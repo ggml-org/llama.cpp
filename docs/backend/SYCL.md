@@ -52,6 +52,10 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
+- 2026.09
+  - Update the CI build environment for oneAPI 2026.1 (unified oneAPI Toolkit). oneDNN is removed from the Deep Learning Essentials package in 2026.0, so the CI now uses the oneAPI Toolkit installer which still includes oneDNN.
+  - oneAPI 2026.1 improves the SYCL build performance: measured with the same code on Arc B570, prompt processing 1331 vs 434 t/s (3.1x) vs the 2025.3-based release build.
+
 - 2026.04-05
   - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
   - Fused MoE.
@@ -257,7 +261,7 @@ Platform #0: Intel(R) OpenCL HD Graphics
  `-- Device #0: Intel(R) Iris(R) Xe Graphics [0x9a49]
 ```
 
-2. **Install Intel® oneAPI Base toolkit**
+2. **Install Intel® oneAPI Toolkit**
 
 SYCL backend depends on:
   - Intel® oneAPI DPC++/C++ compiler/running-time.
@@ -267,11 +271,11 @@ SYCL backend depends on:
 
 - **For Intel GPU**
 
-All above are included in both **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** packages.
+With the 2026.0 release, the Intel® oneAPI Base toolkit and the HPC toolkit are combined into the **Intel® oneAPI Toolkit**, and **oneDNN is removed from the Intel® Deep Learning Essentials** package (oneDNN is distributed separately since then). The **Intel® oneAPI Toolkit** includes oneDNN until 2027.0.
 
-It's recommended to install **Intel® Deep Learning Essentials** which only provides the necessary libraries with less size.
+It's recommended to install the **Intel® oneAPI Toolkit**.
 
-The **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
+The **Intel® oneAPI Toolkit** can be obtained from the official [Intel® oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) page.
 
 Please follow the instructions for downloading and installing the Toolkit for Linux, and preferably keep the default installation values unchanged, notably the installation path *(`/opt/intel/oneapi` by default)*.
 
@@ -281,6 +285,7 @@ Upon a successful installation, SYCL is enabled for the available Intel devices,
 
 |Verified release|
 |-|
+|2026.1 |
 |2025.3.3 |
 |2025.2.1|
 |2025.1|
@@ -815,6 +820,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_XMX_GATHER_SHAPES | decimal bitmask, 255 (default) | Select which XMX `joint_matrix` combinations (A/B type, M x N x K, sub-group size; the accumulator is always f32) the XMX dequant-GEMM paths of `GGML_SYCL_XMX_GATHER_TYPES` may use. `GGML_SYCL_DYNAMIC_PRECISION` sets the type; the combination is picked per call among the ones of that type that the device reports in `matrix_combinations` and this variable allows. The rules, in order: a tile that does not spill; a B type equal to the src1 type, so src1 is copied without a cast; the device's native DPAS tile (8x16x16 on Xe2, Xe3 and Xe-HPC, 8x8x16 on Xe-HPG), then the largest M x K. With f16 on B60 this picks 8x16x16. The log lines `fg_device_combos` (once per device) and `fg_pick_combo` (once per distinct decision) show the result. One bit per combination:<br>* 1: f16 8x16x16, sub-group 16 (Xe2, Xe3, Xe-HPC)<br>* 2: f16 16x16x16, sub-group 16 (Xe2, Xe3, Xe-HPC)<br>* 4: f16 32x64x16, sub-group 16 (Xe2, Xe3, Xe-HPC)<br>* 8: f16 32x64x32, sub-group 16 (Xe2, Xe3, Xe-HPC)<br>* 16: f16 8x8x16, sub-group 8 (Xe-HPG such as Arc A770, ARL-H)<br>* 32: tf32 8x16x8, sub-group 16 (Xe2, Xe3, Xe-HPC)<br>* 64: bf16 8x16x16, sub-group 16 (Xe2, Xe3, Xe-HPC)<br>* 128: bf16 8x8x16, sub-group 8 (Xe-HPG, ARL-H)<br>The 32x64 shapes spill registers and are much slower, so they are only taken when set alone. Set a single bit of the selected type to force a combination for testing, or clear a bit to exclude one that misbehaves on a device. If no allowed combination of the type is available, the paths are off. An AOT build with `GGML_SYCL_DEVICE_ARCH` compiles only the combinations whose sub-group size fits that target. |
 | GGML_SYCL_DYNAMIC_PRECISION | `F16` (default with `GGML_SYCL_F16=ON`), `BF16`, `TF32` or `F32` (default otherwise) | Operand type of the XMX dequant-GEMM paths (`GGML_SYCL_XMX_GATHER_TYPES`). The weights are dequantized into this type and src1 (the activations) is converted to it; the accumulator is always f32.<br>* `F16`: 10-bit mantissa, values up to 65504. A larger activation becomes inf and the result NaN. XMX f16 is on all XMX GPUs.<br>* `BF16`: 7-bit mantissa, f32 range. On all XMX GPUs (8x16x16 on Xe2, Xe3, Xe-HPC; 8x8x16 on Xe-HPG).<br>* `TF32`: 10-bit mantissa, f32 range, about 30% slower than f16 on Arc Pro B60. Only Xe2, Xe3 and Xe-HPC; elsewhere the ops use the library GEMM.<br>* `F32`: the XMX paths are off, and the library GEMM and dequantize-mul-mat-vec kernels do not convert src1 to f16 either.<br>Builds without `GGML_SYCL_F16` default to `F32`, so they get the XMX speedup only when this variable is set.<br>An op can ask for a minimum src1 precision ([TAG_GGML_PREC] in ggml.h, `ggml_prec_set_src`). The XMX paths meet it in every mode: an `F16`, `Q8` or `Q4` request allows any type; a `BF16` request needs the f32 range, so in `F16` mode such an op runs on bf16, else tf32, else the library f32 GEMM; an `F32` request runs on the library f32 GEMM, unless `GGML_SYCL_DYNAMIC_REQUIRED_PRECISION` allows tf32 or bf16. The library GEMM and the dequantize-mul-mat-vec kernels of a `GGML_SYCL_F16=ON` build do not convert src1 to f16 for a `BF16` or `F32` request either. An accumulator request (`ggml_prec_set_acc`) is always met by the XMX paths, which accumulate in f32. In `F16`, `BF16` and `TF32` mode, ops without a request that the XMX paths do not take (for example a `MUL_MAT` of more than 64 tokens) still use the f16 library GEMM in a `GGML_SYCL_F16=ON` build. |
 | GGML_SYCL_DYNAMIC_REQUIRED_PRECISION | `F32` (default), `TF32`, `BF16` or `F16` | How far down the XMX dequant-GEMM paths may serve an op that asks for an F32 src1 ([TAG_GGML_PREC], `ggml_prec_set_src(op, GGML_PREC_F32, 1)`, for example Mistral 4 `ffn_down_exps`, whose activations can exceed the f16 range). `F32`: such an op runs on the library f32 GEMM. `TF32`: it may run on tf32 XMX (f32 range, 10-bit mantissa; Xe2, Xe3, Xe-HPC), else the library f32 GEMM. `BF16`: it may run on tf32 XMX, else bf16 XMX (7-bit mantissa), else the library f32 GEMM. `F16`: src1 requests of any rank are ignored and the op runs like one without a request, so it can overflow f16 as `GGML_SYCL_F16=ON` builds did before; meant for testing and comparison, not for use. Like PyTorch `allow_tf32` or `NVIDIA_TF32_OVERRIDE`, it trades the mantissa of an explicit F32 request for speed and keeps the range. It has no effect with `GGML_SYCL_DYNAMIC_PRECISION=F32`. |
+| GGML_SYCL_MMVQ_WIDE | 0 or 1 (default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|

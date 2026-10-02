@@ -154,6 +154,7 @@ enum llm_type {
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_2_8T_A50B, // Kimi-K3
+    LLM_TYPE_320B_A18B, // GLM-5.3-Flash
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
@@ -232,6 +233,11 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_head_s    = nullptr;
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+
+    // qwen4exp: the MTP block collapses its hyper-connection streams with its own mixer
+    struct ggml_tensor * hc_head_norm          = nullptr;
+    struct ggml_tensor * hc_head_down          = nullptr;
+    struct ggml_tensor * hc_head_up            = nullptr;
 };
 
 struct llama_layer_switch_lora {
@@ -561,6 +567,10 @@ struct llama_layer {
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
+    // glm5-next k-pool indexer
+    struct ggml_tensor * indexer_kpool_gate = nullptr;
+    struct ggml_tensor * indexer_kpool_ape  = nullptr;
+
     // MSA
     struct ggml_tensor * index_q_proj = nullptr;
     struct ggml_tensor * index_k_proj = nullptr;
@@ -728,6 +738,9 @@ struct llama_model {
 
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
+
+    // which tensors can be prefetched - driven by TENSOR_READ_LAZY
+    std::unordered_set<const ggml_tensor *> can_prefetch;
 
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;

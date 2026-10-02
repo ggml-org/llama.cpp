@@ -340,6 +340,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_linear(params);
         case LLM_ARCH_KIMI_K3:
             return new llama_model_kimi_k3(params);
+        case LLM_ARCH_GLM5_NEXT:
+            return new llama_model_glm5_next(params);
         case LLM_ARCH_STEP35:
             return new llama_model_step35(params);
         case LLM_ARCH_SPARK2_5:
@@ -602,8 +604,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
     };
 
+    // if a model has fused tensors they need to be separated into "segments", see the comments on ggml_backend_meta_split_state struct
     auto get_split_segments = [&](int axis, uint32_t il) -> std::vector<std::pair<int64_t, uint32_t>> {
-        // TODO: clarify why this is necessary specifically for these models
         // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
         if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
                 ud->model->arch == LLM_ARCH_QWEN4EXP) {
@@ -1013,6 +1015,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_685B_A37B:     return "685B.A37B";
         case LLM_TYPE_744B_A40B:     return "744B.A40B";
         case LLM_TYPE_2_8T_A50B:     return "2.8T.A50B";
+        case LLM_TYPE_320B_A18B:     return "320B.A18B";
         case LLM_TYPE_E2B:           return "E2B";
         case LLM_TYPE_E4B:           return "E4B";
         default:                     return "?B";
@@ -1320,6 +1323,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out_impl, false);
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
+    ml.get_key(LLM_KV_CLASSIFIER_POOLING_TYPE, hparams.pooling_type_cls, false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
     GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,    hparams.n_layer_nextn,   false);
@@ -1780,7 +1784,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
         }
     }
+
     ml.done_getting_tensors();
+
+    if (per_layer_tok_embd && ml.lazy.has(per_layer_tok_embd)) {
+        LLAMA_LOG_INFO("%s: enabling prefetch for '%s'\n", __func__, per_layer_tok_embd->name);
+
+        can_prefetch.insert(per_layer_tok_embd);
+    }
 
     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
     // If sidecar scales exist, the output weight must be an actual output tensor.
@@ -2436,6 +2447,50 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr);
                 }
             } break;
+        case LLM_ARCH_GLM5_NEXT:
+            {
+                // KDA layers are recurrent, the DSA layers use a K-only MLA cache plus an indexer cache.
+                // tThe Nextn block is never attended by the trunk graph
+                llama_memory_hybrid_idx::layer_filter_cb filter_attn = [&](uint32_t il) {
+                    return il < hparams.n_layer() && !hparams.is_recr(il);
+                };
+                llama_memory_hybrid_idx::layer_filter_cb filter_idx = [&](uint32_t il) {
+                    return il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
+                };
+                llama_memory_hybrid_idx::layer_filter_cb filter_recr = [&](uint32_t il) {
+                    return il < hparams.n_layer() && hparams.is_recr(il);
+                };
+
+                // the draft head is a single DSA layer
+                if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+                    if (hparams.n_layer_nextn == 0) {
+                        throw std::runtime_error("GLM5-Next MTP requires the NextN block, convert without --no-mtp");
+                    }
+                    filter_attn = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    filter_idx  = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    filter_recr = [&](uint32_t)    { return false; };
+                }
+
+                res = new llama_memory_hybrid_idx(
+                    /* model             */ *this,
+                    /* attn_type_k       */ params.type_k,
+                    /* attn_type_v       */ params.type_v,
+                    /* attn_v_trans      */ !cparams.flash_attn,
+                    /* attn_kv_size      */ cparams.n_ctx_seq,
+                    /* attn_n_pad        */ 1,
+                    /* attn_n_swa        */ hparams.n_swa,
+                    /* attn_swa_type     */ hparams.swa_type,
+                    /* recurrent_type_r  */ GGML_TYPE_F32,
+                    /* recurrent_type_s  */ GGML_TYPE_F32,
+                    /* recurrent_rs_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                    /* n_seq_max         */ cparams.n_seq_max,
+                    /* n_rs_seq          */ cparams.n_rs_seq,
+                    /* offload           */ cparams.offload_kqv,
+                    /* unified           */ cparams.kv_unified,
+                    /* filter_attn       */ std::move(filter_attn),
+                    /* filter_recr       */ std::move(filter_recr),
+                    /* filter_idx        */ std::move(filter_idx));
+            } break;
         case LLM_ARCH_HY_V4:
             {
                 if (hparams.indexer_top_k == 0) {
@@ -2653,6 +2708,15 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             filter_idx = [&](uint32_t il) {
                                 return il < hparams.n_layer() && !hparams.is_recr(il);
                             };
+                        }
+
+                        // the MTP draft context holds the MTP block alone: its attention and indexer, no recurrent layer
+                        if (arch == LLM_ARCH_QWEN4EXP && params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+                            filter_attn = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                            filter_recr = [&](uint32_t)    { return false; };
+                            if (filter_idx) {
+                                filter_idx = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                            }
                         }
                     }
 
@@ -2990,6 +3054,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_GLM5_NEXT:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values

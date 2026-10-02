@@ -61,6 +61,10 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
             message = e.what();
+        } catch (const common_json_error & e) {
+            // JSON parse and type errors are invalid requests (400)
+            error = ERROR_TYPE_INVALID_REQUEST;
+            message = e.what();
         } catch (const std::exception & e) {
             // treat other exceptions as server error (500)
             error = ERROR_TYPE_SERVER;
@@ -102,11 +106,11 @@ int llama_server(int argc, char ** argv) {
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
     server_stream_session_manager_start();
 
-    SRV_INF("%s", "initializing ...\n");
-
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
+
+    SRV_INF("%s", "initializing ...\n");
 
     llama_backend_init();
     llama_numa_init(params.numa);

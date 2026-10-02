@@ -234,7 +234,7 @@ class ModelBase:
 
         prefix = "model" if not self.is_mistral_format else "consolidated"
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
-        is_safetensors: bool = len(part_names) > 0
+        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / "model.safetensors.index.json").is_file())
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
@@ -2326,6 +2326,12 @@ class TextModel(ModelBase):
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
 
+        # pooling before a classification head (e.g. ModernBertForSequenceClassification)
+        if (classifier_pooling := self.hparams.get("classifier_pooling")) is not None:
+            if classifier_pooling not in ("cls", "mean"):
+                raise NotImplementedError(f"Unsupported classifier_pooling: {classifier_pooling}")
+            self.gguf_writer.add_classifier_pooling_type(mode_mapping[classifier_pooling])
+
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
@@ -2559,6 +2565,11 @@ class TextModel(ModelBase):
         self.gguf_writer.add_eot_token_id(4)
 
         self.gguf_writer.add_add_space_prefix(False)
+
+        if (add_bos := tokenizer_config.get("add_bos_token")) is not None:
+            self.gguf_writer.add_add_bos_token(add_bos)
+        if (add_eos := tokenizer_config.get("add_eos_token")) is not None:
+            self.gguf_writer.add_add_eos_token(add_eos)
 
 
 class MmprojModel(ModelBase):
