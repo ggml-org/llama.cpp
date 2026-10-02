@@ -154,6 +154,7 @@ class ModelBase:
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
+        self._unfusable_gate_up_layers: set[int] = set()
         self.fuse_qkv = fuse_qkv
         self._q_buffer: dict[int, Tensor] = {}
         self._k_buffer: dict[int, Tensor] = {}
@@ -175,6 +176,7 @@ class ModelBase:
         self._prec_a4: dict[str, bool] = {} # gguf tensor name -> can use 4-bit (A4) activations
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
+        self._fp8_e4m3_preserved: set[str] = set()
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -325,7 +327,7 @@ class ModelBase:
 
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
-        if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv")) for k in self.model_tensors):
+        if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv", ".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")) for k in self.model_tensors):
             return
 
         tensors_to_remove: list[str] = []
@@ -500,34 +502,75 @@ class ModelBase:
                 groups = quant_config["config_groups"]
                 nvfp4_compressed_tensors = (
                     quant_format == "nvfp4-pack-quantized"
-                    or quant_format == "mixed-precision"
-                    and bool(groups)
-                    and all(g.get("format") == "nvfp4-pack-quantized" for g in groups.values() if isinstance(g, dict))
+                    or bool(groups)
+                    and any(g.get("format") == "nvfp4-pack-quantized" for g in groups.values() if isinstance(g, dict))
+                    and all(
+                        g.get("format") == "nvfp4-pack-quantized"
+                        or g.get("format") == "float-quantized"
+                        and g.get("weights", {}).get("type") == "float"
+                        and g.get("weights", {}).get("num_bits") == 8
+                        for g in groups.values() if isinstance(g, dict)
+                    )
                 )
 
                 if len(groups) > 1 and not nvfp4_compressed_tensors:
                     raise NotImplementedError("Can't handle multiple config groups for compressed-tensors yet")
                 weight_config = tuple(groups.values())[0]["weights"]
 
-                if quant_format == "float-quantized" or quant_format == "int-quantized" or quant_format == "naive-quantized":
+                if nvfp4_compressed_tensors:
+                    fp8_configs = [
+                        g["weights"] for g in groups.values()
+                        if isinstance(g, dict) and g.get("format") == "float-quantized"
+                        and g.get("weights", {}).get("type") == "float"
+                        and g.get("weights", {}).get("num_bits") == 8
+                    ]
+                    for name in self.model_tensors.keys():
+                        # Preserved FP8 scales and NVFP4 weights were already consumed.
+                        if name.endswith(".weight_scale"):
+                            weight_name = name.removesuffix("_scale")
+                            w = self.model_tensors[weight_name]
+                            s = self.model_tensors[name]
+                            weight = w()
+                            if weight.dtype not in (torch.float8_e4m3fn, torch.float8_e5m2):
+                                raise ValueError(f"Expected remaining weight {weight_name!r} to be FP8, got {weight.dtype}")
+                            scale = s()
+                            block_size = None
+                            is_channel_scale = scale.ndim >= 1 and scale.ndim <= weight.ndim and scale.shape[0] == weight.shape[0] and all(size == 1 for size in scale.shape[1:])
+                            if scale.numel() != 1 and not is_channel_scale:
+                                block_configs = [c for c in fp8_configs if c.get("strategy") == "block"]
+                                if not block_configs or any(not c.get("block_structure") or c.get("group_size") is not None for c in block_configs):
+                                    raise ValueError(f"FP8 weight {weight_name!r} with scale shape {list(scale.shape)} requires a block layout")
+                                block_sizes = {tuple(c["block_structure"]) for c in block_configs}
+                                if len(block_sizes) != 1:
+                                    raise ValueError(f"FP8 weight {weight_name!r} has ambiguous block layouts")
+                                block_size = next(iter(block_sizes))
+                            self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
+                            tensors_to_remove.append(name)
+                            if self._fp8_as_q8:
+                                self._fp8_dequantized.add(weight_name)
+                        if name.endswith((".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")):
+                            tensors_to_remove.append(name)
+                elif quant_format == "float-quantized" or quant_format == "int-quantized" or quant_format == "naive-quantized":
                     block_size = weight_config.get("block_structure", None)
                     strategy = weight_config.get("strategy")
-                    assert strategy == "channel" or strategy == "block"
-                    assert weight_config.get("group_size") is None  # didn't find a model using this yet
                     is_fp8 = (
                         quant_format == "float-quantized"
                         and weight_config.get("type") == "float"
                         and weight_config.get("num_bits") == 8
                     )
+                    assert strategy in ("channel", "block") or (is_fp8 and strategy == "tensor")
+                    assert weight_config.get("group_size") is None  # didn't find a model using this yet
                     for name in self.model_tensors.keys():
                         if name.endswith(".weight_scale"):
                             weight_name = name.removesuffix("_scale")
                             w = self.model_tensors[weight_name]
                             s = self.model_tensors[name]
-                            self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), block_size)
+                            self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                             tensors_to_remove.append(name)
                             if self._fp8_as_q8 and is_fp8:
                                 self._fp8_dequantized.add(weight_name)
+                        if is_fp8 and name.endswith((".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")):
+                            tensors_to_remove.append(name)
                 elif quant_format == "pack-quantized":
                     assert weight_config.get("strategy") == "group"
                     assert weight_config.get("type", "int") == "int"
@@ -550,9 +593,6 @@ class ModelBase:
                             tensors_to_remove += [base_name + n for n in ("_packed", "_shape", "_scale")]
                             if (base_name + "_zero_point") in self.model_tensors:
                                 tensors_to_remove.append(base_name + "_zero_point")
-                elif nvfp4_compressed_tensors:
-                    # Don't error from compressed-tensors, we'll handle them in _generate_nvfp4_tensors
-                    pass
                 else:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
             elif quant_method == "modelopt":
@@ -574,7 +614,7 @@ class ModelBase:
                         tensors_to_remove.append(name)
                         if is_fp8_weight:
                             self._fp8_dequantized.add(weight_name)
-                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
+                    if name.endswith((".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
@@ -585,6 +625,102 @@ class ModelBase:
 
         for name, value in new_tensors.items():
             self.model_tensors[name] = value
+
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> Tensor:
+        return scale
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        return (self.map_tensor_name(name),)
+
+    def _prepare_fp8_e4m3_tensors(self):
+        if self._fp8_as_q8:
+            return
+
+        scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
+        input_scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
+        consumed: list[str] = []
+
+        for scale_name in list(self.model_tensors.keys()):
+            weight_name = None
+            if scale_name.endswith(".weight_scale"):
+                weight_name = scale_name.removesuffix("_scale")
+            elif scale_name.endswith("_scale_inv"):
+                weight_name = scale_name.removesuffix("_scale_inv")
+            elif scale_name.endswith(".qscale_weight"):
+                weight_name = scale_name.removesuffix("qscale_weight") + "weight"
+
+            if weight_name is None or weight_name not in self.model_tensors:
+                continue
+
+            weight = LazyTorchTensor.to_eager(self.model_tensors[weight_name]())
+            if weight.dtype != torch.float8_e4m3fn or weight.ndim < 2:
+                continue
+
+            scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]()).float().flatten()
+            if scale.numel() != 1:
+                continue
+
+            scale = self._transform_fp8_scale(weight_name, scale)
+
+            weight_prefix = weight_name.removesuffix(".weight")
+            # Transformers fine-grained FP8 uses activation_scale while ModelOpt uses input_scale.
+            # Ref: https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/mistral3.py#L357-L361
+            input_scale_name = next((name for name in (
+                weight_prefix + ".input_scale",
+                weight_prefix + ".activation_scale",
+                weight_prefix + "_activation_scale",
+                weight_prefix + ".qscale_act",
+            ) if name in self.model_tensors), None)
+            input_scale = None
+            if input_scale_name is not None:
+                input_scale = LazyTorchTensor.to_eager(self.model_tensors[input_scale_name]()).float().flatten()
+                if input_scale.numel() != 1:
+                    raise ValueError(f"FP8 input scale {input_scale_name!r} must be a scalar")
+                consumed.append(input_scale_name)
+
+            self._fp8_e4m3_preserved.add(weight_name)
+            consumed.append(scale_name)
+
+            expert_match = re.search(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$", weight_name)
+            if expert_match:
+                bid = int(expert_match.group(1))
+                expert_id = int(expert_match.group(2))
+                proj_type = expert_match.group(3)
+                merged_name = f"model.layers.{bid}.mlp.experts.{proj_type}.weight"
+                new_name = self.map_tensor_name(merged_name)
+                target_name = new_name.replace(".weight", ".scale")
+                entries = scale_tensors.setdefault(target_name, [])
+                assert isinstance(entries, list)
+                cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
+                if input_scale is not None:
+                    target_name = new_name.replace(".weight", ".input_scale")
+                    entries = input_scale_tensors.setdefault(target_name, [])
+                    assert isinstance(entries, list)
+                    cast(list[tuple[int, float]], entries).append((expert_id, float(input_scale[0])))
+            else:
+                for new_name in self._map_fp8_weight_names(weight_name):
+                    mapped = self.tensor_map.get_type_and_name(new_name, try_suffixes=(".weight",)) if weight.ndim == 3 else None
+                    is_packed_expert = mapped is not None and mapped[0] in (
+                        gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP, gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+                    )
+                    # Packed expert weights need one scale value per expert.
+                    n_scales = weight.shape[0] if is_packed_expert else 1
+                    scale_tensors[new_name.replace(".weight", ".scale")] = np.repeat(scale.numpy(), n_scales)
+                    if input_scale is not None:
+                        input_scale_tensors[new_name.replace(".weight", ".input_scale")] = np.repeat(input_scale.numpy(), n_scales)
+
+        for name in consumed:
+            self.model_tensors.pop(name, None)
+
+        for name, values in chain(scale_tensors.items(), input_scale_tensors.items()):
+            if isinstance(values, list):
+                values.sort(key=lambda item: item[0])
+                scale = np.array([item[1] for item in values], dtype=np.float32)
+            else:
+                scale = values.astype(np.float32)
+            if not np.allclose(scale, 1.0, atol=1e-6):
+                logger.info(f"  + {name} (FP8 scale, shape [{scale.size}])")
+                self.gguf_writer.add_tensor(name, scale)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -630,6 +766,26 @@ class ModelBase:
             raise ValueError(f"Can not map tensor {name!r}")
         return new_name
 
+    def prepare_gate_up_fusion(self) -> None:
+        self._unfusable_gate_up_layers.clear()
+        if not self.fuse_gate_up_exps or self._fp8_as_q8:
+            return
+
+        for name, gen in self.model_tensors.items():
+            merged_name = re.sub(r"(\.experts)\.\d+\.", r"\1.", name)
+            mapped = self.tensor_map.get_type_and_name(merged_name, try_suffixes=(".weight",))
+            if mapped is None:
+                continue
+            tensor_type, new_name = mapped
+            if tensor_type not in (gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP, gguf.MODEL_TENSOR.FFN_GATE_UP_EXP) or not new_name.endswith(".weight"):
+                continue
+            if gen().dtype == torch.float8_e4m3fn:
+                bid = next(int(part) for part in new_name.split(".") if part.isdecimal())
+                self._unfusable_gate_up_layers.add(bid)
+
+        for bid in sorted(self._unfusable_gate_up_layers):
+            logger.warning(f"Skipping --fuse-gate-up-exps for layer {bid}: fusion of preserved FP8 expert projections is not supported")
+
     def prepare_qkv_fusion(self) -> None:
         self._fusable_qkv_weight_layers.clear()
         self._fusable_qkv_bias_layers.clear()
@@ -643,6 +799,7 @@ class ModelBase:
         }
         weights: dict[int, set[gguf.MODEL_TENSOR]] = {}
         biases: dict[int, set[gguf.MODEL_TENSOR]] = {}
+        fp8_layers: set[int] = set()
 
         for name in self.model_tensors:
             mapped = self.tensor_map.get_type_and_name(name, try_suffixes=(".weight", ".bias"))
@@ -657,12 +814,19 @@ class ModelBase:
                 continue
             if new_name.endswith(".weight"):
                 weights.setdefault(bid, set()).add(tensor_type)
+                if not self._fp8_as_q8 and self.model_tensors[name]().dtype == torch.float8_e4m3fn:
+                    fp8_layers.add(bid)
             elif new_name.endswith(".bias"):
                 biases.setdefault(bid, set()).add(tensor_type)
 
         for bid, weight_types in weights.items():
             bias_types = biases.get(bid, set())
             if weight_types == qkv_types and (not bias_types or bias_types == qkv_types):
+                # NVFP4 weights use separate reordering and repacking hooks and are exported before this fusion pass.
+                # Separate FP8 scales cannot be represented by one fused QKV scale.
+                if bid in fp8_layers:
+                    logger.warning(f"Skipping --fuse-qkv for layer {bid}: fusion of preserved FP8 projections is not supported")
+                    continue
                 self._fusable_qkv_weight_layers.add(bid)
                 if bias_types:
                     self._fusable_qkv_bias_layers.add(bid)
@@ -686,7 +850,8 @@ class ModelBase:
         new_name = self.map_tensor_name(name)
 
         # Handle gate/up expert tensor fusion if enabled
-        if self.fuse_gate_up_exps and bid is not None:
+        # Preserved FP8 gate/up scales must stay with their separate projections.
+        if self.fuse_gate_up_exps and bid is not None and bid not in self._unfusable_gate_up_layers:
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid):
                 self._gate_exp_buffer[bid] = data_torch
             elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
@@ -745,6 +910,8 @@ class ModelBase:
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del new_name, bid  # unused
+        if name in self._fp8_e4m3_preserved and n_dims >= 2:
+            return gguf.GGMLQuantizationType.F8_E4M3
         # Force FP8-original tensors to Q8_0 when requested; Q8_0 is faster than F16/BF16.
         if self._fp8_as_q8 and name in self._fp8_dequantized and n_dims >= 2:
             return gguf.GGMLQuantizationType.Q8_0
@@ -878,9 +1045,11 @@ class ModelBase:
             weight = LazyTorchTensor.to_eager(self.model_tensors[name]())
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
 
-            # Skip non-NVFP4 tensors (e.g. FP8 with per-channel 1D scales)
-            if scale.ndim < 2:
+            # Leave FP8 weights and their scales for _prepare_fp8_e4m3_tensors.
+            if weight.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) or scale.ndim < 2:
                 continue
+            if weight.ndim != 2 or scale.shape[0] != weight.shape[0] or scale.shape[1] * 8 != weight.shape[1]:
+                raise ValueError(f"NVFP4 weight {name!r} has incompatible shapes: weight {list(weight.shape)}, scale {list(scale.shape)}")
 
             scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
             input_scale = LazyTorchTensor.to_eager(self.model_tensors.get(input_scale_name, lambda: torch.tensor(1.0))())
@@ -984,9 +1153,15 @@ class ModelBase:
         # per-layer NVFP4/FP8) instead of a single global "NVFP4" value.
         nvfp4_compressed_tensors = quant_method == "compressed-tensors" and (
             quant_format == "nvfp4-pack-quantized"
-            or quant_format == "mixed-precision"
-            and bool(quant_groups)
-            and all(g.get("format") == "nvfp4-pack-quantized" for g in quant_groups.values() if isinstance(g, dict))
+            or bool(quant_groups)
+            and any(g.get("format") == "nvfp4-pack-quantized" for g in quant_groups.values() if isinstance(g, dict))
+            and all(
+                g.get("format") == "nvfp4-pack-quantized"
+                or g.get("format") == "float-quantized"
+                and g.get("weights", {}).get("type") == "float"
+                and g.get("weights", {}).get("num_bits") == 8
+                for g in quant_groups.values() if isinstance(g, dict)
+            )
         )
 
         self._nvfp4_global_algo = quant_algo
@@ -1044,8 +1219,10 @@ class ModelBase:
                             self.model_tensors[input_scale_name] = inverse_scale(self.model_tensors.pop(name))
             self._generate_nvfp4_tensors()
 
+        self._prepare_fp8_e4m3_tensors()
         self.dequant_model()
 
+        self.prepare_gate_up_fusion()
         self.prepare_qkv_fusion()
 
         # Handle empty tensor_map for models with block_count=0 (like MobileNetV5)
@@ -1059,10 +1236,15 @@ class ModelBase:
             if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
                 continue
 
+            preserve_fp8_e4m3 = not self._fp8_as_q8 and data_torch.dtype == torch.float8_e4m3fn
+            if preserve_fp8_e4m3:
+                self._fp8_e4m3_preserved.add(name)
+                data_torch = LazyTorchTensor.to_eager(data_torch)
+
             old_dtype = data_torch.dtype
 
             # convert any unsupported data types to float32
-            if data_torch.dtype not in (torch.float16, torch.float32):
+            if data_torch.dtype not in (torch.float16, torch.float32) and name not in self._fp8_e4m3_preserved:
                 data_torch = data_torch.to(torch.float32)
 
             # use the first number-like part of the tensor name as the block id
@@ -1075,7 +1257,10 @@ class ModelBase:
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
-                data = data_torch.numpy()
+                if preserve_fp8_e4m3:
+                    data = data_torch.view(torch.uint8).numpy()
+                else:
+                    data = data_torch.numpy()
 
                 n_dims = len(data.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
@@ -1159,12 +1344,13 @@ class ModelBase:
                 quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
                     lambda qtype, d=data: gguf.quants.quantize(d, qtype))
 
-                try:
-                    data = quantize(data_qtype)
-                except gguf.QuantError as e:
-                    logger.warning("%s, %s", e, "falling back to F16")
-                    data_qtype = gguf.GGMLQuantizationType.F16
-                    data = quantize(data_qtype)
+                if not (data_qtype == gguf.GGMLQuantizationType.F8_E4M3 and data.dtype == np.uint8):
+                    try:
+                        data = quantize(data_qtype)
+                    except gguf.QuantError as e:
+                        logger.warning("%s, %s", e, "falling back to F16")
+                        data_qtype = gguf.GGMLQuantizationType.F16
+                        data = quantize(data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
 
@@ -1205,6 +1391,8 @@ class ModelBase:
                 self.ftype = gguf.LlamaFileType.MOSTLY_NVFP4
             elif self._is_mxfp4:
                 self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
+            elif self._fp8_e4m3_preserved:
+                self.ftype = gguf.LlamaFileType.MOSTLY_F8_E4M3
 
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
