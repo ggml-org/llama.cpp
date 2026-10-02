@@ -252,6 +252,7 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
     std::vector<float> out(n);
     int num_failed = 0;
 
+    printf("Testing degenerate imatrix:\n");
     for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1}) {
         const int64_t group = type == GGML_TYPE_Q2_K ? 16 : 32;
         for (int64_t i = 0; i < n; ++i) {
@@ -261,6 +262,7 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
             x[i] = important ? -0.02f*(g + 1) : (p % 2 ? -1.0f : 0.0f);
             imatrix[i] = important ? 1.0f : 0.0f;
         }
+        printf("  - %s\n", ggml_type_name(type));
 
         std::vector<uint8_t> q(ggml_row_size(type, n));
         ggml_quantize_init(type);
