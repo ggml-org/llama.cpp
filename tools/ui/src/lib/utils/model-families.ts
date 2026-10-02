@@ -18,7 +18,7 @@ export function modelFamilyKey(repo: string): string {
 	const name = repo.split('/').pop() ?? repo;
 	const letters = name.match(FAMILY_LETTERS);
 
-	return letters ? letters[0] : (name.split(FAMILY_SEPARATORS)[0] ?? name);
+	return letters ? letters[0] : name.split(FAMILY_SEPARATORS)[0] || name;
 }
 
 /** Fold entries into families, so `Qwen` collects its sizes and variants. */
