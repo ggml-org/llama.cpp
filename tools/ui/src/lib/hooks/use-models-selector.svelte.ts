@@ -85,17 +85,15 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	// the search, the rows and the sections all read the visible set; only the current
 	// model resolves against `options`, since it can be hidden and still selected
 	const visibleOptions = $derived(options.filter((option) => !modelsStore.isHidden(option.id)));
+	// one filter pass feeds the favorites, the loaded rows and the sections alike
 	const filteredOptions = $derived(filterModelOptions(visibleOptions, searchTerm));
 	const favoriteItems = $derived(
-		groupFavoriteOptions(
-			filterModelOptions(visibleOptions, searchTerm),
-			modelsStore.favoriteModelIds
-		)
+		groupFavoriteOptions(filteredOptions, modelsStore.favoriteModelIds)
 	);
 	const loadedItems = $derived(
-		filterModelOptions(visibleOptions, searchTerm)
-			.map((option, flatIndex) => ({ flatIndex, option }))
-			.filter(({ option }) => modelsStore.isModelLoaded(option.model))
+		filteredOptions
+			.filter((option) => modelsStore.isModelLoaded(option.model))
+			.map((option) => ({ option }))
 	);
 	const loadedIds = $derived(new SvelteSet(loadedItems.map((item) => item.option.id)));
 	// loaded models and favorites are listed once, at the top: the sections skip both
@@ -104,9 +102,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			(option) => !modelsStore.favoriteModelIds.has(option.model) && !loadedIds.has(option.id)
 		)
 	);
-	const groupedFilteredOptions = $derived(
-		groupModelOptions(sectionOptions, (model) => modelsStore.isModelLoaded(model))
-	);
+	const groupedFilteredOptions = $derived(groupModelOptions(sectionOptions));
 	const isEmpty = $derived(
 		filteredOptions.length === 0 && favoriteItems.length === 0 && loadedItems.length === 0
 	);
