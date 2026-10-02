@@ -292,6 +292,8 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
 
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors);
 
+static size_t ggml_backend_meta_buffer_type_get_alloc_size_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors);
+
 static size_t ggml_backend_meta_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
     size_t max_alignment = 1;
@@ -339,7 +341,7 @@ static const struct ggml_backend_buffer_type_i ggml_backend_meta_buffer_type_ifa
     /* .get_alignment       = */ ggml_backend_meta_buffer_type_get_alignment,
     /* .get_max_size        = */ ggml_backend_meta_buffer_type_get_max_size,
     /* .get_alloc_size      = */ ggml_backend_meta_buffer_type_get_alloc_size,
-    /* .get_alloc_size_n    = */ NULL,
+    /* .get_alloc_size_n    = */ ggml_backend_meta_buffer_type_get_alloc_size_n,
     /* .is_host             = */ ggml_backend_meta_buffer_type_is_host,
 };
 
@@ -1719,7 +1721,8 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
     return ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, buf_ctx, max_size);
 }
 
-static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors) {
+static ggml_backend_meta_buffer_context * ggml_backend_meta_buffer_type_alloc_buffer_n_create(
+        ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors, ggml_backend_buffer_t * meta_buf) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
     constexpr size_t compute_headroom = 16; // Maximum number of views per statically allocated tensor that can be created between evals.
@@ -1740,11 +1743,30 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_b
     std::vector<ggml_backend_buffer_t> bufs(n_simple_bufts, nullptr);
     ggml_backend_meta_buffer_context * meta_buf_ctx = new ggml_backend_meta_buffer_context(stc_static, stc_compute_0, stc_compute_1, bufs);
 
-    ggml_backend_buffer_t meta_buf = ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
+    *meta_buf = ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
+
+    std::vector<ggml_backend_buffer_t> old_bufs(n_tensors);
+    for (int i = 0; i < n_tensors; i++) {
+        old_bufs[i] = tensors[i]->buffer;
+        tensors[i]->buffer = *meta_buf;
+    }
+    for (int i = 0; i < n_tensors; i++) {
+        ggml_backend_meta_buffer_init_tensor_impl(meta_buf_ctx->stc_static, tensors[i]);
+    }
+    for (int i = 0; i < n_tensors; i++) {
+        tensors[i]->buffer = old_bufs[i];
+    }
+    return meta_buf_ctx;
+}
+
+static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors) {
+    ggml_backend_buffer_t meta_buf = nullptr;
+    ggml_backend_meta_buffer_context * meta_buf_ctx = ggml_backend_meta_buffer_type_alloc_buffer_n_create(buft, tensors, n_tensors, &meta_buf);
+    const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
+
     for (int i = 0; i < n_tensors; i++) {
         ggml_tensor * t = tensors[i];
         t->buffer = meta_buf;
-        ggml_backend_meta_buffer_init_tensor_impl(meta_buf_ctx->stc_static, t);
         t->data = (void *) 0x2000000000000000; // FIXME
     }
     for (size_t i = 0; i < n_simple_bufts; i++) {
@@ -1772,6 +1794,26 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_b
         meta_buf->size = std::max(meta_buf->size, ggml_backend_buffer_get_size(meta_buf_ctx->bufs[i].get()));
     }
     return meta_buf;
+}
+
+static size_t ggml_backend_meta_buffer_type_get_alloc_size_n(ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors) {
+    if (n_tensors == 0) {
+        return 0;
+    }
+
+    ggml_backend_buffer_t meta_buf = nullptr;
+    ggml_backend_meta_buffer_context * meta_buf_ctx = ggml_backend_meta_buffer_type_alloc_buffer_n_create(buft, tensors, n_tensors, &meta_buf);
+    const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
+
+    size_t total = 0;
+    for (size_t i = 0; i < n_simple_bufts; i++) {
+        ggml_context * ctx = meta_buf_ctx->stc_static.ctxs[i].get();
+        ggml_backend_buffer_type_t simple_buft = ggml_backend_meta_buft_simple_buft(buft, i);
+        total += ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, simple_buft);
+    }
+
+    ggml_backend_buffer_free(meta_buf);
+    return total;
 }
 
 //
