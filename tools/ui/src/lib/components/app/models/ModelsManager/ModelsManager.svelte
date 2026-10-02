@@ -53,6 +53,9 @@
 		});
 	});
 
+	/** How long the panel takes to fade out before it swaps to another model. */
+	const SWAP_FADE_MS = 120;
+
 	// Another model fades the panel out, swaps it, then fades it back in.
 	$effect(() => {
 		const next = target?.id ?? null;
@@ -91,8 +94,6 @@
 		return () => clearTimeout(timer);
 	});
 
-	/** How long the panel takes to fade out before it swaps to another model. */
-	const SWAP_FADE_MS = 120;
 	let isFavorite = $derived((option: ModelOption) =>
 		modelsStore.favoriteModelIds.has(option.model)
 	);
