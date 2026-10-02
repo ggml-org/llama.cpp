@@ -1949,6 +1949,15 @@ struct llama_model_afmoe : public llama_model_base {
 };
 
 
+struct llama_model_etetmoe_llama : public llama_model_base {
+    llama_model_etetmoe_llama(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_laguna : public llama_model_base {
     llama_model_laguna(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
