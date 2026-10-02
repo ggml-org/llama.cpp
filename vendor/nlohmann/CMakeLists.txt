@@ -3,4 +3,4 @@
 add_library(nlohmann INTERFACE)
 add_library(vendor::nlohmann ALIAS nlohmann)
 
-target_include_directories(nlohmann INTERFACE ..)
+target_include_directories(nlohmann SYSTEM INTERFACE ..)
