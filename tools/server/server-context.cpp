@@ -16,6 +16,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "decision-engine.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -46,6 +47,9 @@ static common_speculative_output_limits server_output_limits(const common_params
 
     auto result = common_speculative_get_output_limits(
             params.n_batch, params.n_parallel, common_speculative_n_max(&params.speculative));
+
+    // /decision scores one output row per branch sequence, all in the same ubatch
+    result.total += params.n_seq_decision;
 
     result.total   = std::max<int32_t>(1, result.total);
     result.per_seq = std::max<int32_t>(1, result.per_seq);
@@ -830,6 +834,7 @@ public:
 
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
+    std::unique_ptr<llama_decision::engine> decision_engine; // created by the first /decision request
 
     server_state_callback_t callback_state = [](server_state, json) -> void {};
 
@@ -2372,6 +2377,81 @@ private:
     }
 
     // returns false to decline the task, it is offered again after the decode is done
+    // POST /decision: answer a finite JSON schema in one batched pass on this thread.
+    // Uses the sequence ids above the slots reserved by --decision-seqs (see tools/parallel-decision).
+    json handle_decision(const json & body) {
+        if (params_base.n_seq_decision < 3) {
+            throw std::invalid_argument("decisions are disabled: start the server with --decision-seqs N (N >= 3)");
+        }
+        // one decision per context; all contexts share the schema, the instructions and the cached prefix
+        if (!body.contains("contexts") || !body.at("contexts").is_array() || body.at("contexts").empty() || body.at("contexts").size() > 256) {
+            throw std::invalid_argument("\"contexts\" must be an array of 1-256 strings");
+        }
+        std::vector<std::string> contexts;
+        for (const auto & c : body.at("contexts")) {
+            if (!c.is_string() || c.get<std::string>().empty()) {
+                throw std::invalid_argument("every entry of \"contexts\" must be a non-empty string");
+            }
+            contexts.push_back(c.get<std::string>());
+        }
+        if (!body.contains("schema")) {
+            throw std::invalid_argument("\"schema\" must be provided");
+        }
+        if (!decision_engine) {
+            decision_engine = std::make_unique<llama_decision::engine>(ctx_tgt, (llama_seq_id) params_base.n_parallel,
+                                                                        params_base.n_seq_decision);
+        }
+        const auto cs = llama_decision::compile_schema(body.at("schema"), body.value("instructions", std::string()));
+        std::string shared;
+        std::vector<std::string> dynamic;
+        for (const auto & c : contexts) {
+            auto [head, tail] = llama_decision::render_prompt(chat_params.tmpls.get(), chat_params.use_jinja, cs.system_text, c);
+            if (dynamic.empty()) {
+                shared = head;
+            } else if (head != shared) {
+                throw std::runtime_error("the chat template renders a different prefix per context");
+            }
+            dynamic.push_back(tail);
+        }
+        llama_decision::options opt;
+        opt.mode        = body.value("mode", std::string("auto"));
+        opt.tree_max    = (size_t) body.value("tree_max", 128);
+        opt.allow_cache = body.value("cache_prompt", true);
+
+        const auto b = decision_engine->decide_batch(shared, dynamic, cs.inputs, opt);
+
+        size_t context_tokens = 0;
+        for (const auto & r : b.items) {
+            context_tokens += r.context_tokens;
+        }
+        json usage = json::object();
+        usage["prompt_tokens"]  = (long long) (b.shared_tokens + context_tokens);
+        usage["cached_tokens"]  = (long long) (b.cache_hit ? b.shared_tokens : 0);
+        usage["context_tokens"] = (long long) context_tokens;
+        usage["scored_rows"]    = b.rows;
+        json timings = json::object();
+        timings["prefill_ms"] = b.prefill_ms;
+        timings["scoring_ms"] = b.scoring_ms;
+        timings["total_ms"]   = b.prefill_ms + b.scoring_ms;
+        timings["rounds"]     = b.rounds;
+        timings["per_decision_ms"] = (b.prefill_ms + b.scoring_ms) / (double) b.items.size();
+
+        json results = json::array();
+        for (const auto & r : b.items) {
+            json item = llama_decision::assemble(cs, r);
+            item["usage"] = { { "context_tokens", (long long) r.context_tokens }, { "scored_rows", r.rows } };
+            results.push_back(item);
+        }
+        json out = json::object();
+        out["object"]  = "decision";
+        out["results"] = results;
+        out["model"]   = model_name;
+        out["created"] = (long long) std::time(nullptr);
+        out["usage"]   = usage;
+        out["timings"] = timings;
+        return out;
+    }
+
     bool process_single_task(server_task && task, bool is_yielding) {
         // while yielding, an encode / decode is running and only reading the server state is safe
         if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS && task.type != SERVER_TASK_TYPE_SLOT_GET) {
@@ -2497,6 +2577,21 @@ private:
             case SERVER_TASK_TYPE_NEXT_RESPONSE:
                 {
                     // do nothing
+                } break;
+            case SERVER_TASK_TYPE_DECISION:
+                {
+                    try {
+                        auto res  = std::make_unique<server_task_result_decision>();
+                        res->id   = task.id;
+                        res->data = handle_decision(task.decision_request);
+                        queue_results.send(std::move(res));
+                    } catch (const std::invalid_argument & e) {
+                        send_error(task, e.what(), ERROR_TYPE_INVALID_REQUEST);
+                    } catch (const common_json_error & e) {
+                        send_error(task, std::string("invalid decision request: ") + e.what(), ERROR_TYPE_INVALID_REQUEST);
+                    } catch (const std::exception & e) {
+                        send_error(task, e.what(), ERROR_TYPE_SERVER);
+                    }
                 } break;
             case SERVER_TASK_TYPE_METRICS:
                 {
@@ -5142,6 +5237,27 @@ void server_routes::init_routes() {
 
     this->post_embeddings_oai = [this](const server_http_req & req) {
         return handle_embeddings_impl(req, TASK_RESPONSE_TYPE_OAI_EMBD);
+    };
+
+    this->post_decision = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        server_task task(SERVER_TASK_TYPE_DECISION);
+        task.id               = res->rd.get_new_id();
+        task.decision_request = body;
+        res->rd.post_task(std::move(task));
+
+        auto result = res->rd.next([&] { return req.should_stop(); });
+        if (!result) {
+            return res; // the client went away
+        }
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+        res->ok(result->to_json());
+        return res;
     };
 
     this->post_rerank = [this](const server_http_req & req) {
