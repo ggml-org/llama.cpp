@@ -5,11 +5,11 @@
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
-	import type { ModelDownloadProgress } from '$lib/types';
+	import type { ModelDownloadEntry } from '$lib/types';
 
 	interface Props {
 		/** One entry from the status feed: an in-flight or paused download. */
-		entry: { isPaused: boolean; progress: ModelDownloadProgress | null; repoWithTag: string };
+		entry: ModelDownloadEntry;
 		/** Ask the list to confirm cancelling; the list owns the single dialog. */
 		onRequestCancel?: (repoWithTag: string) => void;
 		/** Show the organization name in the repo id, as the other selector rows do. */
@@ -64,8 +64,13 @@
 		aria-label={actionText}
 		class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
 		onclick={() => {
-			if (entry.isPaused) void modelsStore.status.downloadModel(entry.repoWithTag).catch(() => {});
-			else void modelsStore.status.pauseDownload(entry.repoWithTag);
+			if (entry.isPaused) {
+				void modelsStore.status
+					.downloadModel(entry.repoWithTag)
+					.catch((error) => console.warn('Failed to resume the download:', error));
+			} else {
+				void modelsStore.status.pauseDownload(entry.repoWithTag);
+			}
 		}}
 		type="button"
 	>

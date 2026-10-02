@@ -19,7 +19,11 @@ import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
-import type { ApiModelsSseDownloadProgressData, ModelDownloadProgress } from '$lib/types';
+import type {
+	ApiModelsSseDownloadProgressData,
+	ModelDownloadEntry,
+	ModelDownloadProgress
+} from '$lib/types';
 import type { ModelSidecarBadge } from '$lib/types/models';
 import { repoOf } from '$lib/utils/model-names';
 import { isAuxSidecar } from '$lib/utils/sidecars';
@@ -280,11 +284,7 @@ export class ModelStatusManager {
 	 * Tracked downloads (in flight or paused) for the selector's
 	 * "Download in progress" section.
 	 */
-	getDownloadEntries(): {
-		isPaused: boolean;
-		progress: ModelDownloadProgress | null;
-		repoWithTag: string;
-	}[] {
+	getDownloadEntries(): ModelDownloadEntry[] {
 		const inFlight = Array.from(this.downloadProgress, ([repoWithTag, progress]) => ({
 			isPaused: false,
 			progress,
