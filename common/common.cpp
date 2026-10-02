@@ -49,7 +49,7 @@
 #include <unistd.h>
 #endif
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
@@ -968,93 +968,62 @@ std::filesystem::path common_get_path_from_env(const std::string & name) {
 #endif
 }
 
+#if !defined(_WIN32)
+static std::filesystem::path get_home_directory() {
+    std::filesystem::path home = common_get_path_from_env("HOME");
+    if (!home.empty()) {
+        return home;
+    }
+    const struct passwd * pw = getpwuid(getuid());
+    if (!pw || !pw->pw_dir || !*pw->pw_dir) {
+        throw std::runtime_error("Failed to find $HOME directory");
+    }
+    return pw->pw_dir;
+}
+#endif
+
 std::filesystem::path fs_get_cache_directory() {
     std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
     if (!cache_directory.empty()) {
         return cache_directory;
     }
-
 #if defined(_WIN32)
     cache_directory = common_get_path_from_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
         throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
     }
 #elif defined(__APPLE__)
-    cache_directory = common_get_path_from_env("HOME");
-    if (cache_directory.empty()) {
-        throw std::runtime_error("Failed to find $HOME directory");
-    }
-    cache_directory /= "Library/Caches";
+    cache_directory = get_home_directory() / "Library/Caches";
 #else
     cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
     if (cache_directory.empty()) {
-        cache_directory = common_get_path_from_env("HOME");
-        if (!cache_directory.empty()) {
-            cache_directory /= ".cache";
-        } else {
-            /* no $HOME is defined, fallback to getpwuid */
-            const struct passwd * pw = getpwuid(getuid());
-            if (!pw || !pw->pw_dir || !*pw->pw_dir) {
-                throw std::runtime_error("Failed to find $HOME directory");
-            }
-            cache_directory = pw->pw_dir;
-            cache_directory /= ".cache";
-        }
+        cache_directory = get_home_directory() / ".cache";
     }
 #endif
     return cache_directory / "llama.cpp";
 }
 
-std::string fs_get_config_directory() {
-    std::string config_directory = "";
-    auto ensure_trailing_slash = [](std::string p) {
-        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
-            p += DIRECTORY_SEPARATOR;
-        }
-        return p;
-    };
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
-        defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
-    const std::string xdg_config_home = common_get_env("XDG_CONFIG_HOME");
-    const std::string home            = common_get_env("HOME");
-    if (!xdg_config_home.empty()) {
-        config_directory = xdg_config_home;
-    } else if (!home.empty()) {
-        config_directory = home + "/.config/";
-    } else {
-#if defined(__linux__)
-        /* no $HOME is defined, fallback to getpwuid */
-        struct passwd *pw = getpwuid(getuid());
-        if ((!pw) || (!pw->pw_dir)) {
-            throw std::runtime_error("Failed to find $HOME directory");
-        }
-
-        config_directory = std::string(pw->pw_dir) + std::string("/.config/");
-#else
-        throw std::runtime_error("Failed to find $HOME directory");
-#endif
-    }
-#elif defined(_WIN32)
-    config_directory = common_get_env("APPDATA");
+std::filesystem::path fs_get_config_directory() {
+    std::filesystem::path config_directory;
+#if defined(_WIN32)
+    config_directory = common_get_path_from_env("APPDATA");
     if (config_directory.empty()) {
         throw std::runtime_error("Failed to find %APPDATA% directory");
     }
-#elif defined(__EMSCRIPTEN__)
-    // caller decides what to do when there is no config directory
-    throw std::runtime_error("not implemented on this platform");
 #else
-#  error Unknown architecture
+    config_directory = common_get_path_from_env("XDG_CONFIG_HOME");
+    if (config_directory.empty()) {
+        config_directory = get_home_directory() / ".config";
+    }
 #endif
-    config_directory = ensure_trailing_slash(config_directory);
-    config_directory += "llama.cpp";
-    return ensure_trailing_slash(config_directory);
+    return config_directory / "llama.cpp";
 }
 
 std::filesystem::path fs_get_cache_file(const std::string & filename) {
     GGML_ASSERT(filename.find(DIRECTORY_SEPARATOR) == std::string::npos);
     const std::filesystem::path cache_directory = fs_get_cache_directory();
     std::error_code ec;
-    std::filesystem::create_directories(cache_directory, ec);
+    common_create_directories(cache_directory, ec);
     if (ec) {
         throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
     }
@@ -1770,33 +1739,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
 }
 
 //
-// Batch utils
-//
-
-void common_batch_clear(struct llama_batch & batch) {
-    batch.n_tokens = 0;
-}
-
-void common_batch_add(
-                 struct llama_batch & batch,
-                        llama_token   id,
-                          llama_pos   pos,
-    const std::vector<llama_seq_id> & seq_ids,
-                               bool   logits) {
-    GGML_ASSERT(batch.seq_id[batch.n_tokens] && "llama_batch size exceeded");
-
-    batch.token   [batch.n_tokens] = id;
-    batch.pos     [batch.n_tokens] = pos;
-    batch.n_seq_id[batch.n_tokens] = seq_ids.size();
-    for (size_t i = 0; i < seq_ids.size(); ++i) {
-        batch.seq_id[batch.n_tokens][i] = seq_ids[i];
-    }
-    batch.logits  [batch.n_tokens] = logits;
-
-    batch.n_tokens++;
-}
-
-//
 // Vocab utils
 //
 
@@ -2149,35 +2091,41 @@ common_batch::common_batch(llama_context * ctx) : batch(llama_batch_ext_init(ctx
 
 void common_batch::clear() {
     tokens.clear();
-    llama_batch_ext_clear(batch.get());
 }
 
 int32_t common_batch::add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output) {
-    const int32_t idx = llama_batch_ext_add_token(batch.get(), seq_id, id);
-    if (idx < 0) {
-        GGML_ABORT("%s: failed to add token %d to the batch (error %d, n_tokens = %d)\n", __func__, id, idx, size());
+    tokens.push_back({ id, { pos, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, {} });
+    return size() - 1;
+}
+
+int32_t common_batch::add(llama_token id, llama_pos pos, const std::vector<llama_seq_id> & seq_ids, bool output) {
+    GGML_ASSERT(!seq_ids.empty());
+
+    const int32_t idx = add(id, pos, seq_ids[0], output);
+    for (size_t s = 1; s < seq_ids.size(); ++s) {
+        add_seq(idx, seq_ids[s]);
     }
-    llama_batch_ext_set_pos(batch.get(), idx, &pos);
-    if (output) {
-        llama_batch_ext_set_output_logits(batch.get(), idx, true);
-    }
-    tokens.push_back({ id, { pos, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 } });
     return idx;
 }
 
+bool common_batch::add_seq(int32_t idx, llama_seq_id seq_id) {
+    if (idx < 0 || idx >= size()) {
+        return false;
+    }
+    tokens[idx].seq_ids_extra.push_back(seq_id);
+    return true;
+}
+
 bool common_batch::set_output(int32_t idx, bool value) {
-    if (idx < 0 || idx >= (int32_t) tokens.size()) {
+    if (idx < 0 || idx >= size()) {
         return false;
     }
     tokens[idx].output = value;
-    return llama_batch_ext_set_output_logits(batch.get(), idx, value);
+    return true;
 }
 
 bool common_batch::set_embd(int32_t idx, llama_embd embd) {
-    if (idx < 0 || idx >= (int32_t) tokens.size()) {
-        return false;
-    }
-    if (!llama_batch_ext_set_embd_token(batch.get(), idx, embd)) {
+    if (idx < 0 || idx >= size() || tokens[idx].embd.data != nullptr) {
         return false;
     }
     tokens[idx].embd = embd;
@@ -2185,88 +2133,73 @@ bool common_batch::set_embd(int32_t idx, llama_embd embd) {
 }
 
 int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output) {
-    const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, embd);
-    if (idx < 0) {
-        GGML_ABORT("%s: failed to add embedding to the batch (error %d, n_tokens = %d)\n", __func__, idx, size());
-    }
-    llama_batch_ext_set_pos(batch.get(), idx, pos);
-    if (output) {
-        llama_batch_ext_set_output_logits(batch.get(), idx, true);
-    }
-    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, embd };
+    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, embd, {} };
     for (int32_t j = 0; j < n_pos; ++j) {
         t.pos[j] = pos[j];
     }
     tokens.push_back(t);
-    return idx;
+    return size() - 1;
 }
 
-common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batch & batch) {
-    common_batch res(ctx);
+llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
+    GGML_ASSERT(batch && "common_batch was not initialized with a context");
+    GGML_ASSERT(off >= 0 && n >= 0 && off + n <= size());
 
-    const bool has_token = batch.token != nullptr;
-    const bool has_embd  = batch.embd  != nullptr;
+    llama_batch_ext * res = batch.get();
+    llama_batch_ext_clear(res);
 
-    const size_t n_embd = llama_model_n_embd_inp(llama_get_model(ctx));
-
-    // positions continue from the memory when none are given
-    auto * mem = llama_get_memory(ctx);
-    std::vector<llama_pos> pos_next(llama_n_seq_max(ctx));
-    for (llama_seq_id s = 0; s < (llama_seq_id) pos_next.size(); ++s) {
-        pos_next[s] = llama_memory_seq_pos_max(mem, s) + 1;
-    }
-
-    for (int32_t i = 0; i < batch.n_tokens; ++i) {
-        const int32_t      n_sid  = batch.n_seq_id ? batch.n_seq_id[i]  : 1;
-        const llama_seq_id seq_id = batch.seq_id   ? batch.seq_id[i][0] : 0;
-
-        llama_pos pos[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
-        if (!batch.pos) {
-            pos[0] = pos_next[seq_id]++;
-        } else if (has_token) {
-            pos[0] = batch.pos[i];
-        } else {
-            // embedding batch: section-major layout pos[j*n_tokens + i]
-            for (int32_t j = 0; j < res.n_pos; ++j) {
-                pos[j] = batch.pos[j * batch.n_tokens + i];
-            }
-        }
-
-        const bool output = batch.logits ? batch.logits[i] != 0 : i == batch.n_tokens - 1;
-
-        const llama_embd embd = { has_embd ? batch.embd + (size_t) i * n_embd : nullptr, 1, n_embd };
+    for (int32_t i = off; i < off + n; ++i) {
+        const token & t = tokens[i];
 
         int32_t idx;
-        if (has_token) {
-            idx = res.add(batch.token[i], pos[0], seq_id, output);
-            if (has_embd) {
-                res.set_embd(idx, embd);
+        if (t.id != LLAMA_TOKEN_NULL) {
+            idx = llama_batch_ext_add_token(res, t.seq_id, t.id);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add token %d at index %d (error %d, n = %d)\n", __func__, t.id, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
+            if (t.embd.data && !llama_batch_ext_set_embd_token(res, idx, t.embd)) {
+                GGML_ABORT("%s: failed to set the embedding of token %d at index %d\n", __func__, t.id, i);
             }
         } else {
-            idx = res.add_embd(embd, pos, seq_id, output);
+            idx = llama_batch_ext_add_embd(res, t.seq_id, t.embd);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add embedding at index %d (error %d, n = %d)\n", __func__, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
         }
+        GGML_ASSERT(idx == i - off);
 
-        for (int32_t s = 1; s < n_sid; ++s) {
-            llama_batch_ext_add_seq(res.get(), idx, batch.seq_id[i][s]);
+        for (const llama_seq_id seq_id : t.seq_ids_extra) {
+            if (!llama_batch_ext_add_seq(res, idx, seq_id)) {
+                GGML_ABORT("%s: failed to add seq %d to the entry at index %d\n", __func__, seq_id, i);
+            }
+        }
+        if (t.output) {
+            llama_batch_ext_set_output_logits(res, idx, true);
         }
     }
 
     return res;
 }
 
-common_batch common_batch_get_one(llama_context * ctx, const llama_tokens & tokens) {
+common_batch common_batch_get_one(llama_context * ctx, const llama_token * tokens, int32_t n_tokens) {
     common_batch batch(ctx);
 
     auto mem = llama_get_memory(ctx);
     llama_pos pos = llama_memory_seq_pos_max(mem, 0) + 1; // -1 + 1 == 0 when the memory is empty
 
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        const bool output = i == tokens.size() - 1;
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        const bool output = i == n_tokens - 1;
         batch.add(tokens[i], pos, 0, output);
         pos++;
     }
 
     return batch;
+}
+
+common_batch common_batch_get_one(llama_context * ctx, const llama_tokens & tokens) {
+    return common_batch_get_one(ctx, tokens.data(), (int32_t) tokens.size());
 }
 
 bool common_prompt_batch_decode(

@@ -6601,6 +6601,76 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // LLM-jp-4.1: GPT-OSS dialect with spaces after special tokens and <|end|>-separated parallel calls
+    {
+        auto tst = peg_tester("models/templates/llm-jp-llm-jp-4.1-8b-thinking.jinja", detailed_debug);
+
+        // Final channel
+        tst.test("<|channel|> final<|message|> Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // One space rule: an intentional leading space survives
+        tst.test("<|channel|> final<|message|>  padded").expect_content(" padded").run();
+
+        // Reasoning + content
+        tst.test(
+               "<|channel|> analysis<|message|> I'm\nthinking<|end|><|start|> assistant<|channel|> final<|message|> Hello, world!\nWhat's "
+               "up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Partial reasoning
+        tst.test("<|channel|> analysis<|message|> I'm\nthinking")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .is_partial(true)
+            .expect_reasoning("I'm\nthinking")
+            .run();
+
+        // Tool call, recipient in role header
+        tst.test(
+               "<|channel|> analysis<|message|> I'm\nthinking<|end|>"
+               "<|start|> assistant to=functions.special_function<|channel|> commentary <|constrain|>  json<|message|> {\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Tool call, recipient in channel header
+        tst.test("<|channel|> commentary to=functions.special_function<|message|> {\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Parallel tool calls separated by <|end|>
+        tst.test(
+               "<|channel|> analysis<|message|> I'm\nthinking<|end|>"
+               "<|start|> assistant to=functions.special_function<|channel|> commentary <|constrain|>  json<|message|> {\"arg1\": 1}<|end|>"
+               "<|start|> assistant to=functions.special_function<|channel|> commentary <|constrain|>  json<|message|> {\"arg1\": 2}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .parallel_tool_calls(true)
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "special_function", "{\"arg1\": 1}", {} },
+                { "special_function", "{\"arg1\": 2}", {} },
+            })
+            .run();
+
+        // Structured output
+        tst.test(
+            "<|channel|> analysis<|message|> I need to output the invoice details in JSON<|end|>"
+            "<|start|> assistant<|channel|> final <|constrain|>  json"
+            "<|message|> "
+            R"({"amount": 123.45, "date": "2025-12-03"})"
+            )
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+    }
+
     {
         auto tst = peg_tester("models/templates/StepFun3.5-Flash.jinja", detailed_debug);
 

@@ -698,17 +698,24 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // check that the total number of elements is representable
-            // (a zero-element tensor is trivially representable; the guard also avoids a division by zero below)
-            if (ok && ggml_nelements(&info.t) > 0 &&
-                ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
-                 (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
-                 (INT64_MAX/info.t.ne[3] <= info.t.ne[0]*info.t.ne[1]*info.t.ne[2]))) {
-
-                GGML_LOG_ERROR("%s: total number of elements in tensor '%s' with shape "
-                    "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ") is >= %" PRIi64 "\n",
-                    __func__, info.t.name, info.t.ne[0], info.t.ne[1], info.t.ne[2], info.t.ne[3], INT64_MAX);
-                ok = false;
-                break;
+            // (a zero-element tensor is trivially representable)
+            if (ok) {
+                int64_t current_nelements = info.t.ne[0];
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    if (info.t.ne[i] > 1) { // 1 or 0 won't cause an overflow
+                        if (INT64_MAX / info.t.ne[i] < current_nelements) {
+                             ok = false;
+                             break;
+                         }
+                     }
+                     current_nelements *= info.t.ne[i];
+                 }
+                 if (!ok) {
+                     GGML_LOG_ERROR("%s: incorrect shape for a tensor '%s' may cause overflow errors: "
+                         "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ") is >= INT64_MAX (%" PRIi64 ")\n",
+                         __func__, info.t.name, info.t.ne[0], info.t.ne[1], info.t.ne[2], info.t.ne[3], INT64_MAX);
+                     break;
+                 }
             }
         }
         if (!ok) {
@@ -792,7 +799,16 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 gguf_free(ctx);
                 return nullptr;
             }
-            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            const size_t nbytes = ggml_nbytes(&ti.t);
+            // GGML_PAD adds (alignment - 1) to nbytes. when nbytes is near
+            // SIZE_MAX this wraps to 0 and makes the check below dead.
+            if (nbytes > SIZE_MAX - (ctx->alignment - 1)) {
+                GGML_LOG_ERROR("%s: tensor '%s' size %zu overflows after padding (alignment %zu)\n",
+                    __func__, ti.t.name, nbytes, ctx->alignment);
+                gguf_free(ctx);
+                return nullptr;
+            }
+            const size_t padded_size = GGML_PAD(nbytes, ctx->alignment);
             if (SIZE_MAX - ctx->size < padded_size) {
                 GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
                     __func__, ti.t.name, ctx->size, padded_size);

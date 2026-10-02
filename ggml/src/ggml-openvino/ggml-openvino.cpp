@@ -1179,10 +1179,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->ne[3] != 1) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
         }
-        if (op->op == GGML_OP_GET_ROWS && ggml_is_quantized(op->src[0]->type) &&
-            op->src[0]->view_src != nullptr && op->src[0]->view_offs != 0) {
-            return {false, "GET_ROWS with a nonzero quantized src0 view offset is not supported"};
-        }
         if (op->op == GGML_OP_GET_ROWS && ggml_openvino_get_device_name() == "GPU" &&
             op->src[0]->type == GGML_TYPE_BF16) {
             return {false, "GET_ROWS with BF16 src0 is not supported on GPU"};
@@ -1211,6 +1207,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[1]->op == GGML_OP_PERMUTE) {
             return {false, "ADD/MUL/SUB with PERMUTE src1 is not supported"};
         }
+        if (op->src[0]->type != op->src[1]->type &&
+            (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16)) {
+            return {false, "ADD/MUL/SUB with BF16 and a different src1 type is not supported"};
+        }
         // >8-expert MoE ReduceSum drifts past the 1e-7 tolerance (f32 order vs CPU); intermittent.
         if (op->op == GGML_OP_ADD && is_moe_expert_sum_add(op) && op->src[1]->src[0]->ne[1] > 8) {
             return {false, "MoE expert-plane sum with more than 8 experts is not supported"};
@@ -1221,6 +1221,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
                                std::to_string(op->src[0]->ne[i]) + ", src1->ne[" + std::to_string(i) + "]=" +
                                std::to_string(op->src[1]->ne[i])};
             }
+        }
+        break;
+    }
+    case GGML_OP_SCALE: {
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "SCALE with BF16 type is not supported"};
         }
         break;
     }

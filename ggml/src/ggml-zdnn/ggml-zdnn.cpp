@@ -211,6 +211,10 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
         if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
     }
 
+    if (ctx->owned) {
+        ggml_aligned_free(ctx->all_data, ctx->all_size);
+    }
+
     delete ctx;
 }
 
@@ -311,6 +315,28 @@ static void ggml_backend_zdnn_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     memset(ctx->all_data, value, ctx->all_size);
 }
 
+static void ggml_backend_zdnn_buffer_reset(ggml_backend_buffer_t buffer) {
+    ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
+
+    for (const auto & buf_ptr : ctx->buffers) {
+        ggml_backend_zdnn_buffer * buf = buf_ptr.get();
+
+        if (buf->extra != nullptr) {
+            free(buf->extra->data);
+        }
+
+        if (buf->ztensor.buffer_size > 0) {
+            ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
+        }
+    }
+
+    if (ctx->buffers.size() > 1) {
+        ctx->buffers.resize(1);
+    }
+
+    ctx->n_buffers = 1;
+}
+
 static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .free_buffer   = */ ggml_backend_zdnn_buffer_free_buffer,
     /* .get_base      = */ ggml_backend_zdnn_buffer_get_base,
@@ -322,7 +348,7 @@ static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .get_tensor_2d = */ NULL,
     /* .cpy_tensor    = */ NULL,
     /* .clear         = */ ggml_backend_zdnn_buffer_clear,
-    /* .reset         = */ NULL,
+    /* .reset         = */ ggml_backend_zdnn_buffer_reset,
 };
 
 //
@@ -443,15 +469,13 @@ static ggml_backend_i ggml_backend_zdnn_i = {
 };
 
 static ggml_guid_t ggml_backend_zdnn_guid(void) {
-    static const char * guid_str = "IBM-ZDNN-ACCELER";
-    return reinterpret_cast<ggml_guid_t>((void *)guid_str);
+    static char guid_str[] = "IBM-ZDNN-ACCELER";
+    return reinterpret_cast<ggml_guid_t>(guid_str);
 }
 
 bool ggml_backend_is_zdnn(ggml_backend_t backend) {
     return backend != NULL &&
            ggml_guid_matches(backend->guid, ggml_backend_zdnn_guid());
-
-    GGML_UNUSED(backend);
 }
 
 //
@@ -488,7 +512,7 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->description = ggml_backend_zdnn_device_get_description(dev);
     props->type        = ggml_backend_zdnn_device_get_type(dev);
     ggml_backend_zdnn_device_get_memory(dev, &props->memory_free, &props->memory_total);
-    props->caps = (ggml_backend_dev_caps) {
+    props->caps = {
         /* .async                = */ false,
         /* .host_buffer          = */ false,
         /* .buffer_from_host_ptr = */ false,
@@ -505,7 +529,7 @@ static ggml_backend_t ggml_backend_zdnn_device_init(ggml_backend_dev_t dev, cons
     }
 
     ggml_backend_t backend = (ggml_backend *)malloc(sizeof(ggml_backend));
-    *backend = (ggml_backend) {
+    *backend = {
         /* .guid       = */ ggml_backend_zdnn_guid(),
         /* .iface      = */ ggml_backend_zdnn_i,
         /* .device     = */ dev,
@@ -624,13 +648,13 @@ ggml_backend_reg_t ggml_backend_zdnn_reg(void) {
     atexit(ggml_zdnn_cleanup);
 
     {
-        g_ggml_backend_zdnn_reg = (ggml_backend_reg) {
+        g_ggml_backend_zdnn_reg = {
             /* .api_version = */ GGML_ZDNN_VERSION,
             /* .iface       = */ ggml_backend_zdnn_reg_i,
             /* .context     = */ NULL
         };
 
-        g_ggml_backend_zdnn_device = (ggml_backend_device) {
+        g_ggml_backend_zdnn_device = {
             /* .iface       = */ ggml_backend_zdnn_device_i,
             /* .reg         = */ &g_ggml_backend_zdnn_reg,
             /* .context     = */ &g_ggml_ctx_dev_main
