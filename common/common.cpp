@@ -2215,7 +2215,7 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
             llama_batch_ext_set_output_logits(res, idx, true);
         }
         if (t.decision_order != 0) {
-            llama_batch_ext_set_decision_order(res, idx, t.decision_order);
+            llama_batch_ext_set_decision_order(res, idx, (llama_decision_order) t.decision_order);
         }
     }
 

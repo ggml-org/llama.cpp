@@ -1268,7 +1268,7 @@ bool llama_batch_ext_set_output_logits(llama_batch_ext * batch, int32_t idx, boo
     return batch->set_output(idx, value);
 }
 
-bool llama_batch_ext_set_decision_order(llama_batch_ext * batch, int32_t idx, int32_t order) {
+bool llama_batch_ext_set_decision_order(llama_batch_ext * batch, int32_t idx, llama_decision_order order) {
     return batch->set_decision_order(idx, order);
 }
 

@@ -11,7 +11,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, gguf, logger
+from .base import MmprojModel, ModelBase, gguf, logger
 from .qwen import Qwen3_5TextModel
 
 
@@ -29,7 +29,6 @@ def _load_clef_hparams(dir_model: Path) -> dict[str, Any]:
     return hparams
 
 
-# TODO: image input needs token and embedding entries in the same batch, see https://github.com/ggml-org/llama.cpp/pull/29622
 @ModelBase.register("ClefModel")
 class ClefModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.CLEF
@@ -141,3 +140,11 @@ class ClefModel(Qwen3_5TextModel):
                 return
 
         yield self.map_tensor_name(name), data_torch
+
+
+@ModelBase.register("ClefModel")
+class ClefVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        del args, kwargs
+        raise NotImplementedError(
+            "multimodal input is not supported yet for Clef, requires https://github.com/ggml-org/llama.cpp/pull/29622 to be merged first")
