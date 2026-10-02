@@ -1,0 +1,190 @@
+{
+  "model": "laya-multilingual",
+  "state": {
+    "dialogue": [
+      {
+        "role": "user",
+        "content": "Please recommend a high-performance laptop for programmers."
+      },
+      {
+        "role": "assistant",
+        "content": "Sure, I recommend a thin-and-light laptop with a high-performance processor and a dedicated GPU, priced around 2000 dollars."
+      }
+    ]
+  },
+  "questions": {
+    "q1": {
+      "type": "score",
+      "instructions": "Rate how helpful the assistant's answer is",
+      "criteria": [
+        "not helpful",
+        "somewhat helpful",
+        "helpful",
+        "very helpful"
+      ]
+    }
+  },
+  "per_question": {
+    "q1": {
+      "qtype": "score",
+      "options": [
+        "level 0: not helpful",
+        "level 1: somewhat helpful",
+        "level 2: helpful",
+        "level 3: very helpful"
+      ],
+      "input_ids": [
+        2,
+        7716,
+        2872,
+        235292,
+        19129,
+        1368,
+        10055,
+        573,
+        20409,
+        235303,
+        235256,
+        3448,
+        603,
+        1,
+        4,
+        2403,
+        235248,
+        235276,
+        235292,
+        780,
+        10055,
+        4,
+        2403,
+        235248,
+        235274,
+        235292,
+        13105,
+        10055,
+        4,
+        2403,
+        235248,
+        235284,
+        235292,
+        10055,
+        4,
+        2403,
+        235248,
+        235304,
+        235292,
+        1508,
+        10055,
+        1,
+        19946,
+        138960,
+        1192,
+        892,
+        9766,
+        8247,
+        1192,
+        664,
+        1645,
+        824,
+        664,
+        3312,
+        1192,
+        664,
+        5958,
+        5656,
+        476,
+        1536,
+        235290,
+        33402,
+        15690,
+        604,
+        107783,
+        1464,
+        789,
+        19946,
+        8247,
+        1192,
+        664,
+        105776,
+        824,
+        664,
+        3312,
+        1192,
+        664,
+        21404,
+        235269,
+        590,
+        5656,
+        476,
+        11342,
+        235290,
+        639,
+        235290,
+        2462,
+        15690,
+        675,
+        476,
+        1536,
+        235290,
+        33402,
+        29028,
+        578,
+        476,
+        14613,
+        37783,
+        235269,
+        36900,
+        2449,
+        235248,
+        235284,
+        235276,
+        235276,
+        235276,
+        12035,
+        1464,
+        12765,
+        235270,
+        1
+      ],
+      "marker_pos": [
+        14,
+        21,
+        28,
+        34
+      ],
+      "raw_logits": [
+        -0.7561761736869812,
+        0.41600674390792847,
+        1.5428776741027832,
+        1.0820722579956055
+      ],
+      "act_logits": [
+        1.0,
+        0.0
+      ],
+      "act_probability": 1.0
+    }
+  },
+  "answers": {
+    "q1": {
+      "type": "score",
+      "score": 2.0516,
+      "legend": {
+        "0": "not helpful",
+        "1": "somewhat helpful",
+        "2": "helpful",
+        "3": "very helpful"
+      },
+      "probabilities": {
+        "0": 0.0488,
+        "1": 0.1577,
+        "2": 0.4866,
+        "3": 0.3069
+      },
+      "confidence": 0.1692,
+      "action": {
+        "act_probability": 1.0
+      }
+    }
+  }
+}
