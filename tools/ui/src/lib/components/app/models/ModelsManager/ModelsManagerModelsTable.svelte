@@ -32,6 +32,7 @@
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import {
+		KeyboardKey,
 		ModelCapability,
 		ModelDownloadConfirmAction,
 		ModelsTableGroupKind,
@@ -188,6 +189,12 @@
 
 		return sortAsc ? `Sort by ${name}, highest first` : `Stop sorting by ${name}`;
 	}
+
+	function handleFamilyKeydown(event: KeyboardEvent, toggle: () => void): void {
+		if (event.key === KeyboardKey.SPACE) event.preventDefault();
+
+		if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) toggle();
+	}
 </script>
 
 {#snippet sortHeader(key: ModelsTableSortKey, label: string)}
@@ -253,11 +260,12 @@
 })}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
-	<button
-		aria-expanded={expanded}
-		class="{MODEL_ROW_GRID_CLASS} group w-full cursor-pointer rounded-md px-2 py-1 text-left transition hover:bg-muted/40"
+	<div
+		class="{MODEL_ROW_GRID_CLASS} group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
 		onclick={toggle}
-		type="button"
+		onkeydown={(event) => handleFamilyKeydown(event, toggle)}
+		role="button"
+		tabindex="0"
 	>
 		<span class="flex min-w-0 items-center gap-3">
 			<ModelAvatar
@@ -287,7 +295,7 @@
 				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
 			{/if}
 		</span>
-	</button>
+	</div>
 {/snippet}
 
 {#snippet listItem({ depth, entry }: { depth: number; entry: ModelQuantGroup })}
