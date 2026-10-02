@@ -7,7 +7,28 @@
 
 #include "ggml.h"
 
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
+// dispatch by int tag: a function pointer NTTP embeds the op mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum bin_op_tag {
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_REPEAT,
+};
+
+template <bin_op_tag tag>
+static inline float dispatch_bin_op(const float a, const float b) {
+    switch (tag) {
+        case OP_ADD:    return op_add(a, b);
+        case OP_SUB:    return op_sub(a, b);
+        case OP_MUL:    return op_mul(a, b);
+        case OP_DIV:    return op_div(a, b);
+        case OP_REPEAT: return op_repeat(a, b);
+    }
+}
+
+template<bin_op_tag bin_op, typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
         int ne10, int ne11, int ne12, int ne13,
@@ -45,11 +66,11 @@ static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
     for (int i0 = i0s; i0 < ne0;
          i0 += item_ct1.get_local_range(2) * item_ct1.get_group_range(2)) {
         const int i10 = i0 % ne10;
-        dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
+        dst_row[i0] = (dst_t)dispatch_bin_op<bin_op>(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
     }
 }
 
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
+template<bin_op_tag bin_op, typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
         int ne10, int ne11, int ne12, int ne13,
@@ -83,11 +104,11 @@ static void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t 
     dst_t * dst_row = dst + i_dst;
 
     const int i10 = i0 % ne10;
-    dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
+    dst_row[i0] = (dst_t)dispatch_bin_op<bin_op>(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
 }
 
 
-template<float (*bin_op)(const float, const float)>
+template<bin_op_tag bin_op>
 struct bin_bcast_sycl {
     template <typename src0_t, typename src1_t, typename dst_t>
     void operator()(const src0_t * src0_dd, const src1_t * src1_dd, dst_t * dst_dd, const int64_t ne00,
@@ -309,26 +330,26 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
 
 inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(ctx, dst->src[0], dst->src[1], dst);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<OP_ADD>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
 inline void ggml_sycl_op_sub(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_sub>>(ctx, dst->src[0], dst->src[1], dst);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<OP_SUB>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
 inline void ggml_sycl_op_mul(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_mul>>(ctx, dst->src[0], dst->src[1], dst);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<OP_MUL>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
 inline void ggml_sycl_op_div(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_div>>(ctx, dst->src[0], dst->src[1], dst);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<OP_DIV>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
 inline void ggml_sycl_op_repeat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_repeat>>(ctx, dst, dst->src[0], dst);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<OP_REPEAT>>(ctx, dst, dst->src[0], dst);
 }
 
 
@@ -359,7 +380,7 @@ void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
 // fused ADD+ADD: dst = (src0 + src1) + src2. Same indexing as k_bin_bcast, so mixed
 // types, broadcast, and non-contiguous layouts that add() already handles also fuse.
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename src2_t, typename dst_t>
+template<bin_op_tag bin_op, typename src0_t, typename src1_t, typename src2_t, typename dst_t>
 static void k_bin_bcast3(const src0_t * src0, const src1_t * src1, const src2_t * src2, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
         int ne10, int ne11, int ne12, int ne13,
@@ -405,12 +426,12 @@ static void k_bin_bcast3(const src0_t * src0, const src1_t * src1, const src2_t 
          i0 += item_ct1.get_local_range(2) * item_ct1.get_group_range(2)) {
         const int   i10 = i0 % ne10;
         const int   i20 = i0 % ne20;
-        const float acc = bin_op((float) src0_row[i0 * s00], (float) src1_row[i10 * s10]);
-        dst_row[i0]     = (dst_t) bin_op(acc, (float) src2_row[i20 * s20]);
+        const float acc = dispatch_bin_op<bin_op>((float) src0_row[i0 * s00], (float) src1_row[i10 * s10]);
+        dst_row[i0]     = (dst_t) dispatch_bin_op<bin_op>(acc, (float) src2_row[i20 * s20]);
     }
 }
 
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename src2_t, typename dst_t>
+template<bin_op_tag bin_op, typename src0_t, typename src1_t, typename src2_t, typename dst_t>
 static void k_bin_bcast3_unravel(const src0_t * src0, const src1_t * src1, const src2_t * src2, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
         int ne10, int ne11, int ne12, int ne13,
@@ -446,11 +467,11 @@ static void k_bin_bcast3_unravel(const src0_t * src0, const src1_t * src1, const
 
     const int   i10 = i0 % ne10;
     const int   i20 = i0 % ne20;
-    const float acc = bin_op((float) src0[i_src0 + i0 * s00], (float) src1[i_src1 + i10 * s10]);
-    dst[i_dst + i0] = (dst_t) bin_op(acc, (float) src2[i_src2 + i20 * s20]);
+    const float acc = dispatch_bin_op<bin_op>((float) src0[i_src0 + i0 * s00], (float) src1[i_src1 + i10 * s10]);
+    dst[i_dst + i0] = (dst_t) dispatch_bin_op<bin_op>(acc, (float) src2[i_src2 + i20 * s20]);
 }
 
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename src2_t, typename dst_t>
+template<bin_op_tag bin_op, typename src0_t, typename src1_t, typename src2_t, typename dst_t>
 static void launch_bin_bcast3(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                               const ggml_tensor * src2, ggml_tensor * dst) {
     dpct::queue_ptr stream = ctx.stream();
@@ -603,41 +624,41 @@ void ggml_sycl_op_add_add_fused(ggml_backend_sycl_context & ctx, ggml_tensor * a
 
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_F32 &&
         dst->type == GGML_TYPE_F32) {
-        launch_bin_bcast3<op_add, float, float, float, float>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, float, float, float, float>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && src2->type == GGML_TYPE_F16 &&
                dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast3<op_add, sycl::half, sycl::half, sycl::half, sycl::half>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, sycl::half, sycl::half, sycl::half, sycl::half>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_F32 &&
                dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast3<op_add, sycl::half, float, float, sycl::half>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, sycl::half, float, float, sycl::half>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && src2->type == GGML_TYPE_F32 &&
                dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast3<op_add, sycl::half, sycl::half, float, sycl::half>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, sycl::half, sycl::half, float, sycl::half>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_F16 &&
                dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast3<op_add, sycl::half, float, sycl::half, sycl::half>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, sycl::half, float, sycl::half, sycl::half>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32 && src2->type == GGML_TYPE_I32 &&
                dst->type == GGML_TYPE_I32) {
-        launch_bin_bcast3<op_add, int32_t, int32_t, int32_t, int32_t>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, int32_t, int32_t, int32_t, int32_t>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_I16 && src1->type == GGML_TYPE_I16 && src2->type == GGML_TYPE_I16 &&
                dst->type == GGML_TYPE_I16) {
-        launch_bin_bcast3<op_add, int16_t, int16_t, int16_t, int16_t>(ctx, src0, src1, src2, dst);
+        launch_bin_bcast3<OP_ADD, int16_t, int16_t, int16_t, int16_t>(ctx, src0, src1, src2, dst);
 #ifdef GGML_SYCL_HAS_BF16
     } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16 && src2->type == GGML_TYPE_BF16 &&
                dst->type == GGML_TYPE_BF16) {
-        launch_bin_bcast3<op_add, sycl::ext::oneapi::bfloat16, sycl::ext::oneapi::bfloat16,
+        launch_bin_bcast3<OP_ADD, sycl::ext::oneapi::bfloat16, sycl::ext::oneapi::bfloat16,
                           sycl::ext::oneapi::bfloat16, sycl::ext::oneapi::bfloat16>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_F32 &&
                dst->type == GGML_TYPE_BF16) {
-        launch_bin_bcast3<op_add, sycl::ext::oneapi::bfloat16, float, float, sycl::ext::oneapi::bfloat16>(
+        launch_bin_bcast3<OP_ADD, sycl::ext::oneapi::bfloat16, float, float, sycl::ext::oneapi::bfloat16>(
             ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16 && src2->type == GGML_TYPE_F32 &&
                dst->type == GGML_TYPE_BF16) {
-        launch_bin_bcast3<op_add, sycl::ext::oneapi::bfloat16, sycl::ext::oneapi::bfloat16, float,
+        launch_bin_bcast3<OP_ADD, sycl::ext::oneapi::bfloat16, sycl::ext::oneapi::bfloat16, float,
                           sycl::ext::oneapi::bfloat16>(ctx, src0, src1, src2, dst);
     } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_BF16 &&
                dst->type == GGML_TYPE_BF16) {
-        launch_bin_bcast3<op_add, sycl::ext::oneapi::bfloat16, float, sycl::ext::oneapi::bfloat16,
+        launch_bin_bcast3<OP_ADD, sycl::ext::oneapi::bfloat16, float, sycl::ext::oneapi::bfloat16,
                           sycl::ext::oneapi::bfloat16>(ctx, src0, src1, src2, dst);
 #endif
     } else {
