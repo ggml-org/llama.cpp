@@ -86,12 +86,15 @@ export function modelSupports(option: ModelOption, capability: ModelCapability):
 		: detectThinkingSupport(template);
 }
 
-/** Context a model reports: the provider listing first, then the cached Hub record. */
-export function modelContextLength(option: ModelOption): number {
+/**
+ * Context a model reports: the provider listing first, then the cached Hub record.
+ * Null while neither of them has answered.
+ */
+export function modelContextLength(option: ModelOption): number | null {
 	return (
 		option.contextLength ??
 		HuggingFaceService.cachedDetails(option.model)?.gguf?.context_length ??
-		0
+		null
 	);
 }
 
