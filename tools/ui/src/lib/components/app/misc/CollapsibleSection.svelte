@@ -97,11 +97,7 @@
 {#snippet region()}
 	<!-- Custom expand region instead of bits-ui Collapsible (whose conditional
 	     rendering kills the transition). -->
-	{#snippet body()}
-		{@render children()}
-	{/snippet}
-
-	<CollapsibleRegion {open}>{@render body()}</CollapsibleRegion>
+	<CollapsibleRegion {open}>{@render children()}</CollapsibleRegion>
 {/snippet}
 
 {#if triggerPosition === 'top'}
