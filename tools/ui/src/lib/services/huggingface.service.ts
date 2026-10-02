@@ -387,7 +387,7 @@ export class HuggingFaceService {
 	/**
 	 * Resolve the original (non-GGUF) base model `{ org, name }` for a GGUF repo
 	 * from its HF card (`cardData.base_model`). Returns null when the card has no
-	 * base model. Results are cached per repo.
+	 * base model. A resolved repo is cached for the session.
 	 */
 	static getBaseModel(repoId: string): Promise<{ org: string; name: string } | null> {
 		if (!HuggingFaceService.isEnabled()) return Promise.resolve(null);
@@ -416,7 +416,11 @@ export class HuggingFaceService {
 		this.baseModelPending.set(hfRepoId, promise);
 
 		promise
-			.then((result) => this.baseModelCache.set(hfRepoId, result))
+			// a repo with no base model stays uncached: the details behind it are cached
+			// already, so a retry costs nothing and a failed lookup can try again
+			.then((result) => {
+				if (result) this.baseModelCache.set(hfRepoId, result);
+			})
 			.finally(() => this.baseModelPending.delete(hfRepoId));
 
 		return promise;
