@@ -60,24 +60,23 @@
 	mockModelsStore();
 
 	const loadedModels: ModelItem[] = [
-		{ flatIndex: 0, option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
-		{ flatIndex: 1, option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
+		{ option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
+		{ option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
 	];
 
 	const favoriteModels: ModelItem[] = [
-		{ flatIndex: 2, option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
-		{ flatIndex: 3, option: mockModel('llama3.2-3b', 'Llama-3.2-3B-Instruct', 'meta') }
+		{ option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
+		{ option: mockModel('llama3.2-3b', 'Llama-3.2-3B-Instruct', 'meta') }
 	];
 
 	const availableModels: ModelItem[] = [
 		{
-			flatIndex: 4,
 			option: mockModel('deepseek-coder-6.7b', 'DeepSeek-Coder-6.7B', 'deepseek', ['coding'])
 		},
-		{ flatIndex: 5, option: mockModel('gemma-2-9b', 'Gemma-2-9B-IT', 'google') },
-		{ flatIndex: 6, option: mockModel('phi-3-mini', 'Phi-3-mini-4k', 'microsoft') },
-		{ flatIndex: 7, option: mockModel('codellama-7b', 'CodeLlama-7B', 'codellama', ['coding']) },
-		{ flatIndex: 8, option: mockModel('neural-chat-7b', 'Neural-Chat-7B-v3-3', 'intel') }
+		{ option: mockModel('gemma-2-9b', 'Gemma-2-9B-IT', 'google') },
+		{ option: mockModel('phi-3-mini', 'Phi-3-mini-4k', 'microsoft') },
+		{ option: mockModel('codellama-7b', 'CodeLlama-7B', 'codellama', ['coding']) },
+		{ option: mockModel('neural-chat-7b', 'Neural-Chat-7B-v3-3', 'intel') }
 	];
 
 	const groupedOptions: GroupedModelOptions = {
@@ -102,8 +101,7 @@
 				items: [availableModels[4]],
 				orgName: 'intel'
 			}
-		],
-		loaded: loadedModels
+		]
 	};
 
 	function handleSelect(modelId: string) {
@@ -135,10 +133,8 @@
 		<ModelsSelectorList
 			activeId={null}
 			currentModel={null}
-			groups={{
-				available: [],
-				loaded: [loadedModels[0]]
-			}}
+			groups={{ available: [] }}
+			loaded={[loadedModels[0]]}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -150,10 +146,7 @@
 			activeId={null}
 			currentModel={null}
 			favorites={favoriteModels}
-			groups={{
-				available: [],
-				loaded: []
-			}}
+			groups={{ available: [] }}
 			onSelect={handleSelect}
 		/>
 	</div>

@@ -1,12 +1,10 @@
 import { ModelModality } from '$lib/enums';
 import type { ModelOption } from '$lib/types/models';
-import { SvelteMap } from 'svelte/reactivity';
 
 /** Model list helpers: search, grouping and windowing of the selector rows. */
 
 export interface ModelItem {
 	option: ModelOption;
-	flatIndex: number;
 }
 
 export interface OrgGroup {
@@ -16,7 +14,6 @@ export interface OrgGroup {
 
 export interface GroupedModelOptions {
 	available: OrgGroup[];
-	loaded: ModelItem[];
 }
 
 function matchesModality(option: ModelOption, term: string): boolean {
@@ -59,32 +56,22 @@ export function groupFavoriteOptions(
 	options: ModelOption[],
 	favoriteIds: Set<string>
 ): ModelItem[] {
-	const favorites: ModelItem[] = [];
-
-	for (let i = 0; i < options.length; i++) {
-		if (favoriteIds.has(options[i].model)) {
-			favorites.push({ flatIndex: i, option: options[i] });
-		}
-	}
-
-	return favorites;
+	return options.filter((option) => favoriteIds.has(option.model)).map((option) => ({ option }));
 }
 
 /**
- * Cut the local groups down to a window of rows, loaded first, so the caller can
- * grow it as the list scrolls.
+ * Cut the local groups down to a window of rows, so the caller can grow it as
+ * the list scrolls.
  */
 export function windowLocalGroups(
 	groups: GroupedModelOptions,
 	limit: number
-): { available: GroupedModelOptions['available']; loaded: ModelItem[]; shown: number } {
-	const loaded = groups.loaded.slice(0, Math.max(0, limit));
+): { available: OrgGroup[]; shown: number } {
+	let budget = limit;
 
-	let budget = limit - loaded.length;
+	const available: OrgGroup[] = [];
 
-	const available: GroupedModelOptions['available'] = [];
-
-	let shown = loaded.length;
+	let shown = 0;
 
 	for (const group of groups.available) {
 		if (budget <= 0) break;
@@ -97,43 +84,24 @@ export function windowLocalGroups(
 		if (items.length > 0) available.push({ ...group, items });
 	}
 
-	return { available, loaded, shown };
+	return { available, shown };
 }
 
-export function groupModelOptions(
-	filteredOptions: ModelOption[],
-	isModelLoaded: (model: string) => boolean
-): GroupedModelOptions {
-	// Loaded models
-	const loaded: ModelItem[] = [];
-
-	for (let i = 0; i < filteredOptions.length; i++) {
-		const option = filteredOptions[i];
-
-		if (isModelLoaded(option.model)) {
-			loaded.push({ flatIndex: i, option });
-		}
-	}
-
-	const loadedModelIds = new Set(loaded.map((item) => item.option.model));
+export function groupModelOptions(filteredOptions: ModelOption[]): GroupedModelOptions {
 	const available: OrgGroup[] = [];
-	const orgGroups = new SvelteMap<string, ModelItem[]>();
+	const orgGroups = new Map<string, ModelItem[]>();
 
-	for (let i = 0; i < filteredOptions.length; i++) {
-		const option = filteredOptions[i];
-
-		if (loadedModelIds.has(option.model)) continue;
-
+	for (const option of filteredOptions) {
 		const key = option.parsedId?.orgName ?? '';
 
 		if (!orgGroups.has(key)) orgGroups.set(key, []);
 
-		orgGroups.get(key)!.push({ flatIndex: i, option });
+		orgGroups.get(key)!.push({ option });
 	}
 
 	for (const [orgName, items] of orgGroups) {
 		available.push({ items, orgName: orgName || null });
 	}
 
-	return { available, loaded };
+	return { available };
 }
