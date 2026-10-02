@@ -6334,7 +6334,7 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
 // Reports if ggml_sycl_mul_mat() gives this node to oneDNN. oneDNN chains the submission on events
 // made before recording started, which SYCL graphs do not allow.
 static bool mul_mat_uses_onednn(ggml_tensor * dst) {
-#if GGML_SYCL_DNNL && !defined(GGML_SYCL_GRAPH_DNNL_SUPPORTED)
+#if GGML_SYCL_DNNL
     if (!g_ggml_sycl_enable_dnn) {
         return false;
     }
@@ -6442,11 +6442,13 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                         __func__, ggml_op_name(node_op));
                     return false;
                 }
+#ifndef GGML_SYCL_GRAPH_DNNL_SUPPORTED
                 if (mul_mat_uses_onednn(node)) {
                     GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using oneDNN\n", __func__,
                                    ggml_op_name(node_op));
                     return false;
                 }
+#endif
                 break;
         }
     }
