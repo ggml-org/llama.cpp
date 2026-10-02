@@ -121,7 +121,13 @@
 				return false;
 			}
 
-			return contextLimit === 0 || modelContextLength(option) >= contextLimit;
+			if (contextLimit === 0) return true;
+
+			// the context of a row arrives with its Hub record, so a model we cannot read
+			// yet stays listed; only a known context below the limit rules it out
+			const context = modelContextLength(option);
+
+			return context === null || context >= contextLimit;
 		});
 	});
 
