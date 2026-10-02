@@ -746,6 +746,7 @@ static bool test_state_restore_failure(struct llama_model * model, const struct 
 
 struct test_suite {
     std::vector<test_status> results;
+    bool skipped = false; // whole model does not apply, counted apart from failures
 
     bool all_passed() const {
         return std::all_of(results.begin(), results.end(), [](test_status s) { return s == test_status::PASS; });
@@ -775,6 +776,13 @@ static test_suite run_save_load_tests_for_model(const std::string & model_path, 
     }
 
     GGML_ASSERT(llama_init->context() == nullptr);
+
+    // encoder-only models (e.g. granite_speech_5 CTC) have no memory, so there is no state to save, load or copy
+    if (!llama_model_has_decoder(model)) {
+        suite.results.assign(test_names.size(), test_status::SKIP);
+        suite.skipped = true;
+        return suite;
+    }
 
     // Tokenize prompt or generate random tokens
     llama_tokens tokens;
@@ -937,6 +945,7 @@ int main(int argc, char ** argv) {
         common_log_flush(common_log_main());
 
         size_t n_pass = 0;
+        size_t n_skip = 0;
         size_t n_fail = 0;
         for (const auto & model_path : models) {
             const auto name = std::filesystem::path(model_path).filename().string();
@@ -952,7 +961,9 @@ int main(int argc, char ** argv) {
             LOG("\n");
             common_log_flush(common_log_main());
 
-            if (suite.all_passed()) {
+            if (suite.skipped) {
+                n_skip++;
+            } else if (suite.all_passed()) {
                 n_pass++;
             } else {
                 n_fail++;
@@ -962,7 +973,7 @@ int main(int argc, char ** argv) {
         common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
         common_log_flush(common_log_main());
 
-        LOG_INF("%s: summary: %zu passed, %zu failed (of %zu)\n", __func__, n_pass, n_fail, models.size());
+        LOG_INF("%s: summary: %zu passed, %zu skipped, %zu failed (of %zu)\n", __func__, n_pass, n_skip, n_fail, models.size());
 
         return n_fail == 0 ? 0 : 1;
     }

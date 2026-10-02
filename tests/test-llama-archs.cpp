@@ -394,6 +394,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 7.0f);
     }
 
+    if (arch == LLM_ARCH_GRANITE_SPEECH_5) {
+        ms.add_kv(LLM_KV_CTC_CONTEXT_SIZE, 128u);
+        ms.add_kv(LLM_KV_CTC_MAX_POS_EMB, 512u);
+        ms.add_kv(LLM_KV_CTC_CONV_KERNEL, 7u);
+        ms.add_kv(LLM_KV_CTC_CONV_EXPANSION_FACTOR, 2u);
+        ms.add_kv(LLM_KV_CTC_SUBSAMPLE_LAYERS, std::vector<uint32_t>({1u, 2u}));
+    }
+
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
     {
         std::vector<std::string> tokenizer_list(n_vocab);
@@ -888,7 +896,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
 
-                bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
+                // granite_speech_5 takes audio embd input only (tok_embd has 1 row), so token input does not apply; the model is still generated above to cover the saver/loader round trip
+                bool skip = !arch_supported(arch) || arch == LLM_ARCH_GRANITE_SPEECH_5 || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 bool test_executed = false;
                 bool test_ok = true;
                 if (!skip) {

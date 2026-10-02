@@ -1098,6 +1098,141 @@ bool mtmd_audio_preprocessor_granite_speech::preprocess(const float *           
 }
 
 //
+// mtmd_audio_preprocessor_granite_speech_5
+//
+
+void mtmd_audio_preprocessor_granite_speech_5::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(
+        hparams.audio_ctc_raw_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
+        0.0f, -1.0f, false, 1.0f, true);
+}
+
+// finite-difference delta filter matching torchaudio.functional.compute_deltas at
+// win_length=3: delta[t] = (mel[t+1] - mel[t-1]) / 2, with edge replication at the boundaries
+static void granite_speech_5_compute_deltas(const mtmd_audio_mel & in, mtmd_audio_mel & out) {
+    out.n_mel     = in.n_mel;
+    out.n_len     = in.n_len;
+    out.n_len_org = in.n_len_org;
+    out.data.resize(in.data.size());
+
+    const int64_t n_len = in.n_len;
+    for (int64_t m = 0; m < in.n_mel; m++) {
+        const float * row     = in.data.data()    + m * n_len;
+        float *       row_out = out.data.data()   + m * n_len;
+        for (int64_t t = 0; t < n_len; t++) {
+            const int64_t tp = t > 0         ? t - 1 : 0;
+            const int64_t tn = t < n_len - 1 ? t + 1 : n_len - 1;
+            row_out[t] = (row[tn] - row[tp]) / 2.0f;
+        }
+    }
+}
+
+bool mtmd_audio_preprocessor_granite_speech_5::preprocess(const float *                       samples,
+                                                                size_t                        n_samples,
+                                                                std::vector<mtmd_audio_mel> & output) const {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    const int n_fft = hparams.audio_n_fft;
+    const int pad   = n_fft / 2;
+
+    // reflect padding
+    const int n_padded = (int)n_samples + 2 * pad;
+    std::vector<float> padded(n_padded, 0.0f);
+    std::copy(samples, samples + n_samples, padded.data() + pad);
+    for (int i = 0; i < pad; i++) {
+        int src = i + 1;
+        if (src >= (int)n_samples) {
+            src = (int)n_samples - 1;
+        }
+        padded[pad - 1 - i] = samples[src];
+    }
+    for (int i = 0; i < pad; i++) {
+        int src = (int)n_samples - 2 - i;
+        if (src < 0) {
+            src = 0;
+        }
+        padded[pad + (int)n_samples + i] = samples[src];
+    }
+
+    filter_params params;
+    params.n_mel            = hparams.audio_ctc_raw_mel_bins;
+    params.n_fft_bins       = 1 + (n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true;
+    params.center_padding   = false;
+    params.preemph          = 0.0f;
+    params.use_natural_log  = false;
+    params.norm_per_feature = false;
+    params.mel_floor        = 1e-10f;
+
+    mtmd_audio_mel mel;
+    if (!log_mel_spectrogram(padded.data(), n_padded, 4, params, cache, mel)) {
+        return false;
+    }
+
+    double mmax = -1e20;
+    const size_t mel_size = (size_t)mel.n_mel * (size_t)mel.n_len;
+    for (size_t i = 0; i < mel_size; i++) {
+        if (mel.data[i] > mmax) {
+            mmax = mel.data[i];
+        }
+    }
+    mmax -= 8.0;
+
+    for (size_t i = 0; i < mel_size; i++) {
+        if (mel.data[i] < mmax) {
+            mel.data[i] = mmax;
+        }
+        mel.data[i] = (mel.data[i] + 4.0) / 4.0;
+    }
+
+    // append delta channels (doubles n_mel: static channels first, then delta channels)
+    mtmd_audio_mel deltas;
+    granite_speech_5_compute_deltas(mel, deltas);
+
+    mtmd_audio_mel with_deltas;
+    with_deltas.n_mel     = 2 * mel.n_mel;
+    with_deltas.n_len     = mel.n_len;
+    with_deltas.n_len_org = mel.n_len_org;
+    with_deltas.data.resize((size_t) with_deltas.n_mel * (size_t) with_deltas.n_len);
+    std::copy(mel.data.begin(), mel.data.end(), with_deltas.data.begin());
+    std::copy(deltas.data.begin(), deltas.data.end(), with_deltas.data.begin() + mel.data.size());
+
+    int64_t n_frames = with_deltas.n_len;
+    if (n_frames % 2 == 1) {
+        n_frames--;
+    }
+    const int64_t n_mel     = with_deltas.n_mel;
+    const int64_t n_stacked = n_frames / 2;
+
+    mtmd_audio_mel stacked;
+    stacked.n_mel     = 2 * n_mel;
+    stacked.n_len     = n_stacked;
+    stacked.n_len_org = (int64_t)n_samples;
+    stacked.data.resize((size_t)2 * (size_t)n_mel * (size_t)n_stacked);
+
+    for (int64_t t = 0; t < n_stacked; t++) {
+        for (int64_t m = 0; m < n_mel; m++) {
+            stacked.data[(size_t)m * n_stacked + t] = with_deltas.data[(size_t)m * with_deltas.n_len + 2 * t];
+            stacked.data[(size_t)(m + n_mel) * n_stacked + t] = with_deltas.data[(size_t)m * with_deltas.n_len + 2 * t + 1];
+        }
+    }
+
+    output.push_back(std::move(stacked));
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_gemma4a
 //
 

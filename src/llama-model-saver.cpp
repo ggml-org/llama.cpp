@@ -461,6 +461,17 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_DENSE_2_FEAT_OUT,                  hparams.dense_2_feat_out);
     add_kv(LLM_KV_DENSE_3_FEAT_IN,                   hparams.dense_3_feat_in);
     add_kv(LLM_KV_DENSE_3_FEAT_OUT,                  hparams.dense_3_feat_out);
+
+    // CTC encoder
+    if (hparams.ctc.context_size > 0) {
+        add_kv(LLM_KV_CTC_CONTEXT_SIZE, hparams.ctc.context_size);
+        add_kv(LLM_KV_CTC_MAX_POS_EMB, hparams.ctc.max_pos_emb);
+        add_kv(LLM_KV_CTC_CONV_KERNEL, hparams.ctc.conv_kernel);
+        add_kv(LLM_KV_CTC_CONV_EXPANSION_FACTOR, hparams.ctc.conv_expansion_factor);
+        add_kv(LLM_KV_CTC_SUBSAMPLE_LAYERS, std::vector<uint32_t>(
+                hparams.subsample_factor_impl.begin(),
+                hparams.subsample_factor_impl.begin() + hparams.n_layer_all));
+    }
 }
 
 void llama_model_saver::add_tensors_from_model() {
@@ -495,6 +506,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
+    add_tensor(model->ctc_out_mid);
+    add_tensor(model->ctc_out_mid_b);
 
     // looped architectures alias physical tensors across cache slots; save each
     // tensor once. a different tensor with an existing name still asserts below

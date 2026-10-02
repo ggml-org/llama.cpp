@@ -23,6 +23,7 @@ struct server_context_meta {
     bool has_inp_image;
     bool has_inp_audio;
     bool has_inp_video;
+    bool has_decoder;
     json json_ui_settings;
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
@@ -169,6 +170,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_transcriptions_impl(const server_http_req & req, task_response_type res_type);
     std::unique_ptr<server_res_generator> handle_count_tokens(const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const
