@@ -19,8 +19,11 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst);
 
-// Reports if flash attention runs this node with the oneDNN kernel or the oneMKL kernel (which waits on the host)
-bool ggml_sycl_flash_attn_ext_uses_library(int device, const ggml_tensor * dst);
+// Reports if flash attention runs this node with the oneMKL kernel, which waits on the host
+bool ggml_sycl_flash_attn_ext_needs_sync(int device, const ggml_tensor * dst);
+
+// Reports if flash attention runs this node with the oneDNN kernel
+bool ggml_sycl_flash_attn_ext_uses_onednn(int device, const ggml_tensor * dst);
 
 // Scratch that flash attention needs beyond the output tensor
 struct ggml_sycl_fattn_extra {

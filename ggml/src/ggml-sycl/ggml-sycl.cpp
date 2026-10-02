@@ -49,6 +49,13 @@
 #if defined(__INTEL_LLVM_COMPILER)
     #define GGML_SYCL_DMMV_HAS_ESIMD
 #endif
+// beginning in oneDNN 3.12.3, "Enabled matmul and inner product primitives compatibility with SYCL Graph native recording mode on Intel GPUs."
+#if GGML_SYCL_DNNL
+#    include "dnnl_version.h"
+#    if (DNNL_VERSION_MAJOR > 3 || (DNNL_VERSION_MAJOR == 3 && (DNNL_VERSION_MINOR > 12 || (DNNL_VERSION_MINOR == 12 && DNNL_VERSION_PATCH >= 3))))
+#        define GGML_SYCL_GRAPH_DNNL_SUPPORTED
+#    endif
+#endif
 #include <sycl/half_type.hpp>
 
 #include "ggml.h"
@@ -6279,7 +6286,7 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
 // Reports if ggml_sycl_mul_mat() gives this node to oneDNN. oneDNN chains the submission on events
 // made before recording started, which SYCL graphs do not allow.
 static bool mul_mat_uses_onednn(ggml_tensor * dst) {
-#if GGML_SYCL_DNNL
+#if GGML_SYCL_DNNL && !defined(GGML_SYCL_GRAPH_DNNL_SUPPORTED)
     if (!g_ggml_sycl_enable_dnn) {
         return false;
     }
@@ -6362,12 +6369,18 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 }
                 break;
             case GGML_OP_FLASH_ATTN_EXT:
-                // ggml_sycl_flash_attn_ext_mkl() does host waits and the oneDNN kernel uses oneDNN
-                if (ggml_sycl_flash_attn_ext_uses_library(ctx->device, node)) {
-                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using a host wait or oneDNN\n", __func__,
+                if (ggml_sycl_flash_attn_ext_needs_sync(ctx->device, node)) {
+                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
                                    ggml_op_name(node_op));
                     return false;
                 }
+#ifndef GGML_SYCL_GRAPH_DNNL_SUPPORTED
+                if (ggml_sycl_flash_attn_ext_uses_onednn(ctx->device, node)) {
+                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using oneDNN\n", __func__,
+                                   ggml_op_name(node_op));
+                    return false;
+                }
+#endif
                 break;
             case GGML_OP_MUL_MAT:
                 // We cannot use graphs with ggml_sycl_mul_mat() when SYCL async memory allocation extensions are not available,
