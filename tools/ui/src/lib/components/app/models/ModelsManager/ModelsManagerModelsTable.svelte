@@ -376,13 +376,15 @@
 				>
 					<GroupedList
 						group={familyRow}
-						groupStateKey={group.key}
 						groupWindow={FAMILY_ROW_WINDOW}
 						groups={group.flat ? null : familyGroups(group)}
+						initialCollapsed={modelsStore.collapsedGroupsUnder(group.key)}
 						item={listItem}
 						items={group.flat ? group.items : []}
 						keyOf={(entry) => entry.key}
 						more={showMore}
+						onCollapsedChange={(key, collapsed) =>
+							modelsStore.setGroupCollapsed(group.key, key, collapsed)}
 						sectionWindow={MODEL_ROW_WINDOW}
 						stickyClass="bg-muted/30 backdrop-blur-lg"
 						stickyStyle="top: calc(2.25rem - 1px)"
