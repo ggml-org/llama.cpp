@@ -37,6 +37,10 @@ static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
+static constexpr __host__ __device__ bool is_scaled_low_precision_type(ggml_type type) {
+    return type == GGML_TYPE_NVFP4;
+}
+
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:    return vec_dot_q1_0_q8_1;
@@ -661,7 +665,7 @@ static __global__ void mul_mat_vec_q(
         gate_bias     = (const float *) fusion.gate_bias;
         active_glu    = fusion.glu_op;
         glu_limit     = fusion.glu_limit;
-        if constexpr (type == GGML_TYPE_NVFP4) {
+        if constexpr (is_scaled_low_precision_type(type)) {
             use_scale      = fusion.x_scale    != nullptr;
             use_gate_scale = fusion.gate_scale != nullptr && use_gate;
             x_scale        = (const float *) fusion.x_scale;
@@ -694,7 +698,7 @@ static __global__ void mul_mat_vec_q(
                     gate_biases[j] = gate_bias[j * stride_col_dst + threadIdx.x];
                 }
             }
-            if constexpr (type == GGML_TYPE_NVFP4) {
+            if constexpr (is_scaled_low_precision_type(type)) {
                 if (use_scale) {
                     x_scales = x_scale[ids ? channel_x : 0];
                 }
@@ -802,13 +806,13 @@ static __global__ void mul_mat_vec_q(
             if (threadIdx.x == i && (rows_per_cuda_block == 1 || uint32_t(row0 + i) < stride_col_dst)) {
                 float result = tmp[j][i];
                 if constexpr (has_fusion) {
-                    if constexpr (type == GGML_TYPE_NVFP4) {
+                    if constexpr (is_scaled_low_precision_type(type)) {
                         result *= x_scales;
                     }
                     result += x_biases[j];
                     if (use_gate) {
                         float gate_value = tmp_gate[j][i];
-                        if constexpr (type == GGML_TYPE_NVFP4) {
+                        if constexpr (is_scaled_low_precision_type(type)) {
                             gate_value *= gate_scales;
                         }
                         gate_value += gate_biases[j];
@@ -839,7 +843,7 @@ static __global__ void mul_mat_vec_q(
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, use_scale, use_gate_scale, active_glu, glu_limit, gate_bias, x_bias, x_scale, gate_scale, tmp_gate);
     }
-    if constexpr (type != GGML_TYPE_NVFP4) {
+    if constexpr (!is_scaled_low_precision_type(type)) {
         GGML_UNUSED_VARS(use_scale, use_gate_scale, x_scale, gate_scale, x_scales, gate_scales);
     }
 }
@@ -886,7 +890,7 @@ static __global__ void mul_mat_vec_q_moe(
         gate_bias  = (const float *) fusion.gate_bias;
         active_glu = fusion.glu_op;
         glu_limit  = fusion.glu_limit;
-        if constexpr (type == GGML_TYPE_NVFP4) {
+        if constexpr (is_scaled_low_precision_type(type)) {
             x_scale    = (const float *) fusion.x_scale;
             gate_scale = (const float *) fusion.gate_scale;
         }
@@ -948,7 +952,7 @@ static __global__ void mul_mat_vec_q_moe(
         if constexpr (has_fusion) {
             const uint32_t bias_idx = channel_x*stride_channel_dst + row0 + threadIdx.x;
 
-            if constexpr (type == GGML_TYPE_NVFP4) {
+            if constexpr (is_scaled_low_precision_type(type)) {
                 if (x_scale) {
                     result *= x_scale[channel_x];
                 }
@@ -958,7 +962,7 @@ static __global__ void mul_mat_vec_q_moe(
             }
             if (use_gate) {
                 float gate_value = tmp_gate[threadIdx.x];
-                if constexpr (type == GGML_TYPE_NVFP4) {
+                if constexpr (is_scaled_low_precision_type(type)) {
                     if (gate_scale) {
                         gate_value *= gate_scale[channel_x];
                     }
@@ -990,7 +994,7 @@ static __global__ void mul_mat_vec_q_moe(
 
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, tmp_gate, vgate, x_bias, gate_bias, active_glu, glu_limit, x_scale, gate_scale);
-    } else if constexpr (type != GGML_TYPE_NVFP4) {
+    } else if constexpr (!is_scaled_low_precision_type(type)) {
         GGML_UNUSED_VARS(x_scale, gate_scale);
     }
 }
@@ -1082,7 +1086,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
         const int nsamples_x, const int nsamples_dst, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const int ids_stride, cudaStream_t stream) {
 
-    GGML_ASSERT(ncols_x % ggml_blck_size(type) == 0);
+    GGML_ASSERT(ncols_x % ggml_cuda_type_traits<type>::qk == 0);
     GGML_ASSERT(ncols_dst <= MMVQ_MAX_BATCH_SIZE);
 
     const uint3 nchannels_y_fd   = ids ? init_fastdiv_values(nchannels_y) : make_uint3(0, 0, 0);
@@ -1450,9 +1454,9 @@ void ggml_cuda_mul_mat_vec_q(
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
         GGML_ASSERT( !ids || dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc));
         GGML_ASSERT(  ids || dst->ne[1] == 1);
-        // Scale fusion is only allowed for NVFP4 currently as the cost of checking this at run-time in the prologue is
+        // Scale fusion is only allowed for scaled low-precision types as the cost of checking this at run-time in the prologue is
         // non-negligible for some models such as gpt-oss-20b
-        GGML_ASSERT((fusion->x_scale == nullptr && fusion->gate_scale == nullptr) || src0->type == GGML_TYPE_NVFP4);
+        GGML_ASSERT((fusion->x_scale == nullptr && fusion->gate_scale == nullptr) || is_scaled_low_precision_type(src0->type));
 
         if (fusion->x_bias) {
             GGML_ASSERT(fusion->x_bias->type == GGML_TYPE_F32);
