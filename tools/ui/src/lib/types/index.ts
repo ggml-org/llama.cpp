@@ -14,9 +14,11 @@ export type {
 	ApiModelLoadStage,
 	ApiModelsSseProgress,
 	ApiModelsSseData,
+	ApiModelsSseDownloadProgressData,
 	ApiModelsSseEvent,
+	ApiModelsDownloadRequest,
+	ApiModelsDownloadResponse,
 	ApiModelDetails,
-	ApiModelListResponse,
 	ApiLlamaCppServerProps,
 	ApiChatCompletionRequest,
 	ApiChatCompletionToolCallFunctionDelta,
@@ -26,17 +28,28 @@ export type {
 	ApiChatCompletionResponse,
 	ApiSlotData,
 	ApiProcessingState,
-	ApiRouterModelMeta,
-	ApiRouterModelsLoadRequest,
-	ApiRouterModelsLoadResponse,
-	ApiRouterModelsStatusRequest,
-	ApiRouterModelsStatusResponse,
-	ApiRouterModelsListResponse,
-	ApiRouterModelsUnloadRequest,
-	ApiRouterModelsUnloadResponse,
+	ApiModelsLoadResponse,
+	ApiModelsListResponse,
+	ApiModelsUnloadResponse,
 	AudioInputFormat,
 	ApiStreamSession
 } from './api';
+
+// HuggingFace types
+export type {
+	HfCatalogBuild,
+	HfCatalogEntry,
+	HfCatalogSize,
+	HfModelApiResponse,
+	HfModelCardData,
+	HfModelDetails,
+	HfModelDetailInfo,
+	HfModelGguf,
+	HfModelInfo,
+	HfModelSearchParams,
+	HfModelSibling,
+	HfModelSiblingRef
+} from './huggingface';
 
 // Chat types
 export type {
@@ -89,8 +102,11 @@ export type {
 
 // Model types
 export type {
+	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadFileProgress,
+	ModelDownloadProgress,
 	ModelLoadProgress,
 	ModalityCapabilities
 } from './models';
@@ -208,7 +224,16 @@ export type {
 export type { DesktopIconStripItem } from './navigation';
 
 // Tools types
-export type { ToolEntry, ToolGroup, ToolUiEntry } from './tools';
+export type {
+	EditFileEdit,
+	EditFileMeta,
+	EditFileTitleMeta,
+	ToolEntry,
+	ToolGroup,
+	ToolUiEntry,
+	WriteFileMeta,
+	WriteFileTitleMeta
+} from './tools';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';

@@ -8,7 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { conversationsStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -48,8 +48,7 @@
 	});
 
 	async function loadResources() {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
-		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+		const initialized = await mcpStore.ensureInitialized();
 
 		if (initialized) {
 			await mcpStore.fetchAllResources();
@@ -252,8 +251,8 @@
 	);
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="max-h-[80vh] !max-w-4xl overflow-hidden p-0">
+<Dialog.Root onOpenChange={handleOpenChange} {open}>
+	<Dialog.Content class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0">
 		<Dialog.Header class="border-b border-border/30 px-6 py-4">
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />
@@ -273,12 +272,12 @@
 		<div class="flex h-[500px] min-w-0">
 			<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
 				<McpResourcesBrowser
-					onSelect={handleResourceSelect}
-					onToggle={handleResourceToggle}
-					onTemplateSelect={handleTemplateSelect}
-					selectedUris={selectedResources}
-					{selectedTemplateUri}
 					expandToUri={preSelectedUri}
+					onSelect={handleResourceSelect}
+					onTemplateSelect={handleTemplateSelect}
+					onToggle={handleResourceToggle}
+					{selectedTemplateUri}
+					selectedUris={selectedResources}
 				/>
 			</div>
 
@@ -314,32 +313,32 @@
 								<span class="text-sm">{templatePreviewError}</span>
 
 								<Button
-									size="sm"
-									variant="outline"
 									onclick={() => {
 										templatePreviewError = null;
 									}}
+									size="sm"
+									variant="outline"
 								>
 									Try again
 								</Button>
 							</div>
 						{:else}
 							<McpResourceTemplateForm
-								template={selectedTemplate}
-								onResolve={handleTemplateResolve}
 								onCancel={handleTemplateCancelForm}
+								onResolve={handleTemplateResolve}
+								template={selectedTemplate}
 							/>
 						{/if}
 					</div>
 				{:else if hasTemplateResult}
 					<!-- Template resolved: show preview -->
 					<McpResourcePreview
+						preloadedContent={templatePreviewContent}
 						resource={{
 							name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
 							serverName: selectedTemplate?.serverName || '',
 							uri: templatePreviewUri ?? ''
 						}}
-						preloadedContent={templatePreviewContent}
 					/>
 				{:else if selectedResources.size === 1}
 					{@const allResources = getAllResourcesFlatInTreeOrder()}
@@ -363,10 +362,10 @@
 		</div>
 
 		<Dialog.Footer class="border-t border-border/30 px-6 py-4">
-			<Button variant="outline" onclick={() => handleOpenChange(false)}>Cancel</Button>
+			<Button onclick={() => handleOpenChange(false)} variant="outline">Cancel</Button>
 
 			{#if hasTemplateResult}
-				<Button onclick={handleAttachTemplateResource} disabled={isAttaching}>
+				<Button disabled={isAttaching} onclick={handleAttachTemplateResource}>
 					{#if isAttaching}
 						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}
@@ -376,7 +375,7 @@
 					Attach Resource
 				</Button>
 			{:else}
-				<Button onclick={handleAttach} disabled={selectedResources.size === 0 || isAttaching}>
+				<Button disabled={selectedResources.size === 0 || isAttaching} onclick={handleAttach}>
 					{#if isAttaching}
 						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}

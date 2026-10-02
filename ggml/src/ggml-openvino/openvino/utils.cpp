@@ -1,7 +1,5 @@
 #include "utils.h"
 
-#include "ggml-impl.h"
-
 #include <cmath>
 #include <cstddef>
 #include <ctime>
@@ -27,13 +25,6 @@
 namespace ov {
 namespace frontend {
 namespace ggml {
-
-std::string getCurrentTime() {
-    std::time_t now = std::time(nullptr);
-    char buf[100];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-    return buf;
-}
 
 void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs) {
     auto input_size = context.get_input_size();
@@ -72,6 +63,7 @@ OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std:
         name += "_";
         name += suffix;
         node->set_friendly_name(name);
+        // Uncomment to dump every node's inferred shape (used to hunt down dynamic dims on NPU).
         // std::cout << name << "  " << output.get_partial_shape() << std::endl;
     }
     return outputs;
@@ -81,7 +73,7 @@ namespace {
 ov::Output<ov::Node> rope_yarn_ramp_mix(int n_dims, const float corr_dims[2], float ext_factor) {
     int half_n_dims = n_dims / 2;
     std::vector<float> dim_ids_vec(half_n_dims);
-    std::iota(dim_ids_vec.begin(), dim_ids_vec.end(), 0);
+    std::iota(dim_ids_vec.begin(), dim_ids_vec.end(), 0.0f);
     auto dim_ids = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, (size_t) half_n_dims}, dim_ids_vec);
     auto corr_low = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {corr_dims[0]});
     auto corr_high = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {corr_dims[1]});
@@ -550,6 +542,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
                 if (tail_begin >= 0 && tail_end <= tail_src_elems) {
                     std::vector<int64_t> flat_shape;
+                    flat_shape.reserve(slice_dim);
                     for (int i = 0; i < slice_dim; ++i) {
                         flat_shape.push_back(static_cast<int64_t>(view_src_ggml_shape[i]));
                     }

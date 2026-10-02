@@ -31,15 +31,16 @@ jobs:
     strategy:
       matrix:
         include:
+          # CTK >= 13.5 bundles CCCL >= 3.5; omit GGML_CUDA_CCCL_VERSION for those versions.
           - cuda: '12.4'
             arch: x64
-            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
-          - cuda: '13.3'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
+          - cuda: '13.4'
             arch: x64
-            defines: ''
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - cuda: '13.4'
             arch: arm64
-            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3 -DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone
@@ -47,7 +48,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
@@ -152,7 +153,7 @@ jobs:
           & "${env:HIP_PATH}\lib\llvm\bin\clang.exe" --version
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           # TODO: this build does not match the build in release.yml, so we use a different cache key
           #       ideally, the builds should match, similar to the CUDA build above so that we would be able

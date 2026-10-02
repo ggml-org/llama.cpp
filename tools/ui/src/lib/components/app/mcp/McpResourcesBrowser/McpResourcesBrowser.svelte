@@ -137,18 +137,18 @@
 		{:else}
 			{#each [...filteredResources.entries()] as [serverName, serverRes] (serverName)}
 				<McpResourcesBrowserServerItem
+					{expandedFolders}
+					isExpanded={expandedServers.has(serverName as string)}
+					{onSelect}
+					{onTemplateSelect}
+					{onToggle}
+					onToggleFolder={toggleFolder}
+					onToggleServer={() => toggleServer(serverName as string)}
+					{searchQuery}
+					{selectedTemplateUri}
+					{selectedUris}
 					serverName={serverName as string}
 					serverRes={serverRes as MCPServerResources}
-					isExpanded={expandedServers.has(serverName as string)}
-					{selectedUris}
-					{selectedTemplateUri}
-					{expandedFolders}
-					onToggleServer={() => toggleServer(serverName as string)}
-					onToggleFolder={toggleFolder}
-					{onSelect}
-					{onToggle}
-					{onTemplateSelect}
-					{searchQuery}
 				/>
 			{/each}
 		{/if}

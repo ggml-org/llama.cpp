@@ -808,25 +808,25 @@
 <div class="flex-1 {className} mb-0.5">
 	<div
 		bind:this={rootElement}
-		contenteditable={!disabled}
-		role="textbox"
-		aria-multiline="true"
 		aria-disabled={disabled}
+		aria-multiline="true"
 		aria-placeholder={placeholder}
-		data-placeholder={placeholder}
-		tabindex={disabled ? -1 : 0}
 		class={[
 			'chat-form-input-rich text-md min-h-12 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
 			disabled && 'cursor-not-allowed'
 		]}
-		style="max-height: var(--max-message-height);"
-		oncompositionstart={handleCompositionStart}
+		contenteditable={!disabled}
+		data-placeholder={placeholder}
 		oncompositionend={handleCompositionEnd}
+		oncompositionstart={handleCompositionStart}
+		oncopy={handleCopy}
+		oncut={handleCut}
 		oninput={handleInput}
 		onkeydown={handleKeydown}
 		onpaste={handlePaste}
-		oncopy={handleCopy}
-		oncut={handleCut}
+		role="textbox"
+		style="max-height: var(--max-message-height);"
+		tabindex={disabled ? -1 : 0}
 	></div>
 </div>
 

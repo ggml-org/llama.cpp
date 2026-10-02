@@ -16,6 +16,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_DECISION,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
@@ -148,6 +149,8 @@ struct server_task {
     // temporary store of child tasks for scheduling
     // note: accessing to elements is invalid after the task is moved to server_slot
     std::vector<server_task> child_tasks;
+    // if set on a parent, the children have their own prompt and only share its first n_tokens_shared tokens
+    int32_t n_tokens_shared = 0;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -172,6 +175,26 @@ struct server_task {
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
+    // used by SERVER_TASK_TYPE_DECISION
+    // where to read the model output of each option, exactly one of the two lists is used
+    struct decision {
+        std::vector<llama_token> labels;  // logits of these tokens, at the last prompt token
+        std::vector<int32_t>     markers; // embeddings[column] at these prompt positions
+        int32_t                  column = 0;
+        // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
+        int32_t                  pointer = -1;
+
+        // first prompt position that is read, -1 if none
+        int32_t pos_first() const {
+            int32_t pos = pointer;
+            for (const int32_t marker : markers) {
+                pos = pos < 0 ? marker : std::min(pos, marker);
+            }
+            return pos;
+        }
+    };
+    decision decision;
+
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
 
@@ -188,6 +211,8 @@ struct server_task {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
                 return true;
+            case SERVER_TASK_TYPE_DECISION:
+                return !decision.markers.empty();
             default:
                 return false;
         }
@@ -198,6 +223,8 @@ struct server_task {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
                 return true;
+            case SERVER_TASK_TYPE_DECISION:
+                return !decision.labels.empty();
             default:
                 return false;
         }
@@ -468,6 +495,14 @@ struct server_task_result_embd : server_task_result {
 
 struct server_task_result_rerank : server_task_result {
     float score = -1e6;
+
+    int32_t n_tokens;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_decision : server_task_result {
+    std::vector<float> scores; // one raw model output per option
 
     int32_t n_tokens;
 

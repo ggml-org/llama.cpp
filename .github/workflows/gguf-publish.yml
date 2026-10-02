@@ -21,7 +21,7 @@ on:
 jobs:
   deploy:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     steps:
     - uses: actions/checkout@v6

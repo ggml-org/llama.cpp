@@ -90,20 +90,20 @@
 					: 'pointer-events-none opacity-0')
 		)}
 		{...isCenter ? { disabled: !carousel.canScrollLeft } : {}}
-		onclick={scrollLeft}
 		aria-label="Scroll left"
+		onclick={scrollLeft}
 	>
 		<ChevronLeft class={ICON_CLASS_DEFAULT} />
 	</button>
 
 	<div
-		class={cn('scrollbar-hide overflow-x-auto', containerClass)}
 		bind:this={carousel.scrollContainer}
+		class={cn('scrollbar-hide overflow-x-auto', containerClass)}
 		onscroll={carousel.updateScrollButtons}
 	>
 		<div
-			class={cn('flex min-w-max', isCenter && 'items-start', `gap-${gapSize}`, innerClass)}
 			bind:this={carousel.contentContainer}
+			class={cn('flex min-w-max', isCenter && 'items-start', `gap-${gapSize}`, innerClass)}
 		>
 			{@render children?.()}
 		</div>
@@ -123,8 +123,8 @@
 					: 'pointer-events-none opacity-0')
 		)}
 		{...isCenter ? { disabled: !carousel.canScrollRight } : {}}
-		onclick={scrollRight}
 		aria-label="Scroll right"
+		onclick={scrollRight}
 	>
 		<ChevronRight class={ICON_CLASS_DEFAULT} />
 	</button>

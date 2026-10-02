@@ -276,6 +276,10 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         # ConvTranspose1d kernels: only F16/F32 are implemented, no BF16
         if new_name.endswith(".conv.weight") and (".up.blk." in new_name or ".dac.blk." in new_name):
             return gguf.GGMLQuantizationType.F32
+        # the code predictor FFN intermediate peaks around 1.5e5, above the F16 range, and mul_mat
+        # casts its input to the weight type
+        if new_name.startswith("a.gen.code.blk.") and new_name.endswith(".ffn_down.weight"):
+            return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     @classmethod

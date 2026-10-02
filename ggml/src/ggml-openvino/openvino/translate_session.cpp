@@ -5,6 +5,9 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
+#include "pass/fuse_moe_compressed.h"
+#include "pass/fuse_to_conv.h"
+#include "pass/kv_state_seq_axis.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/mark_dequantization_subgraph.h"
 #include "pass/squeeze_matmul.h"
@@ -18,28 +21,36 @@
 #include <openvino/core/node.hpp>
 #include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/core/shape.hpp>
+#include <openvino/core/type.hpp>
 #include <openvino/core/type/element_type.hpp>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
+#include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/convert_like.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/greater_eq.hpp>
+#include <openvino/op/less.hpp>
+#include <openvino/op/logical_and.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/parameter.hpp>
 #include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/result.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/strided_slice.hpp>
+#include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
+#include <limits>
 #include <sstream>
 
 namespace ov {
@@ -109,7 +120,8 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
 void add_sliced_mask_stateful(TensorMap & tensor_map) {
     auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name) {
         if ((tensor_map.find(mask_name) != tensor_map.end()) &&
-            (tensor_map.find("token_len_per_seq") != tensor_map.end())) {
+            (tensor_map.find("token_len_per_seq") != tensor_map.end()) &&
+            (tensor_map.find("inp_pos") != tensor_map.end())) {
             auto token_len_per_seq = tensor_map.at("token_len_per_seq").get_node_shared_ptr();
             auto mask = tensor_map.at(mask_name).get_node_shared_ptr();
             std::shared_ptr<ov::Node> mask_sliced = mask;
@@ -137,7 +149,66 @@ void add_sliced_mask_stateful(TensorMap & tensor_map) {
     };
 
     create_sliced_mask("self_kq_mask", "KQ_mask_sliced");
+    create_sliced_mask("KQ_mask", "KQ_mask_sliced");
     create_sliced_mask("self_kq_mask_swa", "KQ_mask_swa_sliced");
+}
+
+// Rebuild the sliding-window mask from absolute positions.
+// ggml caps self_kq_mask_swa at the size of its own SWA cache, but the stateful KV state is
+// Concat-appended and grows without bound, so past that cap the two disagree on length and the
+// mask add fails. A pure-Concat state is ordered by position, so positions can rebuild the mask.
+// swa_window holds the real n_swa, read back from the ggml mask in ggml-decoder.cpp.
+// No-op when the graph has no SWA mask, or when the window could not be read back.
+void add_position_mask_stateful_swa(TensorMap & tensor_map) {
+    if (tensor_map.find("self_kq_mask_swa") == tensor_map.end() || tensor_map.find("inp_pos") == tensor_map.end() ||
+        tensor_map.find("swa_window") == tensor_map.end()) {
+        return;
+    }
+
+    auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
+
+    auto zero_i64 = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+    auto one_i64 = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+    auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+    auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+
+    auto query_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::i64);
+    auto query_pos_1d = std::make_shared<ov::op::v1::Reshape>(
+        query_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {-1}), false);
+
+    auto last_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one, three);
+    auto last_pos_1d = std::make_shared<ov::op::v1::Reshape>(last_pos, one_i64, false);
+    auto last_pos_cvt = std::make_shared<ov::op::v0::Convert>(last_pos_1d, ov::element::i64);
+    auto total_len = std::make_shared<ov::op::v1::Add>(last_pos_cvt, one_i64);
+    auto total_len_scalar = std::make_shared<ov::op::v0::Squeeze>(total_len);
+
+    auto cached_pos = std::make_shared<ov::op::v4::Range>(
+        ov::op::v0::Constant::create(ov::element::i64, {}, {0}), total_len_scalar,
+        ov::op::v0::Constant::create(ov::element::i64, {}, {1}), ov::element::i64);
+
+    auto query_col = std::make_shared<ov::op::v1::Reshape>(
+        query_pos_1d, ov::op::v0::Constant::create(ov::element::i64, {2}, {-1, 1}), false);
+    auto cached_row = std::make_shared<ov::op::v1::Reshape>(
+        cached_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {1, -1}), false);
+    auto diff = std::make_shared<ov::op::v1::Subtract>(query_col, cached_row);
+
+    auto swa_window = tensor_map.at("swa_window").get_node_shared_ptr();
+    auto window = std::make_shared<ov::op::v0::Convert>(swa_window, ov::element::i64);
+    auto causal_ok = std::make_shared<ov::op::v1::GreaterEqual>(diff, zero_i64);
+    auto window_ok = std::make_shared<ov::op::v1::Less>(diff, window);
+    auto keep = std::make_shared<ov::op::v1::LogicalAnd>(causal_ok, window_ok);
+
+    auto zero_f = ov::op::v0::Constant::create(ov::element::f32, {}, {0.0f});
+    auto neg_inf_f = ov::op::v0::Constant::create(ov::element::f32, {}, {-std::numeric_limits<float>::infinity()});
+    std::shared_ptr<ov::Node> mask = std::make_shared<ov::op::v1::Select>(keep, zero_f, neg_inf_f);
+
+    auto batch_axis = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+    mask = std::make_shared<ov::op::v0::Unsqueeze>(mask, batch_axis);
+    mask = std::make_shared<ov::op::v0::Unsqueeze>(mask, batch_axis);
+    mask = std::make_shared<ov::op::v0::Convert>(mask, ov::element::f16);
+    mask->set_friendly_name("KQ_mask_swa_sliced");
+
+    tensor_map["KQ_mask_swa_sliced"] = mask->output(0);
 }
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
@@ -172,6 +243,7 @@ void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) 
 void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     if (ggml_model_decoder.is_stateful()) {
         add_sliced_mask_stateful(tensor_map);
+        add_position_mask_stateful_swa(tensor_map);
     }
     // This optimization is error-prone
     // add_rope_sin_cos(tensor_map, ggml_model_decoder);
@@ -201,7 +273,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     auto tensor_map = std::make_shared<TensorMap>();
     std::shared_ptr<Model> resulting_model;
 
-    const auto & ggml_model = std::dynamic_pointer_cast<InputModel>(input_model);
+    const auto & ggml_model = ov::as_type_ptr<InputModel>(input_model);
     std::shared_ptr<GgmlDecoder> ggml_model_decoder = ggml_model->get_model_decoder();
 
     for (const auto & it : ggml_model_decoder->get_model_inputs()) {
@@ -213,7 +285,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     for (const auto & it : ggml_model_decoder->get_model_extra_inputs()) {
         auto input_node = create_extra_input(it.first, it.second);
         if (it.second.is_parameter) {
-            params.push_back(std::dynamic_pointer_cast<ov::op::v0::Parameter>(input_node));
+            params.push_back(ov::as_type_ptr<ov::op::v0::Parameter>(input_node));
         }
         (*tensor_map)[it.first] = input_node;
     }
@@ -272,7 +344,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         }
     };
 
-    auto node_visitor = [&](std::shared_ptr<GgmlDecoder> decoder, int node_idx) {
+    auto node_visitor = [&](const std::shared_ptr<GgmlDecoder> & decoder, int node_idx) {
         auto converted_outputs = translate_node(decoder, node_idx);
         if (converted_outputs.empty()) {
             return;
@@ -384,7 +456,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
 }
 
 std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<Model> model) {
-    auto ggml_model_decoder = std::dynamic_pointer_cast<InputModel>(m_input_model)->get_model_decoder();
+    auto ggml_model_decoder = ov::as_type_ptr<InputModel>(m_input_model)->get_model_decoder();
     {
         ov::pass::Manager manager;
         manager.set_per_pass_validation(true);
@@ -395,11 +467,22 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         // is_decompression_multiply() recognizes GatherMatmul as a valid consumer.
         manager.register_pass<ov::pass::MarkDequantization>(
             std::vector<ov::element::Type>{ov::element::u8, ov::element::i8, ov::element::u4, ov::element::i4});
+        manager.register_pass<pass::FuseToConv>();
+
+        // MOECompressed has no CPU plugin implementation, so keep the GatherMatmul path
+        // everywhere else. Opt-in while the fused path is being brought up.
+        if (ggml_openvino_get_device_name() == "GPU" && getenv("GGML_OPENVINO_MOE_OP")) {
+            manager.register_pass<pass::FuseMoeCompressed>();
+        }
 
         if (ggml_model_decoder->is_stateful()) {
             const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
             const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
             manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
+            // Must run after MakeStateful, which is what creates the ReadValue/Assign pairs.
+            if (!ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT")) {
+                manager.register_pass<pass::KVStateSeqAxis>();
+            }
         }
 
         if (ggml_model_decoder->is_static()) {

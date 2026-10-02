@@ -1,6 +1,4 @@
-import { ROUTES } from './routes.constants';
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
 
@@ -46,6 +44,9 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
+/** Orgs whose avatar is dark and needs inverting in dark mode. */
+export const DARK_INVERT_AVATAR_ORGS = ['openai'];
+
 /** Icon used for the model selector and the `/model` slash command. */
 export const MODEL_SELECTOR_ICON = Package;
 
@@ -64,15 +65,8 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
-		activeRouteId: '/mcp-servers',
-		icon: McpLogo,
-		route: ROUTES.MCP_SERVERS,
-		tooltip: 'MCP Servers'
-	},
-	{
-		activeUrlIncludes: '#/settings',
+		action: SidebarAction.SETTINGS,
 		icon: Settings,
-		route: `${ROUTES.SETTINGS}/general`,
 		tooltip: 'Settings'
 	}
 ];

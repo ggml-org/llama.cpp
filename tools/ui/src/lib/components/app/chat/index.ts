@@ -221,27 +221,6 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
 
 /**
- * Dropdown submenu for managing MCP servers in the chat form.
- *
- * Displays a searchable list of enabled MCP servers with toggle switches
- * to enable/disable each server for chat. Shows server favicon, health status,
- * and a "Manage MCP Servers" settings link.
- *
- * Features:
- * - Search/filter servers by name or URL
- * - Per-server toggle to enable/disable for chat
- * - Health check indicator (shows "Error" badge for failed servers)
- * - Server favicon display
- * - Settings link to manage MCP server configuration
- *
- * @example
- * ```svelte
- * <ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
- * ```
- */
-export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
-
-/**
  * Dropdown submenu for selecting reasoning effort level.
  *
  * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating

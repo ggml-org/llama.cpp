@@ -27,8 +27,8 @@
 		<ScrollCarousel gapSize="2" variant={ScrollCarouselVariant.CENTER}>
 			{#each attachments as attachment, i (attachment.id)}
 				<ChatAttachmentsListItemMcpResource
-					class={i === 0 ? 'ml-3' : ''}
 					{attachment}
+					class={i === 0 ? 'ml-3' : ''}
 					onRemove={handleRemove}
 					onclick={() => handleResourceClick(attachment.resource.uri)}
 				/>

@@ -64,7 +64,7 @@ jobs:
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Run type checking
@@ -106,7 +106,7 @@ jobs:
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Build Storybook

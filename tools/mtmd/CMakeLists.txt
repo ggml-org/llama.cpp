@@ -30,6 +30,7 @@ add_library(mtmd
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
+            models/deepseek4v.cpp
             models/dots3note.cpp
             models/dotsocr.cpp
             models/exaone4_5.cpp
@@ -54,6 +55,7 @@ add_library(mtmd
             models/qwen2vl.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
+            models/ling3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
             models/mimo-audio.cpp
@@ -120,6 +122,13 @@ endif()
 if (ANDROID)
     # miniaudio.h defines ma_android_sdk_version() without a prior prototype
     target_compile_options(mtmd PRIVATE -Wno-missing-prototypes)
+endif()
+
+# MSVC defines _M_X64 for ARM64EC, so miniaudio.h takes its x64 path.
+# ARM64EC does not support AVX types.
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" MTMD_GENERATOR_PLATFORM_LWR)
+if (MSVC AND MTMD_GENERATOR_PLATFORM_LWR STREQUAL "arm64ec")
+    target_compile_definitions(mtmd PRIVATE MA_NO_AVX2)
 endif()
 
 if (TARGET BUILD_INFO)

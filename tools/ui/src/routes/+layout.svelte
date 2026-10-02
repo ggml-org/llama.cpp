@@ -296,7 +296,7 @@
 
 <svelte:head>
 	{#if pwaAssetsHead.themeColor}
-		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
 	{/if}
 
 	{#if settingsStore.config.customCss}
@@ -310,7 +310,7 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
@@ -325,14 +325,17 @@
 			}}
 		/>
 
-		<div class="flex-1">
+		<!-- min-w-0 lets the chat column shrink below its content width, so wide
+		     code blocks and tables scroll inside their own containers instead of
+		     stretching the page into a horizontal scrollbar -->
+		<div class="min-w-0 flex-1">
 			{@render children?.()}
 		</div>
 	</div>
 
 	<ModeWatcher />
 
-	<Toaster richColors />
+	<Toaster closeButton richColors />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->
@@ -342,8 +345,8 @@
 	{/if}
 
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		forceReload={pwa.needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>

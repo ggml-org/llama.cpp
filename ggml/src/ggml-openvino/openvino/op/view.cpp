@@ -7,7 +7,6 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
-#include <set>
 
 namespace ov {
 namespace frontend {
@@ -16,6 +15,13 @@ namespace op {
 
 OutputVector translate_view(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
+
+    if (context.get_op_case() == 1) {
+        // Static-mode identity pass-through for VIEWs over a GATED_DELTA_NET combined output or
+        // the conv_input CONCAT; the consuming op (CPY/RMS_NORM) does its own runtime-correct
+        // slicing on the full tensor (see ggml-decoder.cpp compute_op_case, GGML_OP_VIEW).
+        return {context.get_input(0)};
+    }
 
     if (!context.is_static()) {
         // On the stateless/non-static path VIEW is normally a no-op (consumers re-slice).
@@ -146,7 +152,8 @@ OutputVector translate_view(const NodeContext & context) {
         return {input};
     }
 
-    int64_t src_elems = 1, dst_elems = 1;
+    int64_t src_elems = 1;
+    int64_t dst_elems = 1;
     for (int64_t i = 0; i < src_shape.rank().get_length(); ++i) {
         if (src_shape[i].is_dynamic()) {
             return {input};

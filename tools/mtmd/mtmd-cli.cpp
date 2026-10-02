@@ -81,11 +81,14 @@ struct mtmd_cli_context {
     llama_context     * lctx;
     const llama_vocab * vocab;
     common_sampler    * smpl;
-    llama_batch         batch;
+    common_batch        batch;
     int                 n_batch;
 
     mtmd::bitmaps bitmaps;
     std::vector<mtmd_helper::video_ptr> videos;
+
+    mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
+    std::string video_ffmpeg_bin_dir;
 
     mtmd::batch_ptr mbatch;
 
@@ -106,15 +109,14 @@ struct mtmd_cli_context {
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init->model();
         lctx = llama_init->context();
-        vocab = llama_model_get_vocab(model);
-        smpl = common_sampler_init(model, params.sampling);
-        n_threads = params.cpuparams.n_threads;
-        batch = llama_batch_init(1, 0, 1); // batch for next token generation
-        n_batch = params.n_batch;
-
         if (!model || !lctx) {
             exit(1);
         }
+        vocab = llama_model_get_vocab(model);
+        smpl = common_sampler_init(model, params.sampling);
+        n_threads = params.cpuparams.n_threads;
+        batch = common_batch(lctx); // batch for next token generation
+        n_batch = params.n_batch;
 
         init_vision_context(params);
 
@@ -146,7 +148,6 @@ struct mtmd_cli_context {
     }
 
     ~mtmd_cli_context() {
-        llama_batch_free(batch);
         common_sampler_free(smpl);
     }
 
@@ -161,6 +162,17 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        {
+            // non-causal models need the whole image in one ubatch
+            const int n_ubatch = llama_n_ubatch(lctx);
+            auto mem = mtmd_get_memory_usage(clip_path, mparams);
+            if (mem.use_non_causal && mem.image_max_tokens > n_ubatch) {
+                LOG_WRN("%s: cap image_max_tokens (original=%d) to n_ubatch (%d) because model needs non-causal attention on image\n", __func__, mem.image_max_tokens, n_ubatch);
+                LOG_WRN("%s: increase n_ubatch (-ub) to increase vision token budget\n", __func__);
+                mparams.image_max_tokens = n_ubatch;
+                mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_ubatch);
+            }
+        }
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
@@ -170,6 +182,12 @@ struct mtmd_cli_context {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
+
+        video_ffmpeg_bin_dir = params.video_ffmpeg_bin_dir;
+        init_opt.video_params.fps_target = params.video_fps;
+        init_opt.video_params.timestamp_interval_ms = params.video_timestamp_interval_ms;
+        init_opt.video_params.ffmpeg_bin_dir = video_ffmpeg_bin_dir.empty()
+                            ? nullptr : video_ffmpeg_bin_dir.c_str();
     }
 
     bool check_antiprompt(const llama_tokens & generated_tokens) {
@@ -184,7 +202,7 @@ struct mtmd_cli_context {
     }
 
     bool load_media(const std::string & fname) {
-        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false);
+        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false, init_opt);
         if (!res.bitmap) {
             return false;
         }
@@ -222,9 +240,9 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         }
 
         // eval the token
-        common_batch_clear(ctx.batch);
-        common_batch_add(ctx.batch, token_id, ctx.n_past++, {0}, true);
-        if (llama_decode(ctx.lctx, ctx.batch)) {
+        ctx.batch.clear();
+        ctx.batch.add(token_id, ctx.n_past++, 0, true);
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
             LOG_ERR("failed to decode token\n");
             return 1;
         }
@@ -256,21 +274,50 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     auto formatted_chat = chat_add_and_format(ctx, msg);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
-    mtmd_input_text text;
-    text.text          = formatted_chat.data();
-    text.text_len      = formatted_chat.size();
-    text.add_special   = add_bos;
-    text.parse_special = true;
-
     if (g_is_interrupted) return 0;
 
-    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    // note: we replace the marker here instead of letting mtmd_tokenize() to do that
+    //       because we want to demonstrate how to use mtmd_tokenize_from_parts()
+
+    // split the formatted chat on the media marker to get text segments
+    const std::string marker = mtmd_default_marker();
+    std::vector<std::string> segments;
+    size_t start = 0;
+    size_t pos;
+    while ((pos = formatted_chat.find(marker, start)) != std::string::npos) {
+        segments.push_back(formatted_chat.substr(start, pos - start));
+        start = pos + marker.size();
+    }
+    segments.push_back(formatted_chat.substr(start));
+
     auto bitmaps_c_ptr = ctx.bitmaps.c_ptr();
-    int32_t res = mtmd_tokenize(ctx.ctx_vision.get(),
+    if (segments.size() - 1 != bitmaps_c_ptr.size()) {
+        LOG_ERR("Number of media markers (%zu) does not match number of loaded media (%zu)\n",
+                segments.size() - 1, bitmaps_c_ptr.size());
+        return 1;
+    }
+
+    // interleave text and media parts
+    std::vector<mtmd_input_text> texts(segments.size());
+    std::vector<mtmd_input_part> parts;
+    for (size_t i = 0; i < segments.size(); i++) {
+        texts[i] = {segments[i].data(), segments[i].size(), /* add_special */ false, /* parse_special */ true};
+        parts.push_back({&texts[i], nullptr});
+        if (i < bitmaps_c_ptr.size()) {
+            parts.push_back({nullptr, bitmaps_c_ptr[i]});
+        }
+    }
+    std::vector<const mtmd_input_part *> parts_ptr;
+    for (const auto & p : parts) {
+        parts_ptr.push_back(&p);
+    }
+
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    int32_t res = mtmd_tokenize_from_parts(ctx.ctx_vision.get(),
                         chunks.ptr.get(), // output
-                        &text, // text
-                        bitmaps_c_ptr.data(),
-                        bitmaps_c_ptr.size());
+                        parts_ptr.data(),
+                        parts_ptr.size(),
+                        add_bos);
     if (res != 0) {
         LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
         return 1;
@@ -493,6 +540,10 @@ int main(int argc, char ** argv) {
             console::readline(line, false);
             if (g_is_interrupted) break;
             console::set_display(DISPLAY_TYPE_RESET);
+            // a submitted line always ends with a newline, an empty read is EOF
+            if (line.empty()) {
+                break;
+            }
             line = string_strip(line);
             if (line.empty()) {
                 continue;

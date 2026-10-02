@@ -30,14 +30,15 @@ GGML_OP_CONVERTER(translate_sqr);
 GGML_OP_CONVERTER(translate_rope);
 GGML_OP_CONVERTER(translate_scale);
 GGML_OP_CONVERTER(translate_sqrt);
-GGML_OP_CONVERTER(translate_unary_silu);
 GGML_OP_CONVERTER(translate_unary_softplus);
 GGML_OP_CONVERTER(translate_soft_max);
 GGML_OP_CONVERTER(translate_transpose);
 GGML_OP_CONVERTER(translate_view);
 GGML_OP_CONVERTER(translate_glu_swiglu);
 GGML_OP_CONVERTER(translate_glu_swiglu_oai);
+GGML_OP_CONVERTER(translate_glu_swiglu_clamp);
 GGML_OP_CONVERTER(translate_glu_geglu);
+GGML_OP_CONVERTER(translate_glu_geglu_quick);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
 GGML_OP_CONVERTER(translate_argsort);
@@ -53,6 +54,8 @@ GGML_OP_CONVERTER(translate_set);
 GGML_OP_CONVERTER(translate_diag);
 GGML_OP_CONVERTER(translate_tri);
 GGML_OP_CONVERTER(translate_solve_tri);
+GGML_OP_CONVERTER(translate_pool_2d);
+GGML_OP_CONVERTER(translate_roll);
 
 }  // namespace op
 

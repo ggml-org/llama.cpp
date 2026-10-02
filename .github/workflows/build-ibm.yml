@@ -19,7 +19,8 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-ibm.yml',
-      'ggml/src/ggml-cpu/**'
+      'ggml/src/ggml-cpu/**',
+      'ggml/src/ggml-zdnn/**'
     ]
 
 concurrency:
@@ -34,9 +35,14 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-
   ubuntu-24-s390x:
+    name: ubuntu-24-s390x (VXE ${{ matrix.vxe }})
     runs-on: ubuntu-24.04-s390x
+
+    strategy:
+      fail-fast: false
+      matrix:
+        vxe: ["ON", "OFF"]  # `-DGGML_VXE=ON/OFF`
 
     steps:
       - name: Clone
@@ -77,7 +83,8 @@ jobs:
         run: |
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_VXE=${{ matrix.vxe }}
           time cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -93,6 +100,46 @@ jobs:
           echo "Fetch llama2c big-endian model"
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+  ubuntu-26-zdnn-s390x:
+    name: ubuntu-26-zdnn-s390x
+    runs-on: ubuntu-24.04-s390x
+    container: ubuntu:26.04  # required to get GCC 15.1 and binutils 2.44
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Build Dependencies
+        id: build_depends
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git ca-certificates \
+            libssl-dev libzdnn-dev
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Toolchain workaround (GCC 15)
+        run: |
+          apt-get install -y gcc-15 g++-15
+          echo "CC=gcc-15" >> "$GITHUB_ENV"
+          echo "CXX=g++-15" >> "$GITHUB_ENV"
+
+      - name: Build with zDNN Backend
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_VXE=ON \
+            -DGGML_ZDNN=ON \
+            -DGGML_RPC=ON \
+            -DCMAKE_C_FLAGS="-march=arch15" \
+            -DCMAKE_CXX_FLAGS="-march=arch15"
+          time cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-ppc64le:
     runs-on: ubuntu-24.04-ppc64le
