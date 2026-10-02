@@ -3,13 +3,13 @@
 #include "quantize.h"
 
 template<typename T0, typename T1>
-kernel void kernel_cpy_t_t(
+static inline void cpy_t_t_impl(
         constant ggml_metal_kargs_cpy & args,
         device  const char * src0,
         device        char * dst,
-        uint3   tgpig[[threadgroup_position_in_grid]],
-        ushort3 tpitg[[thread_position_in_threadgroup]],
-        ushort3   ntg[[threads_per_threadgroup]]) {
+        uint3   tgpig,
+        ushort3 tpitg,
+        ushort3   ntg) {
     const int32_t i03 = tgpig[2];
     const int32_t i02 = tgpig[1];
     const int32_t i01 = ntg[1] == 1 ? tgpig[0]%args.ne01 : tgpig[0]*ntg[1] + tpitg.y;
@@ -34,6 +34,35 @@ kernel void kernel_cpy_t_t(
         break;
     }
 }
+
+template<typename T0, typename T1>
+kernel void kernel_cpy_t_t(
+        constant ggml_metal_kargs_cpy & args,
+        device  const char * src0,
+        device        char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    cpy_t_t_impl<T0, T1>(args, src0, dst, tgpig, tpitg, ntg);
+}
+
+// the grid z dimension runs over ne03 x the copies of the batch
+template<typename T0, typename T1>
+kernel void kernel_cpy_batch_t_t(
+        constant ggml_metal_kargs_cpy_batch & args,
+        device  const char * src0,
+        device        char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int32_t ic = tgpig[2]/args.cpy.ne03;
+
+    cpy_t_t_impl<T0, T1>(args.cpy, src0 + args.dsrc[ic], dst + args.ddst[ic], uint3(tgpig[0], tgpig[1], tgpig[2]%args.cpy.ne03), tpitg, ntg);
+}
+
+typedef decltype(kernel_cpy_batch_t_t<float, float>) kernel_cpy_batch_t;
+
+template [[host_name("kernel_cpy_batch_f32_f32")]] kernel kernel_cpy_batch_t kernel_cpy_batch_t_t<float, float>;
 
 typedef decltype(kernel_cpy_t_t<float, float>) kernel_cpy_t;
 
@@ -171,7 +200,8 @@ kernel void kernel_concat(
 
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = ntg.y == 1 ? tgpig.x : tgpig.x*ntg.y + tpitg.y;
+    const int i1 = ntg.y == 1 ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
+    const int ic = ntg.y == 1 ? tgpig.x%args.nc0 : 0;
 
     if (i1 >= args.ne1) {
         return;
@@ -180,7 +210,11 @@ kernel void kernel_concat(
     int o[4] = {0, 0, 0, 0};
     o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
 
-    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+    // chunk ic of nc0 along the row
+    const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
+    const int i0e = min(args.ne0, (ic + 1)*n0);
+
+    for (int i0 = ic*n0 + tpitg.x; i0 < i0e; i0 += ntg.x) {
         device const T * x;
 
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
@@ -220,7 +254,8 @@ kernel void kernel_concat_q(
     // note: for quantized types, the args are in units of blocks (nb0 == type_size)
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = ntg.y == 1 ? tgpig.x : tgpig.x*ntg.y + tpitg.y;
+    const int i1 = ntg.y == 1 ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
+    const int ic = ntg.y == 1 ? tgpig.x%args.nc0 : 0;
 
     if (i1 >= args.ne1) {
         return;
@@ -229,7 +264,11 @@ kernel void kernel_concat_q(
     int o[4] = {0, 0, 0, 0};
     o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
 
-    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+    // chunk ic of nc0 along the row
+    const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
+    const int i0e = min(args.ne0, (ic + 1)*n0);
+
+    for (int i0 = ic*n0 + tpitg.x; i0 < i0e; i0 += ntg.x) {
         device const block_q * x;
 
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {

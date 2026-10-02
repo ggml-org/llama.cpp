@@ -31,6 +31,7 @@
 
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
+#define N_NC_Q4_0 2 // src1 rows of kernel_mul_mv_q4_0_f32_nc
 
 #define N_R0_Q4_1 4
 #define N_SG_Q4_1 2
@@ -122,6 +123,7 @@
 #define FC_DSV4_HC                     2000
 #define FC_PAD                         2100
 #define FC_FLASH_ATTN_EXT_TENSOR       2200
+#define FC_MUL_MV_MMA                  2300
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -215,6 +217,7 @@ typedef struct {
     uint64_t nb2;
     uint64_t nb3;
     int32_t  dim;
+    int32_t  nc0;
 } ggml_metal_kargs_concat;
 
 typedef struct {
@@ -318,6 +321,15 @@ typedef struct {
     uint64_t nb2;
     uint64_t nb3;
 } ggml_metal_kargs_cpy;
+
+#define GGML_METAL_CPY_BATCH_MAX 16
+
+// consecutive copies with one layout, each shifted by a byte offset in the source and in the destination
+typedef struct {
+    ggml_metal_kargs_cpy cpy;
+    int64_t dsrc[GGML_METAL_CPY_BATCH_MAX];
+    int64_t ddst[GGML_METAL_CPY_BATCH_MAX];
+} ggml_metal_kargs_cpy_batch;
 
 typedef struct {
     int64_t  ne10;

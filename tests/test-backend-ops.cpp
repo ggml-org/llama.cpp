@@ -1292,6 +1292,7 @@ struct test_case {
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
     virtual bool use_weight_context() { return false; }
+    virtual void prepare_graph(ggml_cgraph * graph) { GGML_UNUSED(graph); }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1463,6 +1464,7 @@ struct test_case {
 
         // build graph
         ggml_build_forward_expand(gf, out);
+        prepare_graph(gf);
 
         // add sentinels as graph nodes so that they are checked in the callback
         for (ggml_tensor * sentinel : sentinels) {
@@ -7149,6 +7151,197 @@ struct test_moe_reduce : public test_case {
     }
 };
 
+enum cpy_batch_dst {
+    CPY_BATCH_DST_DISJOINT, // each copy writes its own row
+    CPY_BATCH_DST_SAME,     // every copy writes the same row, so the copies must stay ordered
+    CPY_BATCH_DST_HALF,     // each copy overlaps half of the previous one, so the copies must stay ordered
+};
+
+static std::string var_to_str(cpy_batch_dst dst) {
+    switch (dst) {
+        case CPY_BATCH_DST_DISJOINT: return "disjoint";
+        case CPY_BATCH_DST_SAME:     return "same";
+        case CPY_BATCH_DST_HALF:     return "half";
+    }
+    return "unknown";
+}
+
+// copies from overlapping windows of one tensor into views of another, adjacent in the graph, which backends may batch.
+// reads of the whole destination before and after the copies must not run concurrently with them.
+struct test_cpy_batch : public test_case {
+    const int64_t n_cols;
+    const int64_t n_tok;
+    const int64_t n_cpy;
+    const cpy_batch_dst dst;
+    std::vector<ggml_tensor *> cpys;
+    ggml_tensor * pre  = nullptr;
+    ggml_tensor * post = nullptr;
+
+    std::string vars() override {
+        return VARS_TO_STR4(n_cols, n_tok, n_cpy, dst);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CPY_BATCH";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override {
+        std::vector<ggml_tensor *> nodes = cpys;
+        nodes.push_back(pre);
+        nodes.push_back(post);
+        return nodes;
+    }
+
+    test_cpy_batch(int64_t n_cols, int64_t n_tok, int64_t n_cpy, cpy_batch_dst dst = CPY_BATCH_DST_DISJOINT)
+        : n_cols(n_cols), n_tok(n_tok), n_cpy(n_cpy), dst(dst) {
+        GGML_ASSERT(n_cpy <= n_tok + 1);
+    }
+
+    size_t dst_offset(const ggml_tensor * slots, int64_t i) const {
+        switch (dst) {
+            case CPY_BATCH_DST_DISJOINT: return i*slots->nb[1];
+            case CPY_BATCH_DST_SAME:     return 0;
+            case CPY_BATCH_DST_HALF:     return i*slots->nb[1]/2;
+        }
+        return 0;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t w = 3;
+
+        ggml_tensor * src   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_tok + w, n_cols);
+        ggml_tensor * slots = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, w*n_cols, n_cpy);
+        ggml_set_name(src,   "src");
+        ggml_set_name(slots, "slots");
+
+        pre = ggml_scale(ctx, slots, 2.0f);
+        ggml_set_name(pre, "pre");
+
+        cpys.clear();
+        for (int64_t i = 0; i < n_cpy; ++i) {
+            ggml_tensor * win = ggml_view_2d(ctx, src, w, n_cols, src->nb[1], ggml_row_size(GGML_TYPE_F32, n_tok - i));
+            ggml_tensor * row = ggml_view_2d(ctx, slots, w, n_cols, ggml_row_size(GGML_TYPE_F32, w), dst_offset(slots, i));
+            cpys.push_back(ggml_cpy(ctx, win, row));
+        }
+
+        post = ggml_add(ctx, pre, slots);
+        ggml_set_name(post, "out");
+
+        return post;
+    }
+
+    // views first, then the read before the copies, the adjacent copies, and the read after them
+    int node_rank(const ggml_tensor * t) const {
+        if (t->op == GGML_OP_VIEW) {
+            return 0;
+        }
+        if (t == pre) {
+            return 1;
+        }
+        return t->op == GGML_OP_CPY ? 2 : 3;
+    }
+
+    void prepare_graph(ggml_cgraph * gf) override {
+        for (ggml_tensor * c : cpys) {
+            ggml_build_forward_expand(gf, c);
+        }
+
+        ggml_tensor ** nodes = ggml_graph_nodes(gf);
+        std::stable_sort(nodes, nodes + ggml_graph_n_nodes(gf), [this](const ggml_tensor * a, const ggml_tensor * b) {
+            return node_rank(a) < node_rank(b);
+        });
+    }
+};
+
+// mul_mat with src1 in [0, 1]: a zero-mean src1 hides errors in the zero point or the min of a quantized src0
+struct test_mul_mat_pos : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",src1=[0,1]";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_F32) {
+                init_tensor_uniform(t, 0.0f, 1.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+enum mul_mat_add_mode {
+    MUL_MAT_ADD_MM_RES,     // mm + res
+    MUL_MAT_ADD_RES_MM,     // res + mm
+    MUL_MAT_ADD_ROW,        // mm + a one-row res, which a same-shape fusion must leave alone
+    MUL_MAT_ADD_RES_INPLACE, // res += mm
+    MUL_MAT_ADD_B_INPLACE,   // b += mm: the sum overwrites the mat-mul input (m == k)
+};
+
+static std::string var_to_str(mul_mat_add_mode mode) {
+    switch (mode) {
+        case MUL_MAT_ADD_MM_RES:      return "mm+res";
+        case MUL_MAT_ADD_RES_MM:      return "res+mm";
+        case MUL_MAT_ADD_ROW:         return "mm+row";
+        case MUL_MAT_ADD_RES_INPLACE: return "res+=mm";
+        case MUL_MAT_ADD_B_INPLACE:   return "b+=mm";
+    }
+    return "unknown";
+}
+
+// mul_mat followed by an add of a residual, which backends may fuse into the mat-mul
+struct test_mul_mat_add : public test_case {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const mul_mat_add_mode mode;
+
+    test_mul_mat_add(ggml_type type_a, int64_t m, int64_t n, int64_t k, mul_mat_add_mode mode = MUL_MAT_ADD_MM_RES)
+        : type_a(type_a), m(m), n(n), k(k), mode(mode) {
+        GGML_ASSERT(mode != MUL_MAT_ADD_B_INPLACE || m == k);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR5(type_a, m, n, k, mode);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a   = ggml_new_tensor_2d(ctx, type_a,        k, m);
+        ggml_tensor * b   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m, mode == MUL_MAT_ADD_ROW ? 1 : n);
+
+        ggml_tensor * mm  = ggml_mul_mat(ctx, a, b);
+        ggml_tensor * out = nullptr;
+        switch (mode) {
+            case MUL_MAT_ADD_MM_RES:
+            case MUL_MAT_ADD_ROW:         out = ggml_add(ctx, mm, res);         break;
+            case MUL_MAT_ADD_RES_MM:      out = ggml_add(ctx, res, mm);         break;
+            case MUL_MAT_ADD_RES_INPLACE: out = ggml_add_inplace(ctx, res, mm); break;
+            case MUL_MAT_ADD_B_INPLACE:   out = ggml_add_inplace(ctx, b, mm);   break;
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 struct test_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -10243,6 +10436,48 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
 
+    // recurrent rollback snapshots: more copies than one batch holds, a partial batch, and copies that must stay ordered
+    test_cases.emplace_back(new test_cpy_batch(10240, 8,  8));
+    test_cases.emplace_back(new test_cpy_batch(1000,  20, 18));
+    test_cases.emplace_back(new test_cpy_batch(1000,  8,  3));
+    test_cases.emplace_back(new test_cpy_batch(1000,  8,  4, CPY_BATCH_DST_SAME));
+    test_cases.emplace_back(new test_cpy_batch(1000,  8,  4, CPY_BATCH_DST_HALF));
+
+    // few src1 rows (speculative verify): odd m, a single K block, long K, every tile width, broadcast batches
+    for (int64_t n : {2, 3, 5, 8, 9, 13, 16}) {
+        for (auto [m, k] : std::vector<std::pair<int64_t, int64_t>>{{40, 32}, {100, 96}, {1000, 5120}, {3000, 1024}, {6144, 5120}, {17408, 512}}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 64, n, 256, {3, 2}, {2, 1}));
+        for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0,
+                                 GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 48,  n, 2560, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000, n, 1024, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 3000, n, 512,  {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 4100, n, 256,  {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 64,  n, 256,  {3, 2}, {2, 1}));
+            // a K that is not a multiple of the 64-weight chunk takes the other kernels
+            if (96 % ggml_blck_size(type_a) == 0) {
+                test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 100, n, 96, {1, 1}, {1, 1}));
+            }
+        }
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q5_K, GGML_TYPE_F16}) {
+            for (mul_mat_add_mode mode : {MUL_MAT_ADD_MM_RES, MUL_MAT_ADD_RES_MM, MUL_MAT_ADD_ROW, MUL_MAT_ADD_RES_INPLACE}) {
+                test_cases.emplace_back(new test_mul_mat_add(type_a, 1000, n, 1024, mode));
+            }
+            test_cases.emplace_back(new test_mul_mat_add(type_a, 2048, n, 2048, MUL_MAT_ADD_B_INPLACE));
+        }
+        // the widest tiles with two src1 tiles, and src1 rows padded in memory
+        for (ggml_type type_a : {GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 8192, n, 512,  {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000, n, 1024, {1, 1}, {1, 1}, {0, 1, 2, 3}, 1280));
+        }
+        // a src1 with a nonzero mean, for the zero points and mins of quantized src0 types
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+            test_cases.emplace_back(new test_mul_mat_pos(type_a, GGML_TYPE_F32, 1000, n, 1024, {1, 1}, {1, 1}));
+        }
+    }
+
 #if 0
     {
         // Test paths in OpenCL
@@ -10813,6 +11048,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_concat(type_a, {128, 12, 13, 14}, dim == 0 ? 256 : 7, dim, v));
             }
         }
+    }
+
+    // few long rows, which backends may split across workgroups
+    for (int dim : { 0, 1 }) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {98304, 8, 1, 1}, dim == 0 ? 288 : 2, dim, 0));
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {20000, 3, 2, 1}, dim == 0 ? 333 : 1, dim, 1));
+        test_cases.emplace_back(new test_concat(GGML_TYPE_Q8_0, {8192, 2, 1, 1}, dim == 0 ? 4096 : 1, dim, 0));
     }
 
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
