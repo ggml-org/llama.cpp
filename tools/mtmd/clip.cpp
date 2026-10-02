@@ -162,6 +162,9 @@ struct clip_ctx {
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
+    std::unique_ptr<mtmd_compute_workspace> workspace;
+    ggml_backend_sched_eval_callback cb_eval = nullptr;
+    void * cb_eval_user_data = nullptr;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
@@ -179,6 +182,8 @@ struct clip_ctx {
     uint32_t rng_seed = UINT32_MAX;
 
     clip_ctx(clip_context_params & ctx_params) {
+        cb_eval = ctx_params.cb_eval;
+        cb_eval_user_data = ctx_params.cb_eval_user_data;
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -229,6 +234,9 @@ struct clip_ctx {
     }
 
     ~clip_ctx() {
+        workspace.reset();
+        sched.reset();
+        buf.reset();
         ggml_backend_free(backend);
         if (backend != backend_cpu) {
             ggml_backend_free(backend_cpu);
@@ -3859,7 +3867,9 @@ struct clip_model_loader {
     // only initialize backend buffers, but do not allocate them yet
     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
         ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
-        ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
+        if (!ggml_backend_sched_reserve(ctx_clip.sched.get(), gf)) {
+            throw std::runtime_error("failed to reserve vision/audio compute workspace");
+        }
 
         ctx_clip.mem_compute.clear();
         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
@@ -4522,6 +4532,61 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
     return clip_encode(ctx, &params);
 }
 
+// Measure the current image shape after retiring all addresses from the previous graph.
+bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & batch,
+        std::vector<ggml_backend_memory_workspace_group> & output,
+        ggml_backend_buffer_type_t compute_type) {
+    if (!ctx || batch.entries.empty() || (!ctx->support_batch &&
+            batch.entries.size() > size_t(clip_model_n_temporal_merge(ctx)))) return false;
+    if (compute_type && compute_type != ctx->backend_buft.front()) {
+        if (!ggml_backend_supports_buft(ctx->backend,compute_type)) return false;
+        auto types=ctx->backend_buft;
+        types.front()=compute_type;
+        ggml_backend_sched_ptr next(ggml_backend_sched_new(ctx->backend_ptrs.data(),types.data(),
+            int(types.size()),size_t(ctx->max_nodes),false,true));
+        if (!next) return false;
+        auto owner=std::make_unique<mtmd_compute_workspace>(next.get(),ctx->backend_ptrs,size_t(ctx->max_nodes));
+        if (!owner->supported()) return false;
+        if (ctx->workspace && !ctx->workspace->release()) return false;
+        ggml_backend_sched_synchronize(ctx->sched.get());
+        if (!owner->retire_graph()) return false;
+        ctx->workspace.reset();
+        ctx->sched=std::move(next);
+        ctx->backend_buft=std::move(types);
+        ggml_backend_sched_set_eval_callback(ctx->sched.get(),ctx->cb_eval,ctx->cb_eval_user_data);
+        ctx->workspace=std::move(owner);
+    }
+    if (!ctx->workspace) {
+        auto owner=std::make_unique<mtmd_compute_workspace>(ctx->sched.get(),ctx->backend_ptrs,size_t(ctx->max_nodes));
+        if (!owner->supported()) return false;
+        ctx->workspace=std::move(owner);
+    }
+    if (!ctx->workspace->release()) return false;
+    if (ctx->flash_attn_type == CLIP_FLASH_ATTN_TYPE_AUTO) {
+        ctx->flash_attn_type=CLIP_FLASH_ATTN_TYPE_ENABLED;
+        auto * probe=clip_get_graph_builder(ctx,batch)->build();
+        for (int i=0;i<ggml_graph_n_nodes(probe);++i) {
+            auto * node=ggml_graph_node(probe,i);
+            if (node->op == GGML_OP_FLASH_ATTN_EXT && !ggml_backend_supports_op(ctx->backend,node)) {
+                ctx->flash_attn_type=CLIP_FLASH_ATTN_TYPE_DISABLED;
+                break;
+            }
+        }
+    }
+    auto * graph=clip_get_graph_builder(ctx,batch)->build();
+    return ctx->workspace->measure(graph,output);
+}
+
+// Validate grants before attachment; encoding after measurement requires a successful binding.
+bool clip_attach_compute_workspace(clip_ctx * ctx,const std::vector<ggml_backend_memory_lease_t> & leases) {
+    return ctx && ctx->workspace && ctx->workspace->attach(leases);
+}
+
+// Retain model metadata and host embeddings while returning the borrowed compute storage.
+bool clip_release_compute_workspace(clip_ctx * ctx) {
+    return ctx && (!ctx->workspace || ctx->workspace->release());
+}
+
 // persisted state slots of the gen-audio decoder, per pipeline
 static std::vector<c2w_state_slot> list_gen_state_slots(const clip_hparams & hparams, const clip_model & model) {
     switch (model.proj_type) {
@@ -4532,6 +4597,7 @@ static std::vector<c2w_state_slot> list_gen_state_slots(const clip_hparams & hpa
 }
 
 bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+    if (!ctx || !params || !params->imgs || params->imgs->entries.empty()) return false;
     const clip_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
 
@@ -4542,7 +4608,11 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     }
 
     // if buffers are not allocated, we need to do a warmup run to allocate them
-    if (!ctx->is_allocated) {
+    if (ctx->workspace && (!ctx->workspace->ready() || !ctx->workspace->retire_graph())) {
+        LOG_ERR("%s: borrowed vision workspace is not ready\n",__func__);
+        return false;
+    }
+    if (!ctx->is_allocated && !ctx->workspace) {
         clip_model_loader::warmup(*ctx, *params->imgs);
     }
 
@@ -4554,8 +4624,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs, params)->build();
-    if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
-        LOG_ERR("%s: failed to allocate compute graph\n", __func__);
+    if (!(ctx->workspace ? ctx->workspace->alloc_graph(gf) : ggml_backend_sched_alloc_graph(ctx->sched.get(),gf))) {
+        LOG_ERR("%s: failed to allocate vision/audio graph within its workspace\n",__func__);
         return false;
     }
 
@@ -5874,7 +5944,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         }
     }
 
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+    auto status = ctx->workspace ? ctx->workspace->compute_async(gf) : ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+    if (status == GGML_STATUS_SUCCESS && ctx->workspace && !ctx->workspace->drain()) status=GGML_STATUS_FAILED;
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;

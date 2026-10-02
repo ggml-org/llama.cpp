@@ -467,5 +467,24 @@ int main() {
         f.compute(t);
     });
 
+    t.test("late_attachment_failure_clears_partial_bindings", [](testing & t) {
+        fixture f(false);
+        arena_ptr foreign(ggml_backend_memory_arena_new(f.groups[1].workspace.buft,8192),ggml_backend_memory_arena_free);
+        if (!t.assert_true(bool(foreign) && ggml_backend_memory_arena_begin(foreign.get(),0)) ||
+                !t.assert_true(ggml_backend_memory_arena_reserve_at(foreign.get(),99,0,8192,
+                    f.groups[1].workspace.alignment,0,nullptr)) ||
+                !t.assert_true(ggml_backend_memory_arena_commit(foreign.get()))) return;
+        auto * lease=ggml_backend_memory_arena_acquire(foreign.get(),99);
+        if (!t.assert_true(lease != nullptr)) return;
+        const bool attached=ggml_backend_sched_attach_memory_lease(f.sched.get(),f.second.get(),lease);
+        ggml_backend_memory_lease_free(lease);
+        if (!t.assert_true(attached)) return;
+        if (!t.assert_true(f.workspace->register_resources(f.target.plan,{10,20})) ||
+                !t.assert_true(f.transition->prepare(f.target).status == status::prepared)) return;
+        t.assert_true(f.transition->activate(f.arenas).status == status::activation_failed);
+        t.assert_true(f.workspace->leases().empty());
+        t.assert_equal(size_t(0),ggml_backend_sched_get_buffer_size(f.sched.get(),f.first.get()));
+        t.assert_true(ggml_backend_sched_detach_memory_lease(f.sched.get(),f.second.get()));
+    });
     return t.summary();
 }

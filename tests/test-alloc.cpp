@@ -1405,6 +1405,36 @@ static void test_borrowed_buffer_range_shared_buffer_type() {
     GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 1));
 }
 
+// An exhausted range tail must keep best-fit placement identical to the measured plan.
+static void test_borrowed_buffer_exhausted_tail_matches_measurement() {
+    dummy_backend backend=dummy_backend_init(SIZE_MAX);
+    auto [ctx,graph,ctx_ptr]=make_context();
+    const size_t unit=backend.context->alignment;
+    auto tensor=[&](size_t units) { return ggml_new_tensor_1d(ctx,GGML_TYPE_F32,units*unit/sizeof(float)); };
+    auto * a=tensor(6); auto * b=tensor(2); auto * c=tensor(2); auto * d=tensor(2);
+    auto * free_a=tensor(1); auto * free_c=tensor(1);
+    float external=0;
+    free_a->data=free_c->data=&external;
+    free_a->src[0]=a; free_c->src[0]=c;
+    auto * e=tensor(2); auto * f=tensor(6);
+    for (auto * output : {b,d,e,f}) ggml_set_output(output);
+    ggml_tensor * nodes[]={a,b,c,d,free_a,free_c,e,f};
+    for (auto * node : nodes) graph->nodes[graph->n_nodes++]=node;
+    ggml_gallocr_ptr alloc(ggml_gallocr_new(&backend.buffer_type));
+    size_t bytes=0;
+    ggml_gallocr_reserve_n_size(alloc.get(),graph,nullptr,nullptr,&bytes);
+    GGML_ASSERT(bytes == 12*unit);
+    const size_t offset=2*unit;
+    ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(&backend.buffer_type,offset+bytes));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(alloc.get(),0,parent.get(),offset,bytes));
+    GGML_ASSERT(ggml_gallocr_reserve(alloc.get(),graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(alloc.get(),graph));
+    const auto base=uintptr_t(ggml_backend_buffer_get_base(parent.get()));
+    GGML_ASSERT(uintptr_t(e->data)-base == offset+8*unit);
+    GGML_ASSERT(uintptr_t(f->data)-base == offset);
+    GGML_ASSERT(backend.context->allocated_total() == offset+bytes);
+}
+
 // Verify that attaching a range after measurement replaces cached zero-based tensor placements.
 static void test_borrowed_buffer_range_after_measure() {
     dummy_backend backend = dummy_backend_init(SIZE_MAX);
@@ -1786,7 +1816,11 @@ static void run(const char * name, void (*f)()) {
     printf("PASSED\n");
 }
 
-int main() {
+int main(int argc,char ** argv) {
+    if (argc == 2 && !std::strcmp(argv[1],"--borrowed-tail")) {
+        run("test_borrowed_buffer_exhausted_tail_matches_measurement",test_borrowed_buffer_exhausted_tail_matches_measurement);
+        return 0;
+    }
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
@@ -1828,6 +1862,7 @@ int main() {
     run("test_borrowed_buffer_range_shared_buffer_type", test_borrowed_buffer_range_shared_buffer_type);
     run("test_borrowed_buffer_range_detach", test_borrowed_buffer_range_detach);
     run("test_borrowed_buffer_range_after_measure", test_borrowed_buffer_range_after_measure);
+    run("test_borrowed_buffer_exhausted_tail_matches_measurement",test_borrowed_buffer_exhausted_tail_matches_measurement);
     run("test_accelerator_borrowed_buffer_range", test_accelerator_borrowed_buffer_range);
     run("test_scheduler_borrowed_buffer_range", test_scheduler_borrowed_buffer_range);
     run("test_tallocr_range_capacity", test_tallocr_range_capacity);

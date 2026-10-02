@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-memory-transition.h"
+#include "llama.h"
 
 #include <functional>
 
@@ -27,25 +28,25 @@ struct llama_memory_workspace_hooks {
 // Omitted groups remain scheduler-owned. Callers must gate execution through the transition coordinator.
 class llama_memory_workspace : public llama_memory_consumer {
 public:
-    llama_memory_workspace(ggml_backend_sched_t sched,
+    LLAMA_API llama_memory_workspace(ggml_backend_sched_t sched,
             std::vector<llama_memory_workspace_group> groups, llama_memory_workspace_hooks hooks);
-    ~llama_memory_workspace() override;
+    LLAMA_API ~llama_memory_workspace() override;
     llama_memory_workspace(const llama_memory_workspace &) = delete;
     llama_memory_workspace & operator=(const llama_memory_workspace &) = delete;
 
     // Append one resource per buffer-type group and its configured size for each named stage.
     // No backend storage is allocated; failure leaves the plan unchanged.
-    bool register_resources(llama_memory_execution_plan & plan, const std::vector<llama_memory_stage_id> & stages) const;
+    LLAMA_API bool register_resources(llama_memory_execution_plan & plan, const std::vector<llama_memory_stage_id> & stages) const;
 
     // Validate exact maximum-workspace grants and stage lease attachment without touching live bindings.
-    bool prepare(const llama_memory_transition_target & target, const llama_memory_layout & layout,
+    LLAMA_API bool prepare(const llama_memory_transition_target & target, const llama_memory_layout & layout,
             std::unique_ptr<llama_memory_preparation> & output) override;
 
     // Drain, invalidate, and detach only owned leases. Failure retains remaining ownership and keeps this consumer closed.
-    bool close();
-    bool ready() const noexcept;
+    LLAMA_API bool close();
+    LLAMA_API bool ready() const noexcept;
     // Borrowed active attachments; invalidated by release, rebind, or close.
-    const std::vector<ggml_backend_memory_lease_t> & leases() const noexcept;
+    LLAMA_API const std::vector<ggml_backend_memory_lease_t> & leases() const noexcept;
 
 private:
     struct implementation;

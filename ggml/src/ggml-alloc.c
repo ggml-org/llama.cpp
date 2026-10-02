@@ -169,6 +169,7 @@ struct tallocr_chunk {
 struct ggml_dyn_tallocr {
     size_t alignment;
     size_t max_chunk_size;
+    bool bounded;
     struct tallocr_chunk * chunks[GGML_VBUFFER_MAX_CHUNKS];
     int n_chunks;
 
@@ -311,7 +312,8 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
     struct buffer_address  addr  = {.chunk = best_fit_chunk, .offset = block->offset };
     block->offset += size;
     block->size -= size;
-    if (block->size == 0) {
+    // Keep the empty range end so best-fit excludes the same tail as unbounded measurement.
+    if (block->size == 0 && !(alloc->bounded && best_fit_chunk == 0 && best_fit_block == chunk->n_free_blocks-1)) {
         // remove block if empty
         ggml_dyn_tallocr_remove_block(chunk, best_fit_block);
     }
@@ -403,6 +405,7 @@ static void ggml_dyn_tallocr_reset(struct ggml_dyn_tallocr * alloc) {
         alloc->chunks[i] = NULL;
     }
     alloc->n_chunks = 0;
+    alloc->bounded = false;
 
 #ifdef GGML_ALLOCATOR_DEBUG
     for (int i = 0; i < 1024; i++) {
@@ -414,6 +417,7 @@ static void ggml_dyn_tallocr_reset(struct ggml_dyn_tallocr * alloc) {
 // Start a new placement plan with one free range inside the parent buffer.
 static void ggml_dyn_tallocr_reset_with_range(struct ggml_dyn_tallocr * alloc, size_t offset, size_t size) {
     ggml_dyn_tallocr_reset(alloc);
+    alloc->bounded = true;
 
     const int chunk = ggml_dyn_tallocr_new_chunk(alloc, 0);
     GGML_ASSERT(chunk == 0);
@@ -429,6 +433,7 @@ static struct ggml_dyn_tallocr * ggml_dyn_tallocr_new(size_t alignment, size_t m
     *alloc = (struct ggml_dyn_tallocr) {
         /*.alignment      = */ alignment,
         /*.max_chunk_size = */ MIN(max_buffer_size, SIZE_MAX/2), // clamp to avoid overflows
+        /*.bounded        = */ false,
         /*.chunks         = */ {NULL},
         /*.n_chunks       = */ 0,
 #ifdef GGML_ALLOCATOR_DEBUG
@@ -964,6 +969,8 @@ static bool ggml_gallocr_reserve_n_impl(
         struct ggml_dyn_tallocr * talloc = galloc->buf_tallocs[i];
         const size_t range_end = galloc->buffer_offsets[i] + galloc->buffer_sizes[i];
         if (talloc->n_chunks != 1 || ggml_dyn_tallocr_max_size(talloc, 0) > range_end) {
+            GGML_LOG_WARN("%s: borrowed buffer %d requires %zu bytes in %d chunks; range ends at %zu\n",
+                __func__,i,ggml_dyn_tallocr_max_size(talloc,0),talloc->n_chunks,range_end);
             return false;
         }
     }

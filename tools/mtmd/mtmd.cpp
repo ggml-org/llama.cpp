@@ -4,6 +4,7 @@
 #include "mtmd-internal.h"
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
+#include "mtmd-workspace.h"
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
@@ -2113,15 +2114,15 @@ int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk)
     return 3; // "cannot batch" error code
 }
 
-static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
-    if (batch->entries.empty()) {
+static mtmd::input_chunk_ptr mtmd_batch_prepare_chunk(mtmd_batch * batch) {
+    if (!batch || batch->entries.empty()) {
         LOG_ERR("%s: batch is empty\n", __func__);
-        return 1;
+        return {};
     }
     for (const auto * chunk : batch->entries) {
         if (chunk->is_placeholder()) {
             LOG_ERR("%s: chunk is placeholder\n", __func__);
-            return 1;
+            return {};
         }
     }
 
@@ -2153,9 +2154,15 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
         }
     } else {
         LOG_ERR("%s: unsupported chunk type\n", __func__);
-        return 1;
+        return {};
     }
 
+    return batch_chunk;
+}
+
+static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
+    auto batch_chunk=mtmd_batch_prepare_chunk(batch);
+    if (!batch_chunk) return 1;
     LOG_DBG("%s: encoding batch with %zu entries and total %zu tokens\n",
             __func__, batch->entries.size(), mtmd_input_chunk_get_n_tokens(batch_chunk.get()));
     int32_t res = mtmd_encode_chunk_impl(
@@ -2163,6 +2170,27 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
         batch_chunk.get(),
         batch->output_embd);
     return res;
+}
+
+// The same combined chunk drives both measurement and execution, including temporal merges.
+bool mtmd_batch_measure_compute_workspace(mtmd_batch * batch,std::vector<ggml_backend_memory_workspace_group> & output,
+        ggml_backend_buffer_type_t compute_type) {
+    try {
+        auto chunk=mtmd_batch_prepare_chunk(batch);
+        return chunk && chunk->tokens_image && batch->ctx->ctx_v &&
+            clip_measure_compute_workspace(batch->ctx->ctx_v,chunk->tokens_image->batch_f32,output,compute_type);
+    } catch (const std::exception & error) {
+        LOG_ERR("%s: %s\n",__func__,error.what());
+        return false;
+    }
+}
+
+bool mtmd_attach_compute_workspace(mtmd_context * ctx,const std::vector<ggml_backend_memory_lease_t> & leases) {
+    return ctx && ctx->ctx_v && clip_attach_compute_workspace(ctx->ctx_v,leases);
+}
+
+bool mtmd_release_compute_workspace(mtmd_context * ctx) {
+    return ctx && ctx->ctx_v && clip_release_compute_workspace(ctx->ctx_v);
 }
 
 int32_t mtmd_batch_encode(mtmd_batch * batch) {

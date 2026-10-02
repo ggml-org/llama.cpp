@@ -160,9 +160,7 @@ struct llama_memory_workspace::implementation {
         // Validate all staged bindings before attachment; roll back partial new attachments on failure.
         bool bind(const std::vector<llama_memory_region_binding> & bindings) override {
             std::vector<attachment> next;
-            std::vector<ggml_backend_memory_lease_t> next_borrowed;
             next.reserve(desired.size());
-            next_borrowed.reserve(desired.size());
             for (const auto & place : desired) {
                 const llama_memory_region_binding * found = nullptr;
                 for (const auto & binding : bindings) {
@@ -178,7 +176,6 @@ struct llama_memory_workspace::implementation {
                 auto * buffer = ggml_backend_memory_lease_buffer(found->lease);
                 if (ggml_backend_buffer_get_type(buffer) != owner.groups[place.group].workspace.buft) return false;
                 next.push_back({place, workspace_lease_ptr(ggml_backend_memory_lease_retain(found->lease), ggml_backend_memory_lease_free)});
-                next_borrowed.push_back(next.back().lease.get());
             }
             if (!affected) {
                 if (next.size() != owner.active.size()) return false;
@@ -190,6 +187,7 @@ struct llama_memory_workspace::implementation {
             }
             if (!owner.active.empty()) return false;
             owner.active.reserve(next.size());
+            owner.borrowed.reserve(next.size());
             for (auto & binding : next) {
                 ggml_backend_buffer_set_usage(ggml_backend_memory_lease_buffer(binding.lease.get()), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
                 if (!ggml_backend_sched_attach_memory_lease(owner.sched, owner.backend(binding.where.group), binding.lease.get())) {
@@ -197,8 +195,8 @@ struct llama_memory_workspace::implementation {
                     return false;
                 }
                 owner.active.push_back(std::move(binding));
+                owner.borrowed.push_back(owner.active.back().lease.get());
             }
-            owner.borrowed = std::move(next_borrowed);
             return true;
         }
 

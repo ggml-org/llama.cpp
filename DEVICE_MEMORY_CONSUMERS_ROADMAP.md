@@ -432,7 +432,8 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.5a | Ready for review (combined) | - | Exact shared-device parent API/CLI, phase-arena compatibility alias, legacy fixed-pool preservation, and order-independent conflict rejection. |
 | 6.5b | Ready for review (combined) | - | Exact minimum KV bootstrap, all-phase startup validation, next-granule rejection, and phase-safe maximum-budget execution probing. |
 | 6.5c | Ready for review (combined) | - | Parseable grant/transition/residency/copy diagnostics plus full-model numerical, memory, and representative phase-arena performance qualification. |
-| 7.1a-7.5c | Planned | - | See substage dependencies and milestone acceptance gate; no vision integration stage is complete. |
+| 7.1a | Ready for review | - | Actual-batch mtmd workspace measurement, bounded borrowed execution, native-capture retirement and lease release; CPU ownership tests and real CUDA projector embeddings qualified. See evidence below. |
+| 7.1b-7.5c | Planned | - | Embedding handoff, text/image admission, three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3561,3 +3562,40 @@ Matched Release IQ4_XS measurement used context 139,264, prompt 138,752, 512 dec
 Relative to the stage-6.5 baseline at 23.734 tok/s, stages 6.6 and 6.7a together improve this point by **2.90%**. Benchmark artifacts are under `/tmp/cross-token-current-139k` and `/tmp/sparse-feedback-current-139k`. Sparse feedback targets optional marker overhead only; the remaining intra-token exposed H2D time belongs to the forthcoming per-layer deadline-aware residency/lookahead work.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+
+### Stage 7.1a: borrowed vision compute workspace
+
+Implemented on `feature/mmproj-v2` after rebasing onto V2 `e5a7b37d9`. This is the vision consumer seam, not a production multimodal streaming configuration. The server's streaming/mmproj rejection remains in place until the later integration stages.
+
+The private `mtmd-workspace.h` interface measures the actual preprocessed media batch, attaches one committed lease per canonical buffer-type group, executes inside those bounds, and drains and retires native graph captures before returning storage. It reuses `llama_memory_workspace` and `llama_memory_executor`, rather than adding another allocator or ownership model. The scheduler and backends outlive the consumer. Image embeddings retain their existing host-vector ownership; projector weights remain eagerly loaded outside the workspace.
+
+Measurement uses a detached size-only scheduler. It saves and restores tensor metadata and graph node lists because scheduler splitting can replace cross-backend inputs and backend optimization can rewrite nodes. Without restoration, the execution graph can differ from the measured graph. A too-small grant is rejected without a hidden scheduler-owned allocation; a larger subsequent batch fails cleanly and the original smaller batch can run again. New measurement explicitly retires the previous grants. The caller can request a compatible primary compute buffer type, allowing CUDA vision to borrow the text arena's physical `CUDA0_Device` storage even when the projector weights use UVM. Scheduler reconstruction preserves the evaluation callback.
+
+Two prerequisite infrastructure edge cases are included with regression tests: a failed second attachment now clears the already-attached first lease, and an exactly exhausted borrowed allocator tail keeps its zero-size end marker so best-fit placement agrees with unbounded measurement. The existing unbounded allocator path is unchanged. The cross-library workspace/executor methods used by mtmd have explicit export annotations; these remain internal C++ interfaces, not newly installed public APIs.
+
+Qualification:
+
+- TDD red cases covered missing owner behavior, partial-attachment rollback, exact-tail placement, measurement mutation and the requested physical CUDA buffer type before the fixes passed.
+- The new CPU suite passes **10 cases / 88 assertions**, covering measurement without compute allocation, canonical aliases, invalid types/counts, exact and larger grants, oversized graphs, foreign attachments, graph retirement, retained asynchronous dependencies, release ordering and reentry rejection.
+- The real-model suite passes **11 cases / 183 assertions** using the downloaded F16 projector from the same IQ4_XS GGUF snapshot. Four complete embedding comparisons have **zero maximum absolute error** against ordinary mtmd encoding. The oversized-image rejection is followed by successful execution of the original batch, and host embeddings remain readable after workspace release.
+- The four focused suites (`test-mtmd-workspace`, `test-memory-workspace`, `test-alloc`, `test-mtmd-c-api`) pass Release, ASan with leak checking and UBSan. Eighteen additional/focused Release suite selections cover the common planner, transitions, executor, activation/recovery, KV geometry/policy/binding and backend memory APIs; the complete Release allocator suite also passes on CUDA.
+- CUDA Compute Sanitizer memcheck passes the real-model suite with UVM enabled for weights and physical device-local workspace leases: **zero errors**. The complete server target rebuilds successfully. Production is restored with its original image and configuration after testing.
+
+| Synthetic input size | Measured total borrowed workspace | Maximum embedding error |
+| --- | ---: | ---: |
+| 320 x 320 | 12.903 MiB | 0 |
+| 640 x 384 | 30.967 MiB | 0 |
+| 1024 x 768 | 99.094 MiB | 0 |
+| 1280 x 1024 | 165.156 MiB | 0 |
+
+These are allocation and numerical equivalence tests, not grounding-quality or end-to-end generation benchmarks. The fixtures allow smaller image-token counts to exercise variable workspace sizes. Native capture retirement is currently qualified for CPU and CUDA, matching the existing text consumer capability gate; other backends reject this opt-in path until a safe retirement hook is available. Their ordinary mtmd path remains unchanged. Windows export annotations are included, but no Windows build was available for validation. Audio borrowing, independent multi-image handoff, M-RoPE/physical KV-index separation, live text/vision/MTP coordination, projector unload/reload, and server admission belong to later stages.
+
+Run the CPU suite with `build-device-memory-infra-cuda-release/bin/test-mtmd-workspace`. Run the optional real-projector fixture with:
+
+```sh
+build-device-memory-infra-cuda-release/bin/test-mtmd-workspace \
+    --cuda --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+    --mmproj /path/to/mmproj-F16.gguf
+```
+
+For CUDA memory checks, prefix that invocation with `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --error-exitcode 1`. Validation logs are under `/tmp/vision-7.1a-cuda-final.log` and `/tmp/vision-7.1a-cuda-memcheck-final.log`. Stage files and this roadmap are staged for user review; no assistant commit or push was made.

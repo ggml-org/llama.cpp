@@ -16,6 +16,8 @@ add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
             mtmd-image.cpp
+            mtmd-workspace.cpp
+            mtmd-workspace.h
             mtmd.h
             mtmd-internal.h
             mtmd-helper.cpp

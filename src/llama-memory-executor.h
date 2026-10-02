@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-memory-requirements.h"
+#include "llama.h"
 #include "../ggml/src/ggml-backend-memory.h"
 
 #include <exception>
@@ -25,11 +26,11 @@ public:
     llama_memory_execution & operator=(const llama_memory_execution &) = delete;
 
     // Access native resources only while this pin remains valid.
-    explicit operator bool() const noexcept;
-    llama_memory_executable * executable() const noexcept;
+    LLAMA_API explicit operator bool() const noexcept;
+    LLAMA_API llama_memory_executable * executable() const noexcept;
 
     // Release the pin after completion; retained leases may become reusable.
-    void reset() noexcept;
+    LLAMA_API void reset() noexcept;
 
 private:
     friend class llama_memory_executor;
@@ -64,13 +65,13 @@ struct llama_memory_executor_result {
 class llama_memory_executor {
 public:
     llama_memory_executor() = default;
-    ~llama_memory_executor();
+    LLAMA_API ~llama_memory_executor();
     llama_memory_executor(const llama_memory_executor &) = delete;
     llama_memory_executor & operator=(const llama_memory_executor &) = delete;
 
     // Adopt an idle executable after retaining its leases; failure leaves the caller's executable unchanged.
     // Exact aliases are normalized; conflicting IDs, null leases, and replacement of a live capture are rejected.
-    bool capture(
+    LLAMA_API bool capture(
             std::unique_ptr<llama_memory_executable> & executable,
             const std::vector<ggml_backend_memory_lease_t> & bindings,
             uint64_t runtime_revision);
@@ -79,23 +80,23 @@ public:
     bool matches(const std::vector<ggml_backend_memory_lease_t> & bindings, uint64_t runtime_revision) const;
 
     // Acquire before submission; an empty result rejects stale or closed execution.
-    llama_memory_execution acquire(
+    LLAMA_API llama_memory_execution acquire(
             const std::vector<ggml_backend_memory_lease_t> & bindings, uint64_t runtime_revision) const;
 
     // Test whether a proposed resource change touches this capture.
     bool affected_by(const std::vector<llama_memory_resource_id> & resources) const noexcept;
 
     // Close submission admission before a coordinator drains multiple participants.
-    void quiesce() noexcept;
+    LLAMA_API void quiesce() noexcept;
 
     // Close admission, drain, and invalidate native resources before releasing leases.
     // Failure or unreturned pins remain fail-closed and can be retried.
-    llama_memory_executor_result retire(llama_memory_executor_backend & backend);
+    LLAMA_API llama_memory_executor_result retire(llama_memory_executor_backend & backend);
     llama_memory_executor_result retire_if_affected(
             llama_memory_executor_backend & backend, const std::vector<llama_memory_resource_id> & resources);
 
     // Inspect launch admission and the number of outstanding pins, not GPU completion.
-    bool ready() const noexcept;
+    LLAMA_API bool ready() const noexcept;
     size_t outstanding() const noexcept;
 
 private:
