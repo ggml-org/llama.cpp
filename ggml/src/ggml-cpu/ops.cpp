@@ -5784,7 +5784,6 @@ static void ggml_compute_forward_soft_max_ext_back_f32(
         // linear runtime, no additional memory
         float dot_y_dy = 0;
         ggml_vec_dot_f32(nc, &dot_y_dy, 0, y, 0, dy, 0, 1);
-        // This is safe if dst aliases either source and matches the CUDA reference.
         for (int i = 0; i < nc; i++) {
             dx[i] = scale * (dy[i] - dot_y_dy) * y[i];
         }
