@@ -234,7 +234,7 @@ class ModelBase:
 
         prefix = "model" if not self.is_mistral_format else "consolidated"
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
-        is_safetensors: bool = len(part_names) > 0
+        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / "model.safetensors.index.json").is_file())
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
@@ -1268,10 +1268,16 @@ class ModelBase:
         return inner
 
     @staticmethod
-    def load_hparams(dir_model: Path, is_mistral_format: bool):
+    def load_hparams(dir_model: Path, is_mistral_format: bool, guess: bool = True):
         if is_mistral_format:
             with open(dir_model / "params.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
+            return config
+
+        # checkpoints with a non-HF layout are matched by their own loader
+        # models with a HF layout can also register a hparams loader to switch to a custom class
+        config = ModelBase.load_hparams_guess(dir_model) if guess and dir_model.is_dir() else None
+        if config is not None:
             return config
 
         try:
@@ -1280,10 +1286,6 @@ class ModelBase:
             config = AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
-            if not (dir_model / "config.json").is_file():
-                config = ModelBase.load_hparams_guess(dir_model)
-                if config is not None:
-                    return config
             logger.warning("Trying to load config.json instead")
             with open(dir_model / "config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -1936,6 +1938,9 @@ class TextModel(ModelBase):
         if chkhsh == "653660222fb704f61cbf2b618a8ae6502b7f8b20c980f9a5de07ed78e13319cd":
             # ref: https://huggingface.co/ufakai/ufakzeka-1
             res = "ufakzeka"
+        if chkhsh == "4b05e02dad1c5ae07d266fd3342ddb644c6f6be058d728bc0a33af31a1d6ee66":
+            # ref: https://huggingface.co/jhu-clsp/mmBERT-base
+            res = "mmbert"
 
         if res is None:
             logger.warning("\n")
@@ -2566,6 +2571,11 @@ class TextModel(ModelBase):
 
         self.gguf_writer.add_add_space_prefix(False)
 
+        if (add_bos := tokenizer_config.get("add_bos_token")) is not None:
+            self.gguf_writer.add_add_bos_token(add_bos)
+        if (add_eos := tokenizer_config.get("add_eos_token")) is not None:
+            self.gguf_writer.add_add_eos_token(add_eos)
+
 
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
@@ -2873,6 +2883,11 @@ else:
     # Older torch builds do not expose F8_E8M0. Keep the raw bytes so callers
     # that know the format can decode them explicitly.
     LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch.uint8
+
+
+def jinja_str_or_json(name: str) -> str:
+    # jinja expression that renders a variable as-is if it is a string, as JSON otherwise
+    return "{{ " + name + " if " + name + " is string else " + name + " | tojson }}"
 
 
 def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:

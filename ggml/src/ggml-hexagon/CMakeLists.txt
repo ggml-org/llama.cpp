@@ -60,10 +60,10 @@ target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ht
 
 # Build HTP skels
 set(HTP_SKELS)
+set(HTP_PROJECTS)
 function(build_htp_skel V)
     ExternalProject_Add(htp-${V}
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/htp BUILD_ALWAYS ON
-        BUILD_BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so
         CMAKE_ARGS
             -DCMAKE_BUILD_TYPE=${GGML_HEXAGON_HTP_BUILD_TYPE}
             -DCMAKE_TOOLCHAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/htp/cmake-toolchain.cmake
@@ -74,7 +74,9 @@ function(build_htp_skel V)
             -DDSP_VERSION=${V}
             -DPREBUILT_LIB_DIR="toolv19_${V}")
     list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
+    list(APPEND HTP_PROJECTS htp-${V})
     set(HTP_SKELS ${HTP_SKELS} PARENT_SCOPE)
+    set(HTP_PROJECTS ${HTP_PROJECTS} PARENT_SCOPE)
 endfunction()
 
 build_htp_skel(v73)
@@ -101,7 +103,7 @@ if (CMAKE_SYSTEM_NAME MATCHES Windows AND GGML_HEXAGON_HTP_CERT)
     set(LIBGGML_HTP_CAT ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp.cat)
     add_custom_target(libggml-htp-cat
         BYPRODUCTS ${LIBGGML_HTP_CAT}
-        DEPENDS libggml-htp.inf ${HTP_SKELS}
+        DEPENDS libggml-htp.inf ${HTP_PROJECTS}
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/libggml-htp.inf ${CMAKE_CURRENT_BINARY_DIR}
         COMMAND ${INF2CAT} /driver:${CMAKE_CURRENT_BINARY_DIR} /os:10_25H2_ARM64
         COMMAND ${SIGNTOOL} sign /fd sha256 /f ${GGML_HEXAGON_HTP_CERT} ${LIBGGML_HTP_CAT}
