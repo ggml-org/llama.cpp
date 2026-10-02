@@ -12558,6 +12558,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_pool2d(
                 GGML_OP_POOL_MAX, GGML_TYPE_F32, {n_ps, 4, n_tokens, 1}, 128, 1, 128, 1, 0, 0));
         }
+    }   
+
+    // RMS_NORM and fused variants at decode and prefill shapes
+    for (int64_t n_tokens : {1, 512}) {
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {4096, n_tokens, 1, 1}));
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {128, 32*n_tokens, 1, 1}));
+        test_cases.emplace_back(new test_rms_norm_mul_rope({4096, n_tokens, 1, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NORMAL, true, false));
+        test_cases.emplace_back(new test_rms_norm_mul_rope({128, 32, n_tokens, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NEOX));
+        test_cases.emplace_back(new test_rms_norm_mul_rope({128, 8, n_tokens, 1}, 1e-6f, false, true, true, GGML_ROPE_TYPE_NEOX));
     }
 
     // POOL_1D max over MoE down-projection amax shapes:
