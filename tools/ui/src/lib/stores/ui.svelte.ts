@@ -16,14 +16,6 @@ class UiStore {
 	manageModelFocus = $state<string | null>(null);
 	/** Open state of the models manager, driven from the sidebar and from model rows. */
 	manageModelsOpen = $state(false);
-	/** Read and clear the request, so it fires once. */
-	consumeComposerFocus(): boolean {
-		const requested = this.composerFocusRequested;
-
-		this.composerFocusRequested = false;
-
-		return requested;
-	}
 
 	/** Open the models manager, optionally focused on one model. */
 	openModelsManager(focus?: string): void {
