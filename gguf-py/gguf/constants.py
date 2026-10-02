@@ -864,6 +864,7 @@ class MODEL_TENSOR(IntEnum):
     DEC_ATTN_OUT         = auto()
     DEC_ATTN_REL_B       = auto()
     DEC_CROSS_ATTN_NORM  = auto()
+    DEC_CROSS_ATTN_NORM_KV = auto()
     DEC_CROSS_ATTN_Q     = auto()
     DEC_CROSS_ATTN_K     = auto()
     DEC_CROSS_ATTN_V     = auto()
@@ -874,20 +875,6 @@ class MODEL_TENSOR(IntEnum):
     DEC_FFN_DOWN         = auto()
     DEC_FFN_UP           = auto()
     DEC_OUTPUT_NORM      = auto()
-    DEC_CROSS_ATTN_NORM_KV = auto()
-    DECISION_HIDDEN_NORM   = auto()
-    DECISION_PROJ_MEMORY   = auto()
-    DECISION_PROJ_QUESTION = auto()
-    DECISION_PROJ_OPTION_QUESTION = auto()
-    DECISION_PROJ_GLOBAL   = auto()
-    DECISION_PROJ_OPTION_CONTEXT = auto()
-    DECISION_PROJ_OPTION_LEXICAL = auto()
-    DECISION_OPTION_SUMMARY_NORM = auto()
-    DECISION_FIELD_NORM    = auto()
-    DECISION_OPTION_NORM   = auto()
-    DECISION_SCALES        = auto()
-    DECISION_SCORER        = auto()
-    DECISION_SCORER_OUT    = auto()
     ENC_ATTN_NORM        = auto()
     ENC_ATTN_Q           = auto()
     ENC_ATTN_K           = auto()
@@ -902,6 +889,19 @@ class MODEL_TENSOR(IntEnum):
     CLS                  = auto() # classifier
     CLS_OUT              = auto() # classifier output projection
     CLS_NORM             = auto()
+    DECISION_HIDDEN_NORM          = auto()
+    DECISION_PROJ_MEMORY          = auto()
+    DECISION_PROJ_QUESTION        = auto()
+    DECISION_PROJ_OPTION_QUESTION = auto()
+    DECISION_PROJ_GLOBAL          = auto()
+    DECISION_PROJ_OPTION_CONTEXT  = auto()
+    DECISION_PROJ_OPTION_LEXICAL  = auto()
+    DECISION_OPTION_SUMMARY_NORM  = auto()
+    DECISION_FIELD_NORM           = auto()
+    DECISION_OPTION_NORM          = auto()
+    DECISION_SCALES               = auto()
+    DECISION_SCORER               = auto()
+    DECISION_SCORER_OUT           = auto()
     CONV1D               = auto()
     CONVNEXT_DW          = auto()
     CONVNEXT_NORM        = auto()
@@ -1642,6 +1642,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DEC_ATTN_OUT:              "dec.blk.{bid}.attn_o",
     MODEL_TENSOR.DEC_ATTN_REL_B:            "dec.blk.{bid}.attn_rel_b",
     MODEL_TENSOR.DEC_CROSS_ATTN_NORM:       "dec.blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.DEC_CROSS_ATTN_NORM_KV:    "dec.blk.{bid}.cross_attn_norm_kv",
     MODEL_TENSOR.DEC_CROSS_ATTN_Q:          "dec.blk.{bid}.cross_attn_q",
     MODEL_TENSOR.DEC_CROSS_ATTN_K:          "dec.blk.{bid}.cross_attn_k",
     MODEL_TENSOR.DEC_CROSS_ATTN_V:          "dec.blk.{bid}.cross_attn_v",
@@ -1652,20 +1653,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DEC_FFN_DOWN:              "dec.blk.{bid}.ffn_down",
     MODEL_TENSOR.DEC_FFN_UP:                "dec.blk.{bid}.ffn_up",
     MODEL_TENSOR.DEC_OUTPUT_NORM:           "dec.output_norm",
-    MODEL_TENSOR.DEC_CROSS_ATTN_NORM_KV:    "dec.blk.{bid}.cross_attn_norm_kv",
-    MODEL_TENSOR.DECISION_HIDDEN_NORM:      "decision.hidden_norm",
-    MODEL_TENSOR.DECISION_PROJ_MEMORY:      "decision.proj_memory",
-    MODEL_TENSOR.DECISION_PROJ_QUESTION:    "decision.proj_question",
-    MODEL_TENSOR.DECISION_PROJ_OPTION_QUESTION: "decision.proj_option_question",
-    MODEL_TENSOR.DECISION_PROJ_GLOBAL:      "decision.proj_global",
-    MODEL_TENSOR.DECISION_PROJ_OPTION_CONTEXT: "decision.proj_option_context",
-    MODEL_TENSOR.DECISION_PROJ_OPTION_LEXICAL: "decision.proj_option_lexical",
-    MODEL_TENSOR.DECISION_OPTION_SUMMARY_NORM: "decision.option_summary_norm",
-    MODEL_TENSOR.DECISION_FIELD_NORM:       "decision.field_norm",
-    MODEL_TENSOR.DECISION_OPTION_NORM:      "decision.option_norm",
-    MODEL_TENSOR.DECISION_SCALES:           "decision.scales",
-    MODEL_TENSOR.DECISION_SCORER:           "decision.scorer",
-    MODEL_TENSOR.DECISION_SCORER_OUT:       "decision.scorer_out",
     MODEL_TENSOR.ENC_ATTN_NORM:             "enc.blk.{bid}.attn_norm",
     MODEL_TENSOR.ENC_ATTN_Q:                "enc.blk.{bid}.attn_q",
     MODEL_TENSOR.ENC_ATTN_K:                "enc.blk.{bid}.attn_k",
@@ -1680,6 +1667,19 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.CLS:                       "cls",
     MODEL_TENSOR.CLS_OUT:                   "cls.output",
     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
+    MODEL_TENSOR.DECISION_HIDDEN_NORM:         "decision.hidden_norm",
+    MODEL_TENSOR.DECISION_PROJ_MEMORY:         "decision.proj_memory",
+    MODEL_TENSOR.DECISION_PROJ_QUESTION:       "decision.proj_question",
+    MODEL_TENSOR.DECISION_PROJ_OPTION_QUESTION: "decision.proj_option_question",
+    MODEL_TENSOR.DECISION_PROJ_GLOBAL:         "decision.proj_global",
+    MODEL_TENSOR.DECISION_PROJ_OPTION_CONTEXT: "decision.proj_option_context",
+    MODEL_TENSOR.DECISION_PROJ_OPTION_LEXICAL: "decision.proj_option_lexical",
+    MODEL_TENSOR.DECISION_OPTION_SUMMARY_NORM: "decision.option_summary_norm",
+    MODEL_TENSOR.DECISION_FIELD_NORM:          "decision.field_norm",
+    MODEL_TENSOR.DECISION_OPTION_NORM:         "decision.option_norm",
+    MODEL_TENSOR.DECISION_SCALES:              "decision.scales",
+    MODEL_TENSOR.DECISION_SCORER:              "decision.scorer",
+    MODEL_TENSOR.DECISION_SCORER_OUT:          "decision.scorer_out",
     MODEL_TENSOR.CONV1D:                    "conv1d",
     MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
     MODEL_TENSOR.CONVNEXT_NORM:             "convnext.{bid}.norm",

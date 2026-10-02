@@ -2261,6 +2261,16 @@ private:
                 return i >= 0 && i < (int32_t) idx.size() ? llama_get_embeddings_ith(slot.ctx_tgt, idx[i]) : nullptr;
             };
 
+            // joint head (decision model): the scores are the first rows
+            for (int32_t i = 0; i < decision.n_scores; i++) {
+                const float * embd = i < (int32_t) idx.size() ? llama_get_embeddings_ith(slot.ctx_tgt, idx[i]) : nullptr;
+                if (embd == nullptr) {
+                    send_error(slot, "failed to get embeddings", ERROR_TYPE_SERVER);
+                    return;
+                }
+                res->scores.push_back(embd[0]);
+            }
+
             const int32_t n_embd_out = llama_model_n_embd_out(model_tgt);
             const int32_t n_pointer  = n_embd_out / 2;
             const float * embd_q = decision.pointer >= 0 ? get_embd(decision.pointer) : nullptr;
@@ -2273,10 +2283,6 @@ private:
                     return;
                 }
                 if (decision.pointer < 0) {
-                    if (std::isnan(embd[decision.column])) {
-                        send_error(slot, "the model could not evaluate the decision", ERROR_TYPE_SERVER);
-                        return;
-                    }
                     res->scores.push_back(embd[decision.column]);
                     continue;
                 }
@@ -5410,16 +5416,14 @@ void server_routes::init_routes() {
                 task.id = rd.get_new_id();
                 decision.fill_task_joint(state, questions, task);
                 tasks.push_back(std::move(task));
-            }
-            for (const auto & question : questions) {
-                if (decision.is_joint()) {
-                    break;
-                }
-                for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
-                    server_task task = server_task(SERVER_TASK_TYPE_DECISION);
-                    task.id = rd.get_new_id();
-                    decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
-                    tasks.push_back(std::move(task));
+            } else {
+                for (const auto & question : questions) {
+                    for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
+                        server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+                        task.id = rd.get_new_id();
+                        decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
+                        tasks.push_back(std::move(task));
+                    }
                 }
             }
             if (decision.can_share_prompt()) {
@@ -5439,22 +5443,19 @@ void server_routes::init_routes() {
 
         json answers = json::object();
         int32_t n_tokens = 0;
-        if (decision.is_joint()) {
-            auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[0].get());
-            GGML_ASSERT(result != nullptr);
-            const auto scores = decision.split_scores(questions, result->scores);
-            for (size_t i = 0; i < questions.size(); i++) {
-                answers[questions[i].id] = decision.format_answer(questions[i], { scores[i] });
-            }
-            n_tokens = result->n_tokens;
-        }
         size_t i_result = 0;
+        size_t i_score  = 0;
         for (const auto & question : questions) {
-            if (decision.is_joint()) {
-                break;
-            }
             std::vector<std::vector<float>> scores;
-            for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
+            if (decision.is_joint()) {
+                // one result with the scores of all the questions, in order
+                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[0].get());
+                GGML_ASSERT(result != nullptr && i_score + question.options.size() <= result->scores.size());
+                scores.emplace_back(result->scores.begin() + i_score, result->scores.begin() + i_score + question.options.size());
+                i_score += question.options.size();
+                n_tokens = result->n_tokens;
+            }
+            for (size_t variant = 0; !decision.is_joint() && variant < decision.n_variants(question); variant++) {
                 auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result++].get());
                 GGML_ASSERT(result != nullptr);
                 scores.push_back(result->scores);

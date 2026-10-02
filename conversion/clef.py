@@ -4,7 +4,7 @@ import json
 import math
 
 from pathlib import Path
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Iterable, Iterator, TYPE_CHECKING
 
 import torch
 
@@ -40,10 +40,8 @@ class ClefModel(Qwen3_5TextModel):
         "Read the complete state and schema. Decide every field jointly. Each answer "
         "must be exactly one of that field's allowed options."
     )
-    # the pieces of the prompt are tokenized one by one, this separates them
-    _PIECE_SEP = "<<clef:sep>>"
-    # start of a piece: state, question span, option span
-    _PIECE_STATE, _PIECE_QUESTION, _PIECE_OPTION = "<<clef:state>>", "<<clef:question>>", "<<clef:option>>"
+    # torch.nn.LayerNorm default, used by the head
+    _HEAD_NORM_EPS = 1e-5
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -62,25 +60,37 @@ class ClefModel(Qwen3_5TextModel):
         def text(value: str) -> str:
             return "{{ " + json.dumps(value) + " }}"
 
-        sep = text(cls._PIECE_SEP)
-        # state, instructions and option text are given as strings
+        def render(name: str) -> str:
+            # strings are used as is, other values are compact JSON
+            return "{{ " + name + " if " + name + " is string else " + name + " | tojson(separators=[',', ':']) }}"
+
+        # the pieces of the prompt are tokenized one by one, the server gives the text that separates them (sep)
+        # and the text that starts the span of a question or of an option (mark_question, mark_option)
+        # the keys of JSON objects are given in sorted order
+        option = (
+            "{% set d = o.description %}"
+            "{% if q.type == 'noul' and d is none %}"
+            "{% set d = 'The proposition is true or the answer is yes.' if o.key == 'true' else 'The proposition is false or the answer is no.' %}"
+            "{% endif %}"
+            "{{ ({'option_id': o.key} if d is none else {'description': d, 'option_id': o.key}) | tojson(separators=[',', ':']) }}"
+        )
         return (
             text(f"<|im_start|>system\n{cls._SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\nSTATE:\n")
-            + sep + text(cls._PIECE_STATE) + "{{ state }}"
-            + sep + text("\n\nSCHEMA FIELDS:\n")
+            + "{{ sep }}" + render("state")
+            + "{{ sep }}" + text("\n\nSCHEMA FIELDS:\n")
             + "{% for q in questions %}"
-            + sep + text("\nFIELD ") + "{{ loop.index }}" + text("\nID: ") + "{{ q.id }}"
+            + "{{ sep }}" + text("\nFIELD ") + "{{ loop.index }}" + text("\nID: ") + "{{ q.id }}"
             + text("\nTYPE: ") + "{{ q.type }}" + text("\nINSTRUCTION: ")
-            + sep + text(cls._PIECE_QUESTION) + "{{ q.instructions }}"
-            + sep + text("\nALLOWED OPTIONS:\n")
+            + "{{ sep }}{{ mark_question }}" + render("q.instructions")
+            + "{{ sep }}" + text("\nALLOWED OPTIONS:\n")
             + "{% for o in q.options %}"
-            + sep + text("OPTION ") + "{{ loop.index }}" + text(": ")
-            + sep + text(cls._PIECE_OPTION) + "{{ o.text }}"
-            + sep + text("\n")
+            + "{{ sep }}" + text("OPTION ") + "{{ loop.index }}" + text(": ")
+            + "{{ sep }}{{ mark_option }}" + option
+            + "{{ sep }}" + text("\n")
             + "{% endfor %}"
-            + sep + text("END FIELD\n")
+            + "{{ sep }}" + text("END FIELD\n")
             + "{% endfor %}"
-            + sep + text("\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nJOINT SCHEMA DECISIONS:")
+            + "{{ sep }}" + text("\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nJOINT SCHEMA DECISIONS:")
         )
 
     def set_gguf_parameters(self):
@@ -90,9 +100,10 @@ class ClefModel(Qwen3_5TextModel):
         self.gguf_writer.add_decision_routing_block_count(head["routing_layers"])
         self.gguf_writer.add_decision_block_count(head["layers"])
         self.gguf_writer.add_decision_head_count(head["heads"])
+        self.gguf_writer.add_layer_norm_eps(self._HEAD_NORM_EPS)
 
-    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        yield from super().generate_extra_tensors()
+    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
+        yield from super().get_tensors()
         from safetensors.torch import load_file
         for name, data in load_file(self.dir_model / "joint_head.safetensors").items():
             yield "joint_head." + name, data

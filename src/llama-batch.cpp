@@ -168,14 +168,12 @@ bool llama_batch_allocr::init(
         }
     }
 
+    // kept empty if no entry has one
     for (int32_t i = 0; i < n_tok; ++i) {
         if (batch_inp.tokens[i].decision_order != 0) {
             decision_order.resize(n_tok, 0);
-            break;
+            decision_order[i] = batch_inp.tokens[i].decision_order;
         }
-    }
-    for (size_t i = 0; i < decision_order.size(); ++i) {
-        decision_order[i] = batch_inp.tokens[i].decision_order;
     }
 
     //
@@ -266,6 +264,7 @@ bool llama_batch_allocr::init(
             /*.seq_id_unq   =*/ this->seq_id_unq.data(),
             /*.seq_idx      =*/ this->seq_idx.data(),
             /*.output       =*/ batch.logits,
+            /*.decision_order =*/ decision_order.empty() ? nullptr : decision_order.data(),
             /*.data         =*/ {},
         };
 
@@ -472,6 +471,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
         /*.seq_idx      =*/ udata->seq_idx.data(),
         /*.output       =*/ udata->output.data(),
+        /*.decision_order =*/ nullptr,
         /*.data         =*/ std::move(udata),
     };
 
@@ -810,6 +810,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->seq_id_unq.resize(0);
     udata->seq_idx   .resize(LLAMA_MAX_SEQ, -1);
     udata->output    .resize(n_tokens);
+    udata->decision_order.resize(decision_order.empty() ? 0 : n_tokens);
 
     udata->batch_idxs = idxs;
     udata->seq_id_data.reserve(n_tokens);
@@ -838,7 +839,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         udata->output[i]   = batch.logits[idxs[i]];
 
         if (!decision_order.empty()) {
-            udata->decision_order.push_back(decision_order[idxs[i]]);
+            udata->decision_order[i] = decision_order[idxs[i]];
         }
 
         for (int s = 0; s < udata->n_seq_id[i]; ++s) {
@@ -882,12 +883,9 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
         /*.seq_idx      =*/ udata->seq_idx.data(),
         /*.output       =*/ udata->output.data(),
+        /*.decision_order =*/ udata->decision_order.empty() ? nullptr : udata->decision_order.data(),
         /*.data         =*/ std::move(udata),
     };
-
-    if (!res.data->decision_order.empty()) {
-        res.decision_order = res.data->decision_order.data();
-    }
 
     if (debug > 0) {
         LLAMA_LOG_DEBUG("%s: added ubatch to split:\n", __func__);

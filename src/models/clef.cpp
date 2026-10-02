@@ -1,9 +1,8 @@
 #include "models.h"
 
-#include <cmath>
+#include "llama-ext.h"
 
-// torch.nn.LayerNorm default
-static const float CLEF_HEAD_NORM_EPS = 1e-5f;
+#include <cmath>
 
 void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
     llama_model_qwen35::load_arch_hparams(ml);
@@ -12,11 +11,12 @@ void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_DECISION_BLOCK_COUNT,         n_layer_joint);
     ml.get_key(LLM_KV_DECISION_HEAD_COUNT,          n_head_decision);
 
-    if (n_head_decision == 0) {
-        throw std::runtime_error("invalid number of heads in the decision head");
+    if (n_head_decision == 0 || n_layer_routing > LLAMA_MAX_LAYERS || n_layer_joint > LLAMA_MAX_LAYERS) {
+        throw std::runtime_error("invalid size of the decision head");
     }
 
-    hparams.f_norm_eps = CLEF_HEAD_NORM_EPS;
+    // used by the head
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 
     // the output is one score per token, see llama_batch_ext_set_decision_order()
     hparams.n_embd_out_impl = 1;
@@ -115,45 +115,53 @@ struct clef_spans {
     };
     std::vector<question> questions;
     std::vector<option>   options;
-    bool valid = false; // one sequence, at least one question, and each question has an option
+    bool valid = false;
 };
 
 // see llama_batch_ext_set_decision_order()
+// if the batch has no usable order, returns one empty question with one empty option
 static clef_spans clef_get_spans(const llama_ubatch & ubatch) {
-    const int32_t ORDER_QUESTION_FIRST = 1;
-    const int32_t ORDER_QUESTION_LAST  = 3;
-    const int32_t ORDER_OPTION         = 4;
-
     clef_spans res;
+    std::vector<bool> has_option;
+
     // TODO: support multiple sequences
-    if (ubatch.decision_order == nullptr || ubatch.n_seqs_unq != 1) {
-        return res;
-    }
+    bool ok = ubatch.decision_order != nullptr && ubatch.n_seqs_unq == 1;
 
     const int32_t n_tokens = ubatch.n_tokens;
-    std::vector<bool> has_option;
-    for (int32_t i = 0; i < n_tokens;) {
+    for (int32_t i = 0; ok && i < n_tokens;) {
         const int32_t order = ubatch.decision_order[i];
         int32_t end = i + 1;
         while (end < n_tokens && ubatch.decision_order[end] == order) {
             end++;
         }
-        if (order >= ORDER_QUESTION_FIRST && order <= ORDER_QUESTION_LAST) {
-            res.questions.push_back({ order - ORDER_QUESTION_FIRST, i, end });
-            has_option.push_back(false);
-        } else if (order == ORDER_OPTION) {
-            if (res.questions.empty()) {
-                return res;
-            }
-            res.options.push_back({ (int32_t) res.questions.size() - 1, i, end });
-            has_option.back() = true;
-        } else if (order != 0) {
-            return res;
+        switch (order) {
+            case LLAMA_DECISION_ORDER_NONE:
+                break;
+            case LLAMA_DECISION_ORDER_QUESTION_NOUL:
+            case LLAMA_DECISION_ORDER_QUESTION_CHOICE:
+            case LLAMA_DECISION_ORDER_QUESTION_SCORE:
+                res.questions.push_back({ order - LLAMA_DECISION_ORDER_QUESTION_NOUL, i, end });
+                has_option.push_back(false);
+                break;
+            case LLAMA_DECISION_ORDER_OPTION:
+                ok = !res.questions.empty();
+                if (ok) {
+                    res.options.push_back({ (int32_t) res.questions.size() - 1, i, end });
+                    has_option.back() = true;
+                }
+                break;
+            default:
+                ok = false;
         }
         i = end;
     }
 
-    res.valid = !res.questions.empty() && std::find(has_option.begin(), has_option.end(), false) == has_option.end();
+    // each question needs an option
+    res.valid = ok && !res.questions.empty() && std::find(has_option.begin(), has_option.end(), false) == has_option.end();
+    if (!res.valid) {
+        res.questions = {{ 0, 0, 0 }};
+        res.options   = {{ 0, 0, 0 }};
+    }
     return res;
 }
 
@@ -162,22 +170,15 @@ class llama_model_clef::input_decision : public llm_graph_input_i {
 public:
     input_decision(const llama_ubatch & ubatch) : n_tokens(ubatch.n_tokens) {
         const auto spans = clef_get_spans(ubatch);
-        if (spans.valid) {
-            n_questions = spans.questions.size();
-            n_options   = spans.options.size();
-        }
+        n_questions = spans.questions.size();
+        n_options   = spans.options.size();
     }
 
     void set_input(const llama_ubatch * ubatch) override {
         GGML_ASSERT(ubatch->token);
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens * sizeof(llama_token));
 
-        // without valid spans, the head runs on one empty question with one empty option
-        auto spans = clef_get_spans(*ubatch);
-        if (!spans.valid) {
-            spans.questions = {{ 0, 0, 0 }};
-            spans.options   = {{ 0, 0, 0 }};
-        }
+        const auto spans = clef_get_spans(*ubatch);
         GGML_ASSERT(spans.questions.size() == n_questions && spans.options.size() == n_options);
 
         // the scores are NaN if the batch has a decision order that cannot be used
@@ -216,9 +217,7 @@ public:
     bool can_reuse(const llm_graph_params & params) override {
         // the values are computed again in set_input(), only the shapes must match
         const auto spans = clef_get_spans(params.ubatch);
-        const size_t n_q = spans.valid ? spans.questions.size() : 1;
-        const size_t n_o = spans.valid ? spans.options.size()   : 1;
-        return n_q == n_questions && n_o == n_options;
+        return spans.questions.size() == n_questions && spans.options.size() == n_options;
     }
 
     ggml_tensor * tokens          = nullptr; // I32 [n_tokens]
@@ -230,8 +229,8 @@ public:
     ggml_tensor * status          = nullptr; // F32 [1], added to the scores: 0, or NaN on invalid input
 
     const int64_t n_tokens;
-    size_t n_questions = 1;
-    size_t n_options   = 1;
+    size_t n_questions;
+    size_t n_options;
 };
 
 // the backbone is copied from llama_model_qwen35::graph, without the memory module
