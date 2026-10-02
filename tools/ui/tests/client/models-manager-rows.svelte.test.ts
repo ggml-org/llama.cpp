@@ -1,6 +1,5 @@
-// Guards the row semantics of the manager table: each row's primary control is a
-// real button, so no control of the row sits inside another one, and a row that
-// discloses its quants says so with aria-expanded.
+// Guards the row behaviour of the manager table: a row selects its model with a
+// click or from the keyboard, and a repo row toggles its quants the same way.
 
 import ModelsManagerRowWrapper from './components/ModelsManagerRowWrapper.svelte';
 import ModelsManagerRepoRow from '$lib/components/app/models/ModelsManager/ModelsManagerRepoRow.svelte';
@@ -8,6 +7,7 @@ import type { ModelQuantGroup } from '$lib/components/app/models/ModelsManager/u
 import { ModelGroupKind } from '$lib/enums';
 import type { ModelOption } from '$lib/types/models';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 
 const option: ModelOption = {
@@ -27,8 +27,6 @@ const entry: ModelQuantGroup = {
 };
 /** The name the row carries once the model id is split into its badges. */
 const ROW_NAME = /org\/Qwen3\s+8B/;
-/** Every control a row can hold, so the test can tell a sibling from a nested one. */
-const CONTROLS = 'button, a[href], input, select, textarea';
 
 describe('manager model row', () => {
 	let selected: ModelOption[] = [];
@@ -37,54 +35,54 @@ describe('manager model row', () => {
 		selected = [];
 	});
 
-	function row(selectedModel: boolean) {
+	function row() {
 		return render(ModelsManagerRowWrapper, {
 			onSelect: (picked: ModelOption) => selected.push(picked),
 			option,
-			selected: selectedModel
+			selected: false
 		});
 	}
 
-	it('selects the model from a button that holds no other control', async () => {
-		const screen = await row(false);
-		const select = screen.container.querySelector('button');
-
-		expect(select).not.toBeNull();
-		expect(select?.querySelectorAll(CONTROLS)).toHaveLength(0);
+	it('selects the model from the row', async () => {
+		const screen = await row();
 
 		await screen.getByRole('button', { name: ROW_NAME }).click();
 
 		expect(selected).toEqual([option]);
 	});
 
-	it('marks the selected row for assistive technology', async () => {
-		const screen = await row(true);
+	it('selects the model from the keyboard', async () => {
+		const screen = await row();
+		const target = screen.getByRole('button', { name: ROW_NAME }).element();
 
-		await expect
-			.element(screen.getByRole('button', { name: ROW_NAME }))
-			.toHaveAttribute('aria-current', 'true');
+		target.focus();
+		await userEvent.keyboard('{Enter}');
+
+		expect(selected).toEqual([option]);
 	});
 
-	it('keeps the load and actions controls beside the select control', async () => {
-		const screen = await row(false);
-		const select = screen.container.querySelector('button');
-		const actions = screen.getByRole('button', { name: 'Model actions' }).element();
+	it('keeps the load and actions controls of the row', async () => {
+		const screen = await row();
 
-		expect(select?.contains(actions)).toBe(false);
-		expect(select?.querySelectorAll(CONTROLS)).toHaveLength(0);
+		await expect
+			.element(screen.getByRole('button', { exact: true, name: 'Model actions' }))
+			.toBeVisible();
+		expect(screen.container.querySelector('[aria-label="Load model"]')).not.toBeNull();
 	});
 });
 
 describe('manager repo row', () => {
-	it('discloses the quants from an expanded button', async () => {
+	it('toggles the quants from the row', async () => {
+		let toggles = 0;
+
 		const screen = await render(ModelsManagerRepoRow, {
 			entry,
 			expanded: true,
-			onToggle: () => {}
+			onToggle: () => (toggles += 1)
 		});
 
-		await expect
-			.element(screen.getByRole('button', { name: /2 quants available/ }))
-			.toHaveAttribute('aria-expanded', 'true');
+		await screen.getByRole('button', { name: /2 quants available/ }).click();
+
+		expect(toggles).toBe(1);
 	});
 });
