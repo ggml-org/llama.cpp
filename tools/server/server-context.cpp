@@ -5390,7 +5390,7 @@ void server_routes::init_routes() {
                 for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
                     server_task task = server_task(SERVER_TASK_TYPE_DECISION);
                     task.id = rd.get_new_id();
-                    decision.fill_task(state, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
+                    decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
                     tasks.push_back(std::move(task));
                 }
             }
