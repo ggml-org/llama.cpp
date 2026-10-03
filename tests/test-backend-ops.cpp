@@ -3913,6 +3913,7 @@ struct test_add_add : public test_case {
 
         return out;
     }
+
 };
 
 // GGML_OP_ADD + GGML_OP_RMS_NORM (fused operation)
@@ -5569,6 +5570,7 @@ struct test_sqrt : public test_case {
     bool grad_precise() override {
         return true;
     }
+
 };
 
 // GGML_OP_LOG
@@ -5648,6 +5650,7 @@ struct test_sin : public test_case {
     bool grad_precise() override {
         return true;
     }
+
 };
 
 // GGML_OP_COS
