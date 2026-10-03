@@ -291,13 +291,26 @@ static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input) {
 }
 
 static bool parse_endpoint(const std::string & endpoint, std::string & host, int & port) {
-    size_t pos = endpoint.find(':');
-    if (pos == std::string::npos) {
-        return false;
+    std::string port_str;
+    if (!endpoint.empty() && endpoint[0] == '[') {
+        // IPv6 bracket notation: [host]:port
+        size_t closing = endpoint.find(']');
+        if (closing == std::string::npos || closing + 1 >= endpoint.size() || endpoint[closing + 1] != ':') {
+            return false;
+        }
+        host = endpoint.substr(1, closing - 1);
+        port_str = endpoint.substr(closing + 2);
+    } else {
+        // IPv4 or hostname: host:port
+        size_t pos = endpoint.rfind(':');
+        if (pos == std::string::npos) {
+            return false;
+        }
+        host = endpoint.substr(0, pos);
+        port_str = endpoint.substr(pos + 1);
     }
-    host = endpoint.substr(0, pos);
     try {
-        port = std::stoi(endpoint.substr(pos + 1));
+        port = std::stoi(port_str);
     } catch (...) {
         return false;
     }
