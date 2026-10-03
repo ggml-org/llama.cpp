@@ -160,6 +160,18 @@ llama_context::llama_context(
             }
             cparams.ctx_other = params.ctx_other;
         }
+
+        // the draft reads the target features of target_layer_ids, concatenated
+        if (params.ctx_other) {
+            const auto & hparams_tgt = llama_get_model(params.ctx_other)->hparams;
+
+            const uint64_t n_embd_inp_enc = (uint64_t) model.target_layer_ids.size() * hparams_tgt.n_embd;
+            if (n_embd_inp_enc != hparams.n_embd_inp_enc()) {
+                throw std::runtime_error(model.arch_name() + " draft expects an encoder input width of " +
+                                         std::to_string(hparams.n_embd_inp_enc()) + ", but the target model gives " +
+                                         std::to_string(n_embd_inp_enc));
+            }
+        }
     }
 
     if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
