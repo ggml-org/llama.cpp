@@ -207,14 +207,15 @@ shared ACC_TYPE coopmat_stage[TM * TN * NUM_WARPS];
 #include "iq_shmem_init.glsl"
 #endif
 
-void main() {
-    const uint ic = gl_WorkGroupID.y;
-
 #ifdef MUL_MAT_ID
+void mul_mm_id_tile(const uint ic) {
     const uint expert_idx = gl_WorkGroupID.z;
     if (ic * BN >= data_expert_count[expert_idx]) {
         return;
     }
+#else
+void main() {
+    const uint ic = gl_WorkGroupID.y;
 #endif
 #if defined(NEEDS_INIT_IQ_SHMEM) || defined(MULMAT_QUANT)
     init_iq_shmem(gl_WorkGroupSize);
@@ -557,3 +558,16 @@ void main() {
     }
 #endif // COOPMAT
 }
+
+#ifdef MUL_MAT_ID
+// An expert can own more than ceil(n/BN) row blocks when its id repeats, so loop over the extra ones.
+void main() {
+    const uint expert_count = data_expert_count[gl_WorkGroupID.z];
+    for (uint ic = gl_WorkGroupID.y; ic * BN < expert_count; ic += gl_NumWorkGroups.y) {
+        if (ic != gl_WorkGroupID.y) {
+            barrier();
+        }
+        mul_mm_id_tile(ic);
+    }
+}
+#endif
