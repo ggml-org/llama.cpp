@@ -14,19 +14,6 @@
 #include <vector>
 #include <algorithm>
 
-#if defined(_WIN32)
-#    define WIN32_LEAN_AND_MEAN
-#    ifndef NOMINMAX
-#       define NOMINMAX
-#    endif
-#    include <io.h>
-#    include <windows.h>
-#    define isatty _isatty
-#    define fileno _fileno
-#else
-#    include <unistd.h>
-#endif // defined(_WIN32)
-
 int common_log_verbosity_thold = LOG_DEFAULT_LLAMA;
 
 int common_log_get_verbosity_thold(void) {

@@ -1078,6 +1078,14 @@ std::vector<common_file_info> fs_list(const std::string & path, bool include_dir
 // TTY utils
 //
 
+bool common_is_tty(FILE * file) {
+#if defined(_WIN32)
+    return _isatty(_fileno(file));
+#else
+    return isatty(fileno(file));
+#endif
+}
+
 bool tty_can_use_colors() {
     // Check NO_COLOR environment variable (https://no-color.org/)
     if (const char * no_color = std::getenv("NO_COLOR")) {
@@ -1095,10 +1103,7 @@ bool tty_can_use_colors() {
 
     // Check if stdout and stderr are connected to a terminal
     // We check both because log messages can go to either
-    bool stdout_is_tty = isatty(fileno(stdout));
-    bool stderr_is_tty = isatty(fileno(stderr));
-
-    return stdout_is_tty || stderr_is_tty;
+    return common_is_tty(stdout) || common_is_tty(stderr);
 }
 
 //
