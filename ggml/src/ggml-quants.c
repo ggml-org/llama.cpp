@@ -1037,8 +1037,9 @@ static float make_qkx3_quants(int n, int nmax, const float * GGML_RESTRICT x, co
         iscale = (rmin + rdelta*is + nmax)/(max - min);
         float sum_l = 0, sum_l2 = 0, sum_xl = 0;
         for (int i = 0; i < n; ++i) {
-            int l = nearest_int(iscale*(x[i] - min));
-            l = MAX(0, MIN(nmax, l));
+            // min is the best fit so far and can be at or near max, so v can be inf, nan or out of range for nearest_int
+            const float v = iscale*(x[i] - min);
+            const int l = v > 0 ? nearest_int(MIN(v, nmax)) : 0;
             Laux[i] = l;
             float w = weights ? weights[i] : x[i]*x[i];
             sum_l  += w*l;

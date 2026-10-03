@@ -169,19 +169,19 @@ int32_t mtmd_helper_decode_image_chunk(
     while (i_batch < n_img_batches) { // split into batches
         int pos_offset = i_batch*n_batch;
         int n_tokens_batch = std::min(n_batch, n_tokens - pos_offset);
-        llama_batch batch_embd_view = batch_embd.get_view(pos_offset, n_tokens_batch);
 
         LOG_INF("decoding %s batch %d/%d, n_tokens_batch = %d\n", name, i_batch+1, n_img_batches, n_tokens_batch);
 
         int64_t t1 = ggml_time_ms();
-        int32_t ret = llama_decode(lctx, batch_embd_view);
+        int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_embd.render(lctx, pos_offset, n_tokens_batch));
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             return ret;
         }
 
         if (callback != nullptr) {
-            ret = callback(batch_embd_view, user_data);
+            const mtmd_helper_embd_batch view = batch_embd.get_view(pos_offset, n_tokens_batch);
+            ret = callback(&view, user_data);
             if (ret != 0) {
                 LOG_ERR("post-decode callback failed\n");
                 return ret;
@@ -209,37 +209,35 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         llama_pos * new_n_past) {
     GGML_ASSERT(n_batch > 0);
     int32_t ret;
-    llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
 
     if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
         // LOG_INF("decoding text chunk, n_tokens = %zu\n", n_tokens);
+        llama_batch_ext_ptr text_batch(llama_batch_ext_init(lctx));
         size_t i = 0;
         while (i < n_tokens) { // split into batches
-            text_batch.n_tokens = 0; // clear the batch
-            for (; i < n_tokens && text_batch.n_tokens < n_batch; i++) {
-                int32_t j = text_batch.n_tokens;
-                text_batch.token   [j]    = tokens[i];
-                text_batch.pos     [j]    = n_past++;
-                text_batch.n_seq_id[j]    = 1;
-                text_batch.seq_id  [j][0] = seq_id;
-                text_batch.logits  [j]    = false;
-
-                text_batch.n_tokens++;
+            llama_batch_ext_clear(text_batch.get());
+            int32_t n_added = 0;
+            int32_t idx     = -1;
+            for (; i < n_tokens && n_added < n_batch; i++) {
+                idx = llama_batch_ext_add_token(text_batch.get(), seq_id, tokens[i]);
+                GGML_ASSERT(idx >= 0);
+                llama_pos pos = n_past++;
+                llama_batch_ext_set_pos(text_batch.get(), idx, &pos);
+                n_added++;
             }
             bool is_last_token = (i == n_tokens);
             if (logits_last && is_last_token) {
-                text_batch.logits[text_batch.n_tokens - 1] = true;
+                llama_batch_ext_set_output_logits(text_batch.get(), idx, true);
             }
-            ret = llama_decode(lctx, text_batch);
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, text_batch.get());
             if (ret != 0) {
                 LOG_ERR("failed to decode text\n");
-                llama_batch_free(text_batch);
                 return ret;
             }
-            *new_n_past += text_batch.n_tokens;
+            *new_n_past += n_added;
         }
 
     } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE || chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
@@ -251,7 +249,6 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         ret = mtmd_encode_chunk(ctx, chunk);
         if (ret != 0) {
             LOG_ERR("failed to encode %s slice\n", name);
-            llama_batch_free(text_batch);
             return ret;
         }
 
@@ -261,14 +258,12 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            llama_batch_free(text_batch);
             return ret;
         }
     } else {
         GGML_ABORT("chunk type not supported");
     }
 
-    llama_batch_free(text_batch);
     return 0;
 }
 

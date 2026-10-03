@@ -351,12 +351,16 @@ void dequantize_mxfp4(device const block_mxfp4 * xb, short il, thread type4x4 & 
     const float d = e8m0_to_fp32(xb->e);
     const uint8_t shr = il >= 1 ? 4 : 0;
 
+    float4x4 reg_f;
+
     for (int i = 0; i < 4; ++i) {
-        reg[i][0] = d * kvalues_mxfp4_f[(q2[4*i + 0] >> shr) & 0x0F];
-        reg[i][1] = d * kvalues_mxfp4_f[(q2[4*i + 1] >> shr) & 0x0F];
-        reg[i][2] = d * kvalues_mxfp4_f[(q2[4*i + 2] >> shr) & 0x0F];
-        reg[i][3] = d * kvalues_mxfp4_f[(q2[4*i + 3] >> shr) & 0x0F];
+        reg_f[i][0] = d * kvalues_mxfp4_f[(q2[4*i + 0] >> shr) & 0x0F];
+        reg_f[i][1] = d * kvalues_mxfp4_f[(q2[4*i + 1] >> shr) & 0x0F];
+        reg_f[i][2] = d * kvalues_mxfp4_f[(q2[4*i + 2] >> shr) & 0x0F];
+        reg_f[i][3] = d * kvalues_mxfp4_f[(q2[4*i + 3] >> shr) & 0x0F];
     }
+
+    reg = (type4x4) reg_f;
 }
 
 template <typename type4>
