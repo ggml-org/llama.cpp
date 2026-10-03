@@ -716,16 +716,16 @@ private:
 
 // an already-running container or apptainer instance, driven through `<engine> exec`
 // docker and podman take the same verbs and argument order
-// apptainer addresses instances as instance://<name>
+// an instance (apptainer) is addressed as instance://<name>
 class tools_io_container : public tools_io_isolate {
 public:
-    tools_io_container(std::string bin, std::string container_id, std::string cwd = "")
-        : tools_io_isolate(std::move(cwd)), bin(std::move(bin)), container_id(std::move(container_id)) {}
+    tools_io_container(std::string bin, bool instance, std::string container_id, std::string cwd = "")
+        : tools_io_isolate(std::move(cwd)), bin(std::move(bin)), instance(instance), container_id(std::move(container_id)) {}
 
 protected:
     std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
         std::vector<std::string> argv = {bin, "exec"};
-        if (bin == "apptainer") {
+        if (instance) {
             // --containall does not mount the host cwd, so start in a directory that exists in the image
             // (otherwise apptainer warns that it cannot chdir to the host's cwd)
             argv.push_back("--pwd");
@@ -744,6 +744,7 @@ protected:
 
 private:
     std::string bin;
+    bool        instance;
     std::string container_id;
 };
 
@@ -798,28 +799,34 @@ private:
 struct container_runtime_spec {
     std::string bin;
     std::string arg; // image when spawning, container id / instance name when attaching
-    bool attach = false;
+    bool attach   = false;
+    bool instance = false; // daemon-style instance (apptainer) rather than a docker/podman container
 
     static bool parse(const std::string & spec, container_runtime_spec & out) {
-        struct engine { const char * bin; const char * attach_kind; };
+        struct engine { const char * bin; bool instance; };
         static const engine engines[] = {
-            {"docker",    "container"},
-            {"podman",    "container"},
-            {"apptainer", "instance"},
+            {"docker",    false},
+            {"podman",    false},
+            {"apptainer", true},
         };
         for (const auto & e : engines) {
-            const std::string attach_prefix = std::string(e.bin) + "-" + e.attach_kind + ":";
+            const std::string attach_prefix = std::string(e.bin) + (e.instance ? "-instance:" : "-container:");
             if (spec.rfind(attach_prefix, 0) == 0) {
-                out = {e.bin, spec.substr(attach_prefix.size()), true};
+                out = {e.bin, spec.substr(attach_prefix.size()), true, e.instance};
                 return true;
             }
             const std::string spawn_prefix = std::string(e.bin) + ":";
             if (spec.rfind(spawn_prefix, 0) == 0) {
-                out = {e.bin, spec.substr(spawn_prefix.size()), false};
+                out = {e.bin, spec.substr(spawn_prefix.size()), false, e.instance};
                 return true;
             }
         }
         return false;
+    }
+
+    // the "<engine>-container:<id>" / "<engine>-instance:<name>" string that parse() accepts back
+    std::string attach_spec(const std::string & id) const {
+        return bin + (instance ? "-instance:" : "-container:") + id;
     }
 
     // an id/name starting with '-' would become an engine option, e.g. --privileged
@@ -854,7 +861,7 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
         if (!container_runtime_spec::is_valid_id(container.arg)) {
             throw std::runtime_error("invalid container id: " + container.arg);
         }
-        return std::make_unique<tools_io_container>(container.bin, container.arg, cwd);
+        return std::make_unique<tools_io_container>(container.bin, container.instance, container.arg, cwd);
     }
     const std::string ssh_prefix = "ssh:";
     if (runtime.rfind(ssh_prefix, 0) == 0) {
@@ -1878,16 +1885,19 @@ private:
 
 // owns the container/instance the tools run in, as set by --tools-runtime "<engine>:<image>"
 // it is spawned here and stopped when the server exits
+//
+// a keeper process holds the runtime open and doubles as the liveness check:
+//   docker/podman: `<engine> run --rm -i <image> sh`, the shell blocks on stdin and is the container's pid 1
+//   apptainer:     `apptainer exec instance://<name> sh`, attached to a daemon-style instance
+// proc.alive() is therefore a cheap check on every tool call; the slow `exec ... true` probe only runs
+// for an instance whose keeper is gone
 struct server_tools_container_runtime : server_tools_runtime {
     server_tools_container_runtime(const server_tools_container_runtime &) = delete;
 
-    explicit server_tools_container_runtime(const std::string & spec) {
-        container_runtime_spec parsed;
-        if (!container_runtime_spec::parse(spec, parsed) || parsed.attach) {
-            throw std::runtime_error("unknown --tools-runtime option: " + spec);
-        }
-        bin   = parsed.bin;
-        image = parsed.arg;
+    // `parsed` comes from container_runtime_spec::parse() and must be a spawn spec (attach == false):
+    // make_tools_runtime() is the only caller and has already filtered on that
+    explicit server_tools_container_runtime(const container_runtime_spec & parsed)
+        : bin(parsed.bin), image(parsed.arg), instance(parsed.instance) {
         if (image.empty()) {
             throw std::runtime_error("--tools-runtime " + bin + ":<image> requires an image name");
         }
@@ -1898,13 +1908,11 @@ struct server_tools_container_runtime : server_tools_runtime {
     }
 
     ~server_tools_container_runtime() override {
-        if (is_apptainer()) {
-            stop_instance();
-        } else {
-            // closing stdin makes the container's shell (pid 1) exit; --rm then removes it
-            proc.close_stdin();
-            proc.join();
+        if (instance) {
+            stop_instance(); // also ends the keeper: the instance has a private PID namespace
         }
+        // docker/podman: closing stdin makes the container's shell (pid 1) exit; --rm then removes it
+        release_keeper();
     }
 
     // respawns a container/instance that died on its own, so the returned spec always names a running one
@@ -1914,34 +1922,64 @@ struct server_tools_container_runtime : server_tools_runtime {
             SRV_WRN("%s tools runtime \"%s\" died, respawning\n", bin.c_str(), container_id.c_str());
             spawn();
         }
-        return bin + (is_apptainer() ? "-instance:" : "-container:") + container_id;
+        return container_runtime_spec{bin, "", true, instance}.attach_spec(container_id);
     }
 
 private:
     std::string bin;
     std::string image;
+    bool        instance;     // apptainer instance rather than a docker/podman container
     std::string container_id; // container id, or apptainer instance name
-    common_subproc proc;      // docker/podman only: `<engine> run` client that keeps the container alive
-    std::mutex mutex;
-
-    bool is_apptainer() const { return bin == "apptainer"; }
+    common_subproc proc;      // the keeper, see above
+    bool        keeper_up = false;
+    std::mutex  mutex;
 
     bool alive() {
-        if (!is_apptainer()) {
-            return proc.alive();
+        if (proc.alive()) {
+            return true;
         }
-        // instances are daemons, not children: probe by running a no-op in it
+        if (!instance) {
+            return false; // docker/podman: the keeper is pid 1, so its death is the container's death
+        }
+        // the keeper is gone: either the instance died, or a tool killed the keeper (pkill sh, kill -1, ...)
+        // ask the instance before tearing it down; a timeout is inconclusive, not death
         auto res = run_subprocess({bin, "exec", "--pwd", "/tmp", "instance://" + container_id, "true"},
                                   4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
-        return res.exit_code == 0 && !res.timed_out;
+        if (res.exit_code != 0 && !res.timed_out) {
+            return false;
+        }
+        start_keeper();
+        return true;
+    }
+
+    // closing stdin makes the keeper's shell exit, so this also works when the instance is already gone
+    void release_keeper() {
+        if (!keeper_up) {
+            return;
+        }
+        proc.close_stdin();
+        proc.join();
+        keeper_up = false;
+    }
+
+    // create() writes over the handle it is given, so the previous one is released first
+    void start_keeper() {
+        release_keeper();
+        const std::vector<std::string> args = {bin, "exec", "--pwd", "/tmp", "instance://" + container_id, "sh"};
+        const int options = subprocess_option_no_window
+                          | subprocess_option_inherit_environment
+                          | subprocess_option_search_user_path;
+        if (!proc.create(args, options)) {
+            throw std::runtime_error("failed to attach keeper to apptainer instance: " + container_id);
+        }
+        keeper_up = true;
     }
 
     void spawn() {
-        if (is_apptainer()) {
+        if (instance) {
             spawn_apptainer();
         } else {
-            // create() writes over the handle it is given, so the previous one is released first
-            proc.join();
+            release_keeper();
             spawn_docker_podman();
         }
     }
@@ -1961,6 +1999,7 @@ private:
         if (!proc.create(args, options)) {
             throw std::runtime_error("failed to spawn " + bin + " container for tools runtime (image: " + image + ")");
         }
+        keeper_up = true;
 
         std::string cid;
         for (int i = 0; i < 100 && cid.empty(); i++) {
@@ -1976,13 +2015,14 @@ private:
         container_id = cid;
     }
 
-    // "apptainer instance start --containall --writable-tmpfs <image> <name>"
+    // "apptainer instance start --containall --writable-tmpfs <image> <name>", then attaches the keeper
     // --containall: no host $HOME/$TMP, clean env, private PID and IPC namespaces
     // --writable-tmpfs: the SIF is read-only, this gives an in-memory overlay so tools can write
     void spawn_apptainer() {
         if (!container_id.empty()) {
             stop_instance(); // best effort: clear a dead instance that is still registered
         }
+        release_keeper();
 
         std::random_device rd;
         const std::string name = string_format("llama-tools-%08x%08x", (unsigned) rd(), (unsigned) rd());
@@ -1994,6 +2034,13 @@ private:
             throw std::runtime_error("failed to start apptainer instance (image: " + image + "): " + res.output);
         }
         container_id = name;
+
+        try {
+            start_keeper();
+        } catch (...) {
+            stop_instance(); // do not leave a running instance behind that nothing will ever stop
+            throw;
+        }
     }
 
     void stop_instance() {
@@ -2059,7 +2106,7 @@ server_tools::~server_tools() = default;
 static std::unique_ptr<server_tools_runtime> make_tools_runtime(const std::string & spec) {
     container_runtime_spec parsed;
     if (container_runtime_spec::parse(spec, parsed) && !parsed.attach) {
-        return std::make_unique<server_tools_container_runtime>(spec);
+        return std::make_unique<server_tools_container_runtime>(parsed);
     }
     make_tools_io({{"runtime", spec}}); // nothing to own, just reject a bad spec now
     return std::make_unique<server_tools_static_runtime>(spec);
