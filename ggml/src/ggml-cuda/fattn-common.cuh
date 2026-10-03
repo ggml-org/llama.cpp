@@ -328,14 +328,14 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q8_0(
     return sum;
 }
 
-template <typename Tds, int ni>
+template <typename Tds, int ni, int warp_size = WARP_SIZE>
 static __device__ __forceinline__ void quantize_q8_1_to_shared(
     const float * __restrict__ x, const float scale, int * __restrict__ yq32, void * __restrict__ yds) {
 
     float vals[sizeof(int)] = {0.0f};
 #pragma unroll
     for (int l = 0; l < int(sizeof(int)); ++l) {
-        vals[l] = (ni == WARP_SIZE || threadIdx.x < ni) ? scale * x[4*threadIdx.x + l] : 0.0f;
+        vals[l] = (ni == warp_size || threadIdx.x < ni) ? scale * x[4*threadIdx.x + l] : 0.0f;
     }
 
     float amax = fabsf(vals[0]);
@@ -347,8 +347,8 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
     }
 #pragma unroll
     for (int mask = QI8_1/2; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 32));
-        sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, 32);
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, warp_size));
+        sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, warp_size);
     }
 
     const float d = amax / 127;
@@ -363,7 +363,7 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
     }
 
     yq32[threadIdx.x] = q32;
-    if (threadIdx.x % QI8_1 == 0 && (ni == WARP_SIZE || threadIdx.x < ni)) {
+    if (threadIdx.x % QI8_1 == 0 && (ni == warp_size || threadIdx.x < ni)) {
         if (std::is_same<Tds, half2>::value) {
             ((half2  *) yds)[threadIdx.x/QI8_1] =  make_half2(d, sum);
         } else {
