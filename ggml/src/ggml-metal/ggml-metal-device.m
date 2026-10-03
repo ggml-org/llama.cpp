@@ -1672,7 +1672,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                    (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                    op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_SUM:
-            return has_simdgroup_reduction && ggml_is_contiguous(op->src[0]);
+            return has_simdgroup_reduction && ggml_is_contiguously_allocated(op->src[0]) && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_TRI:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_SUM_ROWS:
