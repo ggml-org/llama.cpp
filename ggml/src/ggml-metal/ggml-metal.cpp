@@ -918,6 +918,31 @@ static const char * ggml_backend_metal_tuning_device_token(ggml_backend_dev_t de
     return ggml_metal_device_id_token(ggml_metal_device_get_props(ctx_dev)->device_id);
 }
 
+// test/tune-only override for the mul_mm tile (nr0, nr1) selection, reached via proc_address.
+static void ggml_backend_metal_tuning_set_mm_tile_override(int nr0, int nr1) {
+    ggml_metal_tuning::mm_tile_set_override({ (int16_t) nr0, (int16_t) nr1 });
+}
+
+static void ggml_backend_metal_tuning_clear_mm_tile_override(void) {
+    ggml_metal_tuning::mm_tile_clear_override();
+}
+
+static void ggml_backend_metal_tuning_set_mm_tile_ne11_mm_min_override(int ne11_mm_min) {
+    ggml_metal_tuning::mm_tile_set_ne11_mm_min_override(ne11_mm_min);
+}
+
+static int ggml_backend_metal_tuning_mm_tile_N0_bucket(int64_t N_out) {
+    return ggml_metal_tuning::mm_tile_N0_bucket(N_out);
+}
+
+static int ggml_backend_metal_tuning_mm_tile_token_bucket(int64_t tokens) {
+    return ggml_metal_tuning::mm_tile_token_bucket(tokens);
+}
+
+static int ggml_backend_metal_tuning_mm_tile_lattice_selftest(void) {
+    return ggml_metal_tuning::mm_tile_lattice_selftest();
+}
+
 // generic fusion debugging API (ad-hoc proc-address mechanism): the test resolves the device
 // fusion context once and passes that opaque handle to the rest of the functions
 typedef void * ggml_backend_fusion_t;
@@ -963,6 +988,24 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_metal_tuning_device_token") == 0) {
         return (void *)ggml_backend_metal_tuning_device_token;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_set_mm_tile_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_set_mm_tile_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_clear_mm_tile_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_clear_mm_tile_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_set_mm_tile_ne11_mm_min_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_set_mm_tile_ne11_mm_min_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_mm_tile_N0_bucket") == 0) {
+        return (void *)ggml_backend_metal_tuning_mm_tile_N0_bucket;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_mm_tile_token_bucket") == 0) {
+        return (void *)ggml_backend_metal_tuning_mm_tile_token_bucket;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_mm_tile_lattice_selftest") == 0) {
+        return (void *)ggml_backend_metal_tuning_mm_tile_lattice_selftest;
     }
     // generic fusion debugging API (ad-hoc proc-address mechanism, not part of the official
     // ggml backend interface yet; a backend that adopts it exports these exact names)

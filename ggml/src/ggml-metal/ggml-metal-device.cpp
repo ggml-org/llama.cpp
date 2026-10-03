@@ -5,6 +5,7 @@
 
 #include "ggml-impl.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <string>
@@ -813,11 +814,32 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     constexpr int NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;
     constexpr int NRB = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;
 
-    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor;
+    const auto * dev_props  = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
+    const bool   has_tensor = dev_props->has_tensor;
+
+    // Pick (nr0, nr1) from the tuning table; an untuned shape falls back to the baseline
+    // tile. Tiles are only instantiated against src1 = f32: every mul_mat in a graph feeds
+    // f32 activations, so the f16 src1 variants are not worth doubling the tile count for.
+    // A batched op keeps the baseline: the sweep only measured 2D weights, and the occupancy
+    // veto behind the table does not see the batch dimensions.
+    const bool tile_eligible = !has_tensor && tsrc1 == GGML_TYPE_F32 &&
+        op->ne[2]*op->ne[3] == 1;
+
+    // name, grid and smem below all derive from this one cfg, so they cannot desync
+    const ggml_metal_tuning::mm_tile_cfg_t cfg = tile_eligible
+        ? ggml_metal_tuning::mm_tile_pick(
+              dev_props->device_id,
+              (int) tsrc0,
+              (int64_t) op->src[0]->ne[1],   // N_out (out-feat, ne01)
+              (int64_t) op->src[1]->ne[1])   // tokens (ne11)
+        : ggml_metal_tuning::MM_TILE_BASELINE_CFG;
+
+    const int nr0 = cfg.nr0;
+    const int nr1 = cfg.nr1;
 
     const bool bc_out = has_tensor
         ? (op->ne[0] % NRA != 0 || op->ne[1] % NRB != 0)
-        : (op->ne[0] % 64  != 0 || op->ne[1] % 32  != 0);
+        : (op->ne[0] % nr0 != 0 || op->ne[1] % nr1 != 0);
 
     GGML_ASSERT(op->src[1]->ne[2] <= INT16_MAX && op->src[1]->ne[3] <= INT16_MAX);
     const int16_t ne12 = (int16_t) op->src[1]->ne[2];
@@ -825,12 +847,22 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
-    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
-             base, bc_inp, bc_out, ne12, ne13, r2, r3);
+    // nr1 selects the base function: the bare name is the NR1 template default, anything
+    // else gets _nr1_{nr1}. nr0 is a function constant and only enters the variant name.
+    char nr1_suffix[16] = {0};
+    if (nr1 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1) {
+        snprintf(nr1_suffix, sizeof(nr1_suffix), "_nr1_%d", nr1);
+    }
+    snprintf(base, 256, "kernel_mul_mm_%s_%s%s",
+             ggml_type_name(tsrc0), ggml_type_name(tsrc1), nr1_suffix);
+    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d_nr0=%d",
+             base, bc_inp, bc_out, ne12, ne13, r2, r3, nr0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
+        // nr0 is a function constant, so this is what keeps an illegal geometry out of the kernel
+        GGML_ASSERT(ggml_metal_tuning::mm_tile_cfg_is_legal(nr0, nr1));
+
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
         ggml_metal_cv_set_bool(cv, bc_inp, FC_MUL_MM + 0);
@@ -839,6 +871,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         ggml_metal_cv_set_int16(cv, ne13,  FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, r2,    FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, r3,    FC_MUL_MM + 5);
+        ggml_metal_cv_set_int16(cv, (int16_t) nr0, FC_MUL_MM + 7);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -848,17 +881,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     if (has_tensor) {
         res.nr0 = NRA;
         res.nr1 = NRB;
+        res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
 
         const size_t smem_a = NRA * N_MM_NK_TOTAL * sizeof(ggml_fp16_t);
         res.smem = smem_a;
     } else {
-        res.nr0 = 64;
-        res.nr1 = 32;
+        res.nr0 = nr0;
+        res.nr1 = nr1;
+        res.nsg = nr0 / 16;  // must match the thread count FC_mul_mm_nr0 implies in the kernel
 
-        res.smem = bc_out ? 8192 : (4096 + 2048);
+        // the bc_out writeback reuses shmem as an nr0 x nr1 float scratch, which can exceed
+        // the A/B load buffers for large tiles
+        const size_t NK = 32;
+        const size_t sa = (size_t) nr0 * NK * sizeof(ggml_fp16_t);
+        const size_t sb = (size_t) nr1 * NK * sizeof(ggml_fp16_t);
+        const size_t bc = (size_t) nr0 * nr1 * sizeof(float);
+        res.smem = bc_out ? std::max(sa + sb, bc) : (sa + sb);
     }
-
-    res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
 
     return res;
 }

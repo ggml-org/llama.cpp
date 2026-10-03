@@ -7,6 +7,51 @@
 #include <thread>
 #include <utility>
 
+void init_tensor_uniform(ggml_tensor * t, std::mt19937 & rng, float min, float max) {
+    const size_t nels = ggml_nelements(t);
+
+    std::vector<float>                    data(nels);
+    std::uniform_real_distribution<float> dist(min, max);
+    for (size_t i = 0; i < nels; i++) {
+        data[i] = dist(rng);
+    }
+
+    if (t->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(float));
+        return;
+    }
+
+    GGML_ASSERT(ggml_is_quantized(t->type) || t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16);
+    GGML_ASSERT(nels % ggml_blck_size(t->type) == 0);
+
+    std::vector<float> imatrix(t->ne[0], 1.0f);
+    const float *      im = imatrix.data();
+    if (!ggml_quantize_requires_imatrix(t->type)) {
+        // when the imatrix is optional, exercise both paths; pick via one of the random numbers
+        if (data[0] > 0.5f * (min + max)) {
+            im = nullptr;
+        }
+    }
+
+    const size_t blck_size = ggml_blck_size(t->type);
+    const size_t n_blocks  = nels / blck_size;
+
+    std::vector<uint8_t> dataq(ggml_row_size(t->type, nels));
+    ggml_quantize_chunk(t->type, data.data(), dataq.data(), 0, n_blocks, blck_size, im);
+
+    ggml_backend_tensor_set(t, dataq.data(), 0, dataq.size());
+}
+
+bool filter_has(const char * filter, const char * name) {
+    if (!filter) {
+        return true;
+    }
+
+    const std::string f = std::string(",") + filter + ",";
+
+    return f.find(std::string(",") + name + ",") != std::string::npos;
+}
+
 perf_cell build_perf_cell(ggml_backend_t          backend,
                           const build_graph_fn &  build,
                           const init_tensors_fn & init,
