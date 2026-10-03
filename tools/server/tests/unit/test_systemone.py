@@ -104,6 +104,19 @@ def test_systemone_json_state():
     assert abs(res_obj.body["answers"]["refund"]["noul"] - res_str.body["answers"]["refund"]["noul"]) < 1e-4
 
 
+def test_systemone_batch_larger_than_ubatch():
+    global server
+    # questions with more than n_ubatch tokens in total must not abort the server
+    server.n_batch = 2048
+    server.start()
+    res = server.make_request("POST", "/v1/systemone", data={
+        "state": " ".join([TEST_STATE] * 20),
+        "questions": TEST_QUESTIONS,
+    })
+    assert res.status_code == 200
+    assert list(res.body["answers"].keys()) == ["route", "urgency", "angry"]
+
+
 @pytest.mark.parametrize("data", [
     {"questions": TEST_QUESTIONS},
     {"state": TEST_STATE},
