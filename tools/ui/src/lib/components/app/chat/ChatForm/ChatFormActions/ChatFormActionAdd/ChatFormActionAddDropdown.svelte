@@ -1,10 +1,6 @@
 <script lang="ts">
 	import { File, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
-	import {
-		ChatFormActionAddReasoningSubmenu,
-		ChatFormActionAddToolsSubmenu,
-		McpLogo
-	} from '$lib/components/app';
+	import { ChatFormActionAddToolsSubmenu } from '$lib/components/app';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -17,7 +13,6 @@
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
-	import { serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -70,8 +65,9 @@
 					<DropdownMenu.Trigger
 						{...props}
 						class={cn(
-							buttonVariants({ variant: 'secondary' }),
-							'file-upload-button h-8 w-8 cursor-pointer rounded-full p-0'
+							// ghost brings no fill of its own for the muted composer surface to fight over
+							buttonVariants({ variant: 'ghost' }),
+							'file-upload-button h-8 w-8 cursor-pointer rounded-full bg-background p-0 shadow-sm dark:bg-muted-foreground/15'
 						)}
 						disabled={chatFormActions.disabled}
 					>
@@ -97,13 +93,6 @@
 				}
 			}}
 		>
-			<!-- in router mode the models selector owns the reasoning submenu -->
-			{#if !serverStore.isRouterMode}
-				<ChatFormActionAddReasoningSubmenu />
-
-				<DropdownMenu.Separator />
-			{/if}
-
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-center gap-2"
 				onclick={() => attachmentMenu.callbacks[AttachmentAction.FILE_UPLOAD]()}
@@ -144,15 +133,6 @@
 			</DropdownMenu.Item>
 
 			<ChatFormActionAddToolsSubmenu />
-
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={chatFormActions.onMcpSettingsClick}
-			>
-				<McpLogo class={ICON_CLASS_DEFAULT} />
-
-				<span>MCP Servers</span>
-			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

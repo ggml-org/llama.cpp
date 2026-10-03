@@ -13,6 +13,7 @@
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
 	import { conversationsStore, deviceStore } from '$lib/stores';
+	import type { DesktopIconStripItem } from '$lib/types';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -25,6 +26,8 @@
 		searchQuery: string;
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
+		onManageModelsClick?: () => void;
+		onMcpClick?: () => void;
 		onNewChat?: () => void;
 		onSettingsClick?: () => void;
 	}
@@ -33,6 +36,8 @@
 		class: className,
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
+		onManageModelsClick,
+		onMcpClick,
 		onNewChat,
 		onSearchClick,
 		onSearchDeactivated,
@@ -59,6 +64,37 @@
 			initialized = true;
 		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
 	});
+
+	/** Click handler of one icon strip item: a sidebar action, a route, or the search. */
+	function itemClickHandler(
+		item: DesktopIconStripItem,
+		isSearchOnMobile: boolean
+	): (() => void) | undefined {
+		switch (item.action) {
+			case SidebarAction.NEW_CHAT:
+				return () => {
+					onNewChat?.();
+					void conversationsStore.openNewChat();
+				};
+			case SidebarAction.MANAGE_MODELS:
+				return () => onManageModelsClick?.();
+			case SidebarAction.MCP:
+				return () => onMcpClick?.();
+			case SidebarAction.SETTINGS:
+				return () => onSettingsClick?.();
+			default:
+				break;
+		}
+
+		if (item.route) {
+			return () => {
+				onNewChat?.();
+				goto(item.route!);
+			};
+		}
+
+		return isSearchOnMobile ? undefined : onSearchClick;
+	}
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
@@ -111,22 +147,7 @@
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
-			{@const itemOnClick =
-				item.action === SidebarAction.NEW_CHAT
-					? () => {
-							onNewChat?.();
-							void conversationsStore.openNewChat();
-						}
-					: item.action === SidebarAction.SETTINGS
-						? () => onSettingsClick?.()
-						: item.route
-							? () => {
-									onNewChat?.();
-									goto(item.route!);
-								}
-							: isSearchOnMobile
-								? undefined
-								: onSearchClick}
+			{@const itemOnClick = itemClickHandler(item, isSearchOnMobile)}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -167,22 +188,7 @@
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
-			{@const itemOnClick =
-				item.action === SidebarAction.NEW_CHAT
-					? () => {
-							onNewChat?.();
-							void conversationsStore.openNewChat();
-						}
-					: item.action === SidebarAction.SETTINGS
-						? () => onSettingsClick?.()
-						: item.route
-							? () => {
-									onNewChat?.();
-									goto(item.route!);
-								}
-							: isSearchOnMobile
-								? undefined
-								: onSearchClick}
+			{@const itemOnClick = itemClickHandler(item, isSearchOnMobile)}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,

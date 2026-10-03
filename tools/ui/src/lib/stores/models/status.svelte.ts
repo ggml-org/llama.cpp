@@ -19,7 +19,14 @@ import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
-import type { ApiModelsSseDownloadProgressData, ModelDownloadProgress } from '$lib/types';
+import type {
+	ApiModelsSseDownloadProgressData,
+	ModelDownloadEntry,
+	ModelDownloadProgress
+} from '$lib/types';
+import type { ModelSidecarBadge } from '$lib/types/models';
+import { repoOf } from '$lib/utils/model-names';
+import { isAuxSidecar } from '$lib/utils/sidecars';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -84,7 +91,54 @@ export class ModelStatusManager {
 
 		return result;
 	});
+
 	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
+	/**
+	 * Draft sidecars the registered models pull with them, keyed by the repo of the model
+	 * that pulls them: the router records them in the model's `--model-draft` args.
+	 */
+	private draftSidecarsByRepo = $derived.by(() => {
+		const result = new SvelteMap<string, ModelSidecarBadge[]>();
+
+		for (const m of this.host.routerModels) {
+			const args = m.status?.args;
+
+			if (!args) continue;
+
+			const baseRepo = repoOf(m.id);
+
+			for (let i = 0; i < args.length - 1; i++) {
+				if (args[i] !== CLI_FLAGS.MODEL_DRAFT && args[i] !== CLI_FLAGS.MODEL_DRAFT_SHORT) {
+					continue;
+				}
+
+				const parsed = HuggingFaceService.parseCachePath(args[i + 1]);
+
+				if (!parsed) continue;
+
+				const meta = HuggingFaceService.extractQuantMeta(parsed.file);
+
+				if (!meta?.sidecar || isAuxSidecar(meta.sidecar)) continue;
+
+				const badge: ModelSidecarBadge = {
+					kind: meta.sidecar,
+					quant: meta.quant,
+					repo: parsed.repo
+				};
+				const kinds = result.get(baseRepo);
+
+				if (kinds) {
+					if (!kinds.some((b) => b.kind === badge.kind && b.repo === badge.repo)) {
+						kinds.push(badge);
+					}
+				} else {
+					result.set(baseRepo, [badge]);
+				}
+			}
+		}
+
+		return result;
+	});
 	/** `<repo>:<tag>` strings whose most recent download attempt failed (download_failed). */
 	private failedDownloads = new SvelteSet<string>();
 	private loadingStates = new SvelteMap<string, boolean>();
@@ -230,11 +284,7 @@ export class ModelStatusManager {
 	 * Tracked downloads (in flight or paused) for the selector's
 	 * "Download in progress" section.
 	 */
-	getDownloadEntries(): {
-		isPaused: boolean;
-		progress: ModelDownloadProgress | null;
-		repoWithTag: string;
-	}[] {
+	getDownloadEntries(): ModelDownloadEntry[] {
 		const inFlight = Array.from(this.downloadProgress, ([repoWithTag, progress]) => ({
 			isPaused: false,
 			progress,
@@ -251,6 +301,11 @@ export class ModelStatusManager {
 
 	getDownloadProgress(repoWithTag: string): ModelDownloadProgress | null {
 		return this.downloadProgress.get(repoWithTag) ?? null;
+	}
+
+	/** Draft sidecars a repo pulls with its model, e.g. `mtp` at `Q8_0`. */
+	getDraftSidecars(repoId: string): ModelSidecarBadge[] {
+		return this.draftSidecarsByRepo.get(repoId) ?? [];
 	}
 
 	getLoadProgress(modelId: string): ModelLoadProgress | null {
