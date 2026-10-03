@@ -83,6 +83,7 @@ public:
     // Host identity and the logical frontier survive a zero-grant device phase.
     bool device_suspended() const noexcept;
     bool suspend_ready() const noexcept;
+    bool resume_ready() const noexcept;
     bool prefetch_primed() const noexcept;
     void abort();
     bool reset(bool clear_bytes);

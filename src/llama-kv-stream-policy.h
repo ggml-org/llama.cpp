@@ -106,6 +106,10 @@ struct llama_kv_stream_policy_result {
 // The input pool_bytes is ignored; failure leaves output unchanged.
 llama_kv_stream_policy_result llama_kv_stream_policy_minimum_pool_bytes(
         const llama_kv_stream_policy_config & config, size_t & output);
+// Reconstruct placement for a fresh same-sized, smaller, or larger grant without retaining device storage.
+llama_kv_stream_policy_result llama_kv_stream_policy_restore(
+        const llama_kv_stream_policy_config & current, size_t active_tokens,
+        bool decode, size_t pool_bytes, llama_kv_stream_policy_rebind & output);
 // Recompute a larger pool at an existing committed frontier. This does not retain or move storage.
 // Failure leaves output unchanged.
 llama_kv_stream_policy_result llama_kv_stream_policy_grow(

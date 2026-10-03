@@ -49,6 +49,20 @@ static uint32_t reference_target(uint32_t pool, uint32_t layers, uint32_t active
 
 int main() {
     testing t;
+    t.test("fresh_grant_restore_accepts_equal_smaller_and_larger_phase_budgets", [](testing & t) {
+        const auto c = config(358);
+        for (bool decode : {false,true}) for (size_t bytes : {c.pool_bytes,size_t(64)*425984,size_t(512)*425984}) {
+            llama_kv_stream_policy_rebind rebuilt;
+            if (!t.assert_true(llama_kv_stream_policy_restore(c,25600,decode,bytes,rebuilt).status == status::success)) return;
+            t.assert_equal(bytes,rebuilt.config.pool_bytes);
+            t.assert_equal(bytes,rebuilt.state.budget.pool_bytes);
+            t.assert_equal(size_t(16),rebuilt.layout.layers.size());
+            t.assert_equal(decode ? uint32_t(100) : uint32_t(0),rebuilt.state.decode_active_pages);
+            const auto before = rebuilt.config.pool_bytes;
+            t.assert_true(llama_kv_stream_policy_restore(c,25600,decode,0,rebuilt).status != status::success);
+            t.assert_equal(before,rebuilt.config.pool_bytes);
+        }
+    });
     t.test("target_and_mtp_share_seventeen_layer_budget_without_sharing_identity", [](testing & t) {
         auto c = config(358, 17);
         c.caches = {{101, 16}, {202, 1}};

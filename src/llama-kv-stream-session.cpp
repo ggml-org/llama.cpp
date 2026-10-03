@@ -255,6 +255,7 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
     uint64_t before_revision;
     pool_candidate candidate;
     bool coordinated_scratch;
+    bool before_suspended;
     bool affected = false;
     bool activated = false;
     bool recovered = false;
@@ -276,7 +277,7 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
         before_committed(owner.committed),
         before_generation(owner.expected_generation),
         before_revision(owner.revision),
-        coordinated_scratch(coordinated_scratch) {
+        coordinated_scratch(coordinated_scratch), before_suspended(owner.device_suspended) {
         GGML_ASSERT(owner.transition == nullptr);
         owner.transition = this;
     }
@@ -364,12 +365,13 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
 
     bool quiesce(const std::vector<llama_memory_resource_id> & changed) override {
         if (owner.transition != this || owner.busy || owner.running || owner.poisoned ||
-                !owner.binding || !owner.binding->ready() ||
+                owner.device_suspended != before_suspended ||
+                (before_suspended ? bool(owner.binding) : (!owner.binding || !owner.binding->ready())) ||
                 owner.revision != before_revision || !frontier_unchanged() ||
                 std::find(changed.begin(),changed.end(),resources[0]) == changed.end()) return false;
         affected = true;
         owner.transition_closed = true;
-        owner.binding->quiesce();
+        if (owner.binding) owner.binding->quiesce();
         return true;
     }
 
@@ -493,6 +495,11 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
             auto & owner = original.owner;
             if (owner.content->generation() != original.before_generation ||
                     owner.expected_generation != original.before_generation) return fail();
+            if (original.before_suspended) {
+                for (const auto & binding : bindings)
+                    for (const auto resource : original.resources) if (binding.region.id == resource) return fail();
+                return true;
+            }
             const auto * pool = original.find_binding(
                 bindings,original.resources[0],original.before_regions[0]);
             const auto * writer = original.coordinated_scratch ? original.find_binding(
@@ -515,8 +522,14 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
 
         bool activate() override {
             auto & owner = original.owner;
-            if (!candidate.binding || owner.content->generation() != original.before_generation) return fail();
-            owner.publish_pool(std::move(candidate));
+            if (owner.content->generation() != original.before_generation) return fail();
+            if (original.before_suspended) {
+                if (owner.binding || owner.grant) return fail();
+                owner.device_suspended = true;
+            } else {
+                if (!candidate.binding) return fail();
+                owner.publish_pool(std::move(candidate));
+            }
             original.recovered = true;
             owner.transition_closed = false;
             return true;
@@ -985,7 +998,7 @@ bool llama_kv_stream_session::prepare(
     if (output || !s.config.pool_resource ||
             (!decode && !suspend && target.stage != s.config.prefill_stage) ||
             s.transition || s.busy || s.running || s.poisoned || s.ring_guard ||
-            (s.device_suspended ? !suspend : (!s.binding || !s.binding->ready())) ||
+            (s.device_suspended ? !coordinated_scratch : (!s.binding || !s.binding->ready())) ||
             (suspend && (!coordinated_scratch || s.revision == UINT64_MAX)) || !s.publications || s.publications->failed() ||
             s.publication.pending() || s.content->generation() != s.expected_generation ||
             llama_memory_plan_validate(target.plan).status !=
@@ -1066,17 +1079,22 @@ bool llama_kv_stream_session::prepare(
         if (!found) return false;
     }
 
-    if (s.device_suspended) return true;
+    if (s.device_suspended && suspend) return true;
 
     std::array<ggml_backend_memory_region,3> before{};
     for (size_t i = 0; i < before.size(); ++i) {
+        if (s.device_suspended) {
+            if (s.leases[i] || s.binding || s.resident) return false;
+            before[i] = {resources[i],0,0,desired[i].alignment,0};
+            continue;
+        }
         if (!s.leases[i] ||
                 !ggml_backend_memory_lease_get_region(
                     s.leases[i].get(),&before[i])) return false;
         if (resources[i] && before[i].id != resources[i]) return false;
     }
-    if (before[0].size != s.config.policy.pool_bytes ||
-            desired[0].size == s.config.policy.pool_bytes) return false;
+    if (!s.device_suspended && (before[0].size != s.config.policy.pool_bytes ||
+            desired[0].size == s.config.policy.pool_bytes)) return false;
 
     size_t attention_needed = 0;
     if (!suspend && coordinated_scratch &&
@@ -1088,6 +1106,9 @@ bool llama_kv_stream_session::prepare(
     if (suspend) {
         replacement.config = s.config.policy;
         replacement.state = s.state;
+    } else if (s.device_suspended) {
+        if (llama_kv_stream_policy_restore(s.config.policy,s.committed,decode,desired[0].size,replacement).status !=
+                llama_kv_stream_policy_status::success) return false;
     } else {
         const auto planned = desired[0].size > s.config.policy.pool_bytes ?
             llama_kv_stream_policy_grow(s.config.policy,s.committed,decode,desired[0].size,replacement) :

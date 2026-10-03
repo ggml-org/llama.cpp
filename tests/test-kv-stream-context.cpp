@@ -17,6 +17,7 @@ using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
 static bool auxiliary_control = false, embedded_mtp_control = false, target_tg3_control = false, target_stream_tg4_control = false;
 static bool suspend_control = false;
 static bool suspend_resident_only = false;
+static bool resume_control = false, resume_resident_only = false;
 static bool target_with_stock_draft = false;
 static bool f16_control = false, shared_budget_control = false;
 static bool resident_control = false, trace_control = false;
@@ -332,6 +333,9 @@ int main(int argc,char ** argv) {
         suspend_control = suspend_control || !std::strcmp(argv[i],"--suspend-only");
         suspend_resident_only = suspend_resident_only || !std::strcmp(argv[i],"--suspend-resident-only");
         suspend_control = suspend_control || suspend_resident_only;
+        resume_control = resume_control || !std::strcmp(argv[i],"--resume-only");
+        resume_resident_only = resume_resident_only || !std::strcmp(argv[i],"--resume-resident-only");
+        resume_control = resume_control || resume_resident_only;
         trace_control = trace_control || !std::strcmp(argv[i],"--trace");
         auxiliary_control = auxiliary_control || !std::strcmp(argv[i],"--auxiliary-only");
         embedded_mtp_control = embedded_mtp_control || !std::strcmp(argv[i],"--embedded-mtp-pair");
@@ -664,6 +668,111 @@ int main(int argc,char ** argv) {
     const int tokens = llama_tokenize(vocab,text.data(),int(text.size()),prompt.data(),size,true,false);
     if (!t.assert_true(tokens >= (target_stream_tg4_control ? 3005 : 640))) return t.summary();
     prompt.resize(target_stream_tg4_control ? 3005 : 640);
+    if (resume_control) {
+        for (bool streamed : {false,true}) {
+            if (streamed && resume_resident_only) continue;
+            for (auto phase : {llama_memory_text_phase::decode,llama_memory_text_phase::prefill}) {
+                const auto name = std::string(streamed ? "streamed" : "resident") +
+                    "_hybrid_resume_matches_uninterrupted_" + (phase == llama_memory_text_phase::decode ? "decode" : "prefill");
+                t.test(name, [&](testing & t) {
+                    auto p = llama_context_default_params();
+                    p.n_ctx = streamed ? 8192 : 1024;
+                    p.n_batch = p.n_ubatch = streamed ? 64 : 256;
+                    p.n_seq_max = 1; p.n_rs_seq = 0;
+                    p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
+                    p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+                    p.kv_stream_pool_bytes = 16*1048576;
+                    context_ptr ctx(llama_init_from_model(model.get(),p),llama_free);
+                    if (!t.assert_true(bool(ctx))) return;
+                    std::vector<llama_token> history(streamed ? 6144 : 256);
+                    for (size_t i = 0; i < history.size(); ++i) history[i] = prompt[i%prompt.size()];
+                    llama_set_kv_stream_decode(ctx.get(),false);
+                    for (size_t first = 0; first < history.size(); first += p.n_ubatch)
+                        if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(history.data()+first,p.n_ubatch)))) return;
+                    const auto checkpoint = [&] {
+                        std::vector<uint8_t> data(llama_state_get_size(ctx.get()));
+                        data.resize(llama_state_get_data(ctx.get(),data.data(),data.size())); return data;
+                    };
+                    const auto prefill_state = checkpoint();
+                    llama_set_kv_stream_decode(ctx.get(),true);
+                    for (size_t i = 0; i < 4; ++i)
+                        if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(&prompt[i],1)))) return;
+                    auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+                    auto * stream = hybrid->get_mem_attn()->get_kv_stream();
+                    auto snapshot = [&] {
+                        std::vector<uint8_t> data(llama_state_get_size(ctx.get()));
+                        data.resize(llama_state_get_data(ctx.get(),data.data(),data.size())); return data;
+                    };
+                    const auto saved = snapshot();
+                    const auto initial_frontier = stream->tokens();
+                    const auto host = stream->host();
+                    const auto consumer = stream->memory_consumer();
+                    const auto next = [&]() {
+                        llama_set_kv_stream_decode(ctx.get(),phase == llama_memory_text_phase::decode);
+                        const int32_t rows = phase == llama_memory_text_phase::decode ? 1 : 3;
+                        return llama_decode(ctx.get(),llama_batch_get_one(prompt.data()+4,rows)) == 0;
+                    };
+                    const auto generate = [&]() {
+                        std::vector<llama_token> generated;
+                        llama_set_kv_stream_decode(ctx.get(),true);
+                        for (size_t i = 0; i < 16; ++i) {
+                            const auto * logits = llama_get_logits_ith(ctx.get(),-1);
+                            auto token = llama_token(std::max_element(logits,logits+llama_vocab_n_tokens(vocab))-logits);
+                            generated.push_back(token);
+                            if (llama_decode(ctx.get(),llama_batch_get_one(&token,1)) != 0) { generated.clear(); break; }
+                        }
+                        return generated;
+                    };
+                    if (!t.assert_true(next())) return;
+                    std::vector<float> expected_next(llama_get_logits_ith(ctx.get(),-1),
+                        llama_get_logits_ith(ctx.get(),-1)+llama_vocab_n_tokens(vocab));
+                    const auto expected_tokens = generate();
+                    if (!t.assert_equal(size_t(16),expected_tokens.size())) return;
+                    recurrent_snapshot expected_recurrent;
+                    hybrid->get_mem_recr()->state_write(expected_recurrent,0,0);
+                    std::vector<float> expected_logits(llama_get_logits_ith(ctx.get(),-1),
+                        llama_get_logits_ith(ctx.get(),-1)+llama_vocab_n_tokens(vocab));
+                    if (!t.assert_equal(saved.size(),llama_state_set_data(ctx.get(),saved.data(),saved.size()))) return;
+                    if (!t.assert_true(next())) return;
+                    const auto control_tokens = generate();
+                    t.out << "checkpoint-only matching tokens=" << (control_tokens == expected_tokens) << '\n';
+                    if (!t.assert_true(control_tokens == expected_tokens) ||
+                            !t.assert_equal(prefill_state.size(),llama_state_set_data(ctx.get(),prefill_state.data(),prefill_state.size()))) return;
+                    llama_set_kv_stream_decode(ctx.get(),true);
+                    for (size_t i = 0; i < 4; ++i)
+                        if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(&prompt[i],1)))) return;
+                    t.assert_true(snapshot() == saved);
+                    if (!streamed) t.assert_true(stream->captured_layers() > 0);
+                    const auto revision = stream->binding_view().revision;
+                    if (!t.assert_true(llama_context_suspend_kv_device(ctx.get()))) return;
+                    t.assert_equal(size_t(0),stream->captured_layers());
+                    if (!t.assert_true(llama_context_resume_kv_device(ctx.get(),phase))) return;
+                    t.assert_true(stream->host() == host && stream->memory_consumer() == consumer);
+                    t.assert_equal(initial_frontier,stream->tokens());
+                    t.assert_true(stream->binding_view().revision > revision);
+                    t.assert_equal(size_t(0),stream->captured_layers());
+                    t.assert_true(snapshot() == saved);
+                    if (!t.assert_true(next())) return;
+                    float next_error = 0;
+                    const auto * next_logits = llama_get_logits_ith(ctx.get(),-1);
+                    for (size_t i = 0; i < expected_next.size(); ++i) next_error = std::max(next_error,std::abs(next_logits[i]-expected_next[i]));
+                    t.out << "resume first-batch error=" << next_error << '\n';
+                    t.assert_equal(0.0f,next_error);
+                    const auto actual_tokens = generate();
+                    t.assert_true(actual_tokens == expected_tokens);
+                    const auto * actual_logits = llama_get_logits_ith(ctx.get(),-1);
+                    float maximum = 0;
+                    for (size_t i = 0; i < expected_logits.size(); ++i) maximum = std::max(maximum,std::abs(actual_logits[i]-expected_logits[i]));
+                    t.out << "resume max_logit_error=" << maximum << ", matching tokens=" << (actual_tokens == expected_tokens) << '\n';
+                    t.assert_equal(0.0f,maximum);
+                    recurrent_snapshot actual_recurrent;
+                    hybrid->get_mem_recr()->state_write(actual_recurrent,0,0);
+                    t.assert_true(expected_recurrent.metadata == actual_recurrent.metadata && expected_recurrent.tensors == actual_recurrent.tensors);
+                });
+            }
+        }
+        return t.summary();
+    }
     if (suspend_control) {
         t.test("populated_hybrid_state_survives_device_suspension", [&](testing & t) {
             auto p = llama_context_default_params();

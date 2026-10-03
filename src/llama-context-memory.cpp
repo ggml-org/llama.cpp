@@ -167,7 +167,8 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
             if (activated.status != llama_memory_transition_status::activated) {
                 const auto recovered = transition->recover();
                 if (recovered.status == llama_memory_transition_status::recovered) {
-                    capture_execution();
+                    if (active_stage == suspend_stage) bindings.clear();
+                    else capture_execution();
                 }
                 return false;
             }
@@ -549,6 +550,24 @@ bool llama_context_memory::suspend_kv(llama_memory_executor_backend * auxiliary_
 }
 bool llama_context_memory::kv_device_suspended() const noexcept {
     return impl->shared_stream && impl->shared_stream->device_suspended();
+}
+bool llama_context_memory::resume_kv(llama_memory_text_phase phase, const std::function<bool()> & rebuild) noexcept {
+    if (!impl->shared_stream || impl->serial_borrowed || impl->serial_busy || !impl->shared_stream->resume_ready() ||
+            (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode)) return false;
+    serial_gate gate(impl->serial_busy);
+    const auto close = [&] {
+        try {
+            if (!kv_device_suspended() && !impl->activate_stage(impl->suspend_stage)) impl->executor.quiesce();
+        } catch (...) { impl->executor.quiesce(); }
+    };
+    try {
+        const auto stage = phase == llama_memory_text_phase::decode ? impl->decode_stage : impl->prefill_stage;
+        if (!impl->activate_stage(stage) || kv_device_suspended() || !impl->shared_stream->complete() || (rebuild && !rebuild())) {
+            close(); return false;
+        }
+        impl->serial_active = this;
+        return true;
+    } catch (...) { close(); return false; }
 }
 std::unique_ptr<llama_context_memory> llama_context_memory::borrow_workspace(ggml_backend_sched_t sched,
         const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_memory_workspace_group> & groups,

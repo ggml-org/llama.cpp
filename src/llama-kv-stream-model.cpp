@@ -669,6 +669,10 @@ bool llama_kv_stream_model::device_suspended() const noexcept { return impl->ses
 bool llama_kv_stream_model::suspend_ready() const noexcept {
     return complete() && (!impl->auxiliary_cache || impl->auxiliary_cache->ready());
 }
+bool llama_kv_stream_model::resume_ready() const noexcept {
+    return impl->session && impl->session->device_suspended() && !impl->session->failed() &&
+        !impl->external_mutation && !impl->pending_k && (!impl->auxiliary_cache || impl->auxiliary_cache->ready());
+}
 bool llama_kv_stream_model::prefetch_primed() const noexcept { return impl->session && impl->session->prefetch_primed(); }
 void llama_kv_stream_model::abort() { impl->abort(); }
 bool llama_kv_stream_model::reset(bool clear) {

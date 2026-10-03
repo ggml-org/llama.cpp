@@ -75,6 +75,8 @@ struct llama_context {
     bool uses_memory_coordinator() const;
     // Internal diagnostics; the context retains ownership of this scheduler coordinator.
     const llama_context_memory * get_compute_memory() const noexcept;
+    // Resume bounded device grants and discard graph metadata from the previous binding.
+    bool resume_kv_device(llama_memory_text_phase phase);
 
 
     uint32_t n_ctx()     const;

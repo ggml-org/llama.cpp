@@ -1071,6 +1071,28 @@ bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
     } catch (...) { return false; }
 }
 
+bool llama_context::resume_kv_device(llama_memory_text_phase phase) {
+    if (!cparams.kv_streaming() || !compute_memory || !compute_memory->kv_device_suspended()) return false;
+    const bool previous_decode = cparams.kv_stream_decode;
+    const bool resumed = compute_memory->resume_kv(phase,[&] {
+        gf_res_prev->reset();
+        gf_res_reserve->reset();
+        cparams.kv_stream_decode = phase == llama_memory_text_phase::decode;
+        auto reserved = memory->init_full();
+        const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
+            std::min(4u,std::min(cparams.n_ctx,cparams.n_ubatch)) : cparams.n_seq_max;
+        const uint32_t width = phase == llama_memory_text_phase::decode ?
+            decode_width : std::min(cparams.n_ctx,cparams.n_ubatch);
+        return reserved && graph_reserve(width,cparams.n_seq_max,std::min(width,cparams.n_outputs_max),reserved.get());
+    });
+    if (!resumed) cparams.kv_stream_decode = previous_decode;
+    return resumed;
+}
+
+bool llama_context_resume_kv_device(llama_context * ctx,llama_memory_text_phase phase) noexcept {
+    try { return ctx && ctx->resume_kv_device(phase); } catch (...) { return false; }
+}
+
 
 bool llama_context::uses_compute_arenas() const {
     return !compute_arenas.empty() || (compute_memory && compute_memory->uses_arenas());

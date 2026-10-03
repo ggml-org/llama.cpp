@@ -3,6 +3,7 @@
 #include "llama-memory-executor.h"
 #include "llama-memory-phase.h"
 #include "llama-context-workspace.h"
+#include <functional>
 
 class llama_kv_stream_model;
 
@@ -63,6 +64,9 @@ public:
     // Return KV and graph grants while retaining the shared parent and authoritative host state.
     LLAMA_API bool suspend_kv(llama_memory_executor_backend * auxiliary_completion = nullptr) noexcept;
     LLAMA_API bool kv_device_suspended() const noexcept;
+    // Acquire a fresh measured layout for a suspended target; ordinary execution never resumes implicitly.
+    // Optional rebuild runs under the submission gate and must not execute graphs or change persistent data.
+    LLAMA_API bool resume_kv(llama_memory_text_phase phase, const std::function<bool()> & rebuild = {}) noexcept;
 
     // Record text intent and activate the matching shared-parent layout only when the phase changes.
     llama_memory_text_phase_result signal_text_phase(const llama_memory_text_phase_signal & signal) noexcept;
@@ -87,3 +91,4 @@ private:
 // Internal serial adapter seam; the context retains ownership and may rebuild this coordinator.
 LLAMA_API llama_context_memory * llama_context_compute_memory(llama_context * ctx) noexcept;
 LLAMA_API bool llama_context_suspend_kv_device(llama_context * ctx) noexcept;
+LLAMA_API bool llama_context_resume_kv_device(llama_context * ctx, llama_memory_text_phase phase) noexcept;
