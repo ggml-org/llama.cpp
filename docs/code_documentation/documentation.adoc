@@ -1,0 +1,93 @@
+= Code Documentation
+
+WARNING: This documentation is neither complete (i.e. it does not cover everything) nor exhaustive (i.e. it does not completely cover everything it touches on). The version used is a February 18th 2025 version, specifically commit 63ac128. Subsequent modifications have not yet been reviewed.
+
+[[docs:overview]]
+== Overview
+
+[[docs:overview:main.cpp]]
+=== main.cpp
+
+"`main.cpp`" is the primary source file from which the documentation process started. It compiles into the llama-cli executable which provides chatbot functionality inside the terminal and has the following high-level structure (note that this analysis is not exhaustive):
+
+* (lines) 1-86: include headers, global variables, helper functions
+* 88-133: parameter parsing (call to [.codebit]#`common_params_parse(...)`# on line 91, edge case hadling afterwards), [.codebit]#`common_init()`#, console initialization
+* 135: [.codebit]#`llama_backend_init()`#
+* 136: [.codebit]#`llama_numa_init(...)`#
+* 150: call to [.codebit]#`common_init_from_params(...)`# generates [.codebit]#`struct llama_model`# and [.codebit]#`struct llama_context`#
+* 165-194: set up [.codebit]#`struct ggml_threadpool`#
+* 203-226: conversation mode setup
+* 235-432: session setup
+* 434: [.codebit]#`common_sampler_init(...)`#
+* 460-483: session setup
+* 485-532: inference preparation
+* 534-906: run loop
+    ** 535-630: input and context management
+    ** 632-652: token evaluation by [.codebit]#`llama_decode(...)`# call (line 640)
+    ** 704-728: display logic
+    ** 731-906: antiprompt/reverse prompt detection, console logic
+* 908-923: cleanup (print final logs, dealocate memory)
+
+
+[[docs:overview:call_paths]]
+=== Call Paths
+
+Following is a description of the call paths followed in the documentation process. These are centered on the inference process and the setup necessary for it, and will provide a good picture of the program's general control flow.
+
+==== Model and context init
+
+* [.codebit]#`common_init_from_params(...)`# -> [.codebit]#`llama_model_load_from_file(...)`#, [.codebit]#`llama_init_from_model(...)`#
+    ** [.codebit]#`llama_model_load_from_file(...)`# -> [.codebit]#`llama_model_load_from_file_impl(...)`# -> [.codebit]#`ggml_backend_dev_get(...)`#, [.codebit]#`llama_model_load(...)`#
+        *** [.codebit]#`ggml_backend_dev_get(...)`# -> [.codebit]#`get_reg()`# -> [.codebit]#`struct ggml_backend_registry()`# -> [.codebit]#`struct ggml_backend_registry.register_backend(...)`#, [.codebit]#`ggml_backend_cuda_reg()`# and [.codebit]#`ggml_backend_cpu_reg()`# (among others, depending on the build)
+    ** [.codebit]#`llama_init_from_model(...)`# -> [.codebit]#`struct llama_context(...)`#, [.codebit]#`ggml_backend_dev_init(...)`#, [.codebit]#`ggml_backend_sched_new(...)`#
+        *** [.codebit]#`ggml_backend_dev_init(...)`# -> [.codebit]#`struct ggml_backend_device.iface.init_backend(...)`#
+
+Note that the calls to [.codebit]#`ggml_backend_cuda_reg()`# and [.codebit]#`ggml_backend_cpu_reg()`# go much deeper and are responsible for the proper setup of usable devices (among other functions for different backends that are not documented here). They are overall very similar and will be detailed in their own sections.
+
+==== Inference
+
+* [.codebit]#`llama_decode(...)`# -> [.codebit]#`llama_decode_impl(...)`# -> [.codebit]#`ggml_backend_sched_set_eval_callback(...)`#, [.codebit]#`llama_build_graph(...)`#, [.codebit]#`llama_set_inputs(...)`#, [.codebit]#`llama_graph_compute(...)`#
+    ** [.codebit]#`llama_build_graph(...)`# -> [.codebit]#`struct llm_build_context(...)`#, [.codebit]#`struct llm_build_context.init()`#, [.codebit]#`struct llm_build_context.build_llama()`# (one of many branches)
+        *** [.codebit]#`struct llm_build_context.init()`# -> [.codebit]#`ggml_init(...)`#
+        *** [.codebit]#`struct llm_build_context.build_llama()`# -> [.codebit]#`ggml_new_graph_custom(...)`#, [.codebit]#`llm_build_input_embd(...)`#
+            **** [.codebit]#`ggml_new_graph_custom(...)`# -> [.codebit]#`ggml_graph_nbytes(...)`#, [.codebit]#`ggml_new_object(...)`#, [.codebit]#`ggml_hash_set_reset(...)`#
+        *** [.codebit]#`llm_build_input_embd(...)`# -> [.codebit]#`ggml_new_tensor_1d(...)`#, [.codebit]#`ggml_new_tensor_2d(...)`# -> [.codebit]#`ggml_new_tensor_impl(...)`#
+    ** [.codebit]#`llama_graph_compute(...)`# -> [.codebit]#`ggml_backend_sched_graph_compute_async(...)`# -> [.codebit]#`ggml_backend_sched_alloc_graph(...)`#, [.codebit]#`ggml_backend_sched_compute_splits(...)`#
+        *** [.codebit]#`ggml_backend_sched_alloc_graph(...)`# -> [.codebit]#`ggml_backend_sched_split_graph(...)`#, [.codebit]#`ggml_backend_sched_alloc_splits(...)`#
+        *** [.codebit]#`ggml_backend_sched_compute_splits(...)`# -> [.codebit]#`struct ggml_backend_sched.callback_eval`#, [.codebit]#`ggml_backend_graph_compute_async(...)`#
+            **** [.codebit]#`ggml_backend_graph_compute_async(...)`# -> [.codebit]#`struct ggml_backend.iface.graph_compute`#
+
+Here note that the call path ends in [.codebit]#`struct ggml_backend.iface.graph_compute`#, which is a pointer to a function specific to each backend set in the initialization phase by a call to [.codebit]#`struct ggml_backend_device.iface.init_backend(...)`#, which is itself another pointer to a function set during backend initialization, specifically in the calls to [.codebit]#`ggml_backend_cuda_reg()`# and [.codebit]#`ggml_backend_cpu_reg()`# (and their counterparts for the other supported backends). Again, these will be detailed in their own sections.
+
+[[docs:funcstructs]]
+== Functions and structures
+
+This section will elaborate on the functions and structures mentioned above, as well as other relevant ones, grouped by the files which contain them and ordered by their position in said files.
+
+NOTE: There are many types with the formats [.codebit]#`typename_t`# and [.codebit]#`typename_ptr`#. In most, if not all cases, [.codebit]#`typename_t`# is a [.codebit]#`typedef`# that stands for [.codebit]#`typename*`#, while [.codebit]#`typename_ptr`# stands for [.codebit]#`std::unique_ptr<typename, optional_typename_deleter>`#.
+
+include::documentation/common.h.adoc[]
+
+include::documentation/common.cpp.adoc[]
+
+include::documentation/llama-context.h.adoc[]
+
+include::documentation/llama.cpp.adoc[]
+
+include::documentation/ggml-impl.h.adoc[]
+
+include::documentation/ggml-backend-reg.cpp.adoc[]
+
+include::documentation/ggml-cuda.cu.adoc[]
+
+include::documentation/ggml-cpu.cpp.adoc[]
+
+include::documentation/ggml-cpu.c.adoc[]
+
+include::documentation/ggml-backend.cpp.adoc[]
+
+include::documentation/ggml-backend-impl.h.adoc[]
+
+include::documentation/ggml.h.adoc[]
+
+include::documentation/ggml.c.adoc[]

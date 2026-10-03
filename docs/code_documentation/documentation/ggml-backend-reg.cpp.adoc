@@ -1,0 +1,70 @@
+[[docs:funcstructs:ggml-backend-reg.cpp]]
+== ggml-backend-reg.cpp
+
+
+[[docs:funcstructs:ggml-backend-reg.cpp:struct-ggml_backend_reg_entry]]
+=== struct ggml_backend_reg_entry
+
+[source,C++]
+----
+struct ggml_backend_reg_entry {
+    ggml_backend_reg_t reg;
+    dl_handle_ptr handle;
+};
+----
+
+Note that [.codebit]#`ggml_backend_reg_t`# is an alias for [.codebit]#`ggml_backend_reg*`#.
+
+
+[[docs:funcstructs:ggml-backend-reg.cpp:struct-ggml_backend_registry]]
+=== struct ggml_backend_registry
+
+It has two members:
+
+* [.codebit]#`std::vector<ggml_backend_reg_entry> backends`#
+* [.codebit]#`std::vector<ggml_backend_dev_t> devices`#
+
+Its default constructor calls its [.codebit]#`register_backend(...)`# method with the [.codebit]##`ggml_backend_reg`##s specific to each backend with which llama.cpp is compiled (see [.codebit]#`ggml_backend_cuda_reg()`# and [.codebit]#`ggml_backend_cpu_reg()`#). This constructor *_should not_* be called manually, as this structure is meant to be a singleton. See [.codebit]#`get_reg()`#.
+
+
+[[docs:funcstructs:ggml-backend-reg.cpp:struct-ggml_backend_registry.register_backend]]
+=== struct ggml_backend_registry.register_backend
+
+Signature:
+[.codebit]#`void register_backend(ggml_backend_reg_t reg, dl_handle_ptr handle = nullptr)`#
+
+Pushes the given pair into the structure's [.codebit]#`backends`# member and calls its [.codebit]#`register_device(...)`# method for every device associated with the [.codebit]#`ggml_backend_reg`# (uses [.codebit]#`ggml_backend_reg_dev_count(...)`# and [.codebit]#`ggml_backend_reg_dev_get(...)`# to iterate through and retrieve them).
+
+
+[[docs:funcstructs:ggml-backend-reg.cpp:struct-ggml_backend_registry.register_device]]
+=== struct ggml_backend_registry.register_device
+
+Signature:
+[.codebit]#`void register_device(ggml_backend_dev_t device)`#
+
+Simply pushes to the structure's [.codebit]#`devices`# member.
+
+
+[[docs:funcstructs:ggml-backend-reg.cpp:get_reg]]
+=== get_reg
+
+Signature: [.codebit]#`static ggml_backend_registry & get_reg()`#
+
+Helps implement a singleton-like design pattern for [.codebit]#`struct ggml_backend_registry`#:
+
+[source,C++]
+----
+static ggml_backend_registry & get_reg() {
+    static ggml_backend_registry reg;
+    return reg;
+}
+----
+
+
+[[docs:funcstructs:ggml-backend-reg.cpp:ggml_backend_dev_get]]
+=== ggml_backend_dev_get
+
+Signature:
+[.codebit]#`ggml_backend_dev_t ggml_backend_dev_get(size_t index)`#
+
+Returns [.codebit]#`get_reg().devices[index]`#.
