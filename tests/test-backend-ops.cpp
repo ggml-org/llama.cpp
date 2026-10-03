@@ -3913,6 +3913,17 @@ struct test_add_add : public test_case {
 
         return out;
     }
+
+    double max_nmse_err() override {
+        // Fused ADDs can keep FP32 intermediates while the CPU rounds each ADD to FP16/BF16.
+        if (type == GGML_TYPE_F16) {
+            return 1e-6;
+        }
+        if (type == GGML_TYPE_BF16) {
+            return 1e-4;
+        }
+        return test_case::max_nmse_err();
+    }
 };
 
 // GGML_OP_ADD + GGML_OP_RMS_NORM (fused operation)
@@ -11417,7 +11428,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // lightning_indexer
     for (int kv : { 256 }) {
         for (int bs : { 1, 512 }) {
-            for (int nh : { 32, 64 }) {
+            for (int nh : { 4, 32, 64 }) {
                 for (auto [ns, nm] : { std::pair{1, 1}, std::pair{4, 4}, std::pair{4, 1} }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
                         test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, nm, type_K));

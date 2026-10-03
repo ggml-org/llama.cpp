@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -946,6 +947,9 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
 // Auto-detect if colors can be enabled based on terminal and environment
 bool tty_can_use_colors();
 
+// Check if the given file is attached to a terminal
+bool common_is_tty(FILE * file);
+
 //
 // Model utils
 //
@@ -960,6 +964,7 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_KEV,     // dot product of the hidden states of the last token and of one end token per option
     COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
     COMMON_DECISION_TYPE_LAYA,    // score of one marker token per option, read from the embeddings output
+    COMMON_DECISION_TYPE_CLEF,    // all questions in one prompt, score of option i read from the embeddings output at row i
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -1062,6 +1067,7 @@ struct common_batch {
         bool         output;
         llama_embd   embd; // non-owning view of the data passed to add_embd()/set_embd(), data == NULL if none
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
+        int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
     };
 
     std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i

@@ -49,6 +49,7 @@ class TensorNameMap:
         MODEL_TENSOR.TOKEN_TYPES: (
             "embeddings.token_type_embeddings",  # bert nomic-bert
             "type_emb",  # laya
+            "joint_head.type_embedding",  # clef
         ),
 
         # Normalization of token embeddings
@@ -1181,22 +1182,27 @@ class TensorNameMap:
 
         MODEL_TENSOR.DEC_ATTN_NORM: (
             "decoder.block.{bid}.layer.0.layer_norm", # t5
+            "joint_head.layers.{bid}.norm1",  # clef
         ),
 
         MODEL_TENSOR.DEC_ATTN_Q: (
             "decoder.block.{bid}.layer.0.SelfAttention.q", # t5
+            "joint_head.layers.{bid}.self_attn.q",  # clef
         ),
 
         MODEL_TENSOR.DEC_ATTN_K: (
             "decoder.block.{bid}.layer.0.SelfAttention.k", # t5
+            "joint_head.layers.{bid}.self_attn.k",  # clef
         ),
 
         MODEL_TENSOR.DEC_ATTN_V: (
             "decoder.block.{bid}.layer.0.SelfAttention.v", # t5
+            "joint_head.layers.{bid}.self_attn.v",  # clef
         ),
 
         MODEL_TENSOR.DEC_ATTN_OUT: (
             "decoder.block.{bid}.layer.0.SelfAttention.o", # t5
+            "joint_head.layers.{bid}.self_attn.out_proj",  # clef
         ),
 
         MODEL_TENSOR.DEC_ATTN_REL_B: (
@@ -1205,22 +1211,32 @@ class TensorNameMap:
 
         MODEL_TENSOR.DEC_CROSS_ATTN_NORM: (
             "decoder.block.{bid}.layer.1.layer_norm", # t5
+            "joint_head.layers.{bid}.norm2",  # clef
+            "joint_head.evidence_layers.{bid}.query_norm",  # clef
         ),
 
         MODEL_TENSOR.DEC_CROSS_ATTN_Q: (
             "decoder.block.{bid}.layer.1.EncDecAttention.q", # t5
+            "joint_head.layers.{bid}.multihead_attn.q",  # clef
+            "joint_head.evidence_layers.{bid}.attention.q",  # clef
         ),
 
         MODEL_TENSOR.DEC_CROSS_ATTN_K: (
             "decoder.block.{bid}.layer.1.EncDecAttention.k", # t5
+            "joint_head.layers.{bid}.multihead_attn.k",  # clef
+            "joint_head.evidence_layers.{bid}.attention.k",  # clef
         ),
 
         MODEL_TENSOR.DEC_CROSS_ATTN_V: (
             "decoder.block.{bid}.layer.1.EncDecAttention.v", # t5
+            "joint_head.layers.{bid}.multihead_attn.v",  # clef
+            "joint_head.evidence_layers.{bid}.attention.v",  # clef
         ),
 
         MODEL_TENSOR.DEC_CROSS_ATTN_OUT: (
             "decoder.block.{bid}.layer.1.EncDecAttention.o", # t5
+            "joint_head.layers.{bid}.multihead_attn.out_proj",  # clef
+            "joint_head.evidence_layers.{bid}.attention.out_proj",  # clef
         ),
 
         MODEL_TENSOR.DEC_CROSS_ATTN_REL_B: (
@@ -1229,6 +1245,8 @@ class TensorNameMap:
 
         MODEL_TENSOR.DEC_FFN_NORM: (
             "decoder.block.{bid}.layer.2.layer_norm", # t5
+            "joint_head.layers.{bid}.norm3",  # clef
+            "joint_head.evidence_layers.{bid}.feedforward_norm",  # clef
         ),
 
         MODEL_TENSOR.DEC_FFN_GATE: (
@@ -1238,14 +1256,70 @@ class TensorNameMap:
         MODEL_TENSOR.DEC_FFN_UP: (
             "decoder.block.{bid}.layer.2.DenseReluDense.wi",   # t5
             "decoder.block.{bid}.layer.2.DenseReluDense.wi_1", # flan-t5
+            "joint_head.layers.{bid}.linear1",  # clef
+            "joint_head.evidence_layers.{bid}.feedforward.0",  # clef
         ),
 
         MODEL_TENSOR.DEC_FFN_DOWN: (
             "decoder.block.{bid}.layer.2.DenseReluDense.wo", # t5
+            "joint_head.layers.{bid}.linear2",  # clef
+            "joint_head.evidence_layers.{bid}.feedforward.3",  # clef
         ),
 
         MODEL_TENSOR.DEC_OUTPUT_NORM: (
             "decoder.final_layer_norm", # t5
+        ),
+
+        MODEL_TENSOR.DEC_CROSS_ATTN_NORM_KV: (
+            "joint_head.evidence_layers.{bid}.memory_norm",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_HIDDEN_NORM: (
+            "joint_head.hidden_norm",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_PROJ_MEMORY: (
+            "joint_head.memory_projection",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_PROJ_QUESTION: (
+            "joint_head.question_projection",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_PROJ_OPTION_QUESTION: (
+            "joint_head.option_question_projection",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_PROJ_GLOBAL: (
+            "joint_head.global_projection",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_PROJ_OPTION_CONTEXT: (
+            "joint_head.option_context_projection",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_PROJ_OPTION_LEXICAL: (
+            "joint_head.option_lexical_projection",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_OPTION_SUMMARY_NORM: (
+            "joint_head.option_summary_norm",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_FIELD_NORM: (
+            "joint_head.field_norm",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_OPTION_NORM: (
+            "joint_head.option_norm",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_SCORER: (
+            "joint_head.residual_scorer.0",  # clef
+        ),
+
+        MODEL_TENSOR.DECISION_SCORER_OUT: (
+            "joint_head.residual_scorer.3",  # clef
         ),
 
         MODEL_TENSOR.ENC_ATTN_NORM: (
