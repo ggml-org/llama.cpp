@@ -72,6 +72,49 @@ const sycl_xe_family_caps & get_xe_family_caps(sycl_xe_family family) {
     return xe_family_caps[family];
 }
 
+bool is_xe_family_compiled(sycl_xe_family family) {
+#ifndef GGML_SYCL_XE_FAMILY_AOT
+    (void) family;
+    return true;
+#else
+    switch (family) {
+#ifdef GGML_SYCL_XE_FAMILY_XE_LP
+        case XE_FAMILY_XE_LP:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE_LPG
+        case XE_FAMILY_XE_LPG:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE_LPGPLUS
+        case XE_FAMILY_XE_LPGPLUS:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE_HPG
+        case XE_FAMILY_XE_HPG:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE_HPC
+        case XE_FAMILY_XE_HPC:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE2_LPG
+        case XE_FAMILY_XE2_LPG:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE2_HPG
+        case XE_FAMILY_XE2_HPG:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE3_LPG
+        case XE_FAMILY_XE3_LPG:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE3P_LPG
+        case XE_FAMILY_XE3P_LPG:
+#endif
+#ifdef GGML_SYCL_XE_FAMILY_XE3P_XPC
+        case XE_FAMILY_XE3P_XPC:
+#endif
+            return true;
+        default:
+            return false;
+    }
+#endif
+}
+
 sycl_hw_info get_device_hw_info(sycl::device* device_ptr) {
     sycl_hw_info res;
     int32_t id =

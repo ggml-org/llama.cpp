@@ -221,6 +221,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
         info.devices[i].hw_info = get_device_hw_info(&device);
+        if (!is_xe_family_compiled(info.devices[i].hw_info.xe_family)) {
+            GGML_LOG_WARN("SYCL device %d (%s) is not in GGML_SYCL_XE_FAMILIES, the driver will JIT its kernels from embedded IR\n",
+                          i, get_xe_family_caps(info.devices[i].hw_info.xe_family).name);
+        }
 
         // Only check GPU devices; CPU devices use OpenCL and would otherwise
         // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
@@ -445,6 +449,18 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_F16: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_F16: no\n");
+#endif
+
+#if defined(GGML_SYCL_XE_FAMILY_AOT)
+        GGML_LOG_INFO("  GGML_SYCL_XE_FAMILIES:");
+        for (int f = XE_FAMILY_XE_LP; f < XE_FAMILY_COUNT; ++f) {
+            if (is_xe_family_compiled((sycl_xe_family) f)) {
+                GGML_LOG_INFO(" %s", get_xe_family_caps((sycl_xe_family) f).name);
+            }
+        }
+        GGML_LOG_INFO("\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_XE_FAMILIES: all (JIT)\n");
 #endif
 
 #if defined(GGML_SYCL_FORCE_MMQ)

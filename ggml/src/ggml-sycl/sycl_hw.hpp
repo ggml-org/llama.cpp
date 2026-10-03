@@ -64,4 +64,7 @@ sycl_hw_info get_device_hw_info(sycl::device *device_ptr);
 // Look up the static traits of an Xe family.
 const sycl_xe_family_caps & get_xe_family_caps(sycl_xe_family family);
 
+// True if this build has device code for the family. JIT builds cover every family.
+bool is_xe_family_compiled(sycl_xe_family family);
+
 #endif // SYCL_HW_HPP

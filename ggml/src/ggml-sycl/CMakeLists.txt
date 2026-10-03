@@ -168,9 +168,32 @@ if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+# Xe families (ocloc names) for AOT. Each one also gets a GGML_SYCL_XE_FAMILY_<NAME> define.
+set(GGML_SYCL_XE_FAMILY_NAMES xe-lp xe-lpg xe-lpgplus xe-hpg xe-hpc xe2-lpg xe2-hpg xe3-lpg xe3p-lpg xe3p-xpc)
+set(GGML_SYCL_AOT_DEVICES "${GGML_SYCL_DEVICE_ARCH}")
+if (GGML_SYCL_XE_FAMILIES)
+    if (GGML_SYCL_DEVICE_ARCH)
+        message(FATAL_ERROR "Set GGML_SYCL_XE_FAMILIES or GGML_SYCL_DEVICE_ARCH, not both")
+    endif()
+    string(REPLACE "," ";" _ggml_sycl_xe_families "${GGML_SYCL_XE_FAMILIES}")
+    string(REPLACE "xe-lpg+" "xe-lpgplus" _ggml_sycl_xe_families "${_ggml_sycl_xe_families}")
+    list(REMOVE_DUPLICATES _ggml_sycl_xe_families)
+    foreach(_fam IN LISTS _ggml_sycl_xe_families)
+        if (NOT _fam IN_LIST GGML_SYCL_XE_FAMILY_NAMES)
+            message(FATAL_ERROR "GGML_SYCL_XE_FAMILIES: unknown family '${_fam}'. Valid: ${GGML_SYCL_XE_FAMILY_NAMES}")
+        endif()
+        string(TOUPPER "${_fam}" _def)
+        string(REPLACE "-" "_" _def "${_def}")
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_XE_FAMILY_${_def})
+    endforeach()
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_XE_FAMILY_AOT)
+    list(JOIN _ggml_sycl_xe_families "," GGML_SYCL_AOT_DEVICES)
+    message(STATUS "GGML_SYCL_XE_FAMILIES=${GGML_SYCL_AOT_DEVICES}")
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
-    if (NOT GGML_SYCL_DEVICE_ARCH)
+    if (NOT GGML_SYCL_AOT_DEVICES)
         target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
     else()
         message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
@@ -198,12 +221,12 @@ if (GGML_SYCL_HOST_MEM_FALLBACK)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_HOST_MEM_FALLBACK)
 endif()
 
-if (GGML_SYCL_DEVICE_ARCH)
-    message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
+if (GGML_SYCL_AOT_DEVICES)
+    message(STATUS "GGML_SYCL_AOT_DEVICES=${GGML_SYCL_AOT_DEVICES} (AOT via spir64_gen)")
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_AOT_DEVICES}\""
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -218,7 +241,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_AOT_DEVICES}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 endif()

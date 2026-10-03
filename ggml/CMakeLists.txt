@@ -258,6 +258,8 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
+set   (GGML_SYCL_XE_FAMILIES "" CACHE STRING
+                                            "ggml: sycl Xe families to AOT compile for, e.g. xe2-hpg;xe-hpg")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
 option(GGML_ET                              "ggml: use ET backend"                            OFF)
