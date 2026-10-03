@@ -12,7 +12,8 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                               const int        ncols,
                               const int        nrows,
                               ggml_sort_order  order,
-                              cudaStream_t     stream);
+                              cudaStream_t     stream,
+                              bool             use_segmented_radix);
 #endif  // GGML_CUDA_USE_CUB
 void argsort_f32_i32_cuda_bitonic(const float *   x,
                                   int *           dst,
