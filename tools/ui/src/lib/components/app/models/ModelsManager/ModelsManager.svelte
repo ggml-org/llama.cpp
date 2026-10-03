@@ -4,10 +4,10 @@
 	import {
 		downloadGroups,
 		groupModelQuants,
+		modelCapability,
 		modelContextLength,
 		type ModelQuantGroup,
 		type ModelsTableGroup,
-		modelSupports,
 		splitHiddenQuants
 	} from './utils';
 	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
@@ -104,11 +104,12 @@
 		const searched = filterModelOptions(allModels, filter);
 
 		return searched.filter((option) => {
-			// every capability asked for has to be there: tools and reasoning are
-			// features a model either has or does not, unlike modalities
+			// every capability asked for has to be there, but a model whose chat template
+			// has not been read yet stays listed: the row fetches the record as it comes
+			// near the viewport, so hiding it would keep it from ever answering
 			if (
 				capabilityFilter.length > 0 &&
-				!capabilityFilter.every((capability) => modelSupports(option, capability))
+				!capabilityFilter.every((capability) => modelCapability(option, capability) !== false)
 			) {
 				return false;
 			}
