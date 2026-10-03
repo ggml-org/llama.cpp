@@ -5,7 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { type ModalityKey } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
-	import { uiStore } from '$lib/stores';
+	import { deviceStore, uiStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -50,13 +50,14 @@
 	});
 </script>
 
-<div class="flex shrink-0 items-center gap-2 pb-4">
+<!-- Below md the search takes a row of its own and the filters follow it. -->
+<div class="flex shrink-0 flex-wrap items-center gap-2 pb-4 md:flex-nowrap">
 	<SearchInput
 		bind:ref={filterInput}
 		bind:value={filter}
-		class="max-w-64"
+		class="w-full md:w-auto md:max-w-64"
 		placeholder="Search your models"
-		size="sm"
+		size={deviceStore.isMobile ? 'default' : 'sm'}
 	/>
 
 	<ModelsManagerFilters bind:capabilities bind:contextLimit bind:modalities />

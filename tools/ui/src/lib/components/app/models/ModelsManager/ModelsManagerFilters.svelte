@@ -88,7 +88,14 @@
 	);
 </script>
 
-<ScrollCarousel alwaysShowArrows class="min-w-0 flex-1" gapSize="2" innerClass="items-center">
+<!-- below md the carousel keeps a row of its own: a toolbar that also holds a call to
+     action would otherwise squeeze the filters out of sight -->
+<ScrollCarousel
+	alwaysShowArrows
+	class="min-w-0 flex-1 max-md:w-full max-md:flex-none"
+	gapSize="2"
+	innerClass="items-center"
+>
 	<Select.Root
 		onValueChange={(value) => (contextLimit = Number(value))}
 		type="single"
