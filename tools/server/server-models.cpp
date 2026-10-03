@@ -13,6 +13,7 @@
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
+#include <unordered_map>
 
 #include <functional>
 #include <optional>
@@ -1975,11 +1976,6 @@ void server_models_routes::init_routes() {
         // server-global endpoints (not per-model); skip model name validation
         if (req.path == "/metrics" || req.path == "/slots") {
             std::string name = req.get_param("model");
-            // resolve alias to canonical name
-            auto meta = models.get_meta(name);
-            if (!name.empty() && meta.has_value()) {
-                name = meta->name;
-            }
             // detect JSON accept header
             bool json_output = is_json_accept(req.headers);
 
@@ -2010,31 +2006,67 @@ void server_models_routes::init_routes() {
                     remaining = remaining.substr(comma + 1);
                 }
 
-                // resolve aliases to canonical names; track if "all" resolved to a real model
-                bool has_real_model_all = false;
-                std::vector<std::string> model_names;
-                for (auto & mname : raw_names) {
-                    auto meta = models.get_meta(mname);
-                    if (meta.has_value()) {
-                        mname = meta->name;
+                // cap to prevent resource exhaustion from crafted requests
+                if (raw_names.size() > 16) {
+                    auto err = std::make_unique<server_http_res>();
+                    err->status = 400;
+                    err->data = json{{"error", json{{"code", 400}, {"type", "invalid_request_error"}, {"message", "too many models requested"}}}}.dump();
+                    return err;
+                }
+
+                // snapshot all models under the mutex (thread-safe, fixes CRITICAL-1/2)
+                auto all_meta = models.get_all_meta();
+
+                // build alias->canonical map from snapshot
+                std::unordered_map<std::string, std::string> alias_to_name;
+                for (const auto & meta : all_meta) {
+                    alias_to_name[meta.name] = meta.name;
+                    for (const auto & a : meta.aliases) {
+                        alias_to_name[a] = meta.name;
                     }
-                    if (mname == "all" && meta.has_value()) {
-                        has_real_model_all = true;
+                }
+
+                // does a real model exist named/aliased "all"?
+                bool has_real_model_all = alias_to_name.count("all");
+
+                std::vector<std::string> model_names;
+                if (!has_real_model_all) {
+                    // "all" is not a real model — check if it appears in the input
+                    for (const auto & mname : raw_names) {
+                        if (mname == "all") {
+                            // expand to all models, skip parsing the rest
+                            for (const auto & meta : all_meta) {
+                                if (!meta.hidden) {
+                                    model_names.push_back(meta.name);
+                                }
+                            }
+                            goto done_parsing;
+                        }
+                    }
+                }
+
+                // parse list normally ("all" is a real model, or not present in input)
+                for (auto & mname : raw_names) {
+                    auto it = alias_to_name.find(mname);
+                    if (it != alias_to_name.end()) {
+                        mname = it->second;
                     }
                     model_names.push_back(mname);
                 }
 
-                // if the raw input was exactly "all" (single token, no comma) and no model
-                // is actually named "all", expand to all configured models
-                bool raw_is_all = (raw_names.size() == 1 && raw_names[0] == "all");
-                if (raw_is_all && !has_real_model_all) {
-                    model_names.clear();
-                    for (const auto & [n, inst] : models.mapping) {
-                        if (!inst.meta.hidden) {
-                            model_names.push_back(n);
-                        }
-                    }
-                }
+            done_parsing:
+
+                // helper: placeholder metrics JSON skeleton
+                auto placeholder_metrics = []() {
+                    return json{
+                        {"tasks", json{{"processing", 0}, {"queued", 0}}},
+                        {"prompt", json{{"tokens_total", 0}, {"tokens_cached_total", 0}, {"tokens_per_second", 0.0}}},
+                        {"prediction", json{{"tokens_total", 0}, {"tokens_per_second", 0.0}}},
+                        {"decode", json{{"total", 0}, {"n_tokens_max", 0}, {"busy_slots_per_decode", 0.0}, {"speculative", json{{"draft_tokens_total", 0}, {"verification_steps_total", 0}, {"accepted_tokens", json{{"total", 0}}}}}}},
+                        {"kvcache", json{{"capacity_tokens", 0}, {"used_tokens", 0}, {"utilization", 0.0}, {"slots", json::array()}}},
+                        {"memory", json{{"context_bytes", 0}, {"model_bytes", 0}}},
+                    };
+                };
 
                 json active    = json::array();
                 json available = json::array();
@@ -2042,77 +2074,79 @@ void server_models_routes::init_routes() {
 
                 for (const auto & model_name : model_names) {
                     json entry = json{{"model", model_name}};
-                    auto inst_it = models.mapping.find(model_name);
 
-                    if (inst_it == models.mapping.end()) {
-                        entry["status"] = "not_found";
-                        entry["metrics"] = json::object();
-                    } else {
-                        server_model_status st = inst_it->second.meta.status;
-
-                        if (st == SERVER_MODEL_STATUS_LOADING ||
-                            st == SERVER_MODEL_STATUS_DOWNLOADING ||
-                            st == SERVER_MODEL_STATUS_DOWNLOADED) {
-                            entry["status"] = server_model_status_to_string(st);
-                        } else if (st == SERVER_MODEL_STATUS_SLEEPING) {
-                            entry["status"] = "sleeping";
-                        } else if (st == SERVER_MODEL_STATUS_LOADED) {
-                            entry["status"] = "loaded";
-                        } else {
-                            entry["status"] = "unloaded";
-                        }
-
-                        if (st == SERVER_MODEL_STATUS_LOADED) {
-                            // proxy to child and parse JSON response
-                            httplib::Client cli(CHILD_ADDR, inst_it->second.meta.port);
-                            cli.set_connection_timeout(models.base_params.timeout_read, 5);
-                            cli.set_read_timeout(models.base_params.timeout_read, 0);
-                            cli.set_write_timeout(models.base_params.timeout_read, 0);
-                            std::string path = "/metrics";
-                            if (!req.query_string.empty()) {
-                                path += "?" + req.query_string;
-                            }
-                            httplib::Headers headers = {{"Accept", "application/json"}};
-                            auto result = cli.Get(path.c_str(), headers);
-                            if (result && result->status == 200) {
-                                try {
-                                    json child_resp = json::parse(result->body);
-                                    json child_metrics = json::object();
-                                    if (child_resp.is_object() && child_resp.contains("metrics")) {
-                                        auto & m = child_resp["metrics"];
-                                        if (m.is_array() && !m.empty()) {
-                                            child_metrics = m[0];
-                                        }
-                                    }
-                                    entry["metrics"] = child_metrics;
-                                } catch (const std::exception &) {
-                                    entry["metrics"] = json::object();
-                                }
-                            } else {
-                                entry["metrics"] = json::object();
-                            }
-                            active.push_back(entry);
-                        } else {
-                            entry["metrics"] = json{
-                                {"tasks", json{{"processing", 0}, {"queued", 0}}},
-                                {"prompt", json{{"tokens_total", 0}, {"tokens_cached_total", 0}, {"seconds_total", 0.0}, {"tokens_per_second", 0.0}}},
-                                {"prediction", json{{"tokens_total", 0}, {"seconds_total", 0.0}, {"tokens_per_second", 0.0}}},
-                                {"decode", json{{"total", 0}, {"n_tokens_max", 0}, {"seconds_total", 0.0}, {"busy_slots_per_decode", 0.0}, {"speculative", json{{"draft_tokens_total", 0}, {"accepted_tokens_total", 0}, {"verification_steps_total", 0}}}}},
-                                {"kvcache", json{{"capacity_tokens", 0}, {"used_tokens", 0}, {"utilization", 0.0}, {"slots", json::array()}}},
-                                {"memory", json{{"context_bytes", 0}, {"model_bytes", 0}}},
-                            };
-                            if (st == SERVER_MODEL_STATUS_LOADED || st == SERVER_MODEL_STATUS_SLEEPING) {
-                                active.push_back(entry);
-                            } else if (st == SERVER_MODEL_STATUS_LOADING ||
-                                       st == SERVER_MODEL_STATUS_DOWNLOADING || st == SERVER_MODEL_STATUS_DOWNLOADED) {
-                                // loaded handled above; loading/downloading/downloaded go to wait
-                                wait.push_back(entry);
-                            } else {
-                                // UNLOADED or not_found
-                                available.push_back(entry);
-                            }
+                    // find the snapshot entry for this model
+                    const server_model_meta * meta = nullptr;
+                    for (const auto & m : all_meta) {
+                        if (m.name == model_name) {
+                            meta = &m;
+                            break;
                         }
                     }
+
+                    if (meta == nullptr) {
+                        entry["status"] = "not_found";
+                        entry["metrics"] = json::object();
+                        available.push_back(entry);
+                        continue;
+                    }
+
+                    // re-validate status under lock (fixes CRITICAL-3: TOCTOU)
+                    // get_meta returns a fresh copy under the mutex
+                    auto live_meta = models.get_meta(model_name);
+                    if (!live_meta.has_value() || !live_meta->is_ready_or_sleep()) {
+                        entry["status"] = "unloaded";
+                        entry["metrics"] = placeholder_metrics();
+                        available.push_back(entry);
+                        continue;
+                    }
+
+                    entry["status"] = (live_meta->status == SERVER_MODEL_STATUS_LOADED)
+                        ? "loaded"
+                        : "sleeping";
+
+                    if (live_meta->status != SERVER_MODEL_STATUS_LOADED) {
+                        entry["metrics"] = placeholder_metrics();
+                        active.push_back(entry);
+                        continue;
+                    }
+
+                    // proxy to running child (port validated at line below)
+                    int child_port = live_meta->port;
+                    if (child_port <= 0) {
+                        entry["metrics"] = placeholder_metrics();
+                        active.push_back(entry);
+                        continue;
+                    }
+
+                    httplib::Client cli(CHILD_ADDR, child_port);
+                    cli.set_connection_timeout(models.base_params.timeout_read, 5);
+                    cli.set_read_timeout(models.base_params.timeout_read, 0);
+                    cli.set_write_timeout(models.base_params.timeout_read, 0);
+                    std::string path = "/metrics";
+                    if (!req.query_string.empty()) {
+                        path += "?" + req.query_string;
+                    }
+                    httplib::Headers headers = {{"Accept", "application/json"}};
+                    auto result = cli.Get(path.c_str(), headers);
+                    if (result && result->status == 200 && (size_t)result->body.size() <= 4 * 1024 * 1024) {
+                        try {
+                            json child_resp = json::parse(result->body);
+                            json child_metrics = json::object();
+                            if (child_resp.is_object() && child_resp.contains("metrics")) {
+                                auto & m = child_resp["metrics"];
+                                if (m.is_array() && !m.empty()) {
+                                    child_metrics = m[0];
+                                }
+                            }
+                            entry["metrics"] = child_metrics;
+                        } catch (const std::exception &) {
+                            entry["metrics"] = placeholder_metrics();
+                        }
+                    } else {
+                        entry["metrics"] = placeholder_metrics();
+                    }
+                    active.push_back(entry);
                 }
 
                 json wrapped = json::object();
