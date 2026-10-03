@@ -143,6 +143,7 @@ struct server_batch {
         llama_pos pos;
         bool output;
         bool is_prompt; // for stats tracking
+        int32_t decision_order = 0;
     };
     std::vector<token> tokens;
     int32_t n_tokens_alloc = 0;
@@ -202,6 +203,11 @@ struct server_batch {
         tokens[idx].output = output;
     }
 
+    void set_decision_order(int32_t idx, int32_t order) {
+        GGML_ASSERT(idx >= 0 && idx < (int32_t)tokens.size());
+        tokens[idx].decision_order = order;
+    }
+
     // render the sub-batch [off, off + n_tokens) into view, index i in view is index off + i here
     void render(int32_t off, int32_t n_tokens) {
         GGML_ASSERT(off >= 0 && off < size());
@@ -217,6 +223,7 @@ struct server_batch {
             } else {
                 view.add(t.token, t.pos, t.id_slot, t.output);
             }
+            view.tokens.back().decision_order = t.decision_order;
         }
     }
 };
@@ -451,6 +458,11 @@ struct server_slot {
 
     bool can_batch_with(server_slot & other_slot) const {
         GGML_ASSERT(task);
+
+        // a joint decision head reads the whole batch
+        if (!task->decision.order.empty() || !other_slot.task->decision.order.empty()) {
+            return false;
+        }
 
         return task->type == other_slot.task->type
             && inp_embd.size() == other_slot.inp_embd.size()
@@ -2282,6 +2294,16 @@ private:
                 return i >= 0 && i < (int32_t) idx.size() ? llama_get_embeddings_ith(slot.ctx_tgt, idx[i]) : nullptr;
             };
 
+            // joint head (decision model): the scores are the first rows
+            for (int32_t i = 0; i < decision.n_scores; i++) {
+                const float * embd = i < (int32_t) idx.size() ? llama_get_embeddings_ith(slot.ctx_tgt, idx[i]) : nullptr;
+                if (embd == nullptr) {
+                    send_error(slot, "failed to get embeddings", ERROR_TYPE_SERVER);
+                    return;
+                }
+                res->scores.push_back(embd[0]);
+            }
+
             const int32_t n_embd_out = llama_model_n_embd_out(model_tgt);
             const int32_t n_pointer  = n_embd_out / 2;
             const float * embd_q = decision.pointer >= 0 ? get_embd(decision.pointer) : nullptr;
@@ -3716,6 +3738,9 @@ private:
                             /* pos       = */ slot.prompt.tokens.pos_next(),
                             /* output    = */ slot.need_embd(),
                             /* is_prompt = */ true);
+                        if (!slot.task->decision.order.empty()) {
+                            batch.set_decision_order(batch.size() - 1, slot.task->decision.order[slot.prompt.n_tokens()]);
+                        }
                         slot.prompt.tokens.push_back(cur_tok);
 
                         // break at the last user message, or at user messages at least min step past the last checkpoint
@@ -5436,16 +5461,23 @@ void server_routes::init_routes() {
             return res;
         }
 
-        // one task per variant of each question
+        // one task per variant of each question, or one task for all the questions
         auto & rd = res->rd;
         {
             std::vector<server_task> tasks;
-            for (const auto & question : questions) {
-                for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
-                    server_task task = server_task(SERVER_TASK_TYPE_DECISION);
-                    task.id = rd.get_new_id();
-                    decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
-                    tasks.push_back(std::move(task));
+            if (decision.is_joint()) {
+                server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+                task.id = rd.get_new_id();
+                decision.fill_task_joint(state, questions, task);
+                tasks.push_back(std::move(task));
+            } else {
+                for (const auto & question : questions) {
+                    for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
+                        server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+                        task.id = rd.get_new_id();
+                        decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
+                        tasks.push_back(std::move(task));
+                    }
                 }
             }
             if (decision.can_share_prompt()) {
@@ -5466,9 +5498,18 @@ void server_routes::init_routes() {
         json answers = json::object();
         int32_t n_tokens = 0;
         size_t i_result = 0;
+        size_t i_score  = 0;
         for (const auto & question : questions) {
             std::vector<std::vector<float>> scores;
-            for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
+            if (decision.is_joint()) {
+                // one result with the scores of all the questions, in order
+                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[0].get());
+                GGML_ASSERT(result != nullptr && i_score + question.options.size() <= result->scores.size());
+                scores.emplace_back(result->scores.begin() + i_score, result->scores.begin() + i_score + question.options.size());
+                i_score += question.options.size();
+                n_tokens = result->n_tokens;
+            }
+            for (size_t variant = 0; !decision.is_joint() && variant < decision.n_variants(question); variant++) {
                 auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result++].get());
                 GGML_ASSERT(result != nullptr);
                 scores.push_back(result->scores);
