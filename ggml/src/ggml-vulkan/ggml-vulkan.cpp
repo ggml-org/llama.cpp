@@ -15181,6 +15181,10 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
     vk::PhysicalDeviceMemoryProperties2 memprops = {};
+    vk::PhysicalDeviceProperties2 props;
+    vk::PhysicalDeviceDriverProperties driver_props;
+    props.pNext = &driver_props;
+    vkdev.getProperties2(&props);
     const bool membudget_supported = vk_instance.device_supports_membudget[device];
     const bool is_integrated_gpu = vkdev.getProperties().deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
 
@@ -15199,7 +15203,14 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
             *total += heap.size;
 
             if (membudget_supported && i < budgetprops.heapUsage.size()) {
-                *free += budgetprops.heapBudget[i] - budgetprops.heapUsage[i];
+                if (driver_props.driverID == vk::DriverId::eIntelProprietaryWindows) {
+                    // Intel Windows may report heapBudget > heap.size.
+                    // See https://github.com/ggml-org/llama.cpp/issues/29277
+                    const vk::DeviceSize budget = std::min(budgetprops.heapBudget[i], heap.size);
+                    *free += budget > budgetprops.heapUsage[i] ? budget - budgetprops.heapUsage[i] : 0;
+                } else {
+                    *free += budgetprops.heapBudget[i] - budgetprops.heapUsage[i];
+                }
             } else {
                 *free += heap.size;
             }
