@@ -35,13 +35,6 @@
 #endif
 #endif
 
-// isatty
-#if defined(_WIN32)
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-
 //
 // downloader
 //
@@ -97,11 +90,7 @@ class ProgressBar : public common_download_callback {
     }
 
     static bool is_output_a_tty() {
-#if defined(_WIN32)
-        return _isatty(_fileno(stdout));
-#else
-        return isatty(1);
-#endif
+        return common_is_tty(stdout);
     }
 
 public:
