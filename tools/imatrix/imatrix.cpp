@@ -1236,16 +1236,15 @@ static void process_logits(
 
 struct nextn_collector {
     llama_context_ptr  ctx;
-    llama_batch        batch = {};
+    common_batch       batch;
     int32_t            n_embd = 0;
     bool               own_lm_head = false;
     std::vector<float> pending_h;
-    ~nextn_collector() { llama_batch_free(batch); }
     void clear_memory() {
         llama_memory_clear(llama_get_memory(ctx.get()), true);
         pending_h.clear(); // a chunk's last h-row has no next token, the trunk restarts at position 0
     }
-    bool decode(llama_context * ctx_trunk, const llama_batch & batch_trunk);
+    bool decode(llama_context * ctx_trunk, const common_batch & batch_trunk);
 };
 
 struct nextn_model_info {
@@ -1379,43 +1378,43 @@ static std::unique_ptr<nextn_collector> nextn_collector_init(llama_model * model
     res->ctx.reset(ctx);
     res->n_embd = llama_model_n_embd_out(model);
     res->own_lm_head = own_lm_head;
-    res->batch = llama_batch_init(params.n_batch, res->n_embd, /*n_seq_max =*/ 1);
-    res->batch.token = (llama_token *) malloc(sizeof(llama_token) * params.n_batch);
+    res->batch = common_batch(ctx);
 
     return res;
 }
 
-bool nextn_collector::decode(llama_context * ctx_trunk, const llama_batch & batch_trunk) {
-    const int32_t n_last = batch_trunk.n_tokens - 1;
-    common_batch_clear(batch);
+bool nextn_collector::decode(llama_context * ctx_trunk, const common_batch & batch_trunk) {
+    const int32_t n_last = batch_trunk.size() - 1;
+    batch.clear();
     if (!pending_h.empty()) {
-        common_batch_add(batch, batch_trunk.token[0], batch_trunk.pos[0], { 0 }, false);
-        std::memcpy(batch.embd, pending_h.data(), (size_t) n_embd * sizeof(float));
+        const int32_t idx = batch.add(batch_trunk.tokens[0].id, batch_trunk.tokens[0].pos[0], 0, own_lm_head);
+        batch.set_embd(idx, { pending_h.data(), 1, (size_t) n_embd });
     }
 
+    const float * h_last = nullptr;
     for (int32_t i = 0; i <= n_last; ++i) {
         const float * h = llama_get_embeddings_nextn_ith(ctx_trunk, i);
         if (h == nullptr) {
             LOG_ERR("%s: no NextN hidden state for row %d\n", __func__, i);
+
             return false;
         }
 
-        if (i == n_last) { pending_h.assign(h, h + n_embd); break; }
+        if (i == n_last) { h_last = h; break; }
 
-        const int32_t row = batch.n_tokens;
-        common_batch_add(batch, batch_trunk.token[i + 1], batch_trunk.pos[i + 1], { 0 }, false);
-        std::memcpy(batch.embd + (size_t) row * n_embd, h, (size_t) n_embd * sizeof(float));
+        const int32_t idx = batch.add(batch_trunk.tokens[i + 1].id, batch_trunk.tokens[i + 1].pos[0], 0, own_lm_head);
+        batch.set_embd(idx, { h, 1, (size_t) n_embd });
     }
 
-    if (batch.n_tokens == 0) { return true; }
-    if (batch.n_tokens < 16) { LOG_WRN("%s: NextN sub-batch of %d rows is below the collector's 16 row floor and is dropped\n", __func__, batch.n_tokens); }
+    if (batch.size() > 0) {
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+            LOG_ERR("%s: failed to decode the NextN layer\n", __func__);
 
-    std::fill(batch.logits, batch.logits + batch.n_tokens, (int8_t) (own_lm_head ? 1 : 0));
-
-    if (llama_decode(ctx.get(), batch) != 0) {
-        LOG_ERR("%s: failed to decode the NextN layer\n", __func__);
-        return false;
+            return false;
+        }
     }
+
+    if (h_last != nullptr) { pending_h.assign(h_last, h_last + n_embd); }
 
     return true;
 }
@@ -1531,11 +1530,11 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                 LOG_ERR("%s : failed to eval\n", __func__);
+
                 return false;
             }
 
             if (nextn && !nextn->decode(ctx, batch)) {
-                llama_batch_free(batch);
                 return false;
             }
 
