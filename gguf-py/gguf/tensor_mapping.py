@@ -253,6 +253,7 @@ class TensorNameMap:
             "layers.{bid}.attn.Wqkv",                                              # modern-bert
             "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
             "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
+            "layers.{bid}.linear_attn.in_proj_qkv",                                # qwen3.5 text
             "head.layers.{bid}.self_attn.in_proj",  # laya
         ),
 
@@ -396,6 +397,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_GATE: (
             "model.layers.{bid}.self_attn.gate_proj", # afmoe muse-glimmer
             "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
+            "layers.{bid}.linear_attn.in_proj_z",        # qwen3.5 text
             "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
             "model.layers.{bid}.self_attn.output_gate",  # minimax-01
             "model.layers.{bid}.self_attn.linear_gate",  # hy-v4
@@ -834,6 +836,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
             "model.layers.{bid}.linear_attn.conv1d",   # qwen3next
+            "layers.{bid}.linear_attn.conv1d",         # qwen3.5 text
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -849,6 +852,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.dt_proj",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
             "model.layers.{bid}.linear_attn.dt_proj",   # qwen3next
+            "layers.{bid}.linear_attn.dt_proj",         # qwen3.5 text
             "backbone.layers.{bid}.mixer.dt",           # nemotron-h-moe
             "model.layers.{bid}.self_attn.dt_proj",     # kimi
             "model.layers.{bid}.attention.dt_proj",     # bailingmoe3
@@ -865,6 +869,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.A_log",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.A_log",  # plamo2
             "model.layers.{bid}.linear_attn.A_log",   # qwen3next
+            "layers.{bid}.linear_attn.A_log",         # qwen3.5 text
             "model.layers.{bid}.self_attn.A_log",     # kimi
             "model.layers.{bid}.attention.A_log",     # bailingmoe3
         ),
@@ -891,6 +896,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_NORM: (
             "model.layers.{bid}.mamba.norm",        # falcon-h1 granite-hybrid
             "model.layers.{bid}.linear_attn.norm",  # qwen3next
+            "layers.{bid}.linear_attn.norm",        # qwen3.5 text
             "backbone.layers.{bid}.mixer.norm",     # mamba2
             "model.layers.{bid}.self_attn.o_norm",  # kimi
             "model.layers.{bid}.attention.o_norm",  # bailingmoe3
@@ -901,11 +907,13 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.out_proj",      # mamba
             "model.layers.{bid}.mamba.out_proj",         # jamba falcon-h1 granite-hybrid
             "model.layers.{bid}.linear_attn.out_proj",   # qwen3next
+            "layers.{bid}.linear_attn.out_proj",         # qwen3.5 text
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_ALPHA: (
             "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5
+            "layers.{bid}.linear_attn.in_proj_a",        # qwen3.5 text
         ),
 
         MODEL_TENSOR.SSM_BETA_ALPHA: (
@@ -933,6 +941,7 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.SSM_BETA: (
             "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
+            "layers.{bid}.linear_attn.in_proj_b",        # qwen3.5 text
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
             "model.layers.{bid}.attention.b_proj",       # bailingmoe3
         ),

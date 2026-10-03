@@ -2315,7 +2315,8 @@ class TextModel(ModelBase):
             "lasttoken": gguf.PoolingType.LAST,
         }
 
-        # get pooling type
+        # modules.json pooling wins. embedding_config.json is the fallback when
+        # that file is absent or has no Pooling module.
         if pooling_path is not None:
             with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
                 pooling = json.load(f)
@@ -2330,6 +2331,16 @@ class TextModel(ModelBase):
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
+        else:
+            embedding_config_path = self.dir_model / "embedding_config.json"
+            if embedding_config_path.is_file():
+                with open(embedding_config_path, encoding="utf-8") as f:
+                    embedding_config = json.load(f)
+                pooling = embedding_config.get("pooling")
+                if pooling == "last_token":
+                    self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+                elif pooling is not None:
+                    raise NotImplementedError(f"unsupported embedding_config.json pooling {pooling!r}")
 
         # pooling before a classification head (e.g. ModernBertForSequenceClassification)
         if (classifier_pooling := self.hparams.get("classifier_pooling")) is not None:
