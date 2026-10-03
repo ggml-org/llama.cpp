@@ -465,6 +465,9 @@ struct dist_comm_socket_context::impl {
     // (u+1 -> u) is carried over TCP instead of ND. Read on every rank from the same variable,
     // so both ends of an edge agree.
     std::vector<int>     mesh_reverse_tcp;
+    // LLAMA_DIST_TP_MESH_RELAY: the ring edge u (edge u -> u+1) whose reverse direction does not
+    // run at all; that payload is relayed u+1 -> u+2 -> u over the forward edges instead. -1 = none.
+    int                  mesh_relay_edge   = -1;
     // LLAMA_DIST_TP_MESH_LARGE: payloads above mesh_large_above also take the mesh. That is the
     // size above which every direction rides TCP, and it is the same on every rank.
     bool                 mesh_large        = false;
@@ -686,6 +689,14 @@ struct dist_comm_socket_context::impl {
     // LLAMA_DIST_TP_MESH_LARGE is set and every direction rides TCP (see mesh_takes); those send
     // from a helper thread. Every rank sees the same payload size, so every rank takes the same
     // branch.
+    //
+    // LLAMA_DIST_TP_MESH_RELAY=u takes one reverse direction, u+1 -> u, off the wire for a link
+    // that cannot carry it. Rank u+1 then sends only to next, rank u+2 forwards what it received
+    // from u+1 on to u as soon as it arrives, and rank u takes that as its second receive from
+    // prev. That is the ring's own second step for this one payload, over the two forward edges
+    // the ring already uses; the other five directions stay a mesh. Rank u gets u+1's payload one
+    // hop later than in the full mesh, and nothing else changes: the payload and its source rank
+    // are the same, so the sum is still bit-identical to the ring's.
     bool exchange_mesh(uint32_t op, int32_t src_rank, const void * send_data_ptr, size_t size,
             int32_t & recv_src_rank, void * recv_data_ptr, std::string & err) {
         if (mesh_pending) {
@@ -717,18 +728,22 @@ struct dist_comm_socket_context::impl {
             0,
         };
 
-        auto send_to = [&](bool use_nd, dist_nd_conn * c, socket_t fd) -> bool {
+        auto send_msg = [&](bool use_nd, dist_nd_conn * c, socket_t fd, const op_hdr & hdr, const void * data) -> bool {
             if (use_nd) {
-                if (!dist_nd_send2(c, &send_hdr, sizeof(send_hdr), send_data_ptr, size, err)) {
+                if (!dist_nd_send2(c, &hdr, sizeof(hdr), data, size, err)) {
                     return false;
                 }
-                stats.bytes_sent += sizeof(send_hdr) + size;
+                stats.bytes_sent += sizeof(hdr) + size;
                 return true;
             }
-            if (!write_msg(fd, &send_hdr, sizeof(send_hdr), err)) {
+            if (!write_msg(fd, &hdr, sizeof(hdr), err)) {
                 return false;
             }
-            return size == 0 || write_msg(fd, send_data_ptr, size, err);
+            return size == 0 || write_msg(fd, data, size, err);
+        };
+
+        auto send_to = [&](bool use_nd, dist_nd_conn * c, socket_t fd) -> bool {
+            return send_msg(use_nd, c, fd, send_hdr, send_data_ptr);
         };
 
         auto recv_from = [&](bool use_nd, dist_nd_conn * c, socket_t fd, void * dst, int32_t & src_out) -> bool {
@@ -766,6 +781,7 @@ struct dist_comm_socket_context::impl {
         mesh_from_next.resize(size);
 
         bool ok;
+        int  sends = 2;   // messages this rank put on the wire, for the trace
         if (size > mesh_max_bytes) {
             // A large payload, so every direction is on TCP (mesh_takes) and it can be many MB.
             // A helper thread sends to next and then to prev while this thread receives from
@@ -818,14 +834,36 @@ struct dist_comm_socket_context::impl {
             // Both sends are posted before either receive, so the two links carry this rank's
             // payload at the same time. Under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once
             // it is posted, and the drains below retire both before a staging slot can be reused.
+            //
+            // With a relay (see above) on edge u: rank u+1 skips its send to prev, rank u+2
+            // forwards prev's payload to next between its two receives (the drain of nd_send
+            // retires that send too), and rank u receives next's payload from prev, after prev's.
+            const int  relay      = mesh_relay_edge;
+            const bool relay_skip = relay >= 0 && prev == relay;
+            const bool relay_fwd  = relay >= 0 && cfg.rank == (relay + 2) % cfg.world_size;
+            const bool relay_recv = relay >= 0 && cfg.rank == relay;
+            sends = (relay_skip ? 1 : 2) + (relay_fwd ? 1 : 0);
             ok = send_to(nd_to_next, nd_send, ring_out_fd) &&
-                 send_to(nd_to_prev, nd_recv, ring_in_fd) &&
-                 recv_from(nd_from_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
-                 recv_from(nd_from_next, nd_send, ring_out_fd, mesh_from_next.data(), mesh_next_src);
+                 (relay_skip || send_to(nd_to_prev, nd_recv, ring_in_fd)) &&
+                 recv_from(nd_from_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src);
+            if (ok && relay_fwd) {
+                const op_hdr fwd_hdr {
+                    op,
+                    static_cast<uint32_t>(size),
+                    mesh_prev_src,
+                    0,
+                };
+                ok = send_msg(nd_to_next, nd_send, ring_out_fd, fwd_hdr, recv_data_ptr);
+            }
+            if (ok) {
+                ok = relay_recv
+                    ? recv_from(nd_from_prev, nd_recv, ring_in_fd, mesh_from_next.data(), mesh_next_src)
+                    : recv_from(nd_from_next, nd_send, ring_out_fd, mesh_from_next.data(), mesh_next_src);
+            }
             if (ok && nd_to_next) {
                 ok = dist_nd_send_drain(nd_send, err);
             }
-            if (ok && nd_to_prev) {
+            if (ok && nd_to_prev && !relay_skip) {
                 ok = dist_nd_send_drain(nd_recv, err);
             }
         }
@@ -842,7 +880,7 @@ struct dist_comm_socket_context::impl {
         const char * endpoint = (nd_to_next && nd_to_prev && nd_from_prev && nd_from_next) ? "nd"
                               : (nd_to_next || nd_to_prev || nd_from_prev || nd_from_next) ? "nd/tcp" : "tcp";
         ggml_trace_rpc(endpoint, cfg.rank, "EXCHANGE_MESH", "dist-tp", ne,
-                       2 * (sizeof(send_hdr) + size), 2 * (sizeof(send_hdr) + size));
+                       sends * (sizeof(send_hdr) + size), 2 * (sizeof(send_hdr) + size));
         return true;
     }
 
@@ -899,10 +937,36 @@ struct dist_comm_socket_context::impl {
             }
         }
 
+        // the ring edge whose reverse direction is relayed, e.g. "2" sends 0 -> 2 as 0 -> 1 -> 2.
+        // Every rank reads the same variable, so a value that is not a rank turns the mesh off
+        // everywhere rather than leaving the ranks to disagree.
+        const char * rl = std::getenv("LLAMA_DIST_TP_MESH_RELAY");
+        if (rl != nullptr && rl[0] != '\0') {
+            try {
+                const int u = std::stoi(rl);
+                if (u >= 0 && u < cfg.world_size) {
+                    mesh_relay_edge = u;
+                }
+            } catch (...) {
+                // reported below
+            }
+            if (mesh_relay_edge < 0) {
+                std::fprintf(stderr,
+                             "dist-tp: LLAMA_DIST_TP_MESH_RELAY=%s is not a rank; keeping the ring\n", rl);
+                std::fflush(stderr);
+                mesh_max_bytes = 0;
+                return;
+            }
+        }
+
         // Large payloads may only take the mesh above the size where every direction is on TCP:
         // the ND ceiling in an RDMA run, any size in a TCP run. Both come from the environment,
         // which is the same on every rank. With no ND ceiling no size is TCP-only, so it is off.
-        if (dist_transport_env_true("LLAMA_DIST_TP_MESH_LARGE", false)) {
+        // A relay only serves the small exchanges, so the large mesh stays off with one.
+        if (mesh_relay_edge >= 0 && dist_transport_env_true("LLAMA_DIST_TP_MESH_LARGE", false)) {
+            std::fprintf(stderr, "dist-tp: LLAMA_DIST_TP_MESH_LARGE is ignored with LLAMA_DIST_TP_MESH_RELAY\n");
+            std::fflush(stderr);
+        } else if (dist_transport_env_true("LLAMA_DIST_TP_MESH_LARGE", false)) {
             if (!dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
                 mesh_large       = true;
                 mesh_large_above = mesh_max_bytes;
@@ -923,14 +987,29 @@ struct dist_comm_socket_context::impl {
 
         const int next = (cfg.rank + 1) % cfg.world_size;
         const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
+        // A relayed direction is shown as "via r": it rides this rank's ND or TCP edge to or from
+        // r, whose own banner says "relays a->b".
+        char via[16] = "";
+        char relays[32] = "";
+        if (mesh_relay_edge >= 0) {
+            const int z = (mesh_relay_edge + 2) % cfg.world_size;
+            std::snprintf(via, sizeof(via), "via %d", z);
+            if (cfg.rank == z) {
+                std::snprintf(relays, sizeof(relays), ", relays %d->%d",
+                              (mesh_relay_edge + 1) % cfg.world_size, mesh_relay_edge);
+            }
+        }
         std::fprintf(stderr,
                      "dist-tp all-reduce: full mesh up to %zu B, %s [rank %d/%d] "
-                     "(->%d %s, %d<- %s, ->%d %s, %d<- %s)\n",
+                     "(->%d %s, %d<- %s, ->%d %s, %d<- %s%s)\n",
                      mesh_max_bytes, above, cfg.rank, cfg.world_size,
                      next, nd_send != nullptr ? "ND" : "TCP",
-                     next, nd_send != nullptr && !mesh_edge_reverse_tcp(cfg.rank) ? "ND" : "TCP",
-                     prev, nd_recv != nullptr && !mesh_edge_reverse_tcp(prev) ? "ND" : "TCP",
-                     prev, nd_recv != nullptr ? "ND" : "TCP");
+                     next, mesh_relay_edge == cfg.rank ? via
+                         : nd_send != nullptr && !mesh_edge_reverse_tcp(cfg.rank) ? "ND" : "TCP",
+                     prev, mesh_relay_edge == prev ? via
+                         : nd_recv != nullptr && !mesh_edge_reverse_tcp(prev) ? "ND" : "TCP",
+                     prev, nd_recv != nullptr ? "ND" : "TCP",
+                     relays);
         std::fflush(stderr);
     }
 
