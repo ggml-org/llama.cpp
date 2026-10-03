@@ -40,9 +40,9 @@
 
 	let parsedId = $derived(ModelsService.parseModelId(option.model));
 	let orgName = $derived(parsedId.orgName);
-	// A row names neither flag, so it shows the base org with the quantizer badge
-	// while the lists are grouped by family and the repo org alone when they are not.
-	// A caller that names one of the two keeps control of what the avatar shows.
+	// A row names neither flag: a family heading already carries the base org, so a
+	// grouped list shows the repo's own org, and an ungrouped one the base org with the
+	// quantizer badge. A caller that names one of the two keeps control of the avatar.
 	let followsGrouping = $derived(
 		showBaseModelAvatar === undefined && showRepoOrgAvatar === undefined
 	);
