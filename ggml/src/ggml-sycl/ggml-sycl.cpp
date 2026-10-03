@@ -2986,6 +2986,12 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// True if the src1 precision hint (op_params[3], see ggml_prec_set_src) allows converting src1 down to prec.
+static bool ggml_sycl_src1_prec_allows(const ggml_tensor * dst, ggml_prec prec) {
+    const int32_t hint = ggml_get_op_params_i32(dst, 3);
+    return hint == GGML_PREC_UNDEFINED || (int32_t) prec <= hint;
+}
+
 inline void ggml_sycl_op_mul_mat_sycl(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -3021,7 +3027,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
 
 #if GGML_SYCL_DNNL && defined(GGML_SYCL_HAS_BF16)
     // Fast path for bf16 src0
-    if (src0->type == GGML_TYPE_BF16 && g_ggml_sycl_enable_dnn &&
+    if (src0->type == GGML_TYPE_BF16 && g_ggml_sycl_enable_dnn && ggml_sycl_src1_prec_allows(dst, GGML_PREC_BF16) &&
         ggml_sycl_dnnl_has_optimized_gemm(ggml_sycl_get_device()) && ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1]) {
         using bf16_t = sycl::ext::oneapi::bfloat16;
@@ -3045,7 +3051,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
 #endif
 
     if ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && use_fp16 && ggml_is_contiguous(src0) &&
-        row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
+        row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT && ggml_sycl_src1_prec_allows(dst, GGML_PREC_F16)) {
         ggml_sycl_pool_alloc<sycl::half> src0_as_f16(ctx.pool());
         if (src0->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
@@ -4875,12 +4881,18 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     }
 
     // check data types and tensor shapes for custom matrix multiplication kernels:
-    bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
+    const bool src1_q8_ok  = ggml_sycl_src1_prec_allows(dst, GGML_PREC_Q8);
+    const bool src1_f16_ok = ggml_sycl_src1_prec_allows(dst, GGML_PREC_F16);
 
-    bool use_mul_mat_vec_q = can_use_mul_mat_vec_q(src0, src1, dst);
+    bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
+#ifdef GGML_SYCL_F16
+    use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && src1_f16_ok;
+#endif
+
+    bool use_mul_mat_vec_q = can_use_mul_mat_vec_q(src0, src1, dst) && src1_q8_ok;
 
     bool use_mul_mat_q =  ggml_sycl_supports_mmq(src0->type)
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && src1_q8_ok;
 
 
     // mmvq and mmq need the __dp4a instruction which is available for gen12+
@@ -4921,7 +4933,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1 && src1->ne[3] == 1) {
         // KQV single-batch
         ggml_sycl_mul_mat_vec_nc(ctx, src0, src1, dst);
-    } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
+    } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1 && src1_f16_ok) {
         // KQ + KQV multi-batch
         ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
     } else if (use_dequantize_mul_mat_vec) {
@@ -5001,6 +5013,10 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
 
     // with DMMV prioritised the unfused path would not have gone through mmvq at all
     if (g_ggml_sycl_prioritize_dmmv) {
+        return false;
+    }
+
+    if (!ggml_sycl_src1_prec_allows(gate, GGML_PREC_Q8) || !ggml_sycl_src1_prec_allows(up, GGML_PREC_Q8)) {
         return false;
     }
 
@@ -5277,7 +5293,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     const int64_t n_as = ne02;
     const int64_t n_ids = ids->ne[0];
 
-    if (ne12 == 1) {
+    if (ne12 == 1 && ggml_sycl_src1_prec_allows(dst, GGML_PREC_Q8)) {
         if (ggml_sycl_mul_mat_id_mmvq_fused(ctx, src0, src1, ids, dst)) {
             return;
         }
