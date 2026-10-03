@@ -5105,6 +5105,34 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT with src1 offset from zero and a tight tolerance. A backend that quantizes src1 must
+// apply the zero point of src0 exactly like the CPU, an inexact correction stays hidden with zero-mean src1.
+struct test_mul_mat_x_offset : public test_mul_mat {
+    const float x_offset;
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_a, type_b, m, n, k, x_offset);
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    test_mul_mat_x_offset(ggml_type type_a = GGML_TYPE_Q4_0, ggml_type type_b = GGML_TYPE_F32,
+            int64_t m = 256, int64_t n = 1, int64_t k = 1024, float x_offset = 4.0f)
+        : test_mul_mat(type_a, type_b, m, n, k, {1, 1}, {1, 1}), x_offset(x_offset) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, x_offset - 1.0f, x_offset + 1.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -10431,6 +10459,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
+    for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+        for (int64_t n : {1, 8}) {
+            test_cases.emplace_back(new test_mul_mat_x_offset(type_a, GGML_TYPE_F32, 256, n, 1024, 4.0f));
+        }
+    }
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));
     }
