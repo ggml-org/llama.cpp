@@ -35,6 +35,7 @@ from gguf.constants import (
 # limits mirroring ggml/src/gguf.cpp (not part of gguf.h)
 GGUF_MAX_STRING_LENGTH  = 1024 * 1024 * 1024
 GGUF_MAX_ARRAY_ELEMENTS = 1024 * 1024 * 1024
+GGUF_MAX_ARRAY_NESTING  = 16  # GGUF arrays are flat in practice; bound nesting to stop recursion-based DoS
 
 logger = logging.getLogger(__name__)
 
@@ -232,8 +233,10 @@ class GGUFReader:
         return slen, self._get(offset + 8, np.uint8, slen[0])
 
     def _get_field_parts(
-        self, orig_offs: int, raw_type: int,
+        self, orig_offs: int, raw_type: int, depth: int = 0,
     ) -> tuple[int, list[npt.NDArray[Any]], list[int], list[GGUFValueType]]:
+        if depth > GGUF_MAX_ARRAY_NESTING:
+            raise ValueError(f'Array nesting depth exceeds maximum {GGUF_MAX_ARRAY_NESTING}')
         offs = orig_offs
         types: list[GGUFValueType] = []
         gtype = GGUFValueType(raw_type)
@@ -260,7 +263,7 @@ class GGUFReader:
             data_idxs: list[int] = []
             # FIXME: Handle multi-dimensional arrays properly instead of flattening
             for idx in range(alen[0]):
-                curr_size, curr_parts, curr_idxs, curr_types = self._get_field_parts(offs, raw_itype[0])
+                curr_size, curr_parts, curr_idxs, curr_types = self._get_field_parts(offs, raw_itype[0], depth + 1)
                 if idx == 0:
                     types += curr_types
                 idxs_offs = len(aparts)
