@@ -111,6 +111,37 @@ GGML_CUDA_P2P=1 llama-cli -m model.gguf -sm tensor
 
 P2P requires driver support (usually restricted to workstation/datacenter GPUs) and **may cause crashes or corrupted outputs on some motherboards or BIOS configurations** (e.g. when IOMMU is enabled). If you see instability after enabling it, unset the variable.
 
+### 7. MoE models with `--n-cpu-moe` on multiple GPUs
+
+`--n-cpu-moe N` keeps the expert weights of the **first N layers** on the CPU. With `--split-mode layer`
+the first layers also live on GPU 0, so on a multi-GPU setup the freed memory is almost all on GPU 0
+while the other GPUs keep their full share of experts. The usual symptom is a nearly empty GPU 0 and an
+OOM on the last GPU (see #15136, #16579).
+
+To use the freed memory, give GPU 0 a larger share with `--tensor-split`:
+
+```bash
+llama-server -m model.gguf --n-cpu-moe 17 -ts 3,1
+```
+
+or pin layer ranges per device with `--override-tensor` (`-ot`). Check the result with `nvidia-smi`
+(or your backend's equivalent) and adjust.
+
+Before offloading at all, check whether the model fits: hybrid models (linear/SSM attention mixed with
+full attention) only keep a KV cache for the full-attention layers, so their KV cache can be several
+times smaller than a per-layer estimate suggests. `--fit` measures real allocations, but it only fills in
+arguments you did not set, so an explicit `--n-cpu-moe` or `-ts` stays as you wrote it.
+
+Example (2x 16 GB GPUs, 35B-A3B hybrid MoE at Q5_K_M, 262k context in 4 slots, q8_0 KV cache):
+
+| setup | GPU 0 / GPU 1 VRAM | aggregate decode, 4 clients |
+|---|---|---|
+| `--n-cpu-moe 17 -ts 15,15` | 6.5 / 13.8 GB | 70 tok/s |
+| `--n-cpu-moe 0 -ts 15,15` | 15.8 / 14.2 GB, long prompts fail | - |
+| `--n-cpu-moe 0 -ts 14,16` | 15.5 / 14.8 GB | 191 tok/s |
+
+With everything on the GPUs the balance flips: GPU 0 ends up heavier, so the split moves one share to GPU 1.
+
 ---
 
 ## Troubleshooting
@@ -125,3 +156,5 @@ P2P requires driver support (usually restricted to workstation/datacenter GPUs) 
 | Performance is worse with multi-GPU than single-GPU | The performance is bottlenecked by GPU interconnect speed. For `--split-mode tensor`, verify that NCCL is being used. Try `--split-mode layer` (less communication than `tensor`). Increase GPU interconnect speed via more PCIe lanes or e.g. NVLink (if available). |
 | GPU not used at all | `--n-gpu-layers` is `0` or too low - try explicitly setting `-ngl all`. Or you are accidentally hiding the GPUs via an environment variable like `CUDA_VISIBLE_DEVICES=-1`. Or your build doesn't include support for the relevant backend. |
 | Crashes or corrupted outputs after setting `GGML_CUDA_P2P=1` | Some motherboards and BIOS settings (e.g. with IOMMU enabled) don't support CUDA peer-to-peer reliably. Unset `GGML_CUDA_P2P`. |
+| With `--n-cpu-moe N`, GPU 0 is nearly empty while another GPU is full or runs out of memory | `--n-cpu-moe` offloads the experts of the **first** N layers, and with `--split-mode layer` those layers are on GPU 0. Shift the split towards GPU 0 with `-ts`, or place layer ranges per device with `-ot`. See recipe 7. |
+
