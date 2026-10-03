@@ -198,17 +198,21 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto start = p.rule("start", p.optional(p.literal("<|turn>model\n")));
+    auto parser = build_chat_peg_parser(inputs.specials, [&](common_chat_peg_builder & p) {
+        auto start = p.rule("start", p.optional(p.token("<|turn>") + p.literal("model\n")));
+        auto channel_start = p.token("<|channel>");
+        auto channel_end = p.token("<channel|>");
+        auto think_start = channel_start + p.literal("thought");
+        auto string_delim = p.token("<|\"|>");
 
         if (extract_reasoning) {
-            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+            p.rule("thought", think_start + p.space() + p.reasoning(p.until(channel_end)) + channel_end);
         } else {
-            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
+            p.rule("thought", p.content(think_start + p.space() + p.until(channel_end) + channel_end));
         }
 
-        auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(p.literal("thought"))), "");
-        auto thought = (p.peek(p.literal("<|channel>")) + consume_empty_channels + p.ref("thought")) | p.negate(p.literal("<|channel>"));
+        auto consume_empty_channels = p.gbnf(p.zero_or_more(channel_start + p.negate(p.literal("thought"))), "");
+        auto thought = (p.peek(channel_start) + consume_empty_channels + p.ref("thought")) | p.negate(channel_start);
 
         if (has_response_format) {
             auto response_format = p.literal("```json") <<
@@ -220,8 +224,8 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Gemma4 tool calling syntax
             // Rules should match traversal logic in gemma4_to_json()
-            p.rule("gemma4-string-content", p.until("<|\"|>"));
-            p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
+            p.rule("gemma4-string-content", p.until(string_delim | channel_start));
+            p.rule("gemma4-string", string_delim + p.ref("gemma4-string-content") + string_delim);
             p.rule("gemma4-bool", p.json_bool());
             p.rule("gemma4-null", p.json_null());
             p.rule("gemma4-number", p.json_number());
@@ -266,26 +270,27 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
                 })));
             });
 
-            auto tool_call = p.trigger_rule("tool-call", p.repeat(
-                "<|tool_call>call:" + tool_choice + "<tool_call|>",
-                /* min = */ inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
-                /* max = */ inputs.parallel_tool_calls ? -1 : 1
-            ));
+            auto tool_call_start = p.token("<|tool_call>");
+            auto tool_call_rest  = p.literal("call:") + tool_choice + p.token("<tool_call|>");
+            auto tool_call       = p.rule("tool-call", tool_call_start + tool_call_rest);
+            auto more            = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
+
+            auto tool_calls = p.trigger_rule("tool-calls", tool_call_start, tool_call_rest + more);
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-                return start + thought + tool_call;
+                return start + thought + tool_calls;
             }
 
-            auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until("<|tool_call>"));
-            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>"})));
+            auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until(tool_call_start));
+            auto content = p.rule("content", p.content(p.until(channel_start | channel_end | tool_call_start)));
             auto message = p.rule("message", thought + content);
-            return start + p.zero_or_more(message) + scan_to_toolcall + tool_call;
+            return start + p.zero_or_more(message) + scan_to_toolcall + tool_calls;
         }
 
         // Gemma 4 may emit an extra <|channel>thought\n<channel|> at the end of the content. It may
         // also emit a single trailing <channel|> token. Consume all complete reasoning blocks and
         // then stop at the first unmatched <channel|> token.
-        auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>"})));
+        auto content = p.rule("content", p.content(p.until(channel_start | channel_end)));
         auto message = p.rule("message", thought + content);
         return start + p.one_or_more(message);
     });
@@ -293,14 +298,10 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        data.grammar_lazy = false;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            parser.build_grammar(builder, !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED)));
         });
-
-        data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
-        };
     }
 
     return data;
