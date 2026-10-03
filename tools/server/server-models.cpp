@@ -1956,7 +1956,109 @@ void server_models_routes::init_routes() {
     };
 
     this->proxy_get = [this](const server_http_req & req) {
-        std::string method = "GET";
+        // server-global endpoints (not per-model); skip model name validation
+        if (req.path == "/metrics" || req.path == "/slots") {
+            std::string name = req.get_param("model");
+            // resolve alias to canonical name
+            auto meta = models.get_meta(name);
+            if (!name.empty() && meta.has_value()) {
+                name = meta->name;
+            }
+            // detect JSON accept header
+            bool json_output = is_json_accept(req.headers);
+
+            // count configured models (exclude hidden ones)
+            int active_model_count = 0;
+            for (const auto & [n, inst] : models.mapping) {
+                if (!inst.meta.hidden) {
+                    active_model_count++;
+                }
+            }
+
+            if (req.path == "/metrics" && json_output && name.empty() && active_model_count <= 1) {
+                // aggregate per-model metrics into a JSON array (single model mode)
+                json aggregated = json::array();
+                for (const auto & [model_name, inst] : models.mapping) {
+                    json entry = json{{"model", model_name}};
+                    if (inst.meta.is_running()) {
+                        // proxy to child and parse JSON response
+                        httplib::Client cli(CHILD_ADDR, inst.meta.port);
+                        cli.set_connection_timeout(models.base_params.timeout_read, 5);
+                        cli.set_read_timeout(models.base_params.timeout_read, 0);
+                        cli.set_write_timeout(models.base_params.timeout_read, 0);
+                        std::string path = "/metrics";
+                        if (!req.query_string.empty()) {
+                            path += "?" + req.query_string;
+                        }
+                        httplib::Headers headers = {{"Accept", "application/json"}};
+                        auto result = cli.Get(path.c_str(), headers);
+                        if (result && result->status == 200) {
+                            try {
+                                json child_resp = json::parse(result->body);
+                                json child_metrics = json::object();
+                                // child returns { "metrics": [flat] }
+                                if (child_resp.is_object() && child_resp.contains("metrics")) {
+                                    auto & m = child_resp["metrics"];
+                                    if (m.is_array() && !m.empty()) {
+                                        child_metrics = m[0];
+                                    }
+                                }
+                                entry["metrics"] = child_metrics;
+                                entry["status"] = "loaded";
+                            } catch (const std::exception &) {
+                                entry["metrics"] = json::object();
+                                entry["status"] = "error";
+                            }
+                        } else {
+                            entry["metrics"] = json::object();
+                            entry["status"] = "error";
+                        }
+                    } else {
+                        // placeholder for unloaded model
+                        entry["metrics"] = json{
+                            {"tasks", json{{"processing", 0}, {"queued", 0}}},
+                            {"prompt", json{{"tokens_total", 0}, {"tokens_cached_total", 0}, {"seconds_total", 0.0}, {"tokens_per_second", 0.0}}},
+                            {"prediction", json{{"tokens_total", 0}, {"seconds_total", 0.0}, {"tokens_per_second", 0.0}}},
+                            {"decode", json{{"total", 0}, {"n_tokens_max", 0}, {"seconds_total", 0.0}, {"busy_slots_per_decode", 0.0}, {"speculative", json{{"draft_tokens_total", 0}, {"accepted_tokens_total", 0}, {"verification_steps_total", 0}}}}},
+                            {"kvcache", json{{"capacity_tokens", 0}, {"used_tokens", 0}, {"utilization", 0.0}, {"slots", json::array()}}},
+                            {"memory", json{{"context_bytes", 0}, {"model_bytes", 0}}},
+                        };
+                        entry["status"] = inst.meta.status == SERVER_MODEL_STATUS_SLEEPING ? "sleeping" : "unloaded";
+                    }
+                    aggregated.push_back(entry);
+                }
+                json wrapped = json::object();
+                wrapped["models"] = aggregated;
+                auto res = std::make_unique<server_http_res>();
+                res->status = 200;
+                res->content_type = "application/json";
+                res->data = wrapped.dump();
+                return res;
+            }
+
+            // /metrics JSON without model param in multi-model router: not allowed
+            if (req.path == "/metrics" && json_output && name.empty() && active_model_count > 1) {
+                auto error_res = std::make_unique<server_http_res>();
+                error_res->status = 400;
+                error_res->data = json{{"error", json{{"code", 400}, {"type", "invalid_request_error"}, {"message", "multiple models configured; specify a model parameter for /metrics"}}}}.dump();
+                return error_res;
+            }
+
+            // proxy to the first running child so the child's handler decides what to return
+            if (name.empty()) {
+                for (const auto & [n, inst] : models.mapping) {
+                    if (inst.meta.is_running()) {
+                        return models.proxy_request(req, "GET", n, false);
+                    }
+                }
+                // no running model — return 503
+                auto error_res = std::make_unique<server_http_res>();
+                error_res->status = 503;
+                error_res->data = json{{"error", json{{"code", 503}, {"type", "server_error"}, {"message", "no running model"}}}}.dump();
+                return error_res;
+            }
+            return models.proxy_request(req, "GET", name, false);
+        }
         std::string name = req.get_param("model");
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
@@ -1966,7 +2068,7 @@ void server_models_routes::init_routes() {
         if (autoload) {
             models.ensure_model_ready(name, req.should_stop);
         }
-        return models.proxy_request(req, method, name, false);
+        return models.proxy_request(req, "GET", name, false);
     };
 
     this->proxy_post = [this](const server_http_req & req) {

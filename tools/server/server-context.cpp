@@ -12,6 +12,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -2648,11 +2649,50 @@ private:
                     }
                     SRV_DBG("n_processing_slots = %d\n", n_processing_slots);
 
+                    // KV cache utilization metrics (approximate)
+                    if (!slots.empty() && slots[0].ctx_tgt) {
+                        metrics.kvcache_capacity_tokens = llama_n_ctx(slots[0].ctx_tgt);
+
+                        uint64_t n_used = 0;
+                        metrics.kvcache_slots.clear();
+                        for (const server_slot & slot : slots) {
+                            if (slot.is_processing()) {
+                                n_used += slot.prompt.n_tokens();
+                                metrics.kvcache_slots.push_back({slot.id, (int)slot.state, (uint32_t)slot.prompt.n_tokens()});
+                            }
+                        }
+                        // cap at capacity since per-slot sum can exceed it in unified KV mode
+                        metrics.kvcache_used_tokens = (uint32_t)std::min(n_used, (uint64_t)metrics.kvcache_capacity_tokens);
+                    }
+
+                    // Memory metrics via llama_get_memory_breakdown
+                    metrics.memory_context_bytes = 0;
+                    metrics.memory_model_bytes   = 0;
+                    if (slots[0].ctx_tgt) {
+                        const auto memory_breakdown = llama_get_memory_breakdown(slots[0].ctx_tgt);
+                        for (const auto & buft_mb : memory_breakdown) {
+                            const auto & mb = buft_mb.second;
+                            metrics.memory_context_bytes += mb.context;
+                            metrics.memory_model_bytes   += mb.model;
+                        }
+                    }
+
                     auto res = std::make_unique<server_task_result_metrics>();
                     res->id                  = task.id;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
+
+                    // collect TPS from active slots
+                    for (const server_slot & slot : slots) {
+                        if (slot.is_processing() && slot.stats.is_set()) {
+                            res->recent.push_back({
+                                slot.id,
+                                slot.stats.n_prompt_tps(),
+                                slot.stats.n_gen_tps(),
+                            });
+                        }
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4890,15 +4930,23 @@ void server_routes::init_routes() {
             return res;
         }
 
+        // detect JSON accept header (case-insensitive)
+        bool json_output = is_json_accept(req.headers);
+
         // render response using cached_metrics
         auto use_cached_metrics = [&]() {
             std::unique_lock<std::mutex> lock(mutex_cache);
             res->headers["Process-Start-Time-Unix"] = std::to_string(cached_metrics.t_start);
             server_task_result_metrics tmp;
             tmp.metrics = cached_metrics;
-            res->content_type = "text/plain; version=0.0.4";
             res->status = 200;
-            res->data = tmp.to_metrics();
+            if (json_output) {
+                res->content_type = "application/json";
+                res->data = tmp.to_json().dump();
+            } else {
+                res->content_type = "text/plain; version=0.0.4";
+                res->data = tmp.to_metrics();
+            }
             // the gauges are averaged over the window between two scrapes
             cached_metrics.reset_bucket();
             should_reset_buckets = true;
@@ -4937,9 +4985,14 @@ void server_routes::init_routes() {
             GGML_ASSERT(res_task != nullptr);
 
             res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
-            res->content_type = "text/plain; version=0.0.4";
             res->status = 200;
-            res->data = res_task->to_metrics();
+            if (json_output) {
+                res->content_type = "application/json";
+                res->data = res_task->to_json().dump();
+            } else {
+                res->content_type = "text/plain; version=0.0.4";
+                res->data = res_task->to_metrics();
+            }
         }
 
         return res;
