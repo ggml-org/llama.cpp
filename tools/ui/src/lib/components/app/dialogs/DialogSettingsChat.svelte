@@ -3,6 +3,7 @@
 	import { SettingsChat } from '$lib/components/app/settings';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
+	import { deviceStore } from '$lib/stores';
 
 	interface Props {
 		open?: boolean;
@@ -21,6 +22,7 @@
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
 		class="max-md:h-[100dvh]! max-md:w-screen! max-md:max-w-none! max-md:rounded-none! md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-6xl! flex flex-col p-0 md:p-6 gap-0"
+		onOpenAutoFocus={(event) => deviceStore.isMobile && event.preventDefault()}
 	>
 		<Dialog.Header class="md:p-0 p-4" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
