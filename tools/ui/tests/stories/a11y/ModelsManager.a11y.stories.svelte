@@ -37,7 +37,7 @@
 		row.focus();
 		await userEvent.keyboard('{Enter}');
 
-		await expect(row).toHaveClass(/bg-accent/);
+		await expect(row).toHaveAttribute('aria-pressed', 'true');
 	}}
 >
 	<div class={MODEL_ROW_GRID_CLASS + ' w-[40rem]'}>
