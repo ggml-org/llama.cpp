@@ -10726,6 +10726,7 @@ static vk_op_rope_push_constants ggml_vk_make_rope_constants(const ggml_tensor *
         (uint32_t)mode, (uint32_t)ggml_nrows(src0), (uint32_t)n_dims, (uint32_t)n_offs, freq_scale,
         freq_base, ext_factor, attn_factor, {corr_dims[0], corr_dims[1]}, theta_scale, has_ff,
         { sections[0], sections[1], sections[2], sections[3] }, is_imrope, backprop, set_rows_stride,
+        (uint32_t)n_ctx_orig,
 
         (uint32_t)src0->ne[0],
         (uint32_t)src0->ne[1],

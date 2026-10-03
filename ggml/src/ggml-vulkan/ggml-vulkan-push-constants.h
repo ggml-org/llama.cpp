@@ -472,6 +472,7 @@ struct vk_op_rope_push_constants {
     uint32_t is_imrope;
     uint32_t is_back;
     uint32_t set_rows_stride;
+    uint32_t n_ctx_orig;
     uint32_t ne00;
     uint32_t ne01;
     uint32_t ne02;

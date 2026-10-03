@@ -14,19 +14,31 @@ uint rope_a_coord(const uint i0, const uint i01, const uint i02, const uint i03,
     return ix;
 }
 
-void rope_yarn(const float theta_extrap, const uint i0, out float cos_theta, out float sin_theta, rope_params p) {
+// per-position effective scale for dynamic YARN
+float rope_dynamic_scale(float pos, float freq_scale, uint n_ctx_orig) {
+    if (n_ctx_orig == 0 || freq_scale >= 1.0f) {
+        return freq_scale;
+    }
+    if (pos <= float(n_ctx_orig)) {
+        return 1.0f;
+    }
+    return float(n_ctx_orig) / pos;
+}
+
+void rope_yarn(const float theta_extrap, const uint i0, out float cos_theta, out float sin_theta, rope_params p, float pos) {
     float mscale = p.attn_factor;
+    const float effective_scale = rope_dynamic_scale(pos, p.freq_scale, p.n_ctx_orig);
     // Get n-d rotational scaling corrected for extrapolation
-    float theta_interp = p.freq_scale * theta_extrap;
+    float theta_interp = effective_scale * theta_extrap;
     float theta = theta_interp;
     if (p.ext_factor != 0.0f) {
         float ramp_mix = rope_yarn_ramp(p.corr_dims[0], p.corr_dims[1], i0) * p.ext_factor;
         theta = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
 
         // Get n-d magnitude scaling corrected for interpolation
-        mscale *= 1.0f + 0.1f * log(1.0f / p.freq_scale);
+        mscale *= 1.0f + 0.1f * log(1.0f / effective_scale);
     }
-    // Backprogagation uses inverted rotation
+    // Backpropagation uses inverted rotation
     if (p.is_back != 0) {
         theta = -theta;
     }
@@ -64,7 +76,7 @@ void rope_norm(const uint i0, const uint i1, const uint i2, const uint i3, rope_
     const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p, float(rope_data_pos[i2]));
 
     const float x0 = float(rope_data_a[ix + 0]);
     const float x1 = float(rope_data_a[ix + 1]);
@@ -103,7 +115,7 @@ void rope_neox(const uint i0, const uint i1, const uint i2, const uint i3, rope_
     const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p, float(rope_data_pos[i2]));
 
     // idst/ix point at channel i0/2; the first channel of the rotated pair is p.n_offs + iw/2 = i0/2 + p.n_offs/2
     const float x0 = float(rope_data_a[ix + p.n_offs/2 + 0]);
@@ -172,7 +184,7 @@ void rope_multi(const uint i0, const uint i1, const uint i2, const uint i3, rope
     const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p, float(rope_data_pos[i2]));
 
     // idst/ix point at channel i0/2; the first channel of the rotated pair is p.n_offs + iw/2 = i0/2 + p.n_offs/2
     const float x0 = float(rope_data_a[ix + p.n_offs/2 + 0]);
@@ -207,7 +219,7 @@ void rope_vision(const uint i0, const uint i1, const uint i2, const uint i3, rop
     const float freq_factor = p.has_ff != 0 ? rope_data_ff[i0/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, i0, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, i0, cos_theta, sin_theta, p, float(rope_data_pos[i2]));
 
     const float x0 = float(rope_data_a[ix + 0]);
     const float x1 = float(rope_data_a[ix + p.n_dims]);

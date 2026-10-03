@@ -8,6 +8,17 @@ static float rope_yarn_ramp(const float low, const float high, const int i0) {
     return 1.0f - min(1.0f, max(0.0f, y));
 }
 
+// per-position effective scale for dynamic YARN
+static float rope_dynamic_scale(float pos, float freq_scale, int n_ctx_orig) {
+    if (n_ctx_orig <= 0 || freq_scale >= 1.0f) {
+        return freq_scale;
+    }
+    if (pos <= (float)n_ctx_orig) {
+        return 1.0f;
+    }
+    return (float)n_ctx_orig / pos;
+}
+
 // YaRN algorithm based on LlamaYaRNScaledRotaryEmbedding.py from https://github.com/jquesnelle/yarn
 // MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen Peng.
 static void rope_yarn(
@@ -78,7 +89,8 @@ kernel void kernel_rope_norm(
 
             const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
-            rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, iw, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
+            const float effective_scale = rope_dynamic_scale(theta_base, args.freq_scale, args.n_ctx_orig);
+            rope_yarn(theta/freq_factor, effective_scale, corr_dims, iw, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
             device const T * const src = (device T *)(src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01 + i0*args.nb00);
             device       T * dst_data  = (device T *)( dst + i3*args.nb3  + i2*args.nb2  + i1*args.nb1  + i0*args.nb0);
@@ -136,7 +148,8 @@ kernel void kernel_rope_neox(
 
             const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
-            rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, iw, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
+            const float effective_scale = rope_dynamic_scale((float)pos[i2], args.freq_scale, args.n_ctx_orig);
+            rope_yarn(theta/freq_factor, effective_scale, corr_dims, iw, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
             device const T * const src = (device T *)(src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01 + (args.n_offs + ic)*args.nb00);
             device       T * dst_data  = (device T *)( dst + i3*args.nb3  + i2*args.nb2  + i1*args.nb1  + (args.n_offs + ic)*args.nb0);
@@ -224,7 +237,8 @@ kernel void kernel_rope_multi(
 
             const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
-            rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, iw, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
+            const float effective_scale = rope_dynamic_scale((float)pos[i2], args.freq_scale, args.n_ctx_orig);
+            rope_yarn(theta/freq_factor, effective_scale, corr_dims, iw, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
             device const T * const src = (device T *)(src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01 + (args.n_offs + ic)*args.nb00);
             device       T * dst_data  = (device T *)( dst + i3*args.nb3  + i2*args.nb2  + i1*args.nb1  + (args.n_offs + ic)*args.nb0);
@@ -295,7 +309,8 @@ kernel void kernel_rope_vision(
 
             const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
-            rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, i0, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
+            const float effective_scale = rope_dynamic_scale((float)pos[i2], args.freq_scale, args.n_ctx_orig);
+            rope_yarn(theta/freq_factor, effective_scale, corr_dims, i0, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
             device const T * const src = (device T *)(src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01 + ic*args.nb00);
             device       T * dst_data  = (device T *)( dst + i3*args.nb3  + i2*args.nb2  + i1*args.nb1  + ic*args.nb0);

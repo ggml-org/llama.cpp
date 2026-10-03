@@ -17,6 +17,7 @@ struct rope_params {
     uint is_imrope;
     uint is_back;
     uint set_rows_stride;
+    uint n_ctx_orig;
 
     uint ne00;
     uint ne01;

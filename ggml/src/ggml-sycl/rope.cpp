@@ -16,6 +16,17 @@ static float rope_yarn_ramp(const float low, const float high, const int i0) {
     return 1.0f - sycl::min(1.0f, sycl::max(0.0f, y));
 }
 
+// per-position effective scale for dynamic YARN
+static float rope_dynamic_scale(float pos, float freq_scale, int n_ctx_orig) {
+    if (n_ctx_orig <= 0 || freq_scale >= 1.0f) {
+        return freq_scale;
+    }
+    if (pos <= (float)n_ctx_orig) {
+        return 1.0f;
+    }
+    return (float)n_ctx_orig / pos;
+}
+
 template <bool forward>
 static void rope_yarn(const float theta_extrap, const float freq_scale,
                       const rope_corr_dims corr_dims, const int64_t i0,
@@ -42,7 +53,7 @@ static void rope_norm(const T *x, D *dst, const int ne00, const int ne01,
                       const int ne02, const int s01, const int s02,
                       const int s03, const int s1, const int s2, const int s3,
                       const int n_dims, const int n_offs, const int32_t *pos,
-                      const float freq_scale, const float ext_factor,
+                      const float freq_scale, const int n_ctx_orig, const float ext_factor,
                       const float attn_factor, const rope_corr_dims corr_dims,
                       const float theta_scale, const float *freq_factors,
                       const int64_t *row_indices, const int set_rows_stride) {
@@ -92,7 +103,8 @@ static void rope_norm(const T *x, D *dst, const int ne00, const int ne01,
     float cos_theta;
     float sin_theta;
 
-    rope_yarn<forward>(theta_base / freq_factor, freq_scale, corr_dims, iw,
+    const float effective_scale = rope_dynamic_scale((float)pos[i2], freq_scale, n_ctx_orig);
+    rope_yarn<forward>(theta_base / freq_factor, effective_scale, corr_dims, iw,
                        ext_factor, attn_factor, cos_theta, sin_theta);
 
     const float x0 = x[ix + 0];
@@ -107,7 +119,7 @@ static void rope_neox(const T *x, D *dst, const int ne00, const int ne01,
                       const int ne02, const int s01, const int s02,
                       const int s03, const int s1, const int s2, const int s3,
                       const int n_dims, const int n_offs, const int32_t *pos,
-                      const float freq_scale, const float ext_factor,
+                      const float freq_scale, const int n_ctx_orig, const float ext_factor,
                       const float attn_factor, const rope_corr_dims corr_dims,
                       const float theta_scale, const float *freq_factors,
                       const int64_t *row_indices, const int set_rows_stride) {
@@ -150,7 +162,8 @@ static void rope_neox(const T *x, D *dst, const int ne00, const int ne01,
     float cos_theta;
     float sin_theta;
 
-    rope_yarn<forward>(theta_base / freq_factor, freq_scale, corr_dims, iw,
+    const float effective_scale = rope_dynamic_scale((float)pos[i2], freq_scale, n_ctx_orig);
+    rope_yarn<forward>(theta_base / freq_factor, effective_scale, corr_dims, iw,
                        ext_factor, attn_factor, cos_theta, sin_theta);
 
     // idst/ix point at channel i0/2; the first channel of the rotated pair is n_offs + iw/2 = i0/2 + n_offs/2
@@ -166,7 +179,7 @@ static void rope_multi(const T *x, T *dst, const int ne00, const int ne01,
                        const int ne02, const int s01, const int s02,
                        const int s03, const int s1, const int s2, const int s3,
                        const int n_dims, const int n_offs, const int32_t *pos,
-                       const float freq_scale, const float ext_factor,
+                       const float freq_scale, const int n_ctx_orig, const float ext_factor,
                        const float attn_factor, const rope_corr_dims corr_dims,
                        const float theta_scale, const float *freq_factors,
                        const mrope_sections sections, const bool is_imrope) {
@@ -230,7 +243,8 @@ static void rope_multi(const T *x, T *dst, const int ne00, const int ne01,
     float cos_theta;
     float sin_theta;
 
-    rope_yarn<forward>(theta_base / freq_factor, freq_scale, corr_dims, iw,
+    const float effective_scale = rope_dynamic_scale((float)pos[i2], freq_scale, n_ctx_orig);
+    rope_yarn<forward>(theta_base / freq_factor, effective_scale, corr_dims, iw,
                        ext_factor, attn_factor, cos_theta, sin_theta);
 
     // idst/ix point at channel i0/2; the first channel of the rotated pair is n_offs + iw/2 = i0/2 + n_offs/2
@@ -246,7 +260,7 @@ static void rope_vision(const T *x, T *dst, const int ne00, const int ne01,
                         const int ne02, const int s01, const int s02,
                         const int s03, const int s1, const int s2, const int s3,
                         const int n_dims, const int32_t *pos,
-                        const float freq_scale, const float ext_factor,
+                        const float freq_scale, const int n_ctx_orig, const float ext_factor,
                         const float attn_factor, const rope_corr_dims corr_dims,
                         const float theta_scale, const float *freq_factors,
                         const mrope_sections sections) {
@@ -286,7 +300,8 @@ static void rope_vision(const T *x, T *dst, const int ne00, const int ne01,
     float cos_theta;
     float sin_theta;
 
-    rope_yarn<forward>(theta_base / freq_factor, freq_scale, corr_dims, i0,
+    const float effective_scale = rope_dynamic_scale((float)pos[i2], freq_scale, n_ctx_orig);
+    rope_yarn<forward>(theta_base / freq_factor, effective_scale, corr_dims, i0,
                        ext_factor, attn_factor, cos_theta, sin_theta);
 
     const float x0 = x[ix + 0];
@@ -321,7 +336,7 @@ rope_norm_sycl(const T *x, D *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_norm<forward, false>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    n_offs, pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    n_offs, pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, row_indices, set_rows_stride);
             });
     } else {
@@ -331,7 +346,7 @@ rope_norm_sycl(const T *x, D *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_norm<forward, true>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    n_offs, pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    n_offs, pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, row_indices, set_rows_stride);
             });
     }
@@ -362,7 +377,7 @@ rope_neox_sycl(const T *x, D *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_neox<forward, false>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    n_offs, pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    n_offs, pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, row_indices, set_rows_stride);
             });
     } else {
@@ -372,7 +387,7 @@ rope_neox_sycl(const T *x, D *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_neox<forward, true>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    n_offs, pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    n_offs, pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, row_indices, set_rows_stride);
             });
     }
@@ -403,7 +418,7 @@ rope_multi_sycl(const T *x, T *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_multi<forward, false, T>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    n_offs, pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    n_offs, pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, sections, is_imrope);
             });
     } else {
@@ -413,7 +428,7 @@ rope_multi_sycl(const T *x, T *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_multi<forward, true, T>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    n_offs, pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    n_offs, pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, sections, is_imrope);
             });
     }
@@ -444,7 +459,7 @@ rope_vision_sycl(const T *x, T *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_vision<forward, false, T>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, sections);
             });
     } else {
@@ -454,7 +469,7 @@ rope_vision_sycl(const T *x, T *dst, const int ne00, const int ne01,
                 GGML_UNUSED(item_ct1);
                 rope_vision<forward, true, T>(
                     x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims,
-                    pos, freq_scale, ext_factor, attn_factor, corr_dims,
+                    pos, freq_scale, n_ctx_orig, ext_factor, attn_factor, corr_dims,
                     theta_scale, freq_factors, sections);
             });
     }
@@ -555,7 +570,7 @@ void ggml_sycl_op_rope_impl(ggml_backend_sycl_context &ctx, ggml_tensor *dst,
         if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F32) {
             rope_neox_sycl<forward, float, float>(
                 (const float *)src0_d, (float *)dst_d, ne00, ne01, ne02, s01,
-                s02, s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
+                s02, s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, n_ctx_orig, freq_base,
                 ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
                 set_rows_stride, stream);
         } else if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F16) {
@@ -578,7 +593,7 @@ void ggml_sycl_op_rope_impl(ggml_backend_sycl_context &ctx, ggml_tensor *dst,
         if (src0->type == GGML_TYPE_F32) {
             rope_multi_sycl<forward>((const float *)src0_d, (float *)dst_d,
                                      ne00, ne01, ne02, s01, s02, s03, s1, s2,
-                                     s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
+                                     s3, n_dims, n_offs, nr, pos, freq_scale, n_ctx_orig, freq_base,
                                      ext_factor, attn_factor, corr_dims,
                                      freq_factors, sections, is_imrope, stream);
         } else if (src0->type == GGML_TYPE_F16) {
@@ -595,7 +610,7 @@ void ggml_sycl_op_rope_impl(ggml_backend_sycl_context &ctx, ggml_tensor *dst,
         if (src0->type == GGML_TYPE_F32) {
             rope_vision_sycl<forward>(
                 (const float *)src0_d, (float *)dst_d, ne00, ne01, ne02, s01,
-                s02, s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base,
+                s02, s03, s1, s2, s3, n_dims, nr, pos, freq_scale, n_ctx_orig, freq_base,
                 ext_factor, attn_factor, corr_dims, freq_factors, sections,
                 stream);
         } else if (src0->type == GGML_TYPE_F16) {
@@ -612,7 +627,7 @@ void ggml_sycl_op_rope_impl(ggml_backend_sycl_context &ctx, ggml_tensor *dst,
         if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F32) {
             rope_norm_sycl<forward, float, float>(
                 (const float *)src0_d, (float *)dst_d, ne00, ne01, ne02, s01,
-                s02, s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
+                s02, s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, n_ctx_orig, freq_base,
                 ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
                 set_rows_stride, stream);
         } else if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F16) {
