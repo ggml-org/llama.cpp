@@ -4,7 +4,8 @@
 import ModelsManagerRowWrapper from './components/ModelsManagerRowWrapper.svelte';
 import ModelsManagerRepoRow from '$lib/components/app/models/ModelsManager/ModelsManagerRepoRow.svelte';
 import type { ModelQuantGroup } from '$lib/components/app/models/ModelsManager/utils';
-import { ModelGroupKind } from '$lib/enums';
+import { ModelGroupKind, ServerRole } from '$lib/enums';
+import { serverStore } from '$lib/stores/server.svelte';
 import type { ModelOption } from '$lib/types/models';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -33,6 +34,8 @@ describe('manager model row', () => {
 
 	beforeEach(() => {
 		selected = [];
+		// the row only offers a load control on a router server
+		serverStore.role = ServerRole.ROUTER;
 	});
 
 	function row() {
