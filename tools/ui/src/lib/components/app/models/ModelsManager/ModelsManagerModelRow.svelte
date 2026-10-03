@@ -83,7 +83,7 @@
 		{option}
 	/>
 
-	<ModelsManagerStatusCell {download} {option} />
+	<ModelsManagerStatusCell class="max-md:hidden" {download} {option} />
 
 	{#if download}
 		<ModelDownloadProgressBar
