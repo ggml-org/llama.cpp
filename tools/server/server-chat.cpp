@@ -306,6 +306,42 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         chatcmpl_body.erase("reasoning");
     }
 
+    if (response_body.contains("text")) {
+        // #responses_create-text
+        // Maps Responses' "text.format" to Chat Completions' "response_format" so
+        // that constrained/structured output (json_schema, json_object) is honored
+        // by /v1/responses the same way it already is by /v1/chat/completions.
+        const json & text = response_body.at("text");
+        if (text.contains("format")) {
+            const json & fmt = text.at("format");
+            const std::string fmt_type = json_value(fmt, "type", std::string());
+
+            if (fmt_type == "json_schema") {
+                if (!fmt.contains("schema")) {
+                    throw std::invalid_argument("'text.format' of type 'json_schema' requires 'schema'");
+                }
+                json json_schema {
+                    {"name",   json_value(fmt, "name", std::string("response"))},
+                    {"schema", fmt.at("schema")},
+                };
+                if (fmt.contains("strict")) {
+                    json_schema["strict"] = fmt.at("strict");
+                }
+                chatcmpl_body["response_format"] = {
+                    {"type",        "json_schema"},
+                    {"json_schema", json_schema},
+                };
+            } else if (fmt_type == "json_object") {
+                chatcmpl_body["response_format"] = {{"type", "json_object"}};
+            } else if (fmt_type == "text" || fmt_type.empty()) {
+                // "text" is the default Responses format; nothing to translate.
+            } else {
+                throw std::invalid_argument("unsupported 'text.format.type': " + fmt_type);
+            }
+        }
+        chatcmpl_body.erase("text");
+    }
+
     return chatcmpl_body;
 }
 
