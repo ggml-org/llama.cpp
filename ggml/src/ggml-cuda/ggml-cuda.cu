@@ -1672,7 +1672,7 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
                 src0_chunk.ne[1] = std::min(rows_per_chunk, src0->ne[1] - i01);
                 src0_chunk.data = (char *) src0->data + i01*src0->nb[1];
 
-                // Keep the destination shape and strides so cuBLAS uses the original leading dimension.
+                dst_chunk.ne[0] = src0_chunk.ne[1];
                 dst_chunk.data = (char *) dst->data + i01*dst->nb[0];
 
                 ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, &src0_chunk, src1, &dst_chunk);
