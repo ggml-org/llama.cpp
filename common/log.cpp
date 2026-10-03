@@ -420,9 +420,9 @@ public:
     void set_colors(bool colors) {
         pause();
 
-        this->colors = colors;
+        this->colors = colors && tty_enable_ansi();
 
-        if (colors) {
+        if (this->colors) {
             g_col[COMMON_LOG_COL_DEFAULT] = LOG_COL_DEFAULT;
             g_col[COMMON_LOG_COL_BOLD]    = LOG_COL_BOLD;
             g_col[COMMON_LOG_COL_RED]     = LOG_COL_RED;
