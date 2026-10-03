@@ -329,6 +329,8 @@ kernel void kernel_flash_attn_ext_vec_reduce(
 #undef DV
 }
 
+constant short FC_lightning_indexer_nh [[function_constant(FC_LIGHTNING_INDEXER + 0)]];
+
 template<
     typename kd4x4_t,
     short nl_k,
@@ -345,7 +347,7 @@ kernel void kernel_lightning_indexer(
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
     constexpr short DK    = OP_LIGHTNING_INDEXER_DK;
-    constexpr short NH    = OP_LIGHTNING_INDEXER_NH;
+    const     short NH    = FC_lightning_indexer_nh;
     constexpr short NHPTG = OP_LIGHTNING_INDEXER_NHPTG;
     constexpr short NKPSG = OP_LIGHTNING_INDEXER_NKPSG;
     constexpr short NSG   = OP_LIGHTNING_INDEXER_NSG;
@@ -411,18 +413,22 @@ kernel void kernel_lightning_indexer(
         float score = 0.0f;
 
         FOR_UNROLL (short i_head = 0; i_head < NH; i_head += NHPTG) {
-            // stage the Q tile [DK, NHPTG] and the (prescaled) head weights
+            // stage the Q tile [DK, NHPTG] and the (prescaled) head weights, heads past NH are zero
             for (short i = tiitg; i < NHPTG*DK4; i += NTG) {
                 const short ih = i/DK4;
                 const short i4 = i%DK4;
 
-                device const float4 * q4 = (device const float4 *) (pq + (i_head + ih)*args.nbq1);
+                if (i_head + ih < NH) {
+                    device const float4 * q4 = (device const float4 *) (pq + (i_head + ih)*args.nbq1);
 
-                sq4[ih*DK4 + i4] = half4(q4[i4]);
+                    sq4[ih*DK4 + i4] = half4(q4[i4]);
+                } else {
+                    sq4[ih*DK4 + i4] = half4(0.0h);
+                }
             }
 
             if (tiitg < NHPTG) {
-                sw[tiitg] = ((device const float *) pw)[i_head + tiitg];
+                sw[tiitg] = i_head + tiitg < NH ? ((device const float *) pw)[i_head + tiitg] : 0.0f;
             }
 
             threadgroup_barrier(mem_flags::mem_threadgroup);
