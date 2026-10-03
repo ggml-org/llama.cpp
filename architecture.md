@@ -1,11 +1,11 @@
 # Project architecture
 
-Status: implementation specification, not a description of existing code.
+Status: implementation specification. The initial external benchmark runner exists; Vulkan optimization modules remain planned.
 Specification date: 2026-10-01. Read together with `goal.md`.
 
 ## 1. Architectural decisions
 
-Maintain one llama.cpp fork and one production patch branch: `rx7900xtx-vulkan`. Track upstream `master` without adding project commits to the fork's `master`. Use short-lived experiment branches or worktrees. Both supported GGUFs use the same optimized binary.
+Maintain one llama.cpp fork and one production patch branch: `rx7900xtx-vulkan`. Track upstream `master` without adding project commits to the fork's `master`. Use short-lived experiment branches or worktrees. The primary IQ3_S GGUF uses the optimized binary.
 
 The architecture has five responsibilities:
 
@@ -31,6 +31,7 @@ llama.cpp/
   architecture.md
   benchmark.md
   howtobuild.md
+  progress.md
   docs/rx7900xtx/
     status.md
     upstream-hooks.md
@@ -39,7 +40,6 @@ llama.cpp/
       <experiment-id>.md
     models/
       swift-iq3s.inventory.json
-      swift-q4km.inventory.json
   ggml/src/ggml-vulkan/
     ggml-vulkan.cpp                         [existing]
     CMakeLists.txt                          [existing]
@@ -65,12 +65,10 @@ llama.cpp/
         registry.cpp
         iq3s.hpp
         iq3s.cpp
-        q4k.hpp
-        q4k.cpp
       models/
         registry.hpp
         registry.cpp
-        qwen38_27b/
+        qwen35_27b/
           profile.hpp
           profile.cpp
           fused_ops.hpp
@@ -84,8 +82,7 @@ llama.cpp/
           rdna3.glsl
           quant_helpers.glsl
         iq3s_gemv.comp
-        q4k_gemv.comp
-        models/qwen38_27b/
+        models/qwen35_27b/
           <verified-fusion>.comp
   src/
     <upstream-model-graph-files>             [existing; identify in checkout]
@@ -94,7 +91,7 @@ llama.cpp/
       model_descriptor.cpp
       graph_hints.hpp
       graph_hints.cpp
-      models/qwen38_27b/
+      models/qwen35_27b/
         graph_rules.hpp
         graph_rules.cpp
   common/
@@ -129,8 +126,7 @@ llama.cpp/
       compare.py
       report.py
     presets/
-      qwen38-iq3s.json
-      qwen38-q4km.json
+      qwen35-iq3s.json
     prompts/
       manifest.json
       chat/
@@ -157,7 +153,7 @@ llama.cpp/
   build-rx7900xtx/                          [local, ignored]
 ```
 
-`qwen38_27b` is a provisional module identifier taken from the supplied model names. Confirm the actual architecture from GGUF metadata before implementing profile guards or graph rules. If the identifier is inaccurate, rename the module and presets deliberately and document the mapping; preserve user-supplied filenames in model identity records.
+`qwen35_27b` is the verified internal module identifier. The primary GGUF reports `general.architecture = qwen35`; the supplied filename remains the model identity record. Do not use the marketing-style `Qwen3.8` filename segment as an architecture guard.
 
 `<verified-fusion>` and other angle-bracket entries are placeholders, not literal filenames. Do not implement a presumed DeltaNet fusion just because an earlier conversation mentioned DeltaNet.
 
@@ -165,7 +161,8 @@ llama.cpp/
 
 | File or directory | What belongs here | When an agent should edit it |
 |---|---|---|
-| Root four documents | Goals, architecture contract, benchmark contract, operator instructions | A confirmed implementation detail changes the specification |
+| Root project documents | Goals, architecture contract, benchmark contract, operator instructions | A confirmed implementation detail changes the specification |
+| `progress.md` | Confirmed milestones, baseline results, known limitations, next work | A benchmark or implementation milestone concludes |
 | `status.md` | Current base SHA, accepted patches, known limitations, next concrete work | End of meaningful development milestones |
 | `upstream-hooks.md` | Every upstream edit, its purpose, owner, and rebase checks | A new integration hook is added or changed |
 | `decisions.md` | Short dated design decisions with evidence and alternatives | A consequential design choice is resolved |
@@ -254,6 +251,7 @@ Specialized fused shaders belong under `vulkan-shaders/rxopt/models/<model-id>/`
 Fusion must account for tensor aliasing, graph dependencies, masks, numerical precision, and state updates. Recurrent state and speculative rollback are particularly important if the inspected model has those features. Never skip state restoration to improve timings.
 
 For a future Qwen4 or other architecture, add a new validated descriptor/profile and graph module only after inspecting the real model. Reuse generic device/quant kernels when legal. No current module should require every future model to have the same layers, state, or MTP implementation.
+It is important to prepare everything for Qwen4, as it will be implemented later.
 
 ## 8. MTP integration
 

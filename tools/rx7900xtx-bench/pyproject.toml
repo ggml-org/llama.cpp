@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rx7900xtx-bench"
+version = "0.1.0"
+description = "Single-user RX 7900 XTX MTP benchmark for llama-server"
+requires-python = ">=3.11"
+
+[project.scripts]
+rx7900xtx-bench = "rx7900xtx_bench.cli:main"
+
+[tool.setuptools]
+packages = ["rx7900xtx_bench"]

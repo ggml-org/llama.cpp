@@ -1,6 +1,6 @@
 # Benchmark specification and operator interface
 
-Status: planned benchmark tool; commands using `rx7900xtx-bench` become usable only after implementation.
+Status: the initial baseline runner is implemented and the first IQ3_S 4096-token MTP baseline completed successfully. It launches an owned server, verifies health, device inventory, server context, model path, and MTP draft-context initialization, builds an exact-depth token prompt, performs one warmup plus repeated fresh requests, records raw responses/logs/manifest data, and reads existing speculative counters from `/metrics`. Prefix reuse, suites, MTP sweeps, paired comparison, packaging, and stress runs remain planned. See `progress.md` for the measured baseline.
 Specification date: 2026-10-01. Goals are defined in `goal.md`.
 
 ## 1. Purpose and score
@@ -15,12 +15,11 @@ The benchmark is mandatory evidence for retained optimizations and is designed f
 
 | Preset | Model filename | Server context capacity | Measured prompt depths |
 |---|---|---:|---|
-| `qwen38-iq3s` | `Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf` | 200000 | 4096, 16384, 32768, 65536, 98304 |
-| `qwen38-q4km` | `ukisai_Swift-Qwen3.8-27b-Q4_K_M.gguf` | 131072 | 4096, 16384, 32768, 65536, 98304 |
+| `qwen35-iq3s` | `Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf` | 200000 | 4096, 16384, 32768, 65536, 98304 |
 
-Here 4k means 4096 tokens and 96k means 98304 tokens. Context capacity is fixed even for the smallest test. Benchmark prompt depth never exceeds 98304. Generated tokens naturally increase live state beyond initial prompt depth; reserve capacity for output and speculative work. The cap applies to the initial populated benchmark depth, not an artificial cutoff of every generated token.
+Here 4k means 4096 tokens and 96k means 98304 tokens. Context capacity is fixed even for the smallest test. The harness requests 200000 tokens; upstream rounds this to the verified effective 200192-token context on its 256-token alignment boundary, and records both values. Benchmark prompt depth never exceeds 98304. Generated tokens naturally increase live state beyond initial prompt depth; reserve capacity for output and speculative work. The cap applies to the initial populated benchmark depth, not an artificial cutoff of every generated token.
 
-One slot, one outstanding request, no user traffic during measurement. Start with IQ3S. Q4 is a secondary MTP validation workload, not a target-only regression benchmark.
+One slot, one outstanding request, no user traffic during measurement. The IQ3_S model is the only benchmark workload in the current project.
 
 Verify actual context capacity and MTP activation from the server, not only the requested command line. Do not silently shorten a prompt, reduce capacity, disable MTP, change cache types, or offload extra work to the CPU to make a failed run pass.
 
@@ -94,19 +93,18 @@ Initial candidate `n-max` values: `1,2,4,8`. These are sweep candidates, not pro
 1. Screen candidates at 4k and 16k across representative fixtures.
 2. Validate the best candidates at 32k, then 64k/96k.
 3. Select for final throughput, TTFT, and stability. Acceptance alone does not choose the winner.
-4. Select separate settings for IQ3S and Q4 if appropriate.
-5. Freeze settings during a kernel A/B comparison.
-6. If a patch changes the best setting, report a separate retuned comparison alongside the fixed-setting result.
+4. Freeze settings during a kernel A/B comparison.
+5. If a patch changes the best setting, report a separate retuned comparison alongside the fixed-setting result.
 
 Do not tune on one prompt then claim all-content improvement. Do not introduce automatic depth-dependent policy until its benefit and guard conditions are measured. Preserve the actual sampler and verification rules; changing acceptance semantics is not legitimate tuning.
 
 ## 7. Proposed command-line interface
 
-All options in this section belong to **our future harness**, unless explicitly shown in a llama-server command. The harness maps them to supported upstream arguments using capability detection. JSON presets are versioned, and CLI values override presets.
+The implemented baseline runner supports `--preset qwen35-iq3s`, `--model`, `--server`, `--mmproj`, `--config`, `--depth`, `--runs`, `--output-tokens`, `--host`, `--port`, `--timeout-seconds`, `--startup-timeout-seconds`, `--results-dir`, `--label`, and `--dry-run`. All other options in this section remain planned. JSON presets are versioned, and CLI values override presets.
 
 | Option | Meaning / default |
 |---|---|
-| `--preset NAME` | `qwen38-iq3s` or `qwen38-q4km`; model path must be supplied locally |
+| `--preset NAME` | `qwen35-iq3s`; model path must be supplied locally |
 | `--model PATH` | Exact GGUF path; required unless stored in local config |
 | `--server PATH` | llama-server executable to launch; required for launch mode |
 | `--baseline-server PATH` | Control executable for paired A/B mode |
@@ -149,42 +147,41 @@ Attach mode must verify or require an exported server manifest for model identit
 After the harness is implemented and packaged:
 
 ```bash
-./rx7900xtx-bench --preset qwen38-iq3s --model /models/Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf --server ./build-rx7900xtx/bin/llama-server --runs 5
+./rx7900xtx-bench --preset qwen35-iq3s --model /models/Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf --server ./build-rx7900xtx/bin/llama-server --runs 5
 ```
 
 Run the common-use suite:
 
 ```bash
-./rx7900xtx-bench --preset qwen38-iq3s --config ./bench.local.json --suite common --runs 10
+./rx7900xtx-bench --preset qwen35-iq3s --config ./bench.local.json --suite common --runs 10
 ```
 
 Tune MTP:
 
 ```bash
-./rx7900xtx-bench --preset qwen38-iq3s --config ./bench.local.json --depths 4096,16384 --mtp-sweep 1,2,4,8 --runs 5
+./rx7900xtx-bench --preset qwen35-iq3s --config ./bench.local.json --depths 4096,16384 --mtp-sweep 1,2,4,8 --runs 5
 ```
 
 Compare fixed settings, using an illustrative candidate length of 4 rather than an established optimum:
 
 ```bash
-./rx7900xtx-bench --preset qwen38-iq3s --config ./bench.local.json --server ./build-rx7900xtx/bin/llama-server --baseline-server ./build-control/bin/llama-server --suite common --mtp-n-max 4 --runs 10 --label iq3s-kernel-v1
+./rx7900xtx-bench --preset qwen35-iq3s --config ./bench.local.json --server ./build-rx7900xtx/bin/llama-server --baseline-server ./build-control/bin/llama-server --suite common --mtp-n-max 4 --runs 10 --label iq3s-kernel-v1
 ```
 
 Full validation, without any depth above 96k:
 
 ```bash
-./rx7900xtx-bench --preset qwen38-iq3s --config ./bench.local.json --suite full --runs 10 --fresh-runs 3
-./rx7900xtx-bench --preset qwen38-q4km --config ./bench-q4.local.json --suite full --runs 10
+./rx7900xtx-bench --preset qwen35-iq3s --config ./bench.local.json --suite full --runs 10 --fresh-runs 3
 ```
 
 One 64k measurement and an offline comparison:
 
 ```bash
-./rx7900xtx-bench --preset qwen38-iq3s --config ./bench.local.json --depth 65536 --runs 20
+./rx7900xtx-bench --preset qwen35-iq3s --config ./bench.local.json --depth 65536 --runs 20
 ./rx7900xtx-bench compare --baseline bench-results/control-run --candidate bench-results/optimized-run
 ```
 
-`--config` examples assume the local file supplies required model/server paths. On Windows the packaged executable is `rx7900xtx-bench.exe`; adapt executable and model paths. A single executable is the intended deliverable, packaged per OS from a Python implementation, for example with PyInstaller. Source execution must remain available for development. No executable is created by this specification.
+`--config` examples assume the local file supplies required model/server paths. On Windows the packaged executable is `rx7900xtx-bench.exe`; adapt executable and model paths. A single executable is the intended deliverable, packaged per OS from a Python implementation, for example with PyInstaller. Source execution must remain available for development. All Python development and packaging commands must run in the project-local `.venv-bench` virtual environment; do not install benchmark dependencies globally. No executable is created by this specification.
 
 ## 9. Fair comparison and statistical reporting
 

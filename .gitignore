@@ -95,6 +95,12 @@
 # Python
 
 /.venv
+/.venv-bench
+*.egg-info/
+bench-results/
+build-control/
+build-rx7900xtx/
+bench.local.json
 __pycache__/
 */poetry.lock
 poetry.toml

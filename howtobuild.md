@@ -1,13 +1,13 @@
 # Fork, build, run, and maintain the project
 
-Status: operator guide for the planned patchset. Stock Vulkan commands are usable now on a compatible checkout; project optimization and benchmark commands require their implementation first.
+Status: operator guide for the active patchset. Stock Vulkan commands, the initial benchmark runner, and its first IQ3_S baseline are complete; Vulkan optimization modules remain unimplemented.
 Specification date: 2026-10-01.
 
 ## 1. Environment assumptions
 
-The reference deployment is a single RX 7900 XTX using Vulkan and Mesa RADV on Linux. The user's actual OS and driver have not yet been confirmed. The Linux instructions below use Debian/Ubuntu package names as an example. Use equivalent packages for your distribution. A Windows Vulkan build is documented separately, and requires independent performance validation with its driver.
+The reference deployment is Fedora Linux 44 KDE with kernel `7.2.8-200.fc44.x86_64`, one RX 7900 XTX, Vulkan, and Mesa RADV `26.2.3`. The Linux package example below uses Debian/Ubuntu names; use Fedora-equivalent packages on the reference machine. A Windows Vulkan build is documented separately, and requires independent performance validation with its driver.
 
-You need Git, a C/C++ toolchain, CMake, Ninja, Vulkan development libraries, the `glslc` shader compiler, SPIR-V headers, and a working Vulkan driver. Python is needed to develop/package the benchmark; the eventual packaged executable is intended to run without a separate Python installation.
+You need Git, a C/C++ toolchain, CMake, Ninja, Vulkan development libraries, the `glslc` shader compiler, SPIR-V headers, and a working Vulkan driver. Python is needed to develop/package the benchmark; use only the project-local `.venv-bench` virtual environment for its dependencies. The eventual packaged executable is intended to run without a separate Python installation.
 
 Do not install ROCm merely for this project. Do not use HIP build options: the chosen backend is Vulkan.
 
@@ -36,10 +36,10 @@ git config user.name "Your Name"
 git config user.email "YOUR_COMMIT_EMAIL"
 ```
 
-Copy the four supplied Markdown documents into the repository root. Add them and commit:
+Copy the project Markdown documents into the repository root. Add them and commit:
 
 ```bash
-git add goal.md architecture.md benchmark.md howtobuild.md
+git add goal.md architecture.md benchmark.md howtobuild.md progress.md
 git commit -m "docs: define RX 7900 XTX MTP optimization project"
 git push -u origin rx7900xtx-vulkan
 ```
@@ -65,6 +65,8 @@ sudo apt-get install git build-essential cmake ninja-build libvulkan-dev glslc s
 ```
 
 Package versions must satisfy the actual checked-out CMake requirements. If your distribution's headers/compiler are too old, use a suitable Vulkan SDK according to upstream instructions rather than mixing incompatible files. Installing development packages does not guarantee the runtime selects RADV.
+
+Verified reference inventory: llama-server build `0.5.0-dev-11380`, source commit `0f0796f9076f3ebd3f49fa9be74598b33c42aada`, GCC `16.2.1`, CMake `4.3.0`, shaderc `2026.1`, Ryzen 5 7600X, and approximately 30 GiB RAM. `llama-server --list-devices` reports the RX 7900 XTX as `Vulkan0`; do not use the integrated Radeon GPU reported as `Vulkan1`.
 
 Check the environment:
 
@@ -120,27 +122,20 @@ After changing toolchains or major dependencies, configure new build directories
 
 ## 6. Inspect and run the real models
 
-Keep weights outside the Git checkout, for example `/models/`. Record checksums once:
+Keep weights outside the Git checkout. The verified primary artifact is `/home/tmatkovic/.lmstudio/models/ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF/Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf`; it is 12120016896 bytes with SHA-256 `9aecf1cd41b2cb2f32a74e0d889e33855ebef43b26f43b43feb5720239e677e5`. Record checksums once when an artifact changes:
 
 ```bash
-sha256sum /models/Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf
-sha256sum /models/ukisai_Swift-Qwen3.8-27b-Q4_K_M.gguf
+sha256sum /home/tmatkovic/.lmstudio/models/ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF/Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf
 ```
 
-Use the future harness inventory functionality or the pinned upstream GGUF tooling to inspect architecture metadata, tensor types/shapes, embedded MTP tensors, and context-related metadata. Do not assume uniform IQ3_S quantization throughout the primary model.
+Use the future harness inventory functionality or the pinned upstream GGUF tooling to inspect architecture metadata, tensor types/shapes, embedded MTP tensors, and context-related metadata. The primary GGUF has `general.architecture = qwen35`, 866 tensors, and declares `qwen35.nextn_predict_layers`; do not assume uniform IQ3_S quantization throughout it. The Q4_K_M model is out of scope and must not be inspected or benchmarked for this project.
 
 Read binary help before copying the examples. The current upstream server reference documents the MTP spellings used here; flags may change. `n-max=4` below is only an initial example, not a measured best value. Confirm any model-specific draft loading/setup requirements in the selected revision.
 
-Illustrative IQ3S launch:
+Illustrative IQ3_S launch:
 
 ```bash
-./build-rx7900xtx/bin/llama-server -m /models/Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf -c 200000 -np 1 -ngl all --spec-type draft-mtp --spec-draft-n-max 4 --host 127.0.0.1 --port 8080
-```
-
-Illustrative Q4 launch:
-
-```bash
-./build-rx7900xtx/bin/llama-server -m /models/ukisai_Swift-Qwen3.8-27b-Q4_K_M.gguf -c 131072 -np 1 -ngl all --spec-type draft-mtp --spec-draft-n-max 4 --host 127.0.0.1 --port 8080
+./build-rx7900xtx/bin/llama-server -m /home/tmatkovic/.lmstudio/models/ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF/Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf -c 200000 -np 1 -ngl all --spec-type draft-mtp --spec-draft-n-max 4 --host 127.0.0.1 --port 8080
 ```
 
 Use `build-control` before an optimized binary exists. Run only one server at a time. Confirm effective capacity, single slot, GPU placement, and active MTP from startup/request behavior. A filename containing `mtp` or a successful HTTP response is insufficient proof of active speculation.
@@ -150,39 +145,32 @@ Batch/ubatch, cache types, flash attention, CPU threads, and real sampling setti
 After runtime controls are implemented, this should disable our patches while retaining upstream MTP:
 
 ```bash
-GGML_VULKAN_RX7900XTX_OPT=off ./build-rx7900xtx/bin/llama-server -m /models/Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf -c 200000 -np 1 -ngl all --spec-type draft-mtp --spec-draft-n-max 4
+GGML_VULKAN_RX7900XTX_OPT=off ./build-rx7900xtx/bin/llama-server -m /home/tmatkovic/.lmstudio/models/ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF/Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf -c 200000 -np 1 -ngl all --spec-type draft-mtp --spec-draft-n-max 4
 ```
 
 Use compiled ON/OFF variants for primary acceptance evidence. Runtime-off is convenient for diagnostics and checking gate coverage.
 
 ## 7. Build and run the future benchmark executable
 
-The benchmark package, packaging script, and CLI below are deliverables to implement, not files supplied by this documentation request. Once implemented according to `architecture.md`:
+The baseline benchmark package and CLI are implemented. Create the virtual environment, then install the package in editable mode:
 
 ```bash
 python3 -m venv .venv-bench
 source .venv-bench/bin/activate
-python -m pip install -e './tools/rx7900xtx-bench[packaging]'
-python tools/rx7900xtx-bench/packaging/build_executable.py --output-dir dist
-./dist/rx7900xtx-bench --help
-```
-
-The planned package's `packaging` extra must install pinned packaging requirements, and its script must accept `--output-dir`. Keep source invocation available:
-
-```bash
+python -m pip install -e ./tools/rx7900xtx-bench
 python -m rx7900xtx_bench --help
 ```
 
-The packaged executable should include presets, schemas, and fixture data; test it from outside the source directory. On Windows package locally for Windows, not by assuming a Linux executable is portable.
+Create and activate `.venv-bench` before every source-development session. Do not use the system Python or globally installed Python packages for the benchmark. The virtual environment is local build state and must stay ignored by Git. Packaging as a standalone executable remains future work.
 
 Create a machine-local `bench.local.json` with model/server paths and the verified runtime settings. Keep it ignored by Git. Run a dry run, then the baseline:
 
 ```bash
-./dist/rx7900xtx-bench --preset qwen38-iq3s --config bench.local.json --dry-run
-./dist/rx7900xtx-bench --preset qwen38-iq3s --config bench.local.json --server ./build-control/bin/llama-server --suite common --runs 10 --label initial-control
+python -m rx7900xtx_bench --preset qwen35-iq3s --config bench.local.json --dry-run
+python -m rx7900xtx_bench --preset qwen35-iq3s --config bench.local.json --depth 4096 --runs 5 --label initial-control
 ```
 
-See `benchmark.md` for complete CLI semantics, MTP sweeps, paired builds, fresh/reused prompts, result files, and full validation capped at 96k. No kernel optimization is accepted before reproducible MTP measurements exist.
+See `benchmark.md` for complete CLI semantics, MTP sweeps, paired builds, fresh/reused prompts, result files, and full validation capped at 96k. See `progress.md` for the initial reproducible baseline. No kernel optimization is accepted before reproducible MTP measurements exist.
 
 ## 8. Experiment workflow
 
@@ -235,7 +223,7 @@ If there are conflicts:
 
 Never resolve a semantic conflict by blindly choosing all “ours.” Upstream may have fixed the same operation or introduced a faster path; remove or revise redundant patches when evidence supports it.
 
-After rebase, rebuild ON and OFF, run affected correctness checks, confirm MTP on IQ3S and Q4, and refresh the control benchmark. Compare the new ON/OFF pair at the new base. Do not attribute a change against an old-base result solely to our patchset.
+After rebase, rebuild ON and OFF, run affected correctness checks, confirm MTP on IQ3_S, and refresh the control benchmark. Compare the new ON/OFF pair at the new base. Do not attribute a change against an old-base result solely to our patchset.
 
 Review the rebased diff and update status/hook notes. Then push using a lease, not an unconditional force:
 
@@ -267,6 +255,12 @@ ctest --test-dir build-rx7900xtx -N
 ctest --test-dir build-rx7900xtx --output-on-failure
 ```
 
+Run the benchmark harness unit tests from the activated `.venv-bench` environment:
+
+```bash
+python -m unittest discover -s tools/rx7900xtx-bench/tests -v
+```
+
 Listing/tests depend on the upstream test options and project test registration. An empty CTest suite is not correctness validation; configure the required tests and run the relevant backend tool directly if necessary.
 
 ## 11. Windows alternative
@@ -286,7 +280,7 @@ After our CMake option exists, add `-DGGML_VULKAN_RX7900XTX_OPT=OFF` to control 
 Hash a model with:
 
 ```powershell
-Get-FileHash 'D:\models\Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf' -Algorithm SHA256
+Get-FileHash 'D:\models\Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf' -Algorithm SHA256
 ```
 
 Use the same server arguments as Linux, with quoted Windows paths. For runtime-off diagnostics after implementation:
@@ -314,7 +308,7 @@ Keep models, build directories, benchmark virtual environments, distribution out
 | A/B results incompatible | Model/source/runtime/prompt provenance and resolved settings |
 | Slow prefix benchmark | Verify actual reuse/newly evaluated token counts and state handling |
 
-These documents are planning artifacts. They provide no claim that a binary has been compiled, models loaded, or benchmarks executed in this conversation.
+These documents record an initial verified IQ3_S MTP baseline; see `progress.md`. They do not claim that a Vulkan optimization has been implemented or accepted.
 
 ## Sources and update policy
 

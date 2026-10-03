@@ -1,11 +1,11 @@
 # Project goal: RX 7900 XTX Vulkan MTP optimization
 
-Status: agreed project specification; implementation has not started.
+Status: initial benchmark runner and IQ3_S MTP baseline are complete; Vulkan optimization work has not started.
 Specification date: 2026-10-01.
 
 ## 1. Read this first
 
-Build a maintainable optimization patchset on top of `ggml-org/llama.cpp`, focused on faster **single-user MTP inference through llama-server on one AMD Radeon RX 7900 XTX**. Start with the user's IQ3S GGUF, then validate and optimize the Q4_K_M GGUF. Improve actual final output throughput and interactive latency while preserving inference correctness.
+Build a maintainable optimization patchset on top of `ggml-org/llama.cpp`, focused on faster **single-user MTP inference through llama-server on one AMD Radeon RX 7900 XTX** using the user's primary IQ3_S GGUF. Improve actual final output throughput and interactive latency while preserving inference correctness.
 
 This is an MTP-only performance project. Target-only generation is not a performance goal, acceptance gate, or required benchmark suite. It may be used temporarily to diagnose a specific issue when necessary. Accelerating shared target-model operations is in scope when it improves MTP serving performance.
 
@@ -18,27 +18,25 @@ Keep reusable device, quantization, and shape optimizations independent of model
 | Upstream | `https://github.com/ggml-org/llama.cpp`, tracking `master` |
 | GPU | One Radeon RX 7900 XTX, Navi 31 / RDNA 3, nominal 24 GB VRAM |
 | Backend | Vulkan |
-| Driver reference | Mesa RADV on Linux, as discussed; actual OS/driver must be recorded before implementation |
+| OS and driver | Fedora Linux 44 KDE, kernel `7.2.8-200.fc44.x86_64`, Mesa RADV `26.2.3` |
 | Serving | `llama-server` |
 | Concurrency | One user, one active request, one server slot |
 | Speculation | Embedded MTP, verified on each real GGUF and pinned upstream revision |
-| Primary model | `Swift-1.5-Qwen3.8-27b-GSQ-RCO-IQ3S-mtp.gguf` |
-| Secondary model | `ukisai_Swift-Qwen3.8-27b-Q4_K_M.gguf` |
+| Primary model | `Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf` |
 | Primary allocated context | `200000` tokens |
-| Secondary allocated context | `131072` tokens, the documented convention for “128k” |
 | Benchmark populated depths | `4096`, `16384`, `32768`, `65536`, `98304` tokens |
 
-The model filenames are exact user-supplied identifiers, not independently verified architecture specifications. Preserve their spelling. Do not silently substitute a differently named Qwen model. The user says both models to contain MTP; inspect each file to establish support. Do not infer layer count, hidden size, attention layout, training context limit, or tensor quantization from a filename or earlier conversational descriptions.
+The primary model filename is an exact user-supplied identifier. Preserve its spelling. Do not silently substitute a differently named Qwen model. The secondary Q4_K_M model is out of scope and must not be used as a validation substitute. Do not infer layer count, hidden size, attention layout, training context limit, or tensor quantization from a filename or earlier conversational descriptions.
 
-The primary file (Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf) occupies less than 12 GB. Memory telemetry is useful, but fitting this model is not a current problem to solve. Do not make speculative memory constraints the center of the project.
+The primary file occupies `12120016896` bytes and has SHA-256 `9aecf1cd41b2cb2f32a74e0d889e33855ebef43b26f43b43feb5720239e677e5`. Its verified GGUF architecture key is `qwen35`, it contains 866 tensors, and its metadata declares `qwen35.nextn_predict_layers`. This establishes that the artifact contains MTP metadata; real draft/verify activation must still be verified in the baseline. Memory telemetry is useful, but fitting this model is not a current problem to solve. Do not make speculative memory constraints the center of the project.
 
-Linux/RADV is the reference environment inherited from the discussion, not a confirmed inventory of the user's machine. Windows Vulkan remains possible, but driver-dependent tuning and benchmark results must be validated separately. Do not change the backend to HIP, CUDA, or another runtime without a new decision.
+Fedora Linux/RADV is the confirmed reference environment. Windows Vulkan remains possible, but driver-dependent tuning and benchmark results must be validated separately. Do not change the backend to HIP, CUDA, or another runtime without a new decision.
 
 ## 3. Real usage and priorities
 
 The user normally has short chat conversations, sometimes uses longer contexts for coding, and wants large context capacity available. The server is launched with the large context setting even when only a small part is populated.
 
-Therefore keep the allocated context fixed at the real deployment value in every scored test. A 4k benchmark means approximately 4k actual prompt tokens inside a server configured for 200000 or 131072 tokens. It does not mean launching with `-c 4096`.
+Therefore keep the allocated context fixed at the real deployment value in every scored test. A 4k benchmark means approximately 4k actual prompt tokens inside a server requested with `-c 200000`, which upstream aligns to an effective 200192-token context. It does not mean launching with `-c 4096`.
 
 Priority order:
 
@@ -51,7 +49,7 @@ No benchmark in the agreed suite should populate context beyond 98304 tokens. A 
 
 How the user starts this model currently:
 ```
-  /home/tmatkovic/llama.cpp/vulkan/llama-0.5.0-dev-11369/llama-server \
+  /home/tmatkovic/llama.cpp/vulkan/llama-0.5.0-dev-11380/llama-server \
   -m /home/tmatkovic/.lmstudio/models/ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF/Swift-1.5-Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf \
   --mmproj /home/tmatkovic/.lmstudio/models/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/mmproj-Qwen3.8-27B-BF16.gguf \
   --alias ukisaiswift1.5-27b-GSQ-RCO \
@@ -113,6 +111,7 @@ Out of current scope:
 - Standalone target-only performance optimization or a required target-only score.
 - DFlash/DFlash2 or other speculative methods; keep extension points but do not implement them now.
 - Multiple simultaneous users, batching across users, multi-GPU scaling, or serving fleets.
+- The secondary Q4_K_M GGUF, including its inventory, benchmark, validation, and optimization.
 - Requantizing weights, changing the model, or accepting output-quality loss to raise a score.
 - Populated-context benchmarks above 96k.
 - Implementing speculative details of an unreleased/future model architecture.
@@ -129,18 +128,17 @@ No fixed minimum gain is required. Retain a change when it shows a repeatable us
 ## 7. Initial work sequence
 
 1. Confirm OS, driver, compiler, CPU/RAM, Vulkan features, model paths, and current serving arguments.
-2. Pin a compatible upstream commit; verify both GGUF identities, metadata, tensor types, and embedded MTP support. Begin execution with IQ3S.
-3. Implement the benchmark runner and establish the IQ3S MTP baseline.
+2. Pin a compatible upstream commit; verify the primary GGUF identity, metadata, tensor types, and embedded MTP support. Completed for the initial IQ3_S baseline.
+3. Implement the benchmark runner and establish the IQ3_S MTP baseline. Completed at 4096 prompt tokens; see `progress.md`.
 4. Sweep MTP settings using representative prompts, then select and freeze a configuration for kernel A/B tests.
 5. Profile the actual MTP serving workload.
 6. Add the optimization gates and the smallest necessary dispatch integration.
 7. Implement one measured optimization at a time; validate and retain only supported gains.
-8. Add Q4_K_M validation and tuning; keep IQ3S the primary target.
-9. Rebase regularly and refresh baselines after upstream or driver changes.
+8. Rebase regularly and refresh baselines after upstream or driver changes.
 
 ## 8. Instructions for a coding agent starting a session
 
-Read `goal.md` and `architecture.md` first. Read `benchmark.md` before benchmark work or accepting performance changes. Read `howtobuild.md` for setup and repository maintenance.
+Read `goal.md` and `architecture.md` first. Read `benchmark.md` before benchmark work or accepting performance changes. Read `howtobuild.md` for setup and repository maintenance. Read `progress.md` to see progress. Take it with a grain of salt...maybe it is outdated and not updated. Only the code is apsolute truth.
 
 Inspect the real checkout, its instruction files, current branch, diff, and existing implementation before creating files. The companion documents describe the desired architecture and interface; they do not assert those components already exist. Preserve completed work and update documentation when implementation settles an open detail.
 
@@ -148,7 +146,7 @@ Use the smallest upstream hooks that permit a sound implementation. Keep new log
 
 ## 9. Remaining facts to discover
 
-The actual OS/driver, exact GGUF hashes and metadata, valid context handling, MTP compatibility, current runtime arguments, optimal MTP draft length, cache types, batch settings, and measured bottlenecks remain unknown. Discover and record these facts; they are not permission to alter the agreed goals.
+The valid context handling and real draft/verify activation are confirmed for the initial 4096-token baseline. Optimal MTP draft length, cache types, batch settings, server timing semantics, and measured bottlenecks remain unknown. Discover and record these facts; they are not permission to alter the agreed goals.
 
 ## References
 
