@@ -27,7 +27,7 @@ def main() -> None:
         description="Recompress a GGUF model to BF16X: near-lossless bfloat16 "
         "recompression at 11.5 bpw (1.39x smaller than BF16). Sign and mantissa "
         "stay exact; only weights already 2^-7 below their block max exponent "
-        "(~2%) decode clamped. Requires the last tensor dim to be a multiple of 16.")
+        "(~2%) decode clamped. Requires the last tensor dim to be a multiple of 32.")
     parser.add_argument("input", help="GGUF model to read")
     parser.add_argument("output", help="BF16X GGUF model to write")
     parser.add_argument("--keep-embeddings", action="store_true",
@@ -62,7 +62,7 @@ def main() -> None:
             convertible = False
 
         keep = args.keep_embeddings and ("token_embd" in name or "output" in name)
-        if convertible and f32 is not None and f32.shape[-1] % 16 == 0 and not keep:
+        if convertible and f32 is not None and f32.shape[-1] % 32 == 0 and not keep:
             packed = quantize(f32, GGMLQuantizationType.BF16X)
             packed_bytes = packed.nbytes
             tensors_out.append((name, packed, GGMLQuantizationType.BF16X))

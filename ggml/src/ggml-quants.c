@@ -2136,16 +2136,6 @@ void quantize_row_bf16x_ref(const float * GGML_RESTRICT x, block_bf16x * GGML_RE
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        // shared exponent = max bf16 exponent field in the block
-        uint8_t emax = 0;
-        for (int j = 0; j < qk; j++) {
-            const ggml_bf16_t b = GGML_FP32_TO_BF16(x[i*qk + j]);
-            const uint8_t e = (b.bits >> 7) & 0xFF;
-            if (e > emax) {
-                emax = e;
-            }
-        }
-        y[i].emax = emax;
         memset(y[i].sgn,   0, sizeof(y[i].sgn));
         memset(y[i].mant,  0, sizeof(y[i].mant));
         memset(y[i].delta, 0, sizeof(y[i].delta));
@@ -2154,8 +2144,10 @@ void quantize_row_bf16x_ref(const float * GGML_RESTRICT x, block_bf16x * GGML_RE
             const uint8_t s = b.bits >> 15;
             const uint8_t e = (b.bits >> 7) & 0xFF;
             const uint8_t m = b.bits & 0x7F;
-            const uint8_t d = emax - e;         // e <= emax by construction
-            const uint8_t d3 = d > 7 ? 7 : d;   // 7 = saturation sentinel
+            const int h = j >> 4;               // 16-element half of the block
+            if (j % 16 == 0 || e > y[i].emax[h]) {
+                y[i].emax[h] = e;               // half-block max exponent
+            }
             if (s) {
                 y[i].sgn[j >> 3] |= 1u << (j & 7);
             }
@@ -2164,6 +2156,13 @@ void quantize_row_bf16x_ref(const float * GGML_RESTRICT x, block_bf16x * GGML_RE
             if ((mb & 7) + 7 > 8) {
                 y[i].mant[(mb >> 3) + 1] |= m >> (8 - (mb & 7));
             }
+        }
+        for (int j = 0; j < qk; j++) {
+            const ggml_bf16_t b = GGML_FP32_TO_BF16(x[i*qk + j]);
+            const uint8_t e = (b.bits >> 7) & 0xFF;
+            const int h = j >> 4;
+            const uint8_t d = y[i].emax[h] - e; // e <= emax by construction
+            const uint8_t d3 = d > 7 ? 7 : d;   // 7 = saturation sentinel
             const int db = j*3;                 // 3-bit delta stream
             y[i].delta[db >> 3] |= (d3 << (db & 7)) & 0xFF;
             if ((db & 7) + 3 > 8) {
@@ -2181,8 +2180,9 @@ void dequantize_row_bf16x(const block_bf16x * GGML_RESTRICT x, float * GGML_REST
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        const uint8_t emax = x[i].emax;
         for (int j = 0; j < qk; j++) {
+            const int h = j >> 4;
+            const uint8_t emax = x[i].emax[h];
             const uint8_t s = (x[i].sgn[j >> 3] >> (j & 7)) & 1;
             const int mb = j*7;
             uint8_t m = (x[i].mant[mb >> 3] >> (mb & 7)) & 0x7F;

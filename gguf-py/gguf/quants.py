@@ -220,22 +220,23 @@ class BF16(__Quant, qtype=GGMLQuantizationType.BF16):
 
 class BF16X(__Quant, qtype=GGMLQuantizationType.BF16X):
     # Near-lossless bfloat16 recompression (github.com/dfytensor/bfloat16x):
-    # 16 weights share the block-max exponent (8 bit), per-weight exponent
-    # deltas use 3 bit (7 = saturate at emax - 7; only ~2% of weights sit that
-    # far below the block max), sign + full 7-bit mantissa are exact.
-    # 23 bytes per 16 weights = 11.5 bpw (1.39x vs BF16).
+    # 32 weights per block share two half-block max exponents (one byte per
+    # 16 weights), per-weight exponent deltas use 3 bit (7 = saturate at
+    # emax - 7; only ~2% of weights sit that far below the half-block max),
+    # sign + full 7-bit mantissa are exact.
+    # 46 bytes per 32 weights = 11.5 bpw (1.39x vs BF16).
 
     @classmethod
     def _pack_bits(cls, vals: np.ndarray, nbits: int) -> np.ndarray:
-        # (nb, 16) small unsigned -> LSB-first packed bytes (nb, 16*nbits/8)
-        bits = ((vals.reshape(-1, 16, 1) >> np.arange(nbits, dtype=vals.dtype)) & 1).reshape(-1, 16 * nbits)
+        # (nb, 32) small unsigned -> LSB-first packed bytes (nb, 32*nbits/8)
+        bits = ((vals.reshape(-1, 32, 1) >> np.arange(nbits, dtype=vals.dtype)) & 1).reshape(-1, 32 * nbits)
         return np.packbits(bits, axis=1, bitorder='little')
 
     @classmethod
     def _unpack_bits(cls, data: np.ndarray, nbits: int) -> np.ndarray:
         nb = data.shape[0]
-        bits = np.unpackbits(data, axis=1, bitorder='little')[:, :16 * nbits]
-        bits = bits.reshape(nb, 16, nbits).astype(np.uint16)
+        bits = np.unpackbits(data, axis=1, bitorder='little')[:, :32 * nbits]
+        bits = bits.reshape(nb, 32, nbits).astype(np.uint16)
         return (bits << np.arange(nbits, dtype=np.uint16)).sum(axis=-1)
 
     @classmethod
@@ -249,24 +250,26 @@ class BF16X(__Quant, qtype=GGMLQuantizationType.BF16X):
         sign = ((n >> 15) & 1).astype(np.uint8)
         expo = ((n >> 7) & 0xFF).astype(np.uint8)
         mant = (n & 0x7F).astype(np.uint8)
-        emax = expo.max(axis=-1, keepdims=True)
-        delta = np.minimum(emax - expo, 7)  # emax >= expo element-wise
+        half = expo.reshape(nb, 2, 16)
+        emax = half.max(axis=-1)  # (nb, 2) half-block max exponents
+        delta = np.minimum(emax.repeat(16, axis=1) - expo, 7)
         out = np.concatenate([
-            emax.astype(np.uint8),
+            emax.reshape(nb, 2),
             cls._pack_bits(sign, 1),
             cls._pack_bits(mant, 7),
             cls._pack_bits(delta, 3),
         ], axis=-1)
-        assert out.shape[-1] == 23
+        assert out.shape[-1] == 46
         return out
 
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
         nb = blocks.shape[0]
-        emax = blocks[:, 0].astype(np.uint16).reshape(nb, 1)
-        sign = cls._unpack_bits(blocks[:, 1:3], 1)
-        mant = cls._unpack_bits(blocks[:, 3:17], 7)
-        delta = cls._unpack_bits(blocks[:, 17:23], 3)
+        emax = blocks[:, 0:2].astype(np.uint16)
+        emax = emax.repeat(16, axis=1)  # (nb, 32) per-element half max
+        sign = cls._unpack_bits(blocks[:, 2:6], 1)
+        mant = cls._unpack_bits(blocks[:, 6:34], 7)
+        delta = cls._unpack_bits(blocks[:, 34:46], 3)
         expo = np.maximum(emax - delta, 0)
         bits = (sign.astype(np.uint16) << 15) | (expo << 7) | mant
         return (bits.astype(np.uint32) << 16).view(np.float32)
