@@ -10,6 +10,7 @@
 #include "llama-memory-hybrid.h"
 #include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
+#include "llama-kv-stream-positions.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -2088,19 +2089,17 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     if (cparams.kv_streaming()) {
         auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
-        if (!stream || !stream->complete() || batch_inp.n_tokens < 0 || batch_inp.embd) {
-            LLAMA_LOG_ERROR("%s: KV streaming requires an idle text-token append\n",__func__); return -1;
+        if (!stream || !stream->complete() || batch_inp.n_tokens < 0) {
+            LLAMA_LOG_ERROR("%s: KV streaming requires an idle target append\n",__func__); return -1;
         }
         const size_t first = stream->tokens();
         if (first > cparams.n_ctx_seq || size_t(batch_inp.n_tokens) > cparams.n_ctx_seq-first) {
             LLAMA_LOG_ERROR("%s: KV streaming context capacity exceeded\n",__func__); return 1;
         }
-        for (int32_t i = 0; i < batch_inp.n_tokens; ++i) {
-            if ((batch_inp.pos && batch_inp.pos[i] != int64_t(first+size_t(i))) ||
-                    (batch_inp.n_seq_id && batch_inp.n_seq_id[i] != 1) ||
-                    (batch_inp.seq_id && (!batch_inp.seq_id[i] || batch_inp.seq_id[i][0] != 0))) {
-                LLAMA_LOG_ERROR("%s: KV streaming requires contiguous positions in sequence zero\n",__func__); return -1;
-            }
+        const auto previous_position = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_max(0);
+        if (!llama_kv_stream_validate_append(batch_inp, {first, cparams.n_ctx_seq, previous_position,
+                model.hparams.n_pos_per_embd(), cparams.kv_stream_decode, cparams.kv_stream_auxiliary_layers != 0})) {
+            LLAMA_LOG_ERROR("%s: KV streaming rejected target payload, positions or sequence\n",__func__); return -1;
         }
     }
 
@@ -2243,7 +2242,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             text_phase,
             n_tokens_all,
             cparams.n_seq_max == 1,
-            cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !batch_inp.embd,
+            cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT,
             cparams.ctx_other != nullptr || (cparams.n_rs_seq != 0 && cparams.kv_stream_auxiliary_layers != 1) ||
                 (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1 && !supported_verify),
         });

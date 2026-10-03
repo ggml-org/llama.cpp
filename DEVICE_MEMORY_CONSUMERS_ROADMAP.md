@@ -435,8 +435,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.1a | Committed | dfed912b5 | Actual-batch mtmd workspace measurement, bounded borrowed execution, native-capture retirement and lease release. Its numerical fixture is corrected and requalified in 7.1b. |
 | 7.1b | Committed | 09f566915 | Retained host embedding views, checked token slices, atomic result publication, cancellation cleanup and compatible/incompatible batch controls. CPU ownership and real CUDA lifetime/equivalence tests pass. |
 | 7.2a | Committed | 9295ce06c | Backend-neutral ordered text/image session plan and ordinary mtmd baseline adapter. Initial/follow-up IQ4_XS logits and 16 continuation tokens match the legacy helper; failed images stop later prefill. |
-| 7.2b prerequisite | Ready for review | - | Pre-existing short-prefill dispatch bug isolated and fixed at the 7.2a checkpoint before restoring the ongoing embedding/position work. |
-| 7.2b-7.5c | Planned | - | Adaptive embedding/position admission, live three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
+| 7.2b prerequisite | Committed | a9c1f74cb | Pre-existing short-prefill dispatch bug isolated and fixed at the 7.2a checkpoint before restoring the ongoing embedding/position work. |
+| 7.2b | Ready for review | - | Adaptive embedding admission separates dense physical KV rows from repeated/gapped M-RoPE positions; resident/ring image controls, checkpoint/suffix handling and numerical/memory regressions pass. |
+| 7.2c-7.5c | Planned | - | Live three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3682,7 +3683,7 @@ This checkpoint qualifies the internal session plan and a live ordinary-allocati
 
 The broader text-only regression exposed a bug already present at the committed 7.2a checkpoint: native span selection treated any one-to-four-query operation as decode-capable, ignoring explicit prefill intent. A three-token prefill after generation requested 4,659,328 bytes of span/MMA scratch from a 3,407,872-byte encoded-gather grant. The two-query prefill selector could also avoid the intended strict-gather route when resumed decoding was enabled.
 
-Following the user's prerequisite-fix policy, the uncommitted 7.2b implementation is parked in the task-scoped stash named `codex-7.2b-parked-before-prefill-intent-fix`. Unrelated benchmark files remain untouched. The working tree returns to `9295ce06c`, with only this narrow fix, its regression test and this ledger staged. After the user commits the fix, reapply that stash onto the new checkpoint and finish 7.2b qualification. Stage 7.2b is not marked complete.
+Following the user's prerequisite-fix policy, the uncommitted 7.2b implementation was parked in the task-scoped stash named `codex-7.2b-parked-before-prefill-intent-fix`. The user committed the narrow fix, its regression test and this ledger as `a9c1f74cb`. The 7.2b work is now reapplied onto that checkpoint for combined qualification. The stash is retained as a recovery copy; unrelated benchmark files remain untouched.
 
 The common resident-attention dispatcher now requires decode intent for the segmented span path. All short prefills use encoded gathering plus ordinary native attention, just like longer prefills. TG2 prefill is explicitly admitted to that same native path rather than the older split/fold route. Actual TG1-TG4 decode retains the existing resumable/vector/MMA decisions. No backend API, CUDA kernel, quantization arithmetic or arena budget is changed. Native attention's output-side scratch was already accounted for by the graph allocator; the new synthetic fixture reserves an actual attention output tensor so this requirement is exercised correctly.
 
@@ -3695,3 +3696,48 @@ TDD and qualification:
 - The focused CUDA memcheck reports **zero memory-access errors**, with API-error reporting disabled as in the existing graph-update qualification. The CPU/common session control passes ASan with leak checking and UBSan. Production is restored with its original image/configuration and health checked after testing.
 
 Logs: `/tmp/kv-short-prefill-red.log`, `/tmp/kv-short-prefill-final.log`, `/tmp/kv-short-prefill-full-session.log`, `/tmp/kv-short-prefill-full-model.log`, and `/tmp/kv-short-prefill-memcheck.log`. No assistant commit or push was made.
+
+### Stage 7.2b: adaptive image-embedding prefill and position identity
+
+An image can contribute hundreds of KV rows while advancing its scalar M-RoPE position by a much smaller amount. Several image rows share a scalar position and use different spatial coordinates. The old text-only admission rule equated each position with its physical KV row. This stage removes that assumption without changing the model's RoPE, attention masks, recurrent computation or native attention kernels.
+
+#### Implementation boundary
+
+- `llama-kv-stream-positions.*` checks target appends before execution. Capacity is measured in physical rows. Model positions must be nonnegative and monotone; image prefill can repeat scalar positions, while later text advances past the previous attention position. Spatial coordinates are preserved rather than rewritten to physical row indices. Implicit text positions retain the existing batch allocator's signed-position overflow bound.
+- Raw context admission and per-ubatch admission use the same checks. SET_ROWS and the streaming host cache still address a dense physical prefix. The existing cache-cell metadata supplies scalar/spatial positions to RoPE, masks and checkpoint serialization.
+- The mtmd session adapter explicitly identifies both text and embedding work as prefill. A short embedding batch must not select a decode-only kernel merely because it has one to four rows. The prerequisite fix retains strict gathered/native prefill arithmetic.
+- Checkpoint restoration validates a dense, single-sequence physical prefix with nondecreasing model positions, including duplicate image positions and spatial metadata. Its append head resumes at the physical row count. Oversized metadata and negative positions are rejected. The existing checkpoint format is unchanged.
+- Suffix removal translates a model-position interval into physical row indices using binary search. Removing a shared image position removes all rows at that position. Interior deletion remains unsupported. This lookup is O(log n); the complete O(n) prefix validation runs during checkpoint loading, not on every decode or rejection replay.
+- The phase signal now identifies an ordinary target operation rather than a text-token-only operation. No new allocator, backend execution hook, kernel, public option or production routing is introduced.
+
+The current auxiliary/MTP path still requires linear model positions. Image embeddings are rejected when auxiliary streaming layers are configured, and are rejected under explicit decode intent. Those restrictions are intentional until 7.5c qualifies image-aware draft catch-up and the three-consumer lifecycle. Embedding-output contexts, sequence copies, shifts, position rescaling and interior deletion are not newly supported.
+
+#### TDD and qualification
+
+The coordinate tests were first red against nonfunctional validation stubs. A later boundary test caught the batch allocator's extra implicit-position increment, and the broad model regression exposed the separately committed short-prefill defect. Tests and tolerances were not weakened to accept incorrect numerical output.
+
+- Coordinate and suffix tests pass **7 cases / 8,252 assertions**, including an exhaustive comparison of binary suffix lookup with interval deletion over duplicate/gapped position sequences. They pass in the release, ASan/leak-checking and UBSan builds.
+- Common mtmd session tests pass **12 cases / 146 assertions** under ASan and UBSan. Phase tracking, serial ownership and workspace tests pass **7/115**, **5/88** and **21/454** respectively.
+- The combined CUDA session suite passes **17 cases / 778 assertions**. The combined IQ4_XS text suite passes **5 cases / 561 assertions**: the short-prefill scenario has 14/14 matching boundaries, and ubatch 256/512 retain zero logit error, zero recurrent-state relative L2 error and 32/32 continuation-token matches.
+
+The real-image fixture compares ordinary mtmd with the session adapter using the downloaded matching F16 projector, IQ4_XS target, Q8_0 keys/Q4_0 values, MTP disabled and UVM disabled. It prefills approximately 6K text tokens, two 512x512 images, a later image-bearing follow-up and 16 greedy continuation tokens. It checks initial/follow-up logits, recurrent state, whole-context and sequence checkpoint restoration, malformed input without target mutation, physical row counts distinct from model positions, and failure before unsafe later text. A targeted attention-cache suffix test restores the complete target checkpoint before resuming model work; it does not claim arbitrary recurrent-state rewind is supported.
+
+The small fixed-pool controls do not mean that the final decode pool stays at their configured minimum: the existing phase owner reclaims prefill workspace for decode. Vision weights and vision compute remain separate allocations outside the text parent in this stage. Sharing or suspending those allocations is still future work.
+
+The expanded real-image controls each pass **13 cases / 194 assertions**, including image-position suffix removal and full checkpoint restoration before further target work. All three have zero initial/follow-up logit error, identical recurrent-state bytes and **16/16 matching continuation tokens**:
+
+| Text memory configuration | Decode KV pool | Active pages | Resident pages/layer | Ring slots | Streaming |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Private minimum 16 MiB | 80.6807 MiB | 27 | 11 | 22 | Yes |
+| Private minimum 128 MiB | 192.681 MiB | 0 | 29 | 10 | No |
+| Exact shared parent 96 MiB | 84.5244 MiB | 27 | 11 | 32 | Yes |
+
+The text-only embedded-MTP context regression passes **2 cases / 246 assertions**, retaining zero MTP logit error for TG1-TG4 catch-up and two sequential predictions. This does not qualify MTP with image inputs; the new admission checks still reject that unimplemented combination.
+
+GPU memory checking is split into two focused paths: the exact gather-grant streamed TG1-TG4 prefill regression, and the real-image/checkpoint fixture with a short text prefix and resident KV. The former passes **1 case / 52 assertions** with zero memory-access errors. The initial instrumented 6K-prefix full-model run was deliberately terminated because instrumenting its unchanged text prefill was too costly; its partial zero-error output is not counted as a passed test. Long-prefix resident/ring numerical and suffix controls remain unchanged and pass without instrumentation. The test-only `--prefix-repetitions` option bounds shortened fixtures to the same maximum 6,000 repeated words used by the default run.
+
+The shortened real-image memcheck also passes **13 cases / 194 assertions** with **zero memory-access errors**, zero initial/follow-up logit error, identical recurrent state and 16/16 continuation tokens. Both completed memcheck runs disable API-error reporting for the stock backend's handled CUDA graph-update fallback; actual memory-access checking remains enabled. These are separate completed qualifications, not the interrupted long-prefix run.
+
+Artifacts: `/tmp/vision-7.2b-final-session.log`, `/tmp/vision-7.2b-final-text.log`, `/tmp/vision-7.2b-suffix-stream.log`, `/tmp/vision-7.2b-suffix-resident.log`, `/tmp/vision-7.2b-suffix-arena.log`, `/tmp/vision-7.2b-mtp-regression.log`, `/tmp/vision-7.2b-prefill-memcheck.log`, and `/tmp/vision-7.2b-image-memcheck.log`.
+
+Stage 7.2b is ready for review. Production is restored with its existing image/configuration after qualification. The streaming/mmproj server guard remains in place, and shared vision ownership, suspension, projector reload and server admission remain in later stages. Implementation, tests and this roadmap are staged without unrelated benchmark files. No assistant commit or push is made.

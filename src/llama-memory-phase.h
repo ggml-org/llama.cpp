@@ -12,7 +12,7 @@ struct llama_memory_text_phase_signal {
     llama_memory_text_phase phase         = llama_memory_text_phase::unspecified;
     uint32_t                tokens        = 0;
     bool                    serial        = false;
-    bool                    ordinary_text = false;
+    bool                    ordinary_target = false; // Primary target: text or admitted prefill embeddings.
     bool                    speculative   = false;
 };
 

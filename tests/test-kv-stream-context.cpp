@@ -129,7 +129,7 @@ static run_result evaluate(testing & t,llama_model * model,const std::vector<lla
         t.assert_equal(size_t(0),llama_state_seq_set_data(context.get(),saved.data(),saved.size()-1,0));
         t.assert_equal(state_size,llama_state_seq_set_data(context.get(),saved.data(),saved.size(),0));
         auto sparse=saved;
-        llama_pos wrong_first=1;
+        llama_pos wrong_first=-2;
         const size_t first_position=sizeof(uint32_t)+sizeof(llama_seq_id)+2*sizeof(uint32_t);
         std::memcpy(sparse.data()+first_position,&wrong_first,sizeof(wrong_first));
         t.assert_equal(size_t(0),llama_state_seq_set_data(context.get(),sparse.data(),sparse.size(),0));

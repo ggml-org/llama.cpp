@@ -132,7 +132,7 @@ public:
     std::shared_ptr<llama_kv_stream_logical_cache> mtp_auxiliary_cache() const noexcept {
         return attached_mtp_cache;
     }
-    bool kv_stream_can_remove(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const;
+    bool kv_stream_can_remove(llama_seq_id seq_id, llama_pos p0, llama_pos p1, size_t * retained = nullptr) const;
 
     //
     // llama_memory_i

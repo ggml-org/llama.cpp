@@ -179,6 +179,7 @@ struct session_adapter : mtmd_session_backend {
         const auto positions = mtmd_input_chunk_get_n_pos(chunk);
         if (positions < 0 || positions > std::numeric_limits<llama_pos>::max() - position) return -1;
         llama_pos next = position;
+        llama_set_kv_stream_decode(lctx, false);
         const auto result = view ? mtmd_helper_decode_image_chunk(ctx, lctx, chunk,
             const_cast<float *>(view->data()), position, sequence, batch_size, &next, nullptr, nullptr) :
             mtmd_helper_eval_chunk_single(ctx, lctx, chunk, position, sequence, batch_size,

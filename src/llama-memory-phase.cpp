@@ -9,7 +9,7 @@ llama_memory_text_phase_result llama_memory_text_phase_tracker::notify(
     if (signal.phase == llama_memory_text_phase::unspecified || signal.tokens == 0) {
         return { status::invalid_signal, before, before, generation };
     }
-    if (!signal.serial || !signal.ordinary_text || signal.speculative) {
+    if (!signal.serial || !signal.ordinary_target || signal.speculative) {
         return { status::unsupported_execution, before, before, generation };
     }
     if (count == std::numeric_limits<uint64_t>::max() ||

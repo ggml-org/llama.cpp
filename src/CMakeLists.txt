@@ -77,6 +77,8 @@ add_library(llama
             llama-kv-stream-session.h
             llama-kv-stream-model.cpp
             llama-kv-stream-model.h
+            llama-kv-stream-positions.cpp
+            llama-kv-stream-positions.h
             llama-kv-stream-prefetch.h
             llama-memory-completion.cpp
             llama-memory-completion.h
