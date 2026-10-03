@@ -980,8 +980,6 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         } else if (tensor->op == GGML_OP_SCALE) {
             const float * params = (const float *)tensor->op_params;
             tensor_clone = ggml_scale_bias(ggml_ctx, src_clone[0], params[0], params[1]);
-        } else if (tensor->op == GGML_OP_ADD1) {
-            tensor_clone = ggml_add1(ggml_ctx, src_clone[0], src_clone[1]);
         } else if (tensor->op == GGML_OP_ARANGE) {
             const float start = ggml_get_op_params_f32(tensor, 0);
             const float stop = ggml_get_op_params_f32(tensor, 1);

@@ -914,10 +914,6 @@ struct vk_device_struct {
     // fused UNARY+MUL pipelines: [op][f16][norepeat][op_on_b]
     vk_pipeline pipeline_unary_mul[4][2][2][2];
 
-    vk_pipeline pipeline_add1_f16_f16;
-    vk_pipeline pipeline_add1_f16_f32;
-    vk_pipeline pipeline_add1_f32_f32;
-
     vk_pipeline pipeline_arange_f32;
 
     vk_pipeline pipeline_fill_f32;
