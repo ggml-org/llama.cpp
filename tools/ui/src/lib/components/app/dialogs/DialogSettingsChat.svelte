@@ -2,6 +2,7 @@
 	import { Settings, X } from '@lucide/svelte';
 	import { SettingsChat } from '$lib/components/app/settings';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
 
 	interface Props {
 		open?: boolean;
@@ -30,7 +31,7 @@
 
 			<!-- the body is flush with the dialog, so the corner close needs its own inset -->
 			<Dialog.Close
-				class="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden md:top-0 md:right-0"
+				class="absolute top-0 right-0 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden max-md:top-1 max-md:right-1 {PANEL_CLOSE_MOBILE_CLASS}"
 			>
 				<X class="size-4" />
 
