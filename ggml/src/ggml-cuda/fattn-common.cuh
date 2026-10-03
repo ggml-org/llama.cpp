@@ -362,7 +362,17 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
         }
     }
 
-    yq32[threadIdx.x] = q32;
+    // Only the first ni lanes own a slot in yq32. For ni < WARP_SIZE (reached for head size 64,
+    // where ni == 16) the surplus lanes would otherwise write their zero padding one element past
+    // the ni-int yq32 region -- which is exactly where the caller places yds (yds = yq32 + ni).
+    // That store races the yds store below (a write/write hazard on the packed d/sum words,
+    // reported by compute-sanitizer racecheck) and violates the __restrict__ contract between
+    // yq32 and yds, so the compiler may order the padding store last, leaving Q_ds read back as 0
+    // and the whole Q block silently dropped from the attention sum. ni is a template parameter,
+    // so the ni == WARP_SIZE instantiations fold this guard away with no codegen change.
+    if (ni == WARP_SIZE || threadIdx.x < ni) {
+        yq32[threadIdx.x] = q32;
+    }
     if (threadIdx.x % QI8_1 == 0 && (ni == WARP_SIZE || threadIdx.x < ni)) {
         if (std::is_same<Tds, half2>::value) {
             ((half2  *) yds)[threadIdx.x/QI8_1] =  make_half2(d, sum);
