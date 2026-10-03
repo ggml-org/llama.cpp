@@ -99,7 +99,7 @@ jobs:
         run: |
           cmake -B build \
             -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config Release -j $(nproc) --target llama-server
+          cmake --build build --config Release -j $(nproc) --target llama-server llama-cli
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -124,7 +124,7 @@ jobs:
         id: server_integration_tests
         run: |
           cd tools/server/tests
-          ./tests.sh
+          LLAMA_CLI_BIN_PATH=../../../build/bin/llama-cli ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
