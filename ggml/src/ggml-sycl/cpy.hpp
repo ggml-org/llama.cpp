@@ -4,7 +4,6 @@
 #include "common.hpp"
 #include <float.h>
 
-typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
 __dpct_inline__ int best_index_int8(int n, const int8_t * val, float x) {
     if (x <= val[0]) {

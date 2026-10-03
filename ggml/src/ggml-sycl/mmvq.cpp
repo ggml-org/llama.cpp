@@ -223,7 +223,71 @@ static void mul_mat_vec_q_reorder_ncols(const void * __restrict__ vx, const void
     }
 }
 
-template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
+// dispatch by int tag: a function pointer NTTP embeds the helper mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum vec_dot_tag {
+    VEC_DOT_Q1_0,
+    VEC_DOT_Q2_0,
+    VEC_DOT_Q4_0,
+    VEC_DOT_Q4_1,
+    VEC_DOT_Q5_0,
+    VEC_DOT_Q5_1,
+    VEC_DOT_Q8_0,
+    VEC_DOT_Q2_K,
+    VEC_DOT_Q3_K,
+    VEC_DOT_Q4_K,
+    VEC_DOT_Q5_K,
+    VEC_DOT_Q6_K,
+    VEC_DOT_MXFP4,
+    VEC_DOT_NVFP4,
+    VEC_DOT_IQ2_XXS,
+    VEC_DOT_IQ2_XS,
+    VEC_DOT_IQ2_S,
+    VEC_DOT_IQ3_XXS,
+    VEC_DOT_IQ3_S,
+    VEC_DOT_IQ1_S,
+    VEC_DOT_IQ1_M,
+    VEC_DOT_IQ4_NL,
+    VEC_DOT_IQ4_XS,
+};
+
+// defined below, after the codebook tables they bind
+static float vec_dot_iq2_xxs_q8_1_moe(const void * __restrict__, const block_q8_1 * __restrict__, const int &);
+static float vec_dot_iq2_xs_q8_1_moe(const void * __restrict__, const block_q8_1 * __restrict__, const int &);
+static float vec_dot_iq3_xxs_q8_1_moe(const void * __restrict__, const block_q8_1 * __restrict__, const int &);
+static float vec_dot_iq3_s_q8_1_moe(const void * __restrict__, const block_q8_1 * __restrict__, const int &);
+static float vec_dot_iq1_s_q8_1_moe(const void * __restrict__, const block_q8_1 * __restrict__, const int &);
+
+template <vec_dot_tag tag>
+static float dispatch_vec_dot(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & iqs) {
+    switch (tag) {
+        case VEC_DOT_Q1_0:    return vec_dot_q1_0_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q2_0:    return vec_dot_q2_0_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q4_0:    return vec_dot_q4_0_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q4_1:    return vec_dot_q4_1_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q5_0:    return vec_dot_q5_0_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q5_1:    return vec_dot_q5_1_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q8_0:    return vec_dot_q8_0_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q2_K:    return vec_dot_q2_K_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q3_K:    return vec_dot_q3_K_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q4_K:    return vec_dot_q4_K_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q5_K:    return vec_dot_q5_K_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_Q6_K:    return vec_dot_q6_K_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_MXFP4:   return vec_dot_mxfp4_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_NVFP4:   return vec_dot_nvfp4_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ2_XXS: return vec_dot_iq2_xxs_q8_1_moe(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ2_XS:  return vec_dot_iq2_xs_q8_1_moe(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ2_S:   return vec_dot_iq2_s_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ3_XXS: return vec_dot_iq3_xxs_q8_1_moe(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ3_S:   return vec_dot_iq3_s_q8_1_moe(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ1_S:   return vec_dot_iq1_s_q8_1_moe(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ1_M:   return vec_dot_iq1_m_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ4_NL:  return vec_dot_iq4_nl_q8_1(vbq, bq8_1, iqs);
+        case VEC_DOT_IQ4_XS:  return vec_dot_iq4_xs_q8_1(vbq, bq8_1, iqs);
+    }
+}
+
+template <int qk, int qi, typename block_q_t, int vdr, vec_dot_tag vec_dot_q_sycl>
 static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                           const int ncols, const int nrows, const sycl::nd_item<3> & item_ct1) {
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
@@ -252,7 +316,7 @@ static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict_
             const int iqs = elem + vdr * (item_ct1.get_local_id(2) %
                                           (qi / vdr));  // x block quant index when casting the quants to int
 
-            tmp += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+            tmp += dispatch_vec_dot<vec_dot_q_sycl>(&x[ibx], &y[iby], iqs);
         }
     }
 
@@ -268,7 +332,7 @@ static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict_
 }
 
 template <int qk, int qi, typename block_q_t, int vdr,
-          vec_dot_q_sycl_t vec_dot_q_sycl, int ncols_dst>
+          vec_dot_tag vec_dot_q_sycl, int ncols_dst>
 static void mul_mat_vec_q_ncols(
         const void * __restrict__ vx,
         const void * __restrict__ vy,
@@ -308,7 +372,7 @@ static void mul_mat_vec_q_ncols(
 
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                tmp[j] += vec_dot_q_sycl(&x[ibx], &y[j * stride_col_y + iby], iqs);
+                tmp[j] += dispatch_vec_dot<vec_dot_q_sycl>(&x[ibx], &y[j * stride_col_y + iby], iqs);
             }
         }
     }
@@ -834,7 +898,7 @@ static void mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float *
         stream->submit([&](sycl::handler & cgh) {
             cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                              [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                 mul_mat_vec_q<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
+                                 mul_mat_vec_q<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, VEC_DOT_Q4_0>(
                                      vx, vy, dst, ncols, nrows, item_ct1);
                              });
         });
@@ -856,7 +920,7 @@ static void mul_mat_vec_q4_0_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK4_0, QI4_0, block_q4_0,
-                                    VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1, ncols_dst>(
+                                    VDR_Q4_0_Q8_1_MMVQ, VEC_DOT_Q4_0, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -897,7 +961,7 @@ static void mul_mat_vec_q4_1_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK4_0, QI4_1, block_q4_1,
-                                      VDR_Q4_1_Q8_1_MMVQ, vec_dot_q4_1_q8_1>(
+                                      VDR_Q4_1_Q8_1_MMVQ, VEC_DOT_Q4_1>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -919,7 +983,7 @@ static void mul_mat_vec_q4_1_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK4_0, QI4_1, block_q4_1,
-                                    VDR_Q4_1_Q8_1_MMVQ, vec_dot_q4_1_q8_1, ncols_dst>(
+                                    VDR_Q4_1_Q8_1_MMVQ, VEC_DOT_Q4_1, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -954,7 +1018,7 @@ static void mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy, float 
         stream->submit([&](sycl::handler & cgh) {
             cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                              [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                 mul_mat_vec_q<QK_MXFP4, QI_MXFP4, block_mxfp4, VDR_MXFP4_Q8_1_MMVQ, vec_dot_mxfp4_q8_1>(
+                                 mul_mat_vec_q<QK_MXFP4, QI_MXFP4, block_mxfp4, VDR_MXFP4_Q8_1_MMVQ, VEC_DOT_MXFP4>(
                                      vx, vy, dst, ncols, nrows, item_ct1);
                              });
         });
@@ -976,7 +1040,7 @@ static void mul_mat_vec_mxfp4_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK_MXFP4, QI_MXFP4, block_mxfp4,
-                                    VDR_MXFP4_Q8_1_MMVQ, vec_dot_mxfp4_q8_1, ncols_dst>(
+                                    VDR_MXFP4_Q8_1_MMVQ, VEC_DOT_MXFP4, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1011,7 +1075,7 @@ static void mul_mat_vec_nvfp4_q8_1_sycl(const void * vx, const void * vy, float 
         stream->submit([&](sycl::handler & cgh) {
             cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                              [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                 mul_mat_vec_q<QK_NVFP4, QI_NVFP4, block_nvfp4, VDR_NVFP4_Q8_1_MMVQ, vec_dot_nvfp4_q8_1>(
+                                 mul_mat_vec_q<QK_NVFP4, QI_NVFP4, block_nvfp4, VDR_NVFP4_Q8_1_MMVQ, VEC_DOT_NVFP4>(
                                      vx, vy, dst, ncols, nrows, item_ct1);
                              });
         });
@@ -1033,7 +1097,7 @@ static void mul_mat_vec_nvfp4_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK_NVFP4, QI_NVFP4, block_nvfp4,
-                                    VDR_NVFP4_Q8_1_MMVQ, vec_dot_nvfp4_q8_1, ncols_dst>(
+                                    VDR_NVFP4_Q8_1_MMVQ, VEC_DOT_NVFP4, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1074,7 +1138,7 @@ static void mul_mat_vec_q5_0_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK5_0, QI5_0, block_q5_0,
-                                      VDR_Q5_0_Q8_1_MMVQ, vec_dot_q5_0_q8_1>(
+                                      VDR_Q5_0_Q8_1_MMVQ, VEC_DOT_Q5_0>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1096,7 +1160,7 @@ static void mul_mat_vec_q5_0_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK5_0, QI5_0, block_q5_0,
-                                    VDR_Q5_0_Q8_1_MMVQ, vec_dot_q5_0_q8_1, ncols_dst>(
+                                    VDR_Q5_0_Q8_1_MMVQ, VEC_DOT_Q5_0, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1137,7 +1201,7 @@ static void mul_mat_vec_q5_1_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK5_1, QI5_1, block_q5_1,
-                                      VDR_Q5_1_Q8_1_MMVQ, vec_dot_q5_1_q8_1>(
+                                      VDR_Q5_1_Q8_1_MMVQ, VEC_DOT_Q5_1>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1159,7 +1223,7 @@ static void mul_mat_vec_q5_1_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK5_1, QI5_1, block_q5_1,
-                                    VDR_Q5_1_Q8_1_MMVQ, vec_dot_q5_1_q8_1, ncols_dst>(
+                                    VDR_Q5_1_Q8_1_MMVQ, VEC_DOT_Q5_1, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1268,7 +1332,7 @@ static void mul_mat_vec_q8_0_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK8_0, QI8_0, block_q8_0,
-                                      VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1>(
+                                      VDR_Q8_0_Q8_1_MMVQ, VEC_DOT_Q8_0>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1290,7 +1354,7 @@ static void mul_mat_vec_q8_0_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK8_0, QI8_0, block_q8_0,
-                                    VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, ncols_dst>(
+                                    VDR_Q8_0_Q8_1_MMVQ, VEC_DOT_Q8_0, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1327,8 +1391,8 @@ static void mul_mat_vec_q1_0_q8_1_sycl(const void * vx, const void * vy,
         cgh.parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                mul_mat_vec_q<QK1_0, QI1_0, block_q1_0,
-                              VDR_Q1_0_Q8_1_MMVQ, vec_dot_q1_0_q8_1>(
+                        mul_mat_vec_q<QK1_0, QI1_0, block_q1_0,
+                              VDR_Q1_0_Q8_1_MMVQ, VEC_DOT_Q1_0>(
                     vx, vy, dst, ncols, nrows, item_ct1);
             });
     });
@@ -1350,7 +1414,7 @@ static void mul_mat_vec_q1_0_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK1_0, QI1_0, block_q1_0,
-                                    VDR_Q1_0_Q8_1_MMVQ, vec_dot_q1_0_q8_1, ncols_dst>(
+                                    VDR_Q1_0_Q8_1_MMVQ, VEC_DOT_Q1_0, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1387,8 +1451,8 @@ static void mul_mat_vec_q2_0_q8_1_sycl(const void * vx, const void * vy,
         cgh.parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                mul_mat_vec_q<QK2_0, QI2_0, block_q2_0,
-                              VDR_Q2_0_Q8_1_MMVQ, vec_dot_q2_0_q8_1>(
+                        mul_mat_vec_q<QK2_0, QI2_0, block_q2_0,
+                              VDR_Q2_0_Q8_1_MMVQ, VEC_DOT_Q2_0>(
                     vx, vy, dst, ncols, nrows, item_ct1);
             });
     });
@@ -1410,7 +1474,7 @@ static void mul_mat_vec_q2_0_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK2_0, QI2_0, block_q2_0,
-                                    VDR_Q2_0_Q8_1_MMVQ, vec_dot_q2_0_q8_1, ncols_dst>(
+                                    VDR_Q2_0_Q8_1_MMVQ, VEC_DOT_Q2_0, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1451,7 +1515,7 @@ static void mul_mat_vec_q2_K_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK_K, QI2_K, block_q2_K,
-                                      VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1>(
+                                      VDR_Q2_K_Q8_1_MMVQ, VEC_DOT_Q2_K>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1473,7 +1537,7 @@ static void mul_mat_vec_q2_K_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK_K, QI2_K, block_q2_K,
-                                    VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1, ncols_dst>(
+                                    VDR_Q2_K_Q8_1_MMVQ, VEC_DOT_Q2_K, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1573,7 +1637,7 @@ static void mul_mat_vec_q3_K_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK_K, QI3_K, block_q3_K,
-                                      VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1>(
+                                      VDR_Q3_K_Q8_1_MMVQ, VEC_DOT_Q3_K>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1654,7 +1718,7 @@ static void mul_mat_vec_q3_K_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_ncols<QK_K, QI3_K, block_q3_K,
-                                    VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1, ncols_dst>(
+                                    VDR_Q3_K_Q8_1_MMVQ, VEC_DOT_Q3_K, ncols_dst>(
                     vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, item_ct1);
             });
     });
@@ -1696,7 +1760,7 @@ static void mul_mat_vec_q4_K_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK_K, QI4_K, block_q4_K,
-                                      VDR_Q4_K_Q8_1_MMVQ, vec_dot_q4_K_q8_1>(
+                                      VDR_Q4_K_Q8_1_MMVQ, VEC_DOT_Q4_K>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1721,7 +1785,7 @@ static void mul_mat_vec_q4_K_q8_1_sycl_ncols(
                 [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     mul_mat_vec_q_ncols<QK_K, QI4_K, block_q4_K,
                                         VDR_Q4_K_Q8_1_MMVQ,
-                                        vec_dot_q4_K_q8_1,
+                                        VEC_DOT_Q4_K,
                                         ncols_dst>(
                         vx, vy, dst, ncols, nrows,
                         stride_col_y, stride_col_dst, item_ct1);
@@ -1842,7 +1906,7 @@ static void mul_mat_vec_q5_K_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK_K, QI5_K, block_q5_K,
-                                      VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>(
+                                      VDR_Q5_K_Q8_1_MMVQ, VEC_DOT_Q5_K>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -1867,7 +1931,7 @@ static void mul_mat_vec_q5_K_q8_1_sycl_ncols(
                 [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     mul_mat_vec_q_ncols<QK_K, QI5_K, block_q5_K,
                                         VDR_Q5_K_Q8_1_MMVQ,
-                                        vec_dot_q5_K_q8_1,
+                                        VEC_DOT_Q5_K,
                                         ncols_dst>(
                         vx, vy, dst, ncols, nrows,
                         stride_col_y, stride_col_dst, item_ct1);
@@ -2029,7 +2093,7 @@ static void mul_mat_vec_q6_K_q8_1_sycl(const void *vx, const void *vy,
                 [=](sycl::nd_item<3> item_ct1)
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         mul_mat_vec_q<QK_K, QI6_K, block_q6_K,
-                                      VDR_Q6_K_Q8_1_MMVQ, vec_dot_q6_K_q8_1>(
+                                      VDR_Q6_K_Q8_1_MMVQ, VEC_DOT_Q6_K>(
                             vx, vy, dst, ncols, nrows, item_ct1);
                     });
         });
@@ -2054,7 +2118,7 @@ static void mul_mat_vec_q6_K_q8_1_sycl_ncols(
                 [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     mul_mat_vec_q_ncols<QK_K, QI6_K, block_q6_K,
                                         VDR_Q6_K_Q8_1_MMVQ,
-                                        vec_dot_q6_K_q8_1,
+                                        VEC_DOT_Q6_K,
                                         ncols_dst>(
                         vx, vy, dst, ncols, nrows,
                         stride_col_y, stride_col_dst, item_ct1);
@@ -2295,7 +2359,7 @@ static void mul_mat_vec_iq4_xs_q8_1_sycl_ncols(
                 [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     mul_mat_vec_q_ncols<QK_K, QI4_XS/4, block_iq4_xs,
                                         1,
-                                        vec_dot_iq4_xs_q8_1,
+                                        VEC_DOT_IQ4_XS,
                                         ncols_dst>(
                         vx, vy, dst, ncols, nrows,
                         stride_col_y, stride_col_dst, item_ct1);
@@ -2681,7 +2745,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     GGML_UNUSED(ctx);
 }
 
-// vec_dot_q_sycl_t adapters for the IQ vec_dots that take their codebook tables as extra
+// vec_dot_iq*_* adapters for the IQ vec_dots that take their codebook tables as extra
 // arguments: bind the constant tables here (as vec_dot_iq2_s_q8_1 / vec_dot_iq1_m_q8_1 already do
 // internally) so they can be used as template arguments of mul_mat_vec_q_moe.
 static __dpct_inline__ float vec_dot_iq2_xxs_q8_1_moe(const void * __restrict__ vbq,
@@ -2710,7 +2774,7 @@ static __dpct_inline__ float vec_dot_iq1_s_q8_1_moe(const void * __restrict__ vb
 }
 
 // src1_row_stride: 0 for shared src1 (gate/up proj), else per-expert stride (down proj).
-template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
+template <int qk, int qi, typename block_q_t, int vdr, vec_dot_tag vec_dot_q_sycl>
 static void mul_mat_vec_q_moe(
     const void * __restrict__ vx_base, const void * __restrict__ vy_base,
     float * __restrict__ dst_base, const int32_t * __restrict__ ids_dev,
@@ -2746,7 +2810,7 @@ static void mul_mat_vec_q_moe(
 
         for (size_t elem = 0; elem < qi / vdr; elem += WARP_SIZE) {
             const int iqs = elem + vdr * (item_ct1.get_local_id(2) % (qi / vdr));
-            tmp += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+            tmp += dispatch_vec_dot<vec_dot_q_sycl>(&x[ibx], &y[iby], iqs);
         }
     }
 
@@ -2760,7 +2824,7 @@ static void mul_mat_vec_q_moe(
     }
 }
 
-template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
+template <int qk, int qi, typename block_q_t, int vdr, vec_dot_tag vec_dot_q_sycl>
 static void launch_mul_mat_vec_q_moe(
     const void * vx_base, const void * vy, const int32_t * ids_dev,
     float * dst_base, const int ncols, const int nrows, const int n_experts_used,
@@ -2796,112 +2860,112 @@ bool ggml_sycl_mul_mat_vec_q_id(
     dpct::queue_ptr    stream) {
     switch (src0_type) {
         case GGML_TYPE_Q4_0:
-            launch_mul_mat_vec_q_moe<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
+            launch_mul_mat_vec_q_moe<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, VEC_DOT_Q4_0>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q4_1:
-            launch_mul_mat_vec_q_moe<QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, vec_dot_q4_1_q8_1>(
+            launch_mul_mat_vec_q_moe<QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, VEC_DOT_Q4_1>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q5_0:
-            launch_mul_mat_vec_q_moe<QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, vec_dot_q5_0_q8_1>(
+            launch_mul_mat_vec_q_moe<QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, VEC_DOT_Q5_0>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q5_1:
-            launch_mul_mat_vec_q_moe<QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, vec_dot_q5_1_q8_1>(
+            launch_mul_mat_vec_q_moe<QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, VEC_DOT_Q5_1>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q8_0:
-            launch_mul_mat_vec_q_moe<QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1>(
+            launch_mul_mat_vec_q_moe<QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ, VEC_DOT_Q8_0>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q2_0:
-            launch_mul_mat_vec_q_moe<QK2_0, QI2_0, block_q2_0, VDR_Q2_0_Q8_1_MMVQ, vec_dot_q2_0_q8_1>(
+            launch_mul_mat_vec_q_moe<QK2_0, QI2_0, block_q2_0, VDR_Q2_0_Q8_1_MMVQ, VEC_DOT_Q2_0>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q2_K:
-            launch_mul_mat_vec_q_moe<QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, VEC_DOT_Q2_K>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q3_K:
-            launch_mul_mat_vec_q_moe<QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, VEC_DOT_Q3_K>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q4_K:
-            launch_mul_mat_vec_q_moe<QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vec_dot_q4_K_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, VEC_DOT_Q4_K>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q5_K:
-            launch_mul_mat_vec_q_moe<QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, VEC_DOT_Q5_K>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_Q6_K:
-            launch_mul_mat_vec_q_moe<QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vec_dot_q6_K_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, VEC_DOT_Q6_K>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_MXFP4:
-            launch_mul_mat_vec_q_moe<QK_MXFP4, QI_MXFP4, block_mxfp4, VDR_MXFP4_Q8_1_MMVQ, vec_dot_mxfp4_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_MXFP4, QI_MXFP4, block_mxfp4, VDR_MXFP4_Q8_1_MMVQ, VEC_DOT_MXFP4>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_NVFP4:
-            launch_mul_mat_vec_q_moe<QK_NVFP4, QI_NVFP4, block_nvfp4, VDR_NVFP4_Q8_1_MMVQ, vec_dot_nvfp4_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_NVFP4, QI_NVFP4, block_nvfp4, VDR_NVFP4_Q8_1_MMVQ, VEC_DOT_NVFP4>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ2_XXS:
-            launch_mul_mat_vec_q_moe<QK_K, QI2_XXS/2, block_iq2_xxs, VDR_IQ2_XXS_Q8_1_MMVQ, vec_dot_iq2_xxs_q8_1_moe>(
+            launch_mul_mat_vec_q_moe<QK_K, QI2_XXS/2, block_iq2_xxs, VDR_IQ2_XXS_Q8_1_MMVQ, VEC_DOT_IQ2_XXS>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ2_XS:
-            launch_mul_mat_vec_q_moe<QK_K, QI2_XS/2, block_iq2_xs, VDR_IQ2_XS_Q8_1_MMVQ, vec_dot_iq2_xs_q8_1_moe>(
+            launch_mul_mat_vec_q_moe<QK_K, QI2_XS/2, block_iq2_xs, VDR_IQ2_XS_Q8_1_MMVQ, VEC_DOT_IQ2_XS>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ2_S:
-            launch_mul_mat_vec_q_moe<QK_K, QI2_S/2, block_iq2_s, VDR_IQ2_S_Q8_1_MMVQ, vec_dot_iq2_s_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI2_S/2, block_iq2_s, VDR_IQ2_S_Q8_1_MMVQ, VEC_DOT_IQ2_S>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ3_XXS:
-            launch_mul_mat_vec_q_moe<QK_K, QI3_XXS/2, block_iq3_xxs, VDR_IQ3_XXS_Q8_1_MMVQ, vec_dot_iq3_xxs_q8_1_moe>(
+            launch_mul_mat_vec_q_moe<QK_K, QI3_XXS/2, block_iq3_xxs, VDR_IQ3_XXS_Q8_1_MMVQ, VEC_DOT_IQ3_XXS>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ3_S:
-            launch_mul_mat_vec_q_moe<QK_K, QI3_S/2, block_iq3_s, VDR_IQ3_S_Q8_1_MMVQ, vec_dot_iq3_s_q8_1_moe>(
+            launch_mul_mat_vec_q_moe<QK_K, QI3_S/2, block_iq3_s, VDR_IQ3_S_Q8_1_MMVQ, VEC_DOT_IQ3_S>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ1_S:
-            launch_mul_mat_vec_q_moe<QK_K, QI1_S, block_iq1_s, VDR_IQ1_S_Q8_1_MMVQ, vec_dot_iq1_s_q8_1_moe>(
+            launch_mul_mat_vec_q_moe<QK_K, QI1_S, block_iq1_s, VDR_IQ1_S_Q8_1_MMVQ, VEC_DOT_IQ1_S>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ1_M:
-            launch_mul_mat_vec_q_moe<QK_K, QI1_S, block_iq1_m, VDR_IQ1_M_Q8_1_MMVQ, vec_dot_iq1_m_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI1_S, block_iq1_m, VDR_IQ1_M_Q8_1_MMVQ, VEC_DOT_IQ1_M>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ4_NL:
-            launch_mul_mat_vec_q_moe<QK4_NL, QI4_NL, block_iq4_nl, VDR_IQ4_NL_Q8_1_MMVQ, vec_dot_iq4_nl_q8_1>(
+            launch_mul_mat_vec_q_moe<QK4_NL, QI4_NL, block_iq4_nl, VDR_IQ4_NL_Q8_1_MMVQ, VEC_DOT_IQ4_NL>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
         case GGML_TYPE_IQ4_XS:
-            launch_mul_mat_vec_q_moe<QK_K, QI4_XS/4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1>(
+            launch_mul_mat_vec_q_moe<QK_K, QI4_XS/4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, VEC_DOT_IQ4_XS>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
@@ -3071,8 +3135,8 @@ static void launch_mul_mat_vec_q_reorder_glu(const void * vx, const void * vgate
 // mul_mat_vec_q exactly, so results are bit-identical to running the three
 // nodes separately.
 // ---------------------------------------------------------------------------
-template <int qi_g, typename block_g_t, int vdr_g, vec_dot_q_sycl_t vec_dot_g,
-          int qi_u, typename block_u_t, int vdr_u, vec_dot_q_sycl_t vec_dot_u, int ncols_dst>
+template <int qi_g, typename block_g_t, int vdr_g, vec_dot_tag vec_dot_g,
+          int qi_u, typename block_u_t, int vdr_u, vec_dot_tag vec_dot_u, int ncols_dst>
 static void mul_mat_vec_q_glu(const void * __restrict__ vxg, const void * __restrict__ vxu,
                               const void * __restrict__ vy, float * __restrict__ dst, const int ncols,
                               const int nrows, const int stride_col_y, const int stride_col_dst,
@@ -3098,7 +3162,7 @@ static void mul_mat_vec_q_glu(const void * __restrict__ vxg, const void * __rest
             const int iqs = elem + vdr_g * (item_ct1.get_local_id(2) % (qi_g / vdr_g));
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                tmpg[j] += vec_dot_g(&xg[ibx], &y[j * stride_col_y + iby], iqs);
+                tmpg[j] += dispatch_vec_dot<vec_dot_g>(&xg[ibx], &y[j * stride_col_y + iby], iqs);
             }
         }
     }
@@ -3109,7 +3173,7 @@ static void mul_mat_vec_q_glu(const void * __restrict__ vxg, const void * __rest
             const int iqs = elem + vdr_u * (item_ct1.get_local_id(2) % (qi_u / vdr_u));
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                tmpu[j] += vec_dot_u(&xu[ibx], &y[j * stride_col_y + iby], iqs);
+                tmpu[j] += dispatch_vec_dot<vec_dot_u>(&xu[ibx], &y[j * stride_col_y + iby], iqs);
             }
         }
     }
@@ -3132,8 +3196,8 @@ static void mul_mat_vec_q_glu(const void * __restrict__ vxg, const void * __rest
     }
 }
 
-template <int qi_g, typename block_g_t, int vdr_g, vec_dot_q_sycl_t vec_dot_g,
-          int qi_u, typename block_u_t, int vdr_u, vec_dot_q_sycl_t vec_dot_u, int ncols_dst>
+template <int qi_g, typename block_g_t, int vdr_g, vec_dot_tag vec_dot_g,
+          int qi_u, typename block_u_t, int vdr_u, vec_dot_tag vec_dot_u, int ncols_dst>
 static void launch_mul_mat_vec_q_glu(const void * vxg, const void * vxu, const void * vy, float * dst,
                                      const int ncols, const int nrows, const int stride_col_y,
                                      const int stride_col_dst, const ggml_glu_op glu_op,
@@ -3156,8 +3220,8 @@ static void launch_mul_mat_vec_q_glu(const void * vxg, const void * vxu, const v
 // Dispatch the plain-layout fused GLU GEMV over the activation batch: ncols_dst
 // selects the kernel's per-column template parameter. Returns false when the
 // batch exceeds the instantiated range; the caller falls back to unfused nodes.
-template <int qi_g, typename block_g_t, int vdr_g, vec_dot_q_sycl_t vec_dot_g,
-          int qi_u, typename block_u_t, int vdr_u, vec_dot_q_sycl_t vec_dot_u>
+template <int qi_g, typename block_g_t, int vdr_g, vec_dot_tag vec_dot_g,
+          int qi_u, typename block_u_t, int vdr_u, vec_dot_tag vec_dot_u>
 static bool dispatch_mul_mat_vec_q_glu_plain(const void * vgate, const void * vup, const void * vy,
                                              float * dst, const int ncols, const int nrows,
                                              const int stride_col_y, const int stride_col_dst,
@@ -3224,23 +3288,23 @@ bool ggml_sycl_mul_mat_vec_q_glu_plain(enum ggml_type gate_type, enum ggml_type 
         return false;
     }
     if (gate_type == GGML_TYPE_Q5_K && up_type == GGML_TYPE_Q5_K) {
-        return dispatch_mul_mat_vec_q_glu_plain<QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1,
-                                                QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>(
+        return dispatch_mul_mat_vec_q_glu_plain<QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, VEC_DOT_Q5_K,
+                                                QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, VEC_DOT_Q5_K>(
             vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     if (gate_type == GGML_TYPE_IQ4_XS && up_type == GGML_TYPE_IQ4_XS) {
-        return dispatch_mul_mat_vec_q_glu_plain<QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1,
-                                                QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1>(
+        return dispatch_mul_mat_vec_q_glu_plain<QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, VEC_DOT_IQ4_XS,
+                                                QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, VEC_DOT_IQ4_XS>(
             vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     if (gate_type == GGML_TYPE_IQ4_XS && up_type == GGML_TYPE_Q5_K) {
-        return dispatch_mul_mat_vec_q_glu_plain<QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1,
-                                                QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>(
+        return dispatch_mul_mat_vec_q_glu_plain<QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, VEC_DOT_IQ4_XS,
+                                                QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, VEC_DOT_Q5_K>(
             vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     if (gate_type == GGML_TYPE_Q5_K && up_type == GGML_TYPE_IQ4_XS) {
-        return dispatch_mul_mat_vec_q_glu_plain<QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1,
-                                                QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1>(
+        return dispatch_mul_mat_vec_q_glu_plain<QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, VEC_DOT_Q5_K,
+                                                QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, VEC_DOT_IQ4_XS>(
             vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     return false;
