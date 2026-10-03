@@ -639,6 +639,16 @@ struct server_pipe {
     }
 };
 
+// a child server writes its state commands to stdout and its logs to stderr
+enum server_subproc_stream {
+    SERVER_SUBPROC_STDOUT,
+    SERVER_SUBPROC_STDERR,
+    SERVER_SUBPROC_STREAMS,
+};
+
+// gives the current stdout to the caller as a stream of its own, and sends everything else written to stdout to stderr
+FILE * server_reserve_stdout();
+
 // wrapper around common_subproc to manage a child server process
 // mainly used by router mode
 struct server_subproc {
@@ -649,12 +659,15 @@ struct server_subproc {
     void terminate() { sproc.terminate(); }
     int  join() { return sproc.join(); }
 
-    // true if the child's combined stdout/stderr pipe is available (call after create())
+    // true if both output pipes of the child are available (call after create())
     bool has_output();
 
-    // non-blocking read
+    // true once both output pipes are closed
+    bool output_closed() const;
+
+    // non-blocking read from one output pipe
     // returns the number of bytes read, 0 when nothing is available, -1 when the pipe is closed or broken
-    int read_output(char * buf, size_t len);
+    int read_output(server_subproc_stream stream, char * buf, size_t len);
 
     // wait until one of a set of children has output, wake() is called, or a timeout passes
     struct waiter {
@@ -664,7 +677,7 @@ struct server_subproc {
         // thread-safe; on Windows this is a no-op, wait() returns within 50 ms anyway
         void wake();
 
-        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data (or a broken pipe)
+        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data on an open pipe (or a broken pipe)
         void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
 
     private:
@@ -674,5 +687,6 @@ struct server_subproc {
     };
 
 private:
-    intptr_t out_handle = -1; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
+    intptr_t out_handles[SERVER_SUBPROC_STREAMS] = { -1, -1 }; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
+    bool     out_closed [SERVER_SUBPROC_STREAMS] = { false, false };
 };

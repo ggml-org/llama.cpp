@@ -90,6 +90,10 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int llama_server(int argc, char ** argv) {
+    if (server_child::is_child()) {
+        server_child::init();
+    }
+
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32

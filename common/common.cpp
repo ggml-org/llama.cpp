@@ -1101,6 +1101,20 @@ bool tty_can_use_colors() {
     return stdout_is_tty || stderr_is_tty;
 }
 
+bool tty_enable_ansi() {
+#if defined(_WIN32)
+    // a Windows console renders ANSI sequences only in virtual terminal mode, pipes and files take them as is
+    for (DWORD id : { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) {
+        HANDLE h    = GetStdHandle(id);
+        DWORD  mode = 0;
+        if (GetConsoleMode(h, &mode) && !SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            return false;
+        }
+    }
+#endif
+    return true;
+}
+
 //
 // Model utils
 //
