@@ -77,7 +77,7 @@
 		option={contextSource}
 	/>
 
-	<span class="justify-self-center">
+	<span class="justify-self-center max-md:hidden">
 		<span
 			class="block h-2.5 w-2.5 rounded-full {anyLoaded
 				? 'bg-emerald-500'
