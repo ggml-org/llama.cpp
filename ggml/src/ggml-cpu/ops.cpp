@@ -9749,7 +9749,7 @@ static void ggml_compute_forward_flash_attn_back_f32(
 
                 // softmax
                 // exclude known -INF S[..] values from max and loop
-                // dont forget to set their SM values to zero
+                // don't forget to set their SM values to zero
                 {
                     float max = -INFINITY;
                     ggml_vec_max_f32(masked_begin, &max, S);
