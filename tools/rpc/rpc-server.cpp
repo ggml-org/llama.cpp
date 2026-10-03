@@ -2,12 +2,10 @@
 #include "ggml-rpc.h"
 #ifdef _WIN32
 #  define NOMINMAX
-#  define DIRECTORY_SEPARATOR '\\'
 #  include <windows.h>
 #  include <fcntl.h>
 #  include <io.h>
 #else
-#  define DIRECTORY_SEPARATOR '/'
 #  include <unistd.h>
 #endif
 #include <algorithm>
@@ -20,64 +18,77 @@
 #include <thread>
 #include <vector>
 
-#if defined(__linux__)
+#if !defined(_WIN32)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
 
+
 // NOTE: this is copied from common.cpp to avoid linking with libcommon
-// returns true if successful, false otherwise
-static bool fs_create_directory_with_parents(const std::string & path) {
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::u8path(path), ec);
-    return !ec;
+static std::string fs_path_to_utf8(const std::filesystem::path & path) {
+    const auto value = path.u8string();
+    return std::string(value.begin(), value.end());
+}
+
+// common_get_path_from_env() is adapted to avoid utf8_to_wstring
+static std::filesystem::path common_get_path_from_env(const std::string & name) {
+#ifdef _WIN32
+    std::wstring wname;
+    for (const char * p = name.c_str(); *p; ++p) {
+        wname.push_back((wchar_t)*p);
+    }
+    const wchar_t * wvalue = _wgetenv(wname.c_str());
+    return wvalue ? std::filesystem::path(wvalue) : std::filesystem::path();
+#else
+    const char * value = std::getenv(name.c_str());
+    return value ? std::filesystem::path(value) : std::filesystem::path();
+#endif
 }
 
 // NOTE: this is copied from common.cpp to avoid linking with libcommon
-static std::string fs_get_cache_directory() {
-    std::string cache_directory = "";
-    auto ensure_trailing_slash = [](std::string p) {
-        // Make sure to add trailing slash
-        if (p.back() != DIRECTORY_SEPARATOR) {
-            p += DIRECTORY_SEPARATOR;
-        }
-        return p;
-    };
-    if (getenv("LLAMA_CACHE")) {
-        cache_directory = std::getenv("LLAMA_CACHE");
-    } else {
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
-    defined(__OpenBSD__) || defined(__NetBSD__)
-        if (std::getenv("XDG_CACHE_HOME")) {
-            cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else if (std::getenv("HOME")) {
-            cache_directory = std::getenv("HOME") + std::string("/.cache/");
-        } else {
-#if defined(__linux__)
-            /* no $HOME is defined, fallback to getpwuid */
-            struct passwd *pw = getpwuid(getuid());
-            if ((!pw) || (!pw->pw_dir)) {
-                throw std::runtime_error("Failed to find $HOME directory");
-            }
-
-            cache_directory = std::string(pw->pw_dir) + std::string("/.cache/");
-#else /* defined(__linux__) */
-            throw std::runtime_error("Failed to find $HOME directory");
-#endif /* defined(__linux__) */
-        }
-#elif defined(__APPLE__)
-        cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
-#elif defined(_WIN32)
-        cache_directory = std::getenv("LOCALAPPDATA");
-#elif defined(__EMSCRIPTEN__)
-        GGML_ABORT("not implemented on this platform");
-#else
-#  error Unknown architecture
-#endif
-        cache_directory = ensure_trailing_slash(cache_directory);
-        cache_directory += "llama.cpp";
+#if !defined(_WIN32)
+static std::filesystem::path get_home_directory() {
+    std::filesystem::path home = common_get_path_from_env("HOME");
+    if (!home.empty()) {
+        return home;
     }
-    return ensure_trailing_slash(cache_directory);
+    const struct passwd * pw = getpwuid(getuid());
+    if (!pw || !pw->pw_dir || !*pw->pw_dir) {
+        throw std::runtime_error("Failed to find $HOME directory");
+    }
+    return pw->pw_dir;
+}
+#endif
+
+// NOTE: this is copied from common.cpp to avoid linking with libcommon
+static std::filesystem::path fs_get_cache_directory() {
+    std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
+    if (!cache_directory.empty()) {
+        return cache_directory;
+    }
+#if defined(_WIN32)
+    cache_directory = common_get_path_from_env("LOCALAPPDATA");
+    if (cache_directory.empty()) {
+        throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
+    }
+#elif defined(__APPLE__)
+    cache_directory = get_home_directory() / "Library/Caches";
+#else
+    cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
+    if (cache_directory.empty()) {
+        cache_directory = get_home_directory() / ".cache";
+    }
+#endif
+    return cache_directory / "llama.cpp";
+}
+
+// NOTE: this is copied from common.h to avoid linking with libcommon
+static bool common_create_directories(const std::filesystem::path & path, std::error_code & ec) {
+#if defined(__linux__)
+    return std::filesystem::create_directories(path / "", ec);
+#else
+    return std::filesystem::create_directories(path, ec);
+#endif
 }
 
 struct rpc_server_params {
@@ -229,11 +240,14 @@ int main(int argc, char * argv[]) {
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
     if (params.use_cache) {
-        cache_dir_str = fs_get_cache_directory() + "rpc" + DIRECTORY_SEPARATOR;
-        if (!fs_create_directory_with_parents(cache_dir_str)) {
-            fprintf(stderr, "Failed to create cache directory: %s\n", cache_dir_str.c_str());
+        const std::filesystem::path cache_dir_path = fs_get_cache_directory() / "rpc";
+        std::error_code ec;
+        common_create_directories(cache_dir_path, ec);
+        if (ec) {
+            fprintf(stderr, "Failed to create cache directory: %s\n", fs_path_to_utf8(cache_dir_path).c_str());
             return 1;
         }
+        cache_dir_str = fs_path_to_utf8(cache_dir_path);
         cache_dir = cache_dir_str.c_str();
     }
 
