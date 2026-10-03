@@ -100,6 +100,11 @@ struct llama_memory_i {
     // getters
     virtual bool get_can_shift() const = 0;
 
+    // true when this memory views KV cells owned by another context's memory
+    // (e.g. an MTP draft context that reuses the target's cells and never
+    // decodes into cells of its own)
+    virtual bool get_has_shared_cells() const { return false; }
+
     //
     // ops
     //
