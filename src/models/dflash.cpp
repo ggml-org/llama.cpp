@@ -6,6 +6,20 @@
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
+    ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
+    ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
+    ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, hparams.f_attn_value_scale, false);
+
+    hparams.llm_ffn_op = LLM_FFN_SILU;
+    std::string hidden_act;
+    if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
+        if (hidden_act == "gelu" || hidden_act == "gelu_pytorch_tanh") {
+            hparams.llm_ffn_op = LLM_FFN_GELU;
+        } else if (hidden_act != "silu") {
+            throw std::runtime_error("unsupported DFlash hidden activation: " + hidden_act);
+        }
+    }
+
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale, false);
     hparams.f_final_logit_softcapping = 0.0f;
@@ -108,9 +122,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
-    //
-    // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
-    //       need their own conversion path and graph tweaks
     const struct ggml_tensor * markov_meta = ml->get_tensor_meta("markov_w1.weight");
     if (markov_meta) {
         const int64_t dspark_markov_rank = markov_meta->ne[0];
@@ -156,6 +167,9 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
+    if (output == nullptr && tok_embd != nullptr) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab_draft }, TENSOR_DUPLICATED);
+    }
 
     if (hparams.dsv4_hc_mult > 0) {
         const int64_t q_lora_rank     = hparams.n_lora_q;
@@ -214,11 +228,16 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
+        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.out_scale      = create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1 }, TENSOR_NOT_REQUIRED);
+        layer.rope_freqs     = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), { n_embd_head_k/2 }, TENSOR_NOT_REQUIRED | (i > 0 ? TENSOR_DUPLICATED : 0));
 
         // optional per-head attention sinks (e.g. Nemotron DSpark)
         layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), { n_head }, TENSOR_NOT_REQUIRED);
@@ -428,19 +447,16 @@ static ggml_tensor * build_dflash2_conv(
 
     ggml_tensor * weight_all = ggml_add(ctx0, coeff_all, base_side);
 
+    // taps at or past block_size only read the left padding and add nothing
+    const int64_t n_taps = std::min(kernel_size, block_size);
+
     ggml_tensor * result = nullptr;
-    for (int64_t tap = 0; tap < kernel_size; ++tap) {
+    for (int64_t tap = 0; tap < n_taps; ++tap) {
         ggml_tensor * values = blocks;
         if (tap > 0) {
-            ggml_tensor * zeros = ggml_fill(ctx0,
-                    ggml_new_tensor_3d(ctx0, hidden->type, hidden_size, std::min(tap, block_size), n_blocks), 0.0f);
-            if (tap < block_size) {
-                ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
-                        blocks->nb[1], blocks->nb[2], 0);
-                values = ggml_concat(ctx0, zeros, previous, 1);
-            } else {
-                values = zeros;
-            }
+            ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
+                    blocks->nb[1], blocks->nb[2], 0);
+            values = ggml_pad_ext(ctx0, previous, 0, 0, tap, 0, 0, 0, 0, 0);
         }
         values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
 
@@ -571,7 +587,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         inp_attn = build_attn_inp_kv();
     }
 
-    const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
+    const float kq_scale = hparams.f_attention_scale != 0.0f ? hparams.f_attention_scale : 1.0f/sqrtf(float(n_embd_head));
 
     // drafts for M-RoPE targets use degenerate sections (temporal dim only)
     int sections[4];
@@ -582,7 +598,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             ? ggml_rope_multi(ctx0, cur, pos, nullptr,
                     n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow)
-            : ggml_rope_ext(ctx0, cur, pos, nullptr,
+            : ggml_rope_ext(ctx0, cur, pos, model.layers[0].rope_freqs,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow);
     };
@@ -608,12 +624,16 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             const auto & layer = model.layers[il];
 
             ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g, layer.wk_s);
-            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g, layer.wv_s);
+            const bool shared_kv = layer.wv == nullptr;
+            ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, inp_g, layer.wv_s);
 
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+            if (shared_kv) {
+                Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+            }
             Kcur = build_rope(Kcur, inp_pos);
             cb(Kcur, "Kcur_injected", il);
             cb(Vcur, "Vcur_injected", il);
@@ -673,6 +693,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     ggml_tensor * inp_tokens = inp->tokens;
 
     ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+    if (hparams.f_embedding_scale != 0.0f) {
+        inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
+    }
     cb(inpL, "inp_noise_embd", -1);
 
     res->add_input(std::move(inp));
@@ -692,7 +715,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         ggml_tensor * Qcur = build_lora_mm(layer.wq, noise_norm, layer.wq_s);
         ggml_tensor * Kcur = build_lora_mm(layer.wk, noise_norm, layer.wk_s);
-        ggml_tensor * Vcur = build_lora_mm(layer.wv, noise_norm, layer.wv_s);
+        const bool shared_kv = layer.wv == nullptr;
+        ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, noise_norm, layer.wv_s);
 
         Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -700,6 +724,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
         Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        if (shared_kv) {
+            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+        }
 
         Qcur = build_rope(Qcur, inp_pos);
         Kcur = build_rope(Kcur, inp_pos);
@@ -712,9 +739,19 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             ? build_attn(inp_attn_iswa, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
             : build_attn(inp_attn,      layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
 
+        if (hparams.f_attn_value_scale != 0.0f) {
+            cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
+            cb(cur, "attn_out_scaled", il);
+        }
+
         if (attn_dynamic) {
             cur = build_dflash2_conv(*this, cur, attn_dynamic, layer.dflash_attn_conv_base, 1);
             cb(cur, "attn_conv_out", il);
+        }
+
+        if (layer.attn_post_norm) {
+            cur = build_norm(cur, layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_post_norm", il);
         }
 
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
@@ -735,7 +772,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
                 layer.ffn_gate, NULL, layer.ffn_gate_s,
                 layer.ffn_down, NULL, layer.ffn_down_s,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                hparams.llm_ffn_op, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         if (ffn_dynamic) {
@@ -743,7 +780,15 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             cb(cur, "ffn_conv_out", il);
         }
 
+        if (layer.ffn_post_norm) {
+            cur = build_norm(cur, layer.ffn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_post_norm", il);
+        }
+
         cur = ggml_add(ctx0, cur, ffn_inp);
+        if (layer.out_scale) {
+            cur = ggml_mul(ctx0, cur, layer.out_scale);
+        }
         cb(cur, "l_out", il);
 
         inpL = cur;

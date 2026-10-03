@@ -19,6 +19,7 @@ struct ggml_tensor;
 
 struct llama_cparams;
 struct llama_layer;
+struct llama_prec_policy;
 
 struct llama_memory_context_i;
 
@@ -272,8 +273,8 @@ public:
 
     // views of s_copy, computed once per graph
     // and shared across layers which use build_rs
-    ggml_tensor * s_copy_main;   // I32 [n_seqs]
-    ggml_tensor * s_copy_extra;  // I32 [n_rs - n_seqs]
+    ggml_tensor * s_copy_main; // I32 [n_seqs]
+    ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
     const llama_memory_recurrent_context * mctx;
 
@@ -787,6 +788,8 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    const llama_prec_policy * prec_policy = nullptr;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -1026,6 +1029,8 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+
+    const llama_prec_policy * prec_policy;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1322,15 +1327,15 @@ struct llm_graph_context {
     //         `llama_memory_recurrent`
     ggml_tensor * build_rs(
             ggml_tensor * s,
+            ggml_tensor * state_copy,
             ggml_tensor * state_copy_main,
-            ggml_tensor * state_copy_extra,
                 int32_t   state_size,
                 int32_t   n_seqs,
                uint32_t   n_rs,
                uint32_t   rs_head,
                uint32_t   rs_size,
                 int32_t   rs_zero,
-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
+            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
 
     llm_graph_input_rs * build_rs_inp() const;
 
@@ -1339,7 +1344,7 @@ struct llm_graph_context {
             ggml_tensor * s,
                 int32_t   state_size,
                 int32_t   n_seqs,
-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
+            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
         llm_graph_input_rs * inp,

@@ -47,8 +47,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.4"
-      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Clone

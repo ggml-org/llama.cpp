@@ -152,6 +152,7 @@ struct server_routes {
     server_http_context::handler_t post_embeddings;
     server_http_context::handler_t post_embeddings_oai;
     server_http_context::handler_t post_rerank;
+    server_http_context::handler_t post_systemone;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
 
@@ -169,7 +170,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
-    std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const mtmd_helper_init_opt & init_opt, const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_count_tokens(const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const
     std::unique_ptr<const server_context_meta> meta;
