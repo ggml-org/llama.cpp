@@ -1571,6 +1571,108 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
+void ggml_vec_dot_stq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_stq1_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__AVX2__)
+    float sumf = 0.0f;
+
+    const __m256i m3  = _mm256_set1_epi8(0x03);
+    const __m256i m10 = _mm256_set1_epi8(0x10);
+
+    // 32-entry codebook, 16 bytes per half-table, duplicated in both 128-bit lanes
+    const __m256i cb_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *) stq1_0_codebook));
+    const __m256i cb_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *) (stq1_0_codebook + 16)));
+
+    // byte j <- 1 << (j % 8): single-bit mask for sign-bit expansion
+    const __m256i bit_sel = _mm256_setr_epi8(
+        1, 2, 4, 8, 16, 32, 64, -128, 1, 2, 4, 8, 16, 32, 64, -128,
+        1, 2, 4, 8, 16, 32, 64, -128, 1, 2, 4, 8, 16, 32, 64, -128);
+    // byte j <- sign byte j/8 of a broadcast 32-bit word (lane 0: bytes 0-1, lane 1: bytes 2-3)
+    const __m256i sign_shuf = _mm256_setr_epi8(
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+        2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
+    const __m128i m4_128 = _mm_set1_epi8(0x0F);
+    const __m256i ones16 = _mm256_set1_epi16(1);
+
+    for (int i = 0; i < nb; ++i) {
+        // 16-bit accumulators: each maddubs term is in [-512, 508] (q in {0,1,2}
+        // times int8 y, pairwise summed), 8 terms per block stay within int16.
+        __m256i acc0 = _mm256_setzero_si256();
+        __m256i acc1 = _mm256_setzero_si256();
+
+        // Each half handles 16 bytes of qs (32 groups), 4 bytes of sign and
+        // 128 bytes of y (chunks 2*half and 2*half+1 of 64 bytes each).
+        for (int half = 0; half < 2; ++half) {
+            // unpack 16 bytes into 32 4-bit codes in group order
+            const __m128i packed = _mm_loadu_si128((const __m128i *) (x[i].qs + 16*half));
+            const __m128i lo = _mm_and_si128(packed, m4_128);
+            const __m128i hi = _mm_and_si128(_mm_srli_epi16(packed, 4), m4_128);
+            __m256i idx = MM256_SET_M128I(_mm_unpackhi_epi8(lo, hi), _mm_unpacklo_epi8(lo, hi));
+
+            // expand 4 sign bytes into 32 bytes of 0x00/0x10 in group order
+            uint32_t sbits;
+            memcpy(&sbits, x[i].sign + 4*half, sizeof(sbits)); // potentially unaligned
+            __m256i sign = _mm256_shuffle_epi8(_mm256_set1_epi32((int) sbits), sign_shuf);
+            sign = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(sign, bit_sel), bit_sel), m10);
+
+            idx = _mm256_or_si256(idx, sign); // 5-bit codebook index: (sign << 4) | slot
+
+            // codebook lookup: qpack byte per group (2 pshufb + select on bit 4)
+            const __m256i r_lo = _mm256_shuffle_epi8(cb_lo, idx);
+            const __m256i r_hi = _mm256_shuffle_epi8(cb_hi, idx);
+            const __m256i sel  = _mm256_slli_epi16(_mm256_and_si256(idx, m10), 3); // bit 4 -> bit 7
+            const __m256i qp   = _mm256_blendv_epi8(r_lo, r_hi, sel);
+
+            // lane planes: v_p[g] = (qpack[g] >> 2p) & 3, g in group order
+            const __m256i v0 = _mm256_and_si256(qp, m3);
+            const __m256i v1 = _mm256_and_si256(_mm256_srli_epi16(qp, 2), m3);
+            const __m256i v2 = _mm256_and_si256(_mm256_srli_epi16(qp, 4), m3);
+            const __m256i v3 = _mm256_and_si256(_mm256_srli_epi16(qp, 6), m3);
+
+            // group g (chunk-local gloc = g % 16, chunk c = g / 16) pairs with
+            // y[c*64 + gloc + p*16]; each lane plane is two contiguous 16-byte slices
+            const int8_t * yp = y[i].qs + 128*half;
+            const __m256i y0 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *) (yp + 64 +  0)), _mm_loadu_si128((const __m128i *) (yp +  0)));
+            const __m256i y1 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *) (yp + 64 + 16)), _mm_loadu_si128((const __m128i *) (yp + 16)));
+            const __m256i y2 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *) (yp + 64 + 32)), _mm_loadu_si128((const __m128i *) (yp + 32)));
+            const __m256i y3 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *) (yp + 64 + 48)), _mm_loadu_si128((const __m128i *) (yp + 48)));
+
+            acc0 = _mm256_add_epi16(acc0, _mm256_maddubs_epi16(v0, y0));
+            acc1 = _mm256_add_epi16(acc1, _mm256_maddubs_epi16(v1, y1));
+            acc0 = _mm256_add_epi16(acc0, _mm256_maddubs_epi16(v2, y2));
+            acc1 = _mm256_add_epi16(acc1, _mm256_maddubs_epi16(v3, y3));
+        }
+
+        // cancel the +1 bias of the 2-bit lane encoding (q - 1): subtract the sum
+        // of all 256 y values; only the lane total matters, so bsums can be
+        // subtracted directly from the (differently laid out) accumulator
+        const __m256i ysum = _mm256_loadu_si256((const __m256i *) y[i].bsums);
+        const __m256i sumi16 = _mm256_sub_epi16(_mm256_add_epi16(acc0, acc1), ysum);
+        const int32_t sumi = hsum_i32_8(_mm256_madd_epi16(sumi16, ones16));
+
+        // same float expression as the generic path -> bit-exact result
+        sumf += (float) sumi * (GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d);
+    }
+
+    *s = sumf;
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_stq1_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
