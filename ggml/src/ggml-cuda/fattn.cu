@@ -647,16 +647,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                     return BEST_FATTN_KERNEL_VEC;
                 }
             } else {
-                if (cc >= GGML_CUDA_CC_ADA_LOVELACE) {
-                    if (Q->ne[1] <= 2) {
-                        return BEST_FATTN_KERNEL_VEC;
-                    }
-                } else {
-                    // speculative verify batches (1 + n_max) stay small; the vector kernel
-                    // avoids dequantizing the full KV cache to f16 on every step
-                    if (Q->ne[1] <= 8) {
-                        return BEST_FATTN_KERNEL_VEC;
-                    }
+                // speculative verify batches (1 + n_max) stay small; the vector kernel
+                // avoids dequantizing the full KV cache to f16 on every step
+                if (Q->ne[1] <= 8) {
+                    return BEST_FATTN_KERNEL_VEC;
                 }
             }
             if (!gqa_opt_applies && Q->ne[1] == 1) {
