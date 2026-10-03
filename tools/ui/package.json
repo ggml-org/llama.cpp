@@ -99,6 +99,7 @@
 		"unified": "11.0.5",
 		"unist-util-visit": "5.1.0",
 		"uuid": "13.0.2",
+		"vaul-svelte": "^1.0.0-next.7",
 		"vite": "7.3.6",
 		"vite-plugin-devtools-json": "0.2.1",
 		"vitest": "4.1.10",
