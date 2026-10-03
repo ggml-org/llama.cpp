@@ -283,6 +283,7 @@ static void shift_context() {
     llama_memory_seq_rm(llama_get_memory(g_context), 0, system_prompt_position, system_prompt_position + n_discard);
     llama_memory_seq_add(llama_get_memory(g_context), 0, system_prompt_position + n_discard, current_position, -n_discard);
     current_position -= n_discard;
+    stop_generation_position -= n_discard;
     LOGi("%s: Context shifting done! Current position: %d", __func__, current_position);
 }
 
