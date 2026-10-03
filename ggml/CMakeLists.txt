@@ -321,6 +321,10 @@ endif ()
 # install
 #
 
+if (NOT DEFINED GGML_LIB_INSTALL_DIR)
+    set(GGML_LIB_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR} CACHE PATH "Location of library files")
+endif()
+
 include(CMakePackageConfigHelpers)
 
 # all public headers
@@ -345,8 +349,8 @@ set(GGML_PUBLIC_HEADERS
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
-install(TARGETS ggml LIBRARY PUBLIC_HEADER)
-install(TARGETS ggml-base LIBRARY)
+install(TARGETS ggml LIBRARY DESTINATION ${GGML_LIB_INSTALL_DIR} PUBLIC_HEADER)
+install(TARGETS ggml-base LIBRARY DESTINATION ${GGML_LIB_INSTALL_DIR})
 
 if (GGML_STANDALONE)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ggml.pc.in
