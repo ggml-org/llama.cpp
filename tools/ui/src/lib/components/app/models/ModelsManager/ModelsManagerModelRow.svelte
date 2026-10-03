@@ -11,7 +11,7 @@
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
 	import { ModelRowDownloadState } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import { deviceStore, modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -52,17 +52,17 @@
 	     the button: a button nested in a role="button" row is invalid -->
 	<button
 		aria-pressed={selected}
-		class="flex min-w-0 cursor-pointer items-center gap-3 text-left"
+		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:gap-2"
 		onclick={() => onSelect(option)}
 		style="padding-left: {indent}px"
 		type="button"
 	>
-		<ModelAvatar {option} size="size-9" />
+		<ModelAvatar {option} size="size-7 md:size-9" />
 
 		<span class="flex min-w-0 items-center gap-1.25">
 			<ModelId
 				aliases={option.aliases}
-				class="min-w-0 flex-1"
+				class="min-w-0 flex-1 max-md:text-sm"
 				draftSidecars={option.draftSidecars}
 				hideCapabilities
 				hideModalities
@@ -72,7 +72,8 @@
 				title={option.model}
 			/>
 
-			<ModelCapabilities {option} />
+			<!-- a phone has no width for the modality icons, the id needs it more -->
+			<ModelCapabilities hideModalities={deviceStore.isMobile} {option} />
 		</span>
 	</button>
 
