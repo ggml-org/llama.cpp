@@ -45,7 +45,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
     const ggml_tensor * sinks = dst->src[4];
 
     // F16 KV: native SDPA at any KV length.
-    // Non-F16: dequant to F16 then SDPA at prefill lengths. Only the
+    // Non-F16: dequant to F16 then SDPA for prefill (Q >= 32), at any KV length. Only the
     // standard quantized KV cache types (Q4_0-Q8_0) and F32 are accepted
     // because their to_fp16_sycl conversion is verified. BF16 and IQ*
     // are excluded: BF16 needs a strided conversion kernel that does not
@@ -60,7 +60,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
         if (!k_ok || !v_ok) {
             return false;
         }
-        if (use_shape_limit && (Q->ne[1] < 32 || K->ne[1] < 1024)) {
+        if (use_shape_limit && Q->ne[1] < 32) {
             return false;
         }
         for (const ggml_tensor * t : {K, V}) {
