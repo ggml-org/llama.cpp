@@ -185,8 +185,14 @@ def mmproj_server():
     return mm_server
 
 
-def test_slot_save_restore_text_only_on_multimodal(mmproj_server):
+@pytest.mark.parametrize("preload", [False, True])
+def test_slot_save_restore_text_only_on_multimodal(mmproj_server, tmp_path, preload):
     server = mmproj_server
+    server.slot_save_path = str(tmp_path)
+    if preload:
+        server.cache_prompt_dir = str(tmp_path)
+        for name in ["prefix.txt", "duplicate.txt"]:
+            (tmp_path / name).write_text("The quick brown fox jumps over the lazy dog.", encoding="utf-8")
     server.start()
 
     # A pure-text prompt processed on slot 1 of a multimodal server.
@@ -197,7 +203,9 @@ def test_slot_save_restore_text_only_on_multimodal(mmproj_server):
     })
     assert res.status_code == 200
     prompt_n = res.body["timings"]["prompt_n"]
-    assert prompt_n > 0  # all tokens are processed
+    assert prompt_n > 0
+    if preload:
+        assert res.body["timings"]["cache_n"] > 0
 
     # Saving a pure-text slot must succeed even though an mmproj is loaded.
     res = server.make_request("POST", "/slots/1?action=save", data={

@@ -165,6 +165,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
+| `--cache-prompt-dir DIR` | prefill .txt prefixes from DIR at startup and pin them in RAM (default: disabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_PROMPT_DIR) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
@@ -333,6 +334,26 @@ services:
       LLAMA_ARG_ENDPOINT_METRICS: 1
       LLAMA_ARG_PORT: 8080
 ```
+
+### Preloaded prompt prefixes
+
+Use `--cache-prompt-dir DIR` to prefill text prefixes before the server becomes ready:
+
+```sh
+llama-server -m model.gguf --cache-prompt-dir ./prefixes --cache-ram 8192
+```
+
+The server reads regular `.txt` files directly inside the directory in filename order. Each file contains one raw UTF-8 prompt prefix. Subdirectories and other extensions are ignored; identical token sequences share one snapshot. Files are tokenized with special tokens enabled, as for `/completion`.
+
+Requests supply their complete prompt as usual. A pinned snapshot is reused when all its tokens match the start of the request and it improves on the selected slot. For chat requests, the file must contain the rendered chat-template prefix, including role markers and whitespace. Plain system-message text alone usually does not match a rendered chat prompt. Tokenization at the boundary between the prefix and the rest of the prompt must also match.
+
+Preloaded snapshots remain in host RAM when used, when longer conversations are cached, and when ordinary cache entries are evicted. Their serialized state and checkpoint bytes count against `--cache-ram`; ordinary entries use the remaining capacity. Runtime slots still require their normal KV memory. This pins entries in the application's cache, not physical pages in the operating system.
+
+Startup fails if a file is empty or unreadable, the directory has no `.txt` files, a prefix reaches the slot context limit, or the complete set of snapshots exceeds the RAM cache budget. A nonzero `--cache-ram` and enabled prompt caching are required. `cache_prompt: false` on a request bypasses reuse.
+
+This option supports text prefixes for causal decoder models, including hybrid/recurrent models. LoRA adapters and speculative decoding are currently unsupported. With context checkpoints enabled, hybrid/recurrent models can also reuse a prefix when the request ends exactly there; the final token is evaluated again to obtain logits.
+
+Snapshots are rebuilt on model load, including wake-up from sleep. Changes to the files take effect on the next model load. The feature is disabled by default. The equivalent environment variable is `LLAMA_ARG_CACHE_PROMPT_DIR`.
 
 ### Multimodal support
 
