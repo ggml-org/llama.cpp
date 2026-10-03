@@ -280,11 +280,11 @@
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
 		</span>
 
-		<!-- the context and status columns stay empty here: a phone drops the context one,
-		     so the chevron keeps the last column instead of wrapping onto its own row -->
+		<!-- the context and status columns stay empty here: a phone drops both, so the
+		     chevron keeps the last column instead of wrapping onto its own row -->
 		<span class="max-md:hidden"></span>
 
-		<span></span>
+		<span class="max-md:hidden"></span>
 
 		<span
 			class="flex justify-center {expanded
@@ -349,7 +349,7 @@
 			{@render sortHeader(ModelsTableSortKey.CONTEXT, 'Context')}
 		</span>
 
-		<span class="justify-self-center">
+		<span class="justify-self-center max-md:hidden">
 			{@render sortHeader(ModelsTableSortKey.STATUS, 'Status')}
 		</span>
 

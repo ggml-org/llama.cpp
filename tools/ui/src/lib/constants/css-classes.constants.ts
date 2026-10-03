@@ -50,9 +50,10 @@ export const FILTER_TOGGLE_ITEM_CLASS =
 	'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
 
 /** Column grid shared by every row of the models manager table. Below md the context
- *  column is dropped, so a phone keeps its width for the model id. */
+ *  and status columns are dropped, so a phone keeps its width for the model id and
+ *  its actions. */
 export const MODEL_ROW_GRID_CLASS =
-	'grid grid-cols-[minmax(0,1fr)_3rem_3.5rem] items-center gap-3 md:grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] md:gap-4';
+	'grid grid-cols-[minmax(0,1fr)_3.5rem] items-center gap-3 md:grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] md:gap-4';
 
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =
