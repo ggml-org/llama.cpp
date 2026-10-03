@@ -39,6 +39,8 @@
 		sizeRange?: { min: number; max: number } | null;
 		/** Draft sidecars available for the model, badged with their own quant. */
 		draftSidecars?: ModelSidecarBadge[];
+		/** Give the id a row of its own, with its badges and icons together under it. */
+		stackId?: boolean;
 		/** Allow badges to wrap onto new lines instead of truncating. */
 		wrap?: boolean;
 		class?: string;
@@ -62,6 +64,7 @@
 		showRaw = undefined,
 		showRawTooltip = false,
 		sizeRange,
+		stackId = false,
 		supportsThinking = false,
 		supportsToolUse = false,
 		tags,
@@ -110,7 +113,7 @@
 {:else}
 	{#snippet nameAndBadges()}
 		{#if !hideName}
-			<span class="min-w-0 truncate font-medium">
+			<span class="min-w-0 truncate font-medium {stackId ? 'basis-full' : ''}">
 				{#if !hideOrgName && parsed.orgName}{parsed.orgName}/{/if}{displayName}
 			</span>
 		{/if}
@@ -180,7 +183,7 @@
 		{title}
 		{...rest}
 	>
-		<span class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''}">
+		<span class="flex min-w-0 items-center gap-1.5 {wrap || stackId ? 'flex-wrap' : ''}">
 			{#if showRawTooltip}
 				<Tooltip.Root>
 					<Tooltip.Trigger class="flex min-w-0 items-center gap-1.5">
