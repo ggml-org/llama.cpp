@@ -830,6 +830,12 @@ class GGUFWriter:
         key = Keys.Attention.Indexer.TYPES.format(arch=self.arch)
         self.add_array(key, value)
 
+    def add_indexer_kpool(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KPOOL.format(arch=self.arch), value)
+
+    def add_indexer_kpool_select_tail(self, value: bool) -> None:
+        self.add_bool(Keys.Attention.Indexer.KPOOL_SELECT_TAIL.format(arch=self.arch), value)
+
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
 
@@ -1331,6 +1337,27 @@ class GGUFWriter:
     def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
         self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
 
+    def add_classifier_pooling_type(self, value: PoolingType) -> None:
+        self.add_uint32(Keys.Classifier.POOLING_TYPE.format(arch=self.arch), value.value)
+
+    def add_decision_type(self, value: str) -> None:
+        self.add_string(Keys.Decision.TYPE.format(arch=self.arch), value)
+
+    def add_decision_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.BLOCK_COUNT.format(arch=self.arch), value)
+
+    def add_decision_routing_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.ROUTING_BLOCK_COUNT.format(arch=self.arch), value)
+
+    def add_decision_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.HEAD_COUNT.format(arch=self.arch), value)
+
+    def add_decision_max_head_tokens(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.MAX_HEAD_TOKENS.format(arch=self.arch), value)
+
+    def add_decision_temperature(self, name: str, value: float) -> None:
+        self.add_float32(Keys.Decision.TEMPERATURE.format(arch=self.arch, name=name), value)
+
     # for vision models
 
     def add_clip_has_vision_encoder(self, value: bool) -> None:
@@ -1407,6 +1434,9 @@ class GGUFWriter:
 
     def add_vision_image_std(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_STD, values)
+
+    def add_vision_swiglu_clamp(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.SWIGLU_CLAMP, value)
 
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)

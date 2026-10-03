@@ -9,7 +9,7 @@
 // bit unpacking routines: tiled_unpk_nib4, tiled_unpk_2bit, tiled_unpk_or
 // LUT value expansion routines: tiled_lut8, tiled_unpk_sign32, tiled_unpk_tern8
 
-#define GGML_COMMON_DECL_C
+#define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
 
 #include <stddef.h>

@@ -68,7 +68,7 @@ jobs:
           hf_bucket: ggml-org/cache
 
       - name: Build with CMake
-        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
+        # TODO: Drop GGML_CUDA_CCCL_VERSION when this job uses CTK >= 13.5, which bundles CCCL >= 3.5.
         run: |
           cmake -S . -B build -G Ninja \
             -DLLAMA_FATAL_WARNINGS=ON \
@@ -77,7 +77,7 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
             -DGGML_NATIVE=OFF \
             -DGGML_CUDA=ON \
-            -DGGML_CUDA_CUB_3DOT2=ON
+            -DGGML_CUDA_CCCL_VERSION=v3.4.3
           cmake --build build
 
       - name: ccache-buckets-save
@@ -145,7 +145,7 @@ jobs:
 
   musa:
     runs-on: ubuntu-22.04
-    container: registry.mthreads.com/mcconline/inference/pytorch:2.9.1.post1-py3.10-musa5.2.0-mp31-devel-ubuntu22.04-amd64
+    container: registry.mthreads.com/mcconline/musa_sdk:5.2.0-devel-ubuntu22.04-s5000
 
     steps:
       - name: Clone
@@ -156,7 +156,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential git cmake libssl-dev jq python3-venv
+          apt-get install -y build-essential git cmake libssl-dev jq python3-venv musa-mualg-5-2 musa-muthrust-5-2 libmthreads-compute
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
