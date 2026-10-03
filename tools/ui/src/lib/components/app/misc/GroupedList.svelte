@@ -119,6 +119,20 @@
 	});
 
 	let flatRows = $derived(sectionWindow > 0 ? items.slice(0, sectionWindow + sectionSteps) : items);
+
+	/** Rows one group weighs against the window. */
+	const groupWeight = (entry: GroupedListGroup<G, E>) =>
+		entry.entries.reduce((sum, row) => sum + weight(row), 0);
+
+	/** The groups one page reveals, and the rows they weigh against the window. */
+	let groupPage = $derived.by(() => {
+		const page = (groups ?? []).slice(windowed.length, windowed.length + sectionWindow);
+
+		return {
+			count: page.length,
+			weight: page.reduce((sum, entry) => sum + groupWeight(entry), 0)
+		};
+	});
 </script>
 
 {#if groups}
@@ -154,8 +168,8 @@
 
 	{#if windowed.length < (groups?.length ?? 0) && more}
 		{@render more({
-			count: Math.min(sectionWindow, (groups?.length ?? 0) - windowed.length),
-			onMore: () => (sectionSteps += 1),
+			count: groupPage.count,
+			onMore: () => (sectionSteps += Math.max(1, groupPage.weight)),
 			unit: GroupedListUnit.GROUPS
 		})}
 	{/if}
@@ -167,7 +181,7 @@
 	{#if flatRows.length < items.length && more}
 		{@render more({
 			count: Math.min(sectionWindow, items.length - flatRows.length),
-			onMore: () => (sectionSteps += 1),
+			onMore: () => (sectionSteps += Math.min(sectionWindow, items.length - flatRows.length)),
 			unit: GroupedListUnit.ENTRIES
 		})}
 	{/if}
