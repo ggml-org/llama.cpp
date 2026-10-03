@@ -428,6 +428,19 @@ struct dist_comm_socket_context::impl {
     // both take the same branch and the two transports never disagree.
     size_t nd_max_bytes = 0;
 
+    // Full-mesh all-reduce state, see exchange_mesh(). mesh_max_bytes 0 means the mesh is off.
+    size_t               mesh_max_bytes    = 0;
+    // Ring edges, named by their sending rank u (edge u -> u+1), whose reverse direction
+    // (u+1 -> u) is carried over TCP instead of ND. Read on every rank from the same variable,
+    // so both ends of an edge agree.
+    std::vector<int>     mesh_reverse_tcp;
+    bool                 mesh_pending      = false;   // the first ring step ran as a mesh exchange
+    size_t               mesh_pending_size = 0;
+    const void *         mesh_pending_ptr  = nullptr; // where that step left prev's payload
+    int32_t              mesh_prev_src     = -1;
+    int32_t              mesh_next_src     = -1;
+    std::vector<uint8_t> mesh_from_next;              // handed back by the second ring step
+
     ~impl() {
         // at world_size 2 both pointers are the same object, so freeing twice would be a
         // double free
@@ -596,6 +609,209 @@ struct dist_comm_socket_context::impl {
                            sizeof(send_hdr) + send_size, sizeof(recv_hdr) + recv_size);
         }
         return ok;
+    }
+
+    bool mesh_edge_reverse_tcp(int u) const {
+        return std::find(mesh_reverse_tcp.begin(), mesh_reverse_tcp.end(), u) != mesh_reverse_tcp.end();
+    }
+
+    // Full-mesh exchange for world_size 3, opt-in via LLAMA_DIST_TP_MESH=1.
+    //
+    // The ring all-reduce costs world_size - 1 sequential exchanges per collective. A decode
+    // collective is a 16 KB payload, so each of those exchanges is almost pure wire latency, and
+    // at world_size 3 the second one doubles the network cost of every collective. Both other
+    // ranks are ring neighbours at world_size 3, so the connections a mesh needs already exist:
+    // the edge towards next and the edge from prev each carry traffic in both directions. ND
+    // connections are bidirectional by construction (each end runs both halves of the flow
+    // control, exactly as at world_size 2), and the ring sockets are full-duplex TCP whose
+    // reverse direction is otherwise unused. One mesh exchange sends this rank's payload to both
+    // peers and receives both of theirs, so a collective costs one round of latency, not two.
+    //
+    // It is transparent to the caller. Both callers in ggml-backend-meta.cpp run a store and
+    // forward ring: the second step sends exactly the buffer the first step received, tagged
+    // with the rank it came from. The first call does the whole exchange and returns prev's
+    // payload; the second returns next's payload without touching the wire. At world_size 3
+    // that is the same (payload, source) sequence the ring delivers, so the caller's sum
+    // (own + prev) + next is bit-identical to the ring's. The second call checks that it really
+    // is forwarding the first call's result and fails loudly if a caller ever stops doing that.
+    //
+    // Only payloads up to mesh_max_bytes take this path. Every rank posts both sends before it
+    // receives, which is safe while a payload fits one ND chunk and the TCP socket buffer;
+    // larger payloads keep the ring and the ordering it was reasoned about with. Every rank
+    // sees the same payload size, so every rank takes the same branch.
+    bool exchange_mesh(uint32_t op, int32_t src_rank, const void * send_data_ptr, size_t size,
+            int32_t & recv_src_rank, void * recv_data_ptr, std::string & err) {
+        if (mesh_pending) {
+            mesh_pending = false;
+            if (size != mesh_pending_size || send_data_ptr != mesh_pending_ptr || src_rank != mesh_prev_src) {
+                err = "mesh exchange: second ring step is not forwarding the first step's payload";
+                return false;
+            }
+            std::memcpy(recv_data_ptr, mesh_from_next.data(), size);
+            recv_src_rank = mesh_next_src;
+            return true;
+        }
+
+        const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
+
+        // Forward directions keep the ring's per-edge rule. A reverse direction rides the same
+        // ND connection unless its edge is listed in LLAMA_DIST_TP_MESH_REVERSE_TCP; both ends of
+        // the edge evaluate the same rule, so they never disagree about the transport.
+        const bool size_ok = nd_max_bytes == 0 || size <= nd_max_bytes;
+        const bool nd_to_next   = nd_send != nullptr && size_ok;
+        const bool nd_from_prev = nd_recv != nullptr && size_ok;
+        const bool nd_to_prev   = nd_from_prev && !mesh_edge_reverse_tcp(prev);
+        const bool nd_from_next = nd_to_next   && !mesh_edge_reverse_tcp(cfg.rank);
+
+        const op_hdr send_hdr {
+            op,
+            static_cast<uint32_t>(size),
+            src_rank,
+            0,
+        };
+
+        auto send_to = [&](bool use_nd, dist_nd_conn * c, socket_t fd) -> bool {
+            if (use_nd) {
+                if (!dist_nd_send2(c, &send_hdr, sizeof(send_hdr), send_data_ptr, size, err)) {
+                    return false;
+                }
+                stats.bytes_sent += sizeof(send_hdr) + size;
+                return true;
+            }
+            if (!write_msg(fd, &send_hdr, sizeof(send_hdr), err)) {
+                return false;
+            }
+            return size == 0 || write_msg(fd, send_data_ptr, size, err);
+        };
+
+        auto recv_from = [&](bool use_nd, dist_nd_conn * c, socket_t fd, void * dst, int32_t & src_out) -> bool {
+            op_hdr hdr {};
+            if (use_nd) {
+                if (!dist_nd_recv(c, &hdr, sizeof(hdr), err)) {
+                    return false;
+                }
+                stats.bytes_recv += sizeof(hdr);
+            } else if (!read_msg(fd, &hdr, sizeof(hdr), err)) {
+                return false;
+            }
+            if (hdr.op != op) {
+                err = "unexpected op code on mesh";
+                return false;
+            }
+            if (hdr.count != size) {
+                err = "unexpected payload size on mesh";
+                return false;
+            }
+            if (size > 0) {
+                if (use_nd) {
+                    if (!dist_nd_recv(c, dst, size, err)) {
+                        return false;
+                    }
+                    stats.bytes_recv += size;
+                } else if (!read_msg(fd, dst, size, err)) {
+                    return false;
+                }
+            }
+            src_out = hdr.src_rank;
+            return true;
+        };
+
+        mesh_from_next.resize(size);
+
+        // Both sends are posted before either receive, so the two links carry this rank's
+        // payload at the same time. Under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once it
+        // is posted, and the drains below retire both before a staging slot can be reused.
+        bool ok = send_to(nd_to_next, nd_send, ring_out_fd) &&
+                  send_to(nd_to_prev, nd_recv, ring_in_fd) &&
+                  recv_from(nd_from_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
+                  recv_from(nd_from_next, nd_send, ring_out_fd, mesh_from_next.data(), mesh_next_src);
+        if (ok && nd_to_next) {
+            ok = dist_nd_send_drain(nd_send, err);
+        }
+        if (ok && nd_to_prev) {
+            ok = dist_nd_send_drain(nd_recv, err);
+        }
+        if (!ok) {
+            return false;
+        }
+
+        recv_src_rank     = mesh_prev_src;
+        mesh_pending      = true;
+        mesh_pending_size = size;
+        mesh_pending_ptr  = recv_data_ptr;
+
+        const int64_t ne[GGML_MAX_DIMS] = { (int64_t) size, 1, 1, 1 };
+        const char * endpoint = (nd_to_next && nd_to_prev && nd_from_prev && nd_from_next) ? "nd"
+                              : (nd_to_next || nd_to_prev || nd_from_prev || nd_from_next) ? "nd/tcp" : "tcp";
+        ggml_trace_rpc(endpoint, cfg.rank, "EXCHANGE_MESH", "dist-tp", ne,
+                       2 * (sizeof(send_hdr) + size), 2 * (sizeof(send_hdr) + size));
+        return true;
+    }
+
+    // Opt-in full-mesh all-reduce, see exchange_mesh(). Runs after select_transport() so the
+    // banner below can say which transports the mesh will use.
+    void select_allreduce() {
+        if (!dist_transport_env_true("LLAMA_DIST_TP_MESH", false)) {
+            return;
+        }
+        if (cfg.world_size != 3) {
+            std::fprintf(stderr,
+                         "dist-tp: LLAMA_DIST_TP_MESH needs exactly 3 ranks (have %d); keeping the ring\n",
+                         cfg.world_size);
+            std::fflush(stderr);
+            return;
+        }
+
+        // A decode collective is 16 KB. The cap keeps a mesh payload inside one ND chunk
+        // (ND_PAYLOAD in dist-comm-nd.cpp, 256 KiB including this header).
+        constexpr size_t cap = 256 * 1024 - sizeof(op_hdr);
+        mesh_max_bytes = 64 * 1024;
+        const char * v = std::getenv("LLAMA_DIST_TP_MESH_MAX_BYTES");
+        if (v != nullptr && v[0] != '\0') {
+            try {
+                const long long n = std::stoll(v);
+                if (n > 0) {
+                    mesh_max_bytes = std::min((size_t) n, cap);
+                }
+            } catch (...) {
+                // keep the default
+            }
+        }
+
+        // comma-separated sending ranks, e.g. "2" moves the 0 -> 2 direction of edge 2 -> 0
+        const char * r = std::getenv("LLAMA_DIST_TP_MESH_REVERSE_TCP");
+        if (r != nullptr) {
+            std::string s(r);
+            size_t pos = 0;
+            while (pos < s.size()) {
+                const size_t comma = s.find(',', pos);
+                const std::string tok = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                try {
+                    const int u = std::stoi(tok);
+                    if (u >= 0 && u < cfg.world_size) {
+                        mesh_reverse_tcp.push_back(u);
+                    }
+                } catch (...) {
+                    // ignore a malformed entry
+                }
+                if (comma == std::string::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+        }
+
+        const int next = (cfg.rank + 1) % cfg.world_size;
+        const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
+        std::fprintf(stderr,
+                     "dist-tp all-reduce: full mesh up to %zu B, ring above [rank %d/%d] "
+                     "(->%d %s, %d<- %s, ->%d %s, %d<- %s)\n",
+                     mesh_max_bytes, cfg.rank, cfg.world_size,
+                     next, nd_send != nullptr ? "ND" : "TCP",
+                     next, nd_send != nullptr && !mesh_edge_reverse_tcp(cfg.rank) ? "ND" : "TCP",
+                     prev, nd_recv != nullptr && !mesh_edge_reverse_tcp(prev) ? "ND" : "TCP",
+                     prev, nd_recv != nullptr ? "ND" : "TCP");
+        std::fflush(stderr);
     }
 
     bool bootstrap_master(std::string & err) {
@@ -941,6 +1157,7 @@ std::unique_ptr<dist_comm_socket_context> dist_comm_socket_context::create(const
     }
 
     p->select_transport();
+    p->select_allreduce();
 
     return std::unique_ptr<dist_comm_socket_context>(new dist_comm_socket_context(std::move(p)));
 }
@@ -960,6 +1177,12 @@ bool dist_comm_socket_context::exchange_ring_f32(int32_t src_rank, const float *
     if (send_data == nullptr || recv_data == nullptr) {
         err = "exchange_ring_f32: null payload";
         return false;
+    }
+
+    // A pending mesh step must be served by the mesh whatever its size check would say now.
+    const size_t bytes = n * sizeof(float);
+    if (impl_->mesh_pending || (impl_->mesh_max_bytes > 0 && bytes <= impl_->mesh_max_bytes)) {
+        return impl_->exchange_mesh(OP_ALLREDUCE_F32, src_rank, send_data, bytes, recv_src_rank, recv_data, err);
     }
 
     return impl_->exchange_ring(
