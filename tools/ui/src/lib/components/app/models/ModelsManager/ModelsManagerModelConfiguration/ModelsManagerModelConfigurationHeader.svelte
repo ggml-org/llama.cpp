@@ -44,7 +44,9 @@
 	});
 </script>
 
-<header class="space-y-2.5 pt-3 pl-4">
+<!-- only the desktop pane leaves the right edge to the panel border: on a phone the
+     pane covers the screen, so its two sides carry the same padding -->
+<header class="space-y-2.5 pt-3 pl-4 max-md:pr-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<!-- same geometry as the discover details header: base org, quant org badge -->

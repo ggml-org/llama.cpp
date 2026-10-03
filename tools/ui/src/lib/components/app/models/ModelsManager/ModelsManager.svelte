@@ -234,7 +234,7 @@
 	}
 </script>
 
-<div class={['flex min-h-0 flex-1', className]}>
+<div class={['relative flex min-h-0 flex-1', className]}>
 	<div class="min-h-0 min-w-0 flex-1">
 		<ModelsManagerModelsTable
 			bind:capabilities={capabilityFilter}
@@ -249,10 +249,15 @@
 		/>
 	</div>
 
-	<div class="pane-drawer shrink-0" data-open={selected !== null}>
+	<!-- on a phone the pane covers the whole dialog: the manager header would only
+	     repeat what the pane's own header says -->
+	<div
+		class="pane-drawer max-md:fixed max-md:inset-0 max-md:z-[60] shrink-0"
+		data-open={selected !== null}
+	>
 		<!-- the content box keeps the open width, so it never reflows with the drawer -->
 		<div
-			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40"
+			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 max-md:w-full max-md:max-w-none max-md:border-l-0 max-md:bg-background"
 			data-fade={fade}
 			data-visible={selected !== null && !isSwapping}
 		>
@@ -311,5 +316,12 @@
 	/* swapping models: out, then in, with no pause */
 	.pane-content[data-visible='true'][data-fade='swap'] {
 		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
+	}
+
+	/* a phone has no room beside the table: the pane covers it instead */
+	@media (max-width: 767px) {
+		.pane-drawer[data-open='true'] {
+			width: auto;
+		}
 	}
 </style>

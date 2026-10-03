@@ -69,7 +69,7 @@
 		{status}
 	/>
 
-	<div class="min-h-0 flex-1 overflow-y-auto py-4 pl-4">
+	<div class="min-h-0 flex-1 overflow-y-auto py-4 pl-4 max-md:pr-4">
 		<ModelsManagerModelConfigurationInformation hub={hubDetails} {option} {serverProps} />
 
 		<div class="mt-4 border-t border-border/30 pt-3 pb-2">
