@@ -18,7 +18,7 @@
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-380! flex flex-col p-4 pb-0"
+		class="max-md:h-[100dvh]! max-md:w-screen! max-md:max-w-none! md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-380! flex flex-col p-4 pb-0"
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
 		<Dialog.Header class="flex flex-row items-center p-2 pr-8">
