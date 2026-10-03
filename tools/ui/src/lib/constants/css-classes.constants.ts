@@ -49,11 +49,16 @@ export const FILTER_TRIGGER_CLASS = `
 export const FILTER_TOGGLE_ITEM_CLASS =
 	'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
 
-/** Column grid shared by every row of the models manager table. Below md the context
- *  and status columns are dropped, so a phone keeps its width for the model id and
- *  its actions. */
+/** Column grid shared by every row of the models manager table. Below md the context,
+ *  status and actions columns are dropped, so a phone gives the whole width to the
+ *  model id and floats the row's last cell at the row's end. */
 export const MODEL_ROW_GRID_CLASS =
-	'grid grid-cols-[minmax(0,1fr)_3.5rem] items-center gap-3 md:grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] md:gap-4';
+	'grid grid-cols-[minmax(0,1fr)] items-center gap-3 md:grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] md:gap-4';
+
+/** Last cell of a row: its actions menu, or its fold control. A phone floats it at the
+ *  row's end, inside the clearance the first cell leaves in front of it. */
+export const MODEL_ROW_TRAILING_CELL_CLASS =
+	'max-md:absolute max-md:top-1/2 max-md:right-2 max-md:-translate-y-1/2';
 
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =
