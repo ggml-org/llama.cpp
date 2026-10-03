@@ -3,6 +3,7 @@
 
 #include "common.hpp"
 #include <float.h>
+#include <sycl/ext/intel/math.hpp>
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
@@ -70,10 +71,6 @@ inline void cpy_blck_f32_q1_0(const char * cxi, char * cdsti) {
     }
 }
 
-inline int round_nearest_int(float x) {
-    return (int)(x >= 0.0f ? x + 0.5f : x - 0.5f);
-}
-
 inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
     block_q2_0 *  dsti = (block_q2_0 *) cdsti;
@@ -85,7 +82,7 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     }
 
     const float d  = amax;
-    const float id = d > 0.0f ? 1.0f / d : 0.0f;
+    const float id = d > 0.0f ? sycl::ext::intel::math::fdiv_rn(1.0f, d) : 0.0f;
 
     dsti->d = d;
 
@@ -94,7 +91,7 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     }
 
     for (int j = 0; j < QK2_0; ++j) {
-        int q = round_nearest_int(xi[j] * id) + 1;
+        int q = (int) sycl::round(sycl::ext::intel::math::fmul_rn(xi[j], id)) + 1;
         q = dpct::max(0, dpct::min(3, q));
 
         const int byte_index = j / 4;
