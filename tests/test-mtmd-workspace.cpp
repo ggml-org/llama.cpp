@@ -1,5 +1,6 @@
 #include "../tools/mtmd/mtmd-workspace.h"
 #include "../tools/mtmd/mtmd-embeddings.h"
+#include "../tools/mtmd/mtmd-projector-storage.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "../src/llama-context-memory.h"
 #include "testing.h"
@@ -397,7 +398,8 @@ int main(int argc,char ** argv) {
                 actual=mtmd_batch_get_output_embd(batch.get(),chunk);
                 t.assert_true(retained.data() != actual);
             }
-            t.assert_true(mtmd_release_compute_workspace(borrowed.get()));
+            if (shape.first == 1280) t.assert_true(mtmd_unload_projector_weights(borrowed.get()));
+            else t.assert_true(mtmd_release_compute_workspace(borrowed.get()));
             for (auto & grant : grants) {
                 grant->lease.reset();
                 t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(grant->arena.get()));
@@ -406,6 +408,13 @@ int main(int argc,char ** argv) {
                 [](float a,float b) { return std::abs(a-b) <= 1e-5f; }));
             t.assert_true(mtmd_batch_encode(batch.get()) != 0);
             t.assert_true(mtmd_batch_get_output_embd(batch.get(), chunk) == actual);
+            if (shape.first == 1280) {
+                if (!t.assert_true(mtmd_reload_projector_weights(borrowed.get())) ||
+                        !t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
+                const auto * restored = mtmd_batch_get_output_embd(batch.get(),chunk);
+                t.assert_true(std::equal(expected.begin(),expected.end(),restored,
+                    [](float a,float b) { return std::abs(a-b) <= 1e-5f; }));
+            }
             mtmd_batch_clear_output_embd(batch.get());
             t.assert_true(mtmd_batch_get_output_embd(batch.get(), chunk) == nullptr);
             batch.reset();

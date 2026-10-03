@@ -441,8 +441,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.3a | Committed | 74fc83338 | Zero-grant KV/graph suspension preserves the session, host frontiers and recurrent state while rejecting paused execution; resident/ring and auxiliary-cache qualifications pass. |
 | 7.3b | Committed | 2b3432c74 | Fresh phase grants, reconstructed mirrors, gated graph reservation and unchanged host/recurrent state; resumed prefill/decode comparisons, warm-capture retirement and memory checks pass. |
 | 7.3c | Committed | cace79b9b | Full-parent suspended-KV vision borrowing, exclusive restoration admission, interruption/retry and terminal recovery; real image equivalence and CPU/CUDA memory checks pass. |
-| 7.4a | Ready for review | - | Separate file source, stable tensor metadata and shared eager weight bindings; original CPU/CUDA embedding equivalence, shared-owner teardown and memory checks pass. |
-| 7.4b-7.5c | Planned | - | Explicit projector unload/reload, phase-grant coordination and qualified production vision remain pending. |
+| 7.4a | Committed | 0092cef1e | Separate file source, stable tensor metadata and shared eager weight bindings; original CPU/CUDA embedding equivalence, shared-owner teardown and memory checks pass. |
+| 7.4b | Ready for review | - | Explicit pinned weight unload/reload, native retirement, generation-safe rebinding and retry; CPU/CUDA equivalence, borrowed-workspace return and memory checks pass. |
+| 7.4c-7.5c | Planned | - | Weight/phase-grant coordination and qualified production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3936,3 +3937,48 @@ Artifacts are `/tmp/vision-7.4a-*`, including the original CPU/CUDA `.embd` snap
 #### Remaining boundary
 
 Stage 7.4b will add explicit live unload/reload, capture invalidation, drain/rebind ordering and stale-execution rejection. Stage 7.4c will coordinate those bindings with phase grants and recover failed reloads. Projector weights remain eagerly resident here; production vision and image-aware MTP remain guarded until their later qualifications.
+
+### Stage 7.4b: explicit projector unload/reload and generation-safe execution
+
+The internal `mtmd_unload_projector_weights()` and `mtmd_reload_projector_weights()` seams now provide an explicit vision-weight lifecycle. The existing eager path stays active until unload is requested; no automatic policy, server option or production admission guard is changed.
+
+#### Lifetime and execution ordering
+
+`mtmd_projector_residency` reuses `llama_memory_executor` and its execution pins. A captured dependency retains the current weight owner; a pending pin remains retained between serial submissions until retirement drains the queue. An owner-thread gate prevents callbacks from reopening execution while the binding is changing.
+
+```mermaid
+flowchart LR
+    R[Ready binding and generation] --> U[Reject retained readers and close admission]
+    U --> D[Drain scheduler work]
+    D --> I[Retire native captures and workspace grants]
+    I --> F[Release weights and clear tensor bindings]
+    F --> L[Explicit upload into a fresh candidate]
+    L --> P[Publish new generation]
+    P --> G[Rebuild graphs on next encode]
+    G --> R
+```
+
+- Unload first rejects active host submissions and external retained weight readers. The queued execution pin is not released merely because an encode call returned. Drain and native invalidation finish before the last internal weight reference is returned.
+- Reader count is checked again after retirement. A reader obtained through a previously retained weak reference during a callback must not turn a successful retirement into a false claim that weight bytes were freed. That case leaves weights bound and admission closed until the reader returns and unload is retried.
+- The CLIP adapter uses the existing verified workspace/native-cache lifetime protocol. Ordinary CUDA captures and borrowed compute captures are retired before weight addresses disappear; borrowed leases are detached. The scheduler graph is reset and `is_allocated` is cleared, so the next encode must rebuild/reserve graph addresses. Stable tensor objects, hparams, host preprocessing values, the source manifest/file and retained host embeddings remain alive.
+- Binding generations advance on successful unload/reload. `begin()` rejects an old generation even if a backend allocator recycles the physical address. A failed drain/invalidation keeps execution closed and storage retained; retry is explicit. Failed or cancelled reloads remain unbound, without publishing a partial candidate.
+- Encode, measurement, attachment and borrowing use the same projector admission gate. Reload callbacks cannot execute with partially uploaded weights. Measurement-only buffers made with skipped uploads are explicitly rejected by the live lifecycle; buffer existence alone is not proof that payload bytes are ready.
+- The live adapter admits this lifecycle only when native-cache retirement is verified (CPU/CUDA here). Unsupported backends preserve eager allocation and reject the explicit unload request before changing residency. The storage owner, pins, generations and drain/invalidate hook contract are backend-neutral; other adapters can implement that contract without CUDA allocation logic in the owner.
+
+The explicit lifecycle does not promise that every ordinary scheduler allocation is freed: scheduler-owned compute buffers may remain allocated after a graph reset. Borrowed workspace grants are returned, and the projector weight buffer is released after its readers retire. Shared-arena placement and complete phase-budget coordination belong to 7.4c. The retained source must still remain unchanged in place, as documented in 7.4a.
+
+#### TDD and qualification
+
+- Lifecycle tests were initially red against stubbed methods. The final focused suite passes **13 cases / 117 assertions** in ASan/leak checking, UBSan and targeted TSan with process-local ASLR disabled. It covers ordered drain/invalidate/unbind, host/reload callback reentry, retained and late-retained readers, stale generations, failed retirement closure/retry, allocation/cancellation/exception cleanup, and rejection of measurement-only weights.
+- A fake allocator supplies four different backing addresses across repeated reloads. Tensor object identity stays unchanged, exact payload bytes are restored, and every previous generation remains rejected. These forced-address tests do not assume the production CUDA allocator will always return a different address.
+- Real CPU and CUDA projector tests pass **14/174** each. They match saved pre-7.4a eager-loader embeddings byte-for-byte, repeat three unload/reload cycles with warmed graph execution, reject unloaded encoding/measurement and callback reentry, preserve host embeddings, and retain the earlier projector-destruction/metadata-lifetime checks.
+- The real CUDA suite passes memcheck **14/174**, with **zero memory-access errors**. Handled stock CUDA graph-update API errors are excluded from API-error reporting; memory-access checking remains enabled.
+- The real borrowed-workspace suite passes **12/629**. Image sizes 320x320 through 1280x1024 have zero embedding differences. The largest point unloads weights while borrowed grants remain attached; all grants return before reload, and fresh encoding still matches the ordinary result.
+- The populated-ring text/image session regression remains **13/225**, with zero initial/follow-up/post-decode logit differences, identical recurrent bytes and matching 16-token continuations. Its encoding/restoration failure checks remain passing.
+- Existing CPU workspace/session controls remain **11/113** and **12/146** under ASan/leak checking and UBSan. The residency implementation passes strict conversion/sign-conversion warning checks, and the complete CUDA server target is rebuilt. TSan coverage is host ownership/source/lifecycle logic, not GPU race qualification.
+
+Artifacts are `/tmp/vision-7.4b-*`, including `red.log`, `measure-red.log`, sanitizer storage logs, `real-cpu.log`, `real-cuda.log`, `real-borrowed.log`, `session-ring.log` and `real-memcheck.log`. Production is restored and health checked using its unchanged image/configuration. Stage 7.4b is staged for user review without unrelated benchmark files; no assistant commit or push is made.
+
+#### Remaining boundary
+
+Stage 7.4c must place/reload projector storage through coordinated phase grants, account for allocations outside those grants, and qualify failed phase handoffs. Automatic image-session weight swapping and production vision admission remain pending; this checkpoint only adds and qualifies the explicit lifecycle.

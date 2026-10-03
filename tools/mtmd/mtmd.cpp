@@ -2188,6 +2188,13 @@ std::shared_ptr<const mtmd_projector_weights> mtmd_acquire_projector_weights(con
     return ctx && ctx->ctx_v ? clip_acquire_projector_weights(ctx->ctx_v) : nullptr;
 }
 
+bool mtmd_unload_projector_weights(mtmd_context * ctx) noexcept {
+    return ctx && ctx->ctx_v && clip_unload_projector_weights(ctx->ctx_v);
+}
+bool mtmd_reload_projector_weights(mtmd_context * ctx,mtmd_progress_callback progress,void * user_data) noexcept {
+    return ctx && ctx->ctx_v && clip_reload_projector_weights(ctx->ctx_v,progress,user_data);
+}
+
 // Retain host rows without retaining the projector, scheduler, batch, or input chunk.
 bool mtmd_batch_acquire_output_embd(const mtmd_batch * batch, const mtmd_input_chunk * chunk,
         mtmd_embedding_view & output) noexcept {

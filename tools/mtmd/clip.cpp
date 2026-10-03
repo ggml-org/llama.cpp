@@ -150,6 +150,8 @@ struct clip_ctx {
 
     std::shared_ptr<mtmd_projector_metadata> weight_metadata;
     std::shared_ptr<mtmd_projector_weights> weights;
+    std::unique_ptr<mtmd_projector_residency> weight_residency;
+    bool weight_busy = false;
 
     std::vector<uint8_t> buf_compute_meta;
 
@@ -234,6 +236,8 @@ struct clip_ctx {
     }
 
     ~clip_ctx() {
+        weight_busy = true;
+        weight_residency.reset();
         workspace.reset();
         sched.reset();
         weights.reset();
@@ -247,6 +251,24 @@ struct clip_ctx {
     // this function is added so that we don't change too much of the existing code
     projector_type proj_type() const {
         return model.proj_type;
+    }
+};
+
+// One host submission owns the projector until its graph/output work returns; retirement drains its pin.
+struct clip_weight_operation {
+    clip_ctx * ctx;
+    bool entered = false;
+    explicit clip_weight_operation(clip_ctx * ctx) : ctx(ctx) {
+        if (!ctx || ctx->weight_busy) return;
+        if (ctx->weight_residency) {
+            if (!ctx->weight_residency->begin(ctx->weight_residency->generation())) return;
+        } else if (!ctx->weights) return;
+        ctx->weight_busy = entered = true;
+    }
+    ~clip_weight_operation() {
+        if (!entered) return;
+        if (ctx->weight_residency) ctx->weight_residency->end();
+        ctx->weight_busy = false;
     }
 };
 
@@ -4097,7 +4119,59 @@ void clip_free(clip_ctx * ctx) {
 
 // Retained bindings outlive the scheduler; shared owners also retain tensor descriptors and the file source.
 std::shared_ptr<const mtmd_projector_weights> clip_acquire_projector_weights(const clip_ctx * ctx) noexcept {
-    return ctx ? ctx->weights : nullptr;
+    if (!ctx || ctx->weight_busy) return {};
+    return ctx->weight_residency ? ctx->weight_residency->acquire() : ctx->weights;
+}
+
+// Native cache support is verified before changing eager residency; unsupported backends keep that path.
+bool clip_unload_projector_weights(clip_ctx * ctx) noexcept {
+    if (!ctx || ctx->weight_busy || ctx->no_alloc) return false;
+    try {
+        if (!ctx->weight_residency && (!ctx->weights || ctx->weights.use_count() != 1)) return false;
+        struct gate {
+            clip_ctx & ctx;
+            explicit gate(clip_ctx & ctx) : ctx(ctx) { ctx.weight_busy = true; }
+            ~gate() { ctx.weight_busy = false; }
+        } closed(*ctx);
+        if (!ctx->weight_residency) {
+            if (!ctx->workspace) {
+                auto verified = std::make_unique<mtmd_compute_workspace>(ctx->sched.get(),ctx->backend_ptrs,size_t(ctx->max_nodes));
+                if (!verified->supported()) return false;
+                ctx->workspace = std::move(verified);
+            }
+            if (!ctx->workspace->supported()) return false;
+            auto owner = mtmd_projector_residency::create(ctx->weights,ggml_backend_get_default_buffer_type(ctx->backend),{
+                [ctx] { ggml_backend_sched_synchronize(ctx->sched.get()); return true; },
+                [ctx] {
+                    if (!ctx->workspace) {
+                        auto retired = std::make_unique<mtmd_compute_workspace>(ctx->sched.get(),ctx->backend_ptrs,size_t(ctx->max_nodes));
+                        if (!retired->supported()) return false;
+                        ctx->workspace = std::move(retired);
+                    }
+                    if (!ctx->workspace->release()) return false;
+                    ctx->workspace.reset();
+                    ggml_backend_sched_reset(ctx->sched.get());
+                    ctx->is_allocated = false;
+                    return true;
+                }});
+            if (!owner) return false;
+            ctx->weight_residency = std::move(owner);
+            ctx->weights.reset();
+        }
+        return ctx->weight_residency->unload();
+    } catch (...) { return false; }
+}
+
+// Reload is explicit and leaves failed candidates unbound; graph addresses are rebuilt on the next encode.
+bool clip_reload_projector_weights(clip_ctx * ctx,mtmd_progress_callback progress,void * user_data) noexcept {
+    if (!ctx || ctx->weight_busy || ctx->no_alloc) return false;
+    if (!ctx->weight_residency) return bool(ctx->weights);
+    struct gate {
+        clip_ctx & ctx;
+        explicit gate(clip_ctx & ctx) : ctx(ctx) { ctx.weight_busy = true; }
+        ~gate() { ctx.weight_busy = false; }
+    } closed(*ctx);
+    return ctx->weight_residency->reload(progress,user_data);
 }
 
 const char * clip_patch_merge_type(const struct clip_ctx * ctx) {
@@ -4493,6 +4567,8 @@ bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & 
         ggml_backend_buffer_type_t compute_type) {
     if (!ctx || batch.entries.empty() || (!ctx->support_batch &&
             batch.entries.size() > size_t(clip_model_n_temporal_merge(ctx)))) return false;
+    clip_weight_operation weights(ctx);
+    if (!weights.entered) return false;
     if (compute_type && compute_type != ctx->backend_buft.front()) {
         if (!ggml_backend_supports_buft(ctx->backend,compute_type)) return false;
         auto types=ctx->backend_buft;
@@ -4534,16 +4610,21 @@ bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & 
 
 // Validate grants before attachment; encoding after measurement requires a successful binding.
 bool clip_attach_compute_workspace(clip_ctx * ctx,const std::vector<ggml_backend_memory_lease_t> & leases) {
-    return ctx && ctx->workspace && ctx->workspace->attach(leases);
+    clip_weight_operation weights(ctx);
+    return weights.entered && ctx->workspace && ctx->workspace->attach(leases);
 }
 
 bool clip_borrow_compute_workspace(clip_ctx * ctx,llama_context_memory & parent) {
-    return ctx && ctx->workspace && ctx->workspace->borrow(parent);
+    clip_weight_operation weights(ctx);
+    return weights.entered && ctx->workspace && ctx->workspace->borrow(parent);
 }
 
 // Retain model metadata and host embeddings while returning the borrowed compute storage.
 bool clip_release_compute_workspace(clip_ctx * ctx) {
-    return ctx && (!ctx->workspace || ctx->workspace->release());
+    if (!ctx || ctx->weight_busy) return false;
+    if (!ctx->workspace) return true;
+    clip_weight_operation weights(ctx);
+    return weights.entered && ctx->workspace->release();
 }
 
 // persisted state slots of the gen-audio decoder, per pipeline
@@ -4557,6 +4638,8 @@ static std::vector<c2w_state_slot> list_gen_state_slots(const clip_hparams & hpa
 
 bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     if (!ctx || !params || !params->imgs || params->imgs->entries.empty()) return false;
+    clip_weight_operation weights(ctx);
+    if (!weights.entered) return false;
     const clip_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
 

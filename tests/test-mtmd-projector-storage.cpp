@@ -1,6 +1,7 @@
 #include "../tools/mtmd/mtmd-projector-storage.h"
 #include "../tools/mtmd/mtmd-helper.h"
 #include "../tools/mtmd/mtmd-embeddings.h"
+#include "../tools/mtmd/mtmd-workspace.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
 #include "ggml-cpu.h"
@@ -33,6 +34,25 @@ struct weight_allocation_fault {
     decltype(ggml_backend_buffer_type_i::alloc_buffer) original = type->iface.alloc_buffer;
     weight_allocation_fault() { type->iface.alloc_buffer = [](ggml_backend_buffer_type_t,size_t) -> ggml_backend_buffer_t { return nullptr; }; }
     ~weight_allocation_fault() { type->iface.alloc_buffer = original; }
+};
+
+// Keep fake backing arrays allocated so every new resident buffer has a different address.
+struct changing_weight_allocator {
+    inline static changing_weight_allocator * active = nullptr;
+    ggml_backend_buffer_type type = *ggml_backend_cpu_buffer_type();
+    std::vector<std::vector<uint8_t>> backing;
+    changing_weight_allocator() {
+        GGML_ASSERT(!active); active = this;
+        type.iface.alloc_buffer = [](ggml_backend_buffer_type_t type,size_t bytes) {
+            const size_t alignment = ggml_backend_buft_get_alignment(type);
+            active->backing.emplace_back(bytes+alignment);
+            const auto begin = uintptr_t(active->backing.back().data());
+            auto * buffer = ggml_backend_cpu_buffer_from_ptr(reinterpret_cast<void *>((begin+alignment-1)/alignment*alignment),bytes);
+            buffer->buft = type;
+            return buffer;
+        };
+    }
+    ~changing_weight_allocator() { active = nullptr; }
 };
 
 struct source_fixture {
@@ -210,6 +230,109 @@ int main(int argc,char ** argv) {
         t.assert_true(!mtmd_projector_source::open("",f.gguf.get()));
         t.assert_true(!mtmd_projector_source::from_file(std::tmpfile(),f.gguf.get()));
     });
+    t.test("residency_drains_and_retires_before_unbinding_and_rejects_stale_generations", [](testing & t) {
+        source_fixture f;
+        auto metadata = mtmd_projector_metadata::create(f.context(),f.source());
+        auto * tensor = ggml_get_first_tensor(metadata->context());
+        auto resident = mtmd_projector_weights::allocate(metadata,ggml_backend_cpu_buffer_type());
+        std::unique_ptr<mtmd_projector_residency> owner;
+        std::vector<std::string> order;
+        bool reentered = false;
+        auto drain = [&] {
+            order.push_back("drain");
+            t.assert_true(tensor->data && tensor->buffer && !owner->ready());
+            reentered |= owner->begin(owner->generation()) || owner->unload() || owner->reload() || bool(owner->acquire());
+            return true;
+        };
+        auto invalidate = [&] { order.push_back("invalidate"); t.assert_true(tensor->data != nullptr); return true; };
+        owner = mtmd_projector_residency::create(std::move(resident),ggml_backend_cpu_buffer_type(),{drain,invalidate});
+        if (!t.assert_true(bool(owner))) return;
+        const auto first = owner->generation();
+        auto reader = owner->acquire();
+        t.assert_true(!owner->unload() && owner->ready() && order.empty());
+        reader.reset();
+        if (!t.assert_true(owner->begin(first))) return;
+        t.assert_true(!owner->begin(first) && !owner->unload());
+        owner->end();
+        if (!t.assert_true(owner->unload())) return;
+        t.assert_true(!reentered && order == std::vector<std::string>({"drain","invalidate"}));
+        t.assert_true(!tensor->data && !tensor->buffer && !tensor->extra && !owner->ready());
+        t.assert_true(!owner->begin(first) && !owner->acquire());
+        t.assert_true(owner->unload() && order.size() == 2);
+        t.assert_true(owner->reload() && owner->ready() && owner->generation() > first);
+        t.assert_true(!owner->begin(first));
+        t.assert_true(owner->begin(owner->generation())); owner->end();
+        std::vector<uint8_t> bytes(ggml_nbytes(tensor));
+        ggml_backend_tensor_get(tensor,bytes.data(),0,bytes.size());
+        t.assert_true(std::all_of(bytes.begin(),bytes.end(),[](uint8_t b) { return b == 0x3c; }));
+        // Drain callbacks inspect the owner; finish teardown while that pointer is still assigned.
+        t.assert_true(owner->unload());
+    });
+    t.test("failed_retirement_and_reload_keep_admission_closed_until_retry", [](testing & t) {
+        source_fixture f;
+        auto metadata = mtmd_projector_metadata::create(f.context(),f.source());
+        auto resident = mtmd_projector_weights::allocate(metadata,ggml_backend_cpu_buffer_type());
+        bool drain_ok = false, retire_ok = false;
+        auto owner = mtmd_projector_residency::create(std::move(resident),ggml_backend_cpu_buffer_type(),
+            {[&] { return drain_ok; },[&] { return retire_ok; }});
+        if (!t.assert_true(bool(owner))) return;
+        t.assert_true(!owner->unload() && !owner->ready());
+        t.assert_true(!owner->reload());
+        drain_ok = true;
+        t.assert_true(!owner->unload() && !owner->ready());
+        retire_ok = true;
+        t.assert_true(owner->unload());
+        {
+            weight_allocation_fault fault;
+            t.assert_true(!owner->reload() && !owner->ready());
+        }
+        auto cancel = [](float,void *) { return false; };
+        t.assert_true(!owner->reload(cancel));
+        auto throwing = [](float,void *) -> bool { throw std::runtime_error("cancel"); };
+        t.assert_true(!owner->reload(throwing));
+        t.assert_true(!ggml_get_first_tensor(metadata->context())->data);
+        t.assert_true(owner->reload() && owner->ready());
+        t.assert_true(owner->unload());
+    });
+    t.test("repeated_reload_moves_bindings_without_replacing_tensor_metadata", [](testing & t) {
+        changing_weight_allocator allocator;
+        source_fixture f; auto metadata = mtmd_projector_metadata::create(f.context(),f.source());
+        auto * tensor = ggml_get_first_tensor(metadata->context());
+        auto owner = mtmd_projector_residency::create(mtmd_projector_weights::allocate(metadata,&allocator.type),
+            &allocator.type,{[] { return true; },[] { return true; }});
+        if (!t.assert_true(bool(owner))) return;
+        for (int i = 0; i < 4; ++i) {
+            const auto address = uintptr_t(tensor->data), generation = owner->generation();
+            t.assert_true(owner->begin(generation)); owner->end();
+            if (!t.assert_true(owner->unload() && owner->reload())) return;
+            t.assert_true(uintptr_t(tensor->data) != address && ggml_get_first_tensor(metadata->context()) == tensor);
+            t.assert_true(!owner->begin(generation));
+            std::vector<uint8_t> bytes(ggml_nbytes(tensor));
+            ggml_backend_tensor_get(tensor,bytes.data(),0,bytes.size());
+            t.assert_true(std::all_of(bytes.begin(),bytes.end(),[](uint8_t b) { return b == 0x3c; }));
+        }
+        t.assert_true(owner->unload());
+    });
+    t.test("a_reader_retained_during_retirement_keeps_weights_bound_and_admission_closed", [](testing & t) {
+        source_fixture f; auto metadata = mtmd_projector_metadata::create(f.context(),f.source());
+        auto resident = mtmd_projector_weights::allocate(metadata,ggml_backend_cpu_buffer_type());
+        std::weak_ptr<mtmd_projector_weights> weak = resident;
+        std::shared_ptr<mtmd_projector_weights> reader;
+        auto owner = mtmd_projector_residency::create(std::move(resident),ggml_backend_cpu_buffer_type(),
+            {[] { return true; },[&] { reader = weak.lock(); return true; }});
+        if (!t.assert_true(bool(owner))) return;
+        t.assert_true(!owner->unload() && reader && !owner->ready());
+        t.assert_true(ggml_get_first_tensor(metadata->context())->data != nullptr);
+        reader.reset();
+        t.assert_true(owner->unload() && !ggml_get_first_tensor(metadata->context())->data);
+    });
+    t.test("measurement_only_weights_cannot_enter_the_live_residency_lifecycle", [](testing & t) {
+        source_fixture f; auto metadata = mtmd_projector_metadata::create(f.context(),f.source());
+        auto weights = mtmd_projector_weights::allocate(metadata,ggml_backend_cpu_buffer_type(),true);
+        t.assert_true(bool(weights));
+        t.assert_true(!mtmd_projector_residency::create(std::move(weights),ggml_backend_cpu_buffer_type(),
+            {[] { return true; },[] { return true; }}));
+    });
     if (model_path && projector_path) t.test("real_projector_encoding_matches_the_original_eager_loader", [&](testing & t) {
         ggml_backend_load_all();
         auto model_params = llama_model_default_params();
@@ -218,6 +341,16 @@ int main(int argc,char ** argv) {
         llama_model_ptr model(llama_model_load_from_file(model_path,model_params));
         if (!t.assert_true(bool(model))) return;
         auto params = mtmd_context_params_default();
+        struct encode_probe { mtmd_context * ctx = nullptr; mtmd_batch * batch = nullptr; bool reentered = false; size_t calls = 0; } probe;
+        params.cb_eval_user_data = &probe;
+        params.cb_eval = [](ggml_tensor *,bool ask,void * data) {
+            auto & p = *static_cast<encode_probe *>(data);
+            if (ask && p.ctx && !p.calls++) {
+                p.reentered |= mtmd_unload_projector_weights(p.ctx) || mtmd_reload_projector_weights(p.ctx) ||
+                    bool(mtmd_acquire_projector_weights(p.ctx)) || mtmd_batch_encode(p.batch) == 0;
+            }
+            return false;
+        };
         params.use_gpu = cuda; params.warmup = false; params.n_threads = 4;
         params.image_min_tokens = 64; params.image_max_tokens = 256;
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
@@ -232,6 +365,7 @@ int main(int argc,char ** argv) {
         mtmd::input_chunks_ptr chunks(mtmd_input_chunks_init());
         if (!t.assert_equal(0,mtmd_tokenize(projector.get(),chunks.get(),&input,&bitmap,1))) return;
         mtmd::batch_ptr batch(mtmd_batch_init(projector.get()));
+        probe.ctx = projector.get(); probe.batch = batch.get();
         const mtmd_input_chunk * chunk = nullptr;
         for (size_t i = 0; i < mtmd_input_chunks_size(chunks.get()); ++i) {
             auto * entry = mtmd_input_chunks_get(chunks.get(),i);
@@ -241,6 +375,7 @@ int main(int argc,char ** argv) {
             }
         }
         if (!t.assert_true(chunk != nullptr) || !t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
+        t.assert_true(probe.calls > 0 && !probe.reentered);
         mtmd_embedding_view output;
         if (!t.assert_true(mtmd_batch_acquire_output_embd(batch.get(),chunk,output))) return;
         const size_t bytes = output.n_tokens()*output.n_embd()*sizeof(float);
@@ -261,6 +396,33 @@ int main(int argc,char ** argv) {
             if (!t.assert_true(bool(weights))) return;
             auto metadata = weights->metadata();
             auto * tensor = ggml_get_first_tensor(metadata->context());
+            t.assert_true(!mtmd_unload_projector_weights(projector.get()));
+            weights.reset();
+            const std::vector<float> embeddings(output.data(),output.data()+bytes/sizeof(float));
+            for (int round = 0; round < 3; ++round) {
+                for (int warm = 0; warm < 2; ++warm) if (!t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
+                if (!t.assert_true(mtmd_unload_projector_weights(projector.get()))) return;
+                t.assert_true(!tensor->data && !tensor->buffer && !tensor->extra);
+                t.assert_true(!mtmd_acquire_projector_weights(projector.get()));
+                t.assert_true(mtmd_batch_encode(batch.get()) != 0);
+                std::vector<ggml_backend_memory_workspace_group> groups;
+                t.assert_true(!mtmd_batch_measure_compute_workspace(batch.get(),groups));
+                t.assert_true(std::equal(embeddings.begin(),embeddings.end(),output.data()));
+                struct reload_probe { mtmd_context * ctx; mtmd_batch * batch; bool reentered = false; size_t calls = 0; } p{projector.get(),batch.get()};
+                auto callback = [](float,void * data) {
+                    auto & p = *static_cast<reload_probe *>(data); ++p.calls;
+                    p.reentered |= mtmd_unload_projector_weights(p.ctx) || mtmd_reload_projector_weights(p.ctx) ||
+                        bool(mtmd_acquire_projector_weights(p.ctx)) || mtmd_batch_encode(p.batch) == 0;
+                    return true;
+                };
+                if (!t.assert_true(mtmd_reload_projector_weights(projector.get(),callback,&p))) return;
+                t.assert_true(p.calls > 1 && !p.reentered && tensor->data && tensor->buffer);
+                if (!t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
+                mtmd_embedding_view restored;
+                if (!t.assert_true(mtmd_batch_acquire_output_embd(batch.get(),chunk,restored))) return;
+                t.assert_true(std::memcmp(restored.data(),embeddings.data(),bytes) == 0);
+            }
+            weights = mtmd_acquire_projector_weights(projector.get());
             const size_t sample_bytes = std::min(size_t(64),ggml_nbytes(tensor));
             std::vector<uint8_t> expected(sample_bytes),actual(sample_bytes);
             ggml_backend_tensor_get(tensor,expected.data(),0,sample_bytes);

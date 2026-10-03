@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <functional>
 
 struct mtmd_projector_tensor_source {
     std::string name;
@@ -52,7 +53,7 @@ private:
 };
 
 // Eager resident binding. Shared owners keep both descriptors and backend storage alive.
-// Callers drain execution and retire captures before returning their last owner; no runtime unload API yet.
+// Use the residency lifecycle to drain execution and retire captures before returning its last owner.
 class MTMD_API mtmd_projector_weights {
 public:
     // Allocate and load once; reject reentry or an already-bound metadata context.
@@ -62,14 +63,50 @@ public:
     ~mtmd_projector_weights();
     ggml_backend_buffer_t buffer() const noexcept;
     const std::shared_ptr<mtmd_projector_metadata> & metadata() const noexcept;
+    // Measurement-only buffers have storage but cannot be admitted for execution.
+    bool uploaded() const noexcept;
 
 private:
     mtmd_projector_weights() = default;
     std::shared_ptr<mtmd_projector_metadata> descriptors;
     ggml_backend_buffer_ptr storage;
+    bool payload_uploaded = false;
+};
+
+struct mtmd_projector_residency_hooks {
+    std::function<bool()> drain;
+    std::function<bool()> invalidate;
+};
+
+// Owner-thread lifecycle; execution pins retain the current binding until drained retirement.
+class MTMD_API mtmd_projector_residency {
+public:
+    static std::unique_ptr<mtmd_projector_residency> create(std::shared_ptr<mtmd_projector_weights> weights,
+        ggml_backend_buffer_type_t type, mtmd_projector_residency_hooks hooks);
+    ~mtmd_projector_residency();
+    bool ready() const noexcept;
+    uint64_t generation() const noexcept;
+    std::shared_ptr<const mtmd_projector_weights> acquire() const noexcept;
+    // Reject stale generations and reentry; end closes host submission, not device completion.
+    bool begin(uint64_t generation) noexcept;
+    void end() noexcept;
+    // Refuse retained readers; drain and invalidate before returning the last internal weight owner.
+    bool unload() noexcept;
+    // Failed loading remains unbound and retryable; no implicit graph execution is admitted.
+    bool reload(mtmd_progress_callback progress = nullptr, void * user_data = nullptr) noexcept;
+
+private:
+    struct implementation;
+    explicit mtmd_projector_residency(std::unique_ptr<implementation> impl);
+    std::unique_ptr<implementation> impl;
 };
 
 // Internal ownership seam for lifecycle adapters and tests, not a new public mtmd C API.
 MTMD_API std::shared_ptr<const mtmd_projector_weights> mtmd_acquire_projector_weights(const mtmd_context * ctx) noexcept;
+MTMD_API bool mtmd_unload_projector_weights(mtmd_context * ctx) noexcept;
+MTMD_API bool mtmd_reload_projector_weights(mtmd_context * ctx,
+    mtmd_progress_callback progress = nullptr, void * user_data = nullptr) noexcept;
 struct clip_ctx;
 std::shared_ptr<const mtmd_projector_weights> clip_acquire_projector_weights(const clip_ctx * ctx) noexcept;
+bool clip_unload_projector_weights(clip_ctx * ctx) noexcept;
+bool clip_reload_projector_weights(clip_ctx * ctx,mtmd_progress_callback progress,void * user_data) noexcept;

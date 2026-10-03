@@ -1,6 +1,7 @@
 #include "mtmd-projector-storage.h"
 #include "ggml-alloc.h"
 #include "gguf.h"
+#include "../../src/llama-memory-executor.h"
 
 #include <algorithm>
 #include <limits>
@@ -119,6 +120,7 @@ std::shared_ptr<mtmd_projector_weights> mtmd_projector_weights::allocate(std::sh
             loaded += bytes;
             if (progress && !progress(float(loaded)/float(total),user_data)) return {};
         }
+        result->payload_uploaded = true;
     }
     return result;
 }
@@ -133,3 +135,100 @@ mtmd_projector_weights::~mtmd_projector_weights() {
 }
 ggml_backend_buffer_t mtmd_projector_weights::buffer() const noexcept { return storage.get(); }
 const std::shared_ptr<mtmd_projector_metadata> & mtmd_projector_weights::metadata() const noexcept { return descriptors; }
+bool mtmd_projector_weights::uploaded() const noexcept { return payload_uploaded; }
+
+struct projector_weight_executable : llama_memory_executable {
+    std::shared_ptr<mtmd_projector_weights> weights;
+    explicit projector_weight_executable(std::shared_ptr<mtmd_projector_weights> weights) : weights(std::move(weights)) {}
+};
+
+struct mtmd_projector_residency::implementation : llama_memory_executor_backend {
+    std::shared_ptr<mtmd_projector_metadata> metadata;
+    std::shared_ptr<mtmd_projector_weights> resident;
+    ggml_backend_buffer_type_t type;
+    mtmd_projector_residency_hooks hooks;
+    llama_memory_executor executor;
+    llama_memory_execution pending;
+    uint64_t revision = 1;
+    bool busy = false, submitting = false;
+
+    // Queue completion and native invalidation precede release of the execution's weight dependency.
+    bool drain() override {
+        if (!hooks.drain() || !hooks.invalidate()) return false;
+        pending.reset();
+        return true;
+    }
+    bool capture(const std::shared_ptr<mtmd_projector_weights> & weights,uint64_t generation) {
+        std::unique_ptr<llama_memory_executable> native = std::make_unique<projector_weight_executable>(weights);
+        return executor.capture(native,{},generation);
+    }
+    ~implementation() {
+        busy = true;
+        const auto retired = executor.retire(*this);
+        GGML_ASSERT(retired.status == llama_memory_executor_status::retired || retired.status == llama_memory_executor_status::unchanged);
+    }
+};
+mtmd_projector_residency::mtmd_projector_residency(std::unique_ptr<implementation> impl) : impl(std::move(impl)) {}
+mtmd_projector_residency::~mtmd_projector_residency() = default;
+
+// Adopt the eager binding without changing its tensor addresses or allocating another buffer.
+std::unique_ptr<mtmd_projector_residency> mtmd_projector_residency::create(std::shared_ptr<mtmd_projector_weights> weights,
+    ggml_backend_buffer_type_t type,mtmd_projector_residency_hooks hooks) {
+    if (!weights || !weights->uploaded() || !weights->buffer() || !type || !hooks.drain || !hooks.invalidate) return {};
+    auto state = std::make_unique<implementation>();
+    state->type = type; state->hooks = std::move(hooks);
+    state->metadata = weights->metadata(); state->resident = std::move(weights);
+    if (!state->capture(state->resident,state->revision)) return {};
+    return std::unique_ptr<mtmd_projector_residency>(new mtmd_projector_residency(std::move(state)));
+}
+bool mtmd_projector_residency::ready() const noexcept { return !impl->busy && impl->resident && impl->executor.ready(); }
+uint64_t mtmd_projector_residency::generation() const noexcept { return impl->revision; }
+std::shared_ptr<const mtmd_projector_weights> mtmd_projector_residency::acquire() const noexcept { return ready() ? impl->resident : nullptr; }
+
+// Retain the execution pin across calls; only the drained retirement path returns it.
+bool mtmd_projector_residency::begin(uint64_t generation) noexcept {
+    if (!ready() || generation != impl->revision) return false;
+    try {
+        if (!impl->pending) impl->pending = impl->executor.acquire({},generation);
+        if (!impl->pending) return false;
+        impl->busy = impl->submitting = true;
+        return true;
+    } catch (...) { return false; }
+}
+void mtmd_projector_residency::end() noexcept {
+    if (impl->submitting) impl->busy = impl->submitting = false;
+}
+
+struct projector_transition_gate {
+    bool & busy;
+    explicit projector_transition_gate(bool & busy) : busy(busy) { busy = true; }
+    ~projector_transition_gate() { busy = false; }
+};
+
+// Internal references are the resident slot and its captured dependency; other owners must return first.
+bool mtmd_projector_residency::unload() noexcept {
+    if (impl->busy || impl->revision == UINT64_MAX) return false;
+    if (!impl->resident) return true;
+    if (impl->resident.use_count() > 2) return false;
+    projector_transition_gate gate(impl->busy);
+    const auto retired = impl->executor.retire(*impl);
+    if (retired.status != llama_memory_executor_status::retired && retired.status != llama_memory_executor_status::unchanged) return false;
+    if (impl->resident.use_count() != 1) return false;
+    impl->resident.reset();
+    ++impl->revision;
+    return true;
+}
+
+// Publish a fully uploaded binding and new executable together; failure leaves the unloaded state intact.
+bool mtmd_projector_residency::reload(mtmd_progress_callback progress,void * user_data) noexcept {
+    if (impl->busy || impl->revision == UINT64_MAX) return false;
+    if (impl->resident) return ready();
+    projector_transition_gate gate(impl->busy);
+    try {
+        auto candidate = mtmd_projector_weights::allocate(impl->metadata,impl->type,false,progress,user_data);
+        if (!candidate || !impl->capture(candidate,impl->revision+1)) return false;
+        impl->resident = std::move(candidate);
+        ++impl->revision;
+        return true;
+    } catch (...) { return false; }
+}
