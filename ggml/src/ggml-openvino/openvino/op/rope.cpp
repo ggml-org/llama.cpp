@@ -44,6 +44,8 @@ OutputVector translate_rope(const NodeContext & context) {
     constexpr int TYPE_NORMAL = 0;
     constexpr int TYPE_NEOX = 1;
     constexpr int TYPE_IMROPE = 2;
+    constexpr int TYPE_VISION = 3;
+    constexpr int TYPE_MROPE = 4;
 
     Output<Node> cos_theta_node;
     Output<Node> sin_theta_node;
@@ -67,7 +69,7 @@ OutputVector translate_rope(const NodeContext & context) {
             if (context.get_input_size() == 3) {
                 rope_freqs_weight = context.get_input(2).get_node_shared_ptr();
             }
-            auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode == TYPE_IMROPE, false);
+            auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode, false, head_dim);
             sin_theta_node = sin_cos.first;
             cos_theta_node = sin_cos.second;
             context.put_shared(cache_key + "_cos", cos_theta_node);
@@ -80,10 +82,11 @@ OutputVector translate_rope(const NodeContext & context) {
         data_node = std::make_shared<ov::op::v0::Convert>(data_node, ov::element::f32);
     }
 
+    const int64_t total_rope_dims = (mode == TYPE_VISION) ? (2 * n_dims) : n_dims;
     FRONT_END_OP_CONVERSION_CHECK(n_offs >= 0 && (n_offs % 2 == 0),
                                   "ROPE expects non-negative even n_offs");
-    FRONT_END_OP_CONVERSION_CHECK(n_dims > 0 && n_dims + n_offs <= head_dim && (n_dims % 2 == 0),
-                                  "ROPE expects even n_dims in [1, head_dim - n_offs]");
+    FRONT_END_OP_CONVERSION_CHECK(n_dims > 0 && total_rope_dims + n_offs <= head_dim && (n_dims % 2 == 0),
+                                  "ROPE expects even n_dims with total_rope_dims + n_offs <= head_dim");
 
     // RoPEFusionFlux requires rank_equals(4) on x, t_cos and t_sin. The cos/sin
     // tables are already built rank-4 ([1, S, 1, head_size/2]) for both modes. In
@@ -91,9 +94,10 @@ OutputVector translate_rope(const NodeContext & context) {
     // to rank-4 ([1, S, n_heads, head_size]) here. Stateful RoPE already produced
     // rank-4 output, so downstream attention is unaffected.
     if (context.is_stateful()) {
+        const int64_t batch = static_cast<int64_t>(output_shape[0]);
         auto r4_shape = ov::op::v0::Constant::create(
             ov::element::i64, {4},
-            std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+            std::vector<int64_t>{batch, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
         data_node = std::make_shared<ov::op::v1::Reshape>(data_node, r4_shape, false);
     }
     // For TYPE_NORMAL rope (both stateful and stateless) we emit the Flux-style
@@ -103,6 +107,7 @@ OutputVector translate_rope(const NodeContext & context) {
         auto axis_last = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
         auto step_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
 
+        const int64_t batch = static_cast<int64_t>(output_shape[0]);
         const int64_t n_heads = static_cast<int64_t>(output_shape[2]);
         const int64_t half = n_dims / 2;
         auto rot_start = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_offs});
@@ -112,7 +117,7 @@ OutputVector translate_rope(const NodeContext & context) {
         auto neg_one_f = ov::op::v0::Constant::create(data_node->get_element_type(), ov::Shape{}, {-1.0f});
 
         auto paired_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {5}, std::vector<int64_t>{1, -1, n_heads, half, 2});
+            ov::element::i64, {5}, std::vector<int64_t>{batch, -1, n_heads, half, 2});
         auto x_paired = std::make_shared<ov::op::v1::Reshape>(rot_data, paired_shape, false);
 
         auto split_axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {-1});
@@ -124,7 +129,7 @@ OutputVector translate_rope(const NodeContext & context) {
         auto x_rotated_paired = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{x1_neg, x0}, -1);
 
         auto flat_shape =
-            ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, -1, n_heads, n_dims});
+            ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{batch, -1, n_heads, n_dims});
         auto x_rotated =
             std::make_shared<ov::op::v1::Reshape>(x_rotated_paired, flat_shape, false);
 
@@ -167,10 +172,13 @@ OutputVector translate_rope(const NodeContext & context) {
         } else {
             res = std::make_shared<ov::op::v0::Concat>(concat_parts, -1);
         }
-    } else if (mode == TYPE_NEOX || mode == TYPE_IMROPE) {
-        if (mode == TYPE_IMROPE) {
+    } else if (mode == TYPE_NEOX || mode == TYPE_IMROPE || mode == TYPE_MROPE || mode == TYPE_VISION) {
+        const int64_t half = (mode == TYPE_VISION) ? n_dims : (n_dims / 2);
+        const int64_t rot_dims = 2 * half;
+
+        if (mode != TYPE_NEOX) {
             auto cos_sin_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4},
-                                                                        std::vector<int64_t>{1, -1, 1, (n_dims >> 1)});
+                                                                        std::vector<int64_t>{1, -1, 1, half});
             cos_theta_node = std::make_shared<ov::op::v1::Reshape>(cos_theta_node, cos_sin_shape, true);
             sin_theta_node = std::make_shared<ov::op::v1::Reshape>(sin_theta_node, cos_sin_shape, true);
         }
@@ -179,13 +187,12 @@ OutputVector translate_rope(const NodeContext & context) {
         auto step_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
 
         Output<Node> rot_data = data_node;
-        if (n_offs > 0 || n_offs + n_dims < head_dim) {
+        if (n_offs > 0 || n_offs + rot_dims < head_dim) {
             auto rot_start = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_offs});
-            auto rot_end = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_offs + n_dims});
+            auto rot_end = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_offs + rot_dims});
             rot_data = std::make_shared<ov::op::v8::Slice>(data_node, rot_start, rot_end, step_one, axis_last);
         }
 
-        const int64_t half = n_dims / 2;
         auto neg_one_f = ov::op::v0::Constant::create(data_node->get_element_type(), ov::Shape{}, {-1.0f});
 
         auto split_axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {3});
@@ -212,8 +219,8 @@ OutputVector translate_rope(const NodeContext & context) {
             concat_parts.push_back(head);
         }
         concat_parts.push_back(rotated);
-        if (n_offs + n_dims < head_dim) {
-            auto tail_start = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_offs + n_dims});
+        if (n_offs + rot_dims < head_dim) {
+            auto tail_start = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_offs + rot_dims});
             auto tail_end = ov::op::v0::Constant::create(ov::element::i64, {1}, {head_dim});
             auto tail = std::make_shared<ov::op::v8::Slice>(data_node, tail_start, tail_end, step_one, axis_last);
             concat_parts.push_back(tail);

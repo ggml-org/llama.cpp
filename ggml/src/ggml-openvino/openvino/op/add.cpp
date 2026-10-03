@@ -27,10 +27,18 @@ OutputVector translate_add(const NodeContext & context) {
         auto base_name = context.get_view_input_src_name(1, view_size - 1);
         auto base = context.get_input(base_name);
 
+        // Stateful models drop the leading batch dim, so the base is rank 3 and both axes
+        // below shift down by one. Take them from the actual rank: the expert axis is always
+        // second from last, and the token axis is re-added just before it.
+        const auto base_rank = base.get_partial_shape().rank();
+        FRONT_END_OP_CONVERSION_CHECK(base_rank.is_static() && base_rank.get_length() >= 3,
+                                      "MoE expert sum needs a static rank of at least 3");
+        const int64_t rank = base_rank.get_length();
+
         auto reduced = std::make_shared<ov::op::v1::ReduceSum>(
-            base, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {2}), false);
-        auto res =
-            std::make_shared<ov::op::v0::Unsqueeze>(reduced, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}));
+            base, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {rank - 2}), false);
+        auto res = std::make_shared<ov::op::v0::Unsqueeze>(
+            reduced, ov::op::v0::Constant::create(ov::element::i64, {1}, {rank - 3}));
         return rename_outputs_with_suffix({res}, context.get_name());
     }
 
