@@ -96,6 +96,7 @@ bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & 
     ggml_backend_buffer_type_t compute_type);
 bool clip_attach_compute_workspace(clip_ctx * ctx,const std::vector<ggml_backend_memory_lease_t> & leases);
 bool clip_release_compute_workspace(clip_ctx * ctx);
+bool clip_borrow_compute_workspace(clip_ctx * ctx, llama_context_memory & parent);
 
 enum clip_gen_process_type {
     CLIP_GEN_PROCESS_GEN_UNKNOWN,

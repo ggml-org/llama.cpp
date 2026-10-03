@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <stdexcept>
 
 using phase_status = llama_memory_text_phase_status;
 using text_phase = llama_memory_text_phase;
@@ -67,6 +68,28 @@ struct fixture {
         owner.synchronize();
         for (float x : result) t.assert_equal(value*3, x);
     }
+};
+
+struct handoff_probe {
+    inline static handoff_probe * active = nullptr;
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::synchronize) original;
+    llama_context_memory & parent;
+    llama_context_memory & child;
+    bool reentered = false, fail = true;
+    handoff_probe(ggml_backend_t backend, llama_context_memory & parent, llama_context_memory & child) :
+        backend(backend), original(backend->iface.synchronize), parent(parent), child(child) {
+        GGML_ASSERT(!active); active = this;
+        backend->iface.synchronize = [](ggml_backend_t backend) {
+            active->reentered |= active->parent.prepare_serial_target();
+            active->reentered |= active->child.prepare_serial_consumer(text_phase::prefill);
+            active->reentered |= active->parent.signal_text_phase(
+                {text_phase::decode, 1, true, true, false}).status != phase_status::transition_failed;
+            if (active->fail) throw std::runtime_error("injected queue drain failure");
+            if (active->original) active->original(backend);
+        };
+    }
+    ~handoff_probe() { backend->iface.synchronize = original; active = nullptr; }
 };
 
 // Paired same-binary microbenchmark: dispatch cost only, not full-model tokens per second.
@@ -246,6 +269,77 @@ int main(int argc, char ** argv) {
         t.assert_equal(bytes, ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get()));
         f.rebuild();
         f.run(t, *owner, 5);
+    });
+
+    t.test("three_serial_schedulers_share_scratch_without_overlapping_admission", [&](testing & t) {
+        fixture target(dev), draft(dev), vision(dev);
+        auto parent = llama_context_memory::create(target.sched.get(), target.backends, target.groups);
+        if (!t.assert_true(bool(parent))) return;
+        llama_compute_workspace_plan draft_plan;
+        draft_plan.groups = draft.groups;
+        draft_plan.phase_sizes.assign(2, std::vector<size_t>(draft.groups.size()));
+        for (auto & phase : draft_plan.phase_sizes)
+            for (size_t i = 0; i < draft.groups.size(); ++i) phase[i] = draft.groups[i].size;
+        auto first = llama_context_memory::create(draft.sched.get(), draft.backends, draft_plan, nullptr, parent.get());
+        auto second = llama_context_memory::borrow_workspace(vision.sched.get(), vision.backends, vision.groups, *parent);
+        if (!t.assert_true(bool(first) && bool(second))) return;
+        t.assert_true(!llama_context_memory::borrow_workspace(draft.sched.get(), draft.backends, draft.groups, *parent));
+        t.assert_true(!llama_context_memory::borrow_workspace(vision.sched.get(), vision.backends, vision.groups, *first));
+        t.assert_true(parent->prepare_serial_target());
+        target.rebuild();
+        target.run(t, *parent, 2);
+        float copied[16] = {};
+        t.assert_true(parent->compute_async(target.graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_tensor_get_async(target.device.get(), target.output, copied, 0, sizeof(copied));
+        {
+            handoff_probe probe(target.device.get(), *parent, *first);
+            t.assert_true(!first->prepare_serial_consumer(text_phase::prefill));
+            t.assert_true(parent->serial_ready());
+            t.assert_true(!probe.reentered);
+            probe.fail = false;
+            t.assert_true(first->prepare_serial_consumer(text_phase::prefill));
+            t.assert_true(!probe.reentered);
+        }
+        for (float value : copied) t.assert_equal(6.0f, value);
+        t.assert_true(first->prepare_serial_consumer(text_phase::prefill));
+        draft.rebuild();
+        t.assert_true(parent->compute_async(target.graph) == GGML_STATUS_FAILED);
+        t.assert_true(!parent->serial_ready());
+        draft.run(t, *first, 3);
+        t.assert_true(first->prepare_serial_consumer(text_phase::decode));
+        draft.run(t, *first, 3);
+        t.assert_true(second->prepare_serial_consumer(text_phase::prefill));
+        vision.rebuild();
+        t.assert_true(first->compute_async(draft.graph) == GGML_STATUS_FAILED);
+        vision.run(t, *second, 4);
+        if (dev) {
+            auto query = reinterpret_cast<ggml_backend_cuda_graph_is_captured_t>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_cuda_graph_is_captured"));
+            if (!t.assert_true(query != nullptr)) return;
+            const void * key = ggml_graph_node(vision.graph, 0);
+            t.assert_true(query(vision.device.get(), key));
+            t.assert_true(parent->prepare_serial_target());
+            t.assert_true(!query(vision.device.get(), key));
+        }
+        const auto base = [](const llama_context_memory & owner) {
+            return ggml_backend_buffer_get_base(ggml_backend_memory_lease_buffer(owner.workspace_leases().front()));
+        };
+        t.assert_true(base(*parent) == base(*first) && base(*first) == base(*second));
+        t.assert_true(!second->prepare_serial_consumer(text_phase::decode));
+        for (int i = 0; i < 3; ++i) {
+            t.assert_true(parent->prepare_serial_target());
+            t.assert_true(!second->serial_ready());
+            target.run(t, *parent, float(5 + i));
+            t.assert_true(second->prepare_serial_consumer(text_phase::prefill));
+            vision.run(t, *second, float(8 + i));
+        }
+        first.reset();
+        t.assert_true(parent->prepare_serial_target());
+        target.run(t, *parent, 11);
+        parent.reset();
+        t.assert_true(!second->prepare_serial_consumer(text_phase::prefill));
+        t.assert_true(second->compute_async(vision.graph) == GGML_STATUS_FAILED);
+        second.reset();
     });
 
     if (dev) {

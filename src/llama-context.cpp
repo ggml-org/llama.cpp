@@ -1045,6 +1045,10 @@ const llama_context_memory * llama_context::get_compute_memory() const noexcept 
     return compute_memory.get();
 }
 
+llama_context_memory * llama_context_compute_memory(llama_context * ctx) noexcept {
+    return ctx ? const_cast<llama_context_memory *>(ctx->get_compute_memory()) : nullptr;
+}
+
 
 bool llama_context::uses_compute_arenas() const {
     return !compute_arenas.empty() || (compute_memory && compute_memory->uses_arenas());
@@ -2186,7 +2190,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const bool reservation_was_pending = sched_reserve_state.begin();
     const uint64_t serial_transitions = compute_memory ? compute_memory->phase_transition_count() : 0;
     // Drain the other scheduler before reservation can discard or rewrite shared scratch.
-    if (compute_memory && cparams.kv_stream_auxiliary_layers &&
+    if (compute_memory && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT &&
             !compute_memory->prepare_serial_target()) {
         LLAMA_LOG_ERROR("%s: failed to hand off shared graph scratch to target\n", __func__);
         return -2;
@@ -2204,7 +2208,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         // A dirty scheduler reservation replaced the coordinator. The new
         // owner must receive the handoff as well, before graph inputs are set.
         const auto after_reserve = compute_memory->phase_transition_count();
-        if (cparams.kv_stream_auxiliary_layers && !compute_memory->prepare_serial_target()) return -2;
+        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !compute_memory->prepare_serial_target()) return -2;
         if (cparams.mtp_publish_host && compute_memory->borrows_serial_parent() &&
                 !compute_memory->prepare_serial_draft(text_phase)) return -2;
         draft_graph_rebuild = cparams.mtp_publish_host &&

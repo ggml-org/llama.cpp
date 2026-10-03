@@ -1,6 +1,7 @@
 #include "../tools/mtmd/mtmd-workspace.h"
 #include "../tools/mtmd/mtmd-embeddings.h"
 #include "../ggml/src/ggml-backend-impl.h"
+#include "../src/llama-context-memory.h"
 #include "testing.h"
 #include "ggml-cpu.h"
 #include <cmath>
@@ -86,6 +87,48 @@ int main(int argc,char ** argv) {
         else return 2;
     }
     testing t;
+#if !defined(_WIN32) || !defined(LLAMA_SHARED)
+    t.test("vision_borrows_serial_target_scratch_and_returns_it_on_release", [](testing & t) {
+        workspace_fixture f;
+        workspace_graph graph(8);
+        std::vector<ggml_backend_memory_workspace_group> groups;
+        if (!t.assert_true(f.workspace.measure(graph.graph, groups))) return;
+        ggml_backend_ptr target_backend(ggml_backend_cpu_init());
+        ggml_backend_t backends[] = {target_backend.get()};
+        ggml_backend_buffer_type_t types[] = {ggml_backend_cpu_buffer_type()};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, types, 1, 256, false, true));
+        {
+            auto small = llama_context_memory::create(sched.get(), {target_backend.get()},
+                {{types[0], groups[0].alignment, groups[0].alignment, 0}});
+            if (!t.assert_true(bool(small))) return;
+            t.assert_true(!f.workspace.borrow(*small));
+            t.assert_true(small->serial_ready());
+            t.assert_true(!f.workspace.ready());
+        }
+        auto parent = llama_context_memory::create(sched.get(), {target_backend.get()},
+            {{types[0], groups[0].size, groups[0].alignment, 0}});
+        if (!t.assert_true(bool(parent) && f.workspace.borrow(*parent))) return;
+        if (!t.assert_true(f.workspace.alloc_graph(graph.graph))) return;
+        const auto first = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(parent->shared_parent()));
+        const auto input = reinterpret_cast<uintptr_t>(graph.input->data);
+        t.assert_true(input >= first && input + ggml_nbytes(graph.input) <= first + groups[0].size);
+        verify_graph(t, f.workspace, graph);
+        t.assert_true(f.workspace.release());
+        t.assert_true(parent->prepare_serial_target());
+        t.assert_true(!f.workspace.ready());
+        t.assert_true(f.workspace.compute_async(graph.graph) == GGML_STATUS_FAILED);
+        workspace_graph next(8);
+        t.assert_true(f.workspace.measure(next.graph, groups));
+        t.assert_true(f.workspace.borrow(*parent));
+        t.assert_true(f.workspace.retire_graph());
+        t.assert_true(f.workspace.alloc_graph(next.graph));
+        verify_graph(t, f.workspace, next);
+        parent.reset();
+        t.assert_true(!f.workspace.ready());
+        t.assert_true(f.workspace.compute_async(next.graph) == GGML_STATUS_FAILED);
+        t.assert_true(f.workspace.release());
+    });
+#endif
     t.test("measures_actual_batch_without_allocating_and_normalizes_aliases", [](testing & t) {
         workspace_fixture f;
         if (!t.assert_true(f.workspace.supported())) return;

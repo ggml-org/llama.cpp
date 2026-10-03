@@ -436,8 +436,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.1b | Committed | 09f566915 | Retained host embedding views, checked token slices, atomic result publication, cancellation cleanup and compatible/incompatible batch controls. CPU ownership and real CUDA lifetime/equivalence tests pass. |
 | 7.2a | Committed | 9295ce06c | Backend-neutral ordered text/image session plan and ordinary mtmd baseline adapter. Initial/follow-up IQ4_XS logits and 16 continuation tokens match the legacy helper; failed images stop later prefill. |
 | 7.2b prerequisite | Committed | a9c1f74cb | Pre-existing short-prefill dispatch bug isolated and fixed at the 7.2a checkpoint before restoring the ongoing embedding/position work. |
-| 7.2b | Ready for review | - | Adaptive embedding admission separates dense physical KV rows from repeated/gapped M-RoPE positions; resident/ring image controls, checkpoint/suffix handling and numerical/memory regressions pass. |
-| 7.2c-7.5c | Planned | - | Live three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
+| 7.2b | Committed | 02d9f199c | Adaptive embedding admission separates dense physical KV rows from repeated/gapped M-RoPE positions; resident/ring image controls, checkpoint/suffix handling and numerical/memory regressions pass. |
+| 7.2c | Ready for review | - | Multiple serial scheduler children, exclusive submission/reentry gates, bounded vision borrowing, and capture/copy retirement; CPU/CUDA three-consumer and live shared-image controls pass. |
+| 7.3a-7.5c | Planned | - | KV suspension, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3741,3 +3742,43 @@ The shortened real-image memcheck also passes **13 cases / 194 assertions** with
 Artifacts: `/tmp/vision-7.2b-final-session.log`, `/tmp/vision-7.2b-final-text.log`, `/tmp/vision-7.2b-suffix-stream.log`, `/tmp/vision-7.2b-suffix-resident.log`, `/tmp/vision-7.2b-suffix-arena.log`, `/tmp/vision-7.2b-mtp-regression.log`, `/tmp/vision-7.2b-prefill-memcheck.log`, and `/tmp/vision-7.2b-image-memcheck.log`.
 
 Stage 7.2b is ready for review. Production is restored with its existing image/configuration after qualification. The streaming/mmproj server guard remains in place, and shared vision ownership, suspension, projector reload and server admission remain in later stages. Implementation, tests and this roadmap are staged without unrelated benchmark files. No assistant commit or push is made.
+
+### Stage 7.2c: serial text, vision and optional MTP ownership
+
+The live `llama_context_memory` owner previously tracked one MTP child. It now registers multiple borrowed scheduler owners, rejects duplicate scheduler/backend handles and nested parents, and allows only one active participant to submit graph work. A shared owner-thread gate covers submission, drain, native retirement and phase changes; reentrant handoffs cannot overwrite scratch midway through a callback. This is not concurrent or thread-safe inference.
+
+#### Bounded borrowing and handoff
+
+- `borrow_workspace()` accepts the actual measured canonical buffer groups from a prefill-only consumer. Its device grant must fit before the target's reconstructible KV pool in the prefill layout. Host/fallback groups retain the existing separate allocation behavior. Non-streaming graph owners expose their conservative shared scratch too, which makes the same handoff protocol testable on CPU without inventing a fake CUDA allocator.
+- A vision consumer entering from decode drains the previous scheduler, returns any retained MTP ring guard, and activates the existing target prefill layout. The existing KV consumer preserves authoritative host data and rebinds its resident/ring mirror. Vision then uses only the bounded discardable prefix, not KV bytes. Oversized grants fail instead of silently falling back to an independent vision allocation.
+- Target and MTP preparation now coordinate all registered children. Returning to target decode shrinks inactive child grants before expanding the KV pool. The regular MTP child retains its existing prefill/decode path and unchanged-graph caching; prefill-only vision children cannot enter a decode phase and retire their native captures before the next participant reuses their scratch.
+- Parent destruction drains and invalidates surviving children before detaching their bindings. Child destruction drains and invalidates itself before unregistering from its parent. Children whose parent has disappeared reject further execution, even if their retained buffer owner has not yet been destroyed.
+- Preparation and retirement reuse the existing workspace, executor, lease and transition machinery. There is no new allocator or attention kernel. The private cross-library calls used by mtmd have explicit `LLAMA_API` visibility, including destruction, so the adapter does not rely on ELF's broader default symbol export behavior.
+
+The opt-in internal `mtmd_session_eval_chunks_shared()` adapter measures each actual media batch, borrows from the current target coordinator, encodes, retains the host embedding views, and returns vision scratch before embedding prefill. An early return or exception attempts the same workspace cleanup. A failed request remains closed rather than running later prompt chunks. The existing ordinary adapter stays available; no CLI/server switch or production vision guard is changed.
+
+The target coordinator may be rebuilt by scheduler reservation, so the adapter retrieves it for each batch rather than keeping a raw parent pointer across requests. Graph metadata is rebuilt after a workspace has been returned: measuring a graph containing tensor-buffer pointers from a released grant is outside the detached-graph contract.
+
+#### TDD and qualification
+
+The new three-scheduler test first failed against stubbed borrowing methods while all pre-existing owner controls passed. It then qualified CPU admission, shared physical addresses, repeated target/MTP/vision handoffs and parent-first/child-first teardown before the live vision bridge was wired.
+
+- Owner tests pass **7 cases / 657 assertions** on CPU and **8 cases / 685 assertions** on CUDA. A synchronization probe injects drain failure, rejects callback reentry into target/child/phase admission, and successfully retries. CUDA tests include pending output D2H completion before reuse and native-capture retirement before vision scratch changes ownership.
+- Vision workspace tests pass **11 cases / 113 assertions**. They verify an actual tensor address falls inside the target parent, reject a too-small parent without changing target readiness, return storage on release/cancellation cleanup, reborrow with fresh graph metadata, and close a child whose parent is destroyed first.
+- The owner, workspace and common session suites pass ASan with leak checking and UBSan; the common session controls remain **12 cases / 146 assertions**.
+- The full IQ4_XS text regression remains **5 cases / 561 assertions**, with zero logit/recurrent-state error and matching continuation tokens. The embedded-MTP regression remains **2 cases / 246 assertions**, with zero MTP logit error for TG1-TG4 catch-up and sequential predictions. These text-only MTP controls do not qualify MTP image processing.
+- CUDA memcheck of the complete owner suite passes **8 cases / 685 assertions** with **zero memory-access errors**. API-error reporting is disabled for the stock backend's handled CUDA graph-update fallback; memory-access checking is enabled.
+
+The live no-MTP image fixture uses the matching F16 projector, IQ4_XS target, Q8_0/Q4_0 KV and UVM disabled. Both the private 16 MiB minimum and the exact 96 MiB shared parent pass **13 cases / 208 assertions**. Initial images, a follow-up image, and another image after generation have **zero maximum logit error**, identical recurrent-state bytes, and matching 16-token continuation sequences before and after the last image. The final decode pools are 80.6807 MiB and 84.5244 MiB respectively, with 28 active pages, 11 resident pages per layer, and 22/32 ring slots.
+
+The fixture also borrows and executes vision directly from a populated decode layout before any follow-up text can trigger prefill. Returning that workspace leaves the complete serialized target state unchanged. It then prefills the later image/text request and generates the same continuation as ordinary mtmd. This explicitly qualifies external decode-to-vision-to-text reactivation rather than only the initial prefill-to-vision path.
+
+One integration-fixture failure was corrected without loosening numerical checks: its malformed-input setup attempted another ordinary image encoding after shared execution had returned the vision grant. That setup now measures and reacquires a grant, retains the host view, and returns scratch before testing target rejection. Another synthetic fixture reconstructed its graph after release rather than reusing tensor-buffer metadata from the previous grant.
+
+Artifacts: `/tmp/vision-7.2c-three-owner-red.log`, `/tmp/vision-7.2c-owner-final.log`, `/tmp/vision-7.2c-owner-final-memcheck.log`, `/tmp/vision-7.2c-cycle-stream.log`, `/tmp/vision-7.2c-cycle-arena.log`, `/tmp/vision-7.2c-text-regression.log`, and `/tmp/vision-7.2c-mtp-regression.log`.
+
+#### Deliberate limits
+
+This stage shares graph scratch but keeps a target KV pool and eager projector weights resident. Vision batches larger than the protected prefill prefix are rejected. Stage 7.3 adds full KV suspension/resume; 7.4 adds projector-weight unload/reload; 7.5 admits qualified production requests. Image-aware MTP remains rejected until 7.5c. The adapter is backend-neutral, but native-cache lifecycle qualification here remains CPU/CUDA, not a claim that real multimodal inference has been tested on other accelerators.
+
+Stage 7.2c is staged for user review without unrelated benchmark files. Production is restored using its original image/configuration; no assistant commit or push is made.

@@ -1,4 +1,6 @@
 #include "mtmd-session.h"
+#include "mtmd-workspace.h"
+#include "../../src/llama-context-memory.h"
 
 #include <limits>
 #include <utility>
@@ -138,10 +140,11 @@ struct session_adapter : mtmd_session_backend {
     bool logits_last;
     size_t n_chunks;
     size_t prefills = 0;
+    bool shared = false;
 
     session_adapter(mtmd_context * ctx, llama_context * lctx, llama_pos position, llama_seq_id sequence,
-            int32_t batch_size, bool logits_last, size_t n_chunks) : ctx(ctx), lctx(lctx), position(position),
-        sequence(sequence), batch_size(batch_size), logits_last(logits_last), n_chunks(n_chunks) {}
+            int32_t batch_size, bool logits_last, size_t n_chunks, bool shared) : ctx(ctx), lctx(lctx), position(position),
+        sequence(sequence), batch_size(batch_size), logits_last(logits_last), n_chunks(n_chunks), shared(shared) {}
 
     // Reuse the real context's capability and batch-size checks without allocating graph storage.
     int32_t validate_batch(const std::vector<const mtmd_input_chunk *> & entries,
@@ -164,12 +167,29 @@ struct session_adapter : mtmd_session_backend {
             const auto result = mtmd_batch_add_chunk(batch.get(), chunk);
             if (result) return result;
         }
+        struct workspace_return {
+            mtmd_context * ctx = nullptr;
+            ~workspace_return() { if (ctx) mtmd_release_compute_workspace(ctx); }
+        } returned;
+        if (shared) {
+            auto * parent = llama_context_compute_memory(lctx);
+            auto * buffer = parent ? parent->shared_parent() : nullptr;
+            if (!buffer) return -1;
+            returned.ctx = ctx;
+            std::vector<ggml_backend_memory_workspace_group> groups;
+            if (!mtmd_batch_measure_compute_workspace(batch.get(), groups, ggml_backend_buffer_get_type(buffer)) ||
+                    !mtmd_borrow_compute_workspace(ctx, *parent)) return -1;
+        }
         const auto result = mtmd_batch_encode(batch.get());
         if (result) return result;
         for (const auto * chunk : chunks) {
             mtmd_embedding_view view;
             if (!mtmd_batch_acquire_output_embd(batch.get(), chunk, view)) return -1;
             outputs.push_back(std::move(view));
+        }
+        if (returned.ctx) {
+            if (!mtmd_release_compute_workspace(ctx)) return -1;
+            returned.ctx = nullptr;
         }
         return 0;
     }
@@ -191,9 +211,9 @@ struct session_adapter : mtmd_session_backend {
 };
 }
 
-// No workspace sharing or target-state reset: the supplied prefix continues through this ordered plan.
-int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
-        llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past) {
+// Continue the supplied prefix; shared mode borrows vision scratch only during encoding.
+static int32_t session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
+        llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past, bool shared) {
     if (!ctx || !lctx || !input || !new_n_past || n_past < 0 || seq_id < 0 || n_batch <= 0 ||
             size_t(n_batch) > llama_n_batch(lctx)) return -1;
     try {
@@ -201,7 +221,7 @@ int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const
         if (width <= 0) return -1;
         std::vector<const mtmd_input_chunk *> chunks;
         for (size_t i = 0; i < mtmd_input_chunks_size(input); ++i) chunks.push_back(mtmd_input_chunks_get(input, i));
-        session_adapter backend(ctx, lctx, n_past, seq_id, n_batch, logits_last, chunks.size());
+        session_adapter backend(ctx, lctx, n_past, seq_id, n_batch, logits_last, chunks.size(), shared);
         mtmd_session_plan plan;
         if (!plan.prepare(chunks, size_t(width), backend)) return -1;
         *new_n_past = n_past;
@@ -212,4 +232,14 @@ int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const
         }
         return 0;
     } catch (...) { return -1; }
+}
+
+int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
+        llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past) {
+    return session_eval_chunks(ctx, lctx, input, n_past, seq_id, n_batch, logits_last, new_n_past, false);
+}
+
+int32_t mtmd_session_eval_chunks_shared(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
+        llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past) {
+    return session_eval_chunks(ctx, lctx, input, n_past, seq_id, n_batch, logits_last, new_n_past, true);
 }

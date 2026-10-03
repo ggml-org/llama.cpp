@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+class llama_context_memory;
+
 // Internal serial scheduler adapter. The scheduler and backends outlive this owner.
 class MTMD_API mtmd_compute_workspace {
 public:
@@ -20,6 +22,8 @@ public:
     bool measure(ggml_cgraph * graph, std::vector<ggml_backend_memory_workspace_group> & output);
     // Borrow one committed lease per measured canonical buffer-type group.
     bool attach(const std::vector<ggml_backend_memory_lease_t> & leases);
+    // Borrow measured scratch through the target's exclusive serial owner.
+    bool borrow(llama_context_memory & parent);
     // Check the actual graph against its grants before allocating tensor addresses.
     bool alloc_graph(ggml_cgraph * graph);
     // Retain execution dependencies until drain or release completes scheduler work.
@@ -44,4 +48,5 @@ MTMD_API bool mtmd_batch_measure_compute_workspace(mtmd_batch * batch,
     ggml_backend_buffer_type_t compute_type = nullptr);
 MTMD_API bool mtmd_attach_compute_workspace(mtmd_context * ctx,
     const std::vector<ggml_backend_memory_lease_t> & leases);
+MTMD_API bool mtmd_borrow_compute_workspace(mtmd_context * ctx, llama_context_memory & parent);
 MTMD_API bool mtmd_release_compute_workspace(mtmd_context * ctx);

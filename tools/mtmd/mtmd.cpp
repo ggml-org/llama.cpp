@@ -2174,6 +2174,10 @@ bool mtmd_attach_compute_workspace(mtmd_context * ctx,const std::vector<ggml_bac
     return ctx && ctx->ctx_v && clip_attach_compute_workspace(ctx->ctx_v,leases);
 }
 
+bool mtmd_borrow_compute_workspace(mtmd_context * ctx,llama_context_memory & parent) {
+    return ctx && ctx->ctx_v && clip_borrow_compute_workspace(ctx->ctx_v,parent);
+}
+
 bool mtmd_release_compute_workspace(mtmd_context * ctx) {
     return ctx && ctx->ctx_v && clip_release_compute_workspace(ctx->ctx_v);
 }

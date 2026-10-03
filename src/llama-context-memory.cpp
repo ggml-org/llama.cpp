@@ -39,6 +39,12 @@ struct context_executable : llama_memory_executable {
     }
 };
 
+struct serial_gate {
+    bool & busy;
+    explicit serial_gate(bool & busy) : busy(busy) { busy = true; }
+    ~serial_gate() { busy = false; }
+};
+
 struct llama_context_memory::implementation : llama_memory_executor_backend {
     ggml_backend_sched_t sched = nullptr;
     std::vector<context_cache> caches;
@@ -51,10 +57,11 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     llama_memory_text_phase_tracker text_phase;
     llama_kv_stream_model * shared_stream = nullptr;
     llama_context_memory * serial_parent = nullptr;
-    llama_context_memory * serial_child = nullptr;
+    std::vector<llama_context_memory *> serial_children;
     llama_context_memory * self = nullptr;
     llama_context_memory * serial_active = nullptr;
     bool serial_borrowed = false;
+    bool serial_prefill_only = false, serial_busy = false;
     llama_memory_resource_id kv_pool_resource = 0;
     ggml_backend_buffer_t kv_parent = nullptr;
     size_t kv_parent_capacity = 0;
@@ -69,7 +76,9 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
 
     // Borrowed scratch may alias discardable graph/attention bytes, never persistent KV.
     size_t pool_offset(llama_memory_stage_id stage) const {
-        if (!shared_stream || !kv_pool_resource || !stage) return 0;
+        if (!stage) return 0;
+        if (!shared_stream) return kv_parent_capacity;
+        if (!kv_pool_resource) return 0;
         llama_memory_layout layout;
         if (llama_memory_layout_elastic(phase_target.plan, stage,
                 phase_target.budgets, phase_target.fixed, layout).status !=
@@ -83,16 +92,14 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     // Constructor failures and normal teardown use the same ordering while the scheduler remains alive.
     ~implementation() {
         // The owner may outlive its draft or be freed first; neither leaves a dangling handoff pointer.
-        if (serial_child) {
-            GGML_ASSERT(serial_child->impl->drain());
-            serial_child->impl->serial_parent = nullptr;
-            serial_child = nullptr;
-            serial_active = nullptr;
+        serial_busy = true;
+        for (auto * child : serial_children) {
+            GGML_ASSERT(child->impl->invalidate());
+            GGML_ASSERT(child->impl->workspace->close());
+            child->impl->serial_parent = nullptr;
         }
-        if (serial_parent && serial_parent->impl->serial_child == self) {
-            serial_parent->impl->serial_child = nullptr;
-            serial_parent->impl->serial_active = nullptr;
-        }
+        serial_children.clear();
+        if (serial_parent) serial_parent->impl->serial_busy = true;
         transition.reset();
         GGML_ASSERT(invalidate());
         if (workspace) GGML_ASSERT(workspace->close());
@@ -105,6 +112,13 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
             GGML_ASSERT(shared_stream->release_mtp_layer());
         }
         if (shared_stream) GGML_ASSERT(shared_stream->detach_shared_memory());
+        if (serial_parent) {
+            auto & parent = *serial_parent->impl;
+            auto & children = parent.serial_children;
+            children.erase(std::remove(children.begin(), children.end(), self), children.end());
+            if (parent.serial_active == self) parent.serial_active = serial_parent;
+            parent.serial_busy = false;
+        }
     }
 
     // Completion is independent of host admission; one pin can cover many queued graph splits.
@@ -209,12 +223,20 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
     const auto & groups = plan.groups;
     if (stream && serial_parent) return {};
     auto * borrowed_parent = serial_parent ? serial_parent->shared_parent() : nullptr;
-    if (serial_parent && (!serial_parent->shares_kv_memory() || !borrowed_parent)) return {};
-    if (serial_parent && (serial_parent->impl->serial_child || plan.phase_sizes.size() != 2)) return {};
+    if (serial_parent && (!borrowed_parent || serial_parent->impl->serial_borrowed ||
+            serial_parent->impl->serial_busy || plan.phase_sizes.size() != 2)) return {};
     if (!sched || !supported(backends) || plan.phase_sizes.empty() ||
             backends.size() != static_cast<size_t>(ggml_backend_sched_get_n_backends(sched))) return {};
     for (size_t i = 0; i < backends.size(); ++i) {
         if (ggml_backend_sched_get_backend(sched, static_cast<int>(i)) != backends[i]) return {};
+        if (serial_parent) {
+            if (serial_parent->impl->sched == sched) return {};
+            for (const auto & cache : serial_parent->impl->caches) if (cache.backend == backends[i]) return {};
+            for (auto * child : serial_parent->impl->serial_children) {
+                if (child->impl->sched == sched) return {};
+                for (const auto & cache : child->impl->caches) if (cache.backend == backends[i]) return {};
+            }
+        }
     }
     for (const auto & phase : plan.phase_sizes) if (phase.size() != groups.size()) return {};
     for (size_t i = 0; i < groups.size(); ++i) {
@@ -345,6 +367,10 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             target.budgets.push_back({id,allocation,capacity,group.alignment});
             supplied.push_back({id,allocation,arena.get()});
             state->arenas.push_back({group.buft,capacity,group.first_slot,std::move(arena)});
+            if (!stream && !serial_parent && !state->kv_parent) {
+                state->kv_parent = ggml_backend_memory_arena_parent(state->arenas.back().arena.get());
+                state->kv_parent_capacity = capacity;
+            }
             if (carries_kv) {
                 kv_group = i;
                 kv_arena = state->arenas.size()-1;
@@ -471,20 +497,21 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             state->decode_stage = stages[2];
             state->kv_arena = kv_arena;
         }
-        if (serial_parent) {
+        if (!stream) {
             state->phase_target = target;
             state->supplied = supplied;
             state->active_stage = stages.front();
             state->prefill_stage = stages[1];
-            state->decode_stage = stages[2];
-            state->serial_borrowed = true;
+            state->decode_stage = stages.size() > 2 ? stages[2] : stages[1];
+            state->serial_borrowed = serial_parent != nullptr;
         }
         if (!state->capture_execution()) return {};
         state->serial_parent = serial_parent;
         std::unique_ptr<llama_context_memory> result(
             new llama_context_memory(std::move(state)));
         result->impl->self = result.get();
-        if (serial_parent) serial_parent->impl->serial_child = result.get();
+        result->impl->serial_active = result.get();
+        if (serial_parent) serial_parent->impl->serial_children.push_back(result.get());
         handoff.complete = true;
         return result;
     } catch (const std::bad_alloc &) {
@@ -495,53 +522,100 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 // Keep ownership in one object declared after the scheduler in llama_context.
 llama_context_memory::llama_context_memory(std::unique_ptr<implementation> impl) : impl(std::move(impl)) {}
 llama_context_memory::~llama_context_memory() = default;
+std::unique_ptr<llama_context_memory> llama_context_memory::borrow_workspace(ggml_backend_sched_t sched,
+        const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_memory_workspace_group> & groups,
+        llama_context_memory & parent) {
+    llama_compute_workspace_plan plan;
+    plan.groups = groups;
+    plan.phase_sizes.assign(2, std::vector<size_t>(groups.size()));
+    for (size_t i = 0; i < groups.size(); ++i) plan.phase_sizes[0][i] = groups[i].size;
+    auto result = create(sched, backends, plan, nullptr, &parent);
+    if (result) result->impl->serial_prefill_only = true;
+    return result;
+}
+
+bool llama_context_memory::retire_graph() noexcept {
+    auto * owner = impl->serial_parent ? impl->serial_parent->impl.get() : impl.get();
+    if (owner->serial_busy) return false;
+    serial_gate gate(owner->serial_busy);
+    try { return impl->invalidate(); } catch (...) { return false; }
+}
+
+bool llama_context_memory::serial_ready() const noexcept {
+    return impl->executor.ready() && !impl->serial_busy &&
+        (impl->serial_children.empty() || impl->serial_active == this) && (!impl->serial_borrowed ||
+        (impl->serial_parent && !impl->serial_parent->impl->serial_busy &&
+            impl->serial_parent->impl->serial_active == this));
+}
 // Serial target/draft schedulers may alias scratch, but never execute or publish into it concurrently.
 bool llama_context_memory::prepare_serial_target() noexcept {
-    if (!impl->serial_child) return true;
-    auto * child = impl->serial_child->impl.get();
-    if (!child || child->serial_parent != this || child->serial_borrowed == false) return false;
-    if (impl->serial_active == impl->serial_child && !child->drain()) return false;
-    // Target streaming regains every ring slot; only the MTP resident mirror survives this handoff.
-    if (impl->shared_stream && impl->shared_stream->has_mtp_layer() &&
-            !impl->shared_stream->release_mtp_layer()) return false;
-    impl->serial_active = this;
-    return true;
+    if (impl->serial_borrowed || impl->serial_busy) return false;
+    if (impl->serial_children.empty()) return true;
+    serial_gate gate(impl->serial_busy);
+    try {
+        if (impl->serial_active && impl->serial_active != this) {
+            auto * child = impl->serial_active->impl.get();
+            if (child->serial_parent != this || !child->drain() ||
+                    (child->serial_prefill_only && !child->invalidate())) return false;
+        }
+        // Target streaming regains every ring slot; only the MTP resident mirror survives this handoff.
+        if (impl->shared_stream && impl->shared_stream->has_mtp_layer() &&
+                !impl->shared_stream->release_mtp_layer()) return false;
+        impl->serial_active = this;
+        return impl->capture_execution();
+    } catch (...) { return false; }
 }
 
 bool llama_context_memory::prepare_serial_draft(llama_memory_text_phase phase) noexcept {
+    return prepare_serial_consumer(phase);
+}
+
+bool llama_context_memory::prepare_serial_consumer(llama_memory_text_phase phase) noexcept {
     if (!impl->serial_borrowed || !impl->serial_parent ||
             (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode)) return false;
     auto * parent = impl->serial_parent->impl.get();
-    if (!parent || parent->serial_child != this || !parent->shared_stream) return false;
-    if (parent->serial_active != this && !parent->drain()) return false;
-    if (phase == llama_memory_text_phase::prefill && parent->active_stage == parent->decode_stage) {
-        if (parent->shared_stream->has_mtp_layer() && !parent->shared_stream->release_mtp_layer()) return false;
-        if (!parent->activate_stage(parent->prefill_stage)) return false;
-    }
-    const auto stage = phase == llama_memory_text_phase::decode ? impl->decode_stage : impl->prefill_stage;
-    if (!impl->activate_stage(stage)) return false;
-    const size_t protected_begin = parent->pool_offset(parent->active_stage);
-    bool found = false;
-    for (auto * lease : impl->workspace->leases()) {
-        auto * buffer = lease ? ggml_backend_memory_lease_buffer(lease) : nullptr;
-        if (!buffer || ggml_backend_buffer_get_type(buffer) != ggml_backend_buffer_get_type(parent->kv_parent)) continue;
-        ggml_backend_memory_region region{};
-        if (found || !ggml_backend_memory_lease_get_region(lease, &region) ||
-                !protected_begin || region.offset != 0 || region.size > protected_begin) return false;
-        found = true;
-    }
-    if (!found) return false;
-    parent->serial_active = this;
-    return true;
+    if (!parent || parent->serial_busy || (impl->serial_prefill_only && phase != llama_memory_text_phase::prefill) ||
+            std::find(parent->serial_children.begin(), parent->serial_children.end(), this) == parent->serial_children.end()) return false;
+    serial_gate gate(parent->serial_busy);
+    try {
+        if (parent->serial_active != this && parent->serial_active) {
+            auto * previous = parent->serial_active->impl.get();
+            if (!previous->drain() || (previous->serial_prefill_only && !previous->invalidate())) return false;
+        }
+        if (parent->shared_stream && impl->serial_prefill_only && parent->shared_stream->has_mtp_layer() &&
+                !parent->shared_stream->release_mtp_layer()) return false;
+        if (parent->shared_stream && phase == llama_memory_text_phase::prefill && parent->active_stage == parent->decode_stage) {
+            if (parent->shared_stream->has_mtp_layer() && !parent->shared_stream->release_mtp_layer()) return false;
+            if (!parent->activate_stage(parent->prefill_stage)) return false;
+        }
+        const auto stage = phase == llama_memory_text_phase::decode ? impl->decode_stage : impl->prefill_stage;
+        if (!impl->activate_stage(stage)) return false;
+        const size_t protected_begin = parent->pool_offset(parent->active_stage);
+        bool found = false;
+        for (auto * lease : impl->workspace->leases()) {
+            auto * buffer = lease ? ggml_backend_memory_lease_buffer(lease) : nullptr;
+            if (!buffer || ggml_backend_buffer_get_type(buffer) != ggml_backend_buffer_get_type(parent->kv_parent)) continue;
+            ggml_backend_memory_region region{};
+            if (found || !ggml_backend_memory_lease_get_region(lease, &region) ||
+                    !protected_begin || region.offset != 0 || region.size > protected_begin) return false;
+            found = true;
+        }
+        if (!found) return false;
+        parent->serial_active = this;
+        return impl->capture_execution();
+    } catch (...) { return false; }
 }
 
 
 // A bounded host gate plus one queue pin protects unchanged workspaces without replanning per token.
 ggml_status llama_context_memory::compute_async(ggml_cgraph * graph) {
     if (!graph || !impl->executor.ready()) return GGML_STATUS_FAILED;
+    if (impl->serial_busy || (impl->serial_parent && impl->serial_parent->impl->serial_busy)) return GGML_STATUS_FAILED;
     if (impl->serial_borrowed && (!impl->serial_parent ||
             impl->serial_parent->impl->serial_active != this)) return GGML_STATUS_FAILED;
-    if (impl->serial_child && impl->serial_active != this) return GGML_STATUS_FAILED;
+    if (!impl->serial_children.empty() && impl->serial_active != this) return GGML_STATUS_FAILED;
+    auto * owner = impl->serial_parent ? impl->serial_parent->impl.get() : impl.get();
+    serial_gate gate(owner->serial_busy);
     const auto admission = impl->transition->admit();
     if (!admission) return GGML_STATUS_FAILED;
     if (!impl->pending) {
@@ -623,6 +697,12 @@ bool llama_context_memory::diagnostics(
 
 llama_memory_text_phase_result llama_context_memory::signal_text_phase(
         const llama_memory_text_phase_signal & signal) noexcept {
+    const auto before = impl->text_phase.snapshot();
+    if (impl->serial_busy || (impl->serial_parent && impl->serial_parent->impl->serial_busy) ||
+            (!impl->serial_children.empty() && impl->serial_active != this)) {
+        return {llama_memory_text_phase_status::transition_failed, before.phase, before.phase, before.revision};
+    }
+    serial_gate gate(impl->serial_busy);
     const auto previous = impl->text_phase;
     auto result = impl->text_phase.notify(signal);
     if ((result.status != llama_memory_text_phase_status::changed &&
@@ -635,10 +715,12 @@ llama_memory_text_phase_result llama_context_memory::signal_text_phase(
     // The draft may have moved the physical parent back to prefill while the
     // target tracker still said decode, so reconcile the stage even on unchanged.
     bool ready = true;
-    if (stage == impl->decode_stage && impl->serial_child) {
-        auto * child = impl->serial_child->impl.get();
-        ready = child && child->serial_parent == this && child->drain() &&
-            child->activate_stage(child->decode_stage);
+    if (stage == impl->decode_stage) {
+        for (auto * entry : impl->serial_children) {
+            auto * child = entry->impl.get();
+            ready = ready && child->serial_parent == this && child->drain() &&
+                child->activate_stage(child->decode_stage);
+        }
     }
     if (ready && impl->activate_stage(stage)) return result;
     impl->text_phase = previous;

@@ -4582,6 +4582,10 @@ bool clip_attach_compute_workspace(clip_ctx * ctx,const std::vector<ggml_backend
     return ctx && ctx->workspace && ctx->workspace->attach(leases);
 }
 
+bool clip_borrow_compute_workspace(clip_ctx * ctx,llama_context_memory & parent) {
+    return ctx && ctx->workspace && ctx->workspace->borrow(parent);
+}
+
 // Retain model metadata and host embeddings while returning the borrowed compute storage.
 bool clip_release_compute_workspace(clip_ctx * ctx) {
     return ctx && (!ctx->workspace || ctx->workspace->release());

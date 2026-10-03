@@ -1,6 +1,7 @@
 #include "mtmd-workspace.h"
 #include "../../src/llama-memory-workspace.h"
 #include "../../src/llama-memory-executor.h"
+#include "../../src/llama-context-memory.h"
 #include "../../ggml/src/ggml-cuda-graph.h"
 #include "../../ggml/src/ggml-impl.h"
 
@@ -66,6 +67,7 @@ struct mtmd_compute_workspace::implementation : llama_memory_executor_backend {
     std::vector<workspace_cache> caches;
     std::vector<ggml_backend_memory_workspace_group> measured,granted;
     std::unique_ptr<llama_memory_workspace> consumer;
+    std::unique_ptr<llama_context_memory> borrowed;
     llama_memory_executor executor;
     llama_memory_execution pending;
     ggml_cgraph * graph = nullptr;
@@ -95,12 +97,14 @@ struct mtmd_compute_workspace::implementation : llama_memory_executor_backend {
     }
 
     bool drain() override {
+        if (borrowed) borrowed->synchronize();
         ggml_backend_sched_synchronize(sched);
         pending.reset();
         return true;
     }
 
     bool invalidate() {
+        if (borrowed) { graph=nullptr; return borrowed->retire_graph(); }
         const auto result=executor.retire(*this);
         if (result.status != llama_memory_executor_status::retired &&
                 result.status != llama_memory_executor_status::unchanged) return false;
@@ -113,6 +117,7 @@ struct mtmd_compute_workspace::implementation : llama_memory_executor_backend {
     }
 
     bool close() {
+        borrowed.reset();
         if (consumer && !consumer->close()) return false;
         consumer.reset();
         if (!invalidate()) return false;
@@ -153,7 +158,7 @@ mtmd_compute_workspace::~mtmd_compute_workspace() { GGML_ASSERT(release()); }
 
 bool mtmd_compute_workspace::measure(ggml_cgraph * graph,std::vector<ggml_backend_memory_workspace_group> & output) {
     auto & s=*impl;
-    if (!s.valid || s.busy || s.consumer || !graph) return false;
+    if (!s.valid || s.busy || s.consumer || s.borrowed || !graph) return false;
     workspace_gate gate(s.busy);
     try {
         if (!s.invalidate()) return false;
@@ -216,10 +221,10 @@ bool mtmd_compute_workspace::attach(const std::vector<ggml_backend_memory_lease_
 
 bool mtmd_compute_workspace::alloc_graph(ggml_cgraph * graph) {
     auto & s=*impl;
-    if (!s.valid || s.busy || !s.consumer || !s.consumer->ready() || !graph) return false;
+    if (!s.valid || s.busy || !graph || (!s.borrowed && (!s.consumer || !s.consumer->ready()))) return false;
     workspace_gate gate(s.busy);
     try {
-        if (!s.invalidate()) return false;
+        if (!s.invalidate() || (s.borrowed && !s.borrowed->prepare_serial_consumer(llama_memory_text_phase::prefill))) return false;
         std::vector<ggml_backend_memory_workspace_group> actual;
         if (!s.requirements(graph,actual)) return false;
         for (const auto & need : actual) {
@@ -227,7 +232,7 @@ bool mtmd_compute_workspace::alloc_graph(ggml_cgraph * graph) {
             if (grant == s.granted.end() || need.size > grant->size) return false;
         }
         ggml_backend_sched_reset(s.sched);
-        if (!ggml_backend_sched_alloc_graph(s.sched,graph) || !s.capture()) return false;
+        if (!ggml_backend_sched_alloc_graph(s.sched,graph) || (!s.borrowed && !s.capture())) return false;
         s.graph=graph;
         return true;
     } catch (...) { return false; }
@@ -235,8 +240,10 @@ bool mtmd_compute_workspace::alloc_graph(ggml_cgraph * graph) {
 
 ggml_status mtmd_compute_workspace::compute_async(ggml_cgraph * graph) {
     auto & s=*impl;
-    if (!s.valid || s.busy || !s.consumer || !graph || graph != s.graph || !s.executor.ready()) return GGML_STATUS_FAILED;
+    if (!s.valid || s.busy || !graph || graph != s.graph) return GGML_STATUS_FAILED;
     workspace_gate gate(s.busy);
+    if (s.borrowed) return s.borrowed->compute_async(graph);
+    if (!s.consumer || !s.executor.ready()) return GGML_STATUS_FAILED;
     if (!s.pending) s.pending=s.executor.acquire(s.consumer->leases(),s.revision);
     if (!s.pending) return GGML_STATUS_FAILED;
     try {
@@ -266,4 +273,20 @@ bool mtmd_compute_workspace::retire_graph() {
 }
 
 bool mtmd_compute_workspace::supported() const noexcept { return impl->valid; }
-bool mtmd_compute_workspace::ready() const noexcept { return impl->consumer && impl->consumer->ready(); }
+bool mtmd_compute_workspace::ready() const noexcept {
+    return impl->borrowed ? impl->borrowed->serial_ready() : impl->consumer && impl->consumer->ready();
+}
+
+bool mtmd_compute_workspace::borrow(llama_context_memory & parent) {
+    auto & s=*impl;
+    if (!s.valid || s.busy || s.measured.empty() || s.consumer || s.borrowed) return false;
+    workspace_gate gate(s.busy);
+    try {
+        auto child=llama_context_memory::borrow_workspace(s.sched,s.backends,s.measured,parent);
+        if (!child || !child->prepare_serial_consumer(llama_memory_text_phase::prefill)) return false;
+        std::vector<ggml_backend_memory_workspace_group> grants=s.measured;
+        s.borrowed=std::move(child);
+        s.granted=std::move(grants);
+        return true;
+    } catch (...) { return false; }
+}
