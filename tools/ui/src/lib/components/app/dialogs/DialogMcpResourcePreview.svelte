@@ -51,7 +51,7 @@
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
-	<Dialog.Content class="grid max-h-[90vh] max-w-5xl overflow-hidden sm:w-auto sm:max-w-6xl">
+	<Dialog.Content class="grid max-h-[90vh] max-w-5xl overflow-hidden p-4 sm:w-auto sm:max-w-6xl">
 		<Dialog.Header>
 			<Dialog.Title class="pr-8">{extra.name}</Dialog.Title>
 
