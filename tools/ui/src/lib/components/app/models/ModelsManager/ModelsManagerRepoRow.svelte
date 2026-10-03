@@ -8,7 +8,7 @@
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
 	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import { deviceStore, modelsStore } from '$lib/stores';
 
 	interface Props {
 		entry: ModelQuantGroup;
@@ -64,7 +64,7 @@
 					title={entry.base.model}
 				/>
 
-				<ModelCapabilities option={entry.base} />
+				<ModelCapabilities hideModalities={deviceStore.isMobile} option={entry.base} />
 			</span>
 
 			<span class="block text-xs text-muted-foreground">{groupLabel}</span>

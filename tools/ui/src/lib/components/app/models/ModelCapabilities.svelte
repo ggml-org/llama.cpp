@@ -8,10 +8,12 @@
 
 	interface Props {
 		class?: string;
+		/** Hide the modality icons, keeping the capability ones. */
+		hideModalities?: boolean;
 		option: ModelOption;
 	}
 
-	let { class: className = '', option }: Props = $props();
+	let { class: className = '', hideModalities = false, option }: Props = $props();
 
 	// a listing that declares its capabilities (Ollama-compatible backends) needs no lookup
 	let declared = $derived(option.capabilities);
@@ -52,5 +54,10 @@
 </script>
 
 <span use:nearViewport={() => (isNearViewport = true)} class={className}>
-	<ModelCapabilityIcons modalities={option.modalities} {supportsThinking} {supportsToolUse} />
+	<ModelCapabilityIcons
+		{hideModalities}
+		modalities={option.modalities}
+		{supportsThinking}
+		{supportsToolUse}
+	/>
 </span>
