@@ -1,4 +1,5 @@
 #include "gated_delta_net.cuh"
+#include "chunk_gated_delta_net.cuh"
 #include "ggml-cuda/common.cuh"
 
 template <int S_v, bool KDA, bool keep_rs_t>
@@ -39,8 +40,8 @@ gated_delta_net_cuda(const float * q,
 
     float *       attn_data        = dst;
 
-    // input state holds s0 only: [S_v, S_v, H, n_seqs] — seq stride is D = H * S_v * S_v.
-    // output state layout (per-slot D * n_seqs) — same per-(seq,head) offset as before.
+    // input state holds s0 only: [S_v, S_v, H, n_seqs] - seq stride is D = H * S_v * S_v.
+    // output state layout (per-slot D * n_seqs) - same per-(seq,head) offset as before.
     const int64_t state_in_offset      = sequence * H * S_v * S_v + h_idx * S_v * S_v;
     const int64_t state_out_offset     = (sequence * H + h_idx) * S_v * S_v;
     state += state_out_offset;
@@ -177,7 +178,6 @@ static void launch_gated_delta_net(
         int64_t sb1,   int64_t sb2, int64_t sb3,
         int64_t neqk1, int64_t rq3,
         float scale, int64_t state_slot_stride, int K, cudaStream_t stream) {
-    //TODO: Add chunked kernel for even faster pre-fill
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
     const int num_warps = 4;
     dim3      grid_dims(H, n_seqs, (S_v + num_warps - 1) / num_warps);
@@ -218,6 +218,63 @@ static void launch_gated_delta_net(
             GGML_ABORT("fatal error");
             break;
     }
+}
+
+// Shape-only half of the chunked predicate, split out because the buffer-type get_alloc_size hook
+// has to size the chunked scratch. That sizing must NOT depend on which device is current: deciding
+// from shape alone can only over-allocate on a device that ends up ineligible, never under-allocate
+// (which would corrupt memory). See ggml_cuda_gdn_get_alloc_size.
+bool ggml_cuda_gdn_chunked_shape_eligible(const ggml_tensor * dst) {
+    if (dst->op != GGML_OP_GATED_DELTA_NET) {
+        return false;
+    }
+
+    const ggml_tensor * src_q     = dst->src[0];
+    const ggml_tensor * src_k     = dst->src[1];
+    const ggml_tensor * src_v     = dst->src[2];
+    const ggml_tensor * src_g     = dst->src[3];
+    const ggml_tensor * src_beta  = dst->src[4];
+    const ggml_tensor * src_state = dst->src[5];
+
+    const int64_t S_v      = src_v->ne[0];
+    const int64_t n_tokens = src_v->ne[2];
+    const int64_t neq0     = src_q->ne[0];
+    const int64_t neq1     = src_q->ne[1];   // q head count
+    const int64_t nev1     = src_v->ne[1];   // v head count
+    const bool    kda      = (src_g->ne[0] == S_v);
+    const int     K        = ggml_get_op_params_i32(dst, 0);
+
+    // - not KDA; K == 1 (final state only)
+    // - Q/K/G/beta/state must be contiguous; V must be contiguous within each token (nb[0]/nb[1]
+    //   packed) and packed across sequences (nb[3] == n_tokens*nb[2]), with an arbitrary per-token
+    //   stride nb[2] (fused QKV view). The nb[3] check matches the chunked-entry assert: without it a
+    //   view with inter-sequence padding would pass dispatch and then read the wrong batch slice.
+    // - 128-wide heads, GQA-aligned head counts, n_tokens >= 128
+    return !kda && K == 1
+        && neq0 == 128 && S_v == 128 && nev1 % neq1 == 0
+        && src_k->ne[1] == neq1
+        && n_tokens >= 128
+        && ggml_is_contiguous(src_q) && ggml_is_contiguous(src_k) && ggml_is_contiguous(src_g)
+        && src_v->nb[0] == ggml_type_size(src_v->type) && src_v->nb[1] == (size_t)S_v * ggml_type_size(src_v->type)
+        && src_v->nb[3] == (size_t) n_tokens * src_v->nb[2]
+        && ggml_is_contiguous(src_beta) && ggml_is_contiguous(src_state);
+}
+
+bool ggml_cuda_should_use_chunked_gdn(const ggml_tensor * dst) {
+#ifdef GGML_CUDA_NO_GDN_CHUNK
+    // Recurrent-only baseline build (see tools/bench_ab_*): everything routes to the recurrent
+    // kernel, which also re-enables CUDA graphs for the op.
+    GGML_UNUSED(dst);
+    return false;
+#else
+    if (!ggml_cuda_gdn_chunked_shape_eligible(dst)) {
+        return false;
+    }
+    // NVIDIA Ampere+ only (fp16 WMMA). The HIP/MUSA ggml_cuda_mma backend is intentionally not
+    // dispatched until validated.
+    const int cc_dev = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    return GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev >= GGML_CUDA_CC_AMPERE;
+#endif // GGML_CUDA_NO_GDN_CHUNK
 }
 
 static void ggml_cuda_op_gated_delta_net_impl(
@@ -285,6 +342,15 @@ static void ggml_cuda_op_gated_delta_net_impl(
     // K (snapshot slot count) is an op param; state holds s0 only [S_v, S_v, H, n_seqs].
     const int K = ggml_get_op_params_i32(dst, 0);
     const bool keep_rs = K > 1;
+
+    // Route to the chunked prefill kernel when eligible.
+    // Passes cache so the kernel can write the final state directly to the fused destination
+    // (cache->data). Scratch lives in dst's own allocation, so its address is stable across CUDA
+    // graph capture and replay.
+    if (ggml_cuda_should_use_chunked_gdn(dst)) {
+        ggml_cuda_op_gated_delta_net_chunked(ctx, dst, cache);
+        return;
+    }
 
     // recurrent state -> gdn_out tail (after attention scores), or the cache when fusing
     float * state_d           = dst_d + S_v * H * n_tokens * n_seqs;
