@@ -9,7 +9,7 @@
 	import { configuredContext, downloadProgressFor } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
 	import { ModelRowDownloadState } from '$lib/enums';
 	import { deviceStore, modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -52,7 +52,7 @@
 	     the button: a button nested in a role="button" row is invalid -->
 	<button
 		aria-pressed={selected}
-		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:gap-2"
+		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:gap-2 max-md:pr-8"
 		onclick={() => onSelect(option)}
 		style="padding-left: {indent}px"
 		type="button"
@@ -93,7 +93,7 @@
 		/>
 	{/if}
 
-	<div class="flex items-center justify-center justify-self-center">
+	<div class="flex items-center justify-center justify-self-center {MODEL_ROW_TRAILING_CELL_CLASS}">
 		<DropdownMenuActions
 			actions={modelRowActions(option, favorite, isHidden, onDelete, download)}
 			align="end"
