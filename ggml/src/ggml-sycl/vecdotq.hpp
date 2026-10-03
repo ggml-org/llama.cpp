@@ -378,6 +378,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
 
     __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4, const sycl::half2 & ds8) {
         int sumi = 0;
+        int sumu = 0;
 
 #pragma unroll
         for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
@@ -387,12 +388,13 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
             // SIMD dot product of quantized values
             sumi = dpct::dp4a(vi0, u[2 * i + 0], sumi);
             sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
+            sumu = dpct::dp4a(0x01010101, u[2 * i + 0], sumu);
+            sumu = dpct::dp4a(0x01010101, u[2 * i + 1], sumu);
         }
 
         const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
 
-        // second part effectively subtracts 8 from each quant value
-        return d4 * (sumi * ds8f.x() - (8 * q4_0_traits::vdr_mmvq / q4_0_traits::qi) * ds8f.y());
+        return d4 * ds8f.x() * (float) (sumi - 8 * sumu);
     }
 
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
@@ -812,6 +814,7 @@ template <int vdr>
 static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4,
                                                     const sycl::half2 & ds8) {
     int sumi = 0;
+    int sumu = 0;
 #pragma unroll
     for (int i = 0; i < vdr; ++i) {
         const int vi0 = (v[i] >> 0) & 0x0F0F0F0F;
@@ -820,12 +823,13 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u
         // SIMD dot product of quantized values
         sumi = dpct::dp4a(vi0, u[2 * i + 0], sumi);
         sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
+        sumu = dpct::dp4a(0x01010101, u[2 * i + 0], sumu);
+        sumu = dpct::dp4a(0x01010101, u[2 * i + 1], sumu);
     }
 
     const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
 
-    // second part effectively subtracts 8 from each quant value
-    return d4 * (sumi * ds8f.x() - (8 * vdr / QI4_0) * ds8f.y());
+    return d4 * ds8f.x() * (float) (sumi - 8 * sumu);
 }
 
 #define VDR_Q4_1_Q8_1_MMVQ 2
