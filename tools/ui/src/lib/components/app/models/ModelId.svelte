@@ -116,10 +116,12 @@
 		{/if}
 
 		{#if hasBadges}
-			<!-- the badges do not shrink, so the group clips them instead of letting
-			     them paint over the row actions -->
+			<!-- the badges keep their width, so a long id truncates around them instead of
+			     a label being cut in half -->
 			<span
-				class="inline-flex min-w-0 items-center gap-1 overflow-hidden {wrap ? 'flex-wrap' : ''}"
+				class="inline-flex min-w-0 items-center gap-1 overflow-hidden {wrap
+					? 'flex-wrap'
+					: 'shrink-0'}"
 			>
 				{#if parsed.sidecar}
 					<span class={variantBadgeClass} title={`${parsed.sidecar.toUpperCase()} draft model`}>
