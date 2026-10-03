@@ -48,7 +48,13 @@ struct server_decision_context {
         }
     }
 
+    // true if all the questions of a request go in one prompt, see fill_task_joint()
+    bool is_joint() const {
+        return type == COMMON_DECISION_TYPE_CLEF;
+    }
+
     // true if the prompt of the model has a place for images
+    // TODO: clef needs token and embedding entries in the same batch, see https://github.com/ggml-org/llama.cpp/pull/29622
     bool can_use_images() const {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
@@ -80,6 +86,9 @@ struct server_decision_context {
             const mtmd_helper_init_opt & init_opt,
             server_task & task) const;
 
+    // set the prompt of all the questions, the result has the scores of all their options, in order
+    void fill_task_joint(const json & state, const std::vector<server_decision_question> & questions, server_task & task) const;
+
     // scores: the raw model outputs of each variant
     json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const;
 
@@ -90,6 +99,7 @@ private:
     std::map<std::string, float> temperatures; // "<type>" or "<type>.<n_options bucket>"
     size_t n_options_max   = 0;
     bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
+    bool   choice_sorted   = false; // choice options are in the order of their keys
 
     // OPENJEV, LEV, NIMBLE
     std::vector<llama_token> labels;

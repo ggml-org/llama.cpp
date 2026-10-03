@@ -1346,6 +1346,12 @@ class GGUFWriter:
     def add_decision_block_count(self, value: int) -> None:
         self.add_uint32(Keys.Decision.BLOCK_COUNT.format(arch=self.arch), value)
 
+    def add_decision_routing_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.ROUTING_BLOCK_COUNT.format(arch=self.arch), value)
+
+    def add_decision_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.HEAD_COUNT.format(arch=self.arch), value)
+
     def add_decision_max_head_tokens(self, value: int) -> None:
         self.add_uint32(Keys.Decision.MAX_HEAD_TOKENS.format(arch=self.arch), value)
 

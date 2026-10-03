@@ -1,5 +1,7 @@
 #include "server-decision.h"
 
+#include "../../src/llama-ext.h" // staging API: llama_decision_order
+
 #include <algorithm>
 #include <cmath>
 #include <regex>
@@ -116,6 +118,10 @@ void server_decision_context::init(const llama_model * model) {
             throw std::runtime_error("decision model has no valid max_head_tokens");
         }
         n_options_max = 255;
+    } else if (model_type == COMMON_DECISION_TYPE_CLEF) {
+        n_options_max   = 255;
+        noul_true_first = true;
+        choice_sorted   = true;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
     }
@@ -162,6 +168,11 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
             }
             for (const auto & [key, description] : criteria.items()) {
                 question.options.push_back({key, description});
+            }
+            if (choice_sorted) {
+                std::sort(question.options.begin(), question.options.end(), [](const auto & a, const auto & b) {
+                    return a.key < b.key;
+                });
             }
         } else if (type_name == "score") {
             question.type = SERVER_DECISION_QUESTION_SCORE;
@@ -543,6 +554,90 @@ void server_decision_context::fill_task_laya(llama_tokens & tokens, const server
 }
 
 //
+// joint prompt (clef)
+//
+
+// given to the template: text between the pieces of the prompt, and at the start of the span of a question or of an option
+static const std::string CLEF_MARKER        = "<<clef:";
+static const std::string CLEF_SEP           = "<<clef:sep>>";
+static const std::string CLEF_MARK_QUESTION = "<<clef:question>>";
+static const std::string CLEF_MARK_OPTION   = "<<clef:option>>";
+
+void server_decision_context::fill_task_joint(const json & state, const std::vector<server_decision_question> & questions, server_task & task) const {
+    json inp_questions = json::array();
+    for (const auto & question : questions) {
+        json options = json::array();
+        for (const auto & opt : question.options) {
+            options.push_back(json{
+                {"key",         opt.key},
+                {"description", opt.description},
+            });
+        }
+        inp_questions.push_back(json{
+            {"id",           question.id},
+            {"type",         decision_question_type_name(question.type)},
+            {"instructions", question.instructions},
+            {"options",      options},
+        });
+    }
+
+    // the template is given raw JSON values with sorted keys, and no marker in the input
+    json inp = json{
+        {"state",     state},
+        {"questions", inp_questions},
+    };
+    inp = decision_replace_text(decision_sort_keys(inp), CLEF_MARKER, "<<clef ");
+    inp["sep"]           = CLEF_SEP;
+    inp["mark_question"] = CLEF_MARK_QUESTION;
+    inp["mark_option"]   = CLEF_MARK_OPTION;
+
+    jinja::context ctx(tmpl->source());
+    jinja::global_from_json(ctx, inp, false);
+    jinja::runtime runtime(ctx);
+    const jinja::value results = runtime.execute(tmpl->prog);
+    const std::string prompt   = jinja::runtime::gather_string_parts(results)->as_string().str();
+
+    // the model was trained with the pieces tokenized one by one
+    llama_tokens tokens;
+    size_t i_question = 0;
+    for (std::string piece : string_split(prompt, CLEF_SEP)) {
+        int32_t order = LLAMA_DECISION_ORDER_NONE;
+        if (string_starts_with(piece, CLEF_MARK_QUESTION)) {
+            piece = piece.substr(CLEF_MARK_QUESTION.size());
+            if (i_question >= questions.size()) {
+                throw std::runtime_error("unexpected layout of the decision prompt");
+            }
+            switch (questions[i_question++].type) {
+                case SERVER_DECISION_QUESTION_NOUL:   order = LLAMA_DECISION_ORDER_QUESTION_NOUL;   break;
+                case SERVER_DECISION_QUESTION_CHOICE: order = LLAMA_DECISION_ORDER_QUESTION_CHOICE; break;
+                case SERVER_DECISION_QUESTION_SCORE:  order = LLAMA_DECISION_ORDER_QUESTION_SCORE;  break;
+            }
+        } else if (string_starts_with(piece, CLEF_MARK_OPTION)) {
+            piece = piece.substr(CLEF_MARK_OPTION.size());
+            order = LLAMA_DECISION_ORDER_OPTION;
+            task.decision.n_scores++;
+        }
+
+        const llama_tokens piece_tokens = common_tokenize(vocab, piece, false, true);
+        if (order != LLAMA_DECISION_ORDER_NONE && piece_tokens.empty()) {
+            throw std::invalid_argument("the instructions and the options of a question must not be empty");
+        }
+        tokens.insert(tokens.end(), piece_tokens.begin(), piece_tokens.end());
+        task.decision.order.resize(tokens.size(), order);
+    }
+
+    size_t n_options = 0;
+    for (const auto & question : questions) {
+        n_options += question.options.size();
+    }
+    if (i_question != questions.size() || (size_t) task.decision.n_scores != n_options) {
+        throw std::runtime_error("unexpected layout of the decision prompt");
+    }
+
+    task.tokens = server_tokens(tokens, false);
+}
+
+//
 // answer
 //
 
@@ -608,6 +703,10 @@ json server_decision_context::format_answer(const server_decision_question & que
         const auto & s = scores[v];
         if (s.size() != n) {
             throw std::runtime_error("decision result does not match the number of options");
+        }
+        // a joint head returns NaN if it could not use the decision order
+        if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v); })) {
+            throw std::runtime_error("the model could not evaluate the decision");
         }
         const float score_max = *std::max_element(s.begin(), s.end());
         std::vector<double> p(n);

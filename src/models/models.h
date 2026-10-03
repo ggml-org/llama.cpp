@@ -2391,6 +2391,99 @@ struct llama_model_qwen35 : public llama_model_base {
 };
 
 
+// Qwen3.5 backbone evaluated without memory, with a joint decision head on top of its hidden states
+struct llama_model_clef : public llama_model_qwen35 {
+    llama_model_clef(const struct llama_model_params & params) : llama_model_qwen35(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct attn {
+        ggml_tensor * wq = nullptr;
+        ggml_tensor * bq = nullptr;
+        ggml_tensor * wk = nullptr;
+        ggml_tensor * bk = nullptr;
+        ggml_tensor * wv = nullptr;
+        ggml_tensor * bv = nullptr;
+        ggml_tensor * wo = nullptr;
+        ggml_tensor * bo = nullptr;
+    };
+
+    struct norm {
+        ggml_tensor * w = nullptr;
+        ggml_tensor * b = nullptr;
+    };
+
+    // the first n_layer_routing blocks have no self attention
+    struct head_layer {
+        norm self_norm;
+        attn self_attn;
+        norm cross_norm;
+        norm cross_norm_kv; // routing blocks only
+        attn cross_attn;
+        norm ffn_norm;
+        ggml_tensor * ffn_up     = nullptr;
+        ggml_tensor * ffn_up_b   = nullptr;
+        ggml_tensor * ffn_down   = nullptr;
+        ggml_tensor * ffn_down_b = nullptr;
+    };
+
+    uint32_t n_layer_routing = 0;
+    uint32_t n_layer_joint   = 0;
+    uint32_t n_head_decision = 0;
+
+    std::vector<head_layer> head_layers; // routing blocks, then joint blocks
+
+    norm hidden_norm;
+    norm option_summary_norm;
+    norm field_norm;
+    norm option_norm;
+
+    ggml_tensor * proj_memory          = nullptr;
+    ggml_tensor * proj_question        = nullptr;
+    ggml_tensor * proj_option_question = nullptr;
+    ggml_tensor * proj_global          = nullptr;
+    ggml_tensor * proj_option_context  = nullptr;
+    ggml_tensor * proj_option_lexical  = nullptr;
+    ggml_tensor * scales               = nullptr; // prior scale, joint scale, residual gate
+    ggml_tensor * scorer               = nullptr;
+    ggml_tensor * scorer_b             = nullptr;
+    ggml_tensor * scorer_out           = nullptr;
+    ggml_tensor * scorer_out_b         = nullptr;
+
+    class input_decision;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+    private:
+        llm_graph_input_attn_no_cache * build_attn_inp_causal();
+
+        ggml_tensor * build_layer_attn(
+        llm_graph_input_attn_no_cache * inp_attn,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                            int * sections,
+                            int   il);
+
+        ggml_tensor * build_layer_attn_linear(
+                    ggml_tensor * cur,
+                            int   il);
+
+        // hidden: [n_embd, n_tokens], returns one score per option: [1, n_options]
+        ggml_tensor * build_head(
+                    ggml_tensor * hidden,
+                 input_decision * inp);
+
+        ggml_tensor * build_head_norm(ggml_tensor * cur, const norm & n);
+        ggml_tensor * build_head_attn(ggml_tensor * q, ggml_tensor * kv, const attn & a);
+        ggml_tensor * build_head_ffn (ggml_tensor * cur, const head_layer & layer);
+
+        const llama_model_clef & model;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 

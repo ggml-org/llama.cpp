@@ -192,6 +192,11 @@ struct server_task {
             }
             return pos;
         }
+
+        // for a joint head: one value per prompt token, see llama_batch_ext_set_decision_order()
+        // the scores are the first n_scores rows of the embeddings
+        std::vector<int32_t> order;
+        int32_t              n_scores = 0;
     };
     decision decision;
 
@@ -212,7 +217,7 @@ struct server_task {
             case SERVER_TASK_TYPE_RERANK:
                 return true;
             case SERVER_TASK_TYPE_DECISION:
-                return !decision.markers.empty();
+                return !decision.markers.empty() || !decision.order.empty();
             default:
                 return false;
         }

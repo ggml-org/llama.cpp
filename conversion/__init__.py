@@ -42,6 +42,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ChameleonForConditionalGeneration": "chameleon",
     "ChatGLMForConditionalGeneration": "chatglm",
     "ChatGLMModel": "chatglm",
+    "ClefModel": "clef",
     "CodeShellForCausalLM": "codeshell",
     "CogVLMForCausalLM": "cogvlm",
     "Cohere2MoeForCausalLM": "command_r",
@@ -296,6 +297,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
+    "ClefModel": "clef",
     "CogVLMForCausalLM": "cogvlm",
     "DeepseekOCR2ForCausalLM": "deepseek",
     "DeepseekOCRForCausalLM": "deepseek",

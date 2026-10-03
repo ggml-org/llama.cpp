@@ -3,6 +3,9 @@
 
 #include "build-info.h"
 #include "common.h"
+
+#include "../src/llama-ext.h"
+
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
@@ -1186,6 +1189,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_KEV,     "kev"     },
     { COMMON_DECISION_TYPE_NIMBLE,  "nimble"  },
     { COMMON_DECISION_TYPE_LAYA,    "laya"    },
+    { COMMON_DECISION_TYPE_CLEF,    "clef"    },
 };
 
 static common_decision_type common_decision_type_from_string(const std::string & str) {
@@ -1261,10 +1265,10 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    // this decision model returns a score for each token via the embeddings output
+    // these decision models return a score for each token via the embeddings output
     // TODO: maybe improve this in the future
     const auto decision_type = common_get_decision_type(model);
-    if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV) {
+    if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF) {
         params.embedding    = true;
         params.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
@@ -2209,6 +2213,9 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
         }
         if (t.output) {
             llama_batch_ext_set_output_logits(res, idx, true);
+        }
+        if (t.decision_order != 0) {
+            llama_batch_ext_set_decision_order(res, idx, (llama_decision_order) t.decision_order);
         }
     }
 

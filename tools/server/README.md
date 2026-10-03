@@ -1688,13 +1688,15 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
   - `score`: An array of 2 to 10 level descriptions, lowest level first.
   - `noul`: Optional. An object with the descriptions of `true` and `false`.
 
-The questions of a request are answered independently, an answer does not depend on the other questions.
+The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
 
-The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya. For laya, long questions and options are truncated to the token budget the model was trained with.
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya and clef. For laya, long questions and options are truncated to the token budget the model was trained with.
+
+For laya and clef, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A server that runs clef only serves this endpoint, text generation is not available.
 
 *Image input:*
 
-Image input needs a model that supports it (for example: openjev) and its multimodal projector, see `--mmproj`.
+Image input needs a model that supports it (for example: openjev) and its multimodal projector, see `--mmproj`. Image input is not supported yet for clef.
 
 Images can be given in two ways, and both can be used in the same request:
 
