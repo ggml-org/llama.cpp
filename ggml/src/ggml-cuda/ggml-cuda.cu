@@ -1659,8 +1659,8 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
     const size_t src0_f32_size = ggml_nelements(src0) * sizeof(float);
 
     if (compute_type == GGML_TYPE_F32 &&
-        (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
-        src0_f32_size > max_src0_convert_size) {
+            (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
+            src0_f32_size > max_src0_convert_size) {
         const size_t f32_row_size = src0_f32_size / src0->ne[1];
         const int64_t rows_per_chunk = std::max<int64_t>(1, (int64_t) (max_src0_convert_size / f32_row_size));
 
