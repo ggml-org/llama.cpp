@@ -317,6 +317,10 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
+    if (cparams.n_ctx_orig_yarn > 0 && cparams.rope_freq_scale < 1.0f) {
+        LLAMA_LOG_INFO("%s: yarn dynamic          = true (native ctx = %u, scale ramps from 1.0 to %.4f)\n",
+                __func__, cparams.n_ctx_orig_yarn, (double)cparams.rope_freq_scale);
+    }
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
@@ -1875,6 +1879,22 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     do {
         const auto & ubatch = mctx->get_ubatch();
+
+        // one-time log when dynamic YARN scaling first kicks in
+        if (cparams.n_ctx_orig_yarn > 0 && cparams.rope_freq_scale < 1.0f) {
+            static bool yarn_dynamic_logged = false;
+            if (!yarn_dynamic_logged) {
+                for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
+                    if (ubatch.pos[i] >= (llama_pos)cparams.n_ctx_orig_yarn) {
+                        LLAMA_LOG_INFO("%s: yarn dynamic scaling active (pos %d >= native ctx %u, effective scale = %.4f)\n",
+                                __func__, ubatch.pos[i], cparams.n_ctx_orig_yarn,
+                                (double)cparams.n_ctx_orig_yarn / (double)ubatch.pos[i]);
+                        yarn_dynamic_logged = true;
+                        break;
+                    }
+                }
+            }
+        }
 
         // count the outputs in this ubatch
         {
