@@ -78,6 +78,9 @@ public:
 
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
+    // relabel the last state of seq_id as the state at pos, without recompute (approximate)
+    bool seq_fork(llama_seq_id seq_id, llama_pos pos);
+
     // computed before each graph build
     uint32_t n = 0;
 
