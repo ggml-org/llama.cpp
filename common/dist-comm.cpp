@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <memory>
@@ -206,6 +207,17 @@ void close_fd(socket_t & fd) {
     }
 }
 
+// Wakes any thread blocked in send() or recv() on fd, without releasing the descriptor.
+void shutdown_fd(socket_t fd) {
+    if (fd != DIST_CCL_INVALID_SOCKET) {
+#ifdef _WIN32
+        shutdown(fd, SD_BOTH);
+#else
+        shutdown(fd, SHUT_RDWR);
+#endif
+    }
+}
+
 bool set_no_delay(socket_t fd, std::string & err) {
 #ifdef _WIN32
     const char one = 1;
@@ -398,6 +410,25 @@ bool dist_transport_env_true(const char * key, bool def) {
     return s == "1" || s == "true" || s == "yes" || s == "on";
 }
 
+// LLAMA_DIST_TP_RDMA_MAX_BYTES: the largest payload that rides ND. Default one ND chunk; 0 means
+// no ceiling. Read from the environment alone so that every rank gets the same value whether or
+// not its own ND connections came up.
+size_t dist_nd_ceiling_from_env() {
+    size_t bytes = 256 * 1024;
+    const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MAX_BYTES");
+    if (v != nullptr && v[0] != '\0') {
+        try {
+            const long long n = std::stoll(v);
+            if (n >= 0) {
+                bytes = (size_t) n;
+            }
+        } catch (...) {
+            // keep the default
+        }
+    }
+    return bytes;
+}
+
 } // namespace
 
 struct dist_comm_socket_context::impl {
@@ -434,6 +465,10 @@ struct dist_comm_socket_context::impl {
     // (u+1 -> u) is carried over TCP instead of ND. Read on every rank from the same variable,
     // so both ends of an edge agree.
     std::vector<int>     mesh_reverse_tcp;
+    // LLAMA_DIST_TP_MESH_LARGE: payloads above mesh_large_above also take the mesh. That is the
+    // size above which every direction rides TCP, and it is the same on every rank.
+    bool                 mesh_large        = false;
+    size_t               mesh_large_above  = 0;
     bool                 mesh_pending      = false;   // the first ring step ran as a mesh exchange
     size_t               mesh_pending_size = 0;
     const void *         mesh_pending_ptr  = nullptr; // where that step left prev's payload
@@ -615,6 +650,17 @@ struct dist_comm_socket_context::impl {
         return std::find(mesh_reverse_tcp.begin(), mesh_reverse_tcp.end(), u) != mesh_reverse_tcp.end();
     }
 
+    // Whether a collective of this size runs as a mesh exchange. Every rank must answer the
+    // same way for the same size, so this reads only values derived from the environment, never
+    // whether this rank's own ND connections happen to be up: a rank that fell back to TCP must
+    // not go to the mesh while its peers stay on the ring.
+    bool mesh_takes(size_t size) const {
+        if (mesh_max_bytes == 0) {
+            return false;
+        }
+        return size <= mesh_max_bytes || (mesh_large && size > mesh_large_above);
+    }
+
     // Full-mesh exchange for world_size 3, opt-in via LLAMA_DIST_TP_MESH=1.
     //
     // The ring all-reduce costs world_size - 1 sequential exchanges per collective. A decode
@@ -635,10 +681,11 @@ struct dist_comm_socket_context::impl {
     // (own + prev) + next is bit-identical to the ring's. The second call checks that it really
     // is forwarding the first call's result and fails loudly if a caller ever stops doing that.
     //
-    // Only payloads up to mesh_max_bytes take this path. Every rank posts both sends before it
-    // receives, which is safe while a payload fits one ND chunk and the TCP socket buffer;
-    // larger payloads keep the ring and the ordering it was reasoned about with. Every rank
-    // sees the same payload size, so every rank takes the same branch.
+    // Payloads up to mesh_max_bytes post both sends before receiving, which is safe while a
+    // payload fits one ND chunk and the TCP socket buffer. Larger payloads keep the ring unless
+    // LLAMA_DIST_TP_MESH_LARGE is set and every direction rides TCP (see mesh_takes); those send
+    // from a helper thread. Every rank sees the same payload size, so every rank takes the same
+    // branch.
     bool exchange_mesh(uint32_t op, int32_t src_rank, const void * send_data_ptr, size_t size,
             int32_t & recv_src_rank, void * recv_data_ptr, std::string & err) {
         if (mesh_pending) {
@@ -718,18 +765,69 @@ struct dist_comm_socket_context::impl {
 
         mesh_from_next.resize(size);
 
-        // Both sends are posted before either receive, so the two links carry this rank's
-        // payload at the same time. Under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once it
-        // is posted, and the drains below retire both before a staging slot can be reused.
-        bool ok = send_to(nd_to_next, nd_send, ring_out_fd) &&
-                  send_to(nd_to_prev, nd_recv, ring_in_fd) &&
-                  recv_from(nd_from_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
-                  recv_from(nd_from_next, nd_send, ring_out_fd, mesh_from_next.data(), mesh_next_src);
-        if (ok && nd_to_next) {
-            ok = dist_nd_send_drain(nd_send, err);
-        }
-        if (ok && nd_to_prev) {
-            ok = dist_nd_send_drain(nd_recv, err);
+        bool ok;
+        if (size > mesh_max_bytes) {
+            // A large payload, so every direction is on TCP (mesh_takes) and it can be many MB.
+            // A helper thread sends to next and then to prev while this thread receives from
+            // prev and then from next. Nothing then depends on the socket buffers absorbing a
+            // whole payload: each rank's first send goes to a peer whose first receive is from
+            // it. With SOCKET_BUFSIZE buffers both links carry both directions at once, where the
+            // ring moves 2x the payload one way per link in two dependent steps. On any failure
+            // both sockets are shut down so neither thread can stay blocked; the run is over by
+            // then anyway.
+            if (nd_to_next || nd_to_prev || nd_from_prev || nd_from_next) {
+                err = "mesh exchange: a payload above LLAMA_DIST_TP_MESH_MAX_BYTES must ride TCP in every direction";
+                return false;
+            }
+            if (send_data_ptr == recv_data_ptr) {
+                err = "mesh exchange: send and receive buffers alias, which the send thread cannot allow";
+                return false;
+            }
+            std::string send_err;
+            bool sent = false;
+            auto send_both = [&]() {
+                sent = write_msg(ring_out_fd, &send_hdr, sizeof(send_hdr), send_err) &&
+                       write_msg(ring_out_fd, send_data_ptr, size, send_err) &&
+                       write_msg(ring_in_fd, &send_hdr, sizeof(send_hdr), send_err) &&
+                       write_msg(ring_in_fd, send_data_ptr, size, send_err);
+                if (!sent) {
+                    shutdown_fd(ring_out_fd);
+                    shutdown_fd(ring_in_fd);
+                }
+            };
+            std::thread sender;
+            try {
+                sender = std::thread(send_both);
+            } catch (const std::exception & e) {
+                err = std::string("mesh exchange: could not start the send thread: ") + e.what();
+                return false;
+            }
+            const bool received =
+                recv_from(false, nullptr, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
+                recv_from(false, nullptr, ring_out_fd, mesh_from_next.data(), mesh_next_src);
+            if (!received) {
+                shutdown_fd(ring_out_fd);
+                shutdown_fd(ring_in_fd);
+            }
+            sender.join();
+            if (received && !sent) {
+                err = send_err;
+            }
+            ok = received && sent;
+        } else {
+            // Both sends are posted before either receive, so the two links carry this rank's
+            // payload at the same time. Under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once
+            // it is posted, and the drains below retire both before a staging slot can be reused.
+            ok = send_to(nd_to_next, nd_send, ring_out_fd) &&
+                 send_to(nd_to_prev, nd_recv, ring_in_fd) &&
+                 recv_from(nd_from_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
+                 recv_from(nd_from_next, nd_send, ring_out_fd, mesh_from_next.data(), mesh_next_src);
+            if (ok && nd_to_next) {
+                ok = dist_nd_send_drain(nd_send, err);
+            }
+            if (ok && nd_to_prev) {
+                ok = dist_nd_send_drain(nd_recv, err);
+            }
         }
         if (!ok) {
             return false;
@@ -801,12 +899,34 @@ struct dist_comm_socket_context::impl {
             }
         }
 
+        // Large payloads may only take the mesh above the size where every direction is on TCP:
+        // the ND ceiling in an RDMA run, any size in a TCP run. Both come from the environment,
+        // which is the same on every rank. With no ND ceiling no size is TCP-only, so it is off.
+        if (dist_transport_env_true("LLAMA_DIST_TP_MESH_LARGE", false)) {
+            if (!dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
+                mesh_large       = true;
+                mesh_large_above = mesh_max_bytes;
+            } else if (dist_nd_ceiling_from_env() > 0) {
+                mesh_large       = true;
+                mesh_large_above = std::max(mesh_max_bytes, dist_nd_ceiling_from_env());
+            }
+        }
+
+        char above[96];
+        if (mesh_large && mesh_large_above > mesh_max_bytes) {
+            std::snprintf(above, sizeof(above), "ring to %zu B, mesh above (TCP, send thread)", mesh_large_above);
+        } else if (mesh_large) {
+            std::snprintf(above, sizeof(above), "mesh above (TCP, send thread)");
+        } else {
+            std::snprintf(above, sizeof(above), "ring above");
+        }
+
         const int next = (cfg.rank + 1) % cfg.world_size;
         const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
         std::fprintf(stderr,
-                     "dist-tp all-reduce: full mesh up to %zu B, ring above [rank %d/%d] "
+                     "dist-tp all-reduce: full mesh up to %zu B, %s [rank %d/%d] "
                      "(->%d %s, %d<- %s, ->%d %s, %d<- %s)\n",
-                     mesh_max_bytes, cfg.rank, cfg.world_size,
+                     mesh_max_bytes, above, cfg.rank, cfg.world_size,
                      next, nd_send != nullptr ? "ND" : "TCP",
                      next, nd_send != nullptr && !mesh_edge_reverse_tcp(cfg.rank) ? "ND" : "TCP",
                      prev, nd_recv != nullptr && !mesh_edge_reverse_tcp(prev) ? "ND" : "TCP",
@@ -1070,18 +1190,7 @@ struct dist_comm_socket_context::impl {
 
         if (nd_send != nullptr || nd_recv != nullptr) {
             // default: one ND chunk per exchange; larger payloads stay on TCP. 0 = no ceiling.
-            nd_max_bytes = 256 * 1024;
-            const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MAX_BYTES");
-            if (v != nullptr && v[0] != '\0') {
-                try {
-                    const long long n = std::stoll(v);
-                    if (n >= 0) {
-                        nd_max_bytes = (size_t) n;
-                    }
-                } catch (...) {
-                    // keep the default
-                }
-            }
+            nd_max_bytes = dist_nd_ceiling_from_env();
         }
 
         // The harness greps for this exact prefix to prove which transport a benchmark actually
@@ -1181,7 +1290,7 @@ bool dist_comm_socket_context::exchange_ring_f32(int32_t src_rank, const float *
 
     // A pending mesh step must be served by the mesh whatever its size check would say now.
     const size_t bytes = n * sizeof(float);
-    if (impl_->mesh_pending || (impl_->mesh_max_bytes > 0 && bytes <= impl_->mesh_max_bytes)) {
+    if (impl_->mesh_pending || impl_->mesh_takes(bytes)) {
         return impl_->exchange_mesh(OP_ALLREDUCE_F32, src_rank, send_data, bytes, recv_src_rank, recv_data, err);
     }
 
