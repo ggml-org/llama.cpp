@@ -45,8 +45,9 @@
 </script>
 
 <!-- only the desktop pane leaves the right edge to the panel border: on a phone the
-     pane covers the screen, so its two sides carry the same padding -->
-<header class="space-y-2.5 pt-3 pl-4 max-md:pr-4">
+     pane covers the screen, so its two sides carry the same padding, and it takes a
+     little more room around the model it names -->
+<header class="space-y-2.5 pt-3 pl-4 max-md:space-y-3 max-md:pt-4 max-md:pr-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<!-- same geometry as the discover details header: base org, quant org badge -->
