@@ -321,7 +321,11 @@ struct server_child {
     std::atomic<bool> is_finished_downloading = false; // set by run_download
 
     // return true if the current process is a child server instance
-    bool is_child();
+    static bool is_child();
+
+    // keep stdout for the commands to the router, called before anything else is written;
+    // everything else written to stdout goes to stderr with the logs
+    static void init();
     server_child_mode get_mode();
     int run_download(common_params & params);
 

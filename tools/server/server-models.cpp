@@ -94,7 +94,7 @@ private:
         std::shared_ptr<server_subproc> proc;
         server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
         int port = 0;
-        std::string buf;      // partial line
+        std::string buf[SERVER_SUBPROC_STREAMS]; // partial line of each pipe
         bool eof = false;     // output closed, waiting for the process to be reaped
         int64_t deadline = 0; // force-kill time in ms, 0 when no stop is pending
     };
@@ -147,46 +147,56 @@ private:
         return false;
     }
 
-    // read what the child wrote, forward complete lines
+    // read what the child wrote, handle its commands and forward its logs, line by line
     void read_output(child_t & c) {
+        for (int i = 0; i < SERVER_SUBPROC_STREAMS; i++) {
+            read_stream(c, (server_subproc_stream) i);
+        }
+        c.eof = c.proc->output_closed();
+    }
+
+    void read_stream(child_t & c, server_subproc_stream stream) {
         char chunk[4096];
-        while (!c.eof) {
-            int n = c.proc->read_output(chunk, sizeof(chunk));
+        std::string & buf = c.buf[stream];
+        bool closed = false;
+        while (true) {
+            int n = c.proc->read_output(stream, chunk, sizeof(chunk));
             if (n < 0) {
-                c.eof = true;
+                closed = true;
                 break;
             }
             if (n == 0) {
                 break;
             }
-            c.buf.append(chunk, (size_t) n);
+            buf.append(chunk, (size_t) n);
             size_t start = 0;
             while (true) {
-                size_t nl = c.buf.find('\n', start);
+                size_t nl = buf.find('\n', start);
                 if (nl == std::string::npos) {
                     break;
                 }
-                std::string line = c.buf.substr(start, nl + 1 - start);
+                on_line(c, stream, buf.substr(start, nl + 1 - start));
                 start = nl + 1;
-                on_line(c, line);
             }
-            c.buf.erase(0, start);
-            if (c.buf.size() > max_line) {
-                c.buf.clear(); // a child that never writes a newline must not grow this without bound
+            buf.erase(0, start);
+            if (buf.size() > max_line) {
+                buf.clear(); // a child that never writes a newline must not grow this without bound
             }
         }
-        if (c.eof && !c.buf.empty()) {
-            on_line(c, c.buf);
-            c.buf.clear();
+        if (closed && !buf.empty()) {
+            on_line(c, stream, buf);
+            buf.clear();
         }
     }
 
-    void on_line(child_t & c, const std::string & line) {
-        if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
+    void on_line(child_t & c, server_subproc_stream stream, const std::string & line) {
+        if (stream == SERVER_SUBPROC_STDERR) {
+            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+        } else if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
             LOG_DBG("[%5d] %s", c.port, line.c_str()); // prevent spamming the log
             models.handle_child_state(c.name, line);
         } else {
-            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+            SRV_WRN("[%5d] unexpected output on the command pipe: %s", c.port, line.c_str());
         }
     }
 
@@ -1174,9 +1184,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
         inst.meta.args = child_args; // save for debugging
 
-        // TODO @ngxson : maybe separate stdout and stderr in the future
-        //                so that we can use stdout for commands and stderr for logging
-        int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
+        // the child writes its commands to stdout and its logs to stderr
+        int options = subprocess_option_no_window;
         if (!inst.subproc->sproc.create(child_args, options, child_env)) {
             throw std::runtime_error("failed to spawn server instance");
         }
@@ -1676,6 +1685,12 @@ void server_models::handle_child_state(const std::string & name, const std::stri
 // server_child
 //
 
+static FILE * child_cmd_out = nullptr; // the stdout the router reads the commands from
+
+void server_child::init() {
+    child_cmd_out = server_reserve_stdout();
+}
+
 bool server_child::is_child() {
     const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
     return router_port != nullptr;
@@ -1798,11 +1813,8 @@ void server_child::notify_to_router(const std::string & state, const json & payl
         {"payload", payload},
     };
     std::lock_guard<std::mutex> lk(mtx_stdout);
-    common_log_pause(common_log_main());
-    fflush(stdout);
-    fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
-    fflush(stdout);
-    common_log_resume(common_log_main());
+    fprintf(child_cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(child_cmd_out);
 }
 
 
