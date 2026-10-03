@@ -10,7 +10,7 @@
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
-	import { KeyboardKey, ModelRowDownloadState } from '$lib/enums';
+	import { ModelRowDownloadState } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -38,27 +38,25 @@
 				? ModelRowDownloadState.DOWNLOADING
 				: null
 	);
-
-	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === KeyboardKey.SPACE) event.preventDefault();
-
-		if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) onSelect(option);
-	}
 </script>
 
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'group relative cursor-pointer rounded-md px-2 py-3 transition',
+		'group relative rounded-md px-2 py-3 transition',
 		isHidden && 'opacity-60',
 		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 	]}
-	onclick={() => onSelect(option)}
-	onkeydown={handleKeydown}
-	role="button"
-	tabindex="0"
 >
-	<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+	<!-- the row holds a load control and an actions menu, so only the model itself is
+	     the button: a button nested in a role="button" row is invalid -->
+	<button
+		aria-pressed={selected}
+		class="flex min-w-0 cursor-pointer items-center gap-3 text-left"
+		onclick={() => onSelect(option)}
+		style="padding-left: {indent}px"
+		type="button"
+	>
 		<ModelAvatar {option} size="size-9" />
 
 		<span class="flex min-w-0 items-center gap-1.25">
@@ -76,7 +74,7 @@
 
 			<ModelCapabilities {option} />
 		</span>
-	</span>
+	</button>
 
 	<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
