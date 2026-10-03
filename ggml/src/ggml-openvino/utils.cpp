@@ -714,7 +714,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
             ggml_decoder->set_compute_params(c_params);
             ggml_decoder->set_model_params(m_params);
-            if (old_m_params.kv_buffer_changed(m_params)) {
+            if (old_m_params.kv_buffer_changed(m_params) || !ggml_decoder->is_bound_to(cgraph)) {
                 ggml_decoder->update_io(cgraph);
             }
             ggml_decoder->add_extra_inputs();
@@ -728,12 +728,12 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             if (stateful) {
                 const auto * inp_pos = get_inp_pos_tensor(cgraph);
                 int32_t * pos_data = (int32_t *) inp_pos->data;
-                auto pos_shape = GgmlOvDecoder::get_shape(inp_pos);
+                const auto n_tokens = static_cast<size_t>(get_inp_pos_n_tokens(cgraph, inp_pos));
                 if (pos_data[0] == 0) {
                     infer_request->reset_state();
-                    r_ctx->stateful_kv_size = pos_shape[3];
+                    r_ctx->stateful_kv_size = n_tokens;
                 } else if (r_ctx->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
-                    r_ctx->stateful_kv_size += pos_shape[3];
+                    r_ctx->stateful_kv_size += n_tokens;
                 } else {
                     const size_t pos_begin = static_cast<size_t>(pos_data[0]);
                     const bool refill = pos_begin > r_ctx->stateful_kv_size;
@@ -817,7 +817,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                         ov::Tensor new_state_tensor(state_tensor, begin, end);
                         state.set_state(new_state_tensor);
                     }
-                    r_ctx->stateful_kv_size = pos_begin + pos_shape[3];
+                    r_ctx->stateful_kv_size = pos_begin + n_tokens;
                 }
             }
 
@@ -1027,7 +1027,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
             if (stateful && cache_enabled) {
                 const auto * inp_pos = get_inp_pos_tensor(cgraph);
-                auto pos_shape = GgmlOvDecoder::get_shape(inp_pos);
                 // A freshly compiled model starts with an empty state, so it can only serve a
                 // sequence from its beginning. A non-zero start position means the KV history was
                 // built elsewhere (a restored ggml cache), which the state cannot adopt.
@@ -1040,11 +1039,43 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                         pos_begin);
                     return GGML_STATUS_FAILED;
                 }
-                r_ctx->stateful_kv_size = pos_shape[3];
+                r_ctx->stateful_kv_size = static_cast<size_t>(get_inp_pos_n_tokens(cgraph, inp_pos));
                 const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
                 for (const auto & pair : kv_param_res_names) {
                     r_ctx->kv_state_input_name_map[pair.first + pair.second] = pair.first;
                 }
+            }
+
+            // Without the cache every call compiles a new model whose state starts empty, so hand the
+            // previous request's states over to it; otherwise decode runs with no history at all.
+            if (stateful && !cache_enabled) {
+                const auto * inp_pos = get_inp_pos_tensor(cgraph);
+                const size_t pos_begin = static_cast<size_t>(((int32_t *) inp_pos->data)[0]);
+                const auto n_tokens = static_cast<size_t>(get_inp_pos_n_tokens(cgraph, inp_pos));
+                if (pos_begin != 0) {
+                    if (!r_ctx->last_stateful_request || pos_begin != r_ctx->stateful_kv_size) {
+                        GGML_LOG_ERROR(
+                            "GGML OpenVINO backend stateful inference failed: GGML_OPENVINO_DISABLE_CACHE can only "
+                            "continue a sequence in order, but position %d follows a state that holds %zu tokens.\n",
+                            (int) pos_begin, r_ctx->stateful_kv_size);
+                        return GGML_STATUS_FAILED;
+                    }
+                    std::map<std::string, ov::VariableState> previous;
+                    for (auto & state : r_ctx->last_stateful_request->query_state()) {
+                        previous.emplace(state.get_name(), state);
+                    }
+                    for (auto & state : infer_request->query_state()) {
+                        auto it = previous.find(state.get_name());
+                        if (it == previous.end()) {
+                            GGML_LOG_ERROR("GGML OpenVINO backend stateful inference failed: state '%s' missing\n",
+                                           state.get_name().c_str());
+                            return GGML_STATUS_FAILED;
+                        }
+                        state.set_state(it->second.get_state());
+                    }
+                }
+                r_ctx->stateful_kv_size = pos_begin + n_tokens;
+                r_ctx->last_stateful_request = infer_request;
             }
         }
 

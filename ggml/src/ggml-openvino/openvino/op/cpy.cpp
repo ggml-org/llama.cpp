@@ -91,8 +91,7 @@ OutputVector translate_cpy(const NodeContext & context) {
         }
     }
     const std::string slot_begin_name = "rs_slot_begin_" + context.get_name();
-    const bool slice_assign =
-        context.has_input(slot_begin_name) && !context.is_stateful() && (op_case >= 1 && op_case <= 3);
+    const bool slice_assign = context.has_input(slot_begin_name) && (op_case >= 1 && op_case <= 3);
     if (slice_assign) {
         const int64_t slot_axis = 2;
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
@@ -105,6 +104,8 @@ OutputVector translate_cpy(const NodeContext & context) {
         ov::Output<ov::Node> src;
         ov::Output<ov::Node> begin = context.get_input(slot_begin_name);
         auto base = context.get_input(1);
+        // The slot (2) and column (3) axes below are rank-4 axes; the stateful graph can deliver rank 3.
+        const auto input = lift_to_rank(context.get_input(0), 4);
         if (op_case == 1) {
             ov::Output<ov::Node> state_begin;
             const std::string src_begin_name = "rs_src_begin_" + context.get_name();
@@ -121,8 +122,7 @@ OutputVector translate_cpy(const NodeContext & context) {
                     state_begin = ov::op::v0::Constant::create(ov::element::i64, {1}, {-ssm_state_size});
                 }
             }
-            auto state_part =
-                std::make_shared<ov::op::v8::Slice>(context.get_input(0), state_begin, int_max, one, axis);
+            auto state_part = std::make_shared<ov::op::v8::Slice>(input, state_begin, int_max, one, axis);
             src = std::make_shared<ov::op::v1::Reshape>(state_part, feature, false);
         } else if (op_case == 2) {
             // conv_input is [previous conv state | new tokens]; the snapshot is the conv_kernel_size - 1
@@ -136,18 +136,17 @@ OutputVector translate_cpy(const NodeContext & context) {
                 auto src_begin = context.get_input(src_begin_name);
                 auto src_end = std::make_shared<ov::op::v1::Add>(
                     src_begin, ov::op::v0::Constant::create(ov::element::i64, {1}, {window_size}));
-                window = std::make_shared<ov::op::v8::Slice>(context.get_input(0), src_begin, src_end, one, col_axis);
+                window = std::make_shared<ov::op::v8::Slice>(input, src_begin, src_end, one, col_axis);
             } else if (context.has_input("chunk_valid_len")) {
                 std::vector<int64_t> offsets(window_size);
                 std::iota(offsets.begin(), offsets.end(), 0);
                 auto indices = std::make_shared<ov::op::v1::Add>(
                     ov::op::v0::Constant::create(ov::element::i64, {(size_t) window_size}, offsets),
                     context.get_input("chunk_valid_len"));
-                window = std::make_shared<ov::op::v8::Gather>(context.get_input(0), indices, col_axis);
+                window = std::make_shared<ov::op::v8::Gather>(input, indices, col_axis);
             } else {
                 auto window_begin = ov::op::v0::Constant::create(ov::element::i64, {1}, {-window_size});
-                window =
-                    std::make_shared<ov::op::v8::Slice>(context.get_input(0), window_begin, int_max, one, col_axis);
+                window = std::make_shared<ov::op::v8::Slice>(input, window_begin, int_max, one, col_axis);
             }
             const auto base_shape = base.get_partial_shape();
             FRONT_END_OP_CONVERSION_CHECK(base_shape.rank().is_static() && base_shape.rank().get_length() == 4,
@@ -193,7 +192,7 @@ OutputVector translate_cpy(const NodeContext & context) {
             src = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{feature_head, src, feature_tail}, 3);
         } else {
             // op_case 3: gathered remainder rows already have the cache slot layout [1, 1, extra, feature]
-            src = context.get_input(0);
+            src = input;
         }
 
         if (src.get_element_type() != context.get_output_type()) {
