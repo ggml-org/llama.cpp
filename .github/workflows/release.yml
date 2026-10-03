@@ -323,21 +323,22 @@ jobs:
         include:
           # label = short version used in artifact names / release body
           # cuda  = full container image tag
+          # CTK >= 13.5 bundles CCCL >= 3.5; omit GGML_CUDA_CCCL_VERSION for those versions.
           - build: 'x64'
             os: ubuntu-24.04
             cuda: '12.8.2'
             label: '12.8'
-            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - build: 'x64'
             os: ubuntu-24.04
             cuda: '13.4.1'
             label: '13.4'
-            defines: ''
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - build: 'arm64'
             os: ubuntu-24.04-arm
             cuda: '13.4.1'
             label: '13.4'
-            defines: ''
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
 
     runs-on: ${{ matrix.os }}
     container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
@@ -672,8 +673,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.4"
-      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Set OpenVINO version output
@@ -787,8 +788,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.4"
-      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Set OpenVINO version output
@@ -1244,15 +1245,16 @@ jobs:
     strategy:
       matrix:
         include:
+          # CTK >= 13.5 bundles CCCL >= 3.5; omit GGML_CUDA_CCCL_VERSION for those versions.
           - cuda: '12.4'
             arch: x64
-            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - cuda: '13.4'
             arch: x64
-            defines: ''
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - cuda: '13.4'
             arch: arm64
-            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3 -DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone
@@ -1279,7 +1281,6 @@ jobs:
       - name: Build
         id: cmake_build
         shell: cmd
-        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^

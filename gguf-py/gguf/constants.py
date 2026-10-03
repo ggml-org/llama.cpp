@@ -322,6 +322,15 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class Decision:
+        TYPE               = "{arch}.decision.type"
+        # note: single-use-case keys can be hard-coded in cpp code
+        BLOCK_COUNT        = "{arch}.decision.block_count"
+        ROUTING_BLOCK_COUNT = "{arch}.decision.routing_block_count"
+        HEAD_COUNT         = "{arch}.decision.head_count"
+        MAX_HEAD_TOKENS    = "{arch}.decision.max_head_tokens"
+        TEMPERATURE        = "{arch}.decision.temperature.{name}"  # name: "<type>" or "<type>.<n_opt bucket>"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -532,6 +541,7 @@ class MODEL_ARCH(IntEnum):
     QWEN3VLMOE       = auto()
     QWEN35           = auto()
     QWEN35MOE        = auto()
+    CLEF             = auto()
     QWEN4EXP         = auto()
     PHI2             = auto()
     PHI3             = auto()
@@ -857,6 +867,7 @@ class MODEL_TENSOR(IntEnum):
     DEC_ATTN_OUT         = auto()
     DEC_ATTN_REL_B       = auto()
     DEC_CROSS_ATTN_NORM  = auto()
+    DEC_CROSS_ATTN_NORM_KV = auto()
     DEC_CROSS_ATTN_Q     = auto()
     DEC_CROSS_ATTN_K     = auto()
     DEC_CROSS_ATTN_V     = auto()
@@ -881,6 +892,19 @@ class MODEL_TENSOR(IntEnum):
     CLS                  = auto() # classifier
     CLS_OUT              = auto() # classifier output projection
     CLS_NORM             = auto()
+    DECISION_HIDDEN_NORM          = auto()
+    DECISION_PROJ_MEMORY          = auto()
+    DECISION_PROJ_QUESTION        = auto()
+    DECISION_PROJ_OPTION_QUESTION = auto()
+    DECISION_PROJ_GLOBAL          = auto()
+    DECISION_PROJ_OPTION_CONTEXT  = auto()
+    DECISION_PROJ_OPTION_LEXICAL  = auto()
+    DECISION_OPTION_SUMMARY_NORM  = auto()
+    DECISION_FIELD_NORM           = auto()
+    DECISION_OPTION_NORM          = auto()
+    DECISION_SCALES               = auto()
+    DECISION_SCORER               = auto()
+    DECISION_SCORER_OUT           = auto()
     CONV1D               = auto()
     CONVNEXT_DW          = auto()
     CONVNEXT_NORM        = auto()
@@ -1210,6 +1234,9 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HNORM            = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
+    NEXTN_HC_HEAD_NORM     = auto()
+    NEXTN_HC_HEAD_DOWN     = auto()
+    NEXTN_HC_HEAD_UP       = auto()
     # eagle3
     FC                     = auto()  # feature fusion layer
     D2T                    = auto()  # draft to target vocabulary mapping
@@ -1296,6 +1323,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN3VLMOE:       "qwen3vlmoe",
     MODEL_ARCH.QWEN35:           "qwen35",
     MODEL_ARCH.QWEN35MOE:        "qwen35moe",
+    MODEL_ARCH.CLEF:             "clef",
     MODEL_ARCH.QWEN4EXP:         "qwen4exp",
     MODEL_ARCH.PHI2:             "phi2",
     MODEL_ARCH.PHI3:             "phi3",
@@ -1620,6 +1648,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DEC_ATTN_OUT:              "dec.blk.{bid}.attn_o",
     MODEL_TENSOR.DEC_ATTN_REL_B:            "dec.blk.{bid}.attn_rel_b",
     MODEL_TENSOR.DEC_CROSS_ATTN_NORM:       "dec.blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.DEC_CROSS_ATTN_NORM_KV:    "dec.blk.{bid}.cross_attn_norm_kv",
     MODEL_TENSOR.DEC_CROSS_ATTN_Q:          "dec.blk.{bid}.cross_attn_q",
     MODEL_TENSOR.DEC_CROSS_ATTN_K:          "dec.blk.{bid}.cross_attn_k",
     MODEL_TENSOR.DEC_CROSS_ATTN_V:          "dec.blk.{bid}.cross_attn_v",
@@ -1644,6 +1673,19 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.CLS:                       "cls",
     MODEL_TENSOR.CLS_OUT:                   "cls.output",
     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
+    MODEL_TENSOR.DECISION_HIDDEN_NORM:          "decision.hidden_norm",
+    MODEL_TENSOR.DECISION_PROJ_MEMORY:          "decision.proj_memory",
+    MODEL_TENSOR.DECISION_PROJ_QUESTION:        "decision.proj_question",
+    MODEL_TENSOR.DECISION_PROJ_OPTION_QUESTION: "decision.proj_option_question",
+    MODEL_TENSOR.DECISION_PROJ_GLOBAL:          "decision.proj_global",
+    MODEL_TENSOR.DECISION_PROJ_OPTION_CONTEXT:  "decision.proj_option_context",
+    MODEL_TENSOR.DECISION_PROJ_OPTION_LEXICAL:  "decision.proj_option_lexical",
+    MODEL_TENSOR.DECISION_OPTION_SUMMARY_NORM:  "decision.option_summary_norm",
+    MODEL_TENSOR.DECISION_FIELD_NORM:           "decision.field_norm",
+    MODEL_TENSOR.DECISION_OPTION_NORM:          "decision.option_norm",
+    MODEL_TENSOR.DECISION_SCALES:               "decision.scales",
+    MODEL_TENSOR.DECISION_SCORER:               "decision.scorer",
+    MODEL_TENSOR.DECISION_SCORER_OUT:           "decision.scorer_out",
     MODEL_TENSOR.CONV1D:                    "conv1d",
     MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
     MODEL_TENSOR.CONVNEXT_NORM:             "convnext.{bid}.norm",
@@ -2001,6 +2043,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    MODEL_TENSOR.NEXTN_HC_HEAD_NORM:        "blk.{bid}.nextn.hc_head_norm",
+    MODEL_TENSOR.NEXTN_HC_HEAD_DOWN:        "blk.{bid}.nextn.hc_head_down",
+    MODEL_TENSOR.NEXTN_HC_HEAD_UP:          "blk.{bid}.nextn.hc_head_up",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
@@ -2489,6 +2534,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.MODERN_BERT: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.TOKEN_TYPES,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_OUT,
@@ -2883,6 +2929,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.CLS_OUT,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
@@ -2910,6 +2957,60 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.CLEF: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_OUT,
+        # decision head
+        MODEL_TENSOR.TOKEN_TYPES,
+        MODEL_TENSOR.DEC_ATTN_NORM,
+        MODEL_TENSOR.DEC_ATTN_Q,
+        MODEL_TENSOR.DEC_ATTN_K,
+        MODEL_TENSOR.DEC_ATTN_V,
+        MODEL_TENSOR.DEC_ATTN_OUT,
+        MODEL_TENSOR.DEC_CROSS_ATTN_NORM,
+        MODEL_TENSOR.DEC_CROSS_ATTN_NORM_KV,
+        MODEL_TENSOR.DEC_CROSS_ATTN_Q,
+        MODEL_TENSOR.DEC_CROSS_ATTN_K,
+        MODEL_TENSOR.DEC_CROSS_ATTN_V,
+        MODEL_TENSOR.DEC_CROSS_ATTN_OUT,
+        MODEL_TENSOR.DEC_FFN_NORM,
+        MODEL_TENSOR.DEC_FFN_DOWN,
+        MODEL_TENSOR.DEC_FFN_UP,
+        MODEL_TENSOR.DECISION_HIDDEN_NORM,
+        MODEL_TENSOR.DECISION_PROJ_MEMORY,
+        MODEL_TENSOR.DECISION_PROJ_QUESTION,
+        MODEL_TENSOR.DECISION_PROJ_OPTION_QUESTION,
+        MODEL_TENSOR.DECISION_PROJ_GLOBAL,
+        MODEL_TENSOR.DECISION_PROJ_OPTION_CONTEXT,
+        MODEL_TENSOR.DECISION_PROJ_OPTION_LEXICAL,
+        MODEL_TENSOR.DECISION_OPTION_SUMMARY_NORM,
+        MODEL_TENSOR.DECISION_FIELD_NORM,
+        MODEL_TENSOR.DECISION_OPTION_NORM,
+        MODEL_TENSOR.DECISION_SCALES,
+        MODEL_TENSOR.DECISION_SCORER,
+        MODEL_TENSOR.DECISION_SCORER_OUT,
     ],
     MODEL_ARCH.QWEN35MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3000,6 +3101,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.PLE_NORM_QUERY,
         MODEL_TENSOR.PLE_NORM_CONV,
         MODEL_TENSOR.PLE_CONV1D,
+        # MTP block: [fc_embedding | fc_hidden] as eh_proj, its own hyper-connection mixer as the head
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_HC_HEAD_NORM,
+        MODEL_TENSOR.NEXTN_HC_HEAD_DOWN,
+        MODEL_TENSOR.NEXTN_HC_HEAD_UP,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -5926,6 +6034,15 @@ class GGUFValueType(IntEnum):
         # TODO: need help with 64-bit types in Python
         else:
             raise ValueError(f"Unknown type: {type(val)}")
+
+
+class DecisionType:
+    LAYA    = "laya"     # head blocks + scorer on the hidden state of one marker token per option
+    OPENJEV = "openjev"  # logits of one label token per option
+    LEV     = "lev"      # same as openjev, noul is read from a rating scale
+    KEV     = "kev"      # dot product of the hidden states of the last token and of one end token per option
+    NIMBLE  = "nimble"   # same as openjev, the prompt lists all the questions of the request
+    CLEF    = "clef"     # joint head over all questions, one score per option
 
 
 class VisionProjectorType:

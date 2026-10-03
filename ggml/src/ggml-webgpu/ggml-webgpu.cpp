@@ -4325,12 +4325,14 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
 
     static struct ggml_backend_buffer_type ggml_backend_webgpu_buffer_type = {
         /* .iface = */ {
-                        /* .get_name       = */ ggml_backend_webgpu_buffer_type_get_name,
-                        /* .alloc_buffer   = */ ggml_backend_webgpu_buffer_type_alloc_buffer,
-                        /* .get_alignment  = */ ggml_backend_webgpu_buffer_type_get_alignment,
-                        /* .get_max_size   = */ ggml_backend_webgpu_buffer_type_get_max_size,
-                        /* .get_alloc_size = */ ggml_backend_webgpu_buffer_type_get_alloc_size,
-                        /* .is_host        = */ NULL,  // defaults to false
+                        /* .get_name            = */ ggml_backend_webgpu_buffer_type_get_name,
+                        /* .alloc_buffer        = */ ggml_backend_webgpu_buffer_type_alloc_buffer,
+                        /* .alloc_buffer_n      = */ NULL,
+                        /* .get_alignment       = */ ggml_backend_webgpu_buffer_type_get_alignment,
+                        /* .get_max_size        = */ ggml_backend_webgpu_buffer_type_get_max_size,
+                        /* .get_alloc_size      = */ ggml_backend_webgpu_buffer_type_get_alloc_size,
+                        /* .get_alloc_size_n    = */ NULL,
+                        /* .is_host             = */ NULL,  // defaults to false
         },
         /* .device  = */
         dev,
@@ -4432,7 +4434,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                            src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32));
             break;
         case GGML_OP_GET_ROWS:
-            if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_webgpu_supported_qtype(src0->type)) {
+            if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 ||
+                ggml_webgpu_supported_qtype(src0->type)) {
                 supports_op = (op->type == GGML_TYPE_F32);
             } else if (src0->type == GGML_TYPE_I32) {
                 supports_op = op->type == GGML_TYPE_I32;
@@ -4448,6 +4451,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                         switch (src0->type) {
                             case GGML_TYPE_F32:
                             case GGML_TYPE_F16:
+                            case GGML_TYPE_BF16:
                             case GGML_TYPE_Q1_0:
                             case GGML_TYPE_Q4_0:
                             case GGML_TYPE_Q4_1:
@@ -4489,6 +4493,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     switch (src0->type) {
                         case GGML_TYPE_F32:
                         case GGML_TYPE_F16:
+                        case GGML_TYPE_BF16:
                         case GGML_TYPE_Q1_0:
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q4_1:

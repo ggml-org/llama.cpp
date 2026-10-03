@@ -164,6 +164,7 @@ models = [
     {"name": "mellum2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base"},
     {"name": "laguna",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/poolside/Laguna-XS.2", },
     {"name": "ufakzeka",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ufakai/ufakzeka-1", },
+    {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
 ]
 

@@ -11,12 +11,12 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "hex-cpy-dma.h"
 #include "htp-ctx.h"
-#include "htp-ops.h"
-#include "htp-ops.h"
-#include "hvx-utils.h"
-#include "htp-tensor.h"
 #include "htp-fence.h"
+#include "htp-ops.h"
+#include "htp-tensor.h"
+#include "hvx-utils.h"
 
 struct htp_copy_context {
     struct htp_ops_context * octx;
@@ -48,30 +48,6 @@ struct htp_copy_context {
     struct fastdiv_values div_ne01_ne00;
     struct fastdiv_values div_ne02_ne01_ne00;
 };
-
-static inline void cpy_dma_sametype_reshape_contig(
-    dma_queue * dma_q,
-    dma_addr_t dst,
-    dma_addr_t src0,
-    uint32_t total_bytes
-) {
-    if (total_bytes == 0) {
-        return;
-    }
-
-    const uint32_t max_chunk = DMA_SAFE_CHUNK_SIZE;
-    while (total_bytes > 0) {
-        const uint32_t chunk = MIN(total_bytes, max_chunk);
-        if (!dma_queue_push(dma_q, dma_make_data(dst, src0), chunk, chunk, chunk, /*nrows=*/ 1)) {
-            dma_queue_flush(dma_q);
-            dma_queue_push(dma_q, dma_make_data(dst, src0), chunk, chunk, chunk, /*nrows=*/ 1);
-        }
-        dst         += chunk;
-        src0        += chunk;
-        total_bytes -= chunk;
-    }
-    dma_queue_flush(dma_q);
-}
 
 #define cpy_preamble                              \
     const struct htp_tensor *src0 = octx->src[0]; \
@@ -112,6 +88,7 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
         dma_addr_t dst_addr  = dst->data  + ir0 * ne00 * ELEM_SIZE;                                                \
         dma_addr_t src0_addr = src0->data + ir0 * ne00 * ELEM_SIZE;                                                \
         cpy_dma_sametype_reshape_contig(dma_q, dst_addr, src0_addr, (ir1 - ir0) * ne00 * ELEM_SIZE);               \
+        dma_queue_flush(dma_q);                                                                                    \
         return;                                                                                                    \
     }                                                                                                              \
     const uint32_t ne02_ne01 = ne02 * ne01;                                                                        \
@@ -157,6 +134,7 @@ static void cpy_thread_##NAME##_reshape(unsigned int nth, unsigned int ith, void
         dma_addr_t dst_addr  = dst->data  + th_start * ELEM_SIZE;                                     \
         dma_addr_t src0_addr = src0->data + th_start * ELEM_SIZE;                                     \
         cpy_dma_sametype_reshape_contig(dma_q, dst_addr, src0_addr, (th_end - th_start) * ELEM_SIZE); \
+        dma_queue_flush(dma_q);                                                                       \
         return;                                                                                       \
     }                                                                                                 \
                                                                                                       \
@@ -381,67 +359,6 @@ static void cpy_thread_f32_i32_sameshape(unsigned int nth, unsigned int ith, voi
     }
 }
 
-static inline void cpy_dma_push_2d_chunked(
-    dma_queue * dma_q,
-    dma_addr_t  dst,
-    dma_addr_t  src,
-    size_t      dst_stride,
-    size_t      src_stride,
-    size_t      row_size,
-    uint32_t    nrows
-) {
-    while (nrows > 0) {
-        const uint32_t cur_rows = MIN(nrows, DMA_MAX_NROWS);
-        if (!dma_queue_push(dma_q, dma_make_data(dst, src), dst_stride, src_stride, row_size, cur_rows)) {
-            dma_queue_flush(dma_q);
-            dma_queue_push(dma_q, dma_make_data(dst, src), dst_stride, src_stride, row_size, cur_rows);
-        }
-        dst   += cur_rows * dst_stride;
-        src   += cur_rows * src_stride;
-        nrows -= cur_rows;
-    }
-}
-
-static inline void cpy_dma_sametype_sameshape(
-    struct htp_ops_context * octx,
-    const struct htp_tensor * dst,
-    const struct htp_tensor * src0,
-    uint32_t elem_size,
-    uint32_t ne00, uint32_t ne01, uint32_t ne02, uint32_t ne03,
-    uint32_t nb01, uint32_t nb02, uint32_t nb03,
-    uint32_t  nb1, uint32_t  nb2, uint32_t nb3
-) {
-    const bool contiguous = htp_tensor_is_contiguous(src0, elem_size) && htp_tensor_is_contiguous(dst, elem_size);
-
-    dma_queue * dma_q = octx->ctx->dma[0];
-
-    if (contiguous) {
-        cpy_dma_sametype_reshape_contig(dma_q, dst->data, src0->data, ne00 * elem_size * ne01 * ne02 * ne03);
-        return;
-    }
-
-    const bool contiguous_outer =
-        (ne02 == 1 || (nb02 == ne01 * nb01 && nb2 == ne01 * nb1)) &&
-        (ne03 == 1 || (nb03 == ne02 * nb02 && nb3 == ne02 * nb2));
-
-    if (contiguous_outer) {
-        uint32_t total_rows = ne01 * ne02 * ne03;
-        cpy_dma_push_2d_chunked(dma_q, dst->data, src0->data, nb1, nb01, ne00 * elem_size, total_rows);
-        dma_queue_flush(dma_q);
-        return;
-    }
-
-    for (uint32_t i03 = 0; i03 < ne03; i03++) {
-        for (uint32_t i02 = 0; i02 < ne02; i02++) {
-            dma_addr_t dst_data  = dst->data  + i02 * nb2  + i03 * nb3;
-            dma_addr_t src0_data = src0->data + i02 * nb02 + i03 * nb03;
-            cpy_dma_push_2d_chunked(dma_q, dst_data, src0_data, nb1, nb01, ne00 * elem_size, ne01);
-        }
-    }
-
-    dma_queue_flush(dma_q);
-}
-
 static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
     cpy_preamble;
     *use_dma = false;
@@ -551,7 +468,8 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
         if (sametype && (octx->ctx->mdev.count <= 1 || htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst))) {
             if (octx->ctx->mdev.idx == 0) {
                 *use_dma = true;
-                cpy_dma_sametype_sameshape(octx, dst, src0, ct.src0_type_size, ne00, ne01, ne02, ne03, nb01, nb02, nb03, nb1, nb2, nb3);
+                cpy_dma_sametype_sameshape(octx->ctx->dma[0], dst, src0, ct.src0_type_size);
+                dma_queue_flush(octx->ctx->dma[0]);
             }
         } else {
             work_queue_func_t copy_fun = NULL;
@@ -582,6 +500,7 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
         if (octx->ctx->mdev.count <= 1 && dst_is_contiguous && src_is_contiguous) {
             *use_dma = true;
             cpy_dma_sametype_reshape_contig(octx->ctx->dma[0], dst->data, src0->data, total_elems * ct.dst_type_size);
+            dma_queue_flush(octx->ctx->dma[0]);
             return HTP_STATUS_OK;
         }
 
