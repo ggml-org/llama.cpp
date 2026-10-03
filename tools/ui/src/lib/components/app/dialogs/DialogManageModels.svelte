@@ -18,10 +18,10 @@
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="max-md:h-[100dvh]! max-md:w-screen! max-md:max-w-none! md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-380! flex flex-col p-4 pb-0"
+		class="max-md:h-[100dvh]! max-md:w-screen! max-md:max-w-none! max-md:rounded-none! md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-380! flex flex-col p-4 pb-0"
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
-		<Dialog.Header class="flex flex-row items-center p-2 pr-8">
+		<Dialog.Header class="flex flex-row items-center pr-8">
 			<Dialog.Title class="flex min-h-7 items-center gap-2">
 				<MODEL_ICON class="h-5 w-5 shrink-0" />
 
