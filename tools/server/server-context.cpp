@@ -674,6 +674,12 @@ struct server_slot {
         SLT_INF(*this,
                 "   graphs reused = %10d\n",
                 llama_perf_context(ctx_tgt).n_reused);
+				
+		constexpr size_t MiB = 1024 * 1024;
+        auto mem = common_memory_get_info(ctx_tgt);
+        fprintf(stderr, "[MEMORY] Model weights : %8.2f MiB\n", mem.model_bytes   / (double) MiB);
+        fprintf(stderr, "[MEMORY] KV cache      : %8.2f MiB\n", mem.kv_cache_bytes / (double) MiB);
+        fprintf(stderr, "[MEMORY] Total buffers : %8.2f MiB\n", (mem.model_bytes + mem.kv_cache_bytes) / (double) MiB);
 
         const int32_t n_draft_total       = stats.n_draft_tokens;
         const int32_t n_draft_accepted    = stats.n_draft_accepted;

@@ -45,6 +45,13 @@ void common_fit_print(
 
 void common_memory_breakdown_print(const llama_context * ctx);
 
+struct common_memory_info {
+    size_t model_bytes   = 0;
+    size_t kv_cache_bytes = 0;
+};
+
+common_memory_info common_memory_get_info(const llama_context * ctx);
+
 struct common_device_memory_data {
     int64_t total;
     int64_t free;
