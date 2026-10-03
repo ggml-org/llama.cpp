@@ -280,7 +280,9 @@
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
 		</span>
 
-		<span></span>
+		<!-- the context and status columns stay empty here: a phone drops the context one,
+		     so the chevron keeps the last column instead of wrapping onto its own row -->
+		<span class="max-md:hidden"></span>
 
 		<span></span>
 
