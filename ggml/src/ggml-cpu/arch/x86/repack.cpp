@@ -1512,6 +1512,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
             // Pointers to RHS blocks
             const block_q4_Kx8 * b_ptr = b_ptr_start + (x * b_nb);
+            const block_q4_Kx8 * next_b_ptr = b_ptr_start + ((x+1) * b_nb);
 
             // Master FP accumulators
             __m256 acc_row = _mm256_setzero_ps();
@@ -1536,6 +1537,22 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 // Processes two sub blocks from each Q4_K in each iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
+
+                    // Prefetching of the next blocks
+                    if(b + 1 < nb) {
+                        _mm_prefetch(b_ptr[b+1].qs + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(b_ptr[b+1].qs + 64 + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(b_ptr[b+1].qs + 128 + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(b_ptr[b+1].qs + 192 + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(b_ptr[b+1].scales + 24 * sb, _MM_HINT_T0);
+                    }
+                    else if(x + 1 < nc / 8) {
+                        _mm_prefetch(next_b_ptr[0].qs + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(next_b_ptr[0].qs + 64 + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(next_b_ptr[0].qs + 128 + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(next_b_ptr[0].qs + 192 + sb * 256, _MM_HINT_T0);
+                        _mm_prefetch(next_b_ptr[0].scales + 24 * sb, _MM_HINT_T0);
+                    }
 
                     // Load the eight block_q4_K for two sub blocks quantized values interleaved with each other in chunks of eight - B0,B1 ....B6,B7
                     const __m256i rhs_raw_vec_0123_0 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + sb * 256));
