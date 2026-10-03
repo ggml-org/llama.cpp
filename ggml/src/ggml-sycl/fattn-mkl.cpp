@@ -8,7 +8,6 @@
 
 #include "common.hpp"
 #include "fattn-common.hpp"
-#include "fattn-buffers.hpp"
 #include "convert.hpp"
 #include "fattn.hpp"
 
