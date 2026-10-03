@@ -377,9 +377,9 @@
 				>
 					<ActionIcon
 						ariaLabel="Collapse navigation"
-						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
+						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 max-md:-mr-1 max-md:-mt-1 hover:bg-accent!"
 						icon={deviceStore.isMobile ? X : PanelLeftClose}
-						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+						iconSize="h-4 w-4"
 						onclick={toggleExpandedMode}
 						size="lg"
 						tooltip="Close Sidebar"

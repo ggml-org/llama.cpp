@@ -19,6 +19,12 @@ export const PANEL_CLASSES = `
 export const CHAT_FORM_POPOVER_MAX_HEIGHT = 'max-h-80';
 export const DIALOG_SUBMENU_CONTENT = 'w-60';
 
+/** Close control of a dialog, a panel or the navigation rail on a phone: one tap target,
+ *  one cross, one look. Each site adds the offsets that keep the cross on the 16px inset
+ *  the titles sit on. */
+export const PANEL_CLOSE_MOBILE_CLASS =
+	'max-md:grid max-md:size-10 max-md:place-items-center max-md:rounded-full max-md:text-muted-foreground max-md:opacity-100 max-md:hover:bg-accent max-md:hover:text-accent-foreground';
+
 /** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';
