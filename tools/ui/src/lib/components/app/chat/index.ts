@@ -165,7 +165,7 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 /**
  * Wrapper component for the "add to chat" button (Plus icon).
  * Exposes a `button` snippet that can be used inside DropdownMenu.Trigger (desktop)
- * or Sheet.Root (mobile) to maintain consistent styling while allowing
+ * or Drawer.Root (mobile) to maintain consistent styling while allowing
  * platform-specific trigger wrappers.
  */
 export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionsAdd.svelte';
@@ -192,8 +192,8 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
 /**
- * Model selector component for the chat form action bar. Renders either a dropdown
- * (desktop) or bottom sheet (mobile) for selecting the conversation model in router mode.
+ * Model selector component for the chat form action bar. Renders a dropdown on desktop
+ * and a trigger that opens the models manager on a phone, where the list lives.
  * Exposes an `open` method for programmatically opening the selector.
  */
 export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
