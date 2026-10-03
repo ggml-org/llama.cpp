@@ -88,6 +88,7 @@ struct llama_grammar_parser {
     std::map<std::string, uint32_t> symbol_ids;
 
     llama_grammar_rules rules;
+    size_t n_alternates = 0;
 
     llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
