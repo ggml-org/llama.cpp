@@ -609,11 +609,8 @@ llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    // a forward with no output rows (catch-up after acceptance, draft-context prefill)
-    // persists only through its cache writes: the MLA latent, the indexer key|gate rows
-    // and the pooled keys. The attention output, FFN and LM head feed nothing, so the
-    // headless graph keeps the writes and drops those bodies.
-    const bool headless = n_outputs == 0;
+    // keep only cache writes when neither logits nor hidden rows are needed
+    const bool headless = n_outputs == 0 && !(cparams.embeddings_nextn && !cparams.embeddings_nextn_masked);
 
     ggml_tensor * prev_sel = nullptr;
     cur = build_dsa_layer(cur, layer, mctx_hyb, inp_attn, inp_kpool, &prev_sel, il, headless);
@@ -676,11 +673,12 @@ llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm
     GGML_ASSERT(head_norm && "GLM5-Next MTP: missing both nextn.shared_head_norm and output_norm");
     cur = build_norm(cur, head_norm, nullptr, LLM_NORM_RMS, -1);
 
-    cb(cur, "h_nextn", -1);
-    res->t_h_nextn = cur;
-
+    ggml_tensor * h_nextn = cur;
     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     cb(cur, "mtp_shared_head_norm", -1);
+
+    res->t_h_nextn = cparams.embeddings_nextn_masked ? cur : h_nextn;
+    cb(res->t_h_nextn, "h_nextn", -1);
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
