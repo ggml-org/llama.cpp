@@ -279,13 +279,17 @@ void quantize_row_q8_0_ref(const float * GGML_RESTRICT x, block_q8_0 * GGML_REST
 
     for (int i = 0; i < nb; i++) {
         float amax = 0.0f; // absolute max
+        float max  = 0.0f;
 
         for (int j = 0; j < QK8_0; j++) {
             const float v = x[i*QK8_0 + j];
-            amax = MAX(amax, fabsf(v));
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+                max  = v;
+            }
         }
 
-        const float d = amax / ((1 << 7) - 1);
+        const float d  = max / -128;
         const float id = d ? 1.0f/d : 0.0f;
 
         y[i].d = GGML_FP32_TO_FP16(d);
@@ -293,7 +297,7 @@ void quantize_row_q8_0_ref(const float * GGML_RESTRICT x, block_q8_0 * GGML_REST
         for (int j = 0; j < QK8_0; ++j) {
             const float x0 = x[i*QK8_0 + j]*id;
 
-            y[i].qs[j] = roundf(x0);
+            y[i].qs[j] = MIN(127, roundf(x0));
         }
     }
 }
