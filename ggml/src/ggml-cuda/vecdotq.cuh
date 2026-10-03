@@ -773,6 +773,14 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
 
 #define VDR_BF16X_Q8_1_MMVQ 1
 
+// unaligned 32-bit load (2 aligned loads + funnel shift when needed)
+static __device__ __forceinline__ uint32_t bf16x_load_u32(const uint8_t * p) {
+    const uintptr_t a = (uintptr_t) p;
+    const uint32_t * pa = (const uint32_t *) (a & ~(uintptr_t) 3);
+    const int sh = (int) (a & 3) * 8;
+    return sh == 0 ? pa[0] : __funnelshift_r(pa[0], pa[1], sh);
+}
+
 static __device__ __forceinline__ float vec_dot_bf16x_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -780,33 +788,45 @@ static __device__ __forceinline__ float vec_dot_bf16x_q8_1(
     // 16-element half processed by this thread
     const block_bf16x * bx = (const block_bf16x *) vbq + kbx;
 
-    const int off = iqs * 16;
+    // the half's bit streams, hoisted into registers:
+    //   mant: 16 x 7 bits = 112 bits (4-word span), delta: 16 x 3 = 48 bits (2 words)
+    const uint8_t * mb = bx->mant  + iqs * 14;
+    const uint8_t * db = bx->delta + iqs * 6;
+    const uint8_t * sb = bx->sgn   + iqs * 2;
+
+    const uint32_t mw0 = bf16x_load_u32(mb +  0);
+    const uint32_t mw1 = bf16x_load_u32(mb +  4);
+    const uint32_t mw2 = bf16x_load_u32(mb +  8);
+    const uint32_t mw3 = bf16x_load_u32(mb + 12);
+    const uint32_t dw0 = bf16x_load_u32(db +  0);
+    const uint32_t dw1 = bf16x_load_u32(db +  4);
+    // signs of elements [iqs*16, iqs*16+16) = bytes {iqs*2, iqs*2+1} = the LOW
+    // 16 bits of the unaligned load (little-endian), no shift needed
+    const uint32_t sw  = bf16x_load_u32(sb);
+
     const uint8_t emax = bx->emax[iqs];
     const int8_t * q8 = bq8_1->qs;
 
     float sumf = 0.0f;
 #pragma unroll
     for (int j = 0; j < 16; ++j) {
-        const int e32 = off + j;                // element index in the block
+        const int b7 = 7 * j;   // mantissa bit offset in the window
+        const int b3 = 3 * j;   // delta bit offset in the window
 
-        const int mb = e32*7;
-        uint8_t m = (bx->mant[mb >> 3] >> (mb & 7)) & 0x7F;
-        if ((mb & 7) + 7 > 8) {
-            m |= (bx->mant[(mb >> 3) + 1] << (8 - (mb & 7))) & 0x7F;
-        }
+        const uint32_t mw_sel[4] = {mw0, mw1, mw2, mw3};
+        const uint32_t dw_sel[2] = {dw0, dw1};
 
-        const int db = e32*3;
-        uint8_t d = (bx->delta[db >> 3] >> (db & 7)) & 0x7;
-        if ((db & 7) + 3 > 8) {
-            d |= (bx->delta[(db >> 3) + 1] << (8 - (db & 7))) & 0x7;
-        }
+        const uint32_t m = (b7 % 32 + 7 <= 32)
+            ? (mw_sel[b7 / 32] >> (b7 % 32)) & 0x7F
+            : __funnelshift_r(mw_sel[b7 / 32], mw_sel[b7 / 32 + 1], b7 % 32) & 0x7F;
+        const uint32_t d = (b3 % 32 + 3 <= 32)
+            ? (dw_sel[b3 / 32] >> (b3 % 32)) & 0x7
+            : __funnelshift_r(dw_sel[b3 / 32], dw_sel[b3 / 32 + 1], b3 % 32) & 0x7;
 
-        const uint8_t e = emax > d ? emax - d : 0;
-        const uint32_t bits = ((((uint32_t)(bx->sgn[e32 >> 3] >> (e32 & 7))) & 1u) << 31)
-                            | ((uint32_t) e << 23)
-                            | ((uint32_t) m << 16);
+        const uint8_t e = emax > d ? emax - (uint8_t) d : 0;
+        const uint32_t bits = ((((sw >> j) & 1u) << 15) | (e << 7) | m) << 16;
 
-        sumf += __uint_as_float(bits) * (float) q8[off + j];
+        sumf = fmaf(__uint_as_float(bits), (float) q8[iqs * 16 + j], sumf);
     }
 
     return __low2float(bq8_1->ds) * sumf;
