@@ -1396,6 +1396,23 @@ namespace ggml_cuda_mma {
 #endif // AMD_MFMA_AVAILABLE
     }
 
+    template <int half, data_layout dl_d, data_layout dl_ab>
+    static __device__ __forceinline__ void mma_half(
+            tile<16, 16, int, dl_d> & D, const tile<16, 8, int, dl_ab> & A, const tile<16, 8, int, dl_ab> & B) {
+        static_assert(half == 0 || half == 1, "mma_half expects half 0 or 1");
+#if defined(RDNA3)
+        using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
+        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+        int32x8_t       * acc   = (int32x8_t *)       D.x;
+        const int32x4_t * a_vec = (const int32x4_t *) A.x;
+        const int32x4_t * b_vec = (const int32x4_t *) B.x;
+        acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[half], true, b_vec[half], acc[0], true);
+#else
+        GGML_UNUSED_VARS(D, A, B);
+        NO_DEVICE_CODE;
+#endif // defined(RDNA3)
+    }
+
     static __device__ __forceinline__ void mma(
             tile<32, 32, int> & D, const tile<32, 4, int> & A, const tile<32, 4, int> & B) {
 #if defined(AMD_MFMA_AVAILABLE)

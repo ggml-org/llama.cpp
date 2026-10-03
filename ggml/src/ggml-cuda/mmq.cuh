@@ -913,6 +913,120 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
+#if defined(RDNA3_5)
+    if constexpr (type == GGML_TYPE_Q4_K && I == 64 &&
+                  ggml_cuda_mmq_get_nthreads(type, J, fallback) == 128) {
+        constexpr int qs_cache_size = I/nwarps;
+
+        load_tiles(x, tile_x, offset_x + kb0_start, tile_x_max_i, stride_row_x);
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            {
+                const int * by0 = y + ncols_y * (kb0 * qk / ne_block) * sz;
+#pragma unroll
+                for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+
+                    tile_y[l] = by0[l];
+                }
+            }
+
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, 0);
+
+            __syncthreads();
+
+            {
+                const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
+#pragma unroll
+                for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+
+                    tile_y[l] = by0[l];
+                }
+            }
+
+            __syncthreads();
+
+            int   qs_cache[qs_cache_size];
+            int   scales_cache[3];
+            half2 dm_cache;
+            const int  kb0_next  = kb0 + blocks_per_iter;
+            const bool have_next = kb0_next < kb0_stop;
+            if (have_next) {
+                ggml_cuda_mmq_prefetch_tiles_q4_K<type, J, fallback>(
+                    x, offset_x + kb0_next, tile_x_max_i, stride_row_x,
+                    qs_cache, scales_cache, dm_cache);
+            }
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+            __syncthreads();
+
+            if (have_next) {
+                ggml_cuda_mmq_store_tiles_q4_K<type, J, fallback>(
+                    tile_x, qs_cache, scales_cache, dm_cache);
+            }
+
+            __syncthreads();
+        }
+    } else if constexpr (type == GGML_TYPE_Q8_0 && I == 64 &&
+                         ggml_cuda_mmq_get_nthreads(type, J, fallback) == 128) {
+        constexpr int qs_cache_size = 2*I/nwarps;
+
+        load_tiles(x, tile_x, offset_x + kb0_start, tile_x_max_i, stride_row_x);
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            {
+                const int * by0 = y + ncols_y * (kb0 * qk / ne_block) * sz;
+#pragma unroll
+                for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+
+                    tile_y[l] = by0[l];
+                }
+            }
+
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, 0);
+
+            __syncthreads();
+
+            {
+                const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
+#pragma unroll
+                for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+
+                    tile_y[l] = by0[l];
+                }
+            }
+
+            __syncthreads();
+
+            int   qs_cache[qs_cache_size];
+            float d_cache[4];
+            const int  kb0_next  = kb0 + blocks_per_iter;
+            const bool have_next = kb0_next < kb0_stop;
+            if (have_next) {
+                ggml_cuda_mmq_prefetch_tiles_q8_0<type, J, fallback>(
+                    x, offset_x + kb0_next, tile_x_max_i, stride_row_x, qs_cache, d_cache);
+            }
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+            __syncthreads();
+
+            if (have_next) {
+                ggml_cuda_mmq_store_tiles_q8_0<type, J, fallback>(tile_x, qs_cache, d_cache);
+            }
+
+            __syncthreads();
+        }
+    } else
+#endif // defined(RDNA3_5)
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
         {
