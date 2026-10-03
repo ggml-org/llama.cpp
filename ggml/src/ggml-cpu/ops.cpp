@@ -8527,6 +8527,9 @@ void ggml_compute_forward_pad_reflect_1d(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
+    GGML_ASSERT(p0 >= 0 && p1 >= 0);
+    GGML_ASSERT(ne0 >= ne00 + p0 + p1);
+
     for (int64_t i3 = 0; i3 < ne3; i3++) {
         for (int64_t i2 = 0; i2 < ne2; i2++) {
             for (int64_t i1 = ith; i1 < ne1; i1 += nth) {
