@@ -3,6 +3,17 @@
 #include "generic_binary_head.glsl"
 #include "types.glsl"
 
+#extension GL_EXT_control_flow_attributes : enable
+#if USE_SUBGROUP_ADD
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+layout (constant_id = 3) const uint BLOCK_SIZE = 512;
+layout(local_size_x_id = 3, local_size_y = 1, local_size_z = 1) in;
+#else
+#define BLOCK_SIZE 512
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+#endif
+
 #if RMS_NORM_ROPE_FUSION
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
@@ -11,7 +22,8 @@ layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 // data is passed from rms_norm -> rope through shared memory.
 // rms_norm calls this data_d, rope calls this rope_data_a.
 // Binding 2 is not used
-shared FLOAT_TYPE rope_data_a[1024];
+// host picks a block size such that ncols <= 2*BLOCK_SIZE
+shared FLOAT_TYPE rope_data_a[2*BLOCK_SIZE];
 #define data_d rope_data_a
 
 layout (binding = 3) readonly buffer R_Y {int rope_data_pos[];};
@@ -38,15 +50,10 @@ layout (binding = 3) readonly buffer I {uvec2 data_i[];};
 
 #endif
 
-#extension GL_EXT_control_flow_attributes : enable
-#define BLOCK_SIZE 512
-
 layout (constant_id = 1) const bool do_multiply = false;
 #if RMS_NORM_ADD_FUSION
 layout (constant_id = 2) const bool do_post_multiply = false;
 #endif
-
-layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 shared FLOAT_TYPE sumsh[BLOCK_SIZE];
 
@@ -84,6 +91,19 @@ void rms_norm(uint num_iters) {
         sum += xi * xi;
     }
 
+#if USE_SUBGROUP_ADD
+    sum = subgroupAdd(sum);
+    if (subgroupElect()) {
+        sumsh[gl_SubgroupID] = sum;
+    }
+    barrier();
+    sum = FLOAT_TYPE(0.0f);
+    // Each subgroup reads the partials, so one workgroup barrier is enough.
+    for (uint i = gl_SubgroupInvocationID; i < gl_NumSubgroups; i += gl_SubgroupSize) {
+        sum += sumsh[i];
+    }
+    sum = subgroupAdd(sum);
+#else
     sumsh[tid] = sum;
     // sum up partial sums and write back result
     barrier();
@@ -95,6 +115,7 @@ void rms_norm(uint num_iters) {
         barrier();
     }
     sum = sumsh[0];
+#endif
 
     const FLOAT_TYPE mean = sum / FLOAT_TYPE(ncols);
     const FLOAT_TYPE scale = inversesqrt(mean + FLOAT_TYPE(p.param1));
