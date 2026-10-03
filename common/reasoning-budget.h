@@ -8,11 +8,15 @@
 #include <vector>
 
 enum common_reasoning_budget_state {
-    REASONING_BUDGET_IDLE,         // waiting for start sequence
-    REASONING_BUDGET_COUNTING,     // counting down tokens
-    REASONING_BUDGET_FORCING,      // forcing budget message + end sequence
-    REASONING_BUDGET_WAITING_UTF8, // budget exhausted, waiting for UTF-8 completion
-    REASONING_BUDGET_DONE,         // passthrough forever
+    REASONING_BUDGET_IDLE,          // waiting for start sequence
+    REASONING_BUDGET_COUNTING,      // counting down tokens
+    REASONING_BUDGET_FORCING,       // forcing budget message + end sequence
+    REASONING_BUDGET_WAITING_UTF8,  // budget exhausted, waiting for UTF-8 completion
+    REASONING_BUDGET_DONE,          // passthrough forever
+    // local soft-budget extension (only reachable when soft_ratio/grace are configured)
+    REASONING_BUDGET_SOFT_PENDING,  // soft threshold reached, waiting for a line boundary
+    REASONING_BUDGET_SOFT_FORCING,  // forcing the soft wrap-up message, then back to COUNTING
+    REASONING_BUDGET_HARD_PENDING,  // budget exhausted, bounded grace region before forced end
 };
 
 // Creates a reasoning budget sampler that limits token generation inside a
@@ -39,7 +43,11 @@ struct llama_sampler * common_reasoning_budget_init(
         const std::vector<llama_tokens> & end_seqs,
         const llama_tokens              & forced_tokens,
         int32_t                           budget,
-        common_reasoning_budget_state     initial_state = REASONING_BUDGET_IDLE);
+        common_reasoning_budget_state     initial_state = REASONING_BUDGET_IDLE,
+        // local soft-budget extension: defaults keep exact upstream behavior
+        float                             soft_ratio   = -1.0f, // fraction of budget for the soft warning; <= 0 or > 1 disables
+        const llama_tokens              & soft_tokens  = {},    // tokenized soft wrap-up message (injected once, near a line boundary)
+        int32_t                           grace_tokens = 0);    // extra tokens allowed past the budget before forced termination
 
 common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl);
 
