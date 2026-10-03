@@ -59,6 +59,7 @@ struct clip_context_params {
     bool no_alloc;
     mtmd_progress_callback progress_callback;
     void * progress_callback_user_data;
+    bool defer_weights = false;
 };
 
 struct clip_init_result {
@@ -97,6 +98,8 @@ bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & 
 bool clip_attach_compute_workspace(clip_ctx * ctx,const std::vector<ggml_backend_memory_lease_t> & leases);
 bool clip_release_compute_workspace(clip_ctx * ctx);
 bool clip_borrow_compute_workspace(clip_ctx * ctx, llama_context_memory & parent);
+bool clip_measure_vision_phase(clip_ctx * ctx,const clip_image_f32_batch & batch,ggml_backend_buffer_t parent,
+    size_t & weight_bytes,std::vector<ggml_backend_memory_workspace_group> & groups);
 
 enum clip_gen_process_type {
     CLIP_GEN_PROCESS_GEN_UNKNOWN,

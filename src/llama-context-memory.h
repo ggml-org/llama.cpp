@@ -20,6 +20,7 @@ struct llama_context_memory_diagnostics {
     bool streaming_active = false;
     bool executable_storage_external = true;
     bool kv_device_suspended = false;
+    size_t borrowed_phase_bytes = 0;
 };
 
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
@@ -66,6 +67,9 @@ public:
     LLAMA_API bool kv_device_suspended() const noexcept;
     // A failed reverse transition closes this owner permanently; recreate the context to recover.
     LLAMA_API bool valid() const noexcept;
+    // Loan disjoint regions of a suspended parent. Output owns lease handles; all must return before resume.
+    LLAMA_API bool lend_suspended(const std::vector<size_t> & bytes,
+        std::vector<ggml_backend_memory_lease_t> & output) noexcept;
     // Acquire a fresh measured layout for a suspended target; ordinary execution never resumes implicitly.
     // Optional rebuild runs under the submission gate and must not execute graphs or change persistent data.
     LLAMA_API bool resume_kv(llama_memory_text_phase phase, const std::function<bool()> & rebuild = {}) noexcept;
@@ -76,13 +80,14 @@ public:
     bool uses_arenas() const noexcept;
     // Borrowed handles; consumers retain them before capturing addresses from this workspace.
     LLAMA_API const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
-    bool shares_kv_memory() const noexcept;
+    LLAMA_API bool shares_kv_memory() const noexcept;
+    LLAMA_API bool has_speculative_consumer() const noexcept;
     bool borrows_serial_parent() const noexcept;
     LLAMA_API ggml_backend_buffer_t shared_parent() const noexcept;
     size_t shared_parent_capacity() const noexcept;
     uint64_t shared_arena_generation() const noexcept;
     uint64_t phase_transition_count() const noexcept;
-    bool diagnostics(llama_context_memory_diagnostics & output) const noexcept;
+    LLAMA_API bool diagnostics(llama_context_memory_diagnostics & output) const noexcept;
 
 private:
     struct implementation;

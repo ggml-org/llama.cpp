@@ -1,5 +1,6 @@
 #include "mtmd-session.h"
 #include "mtmd-workspace.h"
+#include "mtmd-projector-storage.h"
 #include "../../src/llama-context-memory.h"
 
 #include <limits>
@@ -141,10 +142,11 @@ struct session_adapter : mtmd_session_backend {
     size_t n_chunks;
     size_t prefills = 0;
     bool shared = false;
+    bool arena = false;
 
     session_adapter(mtmd_context * ctx, llama_context * lctx, llama_pos position, llama_seq_id sequence,
-            int32_t batch_size, bool logits_last, size_t n_chunks, bool shared) : ctx(ctx), lctx(lctx), position(position),
-        sequence(sequence), batch_size(batch_size), logits_last(logits_last), n_chunks(n_chunks), shared(shared) {}
+            int32_t batch_size, bool logits_last, size_t n_chunks, bool shared, bool arena) : ctx(ctx), lctx(lctx), position(position),
+        sequence(sequence), batch_size(batch_size), logits_last(logits_last), n_chunks(n_chunks), shared(shared),arena(arena) {}
 
     // Reuse the real context's capability and batch-size checks without allocating graph storage.
     int32_t validate_batch(const std::vector<const mtmd_input_chunk *> & entries,
@@ -166,6 +168,16 @@ struct session_adapter : mtmd_session_backend {
         for (const auto * chunk : chunks) {
             const auto result = mtmd_batch_add_chunk(batch.get(), chunk);
             if (result) return result;
+        }
+        if (arena) {
+            const auto result = mtmd_batch_encode_arena(ctx,batch.get(),lctx);
+            if (result) return result;
+            for (const auto * chunk : chunks) {
+                mtmd_embedding_view view;
+                if (!mtmd_batch_acquire_output_embd(batch.get(),chunk,view)) return -1;
+                outputs.push_back(std::move(view));
+            }
+            return 0;
         }
         struct workspace_return {
             mtmd_context * ctx = nullptr;
@@ -226,7 +238,7 @@ struct session_adapter : mtmd_session_backend {
 
 // Continue the supplied prefix; shared encoding returns all target KV grants until host outputs are retained.
 static int32_t session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
-        llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past, bool shared) {
+        llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past, bool shared,bool arena = false) {
     if (!ctx || !lctx || !input || !new_n_past || n_past < 0 || seq_id < 0 || n_batch <= 0 ||
             size_t(n_batch) > llama_n_batch(lctx)) return -1;
     try {
@@ -234,7 +246,7 @@ static int32_t session_eval_chunks(mtmd_context * ctx, llama_context * lctx, con
         if (width <= 0) return -1;
         std::vector<const mtmd_input_chunk *> chunks;
         for (size_t i = 0; i < mtmd_input_chunks_size(input); ++i) chunks.push_back(mtmd_input_chunks_get(input, i));
-        session_adapter backend(ctx, lctx, n_past, seq_id, n_batch, logits_last, chunks.size(), shared);
+        session_adapter backend(ctx, lctx, n_past, seq_id, n_batch, logits_last, chunks.size(), shared,arena);
         mtmd_session_plan plan;
         if (!plan.prepare(chunks, size_t(width), backend)) return -1;
         *new_n_past = n_past;
@@ -255,4 +267,66 @@ int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const
 int32_t mtmd_session_eval_chunks_shared(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
         llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past) {
     return session_eval_chunks(ctx, lctx, input, n_past, seq_id, n_batch, logits_last, new_n_past, true);
+}
+
+int32_t mtmd_session_eval_chunks_arena(mtmd_context * ctx,llama_context * lctx,const mtmd_input_chunks * chunks,
+        llama_pos n_past,llama_seq_id seq_id,int32_t n_batch,bool logits_last,llama_pos * new_n_past) {
+    return session_eval_chunks(ctx,lctx,chunks,n_past,seq_id,n_batch,logits_last,new_n_past,false,true);
+}
+
+// The parent lease counts remain authoritative even if a reader outlives the projector or this request.
+int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_context * target,mtmd_progress_callback progress,void * user_data) {
+    if (!ctx || !batch || !target || mtmd_batch_context(batch) != ctx) return -1;
+    auto * owner = llama_context_compute_memory(target);
+    auto * parent = owner ? owner->shared_parent() : nullptr;
+    if (!owner || !owner->valid() || owner->kv_device_suspended() || !owner->shares_kv_memory() ||
+            owner->has_speculative_consumer() || !parent) return -1;
+    struct phase_return {
+        mtmd_context * ctx;
+        llama_context * target;
+        std::vector<ggml_backend_memory_lease_t> grants;
+        std::vector<std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>> host;
+        bool suspended = false, finished = false, armed = false;
+        phase_return(mtmd_context * ctx,llama_context * target) : ctx(ctx),target(target) {}
+        bool finish() noexcept {
+            if (finished) return true;
+            finished = true;
+            if (!armed) return true;
+            bool released = false;
+            try { released = mtmd_release_compute_workspace(ctx) && mtmd_unload_projector_weights(ctx); } catch (...) {}
+            for (auto * lease : grants) ggml_backend_memory_lease_free(lease);
+            grants.clear(); host.clear();
+            return released && (!suspended || llama_context_resume_kv_device(target,llama_memory_text_phase::prefill));
+        }
+        ~phase_return() { finish(); }
+    } returned{ctx,target};
+    try {
+        if (!mtmd_unload_projector_weights(ctx)) return -1;
+        returned.armed = true;
+        mtmd_vision_phase_requirements plan;
+        if (!mtmd_batch_measure_vision_phase(batch,parent,plan)) return -1;
+        if (!llama_context_suspend_kv_device(target)) return -1;
+        returned.suspended = true;
+        if (!owner->lend_suspended({plan.weight_bytes,plan.device_compute_bytes},returned.grants)) return -1;
+        if (!mtmd_reload_projector_weights_in(ctx,returned.grants[0],progress,user_data)) return -1;
+        std::vector<ggml_backend_memory_lease_t> compute;
+        for (size_t i = 0; i < plan.groups.size(); ++i) {
+            const auto & group = plan.groups[i];
+            if (group.buft == ggml_backend_buffer_get_type(parent)) compute.push_back(returned.grants[1]);
+            else {
+                returned.host.emplace_back(ggml_backend_memory_arena_new(group.buft,group.size),ggml_backend_memory_arena_free);
+                auto * arena = returned.host.back().get();
+                if (!arena || !ggml_backend_memory_arena_begin(arena,0) ||
+                        !ggml_backend_memory_arena_reserve(arena,i+1,group.size,group.alignment,0,nullptr) ||
+                        !ggml_backend_memory_arena_commit(arena)) return -1;
+                auto * lease = ggml_backend_memory_arena_acquire(arena,i+1);
+                if (!lease) return -1;
+                returned.grants.push_back(lease); compute.push_back(lease);
+            }
+        }
+        if (!mtmd_attach_compute_workspace(ctx,compute)) return -1;
+        const auto result = mtmd_batch_encode(batch);
+        if (result) return result;
+        return returned.finish() ? 0 : -1;
+    } catch (...) { return -1; }
 }

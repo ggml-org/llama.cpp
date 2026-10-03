@@ -235,6 +235,8 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             (serial_parent->kv_device_suspended() != suspended_workspace) || serial_parent->impl->serial_borrowed ||
             serial_parent->impl->serial_busy || plan.phase_sizes.size() != 2)) return {};
     if (suspended_workspace) {
+        if (serial_parent->impl->kv_arena >= serial_parent->impl->arenas.size() ||
+                ggml_backend_memory_arena_lease_count(serial_parent->impl->arenas[serial_parent->impl->kv_arena].arena.get())) return {};
         if (!serial_parent->impl->workspace->leases().empty() || serial_parent->impl->shared_stream->device_grant_bytes()) return {};
         if (std::any_of(plan.phase_sizes[1].begin(),plan.phase_sizes[1].end(),[](size_t bytes) { return bytes != 0; })) return {};
         for (auto * child : serial_parent->impl->serial_children) {
@@ -569,11 +571,44 @@ bool llama_context_memory::kv_device_suspended() const noexcept {
     return impl->shared_stream && impl->shared_stream->device_suspended();
 }
 bool llama_context_memory::valid() const noexcept { return !impl->invalid; }
+// Commit temporary regions in the actual parent arena, so retained leases block restoration without a scheduler lifetime.
+bool llama_context_memory::lend_suspended(const std::vector<size_t> & bytes,std::vector<ggml_backend_memory_lease_t> & output) noexcept {
+    if (!valid() || !kv_device_suspended() || impl->serial_busy || !output.empty() || bytes.empty() ||
+            impl->kv_arena >= impl->arenas.size() || !impl->workspace->leases().empty()) return false;
+    for (auto * child : impl->serial_children) if (!child->impl->workspace->leases().empty()) return false;
+    auto * arena = impl->arenas[impl->kv_arena].arena.get();
+    if (ggml_backend_memory_arena_lease_count(arena)) return false;
+    serial_gate gate(impl->serial_busy);
+    std::vector<ggml_backend_memory_lease_t> candidate;
+    const auto close = [&] {
+        for (auto * lease : candidate) ggml_backend_memory_lease_free(lease);
+        candidate.clear();
+        ggml_backend_memory_arena_rollback(arena);
+        if (!ggml_backend_memory_arena_begin(arena,0) || !ggml_backend_memory_arena_commit(arena)) impl->invalid = true;
+    };
+    try {
+        candidate.reserve(bytes.size());
+        if (!ggml_backend_memory_arena_begin(arena,0)) return false;
+        for (size_t i = 0; i < bytes.size(); ++i) {
+            if (!bytes[i] || !ggml_backend_memory_arena_reserve(arena,UINT64_MAX-i,bytes[i],
+                    ggml_backend_buft_get_alignment(ggml_backend_buffer_get_type(impl->kv_parent)),0,nullptr)) { close(); return false; }
+        }
+        if (!ggml_backend_memory_arena_commit(arena)) { close(); return false; }
+        for (size_t i = 0; i < bytes.size(); ++i) {
+            auto * lease = ggml_backend_memory_arena_acquire(arena,UINT64_MAX-i);
+            if (!lease) { close(); return false; }
+            candidate.push_back(lease);
+        }
+        output = std::move(candidate);
+        return true;
+    } catch (...) { close(); return false; }
+}
 bool llama_context_memory::resume_kv(llama_memory_text_phase phase, const std::function<bool()> & rebuild) noexcept {
     if (!valid() || !impl->shared_stream || impl->serial_borrowed || impl->serial_busy || !impl->shared_stream->resume_ready() ||
             (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode)) return false;
     for (auto * child : impl->serial_children)
         if (!child->impl->workspace->leases().empty()) return false;
+    if (impl->kv_arena >= impl->arenas.size() || ggml_backend_memory_arena_lease_count(impl->arenas[impl->kv_arena].arena.get())) return false;
     serial_gate gate(impl->serial_busy);
     const auto close = [&] {
         try {
@@ -725,6 +760,11 @@ bool llama_context_memory::borrows_serial_parent() const noexcept { return impl-
 
 
 bool llama_context_memory::shares_kv_memory() const noexcept { return impl->shared_stream != nullptr; }
+bool llama_context_memory::has_speculative_consumer() const noexcept {
+    if (impl->shared_stream && impl->shared_stream->auxiliary_cache()) return true;
+    for (auto * child : impl->serial_children) if (!child->impl->serial_prefill_only) return true;
+    return false;
+}
 ggml_backend_buffer_t llama_context_memory::shared_parent() const noexcept { return impl->kv_parent; }
 size_t llama_context_memory::shared_parent_capacity() const noexcept { return impl->kv_parent_capacity; }
 uint64_t llama_context_memory::shared_arena_generation() const noexcept {
@@ -750,6 +790,20 @@ bool llama_context_memory::diagnostics(
         }
     }
     size_t used = workspace_bytes;
+    size_t borrowed = 0;
+    if (kv_device_suspended()) {
+        if (impl->kv_arena < impl->arenas.size() && ggml_backend_memory_arena_lease_count(impl->arenas[impl->kv_arena].arena.get()))
+            borrowed = ggml_backend_memory_arena_used(impl->arenas[impl->kv_arena].arena.get());
+        for (auto * child : impl->serial_children) for (auto * lease : child->workspace_leases()) {
+            auto * buffer = ggml_backend_memory_lease_buffer(lease);
+            if (ggml_backend_buffer_get_type(buffer) != ggml_backend_buffer_get_type(impl->kv_parent)) continue;
+            const size_t bytes = ggml_backend_buffer_get_size(buffer);
+            if (bytes > SIZE_MAX-borrowed) return false;
+            borrowed += bytes;
+        }
+        if (borrowed > SIZE_MAX-used) return false;
+        used += borrowed;
+    }
     for (size_t bytes : {stream.pool_bytes,stream.writer_bytes,stream.attention_bytes}) {
         if (bytes > SIZE_MAX-used) return false;
         used += bytes;
@@ -767,6 +821,7 @@ bool llama_context_memory::diagnostics(
         stream.last_copy_bytes,stream.last_copy_calls,stream.last_copy_ms,stream.last_elapsed_ms,stream.streaming_active,true,
     };
     output.kv_device_suspended = kv_device_suspended();
+    output.borrowed_phase_bytes = borrowed;
     return true;
 }
 

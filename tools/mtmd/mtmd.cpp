@@ -526,7 +526,7 @@ struct mtmd_context {
     mtmd_context(const char * mmproj_fname,
                    const llama_model * text_model,
                    const mtmd_context_params & ctx_params,
-                   bool no_alloc = false) :
+                   bool no_alloc = false, bool defer_weights = false) :
         print_timings   (ctx_params.print_timings),
         n_threads       (ctx_params.n_threads),
         media_marker    (ctx_params.media_marker),
@@ -573,6 +573,7 @@ struct mtmd_context {
             /* no_alloc          */ no_alloc,
             /* progress_callback */ ctx_params.progress_callback,
             /* progress_callback_user_data */ ctx_params.progress_callback_user_data,
+            /* defer_weights */ defer_weights,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -1114,6 +1115,11 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return nullptr;
     }
+}
+
+mtmd_context * mtmd_init_from_file_deferred(const char * path,const llama_model * model,mtmd_context_params params) {
+    try { return new mtmd_context(path,model,params,false,true); }
+    catch (const std::exception & error) { LOG_ERR("%s: %s\n",__func__,error.what()); return nullptr; }
 }
 
 void mtmd_free(mtmd_context * ctx) {
@@ -2171,6 +2177,27 @@ bool mtmd_batch_measure_compute_workspace(mtmd_batch * batch,std::vector<ggml_ba
     }
 }
 
+bool mtmd_batch_measure_vision_phase(mtmd_batch * batch,ggml_backend_buffer_t parent,mtmd_vision_phase_requirements & output) {
+    try {
+        auto chunk = mtmd_batch_prepare_chunk(batch);
+        mtmd_vision_phase_requirements next;
+        if (!parent || !chunk || !chunk->tokens_image || !batch->ctx->ctx_v ||
+                !clip_measure_vision_phase(batch->ctx->ctx_v,chunk->tokens_image->batch_f32,parent,next.weight_bytes,next.groups)) return false;
+        auto * type = ggml_backend_buffer_get_type(parent);
+        for (const auto & group : next.groups) {
+            auto & bytes = group.buft == type ? next.device_compute_bytes : next.host_compute_bytes;
+            if (group.buft != type && !ggml_backend_buft_is_host(group.buft)) return false;
+            if (group.size > SIZE_MAX-bytes) return false;
+            bytes += group.size;
+        }
+        if (!next.device_compute_bytes || next.weight_bytes > ggml_backend_buffer_get_size(parent) ||
+                next.device_compute_bytes > ggml_backend_buffer_get_size(parent)-next.weight_bytes) return false;
+        output = std::move(next);
+        return true;
+    } catch (const std::exception & error) { LOG_ERR("%s: %s\n",__func__,error.what()); return false; }
+}
+mtmd_context * mtmd_batch_context(mtmd_batch * batch) noexcept { return batch ? batch->ctx : nullptr; }
+
 bool mtmd_attach_compute_workspace(mtmd_context * ctx,const std::vector<ggml_backend_memory_lease_t> & leases) {
     return ctx && ctx->ctx_v && clip_attach_compute_workspace(ctx->ctx_v,leases);
 }
@@ -2193,6 +2220,9 @@ bool mtmd_unload_projector_weights(mtmd_context * ctx) noexcept {
 }
 bool mtmd_reload_projector_weights(mtmd_context * ctx,mtmd_progress_callback progress,void * user_data) noexcept {
     return ctx && ctx->ctx_v && clip_reload_projector_weights(ctx->ctx_v,progress,user_data);
+}
+bool mtmd_reload_projector_weights_in(mtmd_context * ctx,ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) noexcept {
+    return ctx && ctx->ctx_v && clip_reload_projector_weights_in(ctx->ctx_v,lease,progress,user_data);
 }
 
 // Retain host rows without retaining the projector, scheduler, batch, or input chunk.

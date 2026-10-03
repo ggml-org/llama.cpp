@@ -50,3 +50,12 @@ MTMD_API bool mtmd_attach_compute_workspace(mtmd_context * ctx,
     const std::vector<ggml_backend_memory_lease_t> & leases);
 MTMD_API bool mtmd_borrow_compute_workspace(mtmd_context * ctx, llama_context_memory & parent);
 MTMD_API bool mtmd_release_compute_workspace(mtmd_context * ctx);
+
+struct mtmd_vision_phase_requirements {
+    size_t weight_bytes = 0, device_compute_bytes = 0, host_compute_bytes = 0;
+    std::vector<ggml_backend_memory_workspace_group> groups;
+};
+// Plan from unbound weight descriptors without uploading or reading the parent's device bytes.
+MTMD_API bool mtmd_batch_measure_vision_phase(mtmd_batch * batch,ggml_backend_buffer_t parent,
+    mtmd_vision_phase_requirements & output);
+MTMD_API mtmd_context * mtmd_batch_context(mtmd_batch * batch) noexcept;

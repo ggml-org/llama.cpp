@@ -144,7 +144,9 @@ int main(int argc,char ** argv) {
     const bool suspend_only = argc > 1 && std::strcmp(argv[1], "--cuda-suspend") == 0;
     const bool resume_only = argc > 1 && std::strcmp(argv[1], "--cuda-resume") == 0;
     const bool vision_suspend_only = argc > 1 && std::strcmp(argv[1], "--cuda-vision-suspend") == 0;
+    const bool phase_loan_only = argc > 1 && std::strcmp(argv[1], "--cuda-phase-loan") == 0;
     testing t;
+    if (phase_loan_only) t.set_filter("suspended_parent_tracks_phase_loans_until_the_last_lease_returns");
     if (vision_suspend_only) t.set_filter("suspended_kv_parent_lends_full_capacity_and_blocks_early_restore");
     if (suspend_only) t.set_filter("shared_kv_suspension_releases_device_grants_without_changing_host");
     if (resume_only) t.set_filter("shared_kv_resume_acquires_fresh_phase_grants_and_keeps_host_identity");
@@ -153,11 +155,68 @@ int main(int argc,char ** argv) {
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
-    if (argc < 2 || (!vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    t.test("suspended_parent_tracks_phase_loans_until_the_last_lease_returns", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,4,4});
+        auto * type = llama_kv_stream_device_buffer_type(dev);
+        std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+        ggml_backend_buffer_type_t types[] = {type,ggml_backend_cpu_buffer_type()};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(),types,2,256,false,true));
+        llama_compute_workspace_plan plan;
+        plan.groups = {{type,1048576,ggml_backend_buft_get_alignment(type),0}};
+        plan.phase_sizes = {{1048576},{32768}};
+        auto owner = llama_context_memory::create(sched.get(),backends,plan,model.get());
+        if (!t.assert_true(bool(owner))) return;
+        t.assert_true(!owner->has_speculative_consumer());
+        ggml_backend_buffer_clear(model->buffer(),0);
+        if (!t.assert_true(model->restore(257))) return;
+        const auto host = model->host();
+        std::vector<uint8_t> bytes(host->bytes());
+        std::memcpy(bytes.data(),ggml_backend_buffer_get_base(host->buffer()),bytes.size());
+        std::vector<ggml_backend_memory_lease_t> loan;
+        t.assert_true(!owner->lend_suspended({65536,32768},loan));
+        if (!t.assert_true(owner->suspend_kv())) return;
+        t.assert_true(!owner->lend_suspended({owner->shared_parent_capacity(),1},loan) && loan.empty());
+        t.assert_true(!owner->lend_suspended({0},loan) && loan.empty());
+        if (!t.assert_true(owner->lend_suspended({65536,32768},loan))) return;
+        t.assert_equal(size_t(2),loan.size());
+        llama_context_memory_diagnostics diagnostics;
+        t.assert_true(owner->diagnostics(diagnostics));
+        t.assert_equal(size_t(98304),diagnostics.borrowed_phase_bytes);
+        t.assert_equal(owner->shared_parent_capacity()-98304,diagnostics.unused_bytes);
+        ggml_backend_memory_region a{},b{};
+        t.assert_true(ggml_backend_memory_lease_get_region(loan[0],&a) && ggml_backend_memory_lease_get_region(loan[1],&b));
+        t.assert_true(a.offset+a.size <= b.offset && b.offset+b.size <= owner->shared_parent_capacity());
+        t.assert_true(!owner->resume_kv(llama_memory_text_phase::decode));
+        auto * retained = ggml_backend_memory_lease_retain(loan[0]);
+        for (auto * lease : loan) ggml_backend_memory_lease_free(lease);
+        loan.clear();
+        t.assert_true(!owner->resume_kv(llama_memory_text_phase::decode));
+        std::vector<ggml_backend_memory_lease_t> another;
+        t.assert_true(!owner->lend_suspended({1024},another));
+        ggml_backend_memory_lease_free(retained);
+        if (!t.assert_true(owner->resume_kv(llama_memory_text_phase::decode))) return;
+        t.assert_equal(size_t(257),model->tokens());
+        t.assert_true(std::memcmp(bytes.data(),ggml_backend_buffer_get_base(host->buffer()),bytes.size()) == 0);
+        if (!t.assert_true(owner->suspend_kv())) return;
+        {
+            parent_view_fault fault(owner->shared_parent(),1);
+            t.assert_true(!owner->lend_suspended({65536,32768},loan) && loan.empty());
+        }
+        t.assert_true(owner->resume_kv(llama_memory_text_phase::prefill));
+        if (!t.assert_true(owner->suspend_kv() && owner->lend_suspended({65536,32768},loan))) return;
+        owner.reset();
+        t.assert_true(ggml_backend_buffer_get_base(ggml_backend_memory_lease_buffer(loan[0])) != nullptr);
+        ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(loan[0]),0x5a);
+        for (auto * lease : loan) ggml_backend_memory_lease_free(lease);
+        loan.clear();
+    });
     t.test("suspended_kv_parent_lends_full_capacity_and_blocks_early_restore", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
@@ -261,6 +320,7 @@ int main(int argc,char ** argv) {
         plan.phase_sizes = {{1048576,8192},{32768,4096}};
         auto owner = llama_context_memory::create(sched.get(),backends,plan,model.get());
         if (!t.assert_true(bool(owner))) return;
+        t.assert_true(owner->has_speculative_consumer());
         ggml_backend_buffer_clear(model->buffer(),0);
         if (!t.assert_true(model->restore(257))) return;
         t.assert_true(!owner->resume_kv(llama_memory_text_phase::decode));

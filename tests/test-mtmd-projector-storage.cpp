@@ -85,8 +85,10 @@ struct source_fixture {
 int main(int argc,char ** argv) {
     const char * model_path = nullptr, * projector_path = nullptr, * baseline = nullptr, * save = nullptr;
     bool cuda = false;
+    bool phase_only = false;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i],"--cuda")) cuda = true;
+        else if (!std::strcmp(argv[i],"--phase-only")) phase_only = true;
         else if (!std::strcmp(argv[i],"--model") && i+1 < argc) model_path = argv[++i];
         else if (!std::strcmp(argv[i],"--mmproj") && i+1 < argc) projector_path = argv[++i];
         else if (!std::strcmp(argv[i],"--baseline") && i+1 < argc) baseline = argv[++i];
@@ -94,6 +96,10 @@ int main(int argc,char ** argv) {
         else return 2;
     }
     testing t;
+    if (phase_only) {
+        if (!model_path || !projector_path) return 2;
+        t.set_filter("real_deferred_projector_uses_disjoint_weight_and_compute_grants");
+    }
     t.test("source_manifest_and_bytes_outlive_the_loader_metadata", [](testing & t) {
         std::shared_ptr<const mtmd_projector_source> source;
         {
@@ -333,6 +339,38 @@ int main(int argc,char ** argv) {
         t.assert_true(!mtmd_projector_residency::create(std::move(weights),ggml_backend_cpu_buffer_type(),
             {[] { return true; },[] { return true; }}));
     });
+    t.test("leased_weights_use_bounded_storage_without_another_backend_allocation", [](testing & t) {
+        source_fixture f; auto metadata = mtmd_projector_metadata::create(f.context(),f.source());
+        using arena_ptr = std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>;
+        using lease_ptr = std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
+        arena_ptr arena(ggml_backend_memory_arena_new(ggml_backend_cpu_buffer_type(),4096),ggml_backend_memory_arena_free);
+        const size_t alignment = ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
+        GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(),0));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve_at(arena.get(),1,alignment,1024,alignment,0,nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve_at(arena.get(),2,2048,alignment,alignment,0,nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+        lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(),1),ggml_backend_memory_lease_free);
+        lease_ptr tiny(ggml_backend_memory_arena_acquire(arena.get(),2),ggml_backend_memory_lease_free);
+        auto owner = mtmd_projector_residency::create_unloaded(metadata,ggml_backend_cpu_buffer_type(),
+            {[] { return true; },[] { return true; }});
+        if (!t.assert_true(bool(owner))) return;
+        t.assert_true(!owner->ready() && !owner->reload_in(tiny.get()));
+        {
+            weight_allocation_fault no_extra_allocation;
+            t.assert_true(owner->reload_in(lease.get()) && owner->ready());
+        }
+        auto * tensor = ggml_get_first_tensor(metadata->context());
+        const auto begin = uintptr_t(ggml_backend_buffer_get_base(ggml_backend_memory_lease_buffer(lease.get())));
+        t.assert_true(uintptr_t(tensor->data) >= begin && uintptr_t(tensor->data)+ggml_nbytes(tensor) <= begin+1024);
+        auto reader = owner->acquire();
+        lease.reset(); tiny.reset();
+        t.assert_equal(size_t(1),ggml_backend_memory_arena_lease_count(arena.get()));
+        t.assert_true(!owner->unload());
+        reader.reset();
+        if (!t.assert_true(owner->unload())) return;
+        t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(arena.get()));
+        t.assert_true(!tensor->data && metadata->source() != nullptr);
+    });
     if (model_path && projector_path) t.test("real_projector_encoding_matches_the_original_eager_loader", [&](testing & t) {
         ggml_backend_load_all();
         auto model_params = llama_model_default_params();
@@ -438,6 +476,114 @@ int main(int argc,char ** argv) {
             t.assert_true(std::equal(expected.begin(),expected.end(),file_bytes.begin()));
             t.assert_true(output.data() != nullptr);
         }
+    });
+    if (phase_only) t.test("real_deferred_projector_uses_disjoint_weight_and_compute_grants", [&](testing & t) {
+        ggml_backend_load_all();
+        auto mp = llama_model_default_params(); mp.no_alloc = true; mp.n_gpu_layers = 0;
+        mp.load_mode = LLAMA_LOAD_MODE_NONE; mp.use_extra_bufts = false;
+        llama_model_ptr model(llama_model_load_from_file(model_path,mp));
+        if (!t.assert_true(bool(model))) return;
+        auto params = mtmd_context_params_default(); params.use_gpu = cuda; params.warmup = true;
+        params.image_min_tokens = 64; params.image_max_tokens = 256;
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        mtmd::context_ptr projector;
+        {
+            weight_allocation_fault no_eager_host_buffer;
+            projector.reset(mtmd_init_from_file_deferred(projector_path,model.get(),params));
+        }
+        if (!t.assert_true(bool(projector) && !mtmd_acquire_projector_weights(projector.get()))) return;
+        auto * type = ggml_backend_cpu_buffer_type();
+        if (cuda) {
+            auto * dev = ggml_backend_dev_by_name("CUDA0");
+            using factory_t = ggml_backend_buffer_type_t (*)(int);
+            auto factory = reinterpret_cast<factory_t>(ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev),
+                "ggml_backend_cuda_device_buffer_type"));
+            if (!t.assert_true(factory != nullptr)) return;
+            type = factory(0);
+        }
+        using arena_ptr = std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>;
+        using lease_ptr = std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
+        arena_ptr arena(ggml_backend_memory_arena_new(type,1024*1048576),ggml_backend_memory_arena_free);
+        if (!t.assert_true(bool(arena))) return;
+        std::vector<uint8_t> pixels(256*256*3);
+        for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = uint8_t((i*7+i/101)%256);
+        mtmd::bitmap_ptr image(mtmd_bitmap_init(256,256,pixels.data())); const auto * bitmap = image.get();
+        const std::string prompt = mtmd_get_marker(projector.get());
+        mtmd_input_text input{prompt.c_str(),prompt.size(),true,true};
+        mtmd::input_chunks_ptr chunks(mtmd_input_chunks_init());
+        if (!t.assert_equal(0,mtmd_tokenize(projector.get(),chunks.get(),&input,&bitmap,1))) return;
+        mtmd::batch_ptr batch(mtmd_batch_init(projector.get())); const mtmd_input_chunk * chunk = nullptr;
+        for (size_t i = 0; i < mtmd_input_chunks_size(chunks.get()); ++i) {
+            auto * entry = mtmd_input_chunks_get(chunks.get(),i);
+            if (mtmd_input_chunk_get_type(entry) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                chunk = entry; if (!t.assert_equal(0,mtmd_batch_add_chunk(batch.get(),entry))) return;
+            }
+        }
+        mtmd_vision_phase_requirements plan;
+        auto * parent = ggml_backend_memory_arena_parent(arena.get());
+        ggml_backend_buffer_clear(parent,0x6d);
+        ggml_context_ptr canary_context(ggml_init({65536,nullptr,true}));
+        auto * canary = ggml_new_tensor_1d(canary_context.get(),GGML_TYPE_F32,16);
+        GGML_ASSERT(ggml_backend_tensor_alloc(parent,canary,ggml_backend_buffer_get_base(parent)) == GGML_STATUS_SUCCESS);
+        std::vector<uint8_t> canary_before(64),canary_after(64);
+        ggml_backend_tensor_get(canary,canary_before.data(),0,64);
+        const auto usage = ggml_backend_buffer_get_usage(parent);
+        if (!t.assert_true(mtmd_batch_measure_vision_phase(batch.get(),parent,plan))) return;
+        ggml_backend_tensor_get(canary,canary_after.data(),0,64);
+        t.assert_true(canary_before == canary_after && ggml_backend_buffer_get_usage(parent) == usage);
+        t.assert_true(plan.weight_bytes+plan.device_compute_bytes <= 1024*1048576);
+        t.assert_true(plan.groups.size() == 1 || (plan.groups.size() == 2 && plan.host_compute_bytes > 0));
+        auto tiny = ggml_backend_buffer_ptr(ggml_backend_buffer_view(ggml_backend_memory_arena_parent(arena.get()),0,1048576));
+        mtmd_vision_phase_requirements unchanged; unchanged.weight_bytes = 123;
+        t.assert_true(!mtmd_batch_measure_vision_phase(batch.get(),tiny.get(),unchanged) && unchanged.weight_bytes == 123);
+        auto weights_only = ggml_backend_buffer_ptr(ggml_backend_buffer_view(parent,0,plan.weight_bytes));
+        t.assert_true(!mtmd_batch_measure_vision_phase(batch.get(),weights_only.get(),unchanged) && unchanged.weight_bytes == 123);
+        ggml_backend_tensor_get(canary,canary_after.data(),0,64);
+        t.assert_true(canary_after == canary_before && !mtmd_acquire_projector_weights(projector.get()));
+        const size_t alignment = ggml_backend_buft_get_alignment(type);
+        GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(),0));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve(arena.get(),91,plan.weight_bytes,alignment,0,nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve(arena.get(),92,plan.device_compute_bytes,alignment,0,nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+        lease_ptr weights(ggml_backend_memory_arena_acquire(arena.get(),91),ggml_backend_memory_lease_free);
+        lease_ptr device_compute(ggml_backend_memory_arena_acquire(arena.get(),92),ggml_backend_memory_lease_free);
+        if (!t.assert_true(mtmd_reload_projector_weights_in(projector.get(),weights.get()))) return;
+        std::vector<ggml_backend_memory_lease_t> compute;
+        std::vector<arena_ptr> host; std::vector<lease_ptr> host_leases;
+        for (size_t i = 0; i < plan.groups.size(); ++i) {
+            const auto & group = plan.groups[i];
+            if (group.buft == type) compute.push_back(device_compute.get());
+            else {
+                host.emplace_back(ggml_backend_memory_arena_new(group.buft,group.size),ggml_backend_memory_arena_free);
+                GGML_ASSERT(ggml_backend_memory_arena_begin(host.back().get(),0));
+                GGML_ASSERT(ggml_backend_memory_arena_reserve(host.back().get(),i+1,group.size,group.alignment,0,nullptr));
+                GGML_ASSERT(ggml_backend_memory_arena_commit(host.back().get()));
+                host_leases.emplace_back(ggml_backend_memory_arena_acquire(host.back().get(),i+1),ggml_backend_memory_lease_free);
+                compute.push_back(host_leases.back().get());
+            }
+        }
+        if (!t.assert_true(mtmd_attach_compute_workspace(projector.get(),compute)) || !t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
+        mtmd_embedding_view output;
+        if (!t.assert_true(mtmd_batch_acquire_output_embd(batch.get(),chunk,output))) return;
+        const size_t bytes = output.n_tokens()*output.n_embd()*sizeof(float);
+        if (baseline) {
+            std::vector<uint8_t> expected(bytes); std::ifstream file(baseline,std::ios::binary);
+            file.read(reinterpret_cast<char *>(expected.data()),std::streamsize(bytes));
+            if (!t.assert_true(bool(file) && file.peek() == EOF)) return;
+            t.assert_true(std::memcmp(expected.data(),output.data(),bytes) == 0);
+        }
+        auto reader = mtmd_acquire_projector_weights(projector.get());
+        if (!t.assert_true(bool(reader))) return;
+        auto metadata = reader->metadata(); auto * tensor = ggml_get_first_tensor(metadata->context());
+        const size_t sample = std::min(size_t(64),ggml_nbytes(tensor));
+        std::vector<uint8_t> before(sample),after(sample); ggml_backend_tensor_get(tensor,before.data(),0,sample);
+        batch.reset(); projector.reset(); weights.reset(); device_compute.reset(); host_leases.clear(); host.clear();
+        t.assert_equal(size_t(1),ggml_backend_memory_arena_lease_count(arena.get()));
+        tiny.reset(); weights_only.reset();
+        arena.reset();
+        ggml_backend_tensor_get(tensor,after.data(),0,sample);
+        t.assert_true(after == before && output.data() != nullptr);
+        reader.reset(); t.assert_true(!tensor->data && !tensor->buffer);
     });
     return t.summary();
 }

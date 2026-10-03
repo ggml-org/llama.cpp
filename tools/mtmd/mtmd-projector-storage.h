@@ -2,6 +2,7 @@
 
 #include "mtmd.h"
 #include "ggml-cpp.h"
+#include "../../ggml/src/ggml-backend-memory.h"
 
 #include <array>
 #include <cstdio>
@@ -65,12 +66,20 @@ public:
     const std::shared_ptr<mtmd_projector_metadata> & metadata() const noexcept;
     // Measurement-only buffers have storage but cannot be admitted for execution.
     bool uploaded() const noexcept;
+    // Bind and upload within one retained lease; never allocate a replacement backend buffer.
+    static std::shared_ptr<mtmd_projector_weights> allocate_in(std::shared_ptr<mtmd_projector_metadata> metadata,
+        ggml_backend_memory_lease_t lease,mtmd_progress_callback progress = nullptr,void * user_data = nullptr);
+    ggml_backend_memory_lease_t lease() const noexcept;
 
 private:
     mtmd_projector_weights() = default;
     std::shared_ptr<mtmd_projector_metadata> descriptors;
     ggml_backend_buffer_ptr storage;
     bool payload_uploaded = false;
+    std::shared_ptr<ggml_backend_memory_lease> grant;
+    static std::shared_ptr<mtmd_projector_weights> allocate_impl(std::shared_ptr<mtmd_projector_metadata> metadata,
+        ggml_backend_buffer_type_t type,bool skip_upload,mtmd_progress_callback progress,void * user_data,
+        ggml_backend_memory_lease_t lease);
 };
 
 struct mtmd_projector_residency_hooks {
@@ -83,6 +92,9 @@ class MTMD_API mtmd_projector_residency {
 public:
     static std::unique_ptr<mtmd_projector_residency> create(std::shared_ptr<mtmd_projector_weights> weights,
         ggml_backend_buffer_type_t type, mtmd_projector_residency_hooks hooks);
+    // Start with metadata/source only, without eager device storage.
+    static std::unique_ptr<mtmd_projector_residency> create_unloaded(std::shared_ptr<mtmd_projector_metadata> metadata,
+        ggml_backend_buffer_type_t type,mtmd_projector_residency_hooks hooks);
     ~mtmd_projector_residency();
     bool ready() const noexcept;
     uint64_t generation() const noexcept;
@@ -94,11 +106,14 @@ public:
     bool unload() noexcept;
     // Failed loading remains unbound and retryable; no implicit graph execution is admitted.
     bool reload(mtmd_progress_callback progress = nullptr, void * user_data = nullptr) noexcept;
+    // Publish a loaded lease binding with its execution dependency and new generation.
+    bool reload_in(ggml_backend_memory_lease_t lease,mtmd_progress_callback progress = nullptr,void * user_data = nullptr) noexcept;
 
 private:
     struct implementation;
     explicit mtmd_projector_residency(std::unique_ptr<implementation> impl);
     std::unique_ptr<implementation> impl;
+    bool reload_impl(ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) noexcept;
 };
 
 // Internal ownership seam for lifecycle adapters and tests, not a new public mtmd C API.
@@ -106,7 +121,11 @@ MTMD_API std::shared_ptr<const mtmd_projector_weights> mtmd_acquire_projector_we
 MTMD_API bool mtmd_unload_projector_weights(mtmd_context * ctx) noexcept;
 MTMD_API bool mtmd_reload_projector_weights(mtmd_context * ctx,
     mtmd_progress_callback progress = nullptr, void * user_data = nullptr) noexcept;
+MTMD_API mtmd_context * mtmd_init_from_file_deferred(const char * path,const llama_model * model,mtmd_context_params params);
+MTMD_API bool mtmd_reload_projector_weights_in(mtmd_context * ctx,ggml_backend_memory_lease_t lease,
+    mtmd_progress_callback progress = nullptr,void * user_data = nullptr) noexcept;
 struct clip_ctx;
 std::shared_ptr<const mtmd_projector_weights> clip_acquire_projector_weights(const clip_ctx * ctx) noexcept;
 bool clip_unload_projector_weights(clip_ctx * ctx) noexcept;
 bool clip_reload_projector_weights(clip_ctx * ctx,mtmd_progress_callback progress,void * user_data) noexcept;
+bool clip_reload_projector_weights_in(clip_ctx * ctx,ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) noexcept;

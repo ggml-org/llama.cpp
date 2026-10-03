@@ -90,6 +90,15 @@ const std::shared_ptr<const mtmd_projector_source> & mtmd_projector_metadata::so
 // Keep a failed candidate private and clear its bindings before another attempt can use the descriptors.
 std::shared_ptr<mtmd_projector_weights> mtmd_projector_weights::allocate(std::shared_ptr<mtmd_projector_metadata> metadata,
         ggml_backend_buffer_type_t type,bool skip_upload,mtmd_progress_callback progress,void * user_data) {
+    return allocate_impl(std::move(metadata),type,skip_upload,progress,user_data,nullptr);
+}
+std::shared_ptr<mtmd_projector_weights> mtmd_projector_weights::allocate_in(std::shared_ptr<mtmd_projector_metadata> metadata,
+        ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) {
+    auto * buffer = lease ? ggml_backend_memory_lease_buffer(lease) : nullptr;
+    return buffer ? allocate_impl(std::move(metadata),ggml_backend_buffer_get_type(buffer),false,progress,user_data,lease) : nullptr;
+}
+std::shared_ptr<mtmd_projector_weights> mtmd_projector_weights::allocate_impl(std::shared_ptr<mtmd_projector_metadata> metadata,
+        ggml_backend_buffer_type_t type,bool skip_upload,mtmd_progress_callback progress,void * user_data,ggml_backend_memory_lease_t lease) {
     if (!metadata || !type || metadata->loading) return {};
     size_t total = 0;
     for (auto * tensor = ggml_get_first_tensor(metadata->context()); tensor; tensor = ggml_get_next_tensor(metadata->context(),tensor)) {
@@ -104,7 +113,18 @@ std::shared_ptr<mtmd_projector_weights> mtmd_projector_weights::allocate(std::sh
     if (progress && !progress(0.0f,user_data)) return {};
     auto result = std::shared_ptr<mtmd_projector_weights>(new mtmd_projector_weights);
     result->descriptors = metadata;
-    result->storage.reset(ggml_backend_alloc_ctx_tensors_from_buft(result->descriptors->context(),type));
+    if (lease) {
+        auto * buffer = ggml_backend_memory_lease_buffer(lease);
+        const size_t required = ggml_backend_alloc_ctx_tensors_from_buft_size(metadata->context(),type);
+        if (!required || required > ggml_backend_buffer_get_size(buffer)) return {};
+        result->grant = std::shared_ptr<ggml_backend_memory_lease>(ggml_backend_memory_lease_retain(lease),ggml_backend_memory_lease_free);
+        result->storage.reset(ggml_backend_buffer_retain(buffer));
+        ggml_tallocr allocator{};
+        if (!ggml_tallocr_new_range(&allocator,buffer,0,ggml_backend_buffer_get_size(buffer))) return {};
+        for (auto * tensor = ggml_get_first_tensor(metadata->context()); tensor; tensor = ggml_get_next_tensor(metadata->context(),tensor)) {
+            if (ggml_tallocr_alloc(&allocator,tensor) != GGML_STATUS_SUCCESS) return {};
+        }
+    } else result->storage.reset(ggml_backend_alloc_ctx_tensors_from_buft(result->descriptors->context(),type));
     if (!result->storage) return {};
     ggml_backend_buffer_set_usage(result->storage.get(),GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     if (!skip_upload) {
@@ -136,6 +156,7 @@ mtmd_projector_weights::~mtmd_projector_weights() {
 ggml_backend_buffer_t mtmd_projector_weights::buffer() const noexcept { return storage.get(); }
 const std::shared_ptr<mtmd_projector_metadata> & mtmd_projector_weights::metadata() const noexcept { return descriptors; }
 bool mtmd_projector_weights::uploaded() const noexcept { return payload_uploaded; }
+ggml_backend_memory_lease_t mtmd_projector_weights::lease() const noexcept { return grant.get(); }
 
 struct projector_weight_executable : llama_memory_executable {
     std::shared_ptr<mtmd_projector_weights> weights;
@@ -160,7 +181,9 @@ struct mtmd_projector_residency::implementation : llama_memory_executor_backend 
     }
     bool capture(const std::shared_ptr<mtmd_projector_weights> & weights,uint64_t generation) {
         std::unique_ptr<llama_memory_executable> native = std::make_unique<projector_weight_executable>(weights);
-        return executor.capture(native,{},generation);
+        std::vector<ggml_backend_memory_lease_t> leases;
+        if (weights->lease()) leases.push_back(weights->lease());
+        return executor.capture(native,leases,generation);
     }
     ~implementation() {
         busy = true;
@@ -181,6 +204,15 @@ std::unique_ptr<mtmd_projector_residency> mtmd_projector_residency::create(std::
     if (!state->capture(state->resident,state->revision)) return {};
     return std::unique_ptr<mtmd_projector_residency>(new mtmd_projector_residency(std::move(state)));
 }
+std::unique_ptr<mtmd_projector_residency> mtmd_projector_residency::create_unloaded(std::shared_ptr<mtmd_projector_metadata> metadata,
+    ggml_backend_buffer_type_t type,mtmd_projector_residency_hooks hooks) {
+    if (!metadata || !type || !hooks.drain || !hooks.invalidate) return {};
+    for (auto * tensor = ggml_get_first_tensor(metadata->context()); tensor; tensor = ggml_get_next_tensor(metadata->context(),tensor))
+        if (tensor->data || tensor->buffer || tensor->extra) return {};
+    auto state = std::make_unique<implementation>();
+    state->type = type; state->metadata = std::move(metadata); state->hooks = std::move(hooks);
+    return std::unique_ptr<mtmd_projector_residency>(new mtmd_projector_residency(std::move(state)));
+}
 bool mtmd_projector_residency::ready() const noexcept { return !impl->busy && impl->resident && impl->executor.ready(); }
 uint64_t mtmd_projector_residency::generation() const noexcept { return impl->revision; }
 std::shared_ptr<const mtmd_projector_weights> mtmd_projector_residency::acquire() const noexcept { return ready() ? impl->resident : nullptr; }
@@ -189,7 +221,11 @@ std::shared_ptr<const mtmd_projector_weights> mtmd_projector_residency::acquire(
 bool mtmd_projector_residency::begin(uint64_t generation) noexcept {
     if (!ready() || generation != impl->revision) return false;
     try {
-        if (!impl->pending) impl->pending = impl->executor.acquire({},generation);
+        if (!impl->pending) {
+            std::vector<ggml_backend_memory_lease_t> leases;
+            if (impl->resident->lease()) leases.push_back(impl->resident->lease());
+            impl->pending = impl->executor.acquire(leases,generation);
+        }
         if (!impl->pending) return false;
         impl->busy = impl->submitting = true;
         return true;
@@ -221,11 +257,18 @@ bool mtmd_projector_residency::unload() noexcept {
 
 // Publish a fully uploaded binding and new executable together; failure leaves the unloaded state intact.
 bool mtmd_projector_residency::reload(mtmd_progress_callback progress,void * user_data) noexcept {
+    return reload_impl(nullptr,progress,user_data);
+}
+bool mtmd_projector_residency::reload_in(ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) noexcept {
+    return lease && reload_impl(lease,progress,user_data);
+}
+bool mtmd_projector_residency::reload_impl(ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) noexcept {
     if (impl->busy || impl->revision == UINT64_MAX) return false;
-    if (impl->resident) return ready();
+    if (impl->resident) return ready() && (!lease || impl->resident->lease() == lease);
     projector_transition_gate gate(impl->busy);
     try {
-        auto candidate = mtmd_projector_weights::allocate(impl->metadata,impl->type,false,progress,user_data);
+        auto candidate = lease ? mtmd_projector_weights::allocate_in(impl->metadata,lease,progress,user_data) :
+            mtmd_projector_weights::allocate(impl->metadata,impl->type,false,progress,user_data);
         if (!candidate || !impl->capture(candidate,impl->revision+1)) return false;
         impl->resident = std::move(candidate);
         ++impl->revision;

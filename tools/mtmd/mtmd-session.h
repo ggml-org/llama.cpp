@@ -64,3 +64,8 @@ MTMD_API int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lc
 MTMD_API int32_t mtmd_session_eval_chunks_shared(mtmd_context * ctx, llama_context * lctx,
     const mtmd_input_chunks * chunks, llama_pos n_past, llama_seq_id seq_id, int32_t n_batch,
     bool logits_last, llama_pos * new_n_past);
+// Opt-in full vision phase: weights and compute share the suspended target's bounded arena.
+MTMD_API int32_t mtmd_session_eval_chunks_arena(mtmd_context * ctx,llama_context * lctx,
+    const mtmd_input_chunks * chunks,llama_pos n_past,llama_seq_id seq_id,int32_t n_batch,bool logits_last,llama_pos * new_n_past);
+MTMD_API int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_context * target,
+    mtmd_progress_callback progress = nullptr,void * user_data = nullptr);

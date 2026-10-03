@@ -152,6 +152,7 @@ struct clip_ctx {
     std::shared_ptr<mtmd_projector_weights> weights;
     std::unique_ptr<mtmd_projector_residency> weight_residency;
     bool weight_busy = false;
+    bool defer_weights = false;
 
     std::vector<uint8_t> buf_compute_meta;
 
@@ -188,6 +189,7 @@ struct clip_ctx {
         cb_eval_user_data = ctx_params.cb_eval_user_data;
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
+        defer_weights = ctx_params.defer_weights;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
@@ -251,6 +253,23 @@ struct clip_ctx {
     // this function is added so that we don't change too much of the existing code
     projector_type proj_type() const {
         return model.proj_type;
+    }
+
+    mtmd_projector_residency_hooks weight_hooks() {
+        return {
+            [this] { ggml_backend_sched_synchronize(sched.get()); return true; },
+            [this] {
+                if (!workspace) {
+                    auto retired = std::make_unique<mtmd_compute_workspace>(sched.get(),backend_ptrs,size_t(max_nodes));
+                    if (!retired->supported()) return false;
+                    workspace = std::move(retired);
+                }
+                if (!workspace->release()) return false;
+                workspace.reset();
+                ggml_backend_sched_reset(sched.get());
+                is_allocated = false;
+                return true;
+            }};
     }
 };
 
@@ -3707,6 +3726,14 @@ struct clip_model_loader {
         if (!ctx_clip.weight_metadata) {
             throw std::runtime_error(string_format("%s: invalid projector tensor metadata\n",__func__));
         }
+        if (ctx_clip.defer_weights) {
+            auto verified = std::make_unique<mtmd_compute_workspace>(ctx_clip.sched.get(),ctx_clip.backend_ptrs,size_t(ctx_clip.max_nodes));
+            if (!verified->supported()) throw std::runtime_error("deferred projector storage needs verified native retirement");
+            ctx_clip.weight_residency = mtmd_projector_residency::create_unloaded(ctx_clip.weight_metadata,
+                ggml_backend_get_default_buffer_type(ctx_clip.backend),ctx_clip.weight_hooks());
+            if (!ctx_clip.weight_residency) throw std::runtime_error("failed to create deferred projector storage");
+            return;
+        }
         ctx_clip.weights = mtmd_projector_weights::allocate(ctx_clip.weight_metadata,
             ggml_backend_get_default_buffer_type(ctx_clip.backend),ctx_clip.no_alloc,progress_callback,progress_callback_user_data);
         if (!ctx_clip.weights) {
@@ -4050,7 +4077,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
             loader.init_ctx(*ctx_vision);
-            if (ctx_params.warmup) {
+            if (ctx_params.warmup && !ctx_params.defer_weights) {
                 loader.warmup(*ctx_vision);
             }
 
@@ -4064,7 +4091,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
             loader.init_ctx(*ctx_audio);
-            if (ctx_params.warmup) {
+            if (ctx_params.warmup && !ctx_params.defer_weights) {
                 loader.warmup(*ctx_audio);
             }
         }
@@ -4140,20 +4167,7 @@ bool clip_unload_projector_weights(clip_ctx * ctx) noexcept {
                 ctx->workspace = std::move(verified);
             }
             if (!ctx->workspace->supported()) return false;
-            auto owner = mtmd_projector_residency::create(ctx->weights,ggml_backend_get_default_buffer_type(ctx->backend),{
-                [ctx] { ggml_backend_sched_synchronize(ctx->sched.get()); return true; },
-                [ctx] {
-                    if (!ctx->workspace) {
-                        auto retired = std::make_unique<mtmd_compute_workspace>(ctx->sched.get(),ctx->backend_ptrs,size_t(ctx->max_nodes));
-                        if (!retired->supported()) return false;
-                        ctx->workspace = std::move(retired);
-                    }
-                    if (!ctx->workspace->release()) return false;
-                    ctx->workspace.reset();
-                    ggml_backend_sched_reset(ctx->sched.get());
-                    ctx->is_allocated = false;
-                    return true;
-                }});
+            auto owner = mtmd_projector_residency::create(ctx->weights,ggml_backend_get_default_buffer_type(ctx->backend),ctx->weight_hooks());
             if (!owner) return false;
             ctx->weight_residency = std::move(owner);
             ctx->weights.reset();
@@ -4172,6 +4186,16 @@ bool clip_reload_projector_weights(clip_ctx * ctx,mtmd_progress_callback progres
         ~gate() { ctx.weight_busy = false; }
     } closed(*ctx);
     return ctx->weight_residency->reload(progress,user_data);
+}
+
+bool clip_reload_projector_weights_in(clip_ctx * ctx,ggml_backend_memory_lease_t lease,mtmd_progress_callback progress,void * user_data) noexcept {
+    if (!ctx || ctx->weight_busy || ctx->no_alloc || !ctx->weight_residency) return false;
+    struct gate {
+        clip_ctx & ctx;
+        explicit gate(clip_ctx & ctx) : ctx(ctx) { ctx.weight_busy = true; }
+        ~gate() { ctx.weight_busy = false; }
+    } closed(*ctx);
+    return ctx->weight_residency->reload_in(lease,progress,user_data);
 }
 
 const char * clip_patch_merge_type(const struct clip_ctx * ctx) {
@@ -4562,13 +4586,11 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
 }
 
 // Measure the current image shape after retiring all addresses from the previous graph.
-bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & batch,
+static bool clip_measure_compute_workspace_impl(clip_ctx * ctx,const clip_image_f32_batch & batch,
         std::vector<ggml_backend_memory_workspace_group> & output,
         ggml_backend_buffer_type_t compute_type) {
     if (!ctx || batch.entries.empty() || (!ctx->support_batch &&
             batch.entries.size() > size_t(clip_model_n_temporal_merge(ctx)))) return false;
-    clip_weight_operation weights(ctx);
-    if (!weights.entered) return false;
     if (compute_type && compute_type != ctx->backend_buft.front()) {
         if (!ggml_backend_supports_buft(ctx->backend,compute_type)) return false;
         auto types=ctx->backend_buft;
@@ -4608,6 +4630,51 @@ bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & 
     return ctx->workspace->measure(graph,output);
 }
 
+bool clip_measure_compute_workspace(clip_ctx * ctx,const clip_image_f32_batch & batch,
+        std::vector<ggml_backend_memory_workspace_group> & output,ggml_backend_buffer_type_t compute_type) {
+    clip_weight_operation weights(ctx);
+    return weights.entered && clip_measure_compute_workspace_impl(ctx,batch,output,compute_type);
+}
+
+// Describe resident leaves for graph-size planning only; no weight upload or backend tensor initialization occurs.
+bool clip_measure_vision_phase(clip_ctx * ctx,const clip_image_f32_batch & batch,ggml_backend_buffer_t parent,
+        size_t & weight_bytes,std::vector<ggml_backend_memory_workspace_group> & groups) {
+    if (!ctx || !parent || ctx->weight_busy || !ctx->weight_metadata || ctx->weights ||
+            !ctx->weight_residency || ctx->weight_residency->ready()) return false;
+    struct description {
+        clip_ctx & ctx;
+        ggml_backend_buffer_ptr view;
+        std::vector<std::pair<ggml_tensor *,ggml_tensor>> saved;
+        explicit description(clip_ctx & ctx) : ctx(ctx) { ctx.weight_busy = true; }
+        ~description() { for (const auto & entry : saved) *entry.first = entry.second; ctx.weight_busy = false; }
+    } scoped(*ctx);
+    auto * type = ggml_backend_buffer_get_type(parent);
+    const size_t bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx->weight_metadata->context(),type);
+    if (!bytes || bytes > ggml_backend_buffer_get_size(parent)) return false;
+    scoped.view.reset(ggml_backend_buffer_view(parent,0,bytes));
+    if (!scoped.view) return false;
+    ggml_backend_buffer_set_usage(scoped.view.get(),GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    const auto base = uintptr_t(ggml_backend_buffer_get_base(scoped.view.get()));
+    const size_t alignment = ggml_backend_buft_get_alignment(type);
+    if (!base || !alignment) return false;
+    size_t cursor = 0;
+    for (auto * tensor = ggml_get_first_tensor(ctx->weight_metadata->context()); tensor;
+            tensor = ggml_get_next_tensor(ctx->weight_metadata->context(),tensor)) {
+        if (tensor->data || tensor->buffer || tensor->extra) return false;
+        const size_t padding = (alignment-(base+cursor)%alignment)%alignment;
+        const size_t needed = ggml_backend_buft_get_alloc_size(type,tensor);
+        if (padding > bytes-cursor || needed > bytes-cursor-padding) return false;
+        cursor += padding;
+        scoped.saved.emplace_back(tensor,*tensor);
+        tensor->buffer = scoped.view.get(); tensor->data = reinterpret_cast<void *>(base+cursor);
+        cursor += needed;
+    }
+    std::vector<ggml_backend_memory_workspace_group> measured;
+    if (!clip_measure_compute_workspace_impl(ctx,batch,measured,type)) return false;
+    groups = std::move(measured); weight_bytes = bytes;
+    return true;
+}
+
 // Validate grants before attachment; encoding after measurement requires a successful binding.
 bool clip_attach_compute_workspace(clip_ctx * ctx,const std::vector<ggml_backend_memory_lease_t> & leases) {
     clip_weight_operation weights(ctx);
@@ -4623,8 +4690,12 @@ bool clip_borrow_compute_workspace(clip_ctx * ctx,llama_context_memory & parent)
 bool clip_release_compute_workspace(clip_ctx * ctx) {
     if (!ctx || ctx->weight_busy) return false;
     if (!ctx->workspace) return true;
-    clip_weight_operation weights(ctx);
-    return weights.entered && ctx->workspace->release();
+    struct gate {
+        clip_ctx & ctx;
+        explicit gate(clip_ctx & ctx) : ctx(ctx) { ctx.weight_busy = true; }
+        ~gate() { ctx.weight_busy = false; }
+    } closed(*ctx);
+    return ctx->workspace->release();
 }
 
 // persisted state slots of the gen-audio decoder, per pipeline

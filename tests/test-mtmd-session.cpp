@@ -1,5 +1,6 @@
 #include "../tools/mtmd/mtmd-session.h"
 #include "../tools/mtmd/mtmd-workspace.h"
+#include "../tools/mtmd/mtmd-projector-storage.h"
 #include "../src/llama-context-memory.h"
 #include "testing.h"
 
@@ -127,12 +128,14 @@ int main(int argc, char ** argv) {
     size_t continuation_tokens = 16;
     bool resident_control = false;
     bool shared_vision = false;
+    bool phase_arena = false;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--cuda")) cuda = true;
         else if (!std::strcmp(argv[i], "--stream-pool-mib") && i + 1 < argc) stream_pool_mib = std::stoull(argv[++i]);
         else if (!std::strcmp(argv[i], "--shared-budget-mib") && i + 1 < argc) shared_budget_mib = std::stoull(argv[++i]);
         else if (!std::strcmp(argv[i], "--resident-control")) resident_control = true;
         else if (!std::strcmp(argv[i], "--shared-vision")) shared_vision = true;
+        else if (!std::strcmp(argv[i], "--phase-vision")) phase_arena = shared_vision = true;
         else if (!std::strcmp(argv[i], "--prefix-repetitions") && i + 1 < argc) prefix_repetitions = std::stoull(argv[++i]);
         else if (!std::strcmp(argv[i], "--continuation-tokens") && i + 1 < argc) continuation_tokens = std::stoull(argv[++i]);
         else if (!std::strcmp(argv[i], "--model") && i + 1 < argc) model_path = argv[++i];
@@ -143,7 +146,8 @@ int main(int argc, char ** argv) {
     const bool suspended_vision = shared_vision && shared_budget_mib;
     if ((adaptive && !cuda) || (stream_pool_mib && shared_budget_mib) || prefix_repetitions > 6000 ||
             !continuation_tokens || continuation_tokens > 16) return 2;
-    const auto evaluate = shared_vision ? mtmd_session_eval_chunks_shared : mtmd_session_eval_chunks;
+    const auto evaluate = phase_arena ? mtmd_session_eval_chunks_arena :
+        shared_vision ? mtmd_session_eval_chunks_shared : mtmd_session_eval_chunks;
     testing t;
     t.test("future_images_are_encoded_together_but_prefilled_in_prompt_order", [](testing & t) {
         session_fixture f;
@@ -360,6 +364,7 @@ int main(int argc, char ** argv) {
         struct vision_probe {
             llama_context * target = nullptr;
             size_t paused_calls = 0;
+            size_t phase_bytes = 0;
             bool fail_once = false;
             std::function<void()> on_encode;
         } probe;
@@ -368,6 +373,10 @@ int main(int argc, char ** argv) {
             auto & probe = *static_cast<vision_probe *>(data);
             auto * owner = probe.target ? llama_context_compute_memory(probe.target) : nullptr;
             if (ask && owner && owner->kv_device_suspended()) ++probe.paused_calls;
+            if (ask && owner && owner->kv_device_suspended()) {
+                llama_context_memory_diagnostics d;
+                if (owner->diagnostics(d)) probe.phase_bytes = std::max(probe.phase_bytes,d.borrowed_phase_bytes);
+            }
             if (ask && probe.on_encode) probe.on_encode();
             if (ask && probe.fail_once) {
                 probe.fail_once = false;
@@ -475,6 +484,11 @@ int main(int argc, char ** argv) {
             if (!t.assert_equal(continuation_tokens, expected_after_decode_tokens.size())) return;
         }
         target.reset();
+        if (phase_arena) {
+            vision.reset();
+            vision.reset(mtmd_init_from_file_deferred(projector_path,model.get(),params));
+            if (!t.assert_true(bool(vision) && !mtmd_acquire_projector_weights(vision.get()))) return;
+        }
         context_params.kv_stream_pool_bytes = stream_pool_mib * 1048576;
         context_params.shared_device_memory_bytes = shared_budget_mib * 1048576;
         target.reset(llama_init_from_model(model.get(), context_params));
@@ -489,6 +503,23 @@ int main(int argc, char ** argv) {
             t.assert_true(probe.paused_calls > 0);
             auto * owner = llama_context_compute_memory(target.get());
             t.assert_true(owner && owner->valid() && !owner->kv_device_suspended() && owner->serial_ready());
+            if (phase_arena) {
+                t.assert_true(!mtmd_acquire_projector_weights(vision.get()));
+                mtmd::batch_ptr inspect(mtmd_batch_init(vision.get()));
+                for (size_t i = 0; i < mtmd_input_chunks_size(prefix.get()); ++i) {
+                    auto * entry = mtmd_input_chunks_get(prefix.get(),i);
+                    if (mtmd_input_chunk_get_type(entry) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                        if (!t.assert_equal(0,mtmd_batch_add_chunk(inspect.get(),entry))) return;
+                        break;
+                    }
+                }
+                mtmd_vision_phase_requirements plan;
+                if (!t.assert_true(mtmd_batch_measure_vision_phase(inspect.get(),owner->shared_parent(),plan))) return;
+                t.assert_true(probe.phase_bytes >= plan.weight_bytes+plan.device_compute_bytes && probe.phase_bytes <= shared_budget_mib*1048576);
+                t.out << "vision phase: weights=" << plan.weight_bytes/1048576.0 << " MiB, device compute="
+                      << plan.device_compute_bytes/1048576.0 << " MiB, host compute outside=" << plan.host_compute_bytes/1048576.0
+                      << " MiB, peak grants=" << probe.phase_bytes/1048576.0 << " MiB\n";
+            }
         }
 #if !defined(_WIN32) || !defined(LLAMA_SHARED)
         auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
@@ -565,7 +596,9 @@ int main(int argc, char ** argv) {
                 if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) { image_chunk = chunk; break; }
             }
             if (!t.assert_equal(0, mtmd_batch_add_chunk(image_batch.get(), image_chunk))) return;
-            if (shared_vision) {
+            if (phase_arena) {
+                if (!t.assert_equal(0,mtmd_batch_encode_arena(vision.get(),image_batch.get(),target.get()))) return;
+            } else if (shared_vision) {
                 auto * parent = llama_context_compute_memory(target.get());
                 std::vector<ggml_backend_memory_workspace_group> groups;
                 if (!t.assert_true(parent && parent->shared_parent() &&
@@ -573,10 +606,10 @@ int main(int argc, char ** argv) {
                             ggml_backend_buffer_get_type(parent->shared_parent())) &&
                         mtmd_borrow_compute_workspace(vision.get(), *parent))) return;
             }
-            if (!t.assert_equal(0, mtmd_batch_encode(image_batch.get()))) return;
+            if (!phase_arena && !t.assert_equal(0, mtmd_batch_encode(image_batch.get()))) return;
             mtmd_embedding_view image_view;
             if (!t.assert_true(mtmd_batch_acquire_output_embd(image_batch.get(), image_chunk, image_view))) return;
-            if (shared_vision && !t.assert_true(mtmd_release_compute_workspace(vision.get()))) return;
+            if (shared_vision && !phase_arena && !t.assert_true(mtmd_release_compute_workspace(vision.get()))) return;
             llama_pos coordinates[4] = {-1, 0, 0, 0};
             int32_t n_seq = 1;
             llama_seq_id seq = 0, * seq_ptr = &seq;
@@ -619,17 +652,33 @@ int main(int argc, char ** argv) {
             }
             auto retained_state = snapshot();
             std::vector<ggml_backend_memory_workspace_group> groups;
-            if (!t.assert_true(parent && parent->shared_parent() &&
-                    mtmd_batch_measure_compute_workspace(image_batch.get(), groups,
-                        ggml_backend_buffer_get_type(parent->shared_parent())) &&
-                    (!suspended_vision || llama_context_suspend_kv_device(target.get())) &&
-                    mtmd_borrow_compute_workspace(vision.get(), *parent))) return;
-            if (suspended_vision) t.assert_true(!llama_context_resume_kv_device(target.get(),llama_memory_text_phase::decode));
-            if (!t.assert_equal(0, mtmd_batch_encode(image_batch.get())) ||
-                    !t.assert_true(mtmd_release_compute_workspace(vision.get()))) return;
-            if (suspended_vision) {
-                t.assert_true(parent->kv_device_suspended());
-                if (!t.assert_true(llama_context_resume_kv_device(target.get(),llama_memory_text_phase::decode))) return;
+            if (phase_arena) {
+                auto tiny = ggml_backend_buffer_ptr(ggml_backend_buffer_view(parent->shared_parent(),0,1048576));
+                mtmd_vision_phase_requirements untouched; untouched.weight_bytes = 123;
+                t.assert_true(!mtmd_batch_measure_vision_phase(image_batch.get(),tiny.get(),untouched));
+                t.assert_equal(size_t(123),untouched.weight_bytes);
+                t.assert_true(snapshot() == retained_state && !parent->kv_device_suspended());
+                size_t upload_calls = 0;
+                auto cancel_upload = [](float,void * data) { return ++*static_cast<size_t *>(data) == 1; };
+                t.assert_true(mtmd_batch_encode_arena(vision.get(),image_batch.get(),target.get(),cancel_upload,&upload_calls) != 0);
+                t.assert_equal(size_t(2),upload_calls);
+                t.assert_true(!parent->kv_device_suspended() && !mtmd_acquire_projector_weights(vision.get()));
+                t.assert_true(snapshot() == retained_state);
+                if (!t.assert_equal(0,mtmd_batch_encode_arena(vision.get(),image_batch.get(),target.get()))) return;
+                t.assert_true(!mtmd_acquire_projector_weights(vision.get()));
+            } else {
+                if (!t.assert_true(parent && parent->shared_parent() &&
+                        mtmd_batch_measure_compute_workspace(image_batch.get(), groups,
+                            ggml_backend_buffer_get_type(parent->shared_parent())) &&
+                        (!suspended_vision || llama_context_suspend_kv_device(target.get())) &&
+                        mtmd_borrow_compute_workspace(vision.get(), *parent))) return;
+                if (suspended_vision) t.assert_true(!llama_context_resume_kv_device(target.get(),llama_memory_text_phase::decode));
+                if (!t.assert_equal(0, mtmd_batch_encode(image_batch.get())) ||
+                        !t.assert_true(mtmd_release_compute_workspace(vision.get()))) return;
+                if (suspended_vision) {
+                    t.assert_true(parent->kv_device_suspended());
+                    if (!t.assert_true(llama_context_resume_kv_device(target.get(),llama_memory_text_phase::decode))) return;
+                }
             }
             t.assert_true(snapshot() == retained_state);
             if (!t.assert_equal(0, evaluate(vision.get(), target.get(), followup.get(), planned_position + continuation_tokens,

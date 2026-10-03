@@ -442,8 +442,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.3b | Committed | 2b3432c74 | Fresh phase grants, reconstructed mirrors, gated graph reservation and unchanged host/recurrent state; resumed prefill/decode comparisons, warm-capture retirement and memory checks pass. |
 | 7.3c | Committed | cace79b9b | Full-parent suspended-KV vision borrowing, exclusive restoration admission, interruption/retry and terminal recovery; real image equivalence and CPU/CUDA memory checks pass. |
 | 7.4a | Committed | 0092cef1e | Separate file source, stable tensor metadata and shared eager weight bindings; original CPU/CUDA embedding equivalence, shared-owner teardown and memory checks pass. |
-| 7.4b | Ready for review | - | Explicit pinned weight unload/reload, native retirement, generation-safe rebinding and retry; CPU/CUDA equivalence, borrowed-workspace return and memory checks pass. |
-| 7.4c-7.5c | Planned | - | Weight/phase-grant coordination and qualified production vision remain pending. |
+| 7.4b | Committed | d2d996604 | Explicit pinned weight unload/reload, native retirement, generation-safe rebinding and retry; CPU/CUDA equivalence, borrowed-workspace return and memory checks pass. |
+| 7.4c | Ready for review | - | Deferred projector startup, bounded weight/compute loans, phase cleanup/recovery and outside-budget accounting; combined image/text and lifetime qualifications pass. |
+| 7.5a-7.5c | Planned | - | Qualified production vision admission, memory/performance reporting and image-aware MTP remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3982,3 +3983,56 @@ Artifacts are `/tmp/vision-7.4b-*`, including `red.log`, `measure-red.log`, sani
 #### Remaining boundary
 
 Stage 7.4c must place/reload projector storage through coordinated phase grants, account for allocations outside those grants, and qualify failed phase handoffs. Automatic image-session weight swapping and production vision admission remain pending; this checkpoint only adds and qualifies the explicit lifecycle.
+
+### Stage 7.4c: coordinated weight and compute grants for vision
+
+The opt-in internal arena adapter now executes the entire vision phase inside the suspended target's shared parent. It does not merely leave projector weights separately resident while borrowing graph scratch. The existing eager adapter and the graph-only shared adapter remain available unchanged; production/server admission is still guarded.
+
+#### Phase order and source ownership
+
+```mermaid
+flowchart LR
+    A[Projector metadata and file source only] --> B[Measure actual image batch and weight storage]
+    B --> C[Check combined weight plus compute quota]
+    C --> D[Drain text and suspend device KV]
+    D --> E[Loan separate weight and compute regions]
+    E --> F[Upload weights into their lease]
+    F --> G[Encode into borrowed compute]
+    G --> H[Retain host embeddings]
+    H --> I[Retire vision and unload its weights]
+    I --> J[Return all phase leases]
+    J --> K[Restore text grants and graphs]
+    K --> L[Prefill embeddings and continue text]
+```
+
+- `mtmd_init_from_file_deferred()` is a private C++ initialization seam. It retains hparams, tensor descriptors, host preprocessing values and the file source without allocating a projector weight buffer. Requested startup warmup is deferred too; it must not allocate a large ordinary graph before the actual batch and budget are known. Unsupported native-cache lifetimes reject this opt-in mode rather than changing the eager path.
+- `mtmd_batch_measure_vision_phase()` measures the actual preprocessed batch while weights are unbound. A scoped descriptor-only view identifies weights as already-resident leaves for the scheduler's size calculation; it neither uploads weights nor initializes backend tensors. All descriptor fields are restored on exit. The parent bytes and usage remain unchanged. This avoids incorrectly counting all unloaded weights as graph temporaries.
+- The plan reports backend-aligned weight bytes, compute bytes in the shared parent, and host compute bytes outside it. It rejects a parent too small for weights alone or for weights plus compute, and does not silently allocate a second device buffer to make the request work. Non-host compute on another buffer type/device is rejected by this adapter.
+- `llama_context_memory::lend_suspended()` commits disjoint temporary regions in the **actual target arena**, not an unrelated alias facade. It only lends while KV is suspended and ordinary target/child grants are gone. Outstanding lease references block new loans, scratch borrowing and target restoration. Leases retain the arena/buffer independently of their lender's scheduler lifetime.
+- `mtmd_projector_weights::allocate_in()` uses the existing bounded tensor allocator to bind and upload within the weight lease. It retains that lease and never substitutes another backend allocation. The residency executable includes the lease as a dependency; copied readers and execution pins keep restoration blocked until they return.
+- `mtmd_batch_encode_arena()` attaches compute leases, encodes, keeps batch-owned host embeddings, then drains/returns compute, unloads leased weights, returns caller lease references and explicitly resumes the target. `mtmd_session_eval_chunks_arena()` uses that operation within the existing ordered text/image plan. Projector weights stay unloaded between vision phases, including when the next image follows intervening text.
+- Known auxiliary/speculative consumers are explicitly rejected by this adapter; current image-aware MTP is not implicitly admitted by the new memory path. The checks and the lender/lifecycle are backend-neutral, while the live text-streaming adapter is qualified on CUDA here.
+
+#### Failure boundaries and accounting
+
+Insufficient quota is rejected before KV eviction. Failed region materialization returns temporary leases and leaves a safe suspended state that can be resumed; failure to restore a clean loan layout marks the owner invalid. Partial weight-upload cancellation, encoding exceptions and text-restoration allocation failures stop the request and use the same cleanup order. If a reader or incomplete retirement still retains a phase lease, text restoration remains blocked instead of aliasing live vision bytes. Preflight rejection before taking ownership does not clean up someone else's workspace. Request cancellation still takes effect after the active callback has cleaned up, not by interrupting a GPU kernel.
+
+`borrowed_phase_bytes` diagnostics now account for active borrowed phase reservations, including the existing graph-only borrowed path; those bytes are not reported as unused space while KV is paused. Host compute arenas, host image/preprocessing/embedding storage, per-tensor upload staging, persistent target weights and recurrent state are outside the shared parent. CUDA context/library/native graph housekeeping can also allocate outside it. The configured parent is therefore a bound for its ordinary weight/KV/compute buffers, **not a total device-VRAM limit**. No claim is made that unloading the parent reduces `nvidia-smi` usage: the parent is deliberately retained and reused.
+
+The retained file must remain unchanged in place, as in 7.4a. Cold deferred startup avoids requiring both an eager projector weight allocation and the entire shared parent at once. Existing eager contexts can explicitly switch to this adapter after unloading, but their earlier startup peak is not retroactively removed.
+
+#### TDD and qualification
+
+- The suspended-parent loan test was initially red against the stub API. Its final CUDA case passes **1/25**: active-context rejection, invalid/oversized requests, disjoint bounds, retained-reference restoration rejection, last-release retry, unchanged host KV, failed view materialization and leases outliving the lender. Focused memcheck reports **zero errors**. The full CUDA model suite remains **17/672**, with auxiliary, resume, MTP and graph-dispatch controls intact.
+- The bounded weight test proves loading succeeds while replacement backend allocation is faulted, rejects an undersized lease, checks tensor addresses within the grant, retains the grant through a reader and returns it on unload. The focused ownership suite passes **14/126** under ASan/leak checking, UBSan and targeted host TSan.
+- The deferred encoder component passes **1/22** on CPU and **1/23** on CUDA. It starts with no weight owner despite requested warmup, measures without changing parent bytes/usage, rejects both weight-only and smaller quotas, loads weight/compute into separate leases, matches saved original eager-loader embeddings byte-for-byte, and keeps a reader valid after projector and arena-owner destruction. CUDA memcheck passes **1/23 with zero errors**. The target model is metadata-only in this instrumented encoder test; this is not instrumentation of full target decoding.
+- The full IQ4_XS Q8_0/Q4_0 image/text arena fixture passes **13/231** with a 6K-word background, initial images, follow-up images and another image after decoding. Initial/follow-up/post-decode logits have **zero maximum difference**, recurrent bytes match, and 16-token continuations match the ordinary adapter. It also qualifies partial-upload cancellation/retry, encoding interruption and target-restoration failure/retry with unchanged persistent state.
+- In that fixture, a **1,024 MiB** parent holds **884.618 MiB weights + 30.016 MiB device compute = 914.634 MiB** during vision. **3.016 MiB host compute** is reported outside the parent. Text decode regains approximately **1,012.52 MiB KV pool** after the phase. The simultaneous sum would exceed the parent budget, so these results demonstrate phase reuse, not a second projector allocation hidden outside the quota. Active contexts remain resident at this short history; streaming behavior is separately retained in the legacy ring regression.
+- The existing graph-only shared image test remains **13/225** with active ring streaming; the populated-cache resume comparison remains **5/317**, and the CUDA context-owner controls remain **8/686**. The existing eager projector regression remains **15/183**. CPU owner/session controls remain **7/658** and **12/146** under ASan/leak checking and UBSan; host session TSan also passes **12/146** with process-local ASLR disabled.
+- Strict conversion/sign-conversion checks pass for the storage and session implementations, and the full CUDA server target is rebuilt. This does not claim Windows execution, other accelerator qualification or image-aware MTP support.
+
+Artifacts use `/tmp/vision-7.4c-*`, including `loan-red.log`, `loan-memcheck.log`, `model-full.log`, `phase-final.log`, `deferred-cpu.log`, `deferred-cuda.log`, `deferred-memcheck.log`, `legacy-ring.log`, `resume-regression.log` and sanitizer logs. Production is restored with its unchanged image/configuration and health checked; stage 7.4c is staged for user review without unrelated benchmark files. No assistant commit or push is made.
+
+#### Remaining boundary
+
+Stage 7.5a must wire deferred initialization and the arena adapter into the server's qualified no-MTP image request path, handle image/prompt-cache reuse and lift the production guard only for supported configurations. Stage 7.5b measures full-device peaks and transition costs; 7.5c separately qualifies image-aware MTP. The private test/adapter seams here do not themselves enable production multimodal requests.
