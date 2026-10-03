@@ -23,6 +23,7 @@
 
 #include "ggml-sycl/dpct/helper.hpp"
 
+// sum is d times the sum of the quantized values, the same as block_q8_1::s on the CPU.
 template <int ElementsPerWI>
 __dpct_inline__ static void quantize_q8_1_impl(const float * __restrict__ x,
                                                sycl::vec<int8_t, ElementsPerWI> & quantized_values, float & d,
@@ -39,20 +40,22 @@ __dpct_inline__ static void quantize_q8_1_impl(const float * __restrict__ x,
 
 #pragma unroll(ElementsPerWI)
     for (int i = 0; i < ElementsPerWI; i++) {
-        sum += wi_f32_vals[i];
         amax                = sycl::fmax(amax, sycl::fabs(wi_f32_vals[i]));
         quantized_values[i] = 0;
     }
-    sum  = sycl::reduce_over_group(it.get_sub_group(), sum, sycl::plus<float>());
     amax = sycl::reduce_over_group(it.get_sub_group(), amax, sycl::maximum<float>());
     d    = amax == 0 ? 1 : amax / 127;
 
+    int sumq = 0;
 #pragma unroll(ElementsPerWI)
     for (int i = 0; i < ElementsPerWI; i++) {
         quantized_values[i] = sycl::round(wi_f32_vals[i] / d);
+        sumq += quantized_values[i];
     }
+    sumq = sycl::reduce_over_group(it.get_sub_group(), sumq, sycl::plus<int>());
 
-    d = amax == 0 ? 0 : d;
+    d   = amax == 0 ? 0 : d;
+    sum = d * sumq;
 }
 
 // No op to control codepath in ggml_sycl_op_mul_mat

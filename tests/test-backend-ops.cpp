@@ -10459,10 +10459,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
-    for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
-        for (int64_t n : {1, 8}) {
-            test_cases.emplace_back(new test_mul_mat_x_offset(type_a, GGML_TYPE_F32, 256, n, 1024, 4.0f));
-        }
+    test_cases.emplace_back(new test_mul_mat_x_offset(GGML_TYPE_Q4_0, GGML_TYPE_F32, 256, 1, 1024, 4.0f));
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1}) {
+        test_cases.emplace_back(new test_mul_mat_x_offset(type_a, GGML_TYPE_F32, 256, 8, 1024, 4.0f));
     }
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));

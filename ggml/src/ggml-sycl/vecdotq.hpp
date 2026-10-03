@@ -852,19 +852,12 @@ static __dpct_inline__ float vec_dot_q4_1_q8_1_impl(const int *v, const int *u,
         sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
     }
 
-#ifdef GGML_SYCL_F16
-    const sycl::float2 tmp =
-        (dm4 * ds8).convert<float, sycl::rounding_mode::automatic>();
-    const float d4d8 = tmp.x();
-    const float m4s8 = tmp.y();
-#else
     const sycl::float2 dm4f =
         dm4.convert<float, sycl::rounding_mode::automatic>();
     const sycl::float2 ds8f =
         ds8.convert<float, sycl::rounding_mode::automatic>();
     const float d4d8 = dm4f.x() * ds8f.x();
     const float m4s8 = dm4f.y() * ds8f.y();
-#endif // GGML_SYCL_F16
 
     // scale second part of sum by QI8_1/(vdr * QR4_1) to compensate for multiple threads adding it
     return sumi * d4d8 + m4s8 / (QI8_1 / (vdr * QR4_1));
@@ -878,6 +871,7 @@ static __dpct_inline__ float
 vec_dot_q5_0_q8_1_impl(const int *vl, const int *vh, const int *u,
                        const float &d5, const sycl::half2 &ds8) {
     int sumi = 0;
+    int sumu = 0;
 
 #pragma unroll
     for (int i = 0; i < vdr; ++i) {
@@ -896,13 +890,14 @@ vec_dot_q5_0_q8_1_impl(const int *vl, const int *vh, const int *u,
         vi1    |= (vh[i] <<  9) & 0x10000000; // 19 -> 28
         sumi = dpct::dp4a(vi1, u[2 * i + 1],
                           sumi); // SIMD dot product of quantized values
+        sumu = dpct::dp4a(0x01010101, u[2 * i + 0], sumu);
+        sumu = dpct::dp4a(0x01010101, u[2 * i + 1], sumu);
     }
 
     const sycl::float2 ds8f =
         ds8.convert<float, sycl::rounding_mode::automatic>();
 
-    // second part effectively subtracts 16 from each quant value
-    return d5 * (sumi * ds8f.x() - (16 * vdr / QI5_0) * ds8f.y());
+    return d5 * ds8f.x() * (float) (sumi - 16 * sumu);
 }
 
 #define VDR_Q5_1_Q8_1_MMVQ 2
@@ -934,21 +929,12 @@ vec_dot_q5_1_q8_1_impl(const int *vl, const int *vh, const int *u,
                           sumi); // SIMD dot product of quantized values
     }
 
-#ifdef GGML_SYCL_F16
-     const sycl::float2 tmp =
-        (dm5 * ds8).convert<float, sycl::rounding_mode::automatic>();
-    const float d5d8 = tmp.x();
-    const float m5s8 = tmp.y();
-
-
-#else
     const sycl::float2 dm5f =
         dm5.convert<float, sycl::rounding_mode::automatic>();
     const sycl::float2 ds8f =
         ds8.convert<float, sycl::rounding_mode::automatic>();
     const float d5d8 = dm5f.x() * ds8f.x();
     const float m5s8 = dm5f.y() * ds8f.y();
-#endif // GGML_SYCL_F16
 
     // scale second part of sum by QI5_1 / vdr to compensate for multiple threads adding it
     return sumi*d5d8 + m5s8 / (QI5_1 / vdr);
