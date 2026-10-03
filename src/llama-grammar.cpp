@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
+#define MAX_GRAMMAR_RECURSION_DEPTH 256
 //
 // helpers
 //
@@ -440,13 +441,14 @@ const char * llama_grammar_parser::parse_alternates(
         const char        * src,
         const std::string & rule_name,
         uint32_t            rule_id,
-        bool                is_nested) {
+        bool                is_nested,
+        uint32_t            depth) {
     llama_grammar_rule rule;
-    const char * pos = parse_sequence(src, rule_name, rule, is_nested);
+    const char * pos = parse_sequence(src, rule_name, rule, is_nested, depth);
     while (*pos == '|') {
         rule.push_back({LLAMA_GRETYPE_ALT, 0});
         pos = parse_space(pos + 1, true);
-        pos = parse_sequence(pos, rule_name, rule, is_nested);
+        pos = parse_sequence(pos, rule_name, rule, is_nested, depth);
     }
     rule.push_back({LLAMA_GRETYPE_END, 0});
     add_rule(rule_id, rule);
@@ -457,7 +459,8 @@ const char * llama_grammar_parser::parse_sequence(
         const char         * src,
         const std::string  & rule_name,
         llama_grammar_rule & rule,
-        bool               is_nested) {
+        bool               is_nested,
+        uint32_t           depth) {
     size_t last_sym_start = rule.size();
     const char * pos = src;
     uint64_t n_prev_rules = 1;
@@ -595,11 +598,14 @@ const char * llama_grammar_parser::parse_sequence(
             n_prev_rules = 1;
             rule.push_back({LLAMA_GRETYPE_RULE_REF, ref_rule_id});
         } else if (*pos == '(') { // grouping
+            if (depth >= MAX_GRAMMAR_RECURSION_DEPTH) {
+                throw std::runtime_error("grammar recursion depth limit exceeded (max " + std::to_string(MAX_GRAMMAR_RECURSION_DEPTH) + "), please reduce nesting depth");
+            }
             // parse nested alternates into synthesized rule
             pos = parse_space(pos + 1, true);
             uint32_t n_rules_before = symbol_ids.size();
             uint32_t sub_rule_id = generate_symbol_id(rule_name);
-            pos = parse_alternates(pos, rule_name, sub_rule_id, true);
+            pos = parse_alternates(pos, rule_name, sub_rule_id, true, depth + 1);
             n_prev_rules = std::max(1u, (uint32_t)symbol_ids.size() - n_rules_before);
             last_sym_start = rule.size();
             // output reference to synthesized rule
