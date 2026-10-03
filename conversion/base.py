@@ -1529,7 +1529,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -1713,6 +1713,9 @@ class TextModel(ModelBase):
         if chkhsh == "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed":
             # ref: https://huggingface.co/XHToken/Spark-X2.5-1.7B
             res = "spark2_5"
+        if chkhsh == "1f9825a388f700a6b591722f17d470cbbcf10973ece35d2fd14239a14110ae1a":
+            # ref: https://huggingface.co/IFM/K2-Horizon-0.9B
+            res = "k2-horizon"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1941,6 +1944,9 @@ class TextModel(ModelBase):
         if chkhsh == "4b05e02dad1c5ae07d266fd3342ddb644c6f6be058d728bc0a33af31a1d6ee66":
             # ref: https://huggingface.co/jhu-clsp/mmBERT-base
             res = "mmbert"
+        if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
+            # ref: https://huggingface.co/IFM/K2-Horizon-36B
+            res = "k2-horizon"
 
         if res is None:
             logger.warning("\n")

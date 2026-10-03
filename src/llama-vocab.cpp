@@ -558,6 +558,11 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_K2_HORIZON:
+                regex_exprs = {
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}|\\p{M}|\\u200C|\\u200D)+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -2458,6 +2463,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "mellum2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MELLUM2;
+            } else if (
+                tokenizer_pre == "k2-horizon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_K2_HORIZON;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -2945,6 +2954,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<|tool_response>" // gemma4
                     || t.first == "<｜end▁of▁sentence｜>" // deepseek-ocr
                     || t.first == "[e~[" // minimax-m2/m3
+                    || t.first == "<|ifm|im_end|>" // k2-horizon
                ) {
                 special_eog_ids.insert(t.second);
                 if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
