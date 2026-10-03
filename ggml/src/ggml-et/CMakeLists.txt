@@ -40,6 +40,7 @@ set(KERNELS
     mul_mat_Q4_0_matrix_engine
     mul_mat_f16
     mul_mat_f16_matrix_engine
+    mul_mat_f16_f32_matrix_engine
     rope_f32
     unary_f32
     sqr_f32
