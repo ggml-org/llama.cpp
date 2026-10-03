@@ -7,7 +7,7 @@
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { Badge } from '$lib/components/ui/badge';
-	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -31,7 +31,7 @@
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'group rounded-md px-2 py-2 transition',
+		'group relative rounded-md px-2 py-2 transition',
 		isHidden && 'opacity-60',
 		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 	]}
@@ -40,7 +40,7 @@
 	     the button: a button nested in a role="button" row is invalid -->
 	<button
 		aria-pressed={selected}
-		class="flex min-w-0 cursor-pointer items-center gap-3 text-left"
+		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:pr-8"
 		onclick={() => onSelect(option)}
 		style="padding-left: {indent}px"
 		type="button"
@@ -60,7 +60,7 @@
 
 	<ModelsManagerStatusCell class="max-md:hidden" {option} />
 
-	<div class="flex items-center justify-center justify-self-center">
+	<div class="flex items-center justify-center justify-self-center {MODEL_ROW_TRAILING_CELL_CLASS}">
 		<DropdownMenuActions
 			actions={modelRowActions(option, favorite, isHidden, onDelete)}
 			align="end"

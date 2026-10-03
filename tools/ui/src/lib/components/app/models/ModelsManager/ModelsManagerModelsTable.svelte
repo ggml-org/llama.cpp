@@ -28,6 +28,7 @@
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
 		MODEL_ROW_GRID_CLASS,
+		MODEL_ROW_TRAILING_CELL_CLASS,
 		MODEL_ROW_WINDOW,
 		SETTINGS_KEYS
 	} from '$lib/constants';
@@ -261,13 +262,13 @@
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
+		class="{MODEL_ROW_GRID_CLASS} relative group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
 		onclick={toggle}
 		onkeydown={(event) => handleFamilyKeydown(event, toggle)}
 		role="button"
 		tabindex="0"
 	>
-		<span class="flex min-w-0 items-center gap-3">
+		<span class="flex min-w-0 items-center gap-3 max-md:pr-8">
 			<ModelAvatar
 				option={family.entries[0].base}
 				showBaseModelAvatar
@@ -280,14 +281,14 @@
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
 		</span>
 
-		<!-- the context and status columns stay empty here: a phone drops both, so the
-		     chevron keeps the last column instead of wrapping onto its own row -->
+		<!-- the context and status columns stay empty here: the fold control is this
+		     row's last cell, which a phone floats at the row's end -->
 		<span class="max-md:hidden"></span>
 
 		<span class="max-md:hidden"></span>
 
 		<span
-			class="flex justify-center {expanded
+			class="flex justify-center {MODEL_ROW_TRAILING_CELL_CLASS} {expanded
 				? 'opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100'
 				: ''}"
 		>
@@ -353,7 +354,7 @@
 			{@render sortHeader(ModelsTableSortKey.STATUS, 'Status')}
 		</span>
 
-		<span class="text-center">Actions</span>
+		<span class="text-center max-md:hidden">Actions</span>
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
