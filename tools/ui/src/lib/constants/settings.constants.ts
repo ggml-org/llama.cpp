@@ -28,7 +28,6 @@ import type {
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {
 	AGENTIC: { slug: 'agentic', title: 'Agentic' },
-	BACKENDS: { slug: 'backends', title: 'Providers' },
 	DEVELOPER: { slug: 'developer', title: 'Developer' },
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
@@ -39,7 +38,6 @@ export const SETTINGS_SECTIONS = {
 
 export const SETTINGS_SECTION_SLUGS = {
 	AGENTIC: SETTINGS_SECTIONS.AGENTIC.slug,
-	BACKENDS: SETTINGS_SECTIONS.BACKENDS.slug,
 	DEVELOPER: SETTINGS_SECTIONS.DEVELOPER.slug,
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.slug,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
@@ -50,7 +48,6 @@ export const SETTINGS_SECTION_SLUGS = {
 
 export const SETTINGS_SECTION_TITLES = {
 	AGENTIC: SETTINGS_SECTIONS.AGENTIC.title,
-	BACKENDS: SETTINGS_SECTIONS.BACKENDS.title,
 	DEVELOPER: SETTINGS_SECTIONS.DEVELOPER.title,
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.title,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
