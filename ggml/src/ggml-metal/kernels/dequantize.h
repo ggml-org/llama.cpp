@@ -128,6 +128,74 @@ void dequantize_q2_0_t4(device const block_q2_0 * xb, short il, thread type4 & r
     reg = (type4) reg_f;
 }
 
+// BF16X: 32 elements per block, two 16-element halves with separate emax
+// il selects 16 elements (type4x4) or 4 elements (type4)
+template <typename type4x4>
+void dequantize_bf16x(device const block_bf16x * xb, short il, thread type4x4 & reg) {
+    const int base = il * 16;
+
+    float4x4 reg_f;
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            const int j = base + r*4 + c;
+
+            const int mb = j*7;
+            uint8_t m = (xb->mant[mb >> 3] >> (mb & 7)) & 0x7F;
+            if ((mb & 7) + 7 > 8) {
+                m |= (xb->mant[(mb >> 3) + 1] << (8 - (mb & 7))) & 0x7F;
+            }
+
+            const int db = j*3;
+            uint8_t d = (xb->delta[db >> 3] >> (db & 7)) & 0x7;
+            if ((db & 7) + 3 > 8) {
+                d |= (xb->delta[(db >> 3) + 1] << (8 - (db & 7))) & 0x7;
+            }
+
+            const uint8_t emax = xb->emax[j >> 4];
+            const uint8_t e = emax > d ? emax - d : 0;
+            const uint16_t bits = (uint16_t)(((xb->sgn[j >> 3] >> (j & 7)) & 1) << 15)
+                                | (uint16_t)(e << 7)
+                                | (uint16_t) m;
+
+            reg_f[r][c] = as_type<float>(bits);
+        }
+    }
+
+    reg = (type4x4) reg_f;
+}
+
+template <typename type4>
+void dequantize_bf16x_t4(device const block_bf16x * xb, short il, thread type4 & reg) {
+    const int base = il * 4;
+
+    float4 reg_f;
+    for (int c = 0; c < 4; ++c) {
+        const int j = base + c;
+
+        const int mb = j*7;
+        uint8_t m = (xb->mant[mb >> 3] >> (mb & 7)) & 0x7F;
+        if ((mb & 7) + 7 > 8) {
+            m |= (xb->mant[(mb >> 3) + 1] << (8 - (mb & 7))) & 0x7F;
+        }
+
+        const int db = j*3;
+        uint8_t d = (xb->delta[db >> 3] >> (db & 7)) & 0x7;
+        if ((db & 7) + 3 > 8) {
+            d |= (xb->delta[(db >> 3) + 1] << (8 - (db & 7))) & 0x7;
+        }
+
+        const uint8_t emax = xb->emax[j >> 4];
+        const uint8_t e = emax > d ? emax - d : 0;
+        const uint16_t bits = (uint16_t)(((xb->sgn[j >> 3] >> (j & 7)) & 1) << 15)
+                            | (uint16_t)(e << 7)
+                            | (uint16_t) m;
+
+        reg_f[c] = as_type<float>(bits);
+    }
+
+    reg = (type4) reg_f;
+}
+
 template <typename type4x4>
 void dequantize_q4_0(device const block_q4_0 * xb, short il, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 1);

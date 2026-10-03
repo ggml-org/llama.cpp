@@ -23,6 +23,41 @@ static __device__ __forceinline__ void dequantize_q1_0(const void * vx, const in
     v.y = (2*bit_1 - 1) * d;
 }
 
+// BF16X: decode two adjacent elements (iqs, iqs+1) of the 32-element block
+static __device__ __forceinline__ void dequantize_bf16x(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_bf16x * x = (const block_bf16x *) vx;
+
+#pragma unroll
+    for (int k = 0; k < 2; ++k) {
+        const int j = iqs + k;
+        const int h = j >> 4;                   // 16-element half of the block
+        const uint8_t emax = x[ib].emax[h];
+
+        const int mb = j*7;
+        uint8_t m = (x[ib].mant[mb >> 3] >> (mb & 7)) & 0x7F;
+        if ((mb & 7) + 7 > 8) {
+            m |= (x[ib].mant[(mb >> 3) + 1] << (8 - (mb & 7))) & 0x7F;
+        }
+
+        const int db = j*3;
+        uint8_t d = (x[ib].delta[db >> 3] >> (db & 7)) & 0x7;
+        if ((db & 7) + 3 > 8) {
+            d |= (x[ib].delta[(db >> 3) + 1] << (8 - (db & 7))) & 0x7;
+        }
+
+        const uint8_t e = emax > d ? emax - d : 0;
+        const uint32_t bits = ((((uint32_t)(x[ib].sgn[j >> 3] >> (j & 7))) & 1u) << 31)
+                            | ((uint32_t) e << 23)
+                            | ((uint32_t) m << 16);
+
+        if (k == 0) {
+            v.x = __uint_as_float(bits);
+        } else {
+            v.y = __uint_as_float(bits);
+        }
+    }
+}
+
 static __device__ __forceinline__ void dequantize_q2_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q2_0 * x = (const block_q2_0 *) vx;
 
