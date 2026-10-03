@@ -58,7 +58,7 @@
 		{option}
 	/>
 
-	<ModelsManagerStatusCell {option} />
+	<ModelsManagerStatusCell class="max-md:hidden" {option} />
 
 	<div class="flex items-center justify-center justify-self-center">
 		<DropdownMenuActions
