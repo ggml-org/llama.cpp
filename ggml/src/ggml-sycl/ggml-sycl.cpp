@@ -287,9 +287,9 @@ static void print_device_detail(int id, sycl::device &device, std::string device
 static void print_device_opt_feature(int device_count) {
     GGML_LOG_INFO("SYCL Optimization Feature:\n");
     GGML_LOG_INFO(
-        "|ID|        Device Type|Reorder|\n");
+        "|ID|        Device Type|Reorder|    Family|\n");
     GGML_LOG_INFO(
-        "|--|-------------------|-------|\n");
+        "|--|-------------------|-------|----------|\n");
     std::map<std::string, size_t> DeviceNums;
     for (int id = 0; id < device_count; ++id) {
       sycl::device device = dpct::dev_mgr::instance().get_device(id);
@@ -300,8 +300,9 @@ static void print_device_opt_feature(int device_count) {
                   << "]";
       std::string device_type_s = device_type.str();
       device_type_s = std::regex_replace(device_type_s, std::regex("ext_oneapi_"), "");
-      GGML_LOG_INFO("|%2d|%19s|%7s|\n", id, device_type_s.c_str(),
-        ggml_sycl_info().devices[id].opt_feature.reorder ? "Y": "N");
+      GGML_LOG_INFO("|%2d|%19s|%7s|%10s|\n", id, device_type_s.c_str(),
+        ggml_sycl_info().devices[id].opt_feature.reorder ? "Y": "N",
+        get_xe_family_caps(ggml_sycl_info().devices[id].hw_info.xe_family).name);
     }
 
 }

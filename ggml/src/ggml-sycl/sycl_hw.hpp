@@ -25,14 +25,43 @@ enum sycl_intel_gpu_family {
   GPU_FAMILY_DGPU_CLOUD = 3
 };
 
+// Intel GPU IP family, named after the ocloc family targets.
+enum sycl_xe_family {
+  XE_FAMILY_UNKNOWN = 0,
+  XE_FAMILY_PRE_XE,     // Gen8 - Gen11
+  XE_FAMILY_XE_LP,      // TGL, RKL, ADL, DG1
+  XE_FAMILY_XE_LPG,     // MTL, ARL-U/S
+  XE_FAMILY_XE_LPGPLUS, // ARL-H
+  XE_FAMILY_XE_HPG,     // DG2
+  XE_FAMILY_XE_HPC,     // PVC
+  XE_FAMILY_XE2_LPG,    // LNL
+  XE_FAMILY_XE2_HPG,    // BMG
+  XE_FAMILY_XE3_LPG,    // PTL, WCL, NVL-S/U
+  XE_FAMILY_XE3P_LPG,   // NVL-P
+  XE_FAMILY_XE3P_XPC,   // CRI, no SYCL arch enum yet
+  XE_FAMILY_COUNT
+};
+
+// Static hardware traits of one Xe family. 0 means unknown or not present.
+struct sycl_xe_family_caps {
+  const char* name;  // ocloc family name
+  int simd_width;    // native EU SIMD width
+  int dpas_n;        // DPAS execution size (XMX), 0 = no XMX
+  bool block_2d_io;  // 2D block load/store
+};
+
 struct sycl_hw_info {
   syclex::architecture arch;
   const char* arch_name;
   int32_t device_id;
   std::string name;
   sycl_intel_gpu_family gpu_family;
+  sycl_xe_family xe_family;
 };
 
 sycl_hw_info get_device_hw_info(sycl::device *device_ptr);
+
+// Look up the static traits of an Xe family.
+const sycl_xe_family_caps & get_xe_family_caps(sycl_xe_family family);
 
 #endif // SYCL_HW_HPP
