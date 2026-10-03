@@ -782,7 +782,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_XE_FAMILIES | Optional                           | AOT compile for a list of Xe families, e.g. `xe2-hpg;xe-hpg`. Valid: `xe-lp`, `xe-lpg`, `xe-lpgplus`, `xe-hpg`, `xe-hpc`, `xe2-lpg`, `xe2-hpg`, `xe3-lpg`, `xe3p-lpg`, `xe3p-xpc`. Cannot be combined with GGML_SYCL_DEVICE_ARCH. Devices of other families fall back to driver JIT. |
-| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
+| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Use FP16 arithmetic inside the SYCL kernels. The F16/quantized GEMM precision is picked per device at runtime, see GGML_SYCL_FP16_GEMM. (1.) |
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
@@ -816,6 +816,8 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_MEMTRACE_STEP | 64 (default) or positive integer | With GGML_SYCL_MEMTRACE=1, the minimum growth in memory usage to trigger another log record. |
 | GGML_SYCL_MKL_FA_DIAG | 0 (default) or 1 | Enable output fingerprinting for MKL flash attention. Dumps the first 64 float output values for the first 6 FA calls with n_kv ≥ 1024, labeled with kernel type (MKL/TILE/VEC) for cross-kernel comparison. |
 | GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch in graph compute. Unsupported types and layouts fall back to the standalone op kernels. See `ggml_sycl_can_fuse()`. |
+| GGML_SYCL_FP16_GEMM | 0, 1 or unset (default) | GEMM precision for F16 and quantized weights. Unset picks FP16 on devices with XMX (from the Xe family table) and on GGML_SYCL_F16 builds, FP32 otherwise. 0 forces FP32, 1 forces FP16. |
+upported types and layouts fall back to the standalone op kernels. See `ggml_sycl_can_fuse()`. |
 | GGML_SYCL_ENABLE_ESIMD | 0 or 1 (default)| Enable ESIMD kernels when available. |
 | GGML_SYCL_MMVQ_WIDE | 0 or 1 (default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|

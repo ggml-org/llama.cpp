@@ -105,6 +105,7 @@ int g_ggml_sycl_enable_fusion = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
+int g_ggml_sycl_fp16_gemm = 2;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_use_level_zero_api = 0;
@@ -221,6 +222,8 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
         info.devices[i].hw_info = get_device_hw_info(&device);
+        info.devices[i].opt_feature.fp16_gemm =
+            get_xe_family_caps(info.devices[i].hw_info.xe_family).dpas_n > 0 || gpu_has_xmx(device);
         if (!is_xe_family_compiled(info.devices[i].hw_info.xe_family)) {
             GGML_LOG_WARN("SYCL device %d (%s) is not in GGML_SYCL_XE_FAMILIES, the driver will JIT its kernels from embedded IR\n",
                           i, get_xe_family_caps(info.devices[i].hw_info.xe_family).name);
@@ -291,9 +294,9 @@ static void print_device_detail(int id, sycl::device &device, std::string device
 static void print_device_opt_feature(int device_count) {
     GGML_LOG_INFO("SYCL Optimization Feature:\n");
     GGML_LOG_INFO(
-        "|ID|        Device Type|Reorder|    Family|\n");
+        "|ID|        Device Type|Reorder|    Family|FP16 GEMM|\n");
     GGML_LOG_INFO(
-        "|--|-------------------|-------|----------|\n");
+        "|--|-------------------|-------|----------|---------|\n");
     std::map<std::string, size_t> DeviceNums;
     for (int id = 0; id < device_count; ++id) {
       sycl::device device = dpct::dev_mgr::instance().get_device(id);
@@ -304,9 +307,10 @@ static void print_device_opt_feature(int device_count) {
                   << "]";
       std::string device_type_s = device_type.str();
       device_type_s = std::regex_replace(device_type_s, std::regex("ext_oneapi_"), "");
-      GGML_LOG_INFO("|%2d|%19s|%7s|%10s|\n", id, device_type_s.c_str(),
+      GGML_LOG_INFO("|%2d|%19s|%7s|%10s|%9s|\n", id, device_type_s.c_str(),
         ggml_sycl_info().devices[id].opt_feature.reorder ? "Y": "N",
-        get_xe_family_caps(ggml_sycl_info().devices[id].hw_info.xe_family).name);
+        get_xe_family_caps(ggml_sycl_info().devices[id].hw_info.xe_family).name,
+        ggml_sycl_info().devices[id].opt_feature.fp16_gemm ? "Y": "N");
     }
 
 }
@@ -406,6 +410,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+        g_ggml_sycl_fp16_gemm = ggml_sycl_get_env("GGML_SYCL_FP16_GEMM", 2);
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
         g_ggml_sycl_use_level_zero_api = ggml_sycl_get_env("GGML_SYCL_USE_LEVEL_ZERO_API", 1);
@@ -534,6 +539,7 @@ static void ggml_check_sycl() try {
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
+        GGML_LOG_INFO("  GGML_SYCL_FP16_GEMM: %d%s\n", g_ggml_sycl_fp16_gemm, g_ggml_sycl_fp16_gemm == 2 ? " (auto)" : "");
 
 #if defined(__INTEL_LLVM_COMPILER)
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_ESIMD: %d\n", g_ggml_sycl_enable_esimd);
@@ -2986,6 +2992,20 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// True if F16 and quantized weights should take the fp16 GEMM path on this device.
+// GGML_SYCL_FP16_GEMM=0/1 forces it, the default (2) picks per device.
+static bool ggml_sycl_use_fp16_gemm(int device) {
+    if (g_ggml_sycl_fp16_gemm == 0 || g_ggml_sycl_fp16_gemm == 1) {
+        return g_ggml_sycl_fp16_gemm == 1;
+    }
+#ifdef GGML_SYCL_F16
+    GGML_UNUSED(device);
+    return true;
+#else
+    return ggml_sycl_info().devices[device].opt_feature.fp16_gemm;
+#endif
+}
+
 // True if the src1 precision hint (op_params[3], see ggml_prec_set_src) allows converting src1 down to prec.
 static bool ggml_sycl_src1_prec_allows(const ggml_tensor * dst, ggml_prec prec) {
     const int32_t hint = ggml_get_op_params_i32(dst, 3);
@@ -3019,11 +3039,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
     // ldc == nrows of the matrix that cuBLAS writes into
     int ldc = id == ctx.device ? ne0 : row_diff; // used by MKL only
 
-#ifdef GGML_SYCL_F16
-    bool use_fp16 = true;  // TODO(Yu) SYCL capability check
-#else
-    bool use_fp16 = false;
-#endif
+    const bool use_fp16 = ggml_sycl_use_fp16_gemm(id);
 
 #if GGML_SYCL_DNNL && defined(GGML_SYCL_HAS_BF16)
     // Fast path for bf16 src0
