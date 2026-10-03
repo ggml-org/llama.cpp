@@ -440,8 +440,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.2c | Committed | f47e08d3b | Multiple serial scheduler children, exclusive submission/reentry gates, bounded vision borrowing, and capture/copy retirement; CPU/CUDA three-consumer and live shared-image controls pass. |
 | 7.3a | Committed | 74fc83338 | Zero-grant KV/graph suspension preserves the session, host frontiers and recurrent state while rejecting paused execution; resident/ring and auxiliary-cache qualifications pass. |
 | 7.3b | Committed | 2b3432c74 | Fresh phase grants, reconstructed mirrors, gated graph reservation and unchanged host/recurrent state; resumed prefill/decode comparisons, warm-capture retirement and memory checks pass. |
-| 7.3c | Ready for review | - | Full-parent suspended-KV vision borrowing, exclusive restoration admission, interruption/retry and terminal recovery; real image equivalence and CPU/CUDA memory checks pass. |
-| 7.4a-7.5c | Planned | - | Projector storage reload and qualified production vision remain pending. |
+| 7.3c | Committed | cace79b9b | Full-parent suspended-KV vision borrowing, exclusive restoration admission, interruption/retry and terminal recovery; real image equivalence and CPU/CUDA memory checks pass. |
+| 7.4a | Ready for review | - | Separate file source, stable tensor metadata and shared eager weight bindings; original CPU/CUDA embedding equivalence, shared-owner teardown and memory checks pass. |
+| 7.4b-7.5c | Planned | - | Explicit projector unload/reload, phase-grant coordination and qualified production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3894,3 +3895,44 @@ Projector weights and the explicitly accounted recurrent allocation remain outsi
 - Focused CUDA borrowing/recovery memcheck passes **1/83**; the real-model vision memcheck passes **13/225**, both with **zero memory-access errors**. The latter uses a zero-background resident control and `--continuation-tokens 1` to bound instrumentation cost while exercising all handoffs and injected failures. The normal populated-ring equivalence test still uses 16-token continuations. An earlier full-continuation instrumented run was stopped for cost and is not counted as a pass. Handled stock CUDA graph-update API errors are excluded from API-error reporting; memory-access checking remains enabled.
 
 Artifacts use `/tmp/vision-7.3c-*`, including `model-full.log`, `session-final.log`, `text-regression.log`, `resume-regression.log`, `mtp-regression.log`, `owner-memcheck.log`, and `session-short-memcheck.log`. Stage 7.3c is staged for user review; production is restored with its existing image/configuration and unrelated benchmark artifacts remain untouched. No assistant commit or push is made.
+
+### Stage 7.4a: separate projector metadata and eager weight ownership
+
+Implemented in `tools/mtmd/mtmd-projector-storage.h/.cpp` and used by the existing CLIP loader. This is ownership preparation for 7.4b, not a runtime eviction feature. Successful loads still allocate the same eager backend tensor buffer and use the same tensor types, selection order and upload path.
+
+```mermaid
+flowchart TD
+    C[Projector context and model fields] --> M[Stable GGML tensor metadata]
+    C --> W[Shared resident weight owner]
+    W --> M
+    W --> B[Backend weight buffer]
+    M --> S[Shared file handle and copied source manifest]
+    R[Another retained owner] --> W
+```
+
+#### Ownership and loading
+
+- `mtmd_projector_source` copies tensor names, types, shapes, byte sizes and checked absolute file offsets from parsed GGUF metadata. It retains one binary file handle, independent of the loader and working directory. Modalities from the same loader share the source but keep their own selected tensors and backend buffers. File-cursor reads are serialized; unknown names, wrong payload sizes, unfinalized offsets and incomplete reads are rejected.
+- `mtmd_projector_metadata` owns the selected no-allocation GGML context and retains the source. Tensor objects stay at stable addresses while resident storage has a separate lifetime. The factory checks names, shapes, types, byte counts, contiguity and unbound descriptors. The model's hparams, preprocessing values and raw tensor references remain in the existing CLIP model.
+- `mtmd_projector_weights` owns the eager backend buffer and retains its metadata. Copying its shared owner does not duplicate weight storage. A second allocation against bound descriptors and callback reentry are rejected. Failed or cancelled candidates release their storage and clear bindings, including failures after partial loading; progress exceptions preserve the same cleanup.
+- CPU/host-visible buffers still receive direct file reads. Other backends use a temporary per-tensor upload buffer, discarded after loading. No permanent host copy of all projector weight bytes is introduced. The skipped-upload measurement mode still allocates the backend buffer as before; it does not execute an uninitialized model.
+- The projector drains/tears down its workspace and scheduler before returning its weight owner. If another owner remains, descriptors, the backend buffer and source remain alive. Returning the last resident owner releases the buffer before clearing descriptor `data`, `buffer` and `extra`; independently retained metadata remains valid and unbound. Callers must retire all execution/captures before returning that last owner.
+- `mtmd_acquire_projector_weights()` is an internal vision ownership seam, not a new public mtmd C API. Binding changes remain owner-thread-only; reference counting protects lifetime, not concurrent mutation.
+
+The loader's Gemma vision/audio clamp-scalar scans now iterate selected tensor descriptors in their original creation order. Host preprocessing vectors and scalars are read through the same checked source. Cancellation at the initial progress callback is now honored before allocating a candidate, and truncated uploads fail instead of publishing incomplete weight bytes.
+
+The retained source file must remain unchanged in place. Keeping its handle avoids reopening a potentially different pathname, but this stage does not hash or snapshot all weight bytes, nor promise recovery from external file modification. The source handle is closed when its last source/metadata owner is returned; platform file-sharing rules still apply.
+
+#### TDD and qualification
+
+- Initial source/metadata/resident tests were red against stub factories. The final focused suite passes **8 cases / 60 assertions** in Release, ASan with leak checking, UBSan and targeted TSan (`setarch x86_64 -R`). It covers loader/source independence, invalid descriptors, selected modality subsets, exact payload reads, shared buffer release exactly once, metadata surviving buffer release, allocation failure, truncated payloads, early/late cancellation, callback exceptions and reentry, temporary metadata lifetimes, skipped uploads, and concurrent reads sharing one cursor. This TSan result does not qualify parallel binding changes or GPU execution.
+- Before wiring the new owners into CLIP, the test saved image embeddings from the original eager loader on **CPU and CUDA**. The wired implementation matches each saved output **byte-for-byte** with the same Qwen3.8 F16 projector and a deterministic 256x256 image. Those real tests pass **9/76** on both backends and verify retained weights remain readable after projector scheduler/backend destruction, followed by unbound metadata and a still-readable source after the last weight owner is returned.
+- The real CUDA ownership/encoding test passes memcheck **9/76**, with **zero memory-access errors**. No target-model weight allocation is needed for this encoder-only test; the target model is loaded metadata-only. API-error reporting excludes handled stock CUDA graph-update fallback errors, not memory-access errors.
+- The existing populated-ring shared vision/text test remains **13/225**, with zero initial/follow-up/post-decode logit differences, identical recurrent bytes and matching 16-token continuations. Interrupted encoding and restoration/retry controls remain passing.
+- Existing CPU borrowed-workspace and session controls remain **11/113** and **12/146** under ASan/leak checking and UBSan. The new owner implementation also passes strict warning checks with conversion/sign-conversion warnings treated as errors. The complete CUDA server target is rebuilt.
+
+Artifacts are `/tmp/vision-7.4a-*`, including the original CPU/CUDA `.embd` snapshots, `real-cpu.log`, `real-cuda.log`, `real-cuda-memcheck.log`, `session-ring.log` and sanitizer storage logs. Production is restored and health checked using its existing image/configuration. Stage 7.4a is staged for user review without unrelated benchmark files; no assistant commit or push is made.
+
+#### Remaining boundary
+
+Stage 7.4b will add explicit live unload/reload, capture invalidation, drain/rebind ordering and stale-execution rejection. Stage 7.4c will coordinate those bindings with phase grants and recover failed reloads. Projector weights remain eagerly resident here; production vision and image-aware MTP remain guarded until their later qualifications.

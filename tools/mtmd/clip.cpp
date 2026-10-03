@@ -2,6 +2,7 @@
 #include "clip-impl.h"
 #include "clip-model.h"
 #include "clip-graph.h"
+#include "mtmd-projector-storage.h"
 #include "models/models.h"
 
 #include "ggml.h"
@@ -147,8 +148,8 @@ static void clip_image_convert_f32_to_u8(const clip_image_f32& src, clip_image_u
 struct clip_ctx {
     clip_model model;
 
-    gguf_context_ptr ctx_gguf;
-    ggml_context_ptr ctx_data;
+    std::shared_ptr<mtmd_projector_metadata> weight_metadata;
+    std::shared_ptr<mtmd_projector_weights> weights;
 
     std::vector<uint8_t> buf_compute_meta;
 
@@ -157,7 +158,6 @@ struct clip_ctx {
 
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
-    ggml_backend_buffer_ptr buf;
 
 
     int max_nodes = 8192;
@@ -236,7 +236,8 @@ struct clip_ctx {
     ~clip_ctx() {
         workspace.reset();
         sched.reset();
-        buf.reset();
+        weights.reset();
+        weight_metadata.reset();
         ggml_backend_free(backend);
         if (backend != backend_cpu) {
             ggml_backend_free(backend_cpu);
@@ -1176,6 +1177,7 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
 struct clip_model_loader {
     ggml_context_ptr ctx_meta;
     gguf_context_ptr ctx_gguf;
+    std::shared_ptr<const mtmd_projector_source> weight_source;
 
     std::string fname;
 
@@ -2174,11 +2176,8 @@ struct clip_model_loader {
     void load_tensors(clip_ctx & ctx_clip) {
         auto & model = ctx_clip.model;
         auto & hparams = model.hparams;
-        std::map<std::string, size_t> tensor_offset;
-        std::vector<ggml_tensor *> tensors_to_load;
-
-        auto fin = open_ifstream_binary(fname);
-        if (!fin) {
+        if (!weight_source) weight_source = mtmd_projector_source::open(fname.c_str(),ctx_gguf.get());
+        if (!weight_source) {
             throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
         }
 
@@ -2187,20 +2186,14 @@ struct clip_model_loader {
                              : model.modality == CLIP_MODALITY_GEN_AUDIO ? "a.gen.code"
                              : "v";
 
-        // get offsets
-        for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
-            const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
-            tensor_offset[name] = gguf_get_data_offset(ctx_gguf.get()) + gguf_get_tensor_offset(ctx_gguf.get(), i);
-        }
-
         // create data context
         struct ggml_init_params params = {
             /*.mem_size =*/ static_cast<size_t>(gguf_get_n_tensors(ctx_gguf.get()) + 1) * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc =*/ true,
         };
-        ctx_clip.ctx_data.reset(ggml_init(params));
-        if (!ctx_clip.ctx_data) {
+        ggml_context_ptr data_context(ggml_init(params));
+        if (!data_context) {
             throw std::runtime_error(string_format("%s: failed to init ggml context\n", __func__));
         }
 
@@ -2216,8 +2209,7 @@ struct clip_model_loader {
                 throw std::runtime_error(string_format("%s: unable to find tensor %s\n", __func__, name.c_str()));
             }
             if (cur) {
-                tensors_to_load.push_back(cur);
-                ggml_tensor * data_tensor = ggml_dup_tensor(ctx_clip.ctx_data.get(), cur);
+                ggml_tensor * data_tensor = ggml_dup_tensor(data_context.get(), cur);
                 ggml_set_name(data_tensor, cur->name);
                 loaded_tensor_names.insert(name);
                 cur = data_tensor;
@@ -2254,8 +2246,8 @@ struct clip_model_loader {
 
         auto get_vector = [&](const std::string & name) {
             std::vector<float> result;
-            auto it = tensor_offset.find(name);
-            if (it == tensor_offset.end()) {
+            const auto * entry = weight_source->find(name.c_str());
+            if (!entry) {
                 return result;
             }
 
@@ -2276,8 +2268,9 @@ struct clip_model_loader {
 
             const size_t n_elems = n_bytes / sizeof(float);
             result.resize(n_elems);
-            fin.seekg(it->second, std::ios::beg);
-            fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            if (!weight_source->read(name.c_str(),result.data(),n_bytes)) {
+                throw std::runtime_error(string_format("%s: failed to read tensor %s\n",__func__,name.c_str()));
+            }
             return result;
         };
 
@@ -2680,7 +2673,8 @@ struct clip_model_loader {
                     model.std_bias  = get_tensor(TN_STD_BIAS,  false);
                     model.std_scale = get_tensor(TN_STD_SCALE, false);
                     // load scalar for Gemma4ClippableLinear
-                    for (auto * tensor : tensors_to_load) {
+                    for (auto * tensor = ggml_get_first_tensor(data_context.get()); tensor;
+                            tensor = ggml_get_next_tensor(data_context.get(),tensor)) {
                         std::string name = tensor->name;
                         if (string_ends_with(name, ".weight")) {
                             std::string name_inp_max = name;
@@ -3403,7 +3397,8 @@ struct clip_model_loader {
                     }
 
                     // Load clamp info for ClippableLinear AFTER all tensors are loaded
-                    for (auto * tensor : tensors_to_load) {
+                    for (auto * tensor = ggml_get_first_tensor(data_context.get()); tensor;
+                            tensor = ggml_get_next_tensor(data_context.get(),tensor)) {
                         std::string name = tensor->name;
                         if (string_ends_with(name, ".weight")) {
                             std::string name_inp_max = name;
@@ -3686,62 +3681,17 @@ struct clip_model_loader {
                 GGML_ASSERT(false && "unknown projector type");
         }
 
-        // load data
-        {
-            std::vector<uint8_t> read_buf;
-
-            // start loading event
-            if (progress_callback){
-                progress_callback(0.0, progress_callback_user_data);
-            }
-
-            // compute total tensor data size for progress reporting
-            size_t total_data_size = 0;
-            for (auto & t : tensors_to_load) {
-                total_data_size += ggml_nbytes(t);
-            }
-
-            // alloc memory and offload data
-            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            // read the weight from file
-            if (!ctx_clip.no_alloc) {
-                size_t data_loaded = 0;
-                for (auto & t : tensors_to_load) {
-                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
-                    GGML_ASSERT(cur && "tensor not found in ctx_data");
-                    auto it_off = tensor_offset.find(t->name);
-                    GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
-                    const size_t offset = it_off->second;
-                    fin.seekg(offset, std::ios::beg);
-                    if (!fin) {
-                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
-                    }
-                    size_t num_bytes = ggml_nbytes(cur);
-                    if (ggml_backend_buft_is_host(buft)) {
-                        // for the CPU and Metal backend, we can read directly into the tensor
-                        fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
-                    } else {
-                        // read into a temporary buffer first, then copy to device memory
-                        read_buf.resize(num_bytes);
-                        fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
-                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
-                    }
-                    data_loaded += num_bytes;
-                    if (progress_callback && total_data_size > 0) {
-                        const float progress = (float)data_loaded / (float)total_data_size;
-                        if (!progress_callback(progress, progress_callback_user_data)) {
-                            throw std::runtime_error(string_format("%s: model loading cancelled by progress_callback\n", __func__));
-                        }
-                    }
-                }
-                LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
-            } else {
-                LOG_DBG("%s: no_alloc is set, skipping tensor data loading (%zu tensors)\n", __func__, tensors_to_load.size());
-            }
-            fin.close();
+        ctx_clip.weight_metadata = mtmd_projector_metadata::create(std::move(data_context),weight_source);
+        if (!ctx_clip.weight_metadata) {
+            throw std::runtime_error(string_format("%s: invalid projector tensor metadata\n",__func__));
         }
+        ctx_clip.weights = mtmd_projector_weights::allocate(ctx_clip.weight_metadata,
+            ggml_backend_get_default_buffer_type(ctx_clip.backend),ctx_clip.no_alloc,progress_callback,progress_callback_user_data);
+        if (!ctx_clip.weights) {
+            throw std::runtime_error(string_format("%s: failed to allocate or load projector weights\n",__func__));
+        }
+        LOG_DBG("%s: %s %zu tensors from %s\n",__func__,ctx_clip.no_alloc ? "allocated without uploading" : "loaded",
+            loaded_tensor_names.size(),fname.c_str());
 
     }
 
@@ -4143,6 +4093,11 @@ void clip_free(clip_ctx * ctx) {
         return;
     }
     delete ctx;
+}
+
+// Retained bindings outlive the scheduler; shared owners also retain tensor descriptors and the file source.
+std::shared_ptr<const mtmd_projector_weights> clip_acquire_projector_weights(const clip_ctx * ctx) noexcept {
+    return ctx ? ctx->weights : nullptr;
 }
 
 const char * clip_patch_merge_type(const struct clip_ctx * ctx) {

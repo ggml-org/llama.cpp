@@ -22,6 +22,8 @@ add_library(mtmd
             mtmd-session.h
             mtmd-workspace.cpp
             mtmd-workspace.h
+            mtmd-projector-storage.cpp
+            mtmd-projector-storage.h
             mtmd.h
             mtmd-internal.h
             mtmd-helper.cpp

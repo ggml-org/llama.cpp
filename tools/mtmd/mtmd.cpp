@@ -6,6 +6,7 @@
 #include "mtmd-image.h"
 #include "mtmd-workspace.h"
 #include "mtmd-embeddings.h"
+#include "mtmd-projector-storage.h"
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
@@ -2180,6 +2181,11 @@ bool mtmd_borrow_compute_workspace(mtmd_context * ctx,llama_context_memory & par
 
 bool mtmd_release_compute_workspace(mtmd_context * ctx) {
     return ctx && ctx->ctx_v && clip_release_compute_workspace(ctx->ctx_v);
+}
+
+// Internal vision owner borrow; metadata and backend storage share the returned lifetime.
+std::shared_ptr<const mtmd_projector_weights> mtmd_acquire_projector_weights(const mtmd_context * ctx) noexcept {
+    return ctx && ctx->ctx_v ? clip_acquire_projector_weights(ctx->ctx_v) : nullptr;
 }
 
 // Retain host rows without retaining the projector, scheduler, batch, or input chunk.
