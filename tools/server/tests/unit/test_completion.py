@@ -442,6 +442,24 @@ def test_completion_response_fields(
         assert "generation_settings" in res.body
 
 
+@pytest.mark.parametrize("field,extra", [
+    ("repeat_last_n", {"repeat_penalty": 1.1}),
+    ("dry_penalty_last_n", {"dry_multiplier": 1.0, "dry_base": 1.1}),
+])
+def test_completion_penalty_last_n_capped(field: str, extra: dict):
+    global server
+    server.start()
+    n_ctx_slot = server.make_request("GET", "/props").body["default_generation_settings"]["n_ctx"]
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "n_predict": 1,
+        field: 100000,
+        **extra,
+    })
+    assert res.status_code == 200
+    assert res.body["generation_settings"][field] == n_ctx_slot
+
+
 def test_n_probs():
     global server
     server.start()
