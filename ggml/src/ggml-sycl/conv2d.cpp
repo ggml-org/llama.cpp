@@ -11,6 +11,8 @@ struct conv2d_params {
     const int64_t IC, OC;
     const int64_t B;
     const int64_t TOTAL;
+    const int64_t IN_S0, IN_S1, IN_S2, IN_S3;
+    const int64_t K_S0, K_S1, K_S2, K_S3;
 };
 
 struct conv2d_kernel_bounds {
@@ -40,13 +42,13 @@ static inline int calculate_input_coord(int64_t out_coord, int64_t kern_coord, i
     return out_coord * stride + kern_coord * dilation - padding;
 }
 
-// whcn layout helpers (matching ggml tensor memory order)
+// whcn index helpers, input and kernel use element strides so permuted (e.g. cwhn) views work
 static inline int64_t whcn_input_index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
-    return n * (P.IC * P.IW * P.IH) + c * P.IW * P.IH + y * P.IW + x;
+    return n * P.IN_S3 + c * P.IN_S2 + y * P.IN_S1 + x * P.IN_S0;
 }
 
 static inline int64_t whcn_kernel_index(int64_t c_out, int64_t c_in, int64_t ky, int64_t kx, const conv2d_params & P) {
-    return c_out * (P.IC * P.KH * P.KW) + c_in * (P.KH * P.KW) + ky * P.KW + kx;
+    return c_out * P.K_S3 + c_in * P.K_S2 + ky * P.K_S1 + kx * P.K_S0;
 }
 
 static inline int64_t whcn_output_index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
@@ -108,7 +110,7 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const float *       X_D    = (const float *) input->data;
     float *             Y_D    = (float *) dst->data;
 
-    GGML_ASSERT(ggml_is_contiguous(kernel));
+    GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
     GGML_ASSERT(input->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -140,7 +142,13 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int B  = input->ne[3];
 
     const int64_t     total  = (int64_t) B * OC * OH * OW;
-    const conv2d_params params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
+    const size_t        its    = sizeof(float);
+    const size_t        kts    = ggml_type_size(kernel->type);
+    const conv2d_params params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total,
+                                   (int64_t) (input->nb[0] / its), (int64_t) (input->nb[1] / its),
+                                   (int64_t) (input->nb[2] / its), (int64_t) (input->nb[3] / its),
+                                   (int64_t) (kernel->nb[0] / kts), (int64_t) (kernel->nb[1] / kts),
+                                   (int64_t) (kernel->nb[2] / kts), (int64_t) (kernel->nb[3] / kts) };
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_sycl<sycl::half>(X_D, (const sycl::half *) K_D, Y_D, params, stream);
