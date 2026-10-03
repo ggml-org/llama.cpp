@@ -359,7 +359,7 @@ def test_anthropic_tool_result_with_text():
 
     This tests the edge case where a user message contains both text and
     tool_result blocks. The server must properly split these into separate
-    messages: a user message with text, followed by tool messages.
+    messages: tool messages, followed by a user message with the text.
     Without proper handling, this would fail with 500: "unsupported content[].type"
     """
     server.jinja = True
@@ -398,6 +398,54 @@ def test_anthropic_tool_result_with_text():
     assert res.status_code == 200
     assert res.body["type"] == "message"
     assert len(res.body["content"]) > 0
+
+
+def test_anthropic_tool_result_before_text_in_prompt(monkeypatch):
+    """Text that follows tool_result blocks must follow the tool results in the prompt
+
+    The Anthropic API puts tool_result blocks first in a user message; text after
+    them is the next user turn (Claude Code sends its compaction request this way).
+    Rendering that text before the tool results makes the model answer the tool
+    result instead of the text.
+    """
+    monkeypatch.setenv("LLAMA_SERVER_SLOTS_DEBUG", "1")  # to get the prompt from /slots
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.server_slots = True
+    server.start()
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 1,
+        "tools": [{
+            "name": "get_weather",
+            "description": "Get the weather",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}
+        }],
+        "messages": [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tool_1", "name": "get_weather", "input": {"location": "Paris"}}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "tool_1", "content": "Sunny, 25 degrees"},
+                    {"type": "text", "text": "Now summarize this conversation."}
+                ]
+            }
+        ]
+    })
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.body}"
+
+    res = server.make_request("GET", "/slots")
+    assert res.status_code == 200
+    prompt = res.body[0]["prompt"]
+    assert "Sunny, 25 degrees" in prompt and "Now summarize this conversation." in prompt, prompt
+    assert prompt.index("Sunny, 25 degrees") < prompt.index("Now summarize this conversation."), prompt
 
 
 def test_anthropic_tool_result_with_image():

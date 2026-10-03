@@ -521,6 +521,10 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                 }
             }
 
+            for (const auto & tool_msg : tool_results) {
+                oai_messages.push_back(tool_msg);
+            }
+
             if (!converted_content.empty() || has_tool_calls || !reasoning_content.empty()) {
                 json new_msg = {{"role", role}};
                 if (!converted_content.empty()) {
@@ -535,10 +539,6 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                     new_msg["reasoning_content"] = reasoning_content;
                 }
                 oai_messages.push_back(new_msg);
-            }
-
-            for (const auto & tool_msg : tool_results) {
-                oai_messages.push_back(tool_msg);
             }
         }
     }
