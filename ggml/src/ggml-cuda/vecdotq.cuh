@@ -700,6 +700,25 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
         const int u2 = get_int_b4(bq8_1_chunk->qs, j*4+2);
         const int u3 = get_int_b4(bq8_1_chunk->qs, j*4+3);
 
+#if defined(GGML_USE_HIP)
+        const uint32_t q_bits = (uint16_t) q;
+
+        // Expand each group of four Q1_0 bits into byte selectors for v_perm_b32.
+        const uint32_t q0_bits = q_bits >>  0;
+        const uint32_t q1_bits = q_bits >>  4;
+        const uint32_t q2_bits = q_bits >>  8;
+        const uint32_t q3_bits = q_bits >> 12;
+
+        const uint32_t q0_indices = (q0_bits & 0x01) | ((q0_bits & 0x02) << 7) | ((q0_bits & 0x04) << 14) | ((q0_bits & 0x08) << 21);
+        const uint32_t q1_indices = (q1_bits & 0x01) | ((q1_bits & 0x02) << 7) | ((q1_bits & 0x04) << 14) | ((q1_bits & 0x08) << 21);
+        const uint32_t q2_indices = (q2_bits & 0x01) | ((q2_bits & 0x02) << 7) | ((q2_bits & 0x04) << 14) | ((q2_bits & 0x08) << 21);
+        const uint32_t q3_indices = (q3_bits & 0x01) | ((q3_bits & 0x02) << 7) | ((q3_bits & 0x04) << 14) | ((q3_bits & 0x08) << 21);
+
+        const int v0 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q0_indices);
+        const int v1 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q1_indices);
+        const int v2 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q2_indices);
+        const int v3 = __builtin_amdgcn_perm(0x000001FF, 0x000001FF, q3_indices);
+#else
         // unpack crumbs into nibble indices
         const int n0 = __byte_perm(0x11100100, 0x11100100, q >> 0); // [0, 1, 4, 5] [ 8,  9, 12, 13]
         const int n1 = __byte_perm(0x11100100, 0x11100100, q >> 2); // [2, 3, 6, 7] [10, 11, 14, 15]
@@ -713,6 +732,7 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
         const int v1 = __byte_perm(s0, s1, 0x7632);
         const int v2 = __byte_perm(s2, s3, 0x5410);
         const int v3 = __byte_perm(s2, s3, 0x7632);
+#endif // defined(GGML_USE_HIP)
 
         sumi = ggml_cuda_dp4a(v0, u0, sumi);
         sumi = ggml_cuda_dp4a(v1, u1, sumi);
