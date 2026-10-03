@@ -12,6 +12,10 @@ jobs:
   build:
     runs-on: ubuntu-slim
 
+    permissions:
+      actions: write
+      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

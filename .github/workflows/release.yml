@@ -41,6 +41,9 @@ jobs:
   check-release:
     runs-on: ubuntu-slim
 
+    permissions:
+      contents: write
+
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       tag_name: ${{ steps.tag.outputs.name }}
@@ -466,8 +469,8 @@ jobs:
 
     runs-on: ubuntu-24.04  # previously ubuntu-latest
 
-    #permissions:
-    #  actions: write
+    permissions:
+      actions: write
 
     env:
       NDK_VERSION: "29.0.14206865"
@@ -555,6 +558,9 @@ jobs:
     runs-on: ubuntu-latest
     container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
 
+    permissions:
+      actions: write
+
     defaults:
       run:
         shell: bash
@@ -607,6 +613,9 @@ jobs:
 
     runs-on: ubuntu-latest
     container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
+
+    permissions:
+      actions: write
 
     defaults:
       run:
@@ -773,6 +782,9 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     outputs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
@@ -968,6 +980,9 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -1323,6 +1338,9 @@ jobs:
 
     runs-on: windows-2022
 
+    permissions:
+      actions: write
+
     defaults:
       run:
         shell: bash
@@ -1435,6 +1453,9 @@ jobs:
             fp16: ON
 
     runs-on: ubuntu-24.04
+
+    permissions:
+      actions: write
 
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
@@ -1638,6 +1659,9 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
+    permissions:
+      actions: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1713,6 +1737,8 @@ jobs:
 #            build: 'Release'
 #            use_acl_graph: 'off'
 #    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+#    permissions:
+#      actions: write
 #    steps:
 #      - name: Checkout
 #        uses: actions/checkout@v6
