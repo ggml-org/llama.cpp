@@ -42,6 +42,7 @@ export enum MessageRole {
  * Message types for different content kinds.
  */
 export enum MessageType {
+	COMPACTION = 'compaction',
 	ROOT = 'root',
 	SYSTEM = 'system',
 	TEXT = 'text',
@@ -80,6 +81,7 @@ export enum PdfViewMode {
 }
 
 export enum ChatFormCommandAction {
+	COMPACT = 'compact',
 	CWD = 'cwd',
 	MODEL = 'model',
 	PROMPT = 'prompt'
