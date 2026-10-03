@@ -65,6 +65,34 @@ class LFM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("KaniTTS2ForCausalLM")
+@ModelBase.example("nineninesix/kani-tts-2-en")
+class KaniTTS2Model(LFM2Model):
+    model_arch = gguf.MODEL_ARCH.LFM2
+
+    def set_gguf_parameters(self):
+        if (self.hparams.get("tokens_per_frame") != 4 or self.hparams.get("audio_step") != 1.0
+                or self.hparams.get("text_vocab_size") != 64400 or self.hparams.get("vocab_size") != 80538
+                or not self.hparams.get("use_learnable_rope")):
+            raise ValueError("Unsupported KaniTTS-2 audio configuration")
+        super().set_gguf_parameters()
+        head_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+        self.gguf_writer.add_rope_dimension_sections([0, head_dim // 2, 0, 0])
+        self.gguf_writer.add_string("lfm2.tts.model", "kani-tts-2")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("model.learnable_rope_layers."):
+            layer = int(name.split(".")[2])
+            alpha = self.hparams["alpha_min"] + (self.hparams["alpha_max"] - self.hparams["alpha_min"]) * torch.sigmoid(data_torch.float())
+            head_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+            yield f"blk.{layer}.attn_rope_freqs.weight", (1.0 / alpha).expand(head_dim // 2).clone()
+            return
+        if name == "model.speaker_emb_projection.weight":
+            # The speaker projection is stored in the mmproj.
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel")
 @ModelBase.example("LiquidAI/LFM2.5-ColBERT-350M", "LiquidAI/LFM2.5-Embedding-350M")
 class LFM2ColBertModel(LFM2Model):
