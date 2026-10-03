@@ -64,10 +64,19 @@ export function configuredContext(option: ModelOption): number | null {
 		: null;
 }
 
-export function modelSupports(option: ModelOption, capability: ModelCapability): boolean {
+/**
+ * Capability a model reports: true or false once its listing or its chat template
+ * answers, null while the Hub record that carries the template is not read yet.
+ */
+export function modelCapability(option: ModelOption, capability: ModelCapability): boolean | null {
 	if (option.capabilities.includes(capability)) return true;
 
-	const template = HuggingFaceService.cachedDetails(option.model)?.gguf?.chat_template ?? '';
+	const details = HuggingFaceService.cachedDetails(option.model);
+
+	// only the chat template answers this, and it arrives with the Hub record
+	if (details === undefined) return null;
+
+	const template = details?.gguf?.chat_template ?? '';
 
 	return capability === ModelCapability.TOOL_USE
 		? detectToolUseSupport(template)
