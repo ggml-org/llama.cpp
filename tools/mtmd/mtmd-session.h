@@ -60,7 +60,7 @@ MTMD_API int32_t mtmd_session_eval_chunks(mtmd_context * ctx, llama_context * lc
     const mtmd_input_chunks * chunks, llama_pos n_past, llama_seq_id seq_id, int32_t n_batch,
     bool logits_last, llama_pos * new_n_past);
 
-// Opt-in internal adapter: vision borrows bounded target scratch and returns it before embedding prefill.
+// Opt-in adapter: suspend target KV, borrow reclaimed storage, then resume before embedding prefill.
 MTMD_API int32_t mtmd_session_eval_chunks_shared(mtmd_context * ctx, llama_context * lctx,
     const mtmd_input_chunks * chunks, llama_pos n_past, llama_seq_id seq_id, int32_t n_batch,
     bool logits_last, llama_pos * new_n_past);

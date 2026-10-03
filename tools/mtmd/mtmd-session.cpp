@@ -169,16 +169,32 @@ struct session_adapter : mtmd_session_backend {
         }
         struct workspace_return {
             mtmd_context * ctx = nullptr;
-            ~workspace_return() { if (ctx) mtmd_release_compute_workspace(ctx); }
+            llama_context * target = nullptr;
+            // Release vision addresses before rebuilding target graphs, including failure exits.
+            bool finish() noexcept {
+                auto * vision = ctx; ctx = nullptr;
+                auto * text = target; target = nullptr;
+                try {
+                    if (vision && !mtmd_release_compute_workspace(vision)) return false;
+                    return !text || llama_context_resume_kv_device(text,llama_memory_text_phase::prefill);
+                } catch (...) { return false; }
+            }
+            ~workspace_return() { finish(); }
         } returned;
         if (shared) {
             auto * parent = llama_context_compute_memory(lctx);
             auto * buffer = parent ? parent->shared_parent() : nullptr;
-            if (!buffer) return -1;
-            returned.ctx = ctx;
+            if (!buffer || !parent->valid() || parent->kv_device_suspended()) return -1;
             std::vector<ggml_backend_memory_workspace_group> groups;
-            if (!mtmd_batch_measure_compute_workspace(batch.get(), groups, ggml_backend_buffer_get_type(buffer)) ||
-                    !mtmd_borrow_compute_workspace(ctx, *parent)) return -1;
+            if (!mtmd_batch_measure_compute_workspace(batch.get(), groups, ggml_backend_buffer_get_type(buffer))) return -1;
+            for (const auto & group : groups)
+                if (group.buft == ggml_backend_buffer_get_type(buffer) && group.size > ggml_backend_buffer_get_size(buffer)) return -1;
+            if (parent->shares_kv_memory()) {
+                if (!llama_context_suspend_kv_device(lctx)) return -1;
+                returned.target = lctx;
+            }
+            returned.ctx = ctx;
+            if (!mtmd_borrow_compute_workspace(ctx, *parent)) return -1;
         }
         const auto result = mtmd_batch_encode(batch.get());
         if (result) return result;
@@ -187,10 +203,7 @@ struct session_adapter : mtmd_session_backend {
             if (!mtmd_batch_acquire_output_embd(batch.get(), chunk, view)) return -1;
             outputs.push_back(std::move(view));
         }
-        if (returned.ctx) {
-            if (!mtmd_release_compute_workspace(ctx)) return -1;
-            returned.ctx = nullptr;
-        }
+        if (!returned.finish()) return -1;
         return 0;
     }
 
@@ -211,7 +224,7 @@ struct session_adapter : mtmd_session_backend {
 };
 }
 
-// Continue the supplied prefix; shared mode borrows vision scratch only during encoding.
+// Continue the supplied prefix; shared encoding returns all target KV grants until host outputs are retained.
 static int32_t session_eval_chunks(mtmd_context * ctx, llama_context * lctx, const mtmd_input_chunks * input,
         llama_pos n_past, llama_seq_id seq_id, int32_t n_batch, bool logits_last, llama_pos * new_n_past, bool shared) {
     if (!ctx || !lctx || !input || !new_n_past || n_past < 0 || seq_id < 0 || n_batch <= 0 ||

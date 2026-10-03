@@ -40,8 +40,8 @@ public:
     static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
             const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
-            llama_context_memory * serial_parent = nullptr);
-    // Borrow measured prefill scratch from one serial parent; persistent KV is never part of this grant.
+            llama_context_memory * serial_parent = nullptr, bool suspended_workspace = false);
+    // Borrow measured scratch, or the full parent after explicit KV suspension. Return grants before resume.
     LLAMA_API static std::unique_ptr<llama_context_memory> borrow_workspace(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
             const std::vector<ggml_backend_memory_workspace_group> & groups,
@@ -64,6 +64,8 @@ public:
     // Return KV and graph grants while retaining the shared parent and authoritative host state.
     LLAMA_API bool suspend_kv(llama_memory_executor_backend * auxiliary_completion = nullptr) noexcept;
     LLAMA_API bool kv_device_suspended() const noexcept;
+    // A failed reverse transition closes this owner permanently; recreate the context to recover.
+    LLAMA_API bool valid() const noexcept;
     // Acquire a fresh measured layout for a suspended target; ordinary execution never resumes implicitly.
     // Optional rebuild runs under the submission gate and must not execute graphs or change persistent data.
     LLAMA_API bool resume_kv(llama_memory_text_phase phase, const std::function<bool()> & rebuild = {}) noexcept;

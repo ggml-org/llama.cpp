@@ -22,7 +22,7 @@ public:
     bool measure(ggml_cgraph * graph, std::vector<ggml_backend_memory_workspace_group> & output);
     // Borrow one committed lease per measured canonical buffer-type group.
     bool attach(const std::vector<ggml_backend_memory_lease_t> & leases);
-    // Borrow measured scratch through the target's exclusive serial owner.
+    // Borrow measured scratch, including reclaimed KV storage while the target is explicitly suspended.
     bool borrow(llama_context_memory & parent);
     // Check the actual graph against its grants before allocating tensor addresses.
     bool alloc_graph(ggml_cgraph * graph);

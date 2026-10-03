@@ -439,8 +439,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.2b | Committed | 02d9f199c | Adaptive embedding admission separates dense physical KV rows from repeated/gapped M-RoPE positions; resident/ring image controls, checkpoint/suffix handling and numerical/memory regressions pass. |
 | 7.2c | Committed | f47e08d3b | Multiple serial scheduler children, exclusive submission/reentry gates, bounded vision borrowing, and capture/copy retirement; CPU/CUDA three-consumer and live shared-image controls pass. |
 | 7.3a | Committed | 74fc83338 | Zero-grant KV/graph suspension preserves the session, host frontiers and recurrent state while rejecting paused execution; resident/ring and auxiliary-cache qualifications pass. |
-| 7.3b | Ready for review | - | Fresh phase grants, reconstructed mirrors, gated graph reservation and unchanged host/recurrent state; resumed prefill/decode comparisons, warm-capture retirement and memory checks pass. |
-| 7.3c-7.5c | Planned | - | Broader interruption/recovery and suspended-KV vision borrowing, projector reload and production vision remain pending. |
+| 7.3b | Committed | 2b3432c74 | Fresh phase grants, reconstructed mirrors, gated graph reservation and unchanged host/recurrent state; resumed prefill/decode comparisons, warm-capture retirement and memory checks pass. |
+| 7.3c | Ready for review | - | Full-parent suspended-KV vision borrowing, exclusive restoration admission, interruption/retry and terminal recovery; real image equivalence and CPU/CUDA memory checks pass. |
+| 7.4a-7.5c | Planned | - | Projector storage reload and qualified production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3857,3 +3858,39 @@ Artifacts: `/tmp/vision-7.3b-resume-red.log`, `/tmp/vision-7.3b-prefill-control.
 Stage 7.3c still owns the expanded interruption/recovery matrix and integration of vision with the reclaimed suspended-KV capacity. Projector weights remain eager, image-aware MTP is not admitted, and production vision stays guarded. No resume CLI/server option is added. Ownership and reconstruction are backend-neutral; real accelerator qualification here remains CUDA.
 
 Stage 7.3b is staged for user review without unrelated benchmark files. Production is restored and health checked with its existing image/configuration. No assistant commit or push is made.
+
+### Stage 7.3c: interrupted handoff and reclaimed-KV vision borrowing
+
+The opt-in internal image-session adapter now uses the full retained device parent while target KV is suspended, instead of borrowing only the scratch prefix before live KV. The first lower-level test rejected this borrow on the old implementation; the real-model test then detected that vision was still running without target suspension. No attention kernel or numerical tolerance changes are part of this stage.
+
+#### Ownership and execution order
+
+```mermaid
+flowchart LR
+    A[Measure actual vision batch] --> B[Drain target and suspend KV grants]
+    B --> C[Borrow bounded parent storage for vision]
+    C --> D[Encode and retain host embeddings]
+    D --> E[Drain vision and return its grants]
+    E --> F[Resume target with fresh prefill grants and graphs]
+    F --> G[Prefill image embeddings in prompt order]
+```
+
+- Measurement and oversized-batch rejection happen before eviction. Borrowing reclaimed KV space requires an explicitly suspended, valid parent with zero target grants and no child grants. The shared parent allocation does not grow or get replaced.
+- The borrower is prefill-only. It can use the reclaimed KV bytes as discardable vision workspace, but cannot restore target KV or execute target attention. Constructor callbacks, computation, handoff and restoration share the existing owner-thread submission gate.
+- Target resume rejects any child still holding workspace leases, even if its native executable has already been retired. Returning vision grants drains its scheduler and retires captures before target addresses are rebuilt.
+- The adapter retains image embeddings on the host, releases vision storage, and calls the real context resume seam, including phase-specific graph reservation, before embedding prefill. Encoding errors and exceptions use the same scoped cleanup. Restoration failure stops the request; no later embedding or text step runs.
+- Cancellation still follows the session planner's existing rule: an active callback completes its cleanup before cancellation takes effect. Earlier committed text remains committed; cancelled future image outputs are discarded. This is not an asynchronous interruption of an in-flight GPU kernel.
+- A recoverable allocation/rebind failure leaves either the previous active layout or a safe zero-grant suspended layout. A failed reverse transition, or inability to close a failed reconstruction, permanently closes owner admission; `valid()` reports this condition and the caller must recreate that context. It is not reopened by another suspend, resume, phase signal or borrower.
+
+Projector weights and the explicitly accounted recurrent allocation remain outside these reclaimed KV/graph grants. Projector weight unload/reload is still stage 7.4, and production vision/image-aware MTP admission is still stage 7.5. No server guard is lifted or new CLI option added here. The handoff uses backend-neutral leases, transitions and scheduler lifetimes; real accelerator qualification remains CUDA.
+
+#### Validation
+
+- CUDA suspension/borrowing test: **1 case / 83 assertions**. It covers full-parent grants beyond the old scratch allowance, oversized rejection, injected borrower allocation failure, callback reentry, premature resume and decode rejection, return after cancellation/completion, retryable resume failure, repeated transitions, unchanged host bytes/frontier/cache identity, and terminal reverse-drain failure.
+- Full CUDA model suite: **16 cases / 646 assertions**. Existing auxiliary-cache, MTP lease/publication/cancellation and phase-resize controls remain passing.
+- Real IQ4_XS Q8_0/Q4_0 text regression: **5/561**; resume regression: **5/317**; embedded-MTP regression: **2/246**. Their previous numerical and recurrent-state checks remain passing.
+- The real shared-vision test passes **13/225** with a populated streaming cache and a 96 MiB shared parent. Initial images, follow-up images and images after decode have **zero maximum logit difference**, identical recurrent bytes and identical 16-token continuations versus the ordinary adapter. It also tests an interrupted encoder and a restoration allocation failure, followed by explicit resume and successful reuse.
+- Existing serial-owner CUDA and vision-workspace controls pass **8/686** and **11/113**. CPU owner, workspace and session tests pass ASan with leak checking and UBSan; the generic transition suite passes **21/454** under both sanitizers.
+- Focused CUDA borrowing/recovery memcheck passes **1/83**; the real-model vision memcheck passes **13/225**, both with **zero memory-access errors**. The latter uses a zero-background resident control and `--continuation-tokens 1` to bound instrumentation cost while exercising all handoffs and injected failures. The normal populated-ring equivalence test still uses 16-token continuations. An earlier full-continuation instrumented run was stopped for cost and is not counted as a pass. Handled stock CUDA graph-update API errors are excluded from API-error reporting; memory-access checking remains enabled.
+
+Artifacts use `/tmp/vision-7.3c-*`, including `model-full.log`, `session-final.log`, `text-regression.log`, `resume-regression.log`, `mtp-regression.log`, `owner-memcheck.log`, and `session-short-memcheck.log`. Stage 7.3c is staged for user review; production is restored with its existing image/configuration and unrelated benchmark artifacts remain untouched. No assistant commit or push is made.

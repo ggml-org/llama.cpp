@@ -11,6 +11,27 @@
 #include "../src/llama-memory-hybrid.h"
 #include "../src/llama-kv-stream-model.h"
 #include "../src/llama-io.h"
+#include "../ggml/src/ggml-backend-impl.h"
+
+struct vision_restore_fault {
+    using factory = ggml_backend_buffer_t (*)(ggml_backend_buffer_t,size_t,size_t);
+    inline static vision_restore_fault * active = nullptr;
+    ggml_backend_buffer_t parent;
+    factory original;
+    size_t calls = 0;
+    explicit vision_restore_fault(ggml_backend_buffer_t parent) : parent(parent),original(parent->view_buffer) {}
+    void arm() {
+        GGML_ASSERT(!active); active = this;
+        parent->view_buffer = [](ggml_backend_buffer_t parent,size_t offset,size_t size) {
+            if (++active->calls == 1) return ggml_backend_buffer_t(nullptr);
+            return active->original(parent,offset,size);
+        };
+    }
+    ~vision_restore_fault() {
+        parent->view_buffer = original;
+        active = nullptr;
+    }
+};
 
 struct session_recurrent_snapshot : llama_io_write_i {
     std::vector<uint8_t> bytes;
@@ -103,6 +124,7 @@ int main(int argc, char ** argv) {
     size_t stream_pool_mib = 0;
     size_t shared_budget_mib = 0;
     size_t prefix_repetitions = 6000;
+    size_t continuation_tokens = 16;
     bool resident_control = false;
     bool shared_vision = false;
     for (int i = 1; i < argc; ++i) {
@@ -112,12 +134,15 @@ int main(int argc, char ** argv) {
         else if (!std::strcmp(argv[i], "--resident-control")) resident_control = true;
         else if (!std::strcmp(argv[i], "--shared-vision")) shared_vision = true;
         else if (!std::strcmp(argv[i], "--prefix-repetitions") && i + 1 < argc) prefix_repetitions = std::stoull(argv[++i]);
+        else if (!std::strcmp(argv[i], "--continuation-tokens") && i + 1 < argc) continuation_tokens = std::stoull(argv[++i]);
         else if (!std::strcmp(argv[i], "--model") && i + 1 < argc) model_path = argv[++i];
         else if (!std::strcmp(argv[i], "--mmproj") && i + 1 < argc) projector_path = argv[++i];
         else return 2;
     }
     const bool adaptive = stream_pool_mib || shared_budget_mib;
-    if ((adaptive && !cuda) || (stream_pool_mib && shared_budget_mib) || prefix_repetitions > 6000) return 2;
+    const bool suspended_vision = shared_vision && shared_budget_mib;
+    if ((adaptive && !cuda) || (stream_pool_mib && shared_budget_mib) || prefix_repetitions > 6000 ||
+            !continuation_tokens || continuation_tokens > 16) return 2;
     const auto evaluate = shared_vision ? mtmd_session_eval_chunks_shared : mtmd_session_eval_chunks;
     testing t;
     t.test("future_images_are_encoded_together_but_prefilled_in_prompt_order", [](testing & t) {
@@ -332,6 +357,24 @@ int main(int argc, char ** argv) {
         llama_context_ptr target(llama_init_from_model(model.get(), context_params));
         if (!t.assert_true(bool(target))) return;
         auto params = mtmd_context_params_default();
+        struct vision_probe {
+            llama_context * target = nullptr;
+            size_t paused_calls = 0;
+            bool fail_once = false;
+            std::function<void()> on_encode;
+        } probe;
+        params.cb_eval_user_data = &probe;
+        params.cb_eval = [](ggml_tensor *, bool ask, void * data) {
+            auto & probe = *static_cast<vision_probe *>(data);
+            auto * owner = probe.target ? llama_context_compute_memory(probe.target) : nullptr;
+            if (ask && owner && owner->kv_device_suspended()) ++probe.paused_calls;
+            if (ask && probe.on_encode) probe.on_encode();
+            if (ask && probe.fail_once) {
+                probe.fail_once = false;
+                throw std::runtime_error("injected vision execution interruption");
+            }
+            return false;
+        };
         params.use_gpu = cuda; params.warmup = false; params.n_threads = 4;
         params.image_min_tokens = 64; params.image_max_tokens = 256;
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
@@ -397,7 +440,7 @@ int main(int argc, char ** argv) {
 #endif
         auto generate = [&](llama_pos position) {
             std::vector<llama_token> tokens;
-            for (size_t i = 0; i < 16; ++i) {
+            for (size_t i = 0; i < continuation_tokens; ++i) {
                 auto values = logits();
                 llama_token token = llama_token(std::max_element(values.begin(), values.end()) - values.begin());
                 tokens.push_back(token);
@@ -413,7 +456,7 @@ int main(int argc, char ** argv) {
             return tokens;
         };
         auto baseline_tokens = generate(baseline_position);
-        if (!t.assert_equal(size_t(16), baseline_tokens.size())) return;
+        if (!t.assert_equal(continuation_tokens, baseline_tokens.size())) return;
         const auto first_followup_position = baseline_position;
         llama_pos after_decode_position = baseline_position;
         std::vector<float> expected_after_decode;
@@ -423,24 +466,30 @@ int main(int argc, char ** argv) {
 #endif
         if (shared_vision) {
             if (!t.assert_equal(0, mtmd_helper_eval_chunks(vision.get(), target.get(), followup.get(),
-                    baseline_position + 16, 0, 32, true, &after_decode_position))) return;
+                    baseline_position + continuation_tokens, 0, 32, true, &after_decode_position))) return;
             expected_after_decode = logits();
 #if !defined(_WIN32) || !defined(LLAMA_SHARED)
             static_cast<llama_memory_hybrid *>(llama_get_memory(target.get()))->get_mem_recr()->state_write(expected_after_decode_recurrent, 0, 0);
 #endif
             expected_after_decode_tokens = generate(after_decode_position);
-            if (!t.assert_equal(size_t(16), expected_after_decode_tokens.size())) return;
+            if (!t.assert_equal(continuation_tokens, expected_after_decode_tokens.size())) return;
         }
         target.reset();
         context_params.kv_stream_pool_bytes = stream_pool_mib * 1048576;
         context_params.shared_device_memory_bytes = shared_budget_mib * 1048576;
         target.reset(llama_init_from_model(model.get(), context_params));
         if (!t.assert_true(bool(target))) return;
+        if (shared_vision) probe.target = target.get();
         llama_pos planned_position = 0;
         if (!t.assert_equal(0, evaluate(vision.get(), target.get(), prefix.get(), 0, 0, 32, true,
                 &planned_position))) return;
         t.assert_equal(prefix_position, planned_position);
         t.assert_true(compare(expected_prefix, "initial"));
+        if (suspended_vision) {
+            t.assert_true(probe.paused_calls > 0);
+            auto * owner = llama_context_compute_memory(target.get());
+            t.assert_true(owner && owner->valid() && !owner->kv_device_suspended() && owner->serial_ready());
+        }
 #if !defined(_WIN32) || !defined(LLAMA_SHARED)
         auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
         auto * stream = hybrid->get_mem_attn()->get_kv_stream();
@@ -457,6 +506,36 @@ int main(int argc, char ** argv) {
 #endif
         auto planned_state = snapshot();
         if (!t.assert_true(!planned_state.empty())) return;
+        if (suspended_vision) {
+            // Earlier text stays committed when vision is interrupted; no embedding prefill follows it.
+            probe.fail_once = true;
+            llama_pos interrupted_position = planned_position;
+            t.assert_true(evaluate(vision.get(),target.get(),followup.get(),planned_position,0,32,true,
+                &interrupted_position) != 0);
+            t.assert_true(!probe.fail_once && interrupted_position >= planned_position);
+            auto * owner = llama_context_compute_memory(target.get());
+            t.assert_true(owner && owner->valid() && !owner->kv_device_suspended() && owner->serial_ready());
+            t.assert_true(mtmd_release_compute_workspace(vision.get()));
+            t.assert_equal(planned_state.size(),llama_state_set_data(target.get(),planned_state.data(),planned_state.size()));
+            t.assert_true(snapshot() == planned_state);
+#if !defined(_WIN32) || !defined(LLAMA_SHARED)
+            {
+                // Arm only after vision has acquired its grants, so the fault reaches target restoration.
+                vision_restore_fault fault(owner->shared_parent());
+                bool armed = false;
+                probe.on_encode = [&] { if (!armed) { armed = true; fault.arm(); } };
+                interrupted_position = planned_position;
+                t.assert_true(evaluate(vision.get(),target.get(),followup.get(),planned_position,0,32,true,
+                    &interrupted_position) != 0);
+                probe.on_encode = {};
+                t.assert_true(armed && fault.calls > 0 && owner->valid() && owner->kv_device_suspended());
+                t.assert_true(!owner->serial_ready());
+            }
+            if (!t.assert_true(llama_context_resume_kv_device(target.get(),llama_memory_text_phase::prefill))) return;
+            t.assert_equal(planned_state.size(),llama_state_set_data(target.get(),planned_state.data(),planned_state.size()));
+            t.assert_true(snapshot() == planned_state);
+#endif
+        }
 #if !defined(_WIN32) || !defined(LLAMA_SHARED)
         if (stream) {
             auto * cache = hybrid->get_mem_attn();
@@ -527,10 +606,10 @@ int main(int argc, char ** argv) {
         t.assert_true(actual_followup.bytes == followup_recurrent.bytes);
 #endif
         auto planned_tokens = generate(planned_position);
-        t.assert_equal(size_t(16), planned_tokens.size());
+        t.assert_equal(continuation_tokens, planned_tokens.size());
         t.assert_true(planned_tokens == baseline_tokens);
         if (shared_vision) {
-            // Borrow directly from the decode layout before any follow-up text can expand it.
+            // Reclaim the populated decode pool for vision, then rebuild a fresh decode layout.
             auto * parent = llama_context_compute_memory(target.get());
             mtmd::batch_ptr image_batch(mtmd_batch_init(vision.get()));
             for (size_t i = 0; i < mtmd_input_chunks_size(followup.get()); ++i) {
@@ -543,11 +622,17 @@ int main(int argc, char ** argv) {
             if (!t.assert_true(parent && parent->shared_parent() &&
                     mtmd_batch_measure_compute_workspace(image_batch.get(), groups,
                         ggml_backend_buffer_get_type(parent->shared_parent())) &&
+                    (!suspended_vision || llama_context_suspend_kv_device(target.get())) &&
                     mtmd_borrow_compute_workspace(vision.get(), *parent))) return;
+            if (suspended_vision) t.assert_true(!llama_context_resume_kv_device(target.get(),llama_memory_text_phase::decode));
             if (!t.assert_equal(0, mtmd_batch_encode(image_batch.get())) ||
                     !t.assert_true(mtmd_release_compute_workspace(vision.get()))) return;
+            if (suspended_vision) {
+                t.assert_true(parent->kv_device_suspended());
+                if (!t.assert_true(llama_context_resume_kv_device(target.get(),llama_memory_text_phase::decode))) return;
+            }
             t.assert_true(snapshot() == retained_state);
-            if (!t.assert_equal(0, evaluate(vision.get(), target.get(), followup.get(), planned_position + 16,
+            if (!t.assert_equal(0, evaluate(vision.get(), target.get(), followup.get(), planned_position + continuation_tokens,
                     0, 32, true, &planned_position))) return;
             t.assert_equal(after_decode_position, planned_position);
             t.assert_true(compare(expected_after_decode, "after-decode image"));
@@ -574,7 +659,7 @@ int main(int argc, char ** argv) {
         auto invalid = tokenize("Safe prefix: " + marker + " This text must not be decoded after the failed image.",
             {missing_pixels.get()});
         if (!t.assert_true(bool(invalid))) return;
-        const llama_pos start = planned_position + 16;
+        const llama_pos start = planned_position + continuation_tokens;
         llama_pos expected_failure_position = start;
         for (size_t i = 0; i < mtmd_input_chunks_size(invalid.get()); ++i) {
             auto * chunk = mtmd_input_chunks_get(invalid.get(), i);
