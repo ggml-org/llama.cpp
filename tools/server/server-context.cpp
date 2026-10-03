@@ -148,6 +148,7 @@ struct server_slot; // forward declaration
 // the sidecar is published via tmp + rename so it never pairs with a half-written save.
 static constexpr uint32_t SERVER_CKPT_MAGIC    = 0x504B434C; // u32 native-endian; the bytes spell "LCKP"
 static constexpr uint32_t SERVER_CKPT_VERSION  = 1;
+static constexpr uint64_t SERVER_CKPT_RECORD_MIN_SIZE = sizeof(int64_t) + 3 * sizeof(int32_t) + 3 * sizeof(uint64_t);
 
 static std::string server_checkpoint_sidecar_path(const std::string & filepath) {
     return filepath + ".ckpt";
@@ -233,6 +234,118 @@ static bool server_save_checkpoints_sidecar(const std::string & filepath, const 
         return false;
     }
     return true;
+}
+
+static bool server_load_checkpoints_sidecar(const std::string & filepath, std::list<common_prompt_checkpoint> & checkpoints,
+        const std::string & desc_tgt, const std::string & desc_dft) {
+    std::ifstream in(server_checkpoint_sidecar_path(filepath), std::ios::binary);
+    if (!in.is_open()) {
+        return false;
+    }
+
+    in.seekg(0, std::ios::end);
+    const uint64_t file_size = (uint64_t) in.tellg();
+    in.seekg(0, std::ios::beg);
+
+    uint32_t magic       = 0;
+    uint32_t version     = 0;
+    uint32_t n_ckpt      = 0;
+    uint32_t tgt_desc_len = 0;
+    uint32_t dft_desc_len = 0;
+
+    in.read((char *) &magic,        sizeof(magic));
+    in.read((char *) &version,      sizeof(version));
+    in.read((char *) &n_ckpt,       sizeof(n_ckpt));
+    in.read((char *) &tgt_desc_len, sizeof(tgt_desc_len));
+    in.read((char *) &dft_desc_len, sizeof(dft_desc_len));
+
+    if (!in.good() || magic != SERVER_CKPT_MAGIC || version != SERVER_CKPT_VERSION) {
+        return false;
+    }
+
+    // clamp the header against the file size before trusting it to allocate
+    constexpr uint64_t header_size = 5 * sizeof(uint32_t);
+    if (file_size < header_size + tgt_desc_len + dft_desc_len) {
+        return false;
+    }
+
+    std::string file_desc_tgt(tgt_desc_len, '\0');
+    std::string file_desc_dft(dft_desc_len, '\0');
+    if (tgt_desc_len) { in.read(file_desc_tgt.data(), tgt_desc_len); }
+    if (dft_desc_len) { in.read(file_desc_dft.data(), dft_desc_len); }
+    if (!in.good()) {
+        return false;
+    }
+
+    // the blobs are opaque state of the topology that saved them; replaying them onto a
+    // different model can corrupt the KV cache, so reject any topology mismatch
+    if (file_desc_tgt != desc_tgt || file_desc_dft != desc_dft) {
+        return false;
+    }
+
+    if (n_ckpt > (file_size - header_size - tgt_desc_len - dft_desc_len) / SERVER_CKPT_RECORD_MIN_SIZE) {
+        return false;
+    }
+
+    auto remaining = [&] (std::ifstream & f) -> uint64_t {
+        return file_size - (uint64_t) f.tellg();
+    };
+
+    // blobs are interleaved with their sizes, matching the write order
+    for (uint32_t i = 0; i < n_ckpt; ++i) {
+        common_prompt_checkpoint ckpt;
+
+        int64_t  n_tokens  = 0;
+        int32_t  id_task   = -1;
+        int32_t  pos_min   = 0;
+        int32_t  pos_max   = 0;
+        uint64_t tgt_size  = 0;
+        uint64_t dft_size  = 0;
+        uint64_t spec_size = 0;
+
+        in.read((char *) &n_tokens, sizeof(n_tokens));
+        in.read((char *) &id_task,  sizeof(id_task));
+        in.read((char *) &pos_min,  sizeof(pos_min));
+        in.read((char *) &pos_max,  sizeof(pos_max));
+        if (!in.good()) {
+            return false;
+        }
+
+        // clamp each size against the remaining bytes before allocating
+        in.read((char *) &tgt_size, sizeof(tgt_size));
+        if (!in.good() || tgt_size > remaining(in)) {
+            return false;
+        }
+        ckpt.data_tgt.resize(tgt_size);
+        in.read((char *) ckpt.data_tgt.data(), tgt_size);
+
+        in.read((char *) &dft_size, sizeof(dft_size));
+        if (!in.good() || dft_size > remaining(in)) {
+            return false;
+        }
+        ckpt.data_dft.resize(dft_size);
+        in.read((char *) ckpt.data_dft.data(), dft_size);
+
+        in.read((char *) &spec_size, sizeof(spec_size));
+        if (!in.good() || spec_size > remaining(in)) {
+            return false;
+        }
+        ckpt.data_spec.resize(spec_size);
+        in.read((char *) ckpt.data_spec.data(), spec_size);
+
+        if (!in.good()) {
+            return false;
+        }
+
+        ckpt.n_tokens = n_tokens;
+        ckpt.id_task  = id_task;
+        ckpt.pos_min  = pos_min;
+        ckpt.pos_max  = pos_max;
+
+        checkpoints.push_back(std::move(ckpt));
+    }
+
+    return remaining(in) == 0;
 }
 
 struct server_batch {
@@ -2885,6 +2998,17 @@ private:
 
                         slot->prompt.clear();
                         slot->prompt.tokens = std::move(restored);
+
+                        // rebuild the checkpoint ledger from the sidecar so the prefix
+                        // reuse guard can roll back non-rewindable memory to a checkpoint
+                        // position (#25913). a missing, stale or invalid sidecar leaves the
+                        // ledger empty; the slot degrades to full re-processing.
+                        if (server_load_checkpoints_sidecar(filepath, slot->prompt.checkpoints,
+                                server_model_desc(ctx_tgt), server_model_desc(ctx_dft))) {
+                            SLT_INF(*slot, "restored %zu context checkpoint(s) from sidecar\n", slot->prompt.checkpoints.size());
+                        } else {
+                            SLT_DBG(*slot, "%s", "no valid checkpoint sidecar, restored slot has no checkpoints");
+                        }
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);

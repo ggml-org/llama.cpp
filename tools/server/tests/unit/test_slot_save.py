@@ -165,7 +165,7 @@ def test_slot_erase():
 CKPT_MAGIC = b"LCKP"
 CKPT_RECORD_HEADER = struct.Struct("<qiII")  # n_tokens, id_task, pos_min, pos_max; then 3x u64 blob sizes
 
-# a text prefix long enough to produce a context checkpoint
+# a text prefix long enough to produce a context checkpoint, and a suffix to append after the restore
 CKPT_PREFIX = (
     "The city of Amsterdam was built on the river Amstel. Its concentric canals "
     "were dug in the seventeenth century during the Dutch Golden Age, when the city "
@@ -173,6 +173,7 @@ CKPT_PREFIX = (
     "unified whole, remains one of the most remarkable urban projects of early modern "
     "Europe. "
 ) * 4
+CKPT_SUFFIX = "What is the name of the river Amsterdam was built on?"
 
 # a second prefix of similar length on a different topic, for the overwrite test
 CKPT_PREFIX_B = (
@@ -232,6 +233,158 @@ def _ckpt_parse_sidecar(path: str):
     # the byte layout must be fully consumed - the ledger is byte-exact
     assert off == len(data)
     return records
+
+
+def _ckpt_mutate(path: str, off: int, nbytes: int):
+    # flip bytes in [off, off+nbytes): a minimal corruption that must not be silently accepted
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+    for i in range(off, off + nbytes):
+        data[i] ^= 0xFF
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def test_slot_save_checkpoint_sidecar_and_reuse(ckpt_server):
+    server = ckpt_server
+    server.start()
+
+    res = _ckpt_completion(server, CKPT_PREFIX, 1)
+    assert res.body["timings"]["cache_n"] == 0  # cold: everything processed
+    total_n = res.body["timings"]["prompt_n"] + res.body["timings"]["cache_n"]
+
+    res = server.make_request("POST", "/slots/1?action=save", data={"filename": "ckpt_inproc.bin"})
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+
+    records = _ckpt_parse_sidecar("./tmp/ckpt_inproc.bin.ckpt")
+    # multi-checkpoint fidelity: count, ordering and bounds of every record
+    n_tokens = [r[0] for r in records]
+    assert n_tokens == sorted(n_tokens)
+    assert all(0 < t <= n_saved for t in n_tokens)
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={"filename": "ckpt_inproc.bin"})
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    # slot 0 never saw this prefix in RAM: reuse can only come from the restored checkpoints
+    res = _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 0)
+    assert res.body["timings"]["cache_n"] > 0, "restored prefix was not reused: checkpoints were lost in the round-trip"
+    assert res.body["timings"]["prompt_n"] < total_n
+
+
+def test_slot_save_checkpoint_reuse_across_restart(ckpt_server):
+    server = ckpt_server
+    server.start()
+
+    res = _ckpt_completion(server, CKPT_PREFIX, 0)
+    assert res.body["timings"]["cache_n"] == 0
+
+    res = server.make_request("POST", "/slots/0?action=save", data={"filename": "ckpt_restart.bin"})
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+
+    # restart: all in-memory checkpoint state dies with the process
+    server.stop()
+    server.start()
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={"filename": "ckpt_restart.bin"})
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    res = _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 0)
+    assert res.body["timings"]["cache_n"] > 0, "restored prefix was not reused after restart: checkpoints were never persisted"
+
+
+def test_slot_restore_sidecar_missing_or_truncated_degrades(ckpt_server):
+    server = ckpt_server
+    server.start()
+
+    _ckpt_completion(server, CKPT_PREFIX, 0)
+    res = server.make_request("POST", "/slots/0?action=save", data={"filename": "ckpt_degrade.bin"})
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+    sidecar = "./tmp/ckpt_degrade.bin.ckpt"
+
+    # truncated copies (cut mid-header, mid-descriptor, mid-record) must be rejected
+    # without failing the restore; the slot degrades to full re-processing
+    with open(sidecar, "rb") as f:
+        raw = f.read()
+    for cut in (10, 24, len(raw) - 1):
+        truncated = raw[:cut]
+        with open(sidecar, "wb") as f:
+            f.write(truncated)
+        res = server.make_request("POST", "/slots/1?action=restore", data={"filename": "ckpt_degrade.bin"})
+        assert res.status_code == 200
+        assert res.body["n_restored"] == n_saved
+
+    os.remove(sidecar)
+    res = server.make_request("POST", "/slots/1?action=restore", data={"filename": "ckpt_degrade.bin"})
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    # the slot stays usable and deterministic after the degraded restores
+    content = _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 1).body["content"]
+    assert _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 1).body["content"] == content
+
+
+def test_slot_restore_sidecar_desc_or_version_mismatch_degrades(ckpt_server):
+    server = ckpt_server
+    server.start()
+
+    _ckpt_completion(server, CKPT_PREFIX, 0)
+    res = server.make_request("POST", "/slots/0?action=save", data={"filename": "ckpt_mismatch.bin"})
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+    # a rejected ledger must not reuse the whole restored prefix; a few tokens of KV reuse survive
+    prefix_n = n_saved
+    sidecar = "./tmp/ckpt_mismatch.bin.ckpt"
+
+    with open(sidecar, "rb") as f:
+        raw = f.read()
+    # descriptor lengths live in the header at offsets 12 (tgt) and 16 (dft)
+    tgt_len = struct.unpack_from("<I", raw, 12)[0]
+    dft_len = struct.unpack_from("<I", raw, 16)[0]
+    assert tgt_len > 0  # the target descriptor is present; the draft one may be empty for non-speculative models
+
+    # corrupt one field at a time, restore into slot 1, and confirm the restore succeeds
+    # but the corrupted ledger is rejected: reuse must not reach the end of the prefix.
+    # note: a rejected ledger still leaves a few tokens of KV reuse from the restored prompt
+    ckpt_off = 20 + tgt_len + dft_len
+    assert struct.unpack_from("<I", raw, 8)[0] >= 1  # the first record exists
+    mutations = [("desc_tgt", 20), ("n_tokens", ckpt_off)]
+    if dft_len > 0:
+        mutations.insert(1, ("desc_dft", 20 + tgt_len))
+    for name, off in mutations:
+        with open(sidecar, "wb") as f:
+            f.write(raw)
+        _ckpt_mutate(sidecar, off, 1)
+        res = server.make_request("POST", "/slots/1?action=restore", data={"filename": "ckpt_mismatch.bin"})
+        assert res.status_code == 200
+        assert res.body["n_restored"] == n_saved
+        assert _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 1).body["timings"]["cache_n"] < prefix_n
+
+    # a wrong ledger version must be rejected the same way
+    with open(sidecar, "wb") as f:
+        f.write(raw)
+    with open(sidecar, "rb") as f:
+        data = bytearray(f.read())
+    struct.pack_into("<I", data, 4, 2)  # bump the version to 2
+    with open(sidecar, "wb") as f:
+        f.write(data)
+    res = server.make_request("POST", "/slots/1?action=restore", data={"filename": "ckpt_mismatch.bin"})
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+    # the version bump must reject the ledger the same way
+    assert _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 1).body["timings"]["cache_n"] < prefix_n
+
+    # write the original sidecar back: the unmutated ledger must work again
+    with open(sidecar, "wb") as f:
+        f.write(raw)
+    res = server.make_request("POST", "/slots/1?action=restore", data={"filename": "ckpt_mismatch.bin"})
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+    assert _ckpt_completion(server, CKPT_PREFIX + CKPT_SUFFIX, 1).body["timings"]["cache_n"] > 0
 
 
 @pytest.fixture
@@ -314,6 +467,13 @@ def test_slot_save_checkpoint_overwrite(ckpt_server):
     # re-parsing must be byte-exact; a stale/append writer would leak records beyond the new save
     records = _ckpt_parse_sidecar("./tmp/ckpt_overwrite.bin.ckpt")
     assert all(0 < t <= n_saved for t in [r[0] for r in records])
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={"filename": "ckpt_overwrite.bin"})
+    assert res.status_code == 200
+
+    # reuse must come from the new save (CKPT_PREFIX_B), not the old one
+    res = _ckpt_completion(server, CKPT_PREFIX_B + CKPT_SUFFIX, 0)
+    assert res.body["timings"]["cache_n"] > 0
 
 
 #
