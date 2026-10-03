@@ -3650,6 +3650,49 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
+        // Nested array<object> argument (regression for #21771): the value must
+        // be captured by delimiter while the grammar stays schema-constrained.
+        tst.test(
+               "<tool_call>\n"
+               "<function=delegate_terminal_task>\n"
+               "<parameter=objective>\n"
+               "Build the target.\n"
+               "</parameter>\n"
+               "<parameter=relevantContext>\n"
+               "[{\"kind\":\"search\",\"ref\":\"src/\",\"summary\":\"source\"},"
+               "{\"kind\":\"command\",\"ref\":\"git status\",\"summary\":\"status\",\"extra\":{\"a\":[1,2,{\"b\":3}]}}]\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({
+                { "delegate_terminal_task", "Delegate a task to a terminal", R"({
+                    "type": "object",
+                    "properties": {
+                        "objective": { "type": "string" },
+                        "relevantContext": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "type": "string", "enum": ["file", "search", "command"] },
+                                    "ref": { "type": "string" },
+                                    "summary": { "type": "string" }
+                                },
+                                "required": ["kind", "ref"],
+                                "additionalProperties": true
+                            }
+                        }
+                    },
+                    "required": ["objective", "relevantContext"]
+                })" },
+            })
+            .expect_tool_calls({
+                { "delegate_terminal_task",
+                  R"({"objective":"Build the target.","relevantContext":[{"kind":"search","ref":"src/","summary":"source"},{"kind":"command","ref":"git status","summary":"status","extra":{"a":[1,2,{"b":3}]}}]})",
+                  {} },
+            })
+            .run();
+
         // Test with code content (multiline)
         tst.test(
                "<tool_call>\n"
