@@ -52,7 +52,11 @@
 		<span class="truncate text-sm text-muted-foreground">{option.model}</span>
 	</button>
 
-	<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
+	<ModelContext
+		class="justify-self-end max-md:hidden"
+		configured={configuredContext(option)}
+		{option}
+	/>
 
 	<ModelsManagerStatusCell {option} />
 

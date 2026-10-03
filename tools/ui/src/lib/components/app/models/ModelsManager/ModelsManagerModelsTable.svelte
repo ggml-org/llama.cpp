@@ -343,7 +343,7 @@
 	>
 		<span>{@render sortHeader(ModelsTableSortKey.NAME, 'Model')}</span>
 
-		<span class="text-right whitespace-nowrap">
+		<span class="text-right whitespace-nowrap max-md:hidden">
 			{@render sortHeader(ModelsTableSortKey.CONTEXT, 'Context')}
 		</span>
 

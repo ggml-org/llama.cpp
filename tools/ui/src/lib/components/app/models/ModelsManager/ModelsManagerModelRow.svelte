@@ -76,7 +76,11 @@
 		</span>
 	</button>
 
-	<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
+	<ModelContext
+		class="justify-self-end max-md:hidden"
+		configured={configuredContext(option)}
+		{option}
+	/>
 
 	<ModelsManagerStatusCell {download} {option} />
 
