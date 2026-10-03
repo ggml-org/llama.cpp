@@ -4835,6 +4835,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({ { "set_union", R"({"value": "plain text", "amount": "1abc"})", "" } })
             .run();
 
+        // A response format is enforced with thinking on and off.
+        tst.test("I need to output the invoice details in JSON\n</think>\n"
+                 R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON\n")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
         // Continuation: the partial assistant turn is spliced back into the prompt.
         common_chat_msg prefill = simple_assist_msg("", "I'm thinking");
 

@@ -1078,6 +1078,14 @@ std::vector<common_file_info> fs_list(const std::string & path, bool include_dir
 // TTY utils
 //
 
+bool common_is_tty(FILE * file) {
+#if defined(_WIN32)
+    return _isatty(_fileno(file));
+#else
+    return isatty(fileno(file));
+#endif
+}
+
 bool tty_can_use_colors() {
     // Check NO_COLOR environment variable (https://no-color.org/)
     if (const char * no_color = std::getenv("NO_COLOR")) {
@@ -1095,10 +1103,7 @@ bool tty_can_use_colors() {
 
     // Check if stdout and stderr are connected to a terminal
     // We check both because log messages can go to either
-    bool stdout_is_tty = isatty(fileno(stdout));
-    bool stderr_is_tty = isatty(fileno(stderr));
-
-    return stdout_is_tty || stderr_is_tty;
+    return common_is_tty(stdout) || common_is_tty(stderr);
 }
 
 //
@@ -1278,6 +1283,14 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_outputs_max_per_seq = 1;
 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
+    }
+
+    // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
+    // (server.cpp does this check for --embedding, but before the model is loaded)
+    if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
+        LOG_WRN("embeddings enabled: setting n_batch = n_ubatch = %u\n", cparams.n_ubatch);
+        cparams.n_batch = cparams.n_ubatch;
+        params.n_batch  = params.n_ubatch;
     }
 
     // load and optionally apply lora adapters
