@@ -283,8 +283,10 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
     d.ts   = (int64_t)ggml_type_size(T->type);
 
     if (T->type == GGML_TYPE_F16) {
-        d.mode = interleaved ? MKL_FA_KV_MODE_F16_INTERLEAVED
-                             : MKL_FA_KV_MODE_F16_DENSE;
+        // MLA's V cache is a 512-wide view of 576-wide K rows. Treat any
+        // padded row stride as strided even when there is only one KV head.
+        d.mode = interleaved || d.nb1 != d.D * (int64_t)sizeof(sycl::half)
+            ? MKL_FA_KV_MODE_F16_INTERLEAVED : MKL_FA_KV_MODE_F16_DENSE;
     } else if (ggml_is_contiguously_allocated(T) && !interleaved) {
         d.mode = MKL_FA_KV_MODE_QUANT_CONTIG;
     } else {
@@ -413,7 +415,9 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int64_t q_row_stride  = Q->nb[1] / sizeof(float);
     const int64_t q_head_stride = Q->nb[2] / sizeof(float);
 
-    const bool V_is_K_view = V->view_src
+    // Alias the dequantized buffers only when K and V expose the same values.
+    // MLA V is a narrower view of K and needs its own strided dequantization.
+    const bool V_is_K_view = V->ne[0] == K->ne[0] && V->view_src
         && (V->view_src == K || (V->view_src == K->view_src
             && V->view_offs == K->view_offs));
 
