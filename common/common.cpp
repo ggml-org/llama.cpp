@@ -1272,20 +1272,20 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         params.embedding    = true;
         params.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
-        // laya encodes a batch in one ubatch, so n_batch must not be larger than n_ubatch
-        // (server.cpp does this check for --embedding, but before the model is loaded)
-        if (decision_type == COMMON_DECISION_TYPE_LAYA && cparams.n_batch > cparams.n_ubatch) {
-            LOG_WRN("decision model: setting n_batch = n_ubatch = %u\n", cparams.n_ubatch);
-            cparams.n_batch = cparams.n_ubatch;
-            params.n_batch  = params.n_ubatch;
-        }
-
         cparams.embeddings            = true;
         cparams.pooling_type          = LLAMA_POOLING_TYPE_NONE;
         cparams.n_outputs_max         = cparams.n_batch;
         cparams.n_outputs_max_per_seq = 1;
 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
+    }
+
+    // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
+    // (server.cpp does this check for --embedding, but before the model is loaded)
+    if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
+        LOG_WRN("embeddings enabled: setting n_batch = n_ubatch = %u\n", cparams.n_ubatch);
+        cparams.n_batch = cparams.n_ubatch;
+        params.n_batch  = params.n_ubatch;
     }
 
     // load and optionally apply lora adapters
