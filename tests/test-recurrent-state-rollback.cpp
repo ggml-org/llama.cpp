@@ -34,22 +34,18 @@ static const char * test_status_str(test_status status) {
     return "";
 }
 
-static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens, uint32_t count) {
-    llama_batch batch = llama_batch_init(count, 0, 1);
-    for (uint32_t pos = 0; pos < count; ++pos) {
-        common_batch_add(batch, tokens[pos], pos, { 0 }, pos + 1 == count);
+static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens) {
+    common_batch batch(ctx);
+    for (uint32_t pos = 0; pos < tokens.size(); ++pos) {
+        batch.add(tokens[pos], pos, 0, pos + 1 == tokens.size());
     }
-    const bool ok = llama_decode(ctx, batch) == 0;
-    llama_batch_free(batch);
-    return ok;
+    return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
 }
 
-static bool decode_one(llama_context * ctx, llama_token tok, llama_pos pos) {
-    llama_batch batch = llama_batch_init(1, 0, 1);
-    common_batch_add(batch, tok, pos, { 0 }, true);
-    const bool ok = llama_decode(ctx, batch) == 0;
-    llama_batch_free(batch);
-    return ok;
+static bool decode_one(llama_context * ctx, llama_token tok, llama_pos pos, llama_seq_id seq = 0) {
+    common_batch batch(ctx);
+    batch.add(tok, pos, seq, true);
+    return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
 }
 
 struct cache_buffer_collector : llama_io_write_i {
@@ -78,7 +74,7 @@ static llama_context_ptr init_ctx(llama_model * model, llama_context_params cpar
 
     // Use a full ubatch so buffer discovery preserves prefill allocation sizes.
     const uint32_t n_tokens = llama_n_ubatch(ctx.get());
-    if (!decode_tokens(ctx.get(), std::vector<llama_token>(n_tokens, 0), n_tokens)) {
+    if (!decode_tokens(ctx.get(), std::vector<llama_token>(n_tokens, 0))) {
         return nullptr;
     }
     llama_synchronize(ctx.get());
@@ -166,22 +162,22 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
 
     bool ok = true;
 
+    // decode tokens [p_begin, p_end) of seq s, a batch belongs to one context so it is built per call
+    const auto decode_range = [&](llama_context * ctx, uint32_t s, llama_pos p_begin, llama_pos p_end) {
+        common_batch batch(ctx);
+        for (llama_pos pos = p_begin; pos < p_end; ++pos) {
+            batch.add(tok(s, pos), pos, (llama_seq_id) s, false);
+        }
+        return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
+    };
+
     // both contexts decode the identical [0, p0) prefill; only ctx_roll decodes
     // the tail, which is then rolled back so its restore is pending at replay
     for (uint32_t s = 0; s < n_seqs && ok; ++s) {
-        llama_batch batch = llama_batch_init(n_prompt, 0, 1);
-        for (llama_pos pos = 0; pos < (llama_pos) p0; ++pos) {
-            common_batch_add(batch, tok(s, pos), pos, { (llama_seq_id) s }, false);
-        }
-        ok = ok && llama_decode(ctx_roll.get(), batch) == 0;
-        ok = ok && llama_decode(ctx_ref.get(),  batch) == 0;
+        ok = ok && decode_range(ctx_roll.get(), s, 0, (llama_pos) p0);
+        ok = ok && decode_range(ctx_ref.get(),  s, 0, (llama_pos) p0);
 
-        common_batch_clear(batch);
-        for (llama_pos pos = p0; pos < (llama_pos) n_prompt; ++pos) {
-            common_batch_add(batch, tok(s, pos), pos, { (llama_seq_id) s }, false);
-        }
-        ok = ok && llama_decode(ctx_roll.get(), batch) == 0;
-        llama_batch_free(batch);
+        ok = ok && decode_range(ctx_roll.get(), s, (llama_pos) p0, (llama_pos) n_prompt);
 
         ok = ok && llama_memory_seq_rm(llama_get_memory(ctx_roll.get()), (llama_seq_id) s, p0, -1);
 
@@ -193,16 +189,19 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
         return test_status::FAIL;
     }
 
-    llama_batch batch = llama_batch_init(n_seqs*n_replay, 0, 1);
-    for (uint32_t s = 0; s < n_seqs; ++s) {
-        for (uint32_t i = 0; i < n_replay; ++i) {
-            const llama_pos pos = p0 + (llama_pos) i;
-            common_batch_add(batch, tok(s, pos), pos, { (llama_seq_id) s }, true);
+    // all seqs replay in a single batch
+    const auto decode_replay = [&](llama_context * ctx) {
+        common_batch batch(ctx);
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            for (uint32_t i = 0; i < n_replay; ++i) {
+                const llama_pos pos = p0 + (llama_pos) i;
+                batch.add(tok(s, pos), pos, (llama_seq_id) s, true);
+            }
         }
-    }
-    ok = llama_decode(ctx_roll.get(), batch) == 0;
-    ok = ok && llama_decode(ctx_ref.get(), batch) == 0;
-    llama_batch_free(batch);
+        return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
+    };
+    ok = decode_replay(ctx_roll.get());
+    ok = ok && decode_replay(ctx_ref.get());
     if (!ok) {
         LOG_ERR("%s: multi-seq replay decode failed\n", __func__);
         return test_status::FAIL;
@@ -258,13 +257,12 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
     constexpr uint32_t n_tail = 4;
 
     {
-        llama_batch batch_tail = llama_batch_init(n_tail, 0, 1);
+        common_batch batch_tail(ctx_ref.get());
         for (uint32_t i = 0; i < n_tail; ++i) {
             const llama_pos pos = p0 + (llama_pos) (n_replay + i);
-            common_batch_add(batch_tail, tok(0, pos + 7), pos, { 0 }, false);
+            batch_tail.add(tok(0, pos + 7), pos, 0, false);
         }
-        ok = llama_decode(ctx_ref.get(), batch_tail) == 0;
-        llama_batch_free(batch_tail);
+        ok = llama_process(ctx_ref.get(), LLAMA_PROCESS_TYPE_DECODE, batch_tail.get()) == 0;
     }
 
     float diff_tail = 0.0f;
@@ -272,11 +270,8 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
     double nmse_tail_a0 = 0.0;
     for (uint32_t i = 0; i < n_tail && ok; ++i) {
         const llama_pos pos = p0 + (llama_pos) (n_replay + i);
-        llama_batch batch_one = llama_batch_init(1, 0, 1);
-        common_batch_add(batch_one, tok(1, pos), pos, { 1 }, true);
-        ok = llama_decode(ctx_roll.get(), batch_one) == 0;
-        ok = ok && llama_decode(ctx_ref.get(), batch_one) == 0;
-        llama_batch_free(batch_one);
+        ok = decode_one(ctx_roll.get(), tok(1, pos), pos, 1);
+        ok = ok && decode_one(ctx_ref.get(), tok(1, pos), pos, 1);
         if (!ok) {
             break;
         }
@@ -352,7 +347,7 @@ static test_status test_rollback(const common_params & params, llama_model * mod
     // Decode the full prompt on the source, then roll back three positions.
     // Replaying them crosses DSV4's ratio-4 compressor boundary.
     // Rollback leaves the recurrent memory in a snapshot state (rs_idx != 0).
-    if (!decode_tokens(ctx_src.get(), tokens, n_tokens)) {
+    if (!decode_tokens(ctx_src.get(), tokens)) {
         LOG_ERR("%s: failed to decode prompt\n", __func__);
         return test_status::FAIL;
     }
@@ -437,7 +432,7 @@ static test_status test_rollback(const common_params & params, llama_model * mod
             t = 0;
         }
     }
-    if (!decode_tokens(ctx_dirty.get(), noise, n_tokens)) {
+    if (!decode_tokens(ctx_dirty.get(), noise)) {
         LOG_ERR("%s: dirty prompt decode failed\n", __func__);
         return test_status::FAIL;
     }
