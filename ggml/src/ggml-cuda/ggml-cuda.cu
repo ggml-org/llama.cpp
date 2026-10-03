@@ -1970,6 +1970,18 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
+    // A GGML_PREC_F32 request on src1 only has an effect for the F16/BF16 compute paths
+    // (cuBLAS compute type, mul_mat_vec_f). With a quantized src0 we always end up in MMVQ/MMQ,
+    // which quantizes src1 to Q8_x regardless and never looks at the precision flag, so downgrade
+    // the request to Q8 to keep ggml_cuda_mmq_get_prec_src1() happy. Q8_1 is the most precise
+    // activation format MMQ supports, and the CPU backend ignores the flag for these weights as
+    // well, so this does not change results.
+    ggml_tensor dst_prec_norm = *dst;
+    if (ggml_is_quantized(src0->type) && ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32) {
+        ggml_prec_set_src(&dst_prec_norm, GGML_PREC_Q8, 1);
+        dst = &dst_prec_norm;
+    }
+
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
@@ -5321,7 +5333,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16 && !ggml_cuda_op_mul_mat_use_fwht(op)) {
                     return false;
                 }
-                if (op->op == GGML_OP_MUL_MAT_ID && ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
+                // GGML_PREC_F32 on src1 only affects the F16/BF16 compute paths, so it is only
+                // relevant for non-quantized weights. For quantized weights the flag cannot be
+                // honored (see ggml_cuda_mul_mat_id), and refusing the op would only push it to the
+                // CPU backend - potentially with a full host copy of a large weight tensor per call.
+                if (op->op == GGML_OP_MUL_MAT_ID && !ggml_is_quantized(a->type) &&
+                        ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
                     return false;
                 }
 #ifdef GGML_USE_MUSA
