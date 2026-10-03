@@ -303,6 +303,14 @@ static void test(void) {
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
     assert(params.lora_adapters[3].path == "file4\".gguf");
 
+    printf("test-arg-parser: test draft context does not inherit --no-kv-offload\n\n");
+
+    params = common_params();
+    argv = {"binary_name", "-nkvo"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+    assert(params.no_kv_offload == true);
+    assert(common_base_params_to_speculative(params).no_kv_offload == false);
+
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
     printf("test-arg-parser: skip on windows build\n");
