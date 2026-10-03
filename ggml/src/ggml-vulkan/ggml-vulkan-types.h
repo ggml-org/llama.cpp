@@ -505,6 +505,15 @@ static constexpr uint32_t num_topk_moe_pipelines = 10;
 
 static constexpr uint32_t num_topk_pipelines = 11;
 
+// FWHT block widths with a dedicated pipeline. The subgroup shader keeps n/subgroup_size
+// values per invocation, so widths above fwht_max_subgroup_n, or a subgroup narrow enough to
+// exceed fwht_max_subgroup_el_w values, use the shared-memory shader with one row per
+// workgroup instead.
+static constexpr uint32_t num_fwht_pipelines     = 8;
+static constexpr uint32_t fwht_max_subgroup_n    = 512;
+static constexpr uint32_t fwht_max_subgroup_el_w = 64;
+static constexpr uint32_t fwht_rows              = 4;
+
 static constexpr std::initializer_list<ggml_op> topk_moe_early_softmax_norm{ GGML_OP_SOFT_MAX, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,
                                                                              GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE,
                                                                              GGML_OP_SUM_ROWS, GGML_OP_CLAMP,    GGML_OP_DIV,
@@ -954,7 +963,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_sum_rows_f32;
     vk_pipeline pipeline_cross_entropy_loss_f32, pipeline_cross_entropy_loss_f32_wg512;
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
-    vk_pipeline pipeline_fwht_f32[4];
+    vk_pipeline pipeline_fwht_f32[num_fwht_pipelines];
+    vk_pipeline pipeline_fwht_f16[num_fwht_pipelines];
+    uint32_t    fwht_rows_per_wg[num_fwht_pipelines] = {};
     vk_pipeline pipeline_cumsum_f32;
     vk_pipeline pipeline_cumsum_small_f32;
     vk_pipeline pipeline_cumsum_multipass1_f32;
