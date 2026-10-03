@@ -26,6 +26,7 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import type { ToolGroup } from '$lib/types';
 	import type { Snippet } from 'svelte';
+	import { serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -190,6 +191,7 @@
 					class={sheetItemClass}
 					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
 					type="button"
+					disabled={Boolean(serverStore.props?.system_prompt)}
 				>
 					<MessageSquare class="{ICON_CLASS_DEFAULT} shrink-0" />
 
