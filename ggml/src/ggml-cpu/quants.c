@@ -30,6 +30,10 @@ void quantize_row_q2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q2_0_ref(x, y, k);
 }
 
+void quantize_row_bf16x(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_bf16x_ref(x, y, k);
+}
+
 void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q4_0_ref(x, y, k);
 }
@@ -217,6 +221,60 @@ void ggml_vec_dot_q2_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
         }
 
         sumf += d0 * sumi;
+    }
+
+    *s = sumf;
+}
+
+// one BF16X block (16 weights, decoded to exact bf16 values) maps to half a
+// Q8_0 block (32 activations); the Q8_0 scale is applied once per full block
+void ggml_vec_dot_bf16x_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_BF16X;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_bf16x * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; i += 2) {
+        const block_q8_0 * GGML_RESTRICT yb = &y[i / 2];
+        const float d = GGML_CPU_FP16_TO_FP32(yb->d);
+        const int8_t * GGML_RESTRICT qy = yb->qs;
+
+        float sumi = 0.0f;
+
+        for (int half = 0; half < 2; half++) {
+            const block_bf16x * GGML_RESTRICT xb = &x[i + half];
+            const uint8_t emax = xb->emax;
+            for (int j = 0; j < qk; j++) {
+                const uint8_t sg = (xb->sgn[j >> 3] >> (j & 7)) & 1;
+                const int mb = j*7;
+                uint8_t m = (xb->mant[mb >> 3] >> (mb & 7)) & 0x7F;
+                if ((mb & 7) + 7 > 8) {
+                    m |= (xb->mant[(mb >> 3) + 1] << (8 - (mb & 7))) & 0x7F;
+                }
+                const int db = j*3;
+                uint8_t dlt = (xb->delta[db >> 3] >> (db & 7)) & 0x7;
+                if ((db & 7) + 3 > 8) {
+                    dlt |= (xb->delta[(db >> 3) + 1] << (8 - (db & 7))) & 0x7;
+                }
+                const uint8_t e = emax > dlt ? emax - dlt : 0;
+                const uint32_t bits = ((uint32_t)sg << 31) | ((uint32_t)e << 23) | ((uint32_t)m << 16);
+                float wf;
+                memcpy(&wf, &bits, sizeof(wf));
+                sumi += wf * (float)qy[half*qk + j];
+            }
+        }
+
+        sumf += d * sumi;
     }
 
     *s = sumf;
