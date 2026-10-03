@@ -30,9 +30,9 @@
 {#snippet triggerLabel()}
 	<span class="flex items-center gap-0.75 {reasoning.isOff ? 'text-muted-foreground' : ''}">
 		{#if reasoning.isOff}
-			<LightbulbOff class="size-3 shrink-0" />
+			<LightbulbOff class="size-3 max-md:size-3.5 shrink-0" />
 		{:else}
-			<Lightbulb class="size-3 shrink-0" />
+			<Lightbulb class="size-3 max-md:size-3.5 shrink-0" />
 		{/if}
 
 		{#if !isDefault}
