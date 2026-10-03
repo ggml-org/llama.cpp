@@ -1778,6 +1778,29 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
             graph->use_counts[hash_pos] = tensor_ptrs.at(id)->use_count;
         }
     }
+    // Reject remote graphs whose PAD_REFLECT_1D node would make the CPU kernel write
+    // outside of the destination tensor (op_params of a remote node are not validated
+    // anywhere else, so p0/p1 can be arbitrary, including negative values).
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        const struct ggml_tensor * node = graph->nodes[i];
+
+        if (node == nullptr || node->op != GGML_OP_PAD_REFLECT_1D || node->src[0] == nullptr) {
+            continue;
+        }
+
+        const int32_t p0 = ((const int32_t *) node->op_params)[0];
+        const int32_t p1 = ((const int32_t *) node->op_params)[1];
+
+        if (p0 < 0 || p1 < 0 ||
+            node->ne[0] < node->src[0]->ne[0] + p0 + p1 ||
+            node->ne[1] != node->src[0]->ne[1] ||
+            node->ne[2] != node->src[0]->ne[2] ||
+            node->ne[3] != node->src[0]->ne[3]) {
+            GGML_LOG_ERROR("[%s] malformed PAD_REFLECT_1D graph detected\n", __func__);
+            return false;
+        }
+    }
+
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
     stored_graphs[device].graph = graph;
