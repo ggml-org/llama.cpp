@@ -82,6 +82,14 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "OHOS")
+    # OpenHarmony uses musl; GNU extensions needed by ggml (cpu_set_t, CPU_SET,
+    # M_PI, ...) are only exposed when _GNU_SOURCE is defined
+    add_compile_definitions(_GNU_SOURCE)
+    # vendored subprocess.h: OpenHarmony musl has no posix_spawn_file_actions_addchdir
+    add_compile_definitions(SUBPROCESS_HAVE_CWD=0)
+endif()
+
 if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
