@@ -79,6 +79,14 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t patch_total = ggml_sycl_conv3d_calc_patch_total(dst, n);
     const int64_t knl_n_total = ggml_sycl_conv3d_calc_knl_n_total(src0, c);
 
+    if (patch_total == 0 || oc == 0) {
+        return;
+    }
+    if (knl_n_total == 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(ctx.stream()->memset(dst->data, 0, ggml_nbytes(dst))));
+        return;
+    }
+
     const size_t kernel_type_size = ggml_element_size(src0);
 
     ggml_sycl_pool_alloc<float> gemm_output(ctx.pool());
