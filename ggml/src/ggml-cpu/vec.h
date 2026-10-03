@@ -316,6 +316,133 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
     }
 }
 
+// s = dot(x (F16), y (F32)). The flash attention K.Q product has an F32 Q and an F16 K, so it needs no Q conversion.
+inline static void ggml_vec_dot_f16_f32(const int n, float * GGML_RESTRICT s, const ggml_fp16_t * GGML_RESTRICT x, const float * GGML_RESTRICT y) {
+    int i = 0;
+    float sumf = 0.0f;
+#if defined(__AVX512F__)
+    __m512 acc = _mm512_setzero_ps();
+    for (; i + 15 < n; i += 16) {
+        const __m512 ax = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i)));
+        acc = _mm512_fmadd_ps(ax, _mm512_loadu_ps(y + i), acc);
+    }
+    sumf += _mm512_reduce_add_ps(acc);
+#elif defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
+    __m256 acc = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+        const __m256 ax = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i)));
+        acc = _mm256_fmadd_ps(ax, _mm256_loadu_ps(y + i), acc);
+    }
+    __m128 r = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+    r = _mm_add_ps(r, _mm_movehl_ps(r, r));
+    r = _mm_add_ss(r, _mm_movehdup_ps(r));
+    sumf += _mm_cvtss_f32(r);
+#endif
+    for (; i < n; ++i) {
+        sumf += GGML_CPU_FP16_TO_FP32(x[i])*y[i];
+    }
+    *s = sumf;
+}
+
+// Is there a vectorized mixed F16xF32 dot on this build?
+// If 0 the helper is scalar, so callers must not route the K.Q product through it.
+#if defined(__AVX512F__) || (defined(__AVX2__) && defined(__F16C__) && defined(__FMA__))
+#define GGML_HAS_VEC_DOT_F16_F32 1
+#else
+#define GGML_HAS_VEC_DOT_F16_F32 0
+#endif
+
+// Is there a vectorized mixed F16xF32 multiply add on this build?
+// If 0 callers must not use it: for an F16 V keep ggml_vec_mad_f16, otherwise use to_float and ggml_vec_mad_f32.
+#if defined(__AVX512F__) || (defined(__AVX2__) && defined(__F16C__) && defined(__FMA__))
+#define GGML_HAS_VEC_MAD_F16_F32 1
+#else
+#define GGML_HAS_VEC_MAD_F16_F32 0
+#endif
+
+// Four output inter dot. Needs the vectorized mixed dot. Define GGML_NO_INTERDOT_X4 to opt out.
+#if GGML_HAS_VEC_DOT_F16_F32 && !defined(GGML_NO_INTERDOT_X4)
+#define GGML_HAS_INTERDOT_X4 1
+#else
+#define GGML_HAS_INTERDOT_X4 0
+#endif
+
+// Horizontal sum of one F32 vector accumulator. GGML_F32_VEC_REDUCE reduces an
+// array of GGML_F32_ARR accumulators into a single scalar, so it cannot be used
+// for four independent outputs; this is the single-accumulator form.
+#if defined(__AVX512F__)
+    #define GGML_FA_HSUM(a) _mm512_reduce_add_ps(a)
+#elif defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
+    #define GGML_FA_HSUM(a) ggml_fa_hsum_avx(a)
+    inline static float ggml_fa_hsum_avx(__m256 a) {
+        __m128 r = _mm_add_ps(_mm256_castps256_ps128(a), _mm256_extractf128_ps(a, 1));
+        r = _mm_add_ps(r, _mm_movehl_ps(r, r));
+        r = _mm_add_ss(r, _mm_movehdup_ps(r));
+        return _mm_cvtss_f32(r);
+    }
+#endif
+
+// macro-simplified x4out: one ISA-independent loop body via ggml's existing
+// GGML_F32_VEC / GGML_F16_VEC macros, and one local macro for the per-output
+// horizontal reduce (GGML_F32_VEC_REDUCE folds an ARR of accumulators into a
+// single scalar, so it cannot serve four independent outputs).
+inline static void ggml_vec_dot_f16_f32_x4out(const int n,
+        float * GGML_RESTRICT s0, float * GGML_RESTRICT s1,
+        float * GGML_RESTRICT s2, float * GGML_RESTRICT s3,
+        const ggml_fp16_t * GGML_RESTRICT x0, const ggml_fp16_t * GGML_RESTRICT x1,
+        const ggml_fp16_t * GGML_RESTRICT x2, const ggml_fp16_t * GGML_RESTRICT x3,
+        const float * GGML_RESTRICT y) {
+    int i = 0;
+    float f0 = 0.0f, f1 = 0.0f, f2 = 0.0f, f3 = 0.0f;
+#if GGML_HAS_VEC_DOT_F16_F32
+    GGML_F32_VEC a0 = GGML_F32_VEC_ZERO, a1 = GGML_F32_VEC_ZERO;
+    GGML_F32_VEC a2 = GGML_F32_VEC_ZERO, a3 = GGML_F32_VEC_ZERO;
+    for (; i + GGML_F32_EPR - 1 < n; i += GGML_F32_EPR) {
+        const GGML_F32_VEC vy = GGML_F32_VEC_LOAD(y + i);   // Q loaded ONCE
+        a0 = GGML_F32_VEC_FMA(a0, GGML_F16_VEC_LOAD(x0 + i, 0), vy);
+        a1 = GGML_F32_VEC_FMA(a1, GGML_F16_VEC_LOAD(x1 + i, 0), vy);
+        a2 = GGML_F32_VEC_FMA(a2, GGML_F16_VEC_LOAD(x2 + i, 0), vy);
+        a3 = GGML_F32_VEC_FMA(a3, GGML_F16_VEC_LOAD(x3 + i, 0), vy);
+    }
+    f0 += GGML_FA_HSUM(a0);
+    f1 += GGML_FA_HSUM(a1);
+    f2 += GGML_FA_HSUM(a2);
+    f3 += GGML_FA_HSUM(a3);
+#endif
+    // Four separate tail loops, each the same as the tail of ggml_vec_dot_f16_f32.
+    // A fused 4 way tail contracts differently, which breaks the match for head sizes that are not a multiple of the vector width.
+    {
+        int j;
+        for (j = i; j < n; ++j) f0 += GGML_CPU_FP16_TO_FP32(x0[j])*y[j];
+        for (j = i; j < n; ++j) f1 += GGML_CPU_FP16_TO_FP32(x1[j])*y[j];
+        for (j = i; j < n; ++j) f2 += GGML_CPU_FP16_TO_FP32(x2[j])*y[j];
+        for (j = i; j < n; ++j) f3 += GGML_CPU_FP16_TO_FP32(x3[j])*y[j];
+    }
+    *s0 = f0; *s1 = f1; *s2 = f2; *s3 = f3;
+}
+
+// y (F32) += v * x (F16). Keeps the accumulator in F32.
+// ggml_vec_mad_f16 pays three F16<->F32 conversions per element on targets without native F16 arithmetic.
+inline static void ggml_vec_mad_f16_f32(const int n, float * GGML_RESTRICT y, const ggml_fp16_t * GGML_RESTRICT x, const float v) {
+    int i = 0;
+#if defined(__AVX512F__)
+    const __m512 vx = _mm512_set1_ps(v);
+    for (; i + 15 < n; i += 16) {
+        const __m512 ax = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i)));
+        _mm512_storeu_ps(y + i, _mm512_fmadd_ps(ax, vx, _mm512_loadu_ps(y + i)));
+    }
+#elif defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
+    const __m256 vx = _mm256_set1_ps(v);
+    for (; i + 7 < n; i += 8) {
+        const __m256 ax = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i)));
+        _mm256_storeu_ps(y + i, _mm256_fmadd_ps(ax, vx, _mm256_loadu_ps(y + i)));
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] += GGML_CPU_FP16_TO_FP32(x[i])*v;
+    }
+}
+
 inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const float * GGML_RESTRICT x, const float v) {
 #if defined(GGML_SIMD)
     #if defined(__ARM_FEATURE_SVE)
