@@ -157,11 +157,15 @@ struct common_log_entry {
             }
         }
 
-        fprintf(fcur, "%s", msg.data());
+        // the reset goes before the trailing newlines, so that every line carries its own colors
+        const bool reset = level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG;
 
-        if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG) {
-            fprintf(fcur, "%s", g_col[COMMON_LOG_COL_DEFAULT]);
+        size_t end = strlen(msg.data());
+        while (end > 0 && msg[end - 1] == '\n') {
+            end--;
         }
+
+        fprintf(fcur, "%.*s%s%s", (int) end, msg.data(), reset ? g_col[COMMON_LOG_COL_DEFAULT] : "", msg.data() + end);
 
         fflush(fcur);
     }
@@ -171,6 +175,7 @@ struct common_log {
     // default capacity
     common_log(size_t capacity = 512) {
         file       = nullptr;
+        colors     = false;
         prefix     = false;
         timestamps = false;
         running    = false;
@@ -198,6 +203,7 @@ private:
 
     FILE * file;
 
+    bool colors;
     bool prefix;
     bool timestamps;
     bool running;
@@ -407,8 +413,14 @@ public:
         resume();
     }
 
+    bool get_colors() const {
+        return colors;
+    }
+
     void set_colors(bool colors) {
         pause();
+
+        this->colors = colors;
 
         if (colors) {
             g_col[COMMON_LOG_COL_DEFAULT] = LOG_COL_DEFAULT;
@@ -511,6 +523,10 @@ void common_log_set_colors(struct common_log * log, log_colors colors) {
 
     GGML_ASSERT(colors == LOG_COLORS_ENABLED);
     log->set_colors(true);
+}
+
+bool common_log_get_colors(struct common_log * log) {
+    return log->get_colors();
 }
 
 void common_log_set_prefix(struct common_log * log, bool prefix) {

@@ -513,6 +513,8 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     preset.set_option(ctx_preset, "LLAMA_ARG_HOST",  CHILD_ADDR);
     preset.set_option(ctx_preset, "LLAMA_ARG_PORT",  std::to_string(port));
     preset.set_option(ctx_preset, "LLAMA_ARG_ALIAS", name);
+    // the child output goes through the router to its terminal, so it follows the router colors
+    preset.set_option(ctx_preset, "LLAMA_ARG_LOG_COLORS", common_log_get_colors(common_log_main()) ? "on" : "off");
     // TODO: maybe validate preset before rendering ?
     // render args
     args = preset.to_args(bin_path);
@@ -796,11 +798,12 @@ void server_models::load_models() {
             inst.meta.hidden = hidden_models.count(name) > 0;
         }
     };
-    // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
+    // update_args() injects HOST/PORT/ALIAS/LOG_COLORS, so strip them before comparing presets
     auto preset_options_for_compare = [](common_preset p) {
         p.unset_option("LLAMA_ARG_HOST");
         p.unset_option("LLAMA_ARG_PORT");
         p.unset_option("LLAMA_ARG_ALIAS");
+        p.unset_option("LLAMA_ARG_LOG_COLORS");
         return p.options;
     };
 
@@ -1797,10 +1800,7 @@ void server_child::notify_to_router(const std::string & state, const json & payl
     std::lock_guard<std::mutex> lk(mtx_stdout);
     common_log_pause(common_log_main());
     fflush(stdout);
-    // the router matches the command on a line prefix, so the leading newline
-    // closes whatever the logger left open on the shared pipe, down to the
-    // trailing color reset that carries no newline of its own
-    fprintf(stdout, "\n%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
     fflush(stdout);
     common_log_resume(common_log_main());
 }
