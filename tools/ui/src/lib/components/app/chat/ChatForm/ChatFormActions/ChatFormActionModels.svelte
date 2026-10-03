@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
+	import { ModelsSelectorDropdown, ModelsSelectorMobileTrigger } from '$lib/components/app';
 	import { conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
 	import { getConversationModel } from '$lib/utils';
 
@@ -143,7 +143,7 @@
 		}
 	});
 
-	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorSheet | undefined =
+	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorMobileTrigger | undefined =
 		$state(undefined);
 
 	export function open() {
@@ -152,7 +152,7 @@
 </script>
 
 {#if deviceStore.isMobile}
-	<ModelsSelectorSheet
+	<ModelsSelectorMobileTrigger
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
 		disabled={disabled || isOffline}
