@@ -6729,4 +6729,333 @@ void ggml_gemm_q8_0_8x4_q8_0(int                        n,
     }
 }
 
+// Q4_0 x Q8_0 on the same layout (block_q4_0x8-sized panels, see repack.h); the +8 offset is seeded as comp / 16.
+namespace {
+
+// R rows x 8P columns, R < 6: the row tails and the 1-row gemv.
+// The 6-row main-loop tile is written out below to avoid spills and hoisting issues in MSVC.
+template <int R, int P>
+static inline void gemm_q4_0_8x4_q8_0_tile(int64_t                              nb,
+                                           const block_q4_0x8 * GGML_RESTRICT   bp0,
+                                           const block_q4_0x8 * GGML_RESTRICT   bp1,
+                                           const block_q8_0 * GGML_RESTRICT     a,    // row 0; row r at a + r * nb
+                                           const q8_0_vnni_comp * GGML_RESTRICT aux,  // row 0; row r at aux + r * nb
+                                           float * GGML_RESTRICT                s,
+                                           size_t                               bs) {
+    const __m256i m4 = _mm256_set1_epi8(0x0F);
+    __m256        acc[R][P];
+    for (int r = 0; r < R; r++) {
+        for (int p = 0; p < P; p++) {
+            acc[r][p] = _mm256_setzero_ps();
+        }
+    }
+    for (int64_t b = 0; b < nb; b++) {
+        __m256i iacc[R][P];
+        for (int r = 0; r < R; r++) {
+            const __m256i comp = _mm256_set1_epi32(aux[r * nb + b].comp / 16);
+            for (int p = 0; p < P; p++) {
+                iacc[r][p] = comp;
+            }
+        }
+        const int8_t * aq[R];
+        for (int r = 0; r < R; r++) {
+            aq[r] = a[r * nb + b].qs;
+        }
+        for (int g = 0; g < 4; g++) {
+            {
+                const __m256i w0 = _mm256_and_si256(_mm256_loadu_si256((const __m256i *) (bp0[b].qs + 32 * g)), m4);
+                const __m256i w1 =
+                    P == 2 ? _mm256_and_si256(_mm256_loadu_si256((const __m256i *) (bp1[b].qs + 32 * g)), m4) : w0;
+                for (int r = 0; r < R; r++) {
+                    const __m256i av = mm256_bcast_i8x4(aq[r] + 4 * g);
+                    iacc[r][0]       = mul_sum_us8_pairs_acc_int32x8(iacc[r][0], w0, av);
+                    if (P == 2) {
+                        iacc[r][1] = mul_sum_us8_pairs_acc_int32x8(iacc[r][1], w1, av);
+                    }
+                }
+            }
+            {
+                const __m256i w0 = _mm256_and_si256(
+                    _mm256_srli_epi16(_mm256_loadu_si256((const __m256i *) (bp0[b].qs + 32 * g)), 4), m4);
+                const __m256i w1 =
+                    P == 2 ? _mm256_and_si256(
+                                 _mm256_srli_epi16(_mm256_loadu_si256((const __m256i *) (bp1[b].qs + 32 * g)), 4), m4) :
+                             w0;
+                for (int r = 0; r < R; r++) {
+                    const __m256i av = mm256_bcast_i8x4(aq[r] + 16 + 4 * g);
+                    iacc[r][0]       = mul_sum_us8_pairs_acc_int32x8(iacc[r][0], w0, av);
+                    if (P == 2) {
+                        iacc[r][1] = mul_sum_us8_pairs_acc_int32x8(iacc[r][1], w1, av);
+                    }
+                }
+            }
+        }
+        const __m256 cs0 = GGML_F32Cx8_LOAD(bp0[b].d);
+        const __m256 cs1 = P == 2 ? GGML_F32Cx8_LOAD(bp1[b].d) : cs0;
+        for (int r = 0; r < R; r++) {
+            const __m256 rs = _mm256_set1_ps(aux[r * nb + b].d);
+            acc[r][0]       = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc[r][0]), _mm256_mul_ps(cs0, rs), acc[r][0]);
+            if (P == 2) {
+                acc[r][1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc[r][1]), _mm256_mul_ps(cs1, rs), acc[r][1]);
+            }
+        }
+    }
+    for (int r = 0; r < R; r++) {
+        for (int p = 0; p < P; p++) {
+            _mm256_storeu_ps(s + r * bs + 8 * p, acc[r][p]);
+        }
+    }
+}
+
+// 6 rows x 16 columns, the main-loop tile, written out. The nibbles are unpacked into a Q8_0-ordered u8 scratch
+// per block (low nibble -> group g, high nibble -> group 4 + g) so the loop is the Q8_0 one; the narrow tails
+// above keep the direct nibble path.
+static void gemm_q4_0_8x4_q8_0_tile_6x16(int64_t                              nb,
+                                         const block_q4_0x8 * GGML_RESTRICT   bp0,
+                                         const block_q4_0x8 * GGML_RESTRICT   bp1,
+                                         const block_q8_0 * GGML_RESTRICT     a,
+                                         const q8_0_vnni_comp * GGML_RESTRICT aux,
+                                         float * GGML_RESTRICT                s,
+                                         size_t                               bs) {
+    const __m256i m4     = _mm256_set1_epi8(0x0F);
+    __m256        acc_00 = _mm256_setzero_ps();
+    __m256        acc_01 = _mm256_setzero_ps();
+    __m256        acc_10 = _mm256_setzero_ps();
+    __m256        acc_11 = _mm256_setzero_ps();
+    __m256        acc_20 = _mm256_setzero_ps();
+    __m256        acc_21 = _mm256_setzero_ps();
+    __m256        acc_30 = _mm256_setzero_ps();
+    __m256        acc_31 = _mm256_setzero_ps();
+    __m256        acc_40 = _mm256_setzero_ps();
+    __m256        acc_41 = _mm256_setzero_ps();
+    __m256        acc_50 = _mm256_setzero_ps();
+    __m256        acc_51 = _mm256_setzero_ps();
+    for (int64_t b = 0; b < nb; b++) {
+        alignas(32) int8_t u8[2][256];
+        for (int g = 0; g < 4; g++) {
+            const __m256i r0 = _mm256_loadu_si256((const __m256i *) (bp0[b].qs + 32 * g));
+            _mm256_store_si256((__m256i *) (u8[0] + 32 * g), _mm256_and_si256(r0, m4));
+            _mm256_store_si256((__m256i *) (u8[0] + 128 + 32 * g), _mm256_and_si256(_mm256_srli_epi16(r0, 4), m4));
+            const __m256i r1 = _mm256_loadu_si256((const __m256i *) (bp1[b].qs + 32 * g));
+            _mm256_store_si256((__m256i *) (u8[1] + 32 * g), _mm256_and_si256(r1, m4));
+            _mm256_store_si256((__m256i *) (u8[1] + 128 + 32 * g), _mm256_and_si256(_mm256_srli_epi16(r1, 4), m4));
+        }
+        __m256i        iacc_00 = _mm256_set1_epi32(aux[0 * nb + b].comp / 16);
+        __m256i        iacc_01 = iacc_00;
+        __m256i        iacc_10 = _mm256_set1_epi32(aux[1 * nb + b].comp / 16);
+        __m256i        iacc_11 = iacc_10;
+        __m256i        iacc_20 = _mm256_set1_epi32(aux[2 * nb + b].comp / 16);
+        __m256i        iacc_21 = iacc_20;
+        __m256i        iacc_30 = _mm256_set1_epi32(aux[3 * nb + b].comp / 16);
+        __m256i        iacc_31 = iacc_30;
+        __m256i        iacc_40 = _mm256_set1_epi32(aux[4 * nb + b].comp / 16);
+        __m256i        iacc_41 = iacc_40;
+        __m256i        iacc_50 = _mm256_set1_epi32(aux[5 * nb + b].comp / 16);
+        __m256i        iacc_51 = iacc_50;
+        const int8_t * a0      = a[0 * nb + b].qs;
+        const int8_t * a1      = a[1 * nb + b].qs;
+        const int8_t * a2      = a[2 * nb + b].qs;
+        const int8_t * a3      = a[3 * nb + b].qs;
+        const int8_t * a4      = a[4 * nb + b].qs;
+        const int8_t * a5      = a[5 * nb + b].qs;
+        for (int g = 0; g < 8; g++) {
+            const __m256i w0  = _mm256_load_si256((const __m256i *) (u8[0] + 32 * g));
+            const __m256i w1  = _mm256_load_si256((const __m256i *) (u8[1] + 32 * g));
+            const __m256i av0 = mm256_bcast_i8x4(a0 + 4 * g);
+            iacc_00           = mul_sum_us8_pairs_acc_int32x8(iacc_00, w0, av0);
+            iacc_01           = mul_sum_us8_pairs_acc_int32x8(iacc_01, w1, av0);
+            const __m256i av1 = mm256_bcast_i8x4(a1 + 4 * g);
+            iacc_10           = mul_sum_us8_pairs_acc_int32x8(iacc_10, w0, av1);
+            iacc_11           = mul_sum_us8_pairs_acc_int32x8(iacc_11, w1, av1);
+            const __m256i av2 = mm256_bcast_i8x4(a2 + 4 * g);
+            iacc_20           = mul_sum_us8_pairs_acc_int32x8(iacc_20, w0, av2);
+            iacc_21           = mul_sum_us8_pairs_acc_int32x8(iacc_21, w1, av2);
+            const __m256i av3 = mm256_bcast_i8x4(a3 + 4 * g);
+            iacc_30           = mul_sum_us8_pairs_acc_int32x8(iacc_30, w0, av3);
+            iacc_31           = mul_sum_us8_pairs_acc_int32x8(iacc_31, w1, av3);
+            const __m256i av4 = mm256_bcast_i8x4(a4 + 4 * g);
+            iacc_40           = mul_sum_us8_pairs_acc_int32x8(iacc_40, w0, av4);
+            iacc_41           = mul_sum_us8_pairs_acc_int32x8(iacc_41, w1, av4);
+            const __m256i av5 = mm256_bcast_i8x4(a5 + 4 * g);
+            iacc_50           = mul_sum_us8_pairs_acc_int32x8(iacc_50, w0, av5);
+            iacc_51           = mul_sum_us8_pairs_acc_int32x8(iacc_51, w1, av5);
+        }
+        const __m256 cs0 = GGML_F32Cx8_LOAD(bp0[b].d);
+        const __m256 cs1 = GGML_F32Cx8_LOAD(bp1[b].d);
+        const __m256 rs0 = _mm256_set1_ps(aux[0 * nb + b].d);
+        acc_00           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_00), _mm256_mul_ps(cs0, rs0), acc_00);
+        acc_01           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_01), _mm256_mul_ps(cs1, rs0), acc_01);
+        const __m256 rs1 = _mm256_set1_ps(aux[1 * nb + b].d);
+        acc_10           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_10), _mm256_mul_ps(cs0, rs1), acc_10);
+        acc_11           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_11), _mm256_mul_ps(cs1, rs1), acc_11);
+        const __m256 rs2 = _mm256_set1_ps(aux[2 * nb + b].d);
+        acc_20           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_20), _mm256_mul_ps(cs0, rs2), acc_20);
+        acc_21           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_21), _mm256_mul_ps(cs1, rs2), acc_21);
+        const __m256 rs3 = _mm256_set1_ps(aux[3 * nb + b].d);
+        acc_30           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_30), _mm256_mul_ps(cs0, rs3), acc_30);
+        acc_31           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_31), _mm256_mul_ps(cs1, rs3), acc_31);
+        const __m256 rs4 = _mm256_set1_ps(aux[4 * nb + b].d);
+        acc_40           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_40), _mm256_mul_ps(cs0, rs4), acc_40);
+        acc_41           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_41), _mm256_mul_ps(cs1, rs4), acc_41);
+        const __m256 rs5 = _mm256_set1_ps(aux[5 * nb + b].d);
+        acc_50           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_50), _mm256_mul_ps(cs0, rs5), acc_50);
+        acc_51           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_51), _mm256_mul_ps(cs1, rs5), acc_51);
+    }
+    _mm256_storeu_ps(s + 0 * bs, acc_00);
+    _mm256_storeu_ps(s + 0 * bs + 8, acc_01);
+    _mm256_storeu_ps(s + 1 * bs, acc_10);
+    _mm256_storeu_ps(s + 1 * bs + 8, acc_11);
+    _mm256_storeu_ps(s + 2 * bs, acc_20);
+    _mm256_storeu_ps(s + 2 * bs + 8, acc_21);
+    _mm256_storeu_ps(s + 3 * bs, acc_30);
+    _mm256_storeu_ps(s + 3 * bs + 8, acc_31);
+    _mm256_storeu_ps(s + 4 * bs, acc_40);
+    _mm256_storeu_ps(s + 4 * bs + 8, acc_41);
+    _mm256_storeu_ps(s + 5 * bs, acc_50);
+    _mm256_storeu_ps(s + 5 * bs + 8, acc_51);
+}
+
+// 6 rows x 8 columns: the single-panel variant of gemm_q4_0_8x4_q8_0_tile_6x16.
+static void gemm_q4_0_8x4_q8_0_tile_6x8(int64_t                              nb,
+                                        const block_q4_0x8 * GGML_RESTRICT   bp0,
+                                        const block_q4_0x8 * GGML_RESTRICT   bp1,
+                                        const block_q8_0 * GGML_RESTRICT     a,
+                                        const q8_0_vnni_comp * GGML_RESTRICT aux,
+                                        float * GGML_RESTRICT                s,
+                                        size_t                               bs) {
+    UNUSED(bp1);
+    const __m256i m4     = _mm256_set1_epi8(0x0F);
+    __m256        acc_00 = _mm256_setzero_ps();
+    __m256        acc_10 = _mm256_setzero_ps();
+    __m256        acc_20 = _mm256_setzero_ps();
+    __m256        acc_30 = _mm256_setzero_ps();
+    __m256        acc_40 = _mm256_setzero_ps();
+    __m256        acc_50 = _mm256_setzero_ps();
+    for (int64_t b = 0; b < nb; b++) {
+        alignas(32) int8_t u8[1][256];
+        for (int g = 0; g < 4; g++) {
+            const __m256i r0 = _mm256_loadu_si256((const __m256i *) (bp0[b].qs + 32 * g));
+            _mm256_store_si256((__m256i *) (u8[0] + 32 * g), _mm256_and_si256(r0, m4));
+            _mm256_store_si256((__m256i *) (u8[0] + 128 + 32 * g), _mm256_and_si256(_mm256_srli_epi16(r0, 4), m4));
+        }
+        __m256i        iacc_00 = _mm256_set1_epi32(aux[0 * nb + b].comp / 16);
+        __m256i        iacc_10 = _mm256_set1_epi32(aux[1 * nb + b].comp / 16);
+        __m256i        iacc_20 = _mm256_set1_epi32(aux[2 * nb + b].comp / 16);
+        __m256i        iacc_30 = _mm256_set1_epi32(aux[3 * nb + b].comp / 16);
+        __m256i        iacc_40 = _mm256_set1_epi32(aux[4 * nb + b].comp / 16);
+        __m256i        iacc_50 = _mm256_set1_epi32(aux[5 * nb + b].comp / 16);
+        const int8_t * a0      = a[0 * nb + b].qs;
+        const int8_t * a1      = a[1 * nb + b].qs;
+        const int8_t * a2      = a[2 * nb + b].qs;
+        const int8_t * a3      = a[3 * nb + b].qs;
+        const int8_t * a4      = a[4 * nb + b].qs;
+        const int8_t * a5      = a[5 * nb + b].qs;
+        for (int g = 0; g < 8; g++) {
+            const __m256i w0  = _mm256_load_si256((const __m256i *) (u8[0] + 32 * g));
+            const __m256i av0 = mm256_bcast_i8x4(a0 + 4 * g);
+            iacc_00           = mul_sum_us8_pairs_acc_int32x8(iacc_00, w0, av0);
+            const __m256i av1 = mm256_bcast_i8x4(a1 + 4 * g);
+            iacc_10           = mul_sum_us8_pairs_acc_int32x8(iacc_10, w0, av1);
+            const __m256i av2 = mm256_bcast_i8x4(a2 + 4 * g);
+            iacc_20           = mul_sum_us8_pairs_acc_int32x8(iacc_20, w0, av2);
+            const __m256i av3 = mm256_bcast_i8x4(a3 + 4 * g);
+            iacc_30           = mul_sum_us8_pairs_acc_int32x8(iacc_30, w0, av3);
+            const __m256i av4 = mm256_bcast_i8x4(a4 + 4 * g);
+            iacc_40           = mul_sum_us8_pairs_acc_int32x8(iacc_40, w0, av4);
+            const __m256i av5 = mm256_bcast_i8x4(a5 + 4 * g);
+            iacc_50           = mul_sum_us8_pairs_acc_int32x8(iacc_50, w0, av5);
+        }
+        const __m256 cs0 = GGML_F32Cx8_LOAD(bp0[b].d);
+        const __m256 rs0 = _mm256_set1_ps(aux[0 * nb + b].d);
+        acc_00           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_00), _mm256_mul_ps(cs0, rs0), acc_00);
+        const __m256 rs1 = _mm256_set1_ps(aux[1 * nb + b].d);
+        acc_10           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_10), _mm256_mul_ps(cs0, rs1), acc_10);
+        const __m256 rs2 = _mm256_set1_ps(aux[2 * nb + b].d);
+        acc_20           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_20), _mm256_mul_ps(cs0, rs2), acc_20);
+        const __m256 rs3 = _mm256_set1_ps(aux[3 * nb + b].d);
+        acc_30           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_30), _mm256_mul_ps(cs0, rs3), acc_30);
+        const __m256 rs4 = _mm256_set1_ps(aux[4 * nb + b].d);
+        acc_40           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_40), _mm256_mul_ps(cs0, rs4), acc_40);
+        const __m256 rs5 = _mm256_set1_ps(aux[5 * nb + b].d);
+        acc_50           = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_50), _mm256_mul_ps(cs0, rs5), acc_50);
+    }
+    _mm256_storeu_ps(s + 0 * bs, acc_00);
+    _mm256_storeu_ps(s + 1 * bs, acc_10);
+    _mm256_storeu_ps(s + 2 * bs, acc_20);
+    _mm256_storeu_ps(s + 3 * bs, acc_30);
+    _mm256_storeu_ps(s + 4 * bs, acc_40);
+    _mm256_storeu_ps(s + 5 * bs, acc_50);
+}
+
+template <int P>
+static void gemm_q4_0_8x4_q8_0_cols(int64_t                nb,
+                                    const block_q4_0x8 *   bp0,
+                                    const block_q4_0x8 *   bp1,
+                                    const block_q8_0 *     a,
+                                    const q8_0_vnni_comp * aux,
+                                    float *                s,
+                                    size_t                 bs,
+                                    int                    nr) {
+    int y = 0;
+    for (; y + 6 <= nr; y += 6) {
+        if constexpr (P == 2) {
+            gemm_q4_0_8x4_q8_0_tile_6x16(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                         bs);
+        } else {
+            gemm_q4_0_8x4_q8_0_tile_6x8(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                        bs);
+        }
+    }
+    switch (nr - y) {
+        case 5:
+            gemm_q4_0_8x4_q8_0_tile<5, P>(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                          bs);
+            break;
+        case 4:
+            gemm_q4_0_8x4_q8_0_tile<4, P>(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                          bs);
+            break;
+        case 3:
+            gemm_q4_0_8x4_q8_0_tile<3, P>(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                          bs);
+            break;
+        case 2:
+            gemm_q4_0_8x4_q8_0_tile<2, P>(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                          bs);
+            break;
+        case 1:
+            gemm_q4_0_8x4_q8_0_tile<1, P>(nb, bp0, bp1, a + (size_t) y * nb, aux + (size_t) y * nb, s + (size_t) y * bs,
+                                          bs);
+            break;
+        default:
+            break;
+    }
+}
+
+}  // namespace
+
+void ggml_gemm_q4_0_8x4_q8_0(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             const void * GGML_RESTRICT vy_aux,
+                             int                        nr,
+                             int                        nc) {
+    GGML_ASSERT(n % QK4_0 == 0 && nc % 8 == 0);
+    const int64_t          nb     = n / QK4_0;
+    const block_q4_0x8 *   panels = (const block_q4_0x8 *) vx;  // panel p = rows 8p..8p+7, nb blocks each
+    const block_q8_0 *     a      = (const block_q8_0 *) vy;
+    const q8_0_vnni_comp * aux    = (const q8_0_vnni_comp *) vy_aux;
+
+    for (int x = 0; x < nc; x += 16) {
+        const block_q4_0x8 * bp0 = panels + (size_t) (x / 8) * nb;
+        if (nc - x >= 16) {
+            gemm_q4_0_8x4_q8_0_cols<2>(nb, bp0, bp0 + nb, a, aux, s + x, bs, nr);
+        } else {
+            gemm_q4_0_8x4_q8_0_cols<1>(nb, bp0, bp0, a, aux, s + x, bs, nr);
+        }
+    }
+}
+
 #endif  // __AVXVNNI__ || (__AVX512VNNI__ && __AVX512VL__)

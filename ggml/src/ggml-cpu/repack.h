@@ -251,6 +251,16 @@ void ggml_gemm_q8_0_8x4_q8_0(int                        n,
                              const void * GGML_RESTRICT vy_aux,
                              int                        nr,
                              int                        nc);
+// Q4_0 weights in the same layout: block_q4_0x8-sized panels with qs as [4 groups of 4 k][8 rows][4 bytes], the
+// Q4_0 nibble pairs kept as is (k low, k + 16 high). Same activation side as the Q8_0 kernel.
+void ggml_gemm_q4_0_8x4_q8_0(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             const void * GGML_RESTRICT vy_aux,
+                             int                        nr,
+                             int                        nc);
 #endif
 #if defined __riscv_zvfh
 void ggml_quantize_mat_q8_0_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
