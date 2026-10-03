@@ -260,6 +260,7 @@ export interface ChatMessageActions {
 	editWithReplacement: (
 		message: DatabaseMessage,
 		newContent: string,
+		newReasoning: string,
 		shouldBranch: boolean
 	) => void;
 	editUserMessagePreserveResponses: (
@@ -292,17 +293,22 @@ export interface ChatMessageActionsContext {
 }
 
 export interface ChatMessageEditState {
+	/** Agentic turns span several messages, so editing is offered on plain turns only */
+	readonly canEdit: boolean;
 	readonly isEditing: boolean;
 	readonly editedContent: string;
 	readonly editedExtras: DatabaseMessageExtra[];
+	readonly editedReasoning: string;
 	readonly editedUploadedFiles: ChatUploadedFile[];
 	readonly originalContent: string;
 	readonly originalExtras: DatabaseMessageExtra[];
+	readonly originalReasoning: string;
 	readonly showSaveOnlyOption: boolean;
 	readonly showBranchAfterEditOption: boolean;
+	/** Reasoning owns its own textarea, so the edit buffer maps field to field onto the stored message */
+	readonly showReasoningField: boolean;
 	readonly shouldBranchAfterEdit: boolean;
 	readonly messageRole: MessageRole;
-	readonly rawEditContent?: string;
 }
 
 export interface ChatMessageEditActions {
@@ -316,6 +322,7 @@ export interface ChatMessageEditActions {
 }
 
 export interface ChatMessageAssistantEditActions {
+	setReasoning: (reasoning: string) => void;
 	setShouldBranchAfterEdit: (value: boolean) => void;
 }
 
