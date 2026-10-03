@@ -346,10 +346,6 @@ static int common_download_file_single_online(const std::string & url,
     const std::string path_temporary = path + ".downloadInProgress";
     int delay = retry_delay_seconds;
 
-    if (opts.callback) {
-        opts.callback->on_start(p);
-    }
-
     for (int i = 0; i < max_attempts; ++i) {
         if (opts.callback && opts.callback->is_cancelled()) {
             break;
@@ -373,6 +369,12 @@ static int common_download_file_single_online(const std::string & url,
 
         p.downloaded = existing_size;
 
+        if (i == 0 && opts.callback) {
+            // report after the resume offset is known, so a resumed file does not
+            // start at 0 in the progress UI
+            opts.callback->on_start(p);
+        }
+
         LOG_DBG("%s: downloading from %s to %s (etag:%s)...\n",
                 __func__, common_http_show_masked_url(parts).c_str(),
                 path_temporary.c_str(), etag.c_str());
@@ -393,12 +395,7 @@ static int common_download_file_single_online(const std::string & url,
     if (opts.callback) {
         opts.callback->on_done(p, success);
     }
-    if (opts.callback && opts.callback->is_cancelled() &&
-        std::filesystem::exists(path_temporary)) {
-        if (remove(path_temporary.c_str()) != 0) {
-            LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, path_temporary.c_str());
-        }
-    }
+    // a stopped download keeps path_temporary, so the next attempt resumes from it
     if (!success) {
         LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
         return -1; // max attempts reached
