@@ -1285,6 +1285,14 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
     }
 
+    // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
+    // (server.cpp does this check for --embedding, but before the model is loaded)
+    if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
+        LOG_WRN("embeddings enabled: setting n_batch = n_ubatch = %u\n", cparams.n_ubatch);
+        cparams.n_batch = cparams.n_ubatch;
+        params.n_batch  = params.n_ubatch;
+    }
+
     // load and optionally apply lora adapters
     for (auto & la : params.lora_adapters) {
         llama_adapter_lora_ptr lora;
