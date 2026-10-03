@@ -30,6 +30,7 @@
 #define sub_group_shuffle_xor(val, mask) qcom_sub_group_shuffle_xor((val), (mask), CLK_SUB_GROUP_SHUFFLE_WIDTH_WAVE_SIZE_QCOM, 0.0f)
 #endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 // Assumes row size (ne00) is a multiple of 4
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
@@ -94,10 +95,12 @@ kernel void kernel_mul_mat_f16_f32_l4(
         }
     }
 }
+#endif
 
 // Each subgroup produces DR_NDST outputs, assumes ne11 == 1
 #define MUL_MAT_F16_F32_L4_DR_NDST 4
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -180,6 +183,7 @@ kernel void kernel_mul_mat_f16_f32_l4_dr(
         }
     }
 }
+#endif
 
 // Kernels for decoding, Adreno only for now
 #define MUL_MAT_F16_F32_L4_DR_LS_R2_MAX 8
@@ -188,6 +192,7 @@ kernel void kernel_mul_mat_f16_f32_l4_dr(
 #pragma OPENCL EXTENSION cl_qcom_subgroup_shuffle : enable
 #define sub_group_shuffle_xor(val, mask) qcom_sub_group_shuffle_xor((val), (mask), CLK_SUB_GROUP_SHUFFLE_WIDTH_WAVE_SIZE_QCOM, 0.0f)
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 3
 REQD_SUBGROUP_SIZE_64
 kernel void kernel_mul_mat_f16_f32_l4_dr_ls(
         global char * src0,
@@ -289,7 +294,9 @@ kernel void kernel_mul_mat_f16_f32_l4_dr_ls(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 4
 REQD_SUBGROUP_SIZE_64
 kernel void kernel_mul_mat_f16_f32_l4_dr_lq(
         global char * src0,
@@ -389,11 +396,13 @@ kernel void kernel_mul_mat_f16_f32_l4_dr_lq(
         }
     }
 }
+#endif
 #endif // ADRENO_GPU
 
 #define N_ROWS_PER_WG 8
 #define N_OUTS_PER_WG 8
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 5
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -469,7 +478,9 @@ kernel void kernel_mul_mat_f16_f32_l4_x8(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 6
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -547,10 +558,12 @@ kernel void kernel_mul_mat_f16_f32_l4_y8(
         }
     }
 }
+#endif
 
 #define N_OUTS_PAIR  8
 #define N_PAIRS_PAIR (N_OUTS_PAIR / 2)
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 7
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -633,12 +646,14 @@ kernel void kernel_mul_mat_f16_f32_l4_x8_pair(
         }
     }
 }
+#endif
 
 #define N_K_ROWS_GQA   16
 #define GQA_RATIO_GQA  8
 #define LANES_PER_QH   8    // 64 / GQA_RATIO_GQA
 #define DK_VEC_GQA     32   // DK / 4 for DK=128
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 8
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -728,10 +743,12 @@ kernel void kernel_mul_mat_f16_f32_l4_x8_gqa4(
         }
     }
 }
+#endif
 
 #define N_DV_ROWS_Y8GQA  8
 #define GQA_RATIO_Y8GQA  8
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 9
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -839,7 +856,9 @@ kernel void kernel_mul_mat_f16_f32_l4_y8_gqa(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 10
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -932,7 +951,9 @@ kernel void kernel_mul_mat_f16_f32_l4_x8_gqa4_img(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 11
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -1042,12 +1063,14 @@ kernel void kernel_mul_mat_f16_f32_l4_y8_gqa_img(
         }
     }
 }
+#endif
 
 #define N_K_ROWS_GQA_R4   16
 #define GQA_RATIO_R4      4
 #define LANES_PER_QH_R4   16    // = 64 / GQA_RATIO_R4
 #define DK_VEC_R4         32    // DK / 4 for DK=128
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 12
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -1139,12 +1162,14 @@ kernel void kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img(
         }
     }
 }
+#endif
 
 #define N_K_ROWS_GQA_R2_DK256   16
 #define GQA_RATIO_R2            2
 #define LANES_PER_QH_R2         32    // = 64 / GQA_RATIO_R2
 #define DK_VEC_DK256            64    // DK / 4 for DK=256
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 13
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -1235,3 +1260,4 @@ kernel void kernel_mul_mat_f16_f32_l4_x8_gqa_r2_dk256_img(
         }
     }
 }
+#endif
