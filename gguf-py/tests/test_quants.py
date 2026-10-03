@@ -69,6 +69,7 @@ class GGMLQuants:
             "tq1_0", "tq2_0",
             "mxfp4",
             "nvfp4",
+            "f8_e4m3",
             "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m",
             "iq4_nl", "iq4_xs",
         ):
@@ -179,6 +180,19 @@ def do_test(libggml_path: Path, quick: bool = False, user_type: GGMLQuantization
             continue
 
         logger.info(f"Testing {qtype.name}")
+
+        if qtype == GGMLQuantizationType.F8_E4M3:
+            encodings = np.arange(256, dtype=np.uint8)
+            pydq = gguf.dequantize(encodings, qtype)
+            ggdq = ggml_quants.dequantize(encodings, qtype)
+            assert pydq.dtype == np.float32
+            nan_mask = (encodings & 0x7F) == 0x7F
+            # Both 0x7F and 0xFF are NaNs; check classification, not FP32 NaN sign or payload.
+            np.testing.assert_array_equal(np.isnan(pydq), nan_mask)
+            np.testing.assert_array_equal(np.isnan(ggdq), nan_mask)
+            # Compare finite values by bits to also check signed zeros.
+            np.testing.assert_array_equal(pydq[~nan_mask].view(np.uint32), ggdq[~nan_mask].view(np.uint32))
+            logger.info("All 256 FP8 E4M3 encodings match C")
 
         rc = r.copy(order="C")
 
