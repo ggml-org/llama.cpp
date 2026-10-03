@@ -608,6 +608,80 @@ def test_logit_bias(tokenize, openai_style):
     assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
 
 
+@pytest.mark.parametrize("with_neighbor", [False, True])
+def test_prompt_exception_recovery(monkeypatch, tmp_path, with_neighbor: bool):
+    global server
+    monkeypatch.delenv("LLAMA_SERVER_DEBUG_FAIL_PROMPT_SLOT", raising=False)
+    monkeypatch.setenv("LLAMA_ARG_N_GPU_LAYERS", "0")
+    server.n_gpu_layer = 0
+    server.n_threads = 2
+    server.n_slots = 2 if with_neighbor else 1
+    server.n_ctx = 2048
+    server.n_predict = 512
+    server.cache_ram = 0
+    server.server_continuous_batching = True
+    server.server_slots = True
+    prompt = {
+        "prompt": "Once upon a time there was a little girl named Lily.",
+        "id_slot": 1 if with_neighbor else 0,
+        "n_predict": 8,
+        "temperature": 0,
+        "seed": 42,
+    }
+    neighbor_prompt = {
+        "prompt": "Once upon a time",
+        "id_slot": 0,
+        "n_predict": 512,
+        "ignore_eos": True,
+        "temperature": 0,
+        "seed": 42,
+    }
+    server.start()
+    reference = server.make_request("POST", "/completion", data=prompt, timeout=30)
+    assert reference.status_code == 200
+    if with_neighbor:
+        neighbor_reference = server.make_request("POST", "/completion", data=neighbor_prompt, timeout=30)
+        assert neighbor_reference.status_code == 200
+    server.stop()
+
+    monkeypatch.setenv("LLAMA_SERVER_DEBUG_FAIL_PROMPT_SLOT", str(prompt["id_slot"]))
+    log_path = tmp_path / "server.log"
+    server.log_path = str(log_path)
+    server.start()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        if with_neighbor:
+            neighbor = pool.submit(server.make_request, "POST", "/completion", data=neighbor_prompt, timeout=30)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                slots = server.make_request("GET", "/slots", timeout=10)
+                assert slots.status_code == 200
+                if slots.body[0]["is_processing"]:
+                    break
+                assert not neighbor.done(), "neighbor completed before the failing request started"
+                time.sleep(0.01)
+            else:
+                pytest.fail("neighbor did not start")
+
+        failed = server.make_request("POST", "/completion", data=prompt, timeout=30)
+        assert failed.status_code == 500
+        assert server.process.poll() is None
+        if with_neighbor:
+            healthy = neighbor.result(timeout=30)
+            assert healthy.status_code == 200
+            assert healthy.body["stop_type"] == "limit"
+            assert healthy.body["timings"]["predicted_n"] == 512
+            assert healthy.body["content"] == neighbor_reference.body["content"]
+
+    recovered = server.make_request("POST", "/completion", data=prompt, timeout=30)
+    assert recovered.status_code == 200
+    assert recovered.body["timings"]["cache_n"] == 0
+    assert recovered.body["content"] == reference.body["content"]
+    server.stop()
+    batches = re.findall(r"debug prompt allocation failure: batch_before=(\d+)", log_path.read_text())
+    assert len(batches) == 1, "failure injection must fire exactly once"
+    assert (int(batches[0]) > 0) == with_neighbor, "requests did not share the expected batch"
+
+
 def test_cancel_request():
     global server
     server.n_ctx = 4096
