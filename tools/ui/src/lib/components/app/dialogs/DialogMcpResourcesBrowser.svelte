@@ -8,7 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ICON_CLASS_DEFAULT, PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
-	import { mcpStore } from '$lib/stores';
+	import { deviceStore, mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -252,7 +252,10 @@
 </script>
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
-	<Dialog.Content class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0">
+	<Dialog.Content
+		class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0"
+		onOpenAutoFocus={(event) => deviceStore.isMobile && event.preventDefault()}
+	>
 		<Dialog.Header class="border-b border-border/30 px-4 py-3" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />
