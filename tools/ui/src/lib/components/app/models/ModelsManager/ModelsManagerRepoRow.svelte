@@ -6,7 +6,7 @@
 	import type { ModelQuantGroup } from './utils';
 	import { configuredContext } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
 	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
 	import { deviceStore, modelsStore } from '$lib/stores';
 
@@ -40,14 +40,14 @@
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40'
+		'relative cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40'
 	]}
 	onclick={onToggle}
 	onkeydown={handleKeydown}
 	role="button"
 	tabindex="0"
 >
-	<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+	<span class="flex min-w-0 items-center gap-3 max-md:pr-8" style="padding-left: {indent}px">
 		<ModelAvatar option={entry.base} size="size-9" />
 
 		<span class="min-w-0">
@@ -85,7 +85,7 @@
 		></span>
 	</span>
 
-	<span class="flex justify-center">
+	<span class="flex justify-center {MODEL_ROW_TRAILING_CELL_CLASS}">
 		{#if expanded}
 			<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
 		{:else}
