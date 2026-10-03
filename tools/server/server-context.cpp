@@ -134,6 +134,107 @@ enum slot_state {
 
 struct server_slot; // forward declaration
 
+// context checkpoints are the only way the server can roll back non-rewindable
+// memory (SWA windows, recurrent/hybrid state) to a prefix reuse point. the slot save
+// file does not carry them, so the ledger is persisted next to it and rebuilt at
+// restore - keeping prefix reuse alive across the save/restore round-trip (#25913).
+// sidecar format (all integers native-endian), fixed header then one record per checkpoint:
+//   magic(4) as "LCKP", version(u32), n_checkpoints(u32), desc_tgt_len(u32), desc_dft_len(u32)
+//   desc_tgt bytes + desc_dft bytes
+//   record: n_tokens(i64) id_task(i32) pos_min(i32) pos_max(i32)
+//           data_tgt_size(u64) + bytes, data_dft_size(u64) + bytes, data_spec_size(u64) + bytes
+// the model descriptions identify the topology that produced the opaque state blobs; a
+// restore against a different topology rejects the sidecar and reprocesses the prompt.
+// the sidecar is published via tmp + rename so it never pairs with a half-written save.
+static constexpr uint32_t SERVER_CKPT_MAGIC    = 0x504B434C; // u32 native-endian; the bytes spell "LCKP"
+static constexpr uint32_t SERVER_CKPT_VERSION  = 1;
+
+static std::string server_checkpoint_sidecar_path(const std::string & filepath) {
+    return filepath + ".ckpt";
+}
+
+static std::string server_model_desc(llama_context * ctx) {
+    if (ctx == nullptr) {
+        return "";
+    }
+    char buf[256] = "";
+    llama_model_desc(llama_get_model(ctx), buf, sizeof(buf));
+    return std::string(buf);
+}
+
+static std::string server_serialize_checkpoints_sidecar(const std::list<common_prompt_checkpoint> & checkpoints,
+        const std::string & desc_tgt, const std::string & desc_dft) {
+    std::string buf;
+    auto append = [&buf] (const void * data, size_t size) {
+        buf.append((const char *) data, size);
+    };
+
+    const uint32_t magic    = SERVER_CKPT_MAGIC;
+    const uint32_t version  = SERVER_CKPT_VERSION;
+    const uint32_t n_ckpt   = (uint32_t) checkpoints.size();
+    const uint32_t tgt_desc_len = (uint32_t) desc_tgt.size();
+    const uint32_t dft_desc_len = (uint32_t) desc_dft.size();
+
+    append(&magic,         sizeof(magic));
+    append(&version,       sizeof(version));
+    append(&n_ckpt,        sizeof(n_ckpt));
+    append(&tgt_desc_len,  sizeof(tgt_desc_len));
+    append(&dft_desc_len,  sizeof(dft_desc_len));
+    append(desc_tgt.data(), desc_tgt.size());
+    append(desc_dft.data(), desc_dft.size());
+
+    for (const auto & ckpt : checkpoints) {
+        const int64_t  n_tokens  = ckpt.n_tokens;
+        const int32_t  id_task   = ckpt.id_task;
+        const int32_t  pos_min   = ckpt.pos_min;
+        const int32_t  pos_max   = ckpt.pos_max;
+        const uint64_t tgt_size  = ckpt.data_tgt.size();
+        const uint64_t dft_size  = ckpt.data_dft.size();
+        const uint64_t spec_size = ckpt.data_spec.size();
+
+        append(&n_tokens,   sizeof(n_tokens));
+        append(&id_task,    sizeof(id_task));
+        append(&pos_min,    sizeof(pos_min));
+        append(&pos_max,    sizeof(pos_max));
+        append(&tgt_size,   sizeof(tgt_size));
+        append(ckpt.data_tgt.data(),  tgt_size);
+        append(&dft_size,   sizeof(dft_size));
+        append(ckpt.data_dft.data(),  dft_size);
+        append(&spec_size,  sizeof(spec_size));
+        append(ckpt.data_spec.data(), spec_size);
+    }
+
+    return buf;
+}
+
+static bool server_save_checkpoints_sidecar(const std::string & filepath, const std::list<common_prompt_checkpoint> & checkpoints,
+        const std::string & desc_tgt, const std::string & desc_dft) {
+    const std::string sidecar_path = server_checkpoint_sidecar_path(filepath);
+    const std::string buf = server_serialize_checkpoints_sidecar(checkpoints, desc_tgt, desc_dft);
+
+    const std::string tmp_path = sidecar_path + ".tmp";
+    {
+        std::ofstream out(tmp_path, std::ios::binary);
+        if (!out.is_open()) {
+            return false;
+        }
+        out.write(buf.data(), (std::streamsize) buf.size());
+        out.flush();
+        if (!out.good()) {
+            std::filesystem::remove(tmp_path);
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmp_path, sidecar_path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp_path);
+        return false;
+    }
+    return true;
+}
+
 struct server_batch {
     common_batch view; // the rendered sub-batch [off, off + n_tokens), see render()
 
@@ -2716,6 +2817,13 @@ private:
                     if (nwrite == 0) {
                         send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
                         break;
+                    }
+
+                    // persist the checkpoint ledger alongside the KV state; the main save
+                    // already succeeded, so a sidecar failure is a warning, not an error
+                    if (!server_save_checkpoints_sidecar(filepath, slot->prompt.checkpoints,
+                            server_model_desc(ctx_tgt), server_model_desc(ctx_dft))) {
+                        SRV_WRN("%s: failed to write checkpoint sidecar for slot %d\n", __func__, id_slot);
                     }
 
                     const int64_t t_end = ggml_time_us();
