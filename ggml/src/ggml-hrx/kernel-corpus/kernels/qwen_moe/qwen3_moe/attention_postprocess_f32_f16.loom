@@ -1,0 +1,296 @@
+// Qwen grouped-query postprocessing with direct F16 cache publication.
+//
+// Raw projection rows are physically `[token][head][channel]`: the reshape
+// operations in the reference graph only expose that existing layout. Query
+// and key rows receive their independent per-head RMSNorm and NEOX rotary
+// transform. Queries remain F32 for attention, while keys and values are
+// converted directly into their indexed F16 cache rows. No reshape,
+// transpose, normalized-row, or rotated-key allocation is materialized.
+//
+// Logical positions and cache rows are separate runtime inputs. This preserves
+// continuous batching, where a token's rotary position need not equal the
+// physical cache row selected by the allocator. K and V indices also remain
+// distinct so the kernel does not impose an ordering contract on the cache.
+// The stage scheduler owns those indices and guarantees they select valid cache
+// rows; violating that trusted contract is an error rather than a skipped write.
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_postprocess_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @qwen3_moe.model.rms_epsilon : f32
+
+config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+
+config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.attention.key_value_size : %value: index where [range(%value, 1, 262144)]
+
+// Applies one RMSNorm and two adjacent NEOX pairs. NEOX pairs corresponding
+// channels from the low and high halves, while keeping each half contiguous.
+// A two-pair packet therefore gives both halves naturally coalesced loads and
+// stores without changing the model's pairing rule.
+func.def inline @qwen3_moe_rmsnorm_neox_packet(%row_sum: f32, %head_size: f32, %epsilon: f32, %position: f32, %inverse_frequencies: vector<2xf32>, %low_values: vector<2xf32>, %high_values: vector<2xf32>, %low_weights: vector<2xf32>, %high_weights: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) {
+  %mean = scalar.divf<reassoc|nnan|ninf|nsz|afn> %row_sum, %head_size : f32
+  %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+  %scale_vector = vector.splat %scale : vector<2xf32>
+  %position_vector = vector.splat %position : vector<2xf32>
+  %inverse_two_pi = scalar.constant 0.15915494309189535 : f32
+  %inverse_two_pi_vector = vector.splat %inverse_two_pi : vector<2xf32>
+  %normalized_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %low_values, %scale_vector : vector<2xf32>
+  %normalized_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %high_values, %scale_vector : vector<2xf32>
+  %scaled_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %normalized_low, %low_weights : vector<2xf32>
+  %scaled_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %normalized_high, %high_weights : vector<2xf32>
+  %angles = vector.mulf<reassoc|nnan|ninf|nsz|contract> %position_vector, %inverse_frequencies : vector<2xf32>
+  %turns = vector.mulf<reassoc|nnan|ninf|nsz|contract> %angles, %inverse_two_pi_vector : vector<2xf32>
+  %cosines = vector.costurnsf<afn> %turns : vector<2xf32>
+  %sines = vector.sinturnsf<afn> %turns : vector<2xf32>
+  %low_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_low, %cosines : vector<2xf32>
+  %high_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %sines : vector<2xf32>
+  %low_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_low, %sines : vector<2xf32>
+  %high_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %cosines : vector<2xf32>
+  %rotated_low = vector.subf<reassoc|nnan|ninf|nsz> %low_cosines, %high_sines : vector<2xf32>
+  %rotated_high = vector.addf<reassoc|nnan|ninf|nsz> %low_sines, %high_cosines : vector<2xf32>
+  func.return %rotated_low, %rotated_high : vector<2xf32>, vector<2xf32>
+}
+
+// Processes one head domain after its raw projection row is visible. Callers
+// may use a larger workgroup than the packet count; inactive workitems
+// contribute zero to normalization and perform no loads or stores.
+func.template<qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_attention_postprocess_head_body(%publish_output: i1, %token_count: index, %cache_row_count: index, %head_domain0: index, %token0: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer) {
+  %query_size0 = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
+  %head_size0 = config.get @qwen3_moe.attention.head_size : index
+  %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
+  %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), range(%head_size0, 4, 1024), mul(%head_size0, 4), mul(%query_size0, %head_size0), mul(%key_value_size0, %head_size0)] : index, index, index
+  %channel0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %token, %launch_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+  %half_head_size = index.div %head_size, %c2 : index
+  %pair_packet_count = index.div %head_size, %c4 : index
+  %query_head_count = index.div %query_size, %head_size : index
+  %key_value_head_count = index.div %key_value_size, %head_size : index
+  %key_value_domain_count = index.mul %key_value_head_count, %c2 : index
+  %head_domain_count = index.add %query_head_count, %key_value_domain_count : index
+  %head_domain = index.assume %head_domain0 [lt(%head_domain0, %head_domain_count)] : index
+  %key_domain_end = index.add %query_head_count, %key_value_head_count : index
+  %is_query = index.cmp ult, %head_domain, %query_head_count : index
+  %is_query_or_key = index.cmp ult, %head_domain, %key_domain_end : index
+  %key_value_head = index.rem %head_domain, %key_value_head_count : index
+  %active_channel = index.cmp ult, %channel0, %pair_packet_count : index
+  %head_size_i32 = index.cast %head_size : index to i32
+  %head_size_f32 = scalar.sitofp %head_size_i32 : i32 to f32
+  %positions_noalias, %key_cache_indices_noalias, %value_cache_indices_noalias, %query_input_noalias, %key_input_noalias, %value_input_noalias, %query_norm_weight_noalias, %key_norm_weight_noalias, %inverse_frequencies_noalias, %query_output_noalias, %key_cache_noalias, %value_cache_noalias = buffer.assume.noalias %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache : buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi32>
+  %key_cache_indices_view = buffer.view %key_cache_indices_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi64>
+  %value_cache_indices_view = buffer.view %value_cache_indices_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi64>
+  %query_input_view = buffer.view %query_input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
+  %key_input_view = buffer.view %key_input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32>
+  %value_input_view = buffer.view %value_input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32>
+  %query_norm_weight_view = buffer.view %query_norm_weight_noalias[%c0_offset] : buffer -> view<[%head_size]xf32>
+  %key_norm_weight_view = buffer.view %key_norm_weight_noalias[%c0_offset] : buffer -> view<[%head_size]xf32>
+  %inverse_frequencies_view = buffer.view %inverse_frequencies_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+  %query_output_view = buffer.view %query_output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
+  %key_cache_words_view = buffer.view %key_cache_noalias[%c0_offset] : buffer -> view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+  %value_cache_words_view = buffer.view %value_cache_noalias[%c0_offset] : buffer -> view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+  %row_sum = scf.if %is_query_or_key -> (f32) {
+    %partial_sum = scf.if %publish_output -> (f32) {
+      %channel_sum = scf.if %active_channel -> (f32) {
+        %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
+        %reduction_channel = index.mul %channel, %c4 : index
+        %reduction_values = scf.if %is_query -> (vector<4xf32>) {
+          %query_values = vector.load %query_input_view[%token, %head_domain, %reduction_channel] : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32> -> vector<4xf32>
+          scf.yield %query_values : vector<4xf32>
+        } else {
+          %key_values = vector.load %key_input_view[%token, %key_value_head, %reduction_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<4xf32>
+          scf.yield %key_values : vector<4xf32>
+        }
+        %squares = vector.mulf<reassoc|nnan|ninf|nsz|contract> %reduction_values, %reduction_values : vector<4xf32>
+        %sum = vector.reduce<addf, reassoc|nnan|ninf|nsz> %squares, %c0_f32 : vector<4xf32>, f32
+        scf.yield %sum : f32
+      } else {
+        scf.yield %c0_f32 : f32
+      }
+      scf.yield %channel_sum : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %sum = kernel.workgroup.reduce<addf> %partial_sum : f32
+    scf.yield %sum : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  scf.if %publish_output {
+    scf.if %active_channel {
+      %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
+      %pair_channel = index.mul %channel, %c2 : index
+      %paired_channel = index.add %pair_channel, %half_head_size : index
+      %paired_word = index.add %channel, %pair_packet_count : index
+      %reduction_channel = index.mul %channel, %c4 : index
+      scf.if %is_query {
+        %low_values = vector.load %query_input_view[%token, %head_domain, %pair_channel] : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32> -> vector<2xf32>
+        %high_values = vector.load %query_input_view[%token, %head_domain, %paired_channel] : view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32> -> vector<2xf32>
+        %low_weights = vector.load %query_norm_weight_view[%pair_channel] : view<[%head_size]xf32> -> vector<2xf32>
+        %high_weights = vector.load %query_norm_weight_view[%paired_channel] : view<[%head_size]xf32> -> vector<2xf32>
+        %inverse_frequencies_packet = vector.load %inverse_frequencies_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+        %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
+        %position = scalar.sitofp %position_i32 : i32 to f32
+        %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+        vector.store %rotated_low, %query_output_view[%token, %head_domain, %pair_channel] : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
+        vector.store %rotated_high, %query_output_view[%token, %head_domain, %paired_channel] : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
+      } else {
+        scf.if %is_query_or_key {
+          %low_values = vector.load %key_input_view[%token, %key_value_head, %pair_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<2xf32>
+          %high_values = vector.load %key_input_view[%token, %key_value_head, %paired_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<2xf32>
+          %low_weights = vector.load %key_norm_weight_view[%pair_channel] : view<[%head_size]xf32> -> vector<2xf32>
+          %high_weights = vector.load %key_norm_weight_view[%paired_channel] : view<[%head_size]xf32> -> vector<2xf32>
+          %inverse_frequencies_packet = vector.load %inverse_frequencies_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+          %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
+          %position = scalar.sitofp %position_i32 : i32 to f32
+          %cache_index_raw = view.load %key_cache_indices_view[%token] : view<[%launch_token_count]xi64> -> i64
+          %cache_index_i64 = scalar.assume %cache_index_raw [range(%cache_index_raw, 0, 1048575)] : i64
+          %cache_index0 = index.cast %cache_index_i64 : i64 to index
+          %cache_index = index.assume %cache_index0 [lt(%cache_index0, %bounded_cache_row_count)] : index
+          %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+          %half_low = vector.fptrunc %rotated_low : vector<2xf32> to vector<2xf16>
+          %half_high = vector.fptrunc %rotated_high : vector<2xf32> to vector<2xf16>
+          %packed_low = vector.bitcast %half_low : vector<2xf16> to vector<1xi32>
+          %packed_high = vector.bitcast %half_high : vector<2xf16> to vector<1xi32>
+          vector.store %packed_low, %key_cache_words_view[%cache_index, %key_value_head, %channel] : vector<1xi32>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+          vector.store %packed_high, %key_cache_words_view[%cache_index, %key_value_head, %paired_word] : vector<1xi32>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+        } else {
+          %cache_index_raw = view.load %value_cache_indices_view[%token] : view<[%launch_token_count]xi64> -> i64
+          %cache_index_i64 = scalar.assume %cache_index_raw [range(%cache_index_raw, 0, 1048575)] : i64
+          %cache_index0 = index.cast %cache_index_i64 : i64 to index
+          %cache_index = index.assume %cache_index0 [lt(%cache_index0, %bounded_cache_row_count)] : index
+          %values = vector.load %value_input_view[%token, %key_value_head, %reduction_channel] : view<[%launch_token_count]x[%key_value_head_count]x[%head_size]xf32> -> vector<4xf32>
+          %half_values = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+          %packed_values = vector.bitcast %half_values : vector<4xf16> to vector<2xi32>
+          vector.store %packed_values, %value_cache_words_view[%cache_index, %key_value_head, %pair_channel] : vector<2xi32>, view<[%bounded_cache_row_count]x[%key_value_head_count]x[%half_head_size]xi32>
+        }
+      }
+    }
+  }
+  func.return
+}
+
+kernel.def target(@qwen3_moe_attention_postprocess_gfx11_wave32) @qwen3_moe_attention_postprocess_f32_f16(%token_count: index, %cache_row_count: index) {
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %head_size = config.get @qwen3_moe.attention.head_size : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %pair_packet_count = index.div %head_size, %c4 : index
+  %query_head_count = index.div %query_size, %head_size : index
+  %key_value_head_count = index.div %key_value_size, %head_size : index
+  %key_value_domain_count = index.mul %key_value_head_count, %c2 : index
+  %head_domain_count = index.add %query_head_count, %key_value_domain_count : index
+  kernel.launch.config workgroups(%head_domain_count, %token_count, %c1) workgroup_size(%pair_packet_count, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer) where [range(%token_count, 1, 2048)] {
+  %head_domain = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %c0 = index.constant 0 : index
+  %valid_token = index.cmp ult, %token0, %token_count : index
+  %safe_token = scf.select %valid_token, %token0, %c0 : index
+  func.apply<qwen3_moe.attention.postprocess.head_body>(%valid_token, %token_count, %cache_row_count, %head_domain, %safe_token, %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : (i1, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// At position zero NEOX is the identity. Uniform rows make the RMSNorm result
+// analytically one to within epsilon, while the distinct V value proves that
+// all three output domains reach their intended bindings.
+check.case public @qwen3_moe_attention_postprocess_identity_case {
+  %token_count = check.literal value(2) : index
+  %cache_row_count = check.literal value(2) : index
+  %positions = check.generate.fill value(0) : tensor<2xi32>
+  %key_cache_indices = check.generate.iota offset(0) step(1) : tensor<2xi64>
+  %value_cache_indices = check.generate.iota offset(0) step(1) : tensor<2xi64>
+  %query_input = check.generate.fill value(1.0) : tensor<2x1x4xf32>
+  %key_input = check.generate.fill value(1.0) : tensor<2x1x4xf32>
+  %value_input = check.generate.fill value(2.0) : tensor<2x1x4xf32>
+  %query_norm_weight = check.generate.fill value(1.0) : tensor<4xf32>
+  %key_norm_weight = check.generate.fill value(1.0) : tensor<4xf32>
+  %inverse_frequencies = check.generate.fill value(1.0) : tensor<2xf32>
+  %query_output = check.generate.fill value(0.0) : tensor<2x1x4xf32>
+  %key_cache = check.generate.fill value(0.0) : tensor<2x1x4xf16>
+  %value_cache = check.generate.fill value(0.0) : tensor<2x1x4xf16>
+  %expected_query = check.generate.fill value(1.0) : tensor<2x1x4xf32>
+  %expected_key = check.generate.fill value(1.0) : tensor<2x1x4xf16>
+  %expected_value = check.generate.fill value(2.0) : tensor<2x1x4xf16>
+  kernel.launch @qwen3_moe_attention_postprocess_f32_f16[%token_count, %cache_row_count](%token_count, %cache_row_count, %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : [index, index](index, index, tensor<2xi32>, tensor<2xi64>, tensor<2xi64>, tensor<2x1x4xf32>, tensor<2x1x4xf32>, tensor<2x1x4xf32>, tensor<4xf32>, tensor<4xf32>, tensor<2xf32>, tensor<2x1x4xf32>, tensor<2x1x4xf16>, tensor<2x1x4xf16>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<2x1x4xf32>
+  check.expect.close actual(%key_cache) expected(%expected_key) atol(0.001) rtol(0.001) nan(same) : tensor<2x1x4xf16>
+  check.expect.close actual(%value_cache) expected(%expected_value) atol(0.0) rtol(0.0) nan(same) : tensor<2x1x4xf16>
+  check.return
+}
+
+// Distinct angles make the two NEOX pairs rotate `[1, 3]` and `[2, 4]`
+// into `[sqrt(5), sqrt(5)]` and `[sqrt(10), sqrt(10)]`. Their flattened
+// `[A, B, A, B]` result catches adjacent-channel pairing and packet-order
+// mistakes without embedding a second implementation in the test.
+check.case public @qwen3_moe_attention_postprocess_neox_case {
+  %token_count = check.literal value(2) : index
+  %cache_row_count = check.literal value(2) : index
+  %positions = check.generate.fill value(1) : tensor<2xi32>
+  %key_cache_indices = check.generate.iota offset(0) step(1) : tensor<2xi64>
+  %value_cache_indices = check.generate.iota offset(0) step(1) : tensor<2xi64>
+  %query_input = check.generate.fill value(1.0) : tensor<2x1x4xf32>
+  %key_input = check.generate.fill value(1.0) : tensor<2x1x4xf32>
+  %value_input = check.generate.fill value(0.0) : tensor<2x1x4xf32>
+  %query_norm_weight = check.generate.iota offset(1.0) step(1.0) : tensor<4xf32>
+  %key_norm_weight = check.generate.iota offset(1.0) step(1.0) : tensor<4xf32>
+  %inverse_frequencies = check.generate.iota offset(-0.46364760900080609) step(0.14189705460416391) : tensor<2xf32>
+  %query_output = check.generate.fill value(0.0) : tensor<2x1x4xf32>
+  %key_cache = check.generate.fill value(0.0) : tensor<2x1x4xf16>
+  %value_cache = check.generate.fill value(0.0) : tensor<2x1x4xf16>
+  %expected_query = check.generate.iota offset(2.2360668182373047) step(0.92620921134948736) period(2) : tensor<2x1x4xf32>
+  %expected_key = check.generate.iota offset(2.236328125) step(0.92578125) period(2) : tensor<2x1x4xf16>
+  %expected_value = check.generate.fill value(0.0) : tensor<2x1x4xf16>
+  kernel.launch @qwen3_moe_attention_postprocess_f32_f16[%token_count, %cache_row_count](%token_count, %cache_row_count, %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : [index, index](index, index, tensor<2xi32>, tensor<2xi64>, tensor<2xi64>, tensor<2x1x4xf32>, tensor<2x1x4xf32>, tensor<2x1x4xf32>, tensor<4xf32>, tensor<4xf32>, tensor<2xf32>, tensor<2x1x4xf32>, tensor<2x1x4xf16>, tensor<2x1x4xf16>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(0.0001) rtol(0.0001) nan(same) : tensor<2x1x4xf32>
+  check.expect.close actual(%key_cache) expected(%expected_key) atol(0.002) rtol(0.002) nan(same) : tensor<2x1x4xf16>
+  check.expect.close actual(%value_cache) expected(%expected_value) atol(0.0) rtol(0.0) nan(same) : tensor<2x1x4xf16>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_postprocess_benchmark_case {
+  %token_count = check.param.choice values([1, 32, 128, 512]) name("token_count") : index
+  %cache_row_count = check.literal value(4096) : index
+  %positions = check.generate.iota offset(0) step(1) : tensor<[%token_count]xi32>
+  %key_cache_indices = check.generate.iota offset(0) step(1) : tensor<[%token_count]xi64>
+  %value_cache_indices = check.generate.iota offset(0) step(1) : tensor<[%token_count]xi64>
+  %query_input = check.generate.fill value(0.0) : tensor<[%token_count]x32x128xf32>
+  %key_input = check.generate.fill value(0.0) : tensor<[%token_count]x4x128xf32>
+  %value_input = check.generate.fill value(0.0) : tensor<[%token_count]x4x128xf32>
+  %query_norm_weight = check.generate.fill value(1.0) : tensor<128xf32>
+  %key_norm_weight = check.generate.fill value(1.0) : tensor<128xf32>
+  %inverse_frequencies = check.generate.fill value(1.0) : tensor<64xf32>
+  %query_output = check.generate.fill value(1.0) : tensor<[%token_count]x32x128xf32>
+  %key_cache = check.generate.fill value(0.0) : tensor<4096x4x128xf16>
+  %value_cache = check.generate.fill value(0.0) : tensor<4096x4x128xf16>
+  %expected_query = check.generate.fill value(0.0) : tensor<[%token_count]x32x128xf32>
+  %expected_key_cache = check.generate.fill value(0.0) : tensor<4096x4x128xf16>
+  %expected_value_cache = check.generate.fill value(0.0) : tensor<4096x4x128xf16>
+  kernel.launch @qwen3_moe_attention_postprocess_f32_f16[%token_count, %cache_row_count](%token_count, %cache_row_count, %positions, %key_cache_indices, %value_cache_indices, %query_input, %key_input, %value_input, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : [index, index](index, index, tensor<[%token_count]xi32>, tensor<[%token_count]xi64>, tensor<[%token_count]xi64>, tensor<[%token_count]x32x128xf32>, tensor<[%token_count]x4x128xf32>, tensor<[%token_count]x4x128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<64xf32>, tensor<[%token_count]x32x128xf32>, tensor<4096x4x128xf16>, tensor<4096x4x128xf16>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x32x128xf32>
+  check.expect.close actual(%key_cache) expected(%expected_key_cache) atol(0.0) rtol(0.0) nan(same) : tensor<4096x4x128xf16>
+  check.expect.close actual(%value_cache) expected(%expected_value_cache) atol(0.0) rtol(0.0) nan(same) : tensor<4096x4x128xf16>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_attention_postprocess_identity_case> @qwen3_moe_attention_postprocess_identity
+
+check.benchmark<@qwen3_moe_attention_postprocess_neox_case> @qwen3_moe_attention_postprocess_neox
+
+check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_attention_postprocess_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_attention_postprocess_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_attention_postprocess_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_attention_postprocess_benchmark_case> @qwen3_moe_attention_postprocess_prefill_512 {token_count = 512}
