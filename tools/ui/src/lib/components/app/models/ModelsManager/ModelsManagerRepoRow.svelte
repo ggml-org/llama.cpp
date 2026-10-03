@@ -72,7 +72,7 @@
 	</span>
 
 	<ModelContext
-		class="justify-self-end"
+		class="justify-self-end max-md:hidden"
 		configured={configuredContext(contextSource)}
 		option={contextSource}
 	/>
