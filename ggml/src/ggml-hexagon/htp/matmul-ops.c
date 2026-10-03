@@ -3855,7 +3855,30 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     return HTP_STATUS_OK;
 }
 
-int op_matmul(struct htp_ops_context * octx) {
+// The rows of dims 1..3 can be walked with one stride (size-1 dims skipped); returns that stride
+static inline bool htp_mm_rows_stride(const struct htp_tensor * t, uint32_t * stride) {
+    uint32_t s = 0, next = 0;
+    for (int i = 1; i < 4; i++) {
+        if (t->ne[i] == 1) continue;
+        if (s == 0) { s = t->nb[i]; next = s * t->ne[i]; continue; }
+        if (t->nb[i] != next) return false;
+        next *= t->ne[i];
+    }
+    *stride = s ? s : t->nb[1];
+    return true;
+}
+
+static inline void htp_mm_tensor_flatten_rows(struct htp_tensor * f, const struct htp_tensor * t, uint32_t stride) {
+    *f = *t;
+    f->ne[1] = t->ne[1] * t->ne[2] * t->ne[3];
+    f->ne[2] = 1;
+    f->ne[3] = 1;
+    f->nb[1] = stride;
+    f->nb[2] = f->nb[1] * f->ne[1];
+    f->nb[3] = f->nb[2];
+}
+
+static int op_matmul_impl(struct htp_ops_context * octx) {
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
     const int status = htp_mm_init_context(octx, kparams);
@@ -3868,6 +3891,30 @@ int op_matmul(struct htp_ops_context * octx) {
     }
 
     return hvx_mm_matmul(octx);
+}
+
+int op_matmul(struct htp_ops_context * octx) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
+
+    // 2D weight with a batched contiguous activation: one 2D matmul over all rows (host computed kparams the same way)
+    const uint32_t src1_type_size = (src1->type == HTP_TYPE_F32 || src1->type == HTP_TYPE_I32) ? 4 : 2;
+    uint32_t s1, sd;
+    if (octx->src[2] == NULL && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] * src1->ne[3] > 1 &&
+        src1->nb[0] == src1_type_size && htp_mm_rows_stride(src1, &s1) && htp_mm_rows_stride(dst, &sd)) {
+        struct htp_tensor src1_flat, dst_flat;
+        htp_mm_tensor_flatten_rows(&src1_flat, src1, s1);
+        htp_mm_tensor_flatten_rows(&dst_flat, dst, sd);
+        octx->src[1] = &src1_flat;
+        octx->dst    = &dst_flat;
+        const int status = op_matmul_impl(octx);
+        octx->src[1] = src1;
+        octx->dst    = dst;
+        return status;
+    }
+
+    return op_matmul_impl(octx);
 }
 
 static int hmx_mm_op_matmul_id(

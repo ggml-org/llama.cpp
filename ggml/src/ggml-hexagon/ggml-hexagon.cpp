@@ -5429,6 +5429,40 @@ finalize:
     kparams->div_ne12     = init_fastdiv_values(ne12);
 }
 
+// The rows of dims 1..3 can be walked with one stride (size-1 dims skipped); returns that stride
+static bool ggml_hexagon_rows_stride(const int64_t * ne, const size_t * nb, size_t * stride) {
+    size_t s = 0, next = 0;
+    for (int i = 1; i < GGML_MAX_DIMS; i++) {
+        if (ne[i] == 1) continue;
+        if (s == 0) { s = nb[i]; next = s * ne[i]; continue; }
+        if (nb[i] != next) return false;
+        next *= ne[i];
+    }
+    *stride = s ? s : nb[1];
+    return true;
+}
+
+// A 2D weight applied to a batched activation whose rows are evenly strided is the same matmul over ne11 * ne12 * ne13 rows
+static bool ggml_hexagon_matmul_can_flatten(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst) {
+    size_t s1, sd;
+    return dst->op == GGML_OP_MUL_MAT && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] * src1->ne[3] > 1 &&
+           src1->nb[0] == ggml_type_size(src1->type) && ggml_hexagon_rows_stride(src1->ne, src1->nb, &s1) &&
+           ggml_hexagon_rows_stride(dst->ne, dst->nb, &sd);
+}
+
+static ggml_tensor ggml_hexagon_tensor_flatten_rows(const struct ggml_tensor * t) {
+    size_t stride = 0;
+    ggml_hexagon_rows_stride(t->ne, t->nb, &stride);
+    ggml_tensor f = *t;
+    f.ne[1] = t->ne[1] * t->ne[2] * t->ne[3];
+    f.ne[2] = 1;
+    f.ne[3] = 1;
+    f.nb[1] = stride;
+    f.nb[2] = f.nb[1] * f.ne[1];
+    f.nb[3] = f.nb[2];
+    return f;
+}
+
 static void ggml_hexagon_precompute_matmul_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
@@ -5436,6 +5470,12 @@ static void ggml_hexagon_precompute_matmul_params(
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
 ) {
+    if (ggml_hexagon_matmul_can_flatten(src0, src1, dst)) {
+        const ggml_tensor src1_flat = ggml_hexagon_tensor_flatten_rows(src1);
+        const ggml_tensor dst_flat  = ggml_hexagon_tensor_flatten_rows(dst);
+        ggml_hexagon_precompute_matmul_params_impl(sess, src0, &src1_flat, &dst_flat, 0, 0, kparams);
+        return;
+    }
     ggml_hexagon_precompute_matmul_params_impl(sess, src0, src1, dst, 0, 0, kparams);
 }
 
