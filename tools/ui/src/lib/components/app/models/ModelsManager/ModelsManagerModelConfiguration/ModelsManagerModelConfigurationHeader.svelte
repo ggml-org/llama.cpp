@@ -3,6 +3,7 @@
 	import { ModelAvatar, ModelId } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ServerModelStatus } from '$lib/enums';
+	import { deviceStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -47,7 +48,7 @@
 <!-- only the desktop pane leaves the right edge to the panel border: on a phone the
      pane covers the screen, so its two sides carry the same padding, and it takes a
      little more room around the model it names -->
-<header class="space-y-2.5 pt-3 pl-4 max-md:space-y-3 max-md:pt-4 max-md:pr-4">
+<header class="space-y-2.5 pt-3 pl-4 max-md:space-y-4 max-md:pt-4 max-md:pr-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<!-- same geometry as the discover details header: base org, quant org badge -->
@@ -60,11 +61,13 @@
 			/>
 
 			<div class="min-w-0">
+				<!-- a phone gives the id a row of its own, with its badges and icons under it -->
 				<ModelId
 					aliases={option.aliases}
 					class="min-w-0"
 					modalities={option.modalities}
 					modelId={option.model}
+					stackId={deviceStore.isMobile}
 					tags={option.tags}
 					title={option.model}
 				/>
@@ -81,7 +84,7 @@
 
 		<Button
 			aria-label="Close details"
-			class="h-7 w-7"
+			class="h-7 w-7 max-md:-mt-3 max-md:-mr-3 max-md:h-10 max-md:w-10 max-md:rounded-full"
 			onclick={onClose}
 			size="icon"
 			variant="ghost"
