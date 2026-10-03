@@ -6526,7 +6526,10 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
                 case GGML_GLU_OP_SWIGLU_CLAMP:
-                    return ggml_is_contiguous_1(op->src[0]);
+                    return ggml_is_contiguous_1(op->src[0]) &&
+                           (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                           op->type == op->src[0]->type &&
+                           (op->src[1] == nullptr || op->src[1]->type == op->src[0]->type);
                 default:
                     return false;
             }
@@ -6789,7 +6792,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_RMS_NORM_BACK:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_SCALE:
-            return true;
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_CONT:
             return true;
         case GGML_OP_TRI:
