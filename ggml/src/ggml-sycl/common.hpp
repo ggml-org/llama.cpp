@@ -191,6 +191,12 @@ static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
     }
 }
 
+// the DPAS shapes and 2D block loads used by the XMX kernel are those of Xe2
+static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31 ||
+           arch == gpu_arch::intel_gpu_lnl_m;
+}
+
 // fewest columns for which the XMX kernel is faster than the other kernels
 static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
     return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q8_0 ? 1 : 2;
@@ -278,6 +284,10 @@ struct ggml_sycl_device_info {
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
+
+static inline bool ggml_sycl_xmx_enabled(int device) {
+    return g_ggml_sycl_enable_xmx && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+}
 
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 

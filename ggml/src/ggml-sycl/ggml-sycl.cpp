@@ -4825,22 +4825,23 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
 }
 
 // reordered weights of the types in ggml_sycl_xmx_supports_type() take the XMX kernel for wider batches
-static bool can_use_xmx_batch(const ggml_tensor * src0, const ggml_tensor * src1) {
+static bool can_use_xmx_batch(int device, const ggml_tensor * src0, const ggml_tensor * src1) {
 #ifdef GGML_SYCL_MMVQ_HAS_XMX
     const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-    return g_ggml_sycl_enable_xmx && ggml_sycl_xmx_supports_type(src0->type) && extra &&
+    return ggml_sycl_xmx_enabled(device) && ggml_sycl_xmx_supports_type(src0->type) && extra &&
            extra->optimized_feature.reorder && src1->ne[1] <= GGML_SYCL_XMX_MAX_COLS && src1->ne[2] == 1 &&
            src1->ne[3] == 1;
 #else
+    GGML_UNUSED(device);
     GGML_UNUSED(src0);
     GGML_UNUSED(src1);
     return false;
 #endif // GGML_SYCL_MMVQ_HAS_XMX
 }
 
-static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static bool can_use_mul_mat_vec_q(int device, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE || can_use_xmx_batch(src0, src1));
+           (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE || can_use_xmx_batch(device, src0, src1));
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4880,11 +4881,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     // check data types and tensor shapes for custom matrix multiplication kernels:
     bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
-    if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(src0, src1)) {
+    if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
         use_dequantize_mul_mat_vec = false;
     }
 
-    bool use_mul_mat_vec_q = can_use_mul_mat_vec_q(src0, src1, dst);
+    bool use_mul_mat_vec_q = can_use_mul_mat_vec_q(ctx.device, src0, src1, dst);
 
     bool use_mul_mat_q =  ggml_sycl_supports_mmq(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
