@@ -1848,7 +1848,7 @@ server_tokens format_prompt_rerank(
     server_tokens result = {};
 
     // media must be spliced through the mtmd pipeline
-    if ((query_files.empty() && doc_files.empty()) == false && mctx == nullptr) {
+    if ((!query_files.empty() || !doc_files.empty()) && mctx == nullptr) {
         throw std::invalid_argument("multimodal rerank input requires --mmproj");
     }
 
@@ -1881,6 +1881,10 @@ server_tokens format_prompt_rerank(
             return process_mtmd_prompt(mctx, prompt, files, init_opt);
         }
     } else {
+        if (!query_files.empty() || !doc_files.empty()) {
+            throw std::invalid_argument("multimodal rerank input requires a model with a rerank chat template");
+        }
+
         // Get EOS token - use SEP token as fallback if EOS is not available
         server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
         server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);

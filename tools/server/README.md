@@ -790,15 +790,15 @@ documents; the response is truncated to this many entries.
 
 The endpoint supports two request formats, selected by which key carries the documents:
 
-- **TEI format** (`query` + `texts`): text-only. Set `return_text: true` to echo each
-  document's text back in the response; images are never returned and the `text` field is the
-  text parts joined (image-only documents echo `""`).
+- **TEI format** (`query` + `texts`): same input shape as Jina. Set `return_text: true` to echo
+  each document's text back in the response; images are never returned and the `text` field is
+  the text parts joined (image-only documents echo `""`).
 - **Jina format** (`query` + `documents`): Multimodal (image + text) supported. `query` and
   each `documents` element may be a plain string or a multimodal object (`{"text", "image"}`).
 
 *Examples:*
 
-**TEI format, text-only** - `query` + `texts`:
+**TEI format** - `query` + `texts`:
 
 ```shell
 curl http://127.0.0.1:8012/v1/rerank \
@@ -859,7 +859,7 @@ curl http://127.0.0.1:8012/v1/rerank \
 ```
 
 In Jina format the endpoint returns a wrapped object with `model`, `object`, `usage`, and a
-`results` array of `{index, relevance_score}` sorted by score descending. 
+`results` array of `{index, relevance_score}` sorted by score descending.
 
 **Jina response** (wrapped object with `results`):
 
@@ -1686,7 +1686,6 @@ Each object gives one embedding. This input shape is not part of the OpenAI Embe
           "encoding_format": "float"
   }'
   ```
-
 
 ### POST `/v1/responses/input_tokens`: Token Counting
 

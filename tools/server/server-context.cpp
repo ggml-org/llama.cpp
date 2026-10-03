@@ -5431,8 +5431,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
     // TEI: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/rerank
     bool is_tei_format = body.contains("texts");
 
-    // LAMDA FUNCTION DECLARATION: expand one rerank input item: plain string or Jina/TEI compatabile format
-    // {"text": str|[str], "image": url|data-uri|raw-base64|[...]}
+    // expand one rerank input item: plain string or {"text": str|[str], "image": url|data-uri|raw-base64|[urls]}
     auto parse_item = [&](const json & item, std::string & out_text, std::vector<raw_buffer> & out_files) {
         if (item.is_string()) {
             out_text = item.get<std::string>();
@@ -5444,7 +5443,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         if (item.contains("video") || item.contains("fps") || item.contains("max_frames")) {
             throw std::invalid_argument("video/fps/max_frames are not supported for rerank input");
         }
-        json text = item.value("text", json()); // Parsing the "text" field, which can be a string or an array of strings
+        json text = item.value("text", json());
         if (text.is_string()) {
             out_text += text.get<std::string>();
         } else if (text.is_array()) {
@@ -5457,10 +5456,14 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         } else if (!text.is_null()) {
             throw std::invalid_argument("\"text\" must be a string or an array of strings");
         }
-        json image = item.value("image", json()); // Parsing the "image" field, which can be a string (base64) or an array of strings
+        json image = item.value("image", json());
         auto add_image = [&](const std::string & url) {
             // marker is appended by format_prompt_rerank, one per decoded file
-            handle_media(out_files, url, params.media_path);
+            try {
+                handle_media(out_files, url, params.media_path);
+            } catch (const std::runtime_error & e) {
+                throw std::invalid_argument(e.what());
+            }
         };
         if (image.is_string()) {
             add_image(image.get<std::string>());
@@ -5476,7 +5479,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         }
     };
 
-    // Parse query 
+    // Parse query
     std::string query_str;
     std::vector<raw_buffer> query_files;
     if (body.count("query") == 1) {
@@ -5491,14 +5494,14 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         return res;
     }
 
-    // Resolve JINA/TEI format ambiguity
+    // Resolve Jina/TEI format ambiguity
     json documents_json = json_value(body, "documents",
         json_value(body, "texts", json::array()));
-        if (!documents_json.is_array() || documents_json.empty()) {
-            res->error(format_error_response("\"documents\" must be a non-empty array of strings or objects", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        
+    if (!documents_json.is_array() || documents_json.empty()) {
+        res->error(format_error_response("\"documents\" must be a non-empty array of strings or objects", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
     // Parse documents
     std::vector<std::string>          documents(documents_json.size());
     std::vector<std::vector<raw_buffer>> document_files(documents_json.size());
@@ -5512,6 +5515,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
     }
 
     int top_n = json_value(body, "top_n", (int)documents.size());
+    if (top_n < 0) {
+        res->error(format_error_response("\"top_n\" must be >= 0", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
 
     // create and queue the task
     json responses = json::array();
