@@ -1,17 +1,10 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
-	import {
-		ModelId,
-		ModelsSelectorList,
-		ModelsSelectorTriggerIcon,
-		SearchInput
-	} from '$lib/components/app';
-	import * as Sheet from '$lib/components/ui/sheet';
-	import { MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
+	import { ModelId, ModelsSelectorTriggerIcon } from '$lib/components/app';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
+	import { modelsStore, uiStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
@@ -34,34 +27,25 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let sheetOpen = $state(false);
-
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
 		onModelChange: () => onModelChange,
-		onOpenChange: (open) => {
-			sheetOpen = open;
-		},
 		useGlobalSelection: () => useGlobalSelection
 	});
 
-	const showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
+	const selectedOption = $derived(ms.getDisplayOption());
+
+	/**
+	 * A phone picks its model in the manager: the list, the search and the row actions
+	 * already live there, so the trigger opens it. It opens on the table, not on a
+	 * model: the pane is for the model the user picks there.
+	 */
+	function openManager() {
+		uiStore.openModelsManager();
+	}
 
 	export function open() {
-		ms.handleOpenChange(true);
-	}
-
-	function handleSheetOpenChange(open: boolean) {
-		if (!open) {
-			ms.handleOpenChange(false);
-		}
-	}
-
-	function handleManageModels() {
-		sheetOpen = false;
-
-		// let the sheet finish closing before the dialog takes focus
-		setTimeout(() => uiStore.openModelsManager(), 0);
+		openManager();
 	}
 </script>
 
@@ -69,12 +53,12 @@
 	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
+
 			Loading models...
 		</div>
 	{:else if ms.options.length === 0 && ms.isMultiModel}
 		<span class="text-xs text-muted-foreground">No models yet.</span>
 	{:else}
-		{@const selectedOption = ms.getDisplayOption()}
 		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
 			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
@@ -97,11 +81,10 @@
 							? 'text-foreground'
 							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: 'text-foreground',
-					sheetOpen && 'text-foreground'
+								: 'text-foreground'
 				]}
 				disabled={disabled || ms.updating}
-				onclick={() => ms.handleOpenChange(true)}
+				onclick={openManager}
 				style="max-width: min(calc(100cqw - 9rem), 20rem)"
 				type="button"
 			>
@@ -115,7 +98,7 @@
 						hideOrgName
 						hideQuantization
 						hideTags
-						modelId={selectedOption?.model || ''}
+						modelId={selectedOption.model}
 					/>
 				{/if}
 
@@ -129,79 +112,13 @@
 					<ModelLoadHighlight percent={triggerLoadPercent} />
 				{/if}
 			</button>
-
-			<Sheet.Root bind:open={sheetOpen} onOpenChange={handleSheetOpenChange}>
-				<Sheet.Content class="max-h-[85vh] gap-1" side="bottom">
-					<Sheet.Header>
-						<Sheet.Title>Select Model</Sheet.Title>
-
-						<Sheet.Description class="sr-only">
-							Choose a model to use for the conversation
-						</Sheet.Description>
-					</Sheet.Header>
-
-					<div class="flex flex-col gap-1 pb-4">
-						<div class="mb-3 px-4">
-							<SearchInput
-								onInput={(v) => ms.setSearchTerm(v)}
-								placeholder="Search models..."
-								value={ms.searchTerm}
-							/>
-						</div>
-
-						<div class="max-h-[60vh] overflow-y-auto px-2">
-							{#if !ms.isCurrentModelInCache && currentModel}
-								<button
-									class="flex w-full cursor-not-allowed items-center rounded-md bg-red-400/10 px-3 py-2.5 text-left text-sm text-red-400"
-									disabled
-									type="button"
-								>
-									<span class="min-w-0 flex-1 truncate">
-										{selectedOption?.name || currentModel}
-									</span>
-
-									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
-								</button>
-
-								<div class="my-1 h-px bg-border"></div>
-							{/if}
-
-							{#if ms.isEmpty}
-								<p class="px-3 py-3 text-center text-sm text-muted-foreground">{ms.emptyMessage}</p>
-							{/if}
-
-							<ModelsSelectorList
-								activeId={ms.activeId}
-								{currentModel}
-								favorites={ms.favoriteItems}
-								groups={ms.groupedFilteredOptions}
-								loaded={ms.loadedItems}
-								onSelect={ms.handleSelect}
-								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
-								{showOrgName}
-							/>
-						</div>
-
-						<div class="px-2 pb-1">
-							<button
-								class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent"
-								onclick={handleManageModels}
-								type="button"
-							>
-								<MODEL_ICON class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-
-								Manage models
-							</button>
-						</div>
-					</div>
-				</Sheet.Content>
-			</Sheet.Root>
 		{:else}
+			<!-- a single-model server has no list: the trigger opens the manager instead -->
 			<button
 				class={[
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
-						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+						? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
 							: ms.isHighlightedCurrentModelActive
@@ -211,13 +128,15 @@
 				disabled={disabled || ms.updating}
 				onclick={() => ms.handleOpenChange(true)}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
+				type="button"
 			>
 				<ModelsSelectorTriggerIcon class="h-3.5 w-3.5 shrink-0" option={selectedOption} />
 
 				<ModelId
 					class="font-medium"
-					hideOrgName={!showOrgName}
+					hideOrgName
 					hideQuantization
+					hideTags
 					modelId={selectedOption?.model || ''}
 				/>
 
