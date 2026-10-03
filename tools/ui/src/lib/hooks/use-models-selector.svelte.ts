@@ -48,7 +48,7 @@ export interface UseModelsSelectorReturn {
  * Shared reactive state and logic for model selection.
  *
  * Used by both the desktop dropdown (`ModelsSelectorDropdown`)
- * and the mobile sheet (`ModelsSelectorSheet`) to avoid
+ * and the mobile trigger (`ModelsSelectorMobileTrigger`) to avoid
  * duplicating store derivations, selection handling, and model loading.
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
