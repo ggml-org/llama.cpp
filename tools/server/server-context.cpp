@@ -17,6 +17,9 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-session.h"
+#include "mtmd-projector-storage.h"
+#include "src/llama-context-memory.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -252,6 +255,7 @@ struct server_slot {
 
     // multimodal
     mtmd_context * mctx = nullptr;
+    bool vision_arena = false;
     mtmd::batch_ptr mbatch = nullptr;
 
     // speculative decoding
@@ -788,6 +792,7 @@ static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch,
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
     const auto & chunk = input_tokens.find_chunk(idx);
+    if (slot.vision_arena && mtmd_input_chunk_get_type(chunk.get()) != MTMD_INPUT_CHUNK_TYPE_IMAGE) return -1;
 
     mbatch.reset(mtmd_batch_init(mctx));
     int32_t res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
@@ -811,7 +816,7 @@ static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch,
     // TODO @ngxson : move this log line to debug when it become more stable
     SLT_TRC(slot, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
 
-    res = mtmd_batch_encode(mbatch.get());
+    res = slot.vision_arena ? mtmd_batch_encode_arena(mctx,mbatch.get(),slot.ctx_tgt) : mtmd_batch_encode(mbatch.get());
     if (res != 0) {
         SLT_ERR(slot, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
         return -1;
@@ -943,6 +948,7 @@ public:
     mtmd_context * mctx = nullptr;
     // note: video_params.ffmpeg_bin_dir points into params_base, which outlives this struct
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
+    bool vision_arena = false;
     const llama_vocab * vocab = nullptr;
 
     server_decision_context decision;
@@ -1045,13 +1051,14 @@ private:
         ctx_dft   = nullptr;
         model_dft = nullptr;
 
+        // Retire projector bindings and borrowed grants before destroying their text lender.
+        mtmd_free(mctx);
+        mctx = nullptr;
+        vision_arena = false;
         llama_init.reset();
 
         ctx_tgt = nullptr;
         model_tgt = nullptr;
-
-        mtmd_free(mctx);
-        mctx = nullptr;
     }
 
     void handle_sleeping_state(bool new_state) {
@@ -1125,14 +1132,19 @@ private:
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         const bool has_spec = has_draft || spec_mtp;
         const bool streaming = params.kv_stream_pool_bytes || params.shared_device_memory_bytes;
+        vision_arena = server_uses_vision_arena(params);
+        if (const auto * error = server_vision_arena_config_error(params)) {
+            SRV_ERR("%s\n",error);
+            return false;
+        }
         const bool streamed_mtp = common_params_uses_streamed_mtp(params);
         if (params.kv_stream_auxiliary_layers && !streamed_mtp) {
             SRV_ERR("%s", "auxiliary KV layers require embedded draft-mtp and a KV stream pool or arena\n");
             return false;
         }
-        if (streaming && (has_mmproj || params.fit_params ||
+        if (streaming && (params.fit_params ||
                 (has_spec && !streamed_mtp))) {
-            SRV_ERR("%s", "KV streaming shared memory requires text-only execution, --fit off, and embedded draft-mtp for speculation\n");
+            SRV_ERR("%s", "KV streaming requires --fit off and embedded draft-mtp for text speculation\n");
             return false;
         }
         if (streamed_mtp && (!streaming || !spec_mtp || has_draft ||
@@ -1314,12 +1326,22 @@ private:
                 }
             }
 
-            mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
+            mctx = vision_arena ? mtmd_init_from_file_deferred(mmproj_path.c_str(),model_tgt,mparams) :
+                mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
                 return false;
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+            if (vision_arena) {
+                auto * owner = llama_context_compute_memory(ctx_tgt);
+                if (!owner || !owner->valid() || !owner->shares_kv_memory() || owner->has_speculative_consumer() ||
+                        !mtmd_support_vision(mctx) || mtmd_support_audio(mctx) || !mtmd_decode_use_mrope(mctx)) {
+                    SRV_ERR("%s", "unsupported vision arena model/projector capabilities\n");
+                    return false;
+                }
+                SRV_INF("%s", "vision arena enabled: deferred projector weights and bounded serial phase grants\n");
+            }
 
             init_opt.video_params.fps_target = params_base.video_fps;
             init_opt.video_params.timestamp_interval_ms = params_base.video_timestamp_interval_ms;
@@ -1450,6 +1472,7 @@ private:
             slot.n_ctx   = n_ctx_slot();
 
             slot.mctx                   = mctx;
+            slot.vision_arena            = vision_arena;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
@@ -1635,8 +1658,8 @@ private:
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
                 /* tmpls                 */ std::move(chat_templates),
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
-                /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-                /* allow_video           */ mctx ? mtmd_helper_support_video(mctx) : false,
+                /* allow_audio           */ mctx && !vision_arena ? mtmd_support_audio (mctx) : false,
+                /* allow_video           */ mctx && !vision_arena ? mtmd_helper_support_video(mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
@@ -1860,6 +1883,16 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        if (slot.vision_arena) {
+            if (!task.tokens.validate(ctx_tgt)) {
+                send_error(task,"Prompt contains invalid tokens",ERROR_TYPE_INVALID_REQUEST);
+                return false;
+            }
+            if (const auto * error = server_vision_arena_request_error(task)) {
+                send_error(task,error,ERROR_TYPE_NOT_SUPPORTED);
+                return false;
+            }
+        }
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -3948,6 +3981,19 @@ private:
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
                             send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
+                            if (slot.vision_arena) {
+                                auto * owner = llama_context_compute_memory(ctx_tgt);
+                                bool restored = owner && owner->valid() &&
+                                    (!owner->kv_device_suspended() || llama_context_resume_kv_device(ctx_tgt,llama_memory_text_phase::prefill));
+                                if (restored) {
+                                    restored = llama_memory_seq_rm(llama_get_memory(ctx_tgt),slot.id,-1,-1);
+                                    if (restored) slot.prompt.clear();
+                                }
+                                if (!restored) {
+                                    SRV_ERR("%s", "vision arena recovery failed; stopping inference before further memory use\n");
+                                    queue_tasks.terminate();
+                                }
+                            }
                             slot.release();
                             return; // the slot is done, skip it entirely
                         }

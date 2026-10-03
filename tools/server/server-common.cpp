@@ -9,6 +9,7 @@
 #include "base64.hpp"
 
 #include "server-common.h"
+#include "server-task.h"
 
 #include <random>
 #include <sstream>
@@ -33,6 +34,43 @@
 #include <poll.h>
 #include <unistd.h>
 #endif
+
+bool server_uses_vision_arena(const common_params & params) {
+    return !params.mmproj.path.empty() && (params.kv_stream_pool_bytes || params.shared_device_memory_bytes);
+}
+const char * server_vision_arena_config_error(const common_params & params) {
+    if (!server_uses_vision_arena(params)) return nullptr;
+    if (!params.shared_device_memory_bytes || params.kv_stream_pool_bytes)
+        return "vision KV streaming requires a shared device memory arena, not a fixed KV pool";
+    if (params.fit_params || params.n_parallel != 1 || !params.mmproj_use_gpu || params.embedding ||
+            params.no_kv_offload || !params.lora_adapters.empty())
+        return "vision arena requires serial GPU execution, --fit off, KV offload, no embeddings and no LoRA";
+    if (params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0 ||
+            params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
+        return "vision arena is currently qualified with -fa on, Q8_0 K and Q4_0 V";
+    if (params.kv_stream_auxiliary_layers || params.speculative.has_dft())
+        return "vision arena does not yet support draft/MTP execution";
+    for (auto type : params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE)
+        return "vision arena does not yet support speculation";
+    return nullptr;
+}
+
+const char * server_vision_arena_request_error(const server_task & task) {
+    if (task.type != SERVER_TASK_TYPE_COMPLETION || !task.params.lora.empty()) return "vision arena supports completion requests without LoRA";
+    if (task.params.speculative.has_dft()) return "vision arena request cannot enable a draft model";
+    for (auto type : task.params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE) return "vision arena request cannot enable speculation";
+    try {
+        for (size_t i = 0; i < task.tokens.size();) {
+            if (task.tokens[i] != LLAMA_TOKEN_NULL) { ++i; continue; }
+            const auto & chunk = task.tokens.find_chunk(i);
+            if (!chunk || mtmd_input_chunk_get_type(chunk.get()) != MTMD_INPUT_CHUNK_TYPE_IMAGE) return "vision arena accepts images only";
+            const size_t rows = mtmd_input_chunk_get_n_tokens(chunk.get());
+            if (!rows || rows > task.tokens.size()-i) return "invalid media token extent";
+            i += rows;
+        }
+    } catch (...) { return "invalid media token mapping"; }
+    return nullptr;
+}
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;

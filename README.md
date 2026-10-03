@@ -3,7 +3,7 @@
 V2 runs full-context Qwen3.8-27B on a bounded GPU KV working set. The complete KV history stays in pinned system RAM; resident GPU pages and one shared ring supply attention without dropping old tokens. V1 (`feature/kv-stream-phase-arena`) already had streaming, cross-layer prefetch, and a CUDA phase arena. V2 rebuilds those ideas on explicit memory ownership, stays closer to stock attention arithmetic, and adds long-context MTP without a second full GPU KV allocation.
 
 > [!WARNING]
-> This is experimental. The end-to-end path is currently qualified for one serial Qwen3.8-27B-style target with its embedded MTP head on one CUDA GPU, Flash Attention, Q8_0 K / Q4_0 V, and no mmproj. The memory APIs support more backends, but their streamed-attention execution paths are not implemented here.
+> This is experimental. The end-to-end path is qualified for one serial Qwen3.8-27B-style target on one CUDA GPU, Flash Attention and Q8_0 K / Q4_0 V. Text-only execution supports the embedded MTP head; image requests support a matching M-RoPE projector with speculation disabled. Vision plus MTP, audio/video arena execution and other accelerator streaming paths remain unqualified.
 
 ## Results and quick start
 
@@ -49,6 +49,24 @@ python3 benchmarks/run-fixed-span-sweep.py \
 ```
 
 The script writes CSV, JSONL, logs, and a plot when Matplotlib is installed. `--auto-max-arena` instead probes the maximum for each context **and MTP mode**; those variable-budget results are not directly comparable to this fixed-budget figure.
+
+## Image requests without MTP
+
+The server can now share its arena with the matching Qwen3.8 F16 vision projector. Projector weights start unloaded. For an image batch, text KV is saved on the host, the projector and its compute workspace borrow separate arena regions, and host embeddings are retained. The projector then unloads and text regains the arena before image-embedding prefill and generation. Compatible media batching and prompt-prefix caching keep their existing server behavior.
+
+```sh
+./build-v2/bin/llama-server \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --mmproj /path/to/mmproj-Qwen3.8-27B-F16.gguf \
+  --ctx-size 262144 --parallel 1 \
+  --batch-size 256 --ubatch-size 256 --n-gpu-layers 999 \
+  --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
+  --shared-device-memory-mib 2240 --spec-type none --fit off
+```
+
+This requires a shared arena, not the legacy fixed KV-pool flag. Parallel slots, speculation/MTP, CPU projector offload, LoRA, embeddings and unqualified KV pairs are rejected. A batch that exceeds the arena returns an error; reduce image size/token limits or choose a suitable arena. The example budget was tested on the RTX 5070 Ti, not guaranteed for other models/cards. Target weights, recurrent state and CUDA housekeeping remain outside the arena. Native context capacity with short image requests is qualified; full long-context memory/latency characterization follows separately.
+
+An offline [server qualification harness](tools/server/tests/test_adaptive_vision.py) compares the ordinary eager server with the arena server using deterministic local PNGs. It checks token IDs, cached/changed/follow-up and multiple images, RAM prompt-cache restoration, socket cancellation, oversized-batch recovery and optional rejected startup configurations. See [test instructions](tools/server/tests/README.md#adaptive-kv-vision-qualification). It does not stop production containers or download models.
 
 ## KV data movement and attention
 

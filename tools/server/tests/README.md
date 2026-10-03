@@ -94,3 +94,22 @@ And then the test in question can be run in another terminal:
 ```
 And this should trigger the breakpoint and allow inspection of the server state
 in the debugger terminal.
+
+### Adaptive KV vision qualification
+
+This standalone harness needs only Python's standard library and local model/projector files. It starts temporary loopback servers and stops them in cleanup, generates deterministic PNG inputs, and disables UVM in those test processes. Free the GPU beforehand; it does not manage production containers.
+
+```sh
+python3 tools/server/tests/test_adaptive_vision.py \
+  --server ./build-v2/bin/llama-server \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --mmproj /path/to/mmproj-Qwen3.8-27B-F16.gguf \
+  --arena-mib 1024 --context 8192 --check-rejections \
+  --output /path/to/test-results
+```
+
+The default comparison uses 64/64 batching, 16 generated tokens per native request and a 2 GiB RAM prompt cache in the temporary servers. `--background-tokens 6000` checks a longer prefill. Model/backend arithmetic is compared under matched request and cache execution modes, not claimed universally byte-identical. Chat-completion smoke, disconnect cancellation and error recovery are also checked.
+
+For native context-capacity admission with 256/256, use `--mode arena --context 262144 --arena-mib 2240 --batch-size 256 --ubatch-size 256 --skip-budget-rejection`. The skip flag omits the assertion that a particular 1536x1536 image must exceed a small arena; that image can legitimately fit a larger arena. This is not a full 262K-token prompt benchmark.
+
+`--mode stock`/`--mode arena` run one side. `--cache-ram-mib` and `--decode` are configurable. Logs and accepted mode results are stored in the output directory; `--check-rejections` verifies unsupported startup settings without loading the target. No default production cache/checkpoint configuration is changed by this harness.

@@ -443,8 +443,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.3c | Committed | cace79b9b | Full-parent suspended-KV vision borrowing, exclusive restoration admission, interruption/retry and terminal recovery; real image equivalence and CPU/CUDA memory checks pass. |
 | 7.4a | Committed | 0092cef1e | Separate file source, stable tensor metadata and shared eager weight bindings; original CPU/CUDA embedding equivalence, shared-owner teardown and memory checks pass. |
 | 7.4b | Committed | d2d996604 | Explicit pinned weight unload/reload, native retirement, generation-safe rebinding and retry; CPU/CUDA equivalence, borrowed-workspace return and memory checks pass. |
-| 7.4c | Ready for review | - | Deferred projector startup, bounded weight/compute loans, phase cleanup/recovery and outside-budget accounting; combined image/text and lifetime qualifications pass. |
-| 7.5a-7.5c | Planned | - | Qualified production vision admission, memory/performance reporting and image-aware MTP remain pending. |
+| 7.4c | Committed | `b6b9b38e0` | Deferred projector startup, bounded weight/compute loans, phase cleanup/recovery and outside-budget accounting; combined image/text and lifetime qualifications pass. |
+| 7.5a | Ready for review | - | Serial no-MTP server admission, deferred projector startup, bounded image encoding, media/prompt-cache reuse and request cleanup qualified. |
+| 7.5b-7.5c | Planned | - | Full-device memory/performance reporting and image-aware MTP remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -4036,3 +4037,47 @@ Artifacts use `/tmp/vision-7.4c-*`, including `loan-red.log`, `loan-memcheck.log
 #### Remaining boundary
 
 Stage 7.5a must wire deferred initialization and the arena adapter into the server's qualified no-MTP image request path, handle image/prompt-cache reuse and lift the production guard only for supported configurations. Stage 7.5b measures full-device peaks and transition costs; 7.5c separately qualifies image-aware MTP. The private test/adapter seams here do not themselves enable production multimodal requests.
+
+### Stage 7.5a: serial image requests through the server arena
+
+The server now admits the qualified no-MTP vision configuration and initializes its projector with metadata/file ownership only. Actual image batches call the bounded phase adapter from 7.4c. Text-only streaming, text MTP and ordinary eager multimodal execution retain their existing paths; this stage does not enable image-aware MTP.
+
+#### Admission and execution
+
+- Pure configuration checks reject unsupported combinations before allocating the target or projector: fixed KV pools instead of a shared arena, parallel requests, fitting, CPU projector execution, embedding-only operation, disabled KV offload, LoRA, auxiliary/speculative consumers, and settings other than enabled flash attention with Q8_0 K/Q4_0 V. After model initialization, capability checks require a valid shared target owner, image support and MROPE, without audio or speculative consumers. Existing target/backend geometry restrictions still apply; buffer-view support alone does not qualify another backend.
+- The server retains its existing compatible-image lookahead batching and batch-owned host embeddings. Only image encoding is redirected to `mtmd_batch_encode_arena()`: suspend target KV, loan weight/compute regions, encode, unload/return projector grants, and resume text prefill. Subsequent embedding batches do not re-encode already-owned batch outputs.
+- Whole media chunks, image identities, model positions, prompt checkpoints and RAM prompt-cache serialization continue through the existing server token implementation. Images with changed pixels cannot reuse an unchanged-image prefix solely because their dimensions match. Audio/video are not advertised by the arena path. Request overrides cannot enable speculation or LoRA after startup admission.
+- Failed image processing explicitly recovers a valid suspended owner where possible, clears the partial sequence and cached slot prompt, then releases the slot. If restoration or sequence clearing fails, the existing inference queue is terminated rather than accepting another decode against an unsafe owner. Lower-layer injected retirement/restoration failures are qualified in earlier stages; no new HTTP fault-injection claim is made here.
+- Cancellation follows the existing queue/yield contract: a disconnected request is cancelled after active work has returned its phase grants. It does not interrupt a running GPU kernel. Projector destruction now precedes destruction of the text lender.
+
+```mermaid
+sequenceDiagram
+    participant HTTP as Image request
+    participant Server as Serial slot
+    participant Vision as Deferred projector
+    participant Arena as Shared target arena
+    HTTP->>Server: Tokenize text and whole image chunks
+    Server->>Arena: Suspend text KV after its final use
+    Server->>Vision: Encode compatible image batch
+    Vision->>Arena: Borrow weight and compute grants
+    Vision-->>Server: Batch-owned host embeddings
+    Vision->>Arena: Retire execution, unload weights, return grants
+    Server->>Arena: Restore text prefill grants
+    Server->>Server: Prefill image embeddings and remaining text
+    Server-->>HTTP: Decode response
+```
+
+#### TDD and HTTP qualification
+
+- Admission tests were red against the initial stub; the pre-change live server rejected the arena/mmproj combination. The final server-policy/media-token suite passes **5 cases / 30 assertions** in Release, ASan with leak checking, UBSan and targeted host TSan with process-local ASLR disabled. TSan here covers host policy/token logic, not GPU race detection.
+- The new offline standard-library harness generates images locally and exercises nine native completion cases: text, initial image, uncached repeat, cached image, cached follow-up, changed image, separated images, adjacent images and RAM-cache restoration after another prompt. It also checks an OpenAI-compatible image chat request, socket-disconnect cancellation, a clean next request, and oversized-image rejection/recovery for the smaller arena.
+- With IQ4_XS, the matching F16 projector, Q8_0/Q4_0 KV and UVM disabled, **all nine 16-token native continuations match the same binary's ordinary eager/non-streaming path**, both with a 128-token background and a 6K-token background. This is a matched server-path comparison, not a separate upstream-build comparison. The repeated cached image processes four prompt tokens and its follow-up eleven; changed-image processing and RAM-cache restoration are exercised independently.
+- Six live startup rejection checks pass: parallel execution, MTP, CPU projector, unsupported K quantization, fitting and embeddings. The 1,024 MiB parent rejects an oversized image and successfully serves the known text continuation afterward.
+- Native capacity **262,144** with **256/256** batching and a **2,240 MiB** parent passes the image/cache/cancellation flows using short requests. This is capacity/configuration admission, not a full-262K-history or performance qualification. A 1,024 MiB parent correctly rejects that larger startup workspace. The oversized-image negative assertion is separately skipped for the larger parent because that image legitimately fits.
+- A **40K-token background**, context capacity 49,152, 64/64 batching and a 1,024 MiB parent passes the complete arena HTTP suite. Decode diagnostics explicitly show **157 active pages, 155 resident pages and 12 ring slots, `streaming=1`**. This tests media/cache/cancellation recovery with actual streaming; it does not claim a stock numerical comparison at that longer history.
+
+The executable harness is `tools/server/tests/test_adaptive_vision.py`; its usage and limits are documented beside the existing server tests. Artifacts are under `/tmp/vision-7.5a-*`, including policy/sanitizer logs, `final-comparison`, `long-comparison`, `native-final` and `streamed-http`. Temporary servers do not download models or alter production checkpoint/cache settings. The production container is restored using its unchanged image/configuration. Only this stage's source, tests and documentation are staged; no assistant commit or push is made.
+
+#### Remaining boundary
+
+Stage 7.5b must measure full-device peaks, transition/reload latency and post-request baselines, including batch-dependent workspace. Stage 7.5c must separately qualify image-aware MTP. Native context capacity, short matching continuations and host sanitizer coverage do not establish arbitrary full-context image equivalence, accelerator portability or GPU race freedom.

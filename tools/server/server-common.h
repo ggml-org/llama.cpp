@@ -39,6 +39,12 @@ using json = common_json;
 
 using raw_buffer = std::vector<uint8_t>;
 
+// Qualify the serial no-speculation vision arena before model/projector allocation.
+bool server_uses_vision_arena(const common_params & params);
+const char * server_vision_arena_config_error(const common_params & params);
+struct server_task;
+const char * server_vision_arena_request_error(const server_task & task);
+
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
     // Fallback null to default value
