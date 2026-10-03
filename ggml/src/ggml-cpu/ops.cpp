@@ -7315,7 +7315,6 @@ static void ggml_compute_forward_conv_2d_impl(const ggml_compute_params * params
                                               ggml_tensor *               dst,     // [OW, OH, OC, N]
                                               ggml_type                   kernel_type) {
 
-    GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(kernel_type == GGML_TYPE_F16 || kernel_type == GGML_TYPE_F32);
     GGML_ASSERT(kernel->type == kernel_type);
 
@@ -7346,12 +7345,50 @@ static void ggml_compute_forward_conv_2d_impl(const ggml_compute_params * params
     const int64_t knl_n           = knl_w * knl_h * c_in;
     const int64_t patch_total     = dst->ne[3] * dst_w * dst_h;
 
+    // ggml_call_mul_mat reads the weight as a dense [OC][IC*KH*KW] matrix. when the
+    // kernel is not already in that layout, repack it into the tail of the work
+    // buffer, which no other part of this op touches.
+    const int64_t knl_packed_size = ggml_is_contiguous(kernel) ? 0 : c_out * knl_n * traits->type_size;
+    const int64_t wsize_avail     = params->wsize - knl_packed_size;
+    char * const   knl_packed     = (char *) params->wdata + params->wsize - knl_packed_size;
+
+    GGML_ASSERT(wsize_avail > 0);
+
     const int64_t space_per_patch   = knl_n * traits->type_size + c_out * sizeof(float);
-    const int64_t batch_size        = params->wsize / space_per_patch;
+    const int64_t batch_size        = wsize_avail / space_per_patch;
     const int64_t patches_per_batch = batch_size > 8 ? (batch_size / 8) * 8 : batch_size;
     const int64_t batch_n           = (patch_total + patches_per_batch - 1) / patches_per_batch;
 
     GGML_ASSERT(patches_per_batch > 0 && batch_size >= 1);
+
+    if (knl_packed_size > 0) {
+        // split output channels across threads; writes are disjoint and the barrier in
+        // the first batch iteration publishes the result to every thread
+        const int64_t oc_per_thread = (c_out + params->nth - 1) / params->nth;
+        const int64_t oc_start = params->ith * oc_per_thread;
+        const int64_t oc_end   = std::min(oc_start + oc_per_thread, c_out);
+
+        for (int64_t oc = oc_start; oc < oc_end; ++oc) {
+            for (int64_t ic = 0; ic < c_in; ++ic) {
+                for (int64_t ky = 0; ky < knl_h; ++ky) {
+                    for (int64_t kx = 0; kx < knl_w; ++kx) {
+                        const int64_t k  = ic*(knl_h*knl_w) + ky*knl_w + kx;
+                        const char   * s = (const char *) knl_data
+                                         + kx*kernel->nb[0] + ky*kernel->nb[1]
+                                         + ic*kernel->nb[2] + oc*kernel->nb[3];
+                        // weight is stored OC-major, matching the im2col order of k
+                        char         * d = knl_packed + (oc*knl_n + k)*traits->type_size;
+
+                        if (kernel_type == GGML_TYPE_F32) {
+                            *(float *) d = *(const float *) s;
+                        } else {
+                            *(ggml_fp16_t *) d = *(const ggml_fp16_t *) s;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     void * tmp = params->wdata;
 
@@ -7406,10 +7443,11 @@ static void ggml_compute_forward_conv_2d_impl(const ggml_compute_params * params
 
         float * gemm_output = (float *) ((char *) tmp + patches_per_batch * knl_n * traits->type_size);
 
-        GGML_ASSERT(gemm_output + patch_n * c_out <= (float*)tmp + params->wsize);
+        GGML_ASSERT(gemm_output + patch_n * c_out <= (float*)tmp + wsize_avail);
 
         // GEMM: patches[patch_n, knl_n] × kernel[knl_n, c_out] = output[patch_n, c_out]
-        ggml_call_mul_mat(kernel_type, params, patch_n, c_out, knl_n, tmp, knl_data, gemm_output);
+        ggml_call_mul_mat(kernel_type, params, patch_n, c_out, knl_n, tmp,
+                          knl_packed_size > 0 ? (void *) knl_packed : knl_data, gemm_output);
 
         ggml_barrier(params->threadpool);
 
