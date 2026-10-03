@@ -732,6 +732,68 @@ int main_automated_tests(void) {
         }
     }
 
+    // Gate A: legacy (--no-jinja) thinking disable post-process vs Jinja off suffixes.
+    // Templates live under models/templates/; skip if the tree is not present.
+    {
+        struct legacy_case {
+            const char * path;
+            const char * expected_end;
+        };
+        const legacy_case cases[] = {
+            { "models/templates/Qwen-Qwen3-0.6B.jinja",
+              "<|im_start|>assistant\n<think>\n\n</think>\n\n" },
+            { "models/templates/Qwen-QwQ-32B.jinja",
+              "<|im_start|>assistant\n<think>\n</think>" },
+            { "models/templates/deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja",
+              "<think>\n</think>" },
+            { "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja",
+              "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_THINKING|><|END_THINKING|>" },
+        };
+
+        common_chat_msg user;
+        user.role    = "user";
+        user.content = "What is today?";
+
+        for (const auto & c : cases) {
+            if (!std::filesystem::exists(c.path)) {
+                std::cout << "SKIP legacy thinking disable (missing " << c.path << ")\n";
+                continue;
+            }
+            std::cout << "\n=== legacy thinking disable: " << c.path << " ===\n";
+            std::ifstream infile(c.path);
+            std::string src((std::istreambuf_iterator<char>(infile)), std::istreambuf_iterator<char>());
+            auto tmpls = common_chat_templates_ptr(
+                common_chat_templates_init(nullptr, normalize_newlines(src)));
+            common_chat_templates_inputs inputs;
+            inputs.messages              = { user };
+            inputs.add_generation_prompt = true;
+            inputs.use_jinja             = false;
+            inputs.enable_thinking       = false;
+            auto params                  = common_chat_templates_apply(tmpls.get(), inputs);
+            if (!string_ends_with(params.prompt, c.expected_end)) {
+                std::cerr << "Expected end:\n" << c.expected_end << "\nGot:\n" << params.prompt << "\n";
+                assert(false);
+            }
+            inputs.enable_thinking = true;
+            auto params_on         = common_chat_templates_apply(tmpls.get(), inputs);
+            assert(!string_ends_with(params_on.prompt, c.expected_end));
+        }
+
+        if (std::filesystem::exists("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja")) {
+            std::ifstream infile("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja");
+            std::string src((std::istreambuf_iterator<char>(infile)), std::istreambuf_iterator<char>());
+            auto tmpls = common_chat_templates_ptr(
+                common_chat_templates_init(nullptr, normalize_newlines(src)));
+            common_chat_templates_inputs inputs;
+            inputs.messages              = { user };
+            inputs.add_generation_prompt = true;
+            inputs.use_jinja             = false;
+            inputs.enable_thinking       = false;
+            auto params                  = common_chat_templates_apply(tmpls.get(), inputs);
+            assert(params.prompt.find("<think>") == std::string::npos);
+        }
+    }
+
     std::cout << "\nOK: All tests passed successfully.\n";
 
     return 0;
