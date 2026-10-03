@@ -628,8 +628,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                 gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i4;
                 set_kernel_impl = true;
             } else if constexpr (std::is_same_v<BLOC_TYPE, block_q8_0>) {
-                gemm_kernel        = spacemit_kernels::ime1::gemm_kernel_i8i8;
-                set_kernel_impl    = true;
+                gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i8;
+                set_kernel_impl = true;
             }
         }
 #endif
