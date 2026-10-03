@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import { modelDraftBadges } from '../ModelsManager/utils';
 	import {
 		ModelAvatar,
 		ModelCapabilities,
@@ -12,6 +13,8 @@
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 
 	interface Props {
 		option: ModelOption;
@@ -35,6 +38,9 @@
 		option
 	}: Props = $props();
 
+	// row actions follow the backend that serves the row, not the selected one
+	let rowBackend = $derived(getBackend(option.backendId));
+	let canLoad = $derived(rowBackend ? getBackendCapabilities(rowBackend).loadUnload : false);
 	let serverStatus = $derived(modelsStore.getModelStatus(option.model));
 	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
@@ -77,7 +83,7 @@
 	<ModelId
 		aliases={option.aliases}
 		class="min-w-0 flex-1"
-		draftSidecars={option.draftSidecars}
+		draftSidecars={modelDraftBadges(option)}
 		hideCapabilities
 		hideModalities
 		{hideOrgName}
@@ -94,7 +100,15 @@
 	<div class="flex shrink-0 items-center gap-1">
 		<ModelRowActions {isFav} {option} />
 
-		<ModelLoadControl {isFailed} {isLoaded} {isLoading} {isSleeping} {option} />
+		<ModelLoadControl
+			{canLoad}
+			{isFailed}
+			{isLoaded}
+			{isLoading}
+			{isSleeping}
+			{option}
+			showBackendMark
+		/>
 	</div>
 
 	{#if isLoading}

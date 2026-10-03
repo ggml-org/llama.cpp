@@ -11,8 +11,14 @@
 		class?: string;
 		currentModel?: string | null;
 		/** Callback when model changes. Return false to keep menu open (e.g., for validation failures) */
-		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
+		onModelChange?: (
+			modelId: string,
+			modelName: string,
+			backendId?: string
+		) => Promise<boolean> | boolean | void;
 		disabled?: boolean;
+		/** The provider behind this selector is unreachable. */
+		error?: boolean;
 		forceForegroundText?: boolean;
 		/** When true, user's global selection takes priority over currentModel (for form selector) */
 		useGlobalSelection?: boolean;
@@ -22,6 +28,7 @@
 		class: className = '',
 		currentModel = null,
 		disabled = false,
+		error = false,
 		forceForegroundText = false,
 		onModelChange,
 		useGlobalSelection = false
@@ -36,9 +43,9 @@
 	const selectedOption = $derived(ms.getDisplayOption());
 
 	/**
-	 * A phone picks its model in the manager: the list, the search and the row actions
-	 * already live there, so the trigger opens it. It opens on the table, not on a
-	 * model: the pane is for the model the user picks there.
+	 * A phone picks its model in the manager: the list, the search, the row actions and
+	 * the provider cards already live there, so the trigger opens it on the table, not on
+	 * a model: the pane is for the model the user picks there.
 	 */
 	function openManager() {
 		uiStore.openModelsManager();
@@ -57,7 +64,13 @@
 			Loading models...
 		</div>
 	{:else if ms.options.length === 0 && ms.isMultiModel}
-		<span class="text-xs text-muted-foreground">No models yet.</span>
+		<button
+			class="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+			onclick={openManager}
+			type="button"
+		>
+			No models yet. Open the manager to add one.
+		</button>
 	{:else}
 		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
@@ -75,13 +88,15 @@
 			<button
 				class={[
 					`relative inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 max-sm:px-3 max-sm:py-2 max-sm:text-sm dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-					!ms.isCurrentModelInCache
-						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-						: forceForegroundText
-							? 'text-foreground'
-							: ms.isHighlightedCurrentModelActive
+					error
+						? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
+						: !ms.isCurrentModelInCache
+							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+							: forceForegroundText
 								? 'text-foreground'
-								: 'text-foreground'
+								: ms.isHighlightedCurrentModelActive
+									? 'text-foreground'
+									: 'text-foreground'
 				]}
 				disabled={disabled || ms.updating}
 				onclick={openManager}
@@ -117,13 +132,15 @@
 			<button
 				class={[
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-					!ms.isCurrentModelInCache
-						? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
-						: forceForegroundText
-							? 'text-foreground'
-							: ms.isHighlightedCurrentModelActive
+					error
+						? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
+						: !ms.isCurrentModelInCache
+							? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
+							: forceForegroundText
 								? 'text-foreground'
-								: 'text-foreground'
+								: ms.isHighlightedCurrentModelActive
+									? 'text-foreground'
+									: 'text-foreground'
 				]}
 				disabled={disabled || ms.updating}
 				onclick={() => ms.handleOpenChange(true)}

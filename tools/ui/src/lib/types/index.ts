@@ -25,6 +25,7 @@ export type {
 	ApiChatCompletionToolCallDelta,
 	ApiChatCompletionToolCall,
 	ApiChatCompletionStreamChunk,
+	ApiChatCompletionUsage,
 	ApiChatCompletionResponse,
 	ApiSlotData,
 	ApiProcessingState,
@@ -34,6 +35,15 @@ export type {
 	AudioInputFormat,
 	ApiStreamSession
 } from './api';
+
+// Backend types
+export type {
+	Backend,
+	BackendCapabilities,
+	BackendCompat,
+	BackendPreset,
+	BackendProtocol
+} from './backend';
 
 // HuggingFace types
 export type {

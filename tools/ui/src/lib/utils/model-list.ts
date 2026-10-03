@@ -12,8 +12,24 @@ export interface OrgGroup {
 	items: ModelItem[];
 }
 
+/** One remote backend's section on the remote view. */
+export interface ProviderGroup {
+	backendId: string;
+	/** Models the provider lists without any search filtering. */
+	catalog: number;
+	error: string | null;
+	/** Rows to render, capped by the display limit. */
+	items: ModelItem[];
+	loading: boolean;
+	/** Rows left after the search filter, before the cap. */
+	matched: number;
+	name: string;
+}
+
 export interface GroupedModelOptions {
 	available: OrgGroup[];
+	/** Remote backends, one section each. */
+	providers: ProviderGroup[];
 }
 
 function matchesModality(option: ModelOption, term: string): boolean {
@@ -103,5 +119,47 @@ export function groupModelOptions(filteredOptions: ModelOption[]): GroupedModelO
 		available.push({ items, orgName: orgName || null });
 	}
 
-	return { available };
+	return { available, providers: [] };
+}
+
+/**
+ * Remote backends as sections, one per backend, in the given order. Each section
+ * keeps at most `limit` rows; `matched` carries the full count so the caller can
+ * offer the rest.
+ */
+export function groupProviderOptions(
+	options: ModelOption[],
+	providers: {
+		backendId: string;
+		catalog: number;
+		error: string | null;
+		loading: boolean;
+		name: string;
+	}[],
+	limit = Infinity,
+	recentIds: readonly string[] = []
+): ProviderGroup[] {
+	const byBackend = new Map<string, ModelItem[]>();
+	const rank = new Map<string, number>();
+
+	recentIds.forEach((id, index) => rank.set(id, index));
+
+	const rankOf = (id: string) => rank.get(id) ?? Number.MAX_SAFE_INTEGER;
+	// recently used models lead their section, the rest keep the backend's order
+	const byRecency = (items: ModelItem[]) =>
+		rank.size === 0 ? items : [...items].sort((a, b) => rankOf(a.option.id) - rankOf(b.option.id));
+
+	for (const option of options) {
+		const backendId = option.backendId ?? '';
+
+		if (!byBackend.has(backendId)) byBackend.set(backendId, []);
+
+		byBackend.get(backendId)!.push({ option });
+	}
+
+	return providers.map((provider) => {
+		const items = byRecency(byBackend.get(provider.backendId) ?? []);
+
+		return { ...provider, items: items.slice(0, limit), matched: items.length };
+	});
 }

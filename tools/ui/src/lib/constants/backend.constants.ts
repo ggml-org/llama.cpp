@@ -1,2 +1,119 @@
-/** Marks the built-in local llama.cpp backend. */
+import type { BackendCapabilities, BackendCompat, BackendPreset } from '$lib/types';
+
+/** Request/response shape a backend speaks. */
+export const BackendProtocol = {
+	COMPAT: 'llama.cpp',
+	OPENAI: 'openai'
+} as const;
+
+export type BackendProtocol = (typeof BackendProtocol)[keyof typeof BackendProtocol];
+
+/** Field carrying the output token cap, per OpenAI dialect. */
+export const MaxTokensField = {
+	CHAT_COMPLETION: 'max_completion_tokens',
+	COMPLETION: 'max_tokens'
+} as const;
+
+export type MaxTokensField = (typeof MaxTokensField)[keyof typeof MaxTokensField];
+
+/** Prefix for generated ids of user-added backends. */
+export const BACKEND_ID_PREFIX = 'backend';
+
+/** Protocols a configured backend can speak, in display order. */
+export const BACKEND_PROTOCOLS: readonly BackendProtocol[] = [
+	BackendProtocol.COMPAT,
+	BackendProtocol.OPENAI
+];
+
+/** Chat completions path used when a backend does not override it. */
+export const DEFAULT_BACKEND_CHAT_PATH = '/v1/chat/completions';
+
+/** Models listing path used when a backend does not override it. */
+export const DEFAULT_BACKEND_MODELS_PATH = '/v1/models';
+
+/** Id of the built-in backend that points at the server serving this UI. */
 export const LOCAL_BACKEND_ID = 'local';
+
+/** Capabilities of a full llama.cpp server. */
+const LLAMA_CPP_CAPABILITIES: BackendCapabilities = {
+	corsProxy: true,
+	loadUnload: true,
+	props: true,
+	resumableStreams: true,
+	router: true,
+	slots: true,
+	statusFeed: true,
+	tools: true
+};
+/** Capabilities of a plain OpenAI-compatible endpoint. */
+const COMPATIBLE_CAPABILITIES: BackendCapabilities = {
+	corsProxy: false,
+	loadUnload: false,
+	props: false,
+	resumableStreams: false,
+	router: false,
+	slots: false,
+	statusFeed: false,
+	tools: false
+};
+
+/** Capabilities per backend protocol. */
+export const BACKEND_CAPABILITIES: Record<BackendProtocol, BackendCapabilities> = {
+	[BackendProtocol.COMPAT]: LLAMA_CPP_CAPABILITIES,
+	[BackendProtocol.OPENAI]: COMPATIBLE_CAPABILITIES
+};
+
+/** Default wire quirks per protocol. */
+export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
+	// llama-server reports its own timings, so it needs no usage chunk
+	[BackendProtocol.COMPAT]: {
+		maxTokensField: MaxTokensField.COMPLETION,
+		supportsUsageInStreaming: false
+	},
+	[BackendProtocol.OPENAI]: {
+		maxTokensField: MaxTokensField.COMPLETION,
+		supportsUsageInStreaming: true
+	}
+};
+
+/**
+ * Fields that may carry a model's context size in an OpenAI-compatible model
+ * listing. Providers pick their own name, and most report nothing at all.
+ */
+export const MODEL_CONTEXT_LENGTH_FIELDS = [
+	'context_length',
+	'context_window',
+	'max_context_length',
+	'max_position_embeddings'
+] as const;
+
+/** Favicon extract keyed by domain, for backends with no bundled mark. */
+export const FAVICON_SERVICE_URL = 'https://www.google.com/s2/favicons?domain=';
+
+/**
+ * Ready-made endpoints offered when adding a backend.
+ *
+ * TODO: pair a llama.cpp server by scanning its QR code (WebRTC transport, so a
+ * hosted PWA can reach a server on the user's network), see
+ * ggml-org/llama.cpp#24577.
+ */
+export const BACKEND_PRESETS: readonly BackendPreset[] = [
+	{
+		baseUrl: 'https://router.huggingface.co',
+		description: 'Open models from the Hub, served by inference providers.',
+		iconUrl: '/backend-presets/huggingface.svg',
+		id: 'huggingface',
+		name: 'Hugging Face',
+		protocol: BackendProtocol.OPENAI
+	},
+	{
+		baseUrl: 'https://openrouter.ai/api',
+		description: 'Models from many providers behind a single API.',
+		// v2 brand: purple on light, lime on dark
+		iconUrlDark: '/backend-presets/openrouter-dark.svg',
+		iconUrlLight: '/backend-presets/openrouter-light.svg',
+		id: 'openrouter',
+		name: 'OpenRouter',
+		protocol: 'openai'
+	}
+];
