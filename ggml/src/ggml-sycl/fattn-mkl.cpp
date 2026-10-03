@@ -273,7 +273,7 @@ struct mkl_fa_kv_desc {
     int64_t              s02  = 0;      // nc head stride in blocks (mode 3)
 };
 
-static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, int n_kv_heads) {
+static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved) {
     mkl_fa_kv_desc d;
     d.data = (const char *)T->data;
     d.type = T->type;
@@ -289,20 +289,8 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
         d.mode = MKL_FA_KV_MODE_QUANT_CONTIG;
     } else {
         d.mode = MKL_FA_KV_MODE_QUANT_NC;
-        const int64_t bs          = (int64_t)ggml_blck_size(T->type);
-        const int64_t blk_per_row = T->ne[0] / bs;
-        // True Gemma interleave packs heads within a row (nb[2] < ne[1]*nb[1])
-        // → reconstruct physical strides. Padded seq-views (nb[2] > ne[1]*nb[1])
-        // already have correct physical strides.
-        const bool gemma = interleaved &&
-            ((int64_t)T->nb[2] < (int64_t)T->ne[1] * (int64_t)T->nb[1]);
-        if (gemma) {
-            d.s01 = (int64_t)n_kv_heads * blk_per_row;
-            d.s02 = blk_per_row;
-        } else {
-            d.s01 = d.nb1 / d.ts;
-            d.s02 = d.nb2 / d.ts;
-        }
+        d.s01 = d.nb1 / d.ts;
+        d.s02 = d.nb2 / d.ts;
     }
     return d;
 }
@@ -471,9 +459,9 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const bool v_interleaved =
         ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
 
-    const mkl_fa_kv_desc K_desc = mkl_fa_make_desc(K, k_interleaved, n_kv_heads);
+    const mkl_fa_kv_desc K_desc = mkl_fa_make_desc(K, k_interleaved);
     const mkl_fa_kv_desc V_desc = V_is_K_view
-        ? K_desc : mkl_fa_make_desc(V, v_interleaved, n_kv_heads);
+        ? K_desc : mkl_fa_make_desc(V, v_interleaved);
 
     MKL_ACCUM(dequant_time_us, t_deq);
 
@@ -545,6 +533,11 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 + m_batch * (mask->nb[3] / 2);  // 2 = actual fp16 device size
         }
 
+        mkl_fa_kv_desc K_desc_b = K_desc;
+        mkl_fa_kv_desc V_desc_b = V_desc;
+        K_desc_b.data += (int64_t)((K->ne[3] > 1) ? ib : 0) * (int64_t)K->nb[3];
+        V_desc_b.data += (int64_t)((V->ne[3] > 1) ? ib : 0) * (int64_t)V->nb[3];
+
         for (int ikvh = 0; ikvh < n_kv_heads; ikvh++) {
             int kvh_base_head = ikvh * gqa_ratio;
 
@@ -570,10 +563,10 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 // 3a. Dequant this KV chunk to dense fp16 (once per chunk)
                 {
                     MKL_TAKE_TIME(t0);
-                    mkl_fa_dequant_chunk(stream, K_desc, KQV,
+                    mkl_fa_dequant_chunk(stream, K_desc_b, KQV,
                         K_chunk_f16_ptr, ikvh, chunk_start, this_chunk);
                     if (!V_is_K_view) {
-                        mkl_fa_dequant_chunk(stream, V_desc, KQV,
+                        mkl_fa_dequant_chunk(stream, V_desc_b, KQV,
                             V_chunk_f16_ptr, ikvh, chunk_start, this_chunk);
                     }
                     stream->wait();  // dequant must be ready before MKL GEMM
