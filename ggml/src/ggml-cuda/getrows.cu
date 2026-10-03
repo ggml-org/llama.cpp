@@ -30,6 +30,13 @@ static __global__ void k_get_rows(
             const int iybs = i00 - i00%qk; // dst block start index
             const int y_offset = qr == 1 ? 1 : qk/2;
 
+            if constexpr (qk == 1) {
+                if (i00 + 1 == ne00) {
+                    dst_row[i00] = ggml_cuda_cast<dst_t>(ggml_cuda_f8_e4m3_to_fp32(((const uint8_t *) src0_row)[i00]));
+                    continue;
+                }
+            }
+
             // dequantize
             float2 v;
             dequantize_kernel(src0_row, ib, iqs, v);
@@ -178,7 +185,7 @@ static void get_rows_cuda_q(
     const size_t s12 = nb12 / sizeof(int32_t);
     // const size_t s13 = nb13 / sizeof(int32_t);
 
-    GGML_ASSERT(ne00 % 2 == 0);
+    GGML_ASSERT(qk == 1 || ne00 % 2 == 0);
 
     GGML_ASSERT(ne12 > 0);
     GGML_ASSERT(ne11 <= std::numeric_limits<uint32_t>::max() / ne12);
@@ -342,6 +349,10 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_Q8_0:
             get_rows_cuda_q<QK8_0, QR8_0, dequantize_q8_0>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_F8_E4M3:
+            get_rows_cuda_q<1, 1, dequantize_f8_e4m3>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q2_K:
