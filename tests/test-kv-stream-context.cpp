@@ -15,6 +15,8 @@
 using context_ptr = std::unique_ptr<llama_context,decltype(&llama_free)>;
 using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
 static bool auxiliary_control = false, embedded_mtp_control = false, target_tg3_control = false, target_stream_tg4_control = false;
+static bool suspend_control = false;
+static bool suspend_resident_only = false;
 static bool target_with_stock_draft = false;
 static bool f16_control = false, shared_budget_control = false;
 static bool resident_control = false, trace_control = false;
@@ -327,6 +329,9 @@ int main(int argc,char ** argv) {
         f16_control = f16_control || !std::strcmp(argv[i],"--f16");
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
+        suspend_control = suspend_control || !std::strcmp(argv[i],"--suspend-only");
+        suspend_resident_only = suspend_resident_only || !std::strcmp(argv[i],"--suspend-resident-only");
+        suspend_control = suspend_control || suspend_resident_only;
         trace_control = trace_control || !std::strcmp(argv[i],"--trace");
         auxiliary_control = auxiliary_control || !std::strcmp(argv[i],"--auxiliary-only");
         embedded_mtp_control = embedded_mtp_control || !std::strcmp(argv[i],"--embedded-mtp-pair");
@@ -659,6 +664,88 @@ int main(int argc,char ** argv) {
     const int tokens = llama_tokenize(vocab,text.data(),int(text.size()),prompt.data(),size,true,false);
     if (!t.assert_true(tokens >= (target_stream_tg4_control ? 3005 : 640))) return t.summary();
     prompt.resize(target_stream_tg4_control ? 3005 : 640);
+    if (suspend_control) {
+        t.test("populated_hybrid_state_survives_device_suspension", [&](testing & t) {
+            auto p = llama_context_default_params();
+            p.n_ctx = 1024; p.n_batch = p.n_ubatch = 256;
+            p.n_seq_max = 1; p.n_rs_seq = 0;
+            p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
+            p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            p.kv_stream_pool_bytes = 16*1048576;
+            context_ptr ctx(llama_init_from_model(model.get(),p),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            llama_set_kv_stream_decode(ctx.get(),false);
+            if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(prompt.data(),256)))) return;
+            llama_set_kv_stream_decode(ctx.get(),true);
+            for (size_t i = 256; i < 260; ++i)
+                if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(&prompt[i],1)))) return;
+            auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            auto * stream = hybrid->get_mem_attn()->get_kv_stream();
+            if (!t.assert_true(stream && stream->complete())) return;
+            auto snapshot = [&] {
+                std::vector<uint8_t> data(llama_state_get_size(ctx.get()));
+                const size_t written = llama_state_get_data(ctx.get(),data.data(),data.size());
+                data.resize(written); return data;
+            };
+            const auto before = snapshot();
+            recurrent_snapshot recurrent;
+            hybrid->get_mem_recr()->state_write(recurrent,0,0);
+            const auto host = stream->host();
+            const auto frontier = llama_memory_seq_pos_max(llama_get_memory(ctx.get()),0);
+            if (!t.assert_true(llama_context_suspend_kv_device(ctx.get()))) return;
+            t.assert_true(stream->host() == host && stream->device_suspended());
+            t.assert_equal(size_t(260),stream->tokens());
+            t.assert_equal(size_t(0),stream->device_grant_bytes());
+            t.assert_true(snapshot() == before);
+            recurrent_snapshot after;
+            hybrid->get_mem_recr()->state_write(after,0,0);
+            t.assert_true(recurrent.metadata == after.metadata && recurrent.tensors == after.tensors);
+            t.assert_equal(frontier,llama_memory_seq_pos_max(llama_get_memory(ctx.get()),0));
+            t.assert_true(llama_decode(ctx.get(),llama_batch_get_one(&prompt[260],1)) != 0);
+            t.assert_true(snapshot() == before);
+            t.assert_true(llama_context_suspend_kv_device(ctx.get()));
+        });
+        if (!suspend_resident_only) t.test("streamed_hybrid_suspension_retires_cross_token_prefetch", [&](testing & t) {
+            auto p = llama_context_default_params();
+            p.n_ctx = 8192; p.n_batch = p.n_ubatch = 64;
+            p.n_seq_max = 1; p.n_rs_seq = 0;
+            p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
+            p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            p.kv_stream_pool_bytes = 16*1048576;
+            context_ptr ctx(llama_init_from_model(model.get(),p),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            std::vector<llama_token> history(6144);
+            for (size_t i = 0; i < history.size(); ++i) history[i] = prompt[i%prompt.size()];
+            llama_set_kv_stream_decode(ctx.get(),false);
+            for (size_t first = 0; first < history.size(); first += 64)
+                if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(history.data()+first,64)))) return;
+            llama_set_kv_stream_decode(ctx.get(),true);
+            for (size_t i = 0; i < 4; ++i)
+                if (!t.assert_equal(0,llama_decode(ctx.get(),llama_batch_get_one(&prompt[i],1)))) return;
+            auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            auto * stream = hybrid->get_mem_attn()->get_kv_stream();
+            llama_kv_stream_runtime_diagnostics before;
+            if (!t.assert_true(stream && stream->runtime_diagnostics(before) && before.streaming_active)) return;
+            t.assert_true(stream->prefetch_primed());
+            const auto host = stream->host();
+            const auto consumer = stream->memory_consumer();
+            std::vector<uint8_t> bytes(host->bytes());
+            std::memcpy(bytes.data(),ggml_backend_buffer_get_base(host->buffer()),bytes.size());
+            recurrent_snapshot recurrent;
+            hybrid->get_mem_recr()->state_write(recurrent,0,0);
+            if (!t.assert_true(llama_context_suspend_kv_device(ctx.get()))) return;
+            t.assert_true(stream->device_suspended() && !stream->prefetch_primed());
+            t.assert_equal(size_t(6148),stream->tokens());
+            t.assert_true(stream->memory_consumer() == consumer && stream->host() == host);
+            t.assert_equal(size_t(0),stream->device_grant_bytes());
+            t.assert_true(std::memcmp(bytes.data(),ggml_backend_buffer_get_base(host->buffer()),bytes.size()) == 0);
+            recurrent_snapshot after;
+            hybrid->get_mem_recr()->state_write(after,0,0);
+            t.assert_true(recurrent.metadata == after.metadata && recurrent.tensors == after.tensors);
+            t.assert_true(llama_decode(ctx.get(),llama_batch_get_one(&prompt[4],1)) != 0);
+        });
+        return t.summary();
+    }
     if (mtp_sustained_control) {
         t.set_filter("mtp_serial_requests_change_prefill_and_reset_prompt_cache");
         t.test("mtp_serial_requests_change_prefill_and_reset_prompt_cache", [&](testing & t) {

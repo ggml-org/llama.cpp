@@ -34,7 +34,7 @@
 static void llama_log_memory_phase(const llama_context_memory * memory) {
     llama_context_memory_diagnostics d;
     if (!memory || !memory->diagnostics(d)) return;
-    const char * phase = d.phase == llama_memory_text_phase::decode ? "decode" : "prefill";
+    const char * phase = d.kv_device_suspended ? "suspended" : d.phase == llama_memory_text_phase::decode ? "decode" : "prefill";
     LLAMA_LOG_WARN("memory_phase: phase=%s parent=%zu compute=%zu kv_pool=%zu writer=%zu attention=%zu unused=%zu reclaimed_compute=%zu capture=external transition_us=%" PRIu64 " arena_gen=%" PRIu64 " kv_revision=%" PRIu64 " resident_pages=%u ring_slots=%u active_pages=%u streaming=%d last_h2d_bytes=%zu last_h2d_calls=%zu copy_ms=%.3f elapsed_ms=%.3f\n",
         phase,d.parent_bytes,d.workspace_bytes,d.kv_pool_bytes,d.kv_writer_bytes,
         d.kv_attention_bytes,d.unused_bytes,d.reclaimed_workspace_bytes,
@@ -601,7 +601,7 @@ llama_context::~llama_context() {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
 
-            const size_t size_exp = backend_buf_exp_size[i];
+            const size_t size_exp = compute_memory && compute_memory->kv_device_suspended() ? 0 : backend_buf_exp_size[i];
             const size_t size_act = ggml_backend_sched_get_buffer_size(sched.get(), backend);
             if (size_exp == size_act) {
                 LLAMA_LOG_DEBUG("%s: %10s compute buffer size is %8.4f MiB, matches expectation of %8.4f MiB\n",
@@ -1047,6 +1047,28 @@ const llama_context_memory * llama_context::get_compute_memory() const noexcept 
 
 llama_context_memory * llama_context_compute_memory(llama_context * ctx) noexcept {
     return ctx ? const_cast<llama_context_memory *>(ctx->get_compute_memory()) : nullptr;
+}
+bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
+    if (!ctx || !ctx->get_cparams().kv_streaming()) return false;
+    auto * owner = llama_context_compute_memory(ctx);
+    auto * hybrid = static_cast<llama_memory_hybrid *>(ctx->get_memory());
+    auto * stream = hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+    if (!owner || !stream || (!stream->complete() && !stream->device_suspended())) return false;
+    struct recurrent_completion : llama_memory_executor_backend {
+        llama_context & ctx;
+        llama_memory_recurrent & recurrent;
+        recurrent_completion(llama_context & ctx,llama_memory_recurrent & recurrent) : ctx(ctx),recurrent(recurrent) {}
+        bool drain() override {
+            ctx.synchronize();
+            return recurrent.complete_spill() && recurrent.complete_restore_spill();
+        }
+    };
+    try {
+        auto * recurrent = hybrid->get_mem_recr();
+        if (!recurrent) return false;
+        recurrent_completion completion(*ctx,*recurrent);
+        return owner->suspend_kv(&completion);
+    } catch (...) { return false; }
 }
 
 

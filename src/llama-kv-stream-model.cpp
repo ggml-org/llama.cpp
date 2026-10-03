@@ -44,7 +44,7 @@ struct llama_kv_stream_model::implementation {
     size_t suspended_tokens = 0;
     ggml_backend_buffer_t shared_parent = nullptr;
     llama_memory_resource_id pool_resource = 0, writer_resource = 0, attention_resource = 0;
-    llama_memory_stage_id prefill_stage = 0, decode_stage = 0;
+    llama_memory_stage_id prefill_stage = 0, decode_stage = 0, suspend_stage = 0;
 
     ~implementation() {
         abort();
@@ -61,7 +61,7 @@ struct llama_kv_stream_model::implementation {
             llama_memory_resource_id writer_id,
             llama_memory_resource_id attention_id,
             llama_memory_stage_id prefill_id,
-            llama_memory_stage_id decode_id) {
+            llama_memory_stage_id decode_id, llama_memory_stage_id suspend_id = 0) {
         mtp_resident_buffer=nullptr;
         llama_kv_stream_policy_config policy = physical_policy;
         auto * pool_buffer = ggml_backend_memory_lease_buffer(grants[0].get());
@@ -80,6 +80,7 @@ struct llama_kv_stream_model::implementation {
         session_config.attention_resource = attention_id;
         session_config.prefill_stage = prefill_id;
         session_config.decode_stage = decode_id;
+        session_config.suspend_stage = suspend_id;
         auto next = llama_kv_stream_session::create(
             config.backend,content,session_config,grants[0].get(),grants[1].get(),grants[2].get());
         if (next && suspended_tokens && !next->restore(suspended_tokens)) return {};
@@ -130,7 +131,7 @@ struct llama_kv_stream_model::implementation {
         auto * type = llama_kv_stream_device_buffer_type(ggml_backend_get_device(config.backend));
         if (!type) return false;
         pool_resource = writer_resource = attention_resource = 0;
-        prefill_stage = decode_stage = 0;
+        prefill_stage = decode_stage = suspend_stage = 0;
         shared_parent = nullptr;
         shared = false;
         const std::array<size_t,2> sizes{config.pool_bytes,32768};
@@ -280,6 +281,7 @@ struct llama_kv_stream_model::implementation {
         external_mutation = content->invalidate();
     }
     bool reset(bool clear) {
+        if (session && session->device_suspended()) return false;
         abort();
         if (clear) ggml_backend_buffer_clear(host->buffer(),0);
         if (!content->invalidate()) return false;
@@ -291,6 +293,7 @@ struct llama_kv_stream_model::implementation {
     }
 
     bool restore(size_t tokens) {
+        if (session && session->device_suspended()) return false;
         if (!external_mutation || tokens > host->config().context_tokens) return false;
         suspended_tokens = tokens;
         bool restored = false;
@@ -306,6 +309,7 @@ struct llama_kv_stream_model::implementation {
     }
 
     bool truncate(size_t tokens) {
+        if (session && session->device_suspended()) return false;
         if (external_mutation || !session || session->active() || tokens > session->tokens()) return false;
         if (tokens == session->tokens()) return true;
         abort();
@@ -643,7 +647,7 @@ bool llama_kv_stream_model::set_ring_guard(std::shared_ptr<const llama_kv_stream
 }
 bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
     auto & s = *impl;
-    if (!s.session || s.external_mutation || s.session->active() || s.session->failed() || !queries || queries > s.config.max_batch_rows ||
+    if (!s.session || s.session->device_suspended() || s.external_mutation || s.session->active() || s.session->failed() || !queries || queries > s.config.max_batch_rows ||
             (decode && queries > 4) || active < s.session->tokens() || active-s.session->tokens() != queries ||
             active > s.host->config().context_tokens) return false;
     // A new KV page can require physical repartition; retire the MTP guard
@@ -660,7 +664,12 @@ bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
     }
     s.queries = queries; s.pending_k = nullptr; s.pending_owner.reset(); s.checked_indices.clear(); return true;
 }
-bool llama_kv_stream_model::complete() const noexcept { return impl->session && !impl->external_mutation && !impl->session->active() && !impl->session->failed() && !impl->pending_k; }
+bool llama_kv_stream_model::complete() const noexcept { return impl->session && !impl->session->device_suspended() && !impl->external_mutation && !impl->session->active() && !impl->session->failed() && !impl->pending_k; }
+bool llama_kv_stream_model::device_suspended() const noexcept { return impl->session ? impl->session->device_suspended() : impl->suspended; }
+bool llama_kv_stream_model::suspend_ready() const noexcept {
+    return complete() && (!impl->auxiliary_cache || impl->auxiliary_cache->ready());
+}
+bool llama_kv_stream_model::prefetch_primed() const noexcept { return impl->session && impl->session->prefetch_primed(); }
 void llama_kv_stream_model::abort() { impl->abort(); }
 bool llama_kv_stream_model::reset(bool clear) {
     return release_mtp_layer() && impl->reset(clear);
@@ -776,7 +785,7 @@ bool llama_kv_stream_model::attach_shared_memory(
     }
     auto candidate = s.create_session(
         retained,binding.pool_resource,binding.writer_resource,binding.attention_resource,
-        binding.prefill_stage,binding.decode_stage);
+        binding.prefill_stage,binding.decode_stage,binding.suspend_stage);
     if (!candidate) return false;
 
     s.session = std::move(candidate);
@@ -785,6 +794,7 @@ bool llama_kv_stream_model::attach_shared_memory(
     s.attention_resource = binding.attention_resource;
     s.prefill_stage = binding.prefill_stage;
     s.decode_stage = binding.decode_stage;
+    s.suspend_stage = binding.suspend_stage;
     s.shared_parent = binding.parent;
     s.shared = true;
     s.suspended = false;
@@ -800,7 +810,7 @@ bool llama_kv_stream_model::detach_shared_memory() noexcept {
     s.suspended_tokens = s.session ? s.session->tokens() : s.suspended_tokens;
     s.release_device_memory();
     s.pool_resource = s.writer_resource = s.attention_resource = 0;
-    s.prefill_stage = s.decode_stage = 0;
+    s.prefill_stage = s.decode_stage = s.suspend_stage = 0;
     s.suspended = true;
     return true;
 }
@@ -851,6 +861,11 @@ ggml_backend_buffer_t llama_kv_stream_model::mtp_writer_workspace() const noexce
 bool llama_kv_stream_model::runtime_diagnostics(
         llama_kv_stream_runtime_diagnostics & output) const noexcept {
     if (!impl->session) return false;
+    if (impl->session->device_suspended()) {
+        output = {};
+        output.layout_revision = impl->session->layout_revision();
+        return true;
+    }
     const auto & policy = impl->session->policy();
     const auto copies = impl->session->sequence_stats();
     const auto timing = impl->session->copy_feedback();

@@ -70,7 +70,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     size_t kv_workspace_max = 0;
     llama_memory_transition_target phase_target;
     std::vector<llama_memory_transition_arena> supplied;
-    llama_memory_stage_id active_stage = 0, prefill_stage = 0, decode_stage = 0;
+    llama_memory_stage_id active_stage = 0, prefill_stage = 0, decode_stage = 0, suspend_stage = 0;
     uint64_t transition_count = 0, executor_revision = 0;
     uint64_t last_transition_us = 0;
 
@@ -171,7 +171,8 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
                 }
                 return false;
             }
-            if (!capture_execution()) return false;
+            if (stage == suspend_stage) bindings.clear();
+            else if (!capture_execution()) return false;
             active_stage = stage;
             ++transition_count;
             last_transition_us = uint64_t(ggml_time_us()-started);
@@ -223,7 +224,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
     const auto & groups = plan.groups;
     if (stream && serial_parent) return {};
     auto * borrowed_parent = serial_parent ? serial_parent->shared_parent() : nullptr;
-    if (serial_parent && (!borrowed_parent || serial_parent->impl->serial_borrowed ||
+    if (serial_parent && (!borrowed_parent || serial_parent->kv_device_suspended() || serial_parent->impl->serial_borrowed ||
             serial_parent->impl->serial_busy || plan.phase_sizes.size() != 2)) return {};
     if (!sched || !supported(backends) || plan.phase_sizes.empty() ||
             backends.size() != static_cast<size_t>(ggml_backend_sched_get_n_backends(sched))) return {};
@@ -284,6 +285,12 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             const llama_memory_stage_id id = phase+2;
             stages.push_back(id);
             target.plan.stages.push_back({id,{id-1},{}});
+        }
+        if (stream || serial_parent) {
+            const auto id = stages.back()+1;
+            target.plan.stages.push_back({id,{stages.back()},{}});
+            stages.push_back(id);
+            state->suspend_stage = id;
         }
         target.stage = stages.front();
 
@@ -362,6 +369,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             for (size_t phase = 0; phase < plan.phase_sizes.size(); ++phase) {
                 configured.stages.push_back({stages[phase+1],plan.phase_sizes[phase][i]});
             }
+            if (state->suspend_stage) configured.stages.push_back({state->suspend_stage,0});
             selected.push_back(std::move(configured));
             target.plan.domains.push_back({id,allocation,LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
             target.budgets.push_back({id,allocation,capacity,group.alignment});
@@ -408,10 +416,11 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 attention_id,kv_domain,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,
                 llama_memory_content::discardable});
             for (size_t i = 0; i < target.plan.stages.size(); ++i) {
-                const size_t attention = i == 0 ? kv_attention :
+                const bool suspended = target.plan.stages[i].id == state->suspend_stage;
+                const size_t attention = suspended ? 0 : i == 0 ? kv_attention :
                     (i == 1 ? kv.attention_prefill_bytes : kv.attention_decode_bytes);
                 auto & requirements = target.plan.stages[i].requirements;
-                const size_t pool_preferred = (kv.shared_device_memory_bytes || i == 2) ?
+                const size_t pool_preferred = suspended ? 0 : (kv.shared_device_memory_bytes || i == 2) ?
                     target.budgets[kv_arena].capacity : kv.pool_bytes;
                 // The serial MTP prefill workspace may extend slightly beyond
                 // target compute into discardable attention scratch. Keep the
@@ -421,11 +430,11 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
                 requirements.push_back({
-                    writer_id,kv.writer_bytes,kv.writer_bytes,
+                    writer_id,suspended ? 0 : kv.writer_bytes,suspended ? 0 : kv.writer_bytes,
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
                 requirements.push_back({
-                    pool_id,kv.pool_bytes,pool_preferred,
+                    pool_id,suspended ? 0 : kv.pool_bytes,pool_preferred,
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
             }
@@ -484,7 +493,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (!pool || !writer || !attention ||
                     !stream->attach_shared_memory({
                         state->kv_parent,pool.get(),writer.get(),attention.get(),
-                        pool_id,writer_id,attention_id,stages[1],stages[2]})) return {};
+                        pool_id,writer_id,attention_id,stages[1],stages[2],state->suspend_stage})) return {};
             state->shared_stream = stream;
             auto * consumer = stream->memory_consumer();
             if (!consumer) return {};
@@ -522,6 +531,25 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 // Keep ownership in one object declared after the scheduler in llama_context.
 llama_context_memory::llama_context_memory(std::unique_ptr<implementation> impl) : impl(std::move(impl)) {}
 llama_context_memory::~llama_context_memory() = default;
+bool llama_context_memory::suspend_kv(llama_memory_executor_backend * auxiliary_completion) noexcept {
+    if (!impl->shared_stream || impl->serial_borrowed || impl->serial_busy) return false;
+    if (kv_device_suspended()) {
+        serial_gate gate(impl->serial_busy);
+        try { return !auxiliary_completion || auxiliary_completion->drain(); } catch (...) { return false; }
+    }
+    if (!impl->shared_stream->suspend_ready() || !prepare_serial_target()) return false;
+    serial_gate gate(impl->serial_busy);
+    try {
+        if (auxiliary_completion && !auxiliary_completion->drain()) return false;
+        if (impl->shared_stream->has_mtp_layer() && !impl->shared_stream->release_mtp_layer()) return false;
+        for (auto * child : impl->serial_children)
+            if (!child->impl->activate_stage(child->impl->suspend_stage)) return false;
+        return impl->activate_stage(impl->suspend_stage) && kv_device_suspended();
+    } catch (...) { return false; }
+}
+bool llama_context_memory::kv_device_suspended() const noexcept {
+    return impl->shared_stream && impl->shared_stream->device_suspended();
+}
 std::unique_ptr<llama_context_memory> llama_context_memory::borrow_workspace(ggml_backend_sched_t sched,
         const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_memory_workspace_group> & groups,
         llama_context_memory & parent) {
@@ -542,14 +570,14 @@ bool llama_context_memory::retire_graph() noexcept {
 }
 
 bool llama_context_memory::serial_ready() const noexcept {
-    return impl->executor.ready() && !impl->serial_busy &&
+    return impl->executor.ready() && !kv_device_suspended() && !impl->serial_busy &&
         (impl->serial_children.empty() || impl->serial_active == this) && (!impl->serial_borrowed ||
-        (impl->serial_parent && !impl->serial_parent->impl->serial_busy &&
+        (impl->serial_parent && !impl->serial_parent->kv_device_suspended() && !impl->serial_parent->impl->serial_busy &&
             impl->serial_parent->impl->serial_active == this));
 }
 // Serial target/draft schedulers may alias scratch, but never execute or publish into it concurrently.
 bool llama_context_memory::prepare_serial_target() noexcept {
-    if (impl->serial_borrowed || impl->serial_busy) return false;
+    if (impl->serial_borrowed || impl->serial_busy || kv_device_suspended()) return false;
     if (impl->serial_children.empty()) return true;
     serial_gate gate(impl->serial_busy);
     try {
@@ -574,7 +602,7 @@ bool llama_context_memory::prepare_serial_consumer(llama_memory_text_phase phase
     if (!impl->serial_borrowed || !impl->serial_parent ||
             (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode)) return false;
     auto * parent = impl->serial_parent->impl.get();
-    if (!parent || parent->serial_busy || (impl->serial_prefill_only && phase != llama_memory_text_phase::prefill) ||
+    if (!parent || parent->serial_busy || impl->serial_parent->kv_device_suspended() || (impl->serial_prefill_only && phase != llama_memory_text_phase::prefill) ||
             std::find(parent->serial_children.begin(), parent->serial_children.end(), this) == parent->serial_children.end()) return false;
     serial_gate gate(parent->serial_busy);
     try {
@@ -609,7 +637,8 @@ bool llama_context_memory::prepare_serial_consumer(llama_memory_text_phase phase
 
 // A bounded host gate plus one queue pin protects unchanged workspaces without replanning per token.
 ggml_status llama_context_memory::compute_async(ggml_cgraph * graph) {
-    if (!graph || !impl->executor.ready()) return GGML_STATUS_FAILED;
+    if (!graph || kv_device_suspended() || !impl->executor.ready() ||
+            (impl->serial_parent && impl->serial_parent->kv_device_suspended())) return GGML_STATUS_FAILED;
     if (impl->serial_busy || (impl->serial_parent && impl->serial_parent->impl->serial_busy)) return GGML_STATUS_FAILED;
     if (impl->serial_borrowed && (!impl->serial_parent ||
             impl->serial_parent->impl->serial_active != this)) return GGML_STATUS_FAILED;
@@ -692,13 +721,14 @@ bool llama_context_memory::diagnostics(
         stream.resident_pages_per_layer,stream.ring_slots,stream.active_pages,
         stream.last_copy_bytes,stream.last_copy_calls,stream.last_copy_ms,stream.last_elapsed_ms,stream.streaming_active,true,
     };
+    output.kv_device_suspended = kv_device_suspended();
     return true;
 }
 
 llama_memory_text_phase_result llama_context_memory::signal_text_phase(
         const llama_memory_text_phase_signal & signal) noexcept {
     const auto before = impl->text_phase.snapshot();
-    if (impl->serial_busy || (impl->serial_parent && impl->serial_parent->impl->serial_busy) ||
+    if (kv_device_suspended() || impl->serial_busy || (impl->serial_parent && impl->serial_parent->impl->serial_busy) ||
             (!impl->serial_children.empty() && impl->serial_active != this)) {
         return {llama_memory_text_phase_status::transition_failed, before.phase, before.phase, before.revision};
     }

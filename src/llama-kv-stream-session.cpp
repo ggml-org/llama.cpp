@@ -80,6 +80,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     size_t primed_active = 0;
     pool_rebind * transition = nullptr;
     bool transition_closed = false;
+    bool device_suspended = false;
 
     bool retire_publication() {
         bool released=true;
@@ -181,6 +182,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         state = candidate.state;
         grant = candidate.grant;
         revision = binding->view()->revision;
+        device_suspended = false;
     }
 
     // Prepare and configure replacement metadata before retiring the active device binding.
@@ -281,8 +283,8 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
 
     ~pool_rebind() override {
         if (owner.transition != this) return;
-        if (affected && !recovered &&
-                (!activated || !owner.binding || !owner.binding->ready())) owner.poisoned = true;
+        if (affected && !recovered && (!activated ||
+                (!owner.device_suspended && (!owner.binding || !owner.binding->ready())))) owner.poisoned = true;
         owner.transition_closed = false;
         owner.transition = nullptr;
     }
@@ -401,6 +403,11 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
     bool bind(const std::vector<llama_memory_region_binding> & bindings) override {
         if (!affected || owner.binding || owner.leases[0] || candidate.binding ||
                 !frontier_unchanged()) return false;
+        if (!desired_regions[0].size) {
+            for (const auto & binding : bindings)
+                for (const auto resource : resources) if (binding.region.id == resource) return false;
+            return true;
+        }
         const auto * pool = find_binding(bindings,resources[0],desired_regions[0]);
         const auto * writer = coordinated_scratch ?
             find_binding(bindings,resources[1],desired_regions[1]) : nullptr;
@@ -418,7 +425,15 @@ struct llama_kv_stream_session::implementation::pool_rebind : llama_memory_prepa
     }
 
     bool activate() override {
-        if (!affected || !candidate.binding || !frontier_unchanged()) return false;
+        if (!affected || !frontier_unchanged()) return false;
+        if (!desired_regions[0].size) {
+            if (owner.revision == UINT64_MAX || owner.binding || owner.grant) return false;
+            ++owner.revision;
+            owner.device_suspended = true;
+            activated = true;
+            return true;
+        }
+        if (!candidate.binding) return false;
         owner.publish_pool(std::move(candidate));
         activated = true;
         return true;
@@ -528,6 +543,7 @@ struct session_operation {
 };
 
 llama_kv_stream_session::llama_kv_stream_session() = default;
+bool llama_kv_stream_session::device_suspended() const noexcept { return impl->device_suspended; }
 llama_kv_stream_session::~llama_kv_stream_session() {
     if (impl) {
         impl->drain(); impl->graphs.clear();
@@ -541,9 +557,10 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
         ggml_backend_memory_lease_t pool, ggml_backend_memory_lease_t writer, ggml_backend_memory_lease_t partial) {
     const bool coordinated_scratch = config.writer_resource || config.attention_resource;
     const bool any_transition = config.pool_resource || coordinated_scratch ||
-        config.prefill_stage || config.decode_stage;
+        config.prefill_stage || config.decode_stage || config.suspend_stage;
     if (any_transition && (!config.pool_resource || !config.prefill_stage || !config.decode_stage ||
             config.prefill_stage == config.decode_stage ||
+            (config.suspend_stage && (config.suspend_stage == config.prefill_stage || config.suspend_stage == config.decode_stage)) ||
             (coordinated_scratch && (!config.writer_resource || !config.attention_resource ||
                 config.writer_resource == config.pool_resource ||
                 config.attention_resource == config.pool_resource ||
@@ -718,6 +735,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
 
 bool llama_kv_stream_session::restore(size_t tokens) {
     auto & s = *impl;
+    if (s.device_suspended) return false;
     if (s.busy || s.transition_closed || s.running || s.poisoned || s.ring_guard || s.committed || tokens > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
     if (s.content->generation() != s.expected_generation) return false;
@@ -734,6 +752,7 @@ bool llama_kv_stream_session::restore(size_t tokens) {
 
 bool llama_kv_stream_session::reconstruct(size_t tokens) {
     auto & s = *impl;
+    if (s.device_suspended) return false;
     if (s.busy || s.transition || s.transition_closed || s.running || s.ring_guard ||
             tokens > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
@@ -842,6 +861,7 @@ bool llama_kv_stream_session::failed() const noexcept { return impl->poisoned; }
 size_t llama_kv_stream_session::tokens() const noexcept { return impl->committed; }
 bool llama_kv_stream_session::reserve_complete_layer(uint32_t layer, size_t reserved_tokens) {
     auto & s = *impl;
+    if (s.device_suspended) return false;
     if (s.busy || s.transition || s.transition_closed || s.running || s.poisoned ||
             s.publication.pending() || s.ring_guard ||
             reserved_tokens > s.content->host()->config().context_tokens) return false;
@@ -867,6 +887,7 @@ bool llama_kv_stream_session::reserve_complete_layer(uint32_t layer, size_t rese
 bool llama_kv_stream_session::set_ring_guard(
         std::shared_ptr<const llama_kv_stream_ring_guard> next) {
     auto & s = *impl;
+    if (s.device_suspended) return !next && !s.ring_guard;
     if (s.busy || s.transition || s.transition_closed || s.running || (s.poisoned && next) ||
             s.publication.pending()) return false;
     if (s.ring_guard == next) return true;
@@ -958,12 +979,14 @@ bool llama_kv_stream_session::prepare(
         std::unique_ptr<llama_memory_preparation> & output) {
     auto & s = *impl;
     const bool decode = target.stage == s.config.decode_stage;
+    const bool suspend = s.config.suspend_stage && target.stage == s.config.suspend_stage;
     const bool coordinated_scratch =
         s.config.writer_resource && s.config.attention_resource;
     if (output || !s.config.pool_resource ||
-            (!decode && target.stage != s.config.prefill_stage) ||
-            s.transition || s.busy || s.running || s.poisoned || s.ring_guard || !s.binding ||
-            !s.binding->ready() || !s.publications || s.publications->failed() ||
+            (!decode && !suspend && target.stage != s.config.prefill_stage) ||
+            s.transition || s.busy || s.running || s.poisoned || s.ring_guard ||
+            (s.device_suspended ? !suspend : (!s.binding || !s.binding->ready())) ||
+            (suspend && (!coordinated_scratch || s.revision == UINT64_MAX)) || !s.publications || s.publications->failed() ||
             s.publication.pending() || s.content->generation() != s.expected_generation ||
             llama_memory_plan_validate(target.plan).status !=
                 llama_memory_plan_status::success) return false;
@@ -1013,6 +1036,7 @@ bool llama_kv_stream_session::prepare(
         if (!requirements[i] || requirements[i]->access != access ||
                 !(requirements[i]->capabilities &
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS)) return false;
+        if (suspend && (requirements[i]->size_min || requirements[i]->size_preferred)) return false;
 
         bool found = false;
         for (size_t a = 0; a < layout.arenas.size(); ++a) {
@@ -1020,6 +1044,13 @@ bool llama_kv_stream_session::prepare(
             if (candidate_arena.budget.domain != declarations[i]->domain ||
                     candidate_arena.budget.allocation_class !=
                         declarations[i]->allocation_class) continue;
+            if (suspend) {
+                if (found || (arena != std::numeric_limits<size_t>::max() && arena != a)) return false;
+                for (const auto & region : candidate_arena.regions) if (region.id == resources[i]) return false;
+                found = true; arena = a;
+                desired[i] = {resources[i],0,0,requirements[i]->alignment,0};
+                continue;
+            }
             for (const auto & region : candidate_arena.regions) {
                 if (region.id != resources[i]) continue;
                 if (found || region.size < requirements[i]->size_min ||
@@ -1035,6 +1066,8 @@ bool llama_kv_stream_session::prepare(
         if (!found) return false;
     }
 
+    if (s.device_suspended) return true;
+
     std::array<ggml_backend_memory_region,3> before{};
     for (size_t i = 0; i < before.size(); ++i) {
         if (!s.leases[i] ||
@@ -1046,18 +1079,21 @@ bool llama_kv_stream_session::prepare(
             desired[0].size == s.config.policy.pool_bytes) return false;
 
     size_t attention_needed = 0;
-    if (coordinated_scratch &&
+    if (!suspend && coordinated_scratch &&
             (!s.attention_bytes(decode,attention_needed) ||
              desired[1].size < 32768 ||
              desired[2].size < attention_needed)) return false;
 
     llama_kv_stream_policy_rebind replacement;
-    const auto planned = desired[0].size > s.config.policy.pool_bytes ?
-        llama_kv_stream_policy_grow(
-            s.config.policy,s.committed,decode,desired[0].size,replacement) :
-        llama_kv_stream_policy_shrink(
-            s.config.policy,s.committed,decode,desired[0].size,replacement);
-    if (planned.status != llama_kv_stream_policy_status::success) return false;
+    if (suspend) {
+        replacement.config = s.config.policy;
+        replacement.state = s.state;
+    } else {
+        const auto planned = desired[0].size > s.config.policy.pool_bytes ?
+            llama_kv_stream_policy_grow(s.config.policy,s.committed,decode,desired[0].size,replacement) :
+            llama_kv_stream_policy_shrink(s.config.policy,s.committed,decode,desired[0].size,replacement);
+        if (planned.status != llama_kv_stream_policy_status::success) return false;
+    }
 
     const auto frontiers = s.publications->frontiers();
     if (frontiers.reserved != s.committed ||
@@ -1094,6 +1130,7 @@ llama_kv_stream_publication_frontiers llama_kv_stream_session::publication_front
 bool llama_kv_stream_session::set_workspaces(const std::vector<ggml_backend_memory_lease_t> & workspaces) {
     auto & s = *impl;
     if (s.busy || s.transition || s.transition_closed || s.running) return false;
+    if (s.device_suspended) return workspaces.empty() && s.graph_bindings.empty();
     if (s.graph_bindings == workspaces) return true;
     session_operation guard(s.busy);
     std::vector<lease_ptr> retained;
@@ -1114,7 +1151,7 @@ bool llama_kv_stream_session::set_workspaces(const std::vector<ggml_backend_memo
 void llama_kv_stream_session::release_graphs() { if (!impl->busy && !impl->transition_closed) impl->graphs.clear(); }
 bool llama_kv_stream_session::set_attention_workspace(ggml_backend_memory_lease_t lease, bool decode) {
     auto & s = *impl;
-    if (s.busy || s.transition || s.transition_closed || s.running || s.poisoned) return false;
+    if (s.busy || s.transition || s.transition_closed || s.running || s.poisoned || s.device_suspended) return false;
     size_t bytes = 0;
     if (lease) {
         auto * buffer = ggml_backend_memory_lease_buffer(lease);

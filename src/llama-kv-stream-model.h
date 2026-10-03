@@ -19,6 +19,7 @@ struct llama_kv_stream_memory_binding {
     ggml_backend_memory_lease_t pool = nullptr, writer = nullptr, attention = nullptr;
     llama_memory_resource_id pool_resource = 0, writer_resource = 0, attention_resource = 0;
     llama_memory_stage_id prefill_stage = 0, decode_stage = 0;
+    llama_memory_stage_id suspend_stage = 0;
 };
 
 struct llama_kv_stream_runtime_diagnostics {
@@ -79,6 +80,10 @@ public:
     llama_kv_stream_population_stats mtp_layer_population() const noexcept;
     bool begin(size_t active_tokens, uint32_t query_tokens, bool decode);
     bool complete() const noexcept;
+    // Host identity and the logical frontier survive a zero-grant device phase.
+    bool device_suspended() const noexcept;
+    bool suspend_ready() const noexcept;
+    bool prefetch_primed() const noexcept;
     void abort();
     bool reset(bool clear_bytes);
     bool restore(size_t tokens);

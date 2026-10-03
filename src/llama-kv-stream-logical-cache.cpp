@@ -39,6 +39,11 @@ llama_kv_stream_publication_frontiers llama_kv_stream_logical_cache::frontiers()
     return publications->frontiers();
 }
 size_t llama_kv_stream_logical_cache::tokens() const noexcept { return committed; }
+bool llama_kv_stream_logical_cache::ready() const noexcept {
+    return !failed && !pending.pending() && !active_writer &&
+        authoritative->generation() == expected_generation && !publications->failed() && !publications->pending() &&
+        publications->frontiers().committed == committed;
+}
 
 bool llama_kv_stream_logical_cache::begin(size_t count) {
     if (failed || pending.pending() || authoritative->generation() != expected_generation ||

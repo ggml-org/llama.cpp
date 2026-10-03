@@ -437,8 +437,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.2a | Committed | 9295ce06c | Backend-neutral ordered text/image session plan and ordinary mtmd baseline adapter. Initial/follow-up IQ4_XS logits and 16 continuation tokens match the legacy helper; failed images stop later prefill. |
 | 7.2b prerequisite | Committed | a9c1f74cb | Pre-existing short-prefill dispatch bug isolated and fixed at the 7.2a checkpoint before restoring the ongoing embedding/position work. |
 | 7.2b | Committed | 02d9f199c | Adaptive embedding admission separates dense physical KV rows from repeated/gapped M-RoPE positions; resident/ring image controls, checkpoint/suffix handling and numerical/memory regressions pass. |
-| 7.2c | Ready for review | - | Multiple serial scheduler children, exclusive submission/reentry gates, bounded vision borrowing, and capture/copy retirement; CPU/CUDA three-consumer and live shared-image controls pass. |
-| 7.3a-7.5c | Planned | - | KV suspension, projector reload and production vision remain pending. |
+| 7.2c | Committed | f47e08d3b | Multiple serial scheduler children, exclusive submission/reentry gates, bounded vision borrowing, and capture/copy retirement; CPU/CUDA three-consumer and live shared-image controls pass. |
+| 7.3a | Ready for review | - | Zero-grant KV/graph suspension preserves the session, host frontiers and recurrent state while rejecting paused execution; resident/ring and auxiliary-cache qualifications pass. |
+| 7.3b-7.5c | Planned | - | Fresh-grant resume, interruption/vision borrowing, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3782,3 +3783,40 @@ Artifacts: `/tmp/vision-7.2c-three-owner-red.log`, `/tmp/vision-7.2c-owner-final
 This stage shares graph scratch but keeps a target KV pool and eager projector weights resident. Vision batches larger than the protected prefill prefix are rejected. Stage 7.3 adds full KV suspension/resume; 7.4 adds projector-weight unload/reload; 7.5 admits qualified production requests. Image-aware MTP remains rejected until 7.5c. The adapter is backend-neutral, but native-cache lifecycle qualification here remains CPU/CUDA, not a claim that real multimodal inference has been tested on other accelerators.
 
 Stage 7.2c is staged for user review without unrelated benchmark files. Production is restored using its original image/configuration; no assistant commit or push is made.
+
+### Stage 7.3a: zero-grant device suspension
+
+The shared context plan now has an explicit suspension stage with zero requirements for target graph scratch, KV pool, KV writer scratch and attention scratch. Serial children have a corresponding zero-workspace stage. Suspension uses the existing consumer transition lifecycle: close submission, drain affected work, retire native captures, release views, commit the empty arena layout, and publish the suspended state.
+
+#### Preserved ownership and protected state
+
+- The KV session, registered consumer pointer, proxy host buffer, cache IDs, host generation, publication frontiers and logical token count remain in place. A zero-grant transition does not delete and recreate the session. Its device-layout revision advances so an old capture cannot be mistaken for a valid binding.
+- Target and auxiliary MTP appends must be complete before suspension. An active append or an unacknowledged MTP publication is rejected instead of being implicitly accepted or cancelled. A completed retained MTP layer is released without changing the auxiliary host cache's identity, frontier or bytes.
+- Pending target compute, output D2H and cross-token prefetch retire before the KV views are released. All registered child schedulers surrender their scratch grants as well. Suspended target and child execution, target phase activation, new borrowing, KV append and unsupported reset/truncation are rejected; empty cleanup detach is allowed.
+- `llama_context_suspend_kv_device()` supplies a recurrent-completion participant to the common owner. Its callback runs under the same reentry gate and completes pending recurrent publication/restoration after target scheduler synchronization. Current recurrent tensors and rollback/staging storage remain separately owned, outside the returned KV/graph ranges. This stage neither unloads nor zeroes recurrent state.
+- The memory diagnostics explicitly report suspended KV with zero resident/ring/writer/attention bytes. Expected teardown sizes account for deliberately detached compute grants. Normal context construction and text/MTP execution do not automatically suspend.
+
+**Release of reservations is not release of the parent allocation.** The shared device-local parent stays allocated for later vision reuse; its arena has no KV/graph reservations or leases after successful suspension. Consequently, `nvidia-smi` need not show a VRAM decrease. Persistent weights, recurrent state and other independently owned allocations are also not counted as reclaimed KV space.
+
+No new allocator, backend interface pattern or attention kernel is introduced. The suspension completion uses the existing `llama_memory_executor_backend` drain contract. The private mtmd/context integration entry points retain explicit cross-library visibility.
+
+#### TDD and qualification
+
+The first suspension regression was red against stubbed owner methods while pre-existing allocation paths still built. The live hybrid case subsequently caught a cleanup assertion: context teardown needs to detach an already-empty workspace after suspension. The implementation now accepts that idempotent empty cleanup but rejects attaching a new workspace while suspended. Numerical and state checks were not relaxed.
+
+- The targeted CUDA owner/model case passes **1 case / 47 assertions**. It rejects active target append, incomplete auxiliary publication and an injected auxiliary-completion failure; retries safely; closes callback reentry; completes queued D2H; releases a retained MTP layer and a registered child; retains host bytes/identities; and reports zero pool/writer/attention/graph grants. Suspended reactivation is rejected, and repeated suspension/cleanup is safe.
+- The real IQ4_XS Q8_0/Q4_0 hybrid tests pass **3 cases / 133 assertions** with UVM disabled. One case suspends after 256 prefill rows and four decode rows, compares the complete serialized context and recurrent tensors, rejects another decode without mutation, repeats suspension and tears down normally. The other prefills 6,144 tokens with ubatch 64, decodes four rows into a streamed layout, confirms cross-token prefetch is primed, then verifies suspension retires it while preserving all host KV bytes and recurrent state at the 6,148-row frontier.
+- The new auxiliary-readiness controls and existing logical cache tests pass **9 cases / 180 assertions**. Host publication without its final acknowledgment is not suspension-ready; cancellation and completed publication restore readiness, while an unacknowledged external host replacement is rejected.
+- Logical-cache, common session, context-owner and workspace controls pass ASan with leak checking and UBSan. Their CPU counts are **9/180**, **1/2**, **7/658** and **21/454** respectively. The common-only session test is not a claim of GPU instrumentation by CPU sanitizers.
+- The text regression remains **5 cases / 561 assertions** with zero logit/recurrent-state error and matching continuations. The text-only MTP regression remains **2 cases / 246 assertions** with zero TG1-TG4 MTP logit error. The full CUDA session suite remains **17 cases / 778 assertions**.
+- The final full CUDA model/adapter suite passes **14 cases / 491 assertions**, and the CUDA context-owner suite passes **8 cases / 686 assertions**. Existing phase resizing, recovery, MTP population/cancellation, three-consumer handoffs and native retirement remain green.
+- The existing shared-vision regression remains **13 cases / 208 assertions**: initial, follow-up and post-decode image logits, recurrent state and continuation tokens still match ordinary mtmd. This is the 7.2c scratch-sharing path, not vision reuse of suspended KV space.
+- CUDA memcheck passes for both the targeted family suspension (**1/47**) and the real resident hybrid suspension (**2/22**) with **zero memory-access errors**. API-error reporting is disabled for the stock backend's handled CUDA graph-update fallback; actual memory checking stays enabled. The long ring test is qualified without full-model instrumentation.
+
+Artifacts: `/tmp/vision-7.3a-suspend-red.log`, `/tmp/vision-7.3a-family-suspend-final.log`, `/tmp/vision-7.3a-family-memcheck-final.log`, `/tmp/vision-7.3a-hybrid-qualification.log`, `/tmp/vision-7.3a-hybrid-memcheck.log`, `/tmp/vision-7.3a-model-suite-final.log`, `/tmp/vision-7.3a-owner-suite-final.log`, `/tmp/vision-7.3a-text-regression.log`, `/tmp/vision-7.3a-mtp-regression.log`, `/tmp/vision-7.3a-session-full.log`, and `/tmp/vision-7.3a-vision-regression.log`.
+
+#### Deliberate checkpoint boundary
+
+This checkpoint ends with the KV device binding suspended. Fresh-grant reactivation and pointer/graph reconstruction remain in 7.3b; the broader interruption/recovery matrix and using reclaimed KV capacity for vision remain in 7.3c. Projector weights remain eager, production vision is still guarded, and no suspension CLI/server option is added. Ownership logic is backend-neutral; real accelerator qualification here is CUDA only.
+
+Stage 7.3a is staged for user review without unrelated benchmark files. Production is restored with its original image/configuration after testing. No assistant commit or push is made.

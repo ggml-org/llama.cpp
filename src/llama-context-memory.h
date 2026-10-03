@@ -18,6 +18,7 @@ struct llama_context_memory_diagnostics {
     double last_copy_ms = 0, last_elapsed_ms = 0;
     bool streaming_active = false;
     bool executable_storage_external = true;
+    bool kv_device_suspended = false;
 };
 
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
@@ -59,6 +60,9 @@ public:
     // Retire native graph addresses before the caller replaces graph metadata.
     LLAMA_API bool retire_graph() noexcept;
     LLAMA_API bool serial_ready() const noexcept;
+    // Return KV and graph grants while retaining the shared parent and authoritative host state.
+    LLAMA_API bool suspend_kv(llama_memory_executor_backend * auxiliary_completion = nullptr) noexcept;
+    LLAMA_API bool kv_device_suspended() const noexcept;
 
     // Record text intent and activate the matching shared-parent layout only when the phase changes.
     llama_memory_text_phase_result signal_text_phase(const llama_memory_text_phase_signal & signal) noexcept;
@@ -82,3 +86,4 @@ private:
 
 // Internal serial adapter seam; the context retains ownership and may rebuild this coordinator.
 LLAMA_API llama_context_memory * llama_context_compute_memory(llama_context * ctx) noexcept;
+LLAMA_API bool llama_context_suspend_kv_device(llama_context * ctx) noexcept;

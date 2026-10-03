@@ -120,17 +120,121 @@ int main(int argc,char ** argv) {
     const bool lease_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-lease") == 0;
     const bool admission_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-admission") == 0;
     const bool wide_ubatch_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-wide-ubatch") == 0;
+    const bool suspend_only = argc > 1 && std::strcmp(argv[1], "--cuda-suspend") == 0;
     testing t;
+    if (suspend_only) t.set_filter("shared_kv_suspension_releases_device_grants_without_changing_host");
     if (admission_only) t.set_filter("mtp_prefill_admission_demotes_resident_pages_before_population");
     if (wide_ubatch_only) t.set_filter("mtp_prefill_uses_configured_microbatch_rows");
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
-    if (argc < 2 || (!auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    t.test("shared_kv_suspension_releases_device_grants_without_changing_host", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        llama_kv_stream_model_config config{backend.get(),f.host->config(),page.bytes*4,4,4};
+        config.auxiliary_cache_layers = 1;
+        auto model = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto * type = llama_kv_stream_device_buffer_type(dev);
+        auto * host_type = ggml_backend_cpu_buffer_type();
+        std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+        std::vector<ggml_backend_buffer_type_t> types{type,host_type};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(),types.data(),2,256,false,true));
+        llama_compute_workspace_plan plan;
+        plan.groups = {{type,65536,ggml_backend_buft_get_alignment(type),0},
+            {host_type,8192,ggml_backend_buft_get_alignment(host_type),1}};
+        plan.phase_sizes = {{65536,8192},{32768,4096}};
+        auto owner = llama_context_memory::create(sched.get(),backends,plan,model.get());
+        if (!t.assert_true(bool(owner))) return;
+        if (!t.assert_true(model->begin(1,1,true))) return;
+        const auto active_grants = model->device_grant_bytes();
+        t.assert_true(!owner->suspend_kv() && !model->device_suspended());
+        t.assert_equal(active_grants,model->device_grant_bytes());
+        model->abort();
+        ggml_backend_buffer_clear(model->buffer(),0);
+        if (!t.assert_true(model->restore(257))) return;
+        const auto auxiliary = model->auxiliary_cache();
+        if (!t.assert_true(auxiliary && auxiliary->begin(1))) return;
+        t.assert_true(!owner->suspend_kv() && !model->device_suspended());
+        if (!t.assert_true(auxiliary->cancel())) return;
+        auto checkpoint = auxiliary->checkpoint();
+        checkpoint.tokens = 257;
+        if (!t.assert_true(auxiliary->restore(checkpoint) && model->acquire_mtp_layer())) return;
+        const auto auxiliary_identity = auxiliary->identity();
+        std::vector<uint8_t> auxiliary_bytes(auxiliary->host()->bytes());
+        std::memcpy(auxiliary_bytes.data(),ggml_backend_buffer_get_base(auxiliary->host()->buffer()),auxiliary_bytes.size());
+        const auto cache = model->host();
+        const auto cache_id = cache->cache_id();
+        const auto consumer = model->memory_consumer();
+        std::vector<uint8_t> expected(cache->bytes());
+        std::memcpy(expected.data(),ggml_backend_buffer_get_base(cache->buffer()),expected.size());
+        const auto revision = model->binding_view().revision;
+        auto * parent = owner->shared_parent();
+        ggml_context_ptr graph_ctx(ggml_init({16384,nullptr,true}));
+        auto * marker = ggml_new_tensor_1d(graph_ctx.get(),GGML_TYPE_F32,4);
+        const auto old = model->binding_view();
+        if (!t.assert_true(ggml_backend_tensor_alloc(old.buffer,marker,old.base) == GGML_STATUS_SUCCESS)) return;
+        const float source[4] = {1,2,3,4};
+        float copied[4] = {};
+        ggml_backend_tensor_set_async(backend.get(),marker,source,0,sizeof(source));
+        ggml_backend_tensor_get_async(backend.get(),marker,copied,0,sizeof(copied));
+        ggml_backend_ptr child_backend(ggml_backend_dev_init(dev,nullptr)), child_cpu(ggml_backend_cpu_init());
+        std::vector<ggml_backend_t> child_backends{child_backend.get(),child_cpu.get()};
+        ggml_backend_sched_ptr child_sched(ggml_backend_sched_new(child_backends.data(),types.data(),2,256,false,true));
+        auto child = llama_context_memory::borrow_workspace(child_sched.get(),child_backends,
+            {{type,8192,ggml_backend_buft_get_alignment(type),0}},*owner);
+        if (!t.assert_true(bool(child))) return;
+        struct completion_probe : llama_memory_executor_backend {
+            llama_context_memory & owner;
+            bool fail = true, reentered = false;
+            explicit completion_probe(llama_context_memory & owner) : owner(owner) {}
+            bool drain() override { reentered |= owner.suspend_kv(); return !fail; }
+        } completion(*owner);
+        const auto grants = model->device_grant_bytes();
+        t.assert_true(!owner->suspend_kv(&completion));
+        t.assert_true(!completion.reentered && !model->device_suspended());
+        t.assert_equal(grants,model->device_grant_bytes());
+        completion.fail = false;
+        if (!t.assert_true(owner->suspend_kv(&completion))) return;
+        t.assert_true(!completion.reentered);
+        t.assert_true(std::memcmp(source,copied,sizeof(source)) == 0);
+        t.assert_true(owner->kv_device_suspended() && model->device_suspended());
+        t.assert_true(model->host() == cache && cache->cache_id() == cache_id);
+        t.assert_true(model->memory_consumer() == consumer);
+        t.assert_true(!model->has_mtp_layer() && model->auxiliary_cache() == auxiliary);
+        t.assert_equal(auxiliary_identity.generation,auxiliary->identity().generation);
+        t.assert_equal(size_t(257),auxiliary->tokens());
+        t.assert_true(std::memcmp(auxiliary_bytes.data(),ggml_backend_buffer_get_base(auxiliary->host()->buffer()),auxiliary_bytes.size()) == 0);
+        t.assert_equal(size_t(257),model->tokens());
+        t.assert_equal(size_t(0),model->device_grant_bytes());
+        t.assert_equal(size_t(0),model->pool_grant_bytes());
+        t.assert_equal(size_t(0),model->writer_grant_bytes());
+        t.assert_equal(size_t(0),model->attention_grant_bytes());
+        t.assert_true(model->binding_view().buffer == nullptr);
+        t.assert_true(owner->workspace_leases().empty());
+        t.assert_true(child->workspace_leases().empty());
+        t.assert_true(!child->serial_ready() && !child->prepare_serial_consumer(llama_memory_text_phase::prefill));
+        t.assert_equal(size_t(0),ggml_backend_sched_get_buffer_size(sched.get(),backend.get()));
+        t.assert_true(owner->shared_parent() == parent);
+        t.assert_true(std::memcmp(expected.data(),ggml_backend_buffer_get_base(cache->buffer()),expected.size()) == 0);
+        llama_context_memory_diagnostics diagnostics;
+        if (!t.assert_true(owner->diagnostics(diagnostics))) return;
+        t.assert_true(diagnostics.kv_device_suspended && diagnostics.layout_revision > revision);
+        t.assert_equal(diagnostics.parent_bytes,diagnostics.unused_bytes);
+        t.assert_true(!model->begin(258,1,true) && !model->reset(false) && !model->truncate(256));
+        t.assert_true(!owner->prepare_serial_target() && !owner->serial_ready());
+        t.assert_true(owner->signal_text_phase({llama_memory_text_phase::decode,1,true,true,false}).status ==
+            llama_memory_text_phase_status::transition_failed);
+        t.assert_true(owner->suspend_kv());
+        t.assert_true(model->set_workspaces({}));
+        t.assert_true(!model->set_workspaces({nullptr}));
+        t.assert_true(std::memcmp(expected.data(),ggml_backend_buffer_get_base(cache->buffer()),expected.size()) == 0);
+    });
     t.test("fixed_compute_and_kv_grants_share_one_device_parent", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         ggml_kv_stream_layout page;

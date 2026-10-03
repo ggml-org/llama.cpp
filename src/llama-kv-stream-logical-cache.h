@@ -29,6 +29,8 @@ public:
     llama_kv_stream_logical_checkpoint checkpoint() const noexcept;
     llama_kv_stream_publication_frontiers frontiers() const noexcept;
     size_t tokens() const noexcept;
+    // No pending publication or unacknowledged host replacement.
+    bool ready() const noexcept;
 
     // One append is active at a time. Host publication does not claim a device mirror.
     bool begin(size_t count);

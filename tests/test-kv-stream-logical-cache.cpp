@@ -64,6 +64,23 @@ struct generated_source {
 
 int main() {
     testing t;
+    t.test("suspension_readiness_requires_acknowledged_host_publication", [](testing & t) {
+        auto cache = llama_kv_stream_logical_cache::create(host(909));
+        if (!t.assert_true(bool(cache) && cache->ready())) return;
+        if (!t.assert_true(cache->begin(1))) return;
+        t.assert_true(!cache->ready());
+        t.assert_true(cache->cancel() && cache->ready());
+        const auto backing = cache->host();
+        std::vector<uint8_t> k(backing->layout().k_token_bytes,1), v(backing->layout().v_token_bytes,2);
+        llama_kv_stream_write write;
+        if (!t.assert_true(cache->begin(1) && cache->content()->prepare({
+                {0,operand::k,0,k.data(),k.size()},{0,operand::v,0,v.data(),v.size()}},write) &&
+                cache->publish_host(write))) return;
+        t.assert_true(!cache->ready());
+        t.assert_true(cache->finish() && cache->ready());
+        t.assert_true(cache->content()->invalidate());
+        t.assert_true(!cache->ready());
+    });
     t.test("suffix_truncation_preserves_clean_resident_rows_but_restore_invalidates_them", [](testing & t) {
         auto cache = llama_kv_stream_logical_cache::create(host(202));
         if (!t.assert_true(cache && append(t,*cache,4,0x20))) return;
