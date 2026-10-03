@@ -14,7 +14,8 @@ static void kernel_roll_fused_i0_i1(
     const float *src_d,
     float *dst_d,
     int ne0, int ne1, int ne2, int ne3,
-    int sh0, int sh1, int sh2, int sh3)
+    int sh0, int sh1, int sh2, int sh3,
+    int64_t snb1, int64_t snb2, int64_t snb3)
 {
     if (ne0 == 0 || ne1 == 0 || ne2 == 0 || ne3 == 0) return;
 
@@ -57,10 +58,10 @@ static void kernel_roll_fused_i0_i1(
             const int s2 = wrap_add(i2, shNe2, ne2);
             const int s3 = wrap_add(i3, shNe3, ne3);
 
-            const int idx_src = s0
-                              + s1 * stride1
-                              + s2 * stride2
-                              + s3 * stride3;
+            const int64_t idx_src = s0
+                                  + s1 * snb1
+                                  + s2 * snb2
+                                  + s3 * snb3;
 
             dst_d[idx_dst] = src_d[idx_src];
         });
@@ -72,6 +73,7 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
     const ggml_tensor *src = dst->src[0];
     GGML_ASSERT(src && src->type == GGML_TYPE_F32);
+    GGML_ASSERT(src->nb[0] == sizeof(float));
 
     const int ne0 = (int) dst->ne[0];
     const int ne1 = (int) dst->ne[1];
@@ -85,7 +87,7 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     int shift3 = params[3];
 
 
-    if ((shift0 | shift1 | shift2 | shift3) == 0) {
+    if ((shift0 | shift1 | shift2 | shift3) == 0 && ggml_is_contiguous(src)) {
         const size_t nb = ggml_nbytes(src);
         queue *q = ctx.stream();
         SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(dst->data, src->data, nb)));
@@ -113,7 +115,10 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
         kernel_roll_fused_i0_i1(
             *q, src_d, dst_d,
             ne0, ne1, ne2, ne3,
-            shift0, shift1, shift2, shift3
+            shift0, shift1, shift2, shift3,
+            (int64_t) (src->nb[1] / sizeof(float)),
+            (int64_t) (src->nb[2] / sizeof(float)),
+            (int64_t) (src->nb[3] / sizeof(float))
         );
     } catch (const std::exception &e) {
         std::fprintf(stderr, "[SYCL-ROLL] ERROR: %s\n", e.what());
