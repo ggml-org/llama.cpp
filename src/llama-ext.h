@@ -130,6 +130,10 @@ LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uin
 
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
+// relabel the recurrent state of seq_id as the state after pos, without recompute (approximate, for cache reuse)
+// returns false if the memory has a recurrent part with no state for seq_id, true (no-op) if it has no recurrent part
+LLAMA_API bool llama_memory_seq_rs_fork(llama_memory_t mem, llama_seq_id seq_id, llama_pos pos);
+
 //
 // model/context data extraction
 //
