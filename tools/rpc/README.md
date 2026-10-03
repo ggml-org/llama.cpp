@@ -83,6 +83,20 @@ $ llama-cli -hf ggml-org/gemma-3-1b-it-GGUF -ngl 99 --rpc 192.168.88.10:50052,19
 By default, llama.cpp distributes model weights and the KV cache across all available devices -- both local and remote -- in proportion to each device's available memory.
 You can override this behavior with the `--tensor-split` option and set custom proportions when splitting tensor data across devices.
 
+### RPC load threads
+
+For mmap model loads, large RPC-backed tensors can be prepared using multiple
+worker threads on the main host by setting `GGML_RPC_LOAD_THREADS`:
+
+```bash
+$ GGML_RPC_LOAD_THREADS=8 llama-cli ... --rpc 192.168.88.10:50052
+```
+
+This uses multiple CPU workers for the client-side read/hash work during model
+loading and can significantly reduce load time. RPC load threads are currently
+supported only with mmap, as the workers require stable mapped tensor data. The
+feature is disabled when the variable is unset.
+
 ### Local cache
 
 The RPC server can use a local cache to store large tensors and avoid transferring them over the network.
