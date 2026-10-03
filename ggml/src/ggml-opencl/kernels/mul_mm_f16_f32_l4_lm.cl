@@ -3,13 +3,43 @@
 #define LOAD_VEC_A 4
 #define LOAD_VEC_B 4
 
+// Tile shape is overridable at build time so the same source can be compiled
+// as a second, NARROW instance for skinny-N matmuls (the KQ/KQV of a
+// speculative/MTP verify batch, where ne11 is the verify width 2..8).
+//
+// With the default BN=64/TN=8 the N dimension is tiled 64 wide: at ne11=4 the
+// grid is CEIL_DIV(4,64)=1 column tile, so 7 of the 8 column groups
+// (th_c = tid/(BM/TM)) hold no valid column at all, and the one that does uses
+// 4 of its TN=8 slots -> 4/64 of the tile does useful work. The masked lanes
+// still execute every mad; the bounds test only guards the final store.
+//
+// The narrow instance uses BN=8/TN=1 with the same 128 threads, which covers a
+// verify width of up to 8 in a single column tile with no waste at w=8 and
+// half-occupancy at w=4, instead of 6.25%.
+#ifndef BM
 #define BM 64
+#endif
+#ifndef BN
 #define BN 64
+#endif
+#ifndef BK
 #define BK 16
+#endif
+#ifndef TM
 #define TM 4
+#endif
+#ifndef TN
 #define TN 8
+#endif
 
-kernel void kernel_mul_mm_f16_f32_l4_lm(
+// The narrow instance is compiled from this same source, so it must export a
+// DIFFERENT symbol -- otherwise the two are indistinguishable in a profile and
+// an env-gated A/B cannot be checked for which variant actually ran.
+#ifndef KERNEL_NAME_LM
+#define KERNEL_NAME_LM kernel_mul_mm_f16_f32_l4_lm
+#endif
+
+kernel void KERNEL_NAME_LM(
     global half4 * src0,
     ulong offset0,
     global float4 * src1,
@@ -93,8 +123,14 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
             }
         }
 
+        // loadc_b is derived from the thread id and spans get_local_size(0)/(BK/LOAD_VEC_B)
+        // regardless of BN, so once BN is narrowed below that span the extra threads must
+        // sit the load out -- otherwise they write past buf_b[BN*BK]. With the default
+        // BN=64 this is true for every thread and the guard is free.
         for (int l = 0; l < BN; l += loadstride_b) {
-            if (ic*BN + loadc_b + l < ne11) {
+            if (loadc_b + l >= BN) {
+                // nothing to load for this thread at this tile width
+            } else if (ic*BN + loadc_b + l < ne11) {
                 const int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
                 buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = src1[idx].s0;
                 buf_b[(loadr_b * LOAD_VEC_B + 1) * BN + loadc_b + l] = src1[idx].s1;
