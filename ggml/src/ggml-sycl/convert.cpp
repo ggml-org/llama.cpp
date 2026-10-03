@@ -208,24 +208,26 @@ static void dequantize_row_q4_1_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 
+// Work-group width for the wide K-quant dequant: 16 threads cover one 256-weight block.
+// Swept standalone at 5120x17408: 64 -> 526 GB/s, 128 -> 896, 256 -> 1124, 512 -> 1133.
+#define GGML_SYCL_DEQK_WG 256
+
+#define GGML_SYCL_LAUNCH_DEQK_WIDE(KERNEL)                                                        \
+    do {                                                                                          \
+        const int     wg     = GGML_SYCL_DEQK_WG;                                                       \
+        const int64_t groups = (nb * 16 + wg - 1) / wg;                                           \
+        stream->parallel_for(sycl::nd_range<1>(groups * wg, wg), [=](sycl::nd_item<1> it) {       \
+            KERNEL<dst_t>(vx, y, nb, it);                                                         \
+        });                                                                                       \
+    } while (0)
+
+
 template <typename dst_t>
 static void dequantize_row_q4_K_sycl(const void *vx, dst_t *y, const int64_t k,
                                      dpct::queue_ptr stream) {
     const int64_t nb = k / QK_K;
-    {
-        dpct::has_capability_or_fail(stream->get_device(),
-                                     {sycl::aspect::fp16});
-
-        stream->submit([&](sycl::handler &cgh) {
-            sycl::local_accessor<uint8_t, 1> scale_local_acc(sycl::range<1>(12), cgh);
-            cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
-                                                   sycl::range<3>(1, 1, 32),
-                                               sycl::range<3>(1, 1, 32)),
-                             [=](sycl::nd_item<3> item_ct1) {
-                                 dequantize_block_q4_K(vx, y, get_pointer(scale_local_acc), item_ct1);
-                             });
-        });
-    }
+    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    GGML_SYCL_LAUNCH_DEQK_WIDE(dequantize_block_q4_K_wide);
 }
 
 template <typename dst_t>
@@ -250,32 +252,8 @@ template <typename dst_t>
 static void dequantize_row_q5_K_sycl(const void *vx, dst_t *y, const int64_t k,
                                      dpct::queue_ptr stream) {
     const int64_t nb = k / QK_K;
-#if QK_K == 256
-    {
-        dpct::has_capability_or_fail(stream->get_device(),
-                                     {sycl::aspect::fp16});
-
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
-                                                   sycl::range<3>(1, 1, 64),
-                                               sycl::range<3>(1, 1, 64)),
-                             [=](sycl::nd_item<3> item_ct1) {
-                                 dequantize_block_q5_K(vx, y, item_ct1);
-                             });
-    }
-#else
-    {
-        dpct::has_capability_or_fail(stream->get_device(),
-                                     {sycl::aspect::fp16});
-
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
-                                                   sycl::range<3>(1, 1, 32),
-                                               sycl::range<3>(1, 1, 32)),
-                             [=](sycl::nd_item<3> item_ct1) {
-                                 dequantize_block_q5_K(vx, y, item_ct1);
-                             });
-    }
-
-#endif
+    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    GGML_SYCL_LAUNCH_DEQK_WIDE(dequantize_block_q5_K_wide);
 }
 
 template <typename dst_t>
