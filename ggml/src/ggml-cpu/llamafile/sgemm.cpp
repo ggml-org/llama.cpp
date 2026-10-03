@@ -2440,9 +2440,10 @@ class tinyBLAS_Q0_PPC {
         int64_t n_aligned = 0;
         if (n % n_chunk == 0) {
             n_aligned = n;
-        } else if (n == 4) {
-            n_aligned = 4;
         } else if (n < n_chunk) {
+            // n==4 used to force tiled with nc=4, but KERNEL_Q0 is 8-wide in N
+            // (save_acc jj+4, B pack stride 32*kc). That OOB-stores C and
+            // segfaults on the k-tail add_save_acc. mnpack KERNEL_8x4 handles n=4.
             n_aligned = (n / 8) * 8;
         } else {
             n_aligned = (n / n_chunk) * n_chunk;
