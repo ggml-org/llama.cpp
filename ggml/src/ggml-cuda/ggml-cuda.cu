@@ -4544,15 +4544,24 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
             } else {
                 // Post-warmup: normal CUDA graph operation
                 if (properties_changed) {
-                    // Properties changed - reset warmup, execute directly until stable again
-                    graph->warmup_complete = false;
-                    GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
+                    if (graph->instance != nullptr && graph->replayed_since_capture) {
+                        use_cuda_graph = true;
+                        cuda_graph_update_required = true;
+                    } else {
+                        // Reset warmup when graph properties keep changing.
+                        graph->warmup_complete = false;
+                        GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
+                    }
                 } else {
                     use_cuda_graph = true;
                     cuda_graph_update_required = graph->instance == nullptr;
                 }
             }
         }
+    }
+
+    if (!use_cuda_graph || cuda_graph_update_required) {
+        graph->replayed_since_capture = false;
     }
 #endif // USE_CUDA_GRAPH
 
@@ -4567,6 +4576,12 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     }
 
     ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
+
+#ifdef USE_CUDA_GRAPH
+    if (use_cuda_graph && !cuda_graph_update_required) {
+        graph->replayed_since_capture = true;
+    }
+#endif
 
     return GGML_STATUS_SUCCESS;
 }
