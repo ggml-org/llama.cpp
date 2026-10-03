@@ -13,6 +13,16 @@ if (LLAMA_BUILD_TESTS AND UNIX AND NOT GGML_BACKEND_DL)
             $<TARGET_FILE:ggml-rpc-server>
             $<TARGET_FILE:test-rpc-multi-server>)
     set_property(TEST test-rpc-multi-server PROPERTY LABELS main)
+
+    add_executable(test-rpc-crash ${PROJECT_SOURCE_DIR}/tests/test-rpc-crash.cpp)
+    target_link_libraries(test-rpc-crash PRIVATE ggml ggml-rpc)
+    target_include_directories(test-rpc-crash PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+    add_test(
+        NAME test-rpc-crash
+        COMMAND bash ${PROJECT_SOURCE_DIR}/tests/test-rpc-crash.sh
+            $<TARGET_FILE:ggml-rpc-server>
+            $<TARGET_FILE:test-rpc-crash>)
+    set_property(TEST test-rpc-crash PROPERTY LABELS main)
 endif()
 
 if(LLAMA_TOOLS_INSTALL)

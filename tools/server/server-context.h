@@ -81,6 +81,9 @@ static server_state server_state_from_str(const std::string & str) {
 
 using server_state_callback_t = std::function<void(server_state, json /* payload */)>;
 
+// called when the compute device fails and cannot recover
+using server_error_callback_t = std::function<void()>;
+
 struct server_context {
     std::unique_ptr<server_context_impl> impl;
 
@@ -110,6 +113,7 @@ struct server_context {
 
     // note: must be set before load_model() is called
     void set_state_callback(server_state_callback_t callback);
+    void set_error_callback(server_error_callback_t callback);
 };
 
 
