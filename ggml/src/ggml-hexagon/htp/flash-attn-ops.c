@@ -2428,6 +2428,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     return HTP_STATUS_OK;
 }
 
+#include "hmxint-fa.h"
+
 int op_flash_attn_ext(struct htp_ops_context * octx) {
     const struct htp_tensor * q    = octx->src[0];
     const struct htp_tensor * k    = octx->src[1];
@@ -2458,6 +2460,11 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
 
     if (kparams->kernel_type == HTP_FA_KERNEL_HMX) {
         return hmx_flash_attn_ext(octx);
+    }
+
+    if (!octx->ctx->hmx_fp16 && kparams->kernel_type == HTP_FA_KERNEL_HVX && kparams->max_bias == 0.0f && kparams->logit_softcap == 0.0f) {
+        const int r = hmxint_flash_attn(octx, kparams->scale);   // integer-HMX attention (SoCs whose HMX has no FP16)
+        if (r != HTP_STATUS_NO_SUPPORT) return r;
     }
 
     struct htp_fa_context factx;

@@ -98,6 +98,7 @@ struct htp_context {
     int                    thread_prio;
 
     bool                   hmx_enabled;
+    bool                   hmx_fp16;       // HMX has FP16 (false on e.g. SM7750): integer HMX paths are used instead
     bool                   etm;
     uint32_t               profiler;
 

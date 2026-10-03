@@ -2697,6 +2697,8 @@ typedef struct {
     uint32_t       n_dot_tiles;
 } hmx_matmul_job_t;
 
+#include "hmxint-mm.h"
+
 static void hmx_matmul_worker_fn(void * data) {
     hmx_matmul_job_t * job = (hmx_matmul_job_t *) data;
     FARF(HIGH, "hmx-mm-job: n_row_tiles %u n_col_tiles %u n_dot_tiles %u", job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
@@ -2750,6 +2752,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
     if (!hex_is_aligned(dst, VLEN) || (act_dma_addr & (VLEN - 1)) != 0) { return -1; }
+
+    if (!ctx->hmx_fp16 && weight_type == HTP_TYPE_Q4_0) {  // integer HMX path (SoCs whose HMX has no FP16)
+        return hmxint_mm_q4_0(ctx, dst, src2_addr, src2_bytes, act_dma_addr, weight, m, k, n, act_stride, dst_stride, src2_stride, dst_cols, n_threads);
+    }
 
     size_t row_stride = htp_mm_get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
@@ -3096,6 +3102,22 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
     }
 
     if (m_rows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    if (!ctx->hmx_fp16 && weight_type == HTP_TYPE_Q4_0) {  // integer HMX path, one call per weight
+        for (uint32_t p = 0; p < n_weights; p++) {
+            const struct htp_tensor * restrict src_w = octx->src[p];
+            const struct htp_tensor * restrict dst   = octx->dsts[p];
+            if (!src_w || !dst || src_w->ne[1] == 0) continue;
+            const int n_pad      = (int) ((src_w->ne[1] + 31) / 32 * 32);
+            const int dst_stride = (int) (dst->nb[1] / sizeof(float));
+            if (hmxint_mm_q4_0(ctx, (float *) dst->data + (size_t) m_start * dst_stride, 0, 0,
+                               act_dma_addr + (size_t) m_start * act_stride * sizeof(float), src_w->data,
+                               m_rows, k, n_pad, act_stride, dst_stride, 0, (int) dst->ne[0], octx->n_threads) != 0) {
+                return HTP_STATUS_INTERNAL_ERR;
+            }
+        }
         return HTP_STATUS_OK;
     }
 
