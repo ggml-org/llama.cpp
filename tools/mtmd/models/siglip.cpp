@@ -67,6 +67,17 @@ ggml_cgraph * clip_graph_siglip::build() {
             FFN_GELU,
             -1);
 
+    } else if (proj_type == PROJECTOR_TYPE_ETET) {
+        cur = build_ffn(cur,
+            model.mm_1_w, model.mm_1_b,
+            nullptr, nullptr,
+            model.mm_2_w, model.mm_2_b,
+            FFN_GELU,
+            -1);
+
+        // trailing LayerNorm, its stats depend on the input so it cannot be folded into the linear above
+        cur = build_norm(cur, model.mm_post_norm_w, model.mm_post_norm_b, NORM_TYPE_NORMAL, eps, -1);
+
     } else if (proj_type == PROJECTOR_TYPE_JANUS_PRO) {
         cur = build_ffn(cur,
             model.mm_0_w, model.mm_0_b,
