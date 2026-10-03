@@ -351,6 +351,28 @@ static void test_backend_greedy_sampling(const test_params & params) {
     }
 }
 
+
+static void test_backend_filtered_greedy(const test_params & params) {
+    for (int k : {1, 8}) {
+        llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(k));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        std::vector<llama_sampler_seq_config> configs = {{0, chain.get()}};
+        test_context test_ctx(params, configs);
+        GGML_ASSERT(test_ctx.decode({{0, "Write a Python function"}}));
+        for (int step = 0; step < 4; ++step) {
+            const int idx = test_ctx.idx_for_seq(0);
+            const auto * logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), idx);
+            const auto * ids = llama_get_sampled_candidates_ith(test_ctx.ctx.get(), idx);
+            GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), idx) == (uint32_t) k);
+            GGML_ASSERT(llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), idx) == (uint32_t) k);
+            const auto expected = ids[std::max_element(logits, logits + k) - logits];
+            GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), idx) == expected);
+            GGML_ASSERT(test_ctx.decode_token(expected));
+        }
+    }
+}
+
 static void test_backend_top_k_sampling(const test_params & params) {
     const int seq_id = 0;
     const int32_t k = 8;
@@ -1979,6 +2001,7 @@ struct backend_test_case {
 
 static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
+    { "greedy_filtered", test_backend_filtered_greedy,         true },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
     { "penalties",       test_backend_penalties_sampling,      true  },
     { "temp",            test_backend_temp_sampling,           true  },
