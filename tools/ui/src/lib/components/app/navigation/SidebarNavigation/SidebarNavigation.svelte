@@ -309,6 +309,15 @@
 			pendingCollapse = null;
 		}
 	}
+
+	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
+	function openDialog(open: () => void): void {
+		if (deviceStore.isMobile) {
+			scheduleMobileCollapse();
+		}
+
+		open();
+	}
 </script>
 
 <svelte:window bind:innerWidth onkeydown={handleKeydown} />
@@ -392,8 +401,8 @@
 				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
-				onManageModelsClick={() => uiStore.openModelsManager()}
-				onMcpClick={() => (mcpDialogOpen = true)}
+				onManageModelsClick={() => openDialog(() => uiStore.openModelsManager())}
+				onMcpClick={() => openDialog(() => (mcpDialogOpen = true))}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
@@ -407,7 +416,7 @@
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
-				onSettingsClick={() => (settingsDialogOpen = true)}
+				onSettingsClick={() => openDialog(() => (settingsDialogOpen = true))}
 			/>
 
 			{#if uiStore.isSidebarExpanded || isOnMobile}
