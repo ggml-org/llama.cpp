@@ -115,7 +115,11 @@ static __dpct_inline__ T op_relu(T x) {
 
 template<typename T>
 static __dpct_inline__ T op_sigmoid(T x) {
-    return static_cast<T>(1.0f) / (static_cast<T>(1.0f) + op_exp(-x));
+    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16> || std::is_same_v<T, sycl::half>) {
+        return static_cast<T>(op_sigmoid(static_cast<float>(x)));
+    } else {
+        return static_cast<T>(1.0f) / (static_cast<T>(1.0f) + op_exp(-x));
+    }
 }
 
 template<typename T>
@@ -147,10 +151,8 @@ static __dpct_inline__ T op_cos(T x) {
 
 template<typename T>
 static __dpct_inline__ T op_hardsigmoid(T x) {
-    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        return sycl::ext::oneapi::experimental::fmin(
-            static_cast<T>(1.0f), sycl::ext::oneapi::experimental::fmax(
-                                      static_cast<T>(0.0f), (x + static_cast<T>(3.0f)) / static_cast<T>(6.0f)));
+    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16> || std::is_same_v<T, sycl::half>) {
+        return static_cast<T>(op_hardsigmoid(static_cast<float>(x)));
     } else {
         return sycl::fmin(static_cast<T>(1.0f),
                           sycl::fmax(static_cast<T>(0.0f), (x + static_cast<T>(3.0f)) / static_cast<T>(6.0f)));
