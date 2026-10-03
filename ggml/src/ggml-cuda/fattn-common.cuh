@@ -1139,7 +1139,7 @@ void launch_fattn(
     dim3 blocks_num;
     if (stream_k) {
         // Stream-K splits the work before the mask scan is applied, so skipped KV tiles make the blocks uneven.
-        const bool prefer_whole_tiles = GGML_CUDA_CC_IS_NVIDIA(cc) && async_kv_preload && scan_mask;
+        const bool prefer_whole_tiles = GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK && async_kv_preload && scan_mask;
 
         auto should_use_stream_k = [prefer_whole_tiles](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
             const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
