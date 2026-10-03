@@ -1292,7 +1292,6 @@ struct test_case {
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
     virtual bool use_weight_context() { return false; }
-    virtual void prepare_graph(ggml_cgraph * graph) { GGML_UNUSED(graph); }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1464,7 +1463,6 @@ struct test_case {
 
         // build graph
         ggml_build_forward_expand(gf, out);
-        prepare_graph(gf);
 
         // add sentinels as graph nodes so that they are checked in the callback
         for (ggml_tensor * sentinel : sentinels) {
@@ -7151,111 +7149,6 @@ struct test_moe_reduce : public test_case {
     }
 };
 
-enum cpy_batch_dst {
-    CPY_BATCH_DST_DISJOINT, // each copy writes its own row
-    CPY_BATCH_DST_SAME,     // every copy writes the same row, so the copies must stay ordered
-    CPY_BATCH_DST_HALF,     // each copy overlaps half of the previous one, so the copies must stay ordered
-};
-
-static std::string var_to_str(cpy_batch_dst dst) {
-    switch (dst) {
-        case CPY_BATCH_DST_DISJOINT: return "disjoint";
-        case CPY_BATCH_DST_SAME:     return "same";
-        case CPY_BATCH_DST_HALF:     return "half";
-    }
-    return "unknown";
-}
-
-// copies from overlapping windows of one tensor into views of another, adjacent in the graph, which backends may batch.
-// reads of the whole destination before and after the copies must not run concurrently with them.
-struct test_cpy_batch : public test_case {
-    const int64_t n_cols;
-    const int64_t n_tok;
-    const int64_t n_cpy;
-    const cpy_batch_dst dst;
-    std::vector<ggml_tensor *> cpys;
-    ggml_tensor * pre  = nullptr;
-    ggml_tensor * post = nullptr;
-
-    std::string vars() override {
-        return VARS_TO_STR4(n_cols, n_tok, n_cpy, dst);
-    }
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "CPY_BATCH";
-    }
-
-    bool run_whole_graph() override { return true; }
-
-    std::vector<ggml_tensor *> fusion_test_nodes() override {
-        std::vector<ggml_tensor *> nodes = cpys;
-        nodes.push_back(pre);
-        nodes.push_back(post);
-        return nodes;
-    }
-
-    test_cpy_batch(int64_t n_cols, int64_t n_tok, int64_t n_cpy, cpy_batch_dst dst = CPY_BATCH_DST_DISJOINT)
-        : n_cols(n_cols), n_tok(n_tok), n_cpy(n_cpy), dst(dst) {
-        GGML_ASSERT(n_cpy <= n_tok + 1);
-    }
-
-    size_t dst_offset(const ggml_tensor * slots, int64_t i) const {
-        switch (dst) {
-            case CPY_BATCH_DST_DISJOINT: return i*slots->nb[1];
-            case CPY_BATCH_DST_SAME:     return 0;
-            case CPY_BATCH_DST_HALF:     return i*slots->nb[1]/2;
-        }
-        return 0;
-    }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        const int64_t w = 3;
-
-        ggml_tensor * src   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_tok + w, n_cols);
-        ggml_tensor * slots = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, w*n_cols, n_cpy);
-        ggml_set_name(src,   "src");
-        ggml_set_name(slots, "slots");
-
-        pre = ggml_scale(ctx, slots, 2.0f);
-        ggml_set_name(pre, "pre");
-
-        cpys.clear();
-        for (int64_t i = 0; i < n_cpy; ++i) {
-            ggml_tensor * win = ggml_view_2d(ctx, src, w, n_cols, src->nb[1], ggml_row_size(GGML_TYPE_F32, n_tok - i));
-            ggml_tensor * row = ggml_view_2d(ctx, slots, w, n_cols, ggml_row_size(GGML_TYPE_F32, w), dst_offset(slots, i));
-            cpys.push_back(ggml_cpy(ctx, win, row));
-        }
-
-        post = ggml_add(ctx, pre, slots);
-        ggml_set_name(post, "out");
-
-        return post;
-    }
-
-    // views first, then the read before the copies, the adjacent copies, and the read after them
-    int node_rank(const ggml_tensor * t) const {
-        if (t->op == GGML_OP_VIEW) {
-            return 0;
-        }
-        if (t == pre) {
-            return 1;
-        }
-        return t->op == GGML_OP_CPY ? 2 : 3;
-    }
-
-    void prepare_graph(ggml_cgraph * gf) override {
-        for (ggml_tensor * c : cpys) {
-            ggml_build_forward_expand(gf, c);
-        }
-
-        ggml_tensor ** nodes = ggml_graph_nodes(gf);
-        std::stable_sort(nodes, nodes + ggml_graph_n_nodes(gf), [this](const ggml_tensor * a, const ggml_tensor * b) {
-            return node_rank(a) < node_rank(b);
-        });
-    }
-};
-
 // mul_mat with src1 in [0, 1]: a zero-mean src1 hides errors in the zero point or the min of a quantized src0
 struct test_mul_mat_pos : public test_mul_mat {
     using test_mul_mat::test_mul_mat;
@@ -10435,13 +10328,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 31, 509, 2051, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
-
-    // recurrent rollback snapshots: more copies than one batch holds, a partial batch, and copies that must stay ordered
-    test_cases.emplace_back(new test_cpy_batch(10240, 8,  8));
-    test_cases.emplace_back(new test_cpy_batch(1000,  20, 18));
-    test_cases.emplace_back(new test_cpy_batch(1000,  8,  3));
-    test_cases.emplace_back(new test_cpy_batch(1000,  8,  4, CPY_BATCH_DST_SAME));
-    test_cases.emplace_back(new test_cpy_batch(1000,  8,  4, CPY_BATCH_DST_HALF));
 
     // few src1 rows (speculative verify): odd m, a single K block, long K, every tile width, broadcast batches
     for (int64_t n : {2, 3, 5, 8, 9, 13, 16}) {

@@ -322,15 +322,6 @@ typedef struct {
     uint64_t nb3;
 } ggml_metal_kargs_cpy;
 
-#define GGML_METAL_CPY_BATCH_MAX 16
-
-// consecutive copies with one layout, each shifted by a byte offset in the source and in the destination
-typedef struct {
-    ggml_metal_kargs_cpy cpy;
-    int64_t dsrc[GGML_METAL_CPY_BATCH_MAX];
-    int64_t ddst[GGML_METAL_CPY_BATCH_MAX];
-} ggml_metal_kargs_cpy_batch;
-
 typedef struct {
     int64_t  ne10;
     int64_t  ne11;

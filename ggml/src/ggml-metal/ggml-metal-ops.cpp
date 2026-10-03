@@ -194,16 +194,6 @@ static bool ggml_metal_op_concurrency_add(ggml_metal_op_t ctx, const ggml_tensor
     return ggml_mem_ranges_add(ctx->mem_ranges, node);
 }
 
-// the encoder checks the first and the last node of a fused group; check the inner nodes of a group that writes several outputs
-static void ggml_metal_op_fusion_concurrency(ggml_metal_op_t ctx, int idx, int n_fuse) {
-    for (int i = 1; i < n_fuse - 1; ++i) {
-        if (!ggml_metal_op_concurrency_check(ctx, ctx->node(idx + i))) {
-            ggml_metal_op_concurrency_reset(ctx);
-            break;
-        }
-    }
-}
-
 static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
     struct ggml_tensor * node = ctx->node(idx);
 
@@ -2233,40 +2223,6 @@ int ggml_metal_op_set(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-// the byte offsets of the sources and destinations of the n copies from idx on, relative to the first copy
-static void ggml_metal_op_cpy_batch_offsets(ggml_metal_op_t ctx, int idx, int n, int64_t * dsrc, int64_t * ddst) {
-    const ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(ctx->node(idx)->src[0]);
-    const ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(ctx->node(idx));
-
-    for (int i = 0; i < n; ++i) {
-        const ggml_tensor * cpy = ctx->node(idx + i);
-
-        dsrc[i] = (int64_t) ggml_metal_get_buffer_id(cpy->src[0]).offs - (int64_t) bid_src.offs;
-        ddst[i] = (int64_t) ggml_metal_get_buffer_id(cpy).offs         - (int64_t) bid_dst.offs;
-    }
-}
-
-// the number of nodes from idx on that the fusion table fuses as pattern id into one dispatch, 1 if it fuses none
-static int ggml_metal_op_try_fusion(ggml_metal_op_t ctx, int idx, ggml_metal_fusion_id id) {
-    if (!ctx->use_fusion()) {
-        return 1;
-    }
-
-    int n = 1;
-    const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
-    if (fusion == nullptr || ggml_metal_fusion_get_id(fusion) != id) {
-        return 1;
-    }
-
-    ctx->count_fusions(fusion);
-
-    if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
-        GGML_LOG_DEBUG("%s: fuse: %s to %s, %d nodes\n", __func__, ggml_op_name(ctx->node(idx)->op), ggml_op_name(ctx->node(idx + n - 1)->op), n);
-    }
-
-    return n;
-}
-
 int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2330,24 +2286,14 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
 
     const int nw0 = nrptg == 1 ? (nk0 + nth - 1)/nth : 1;
 
-    const int n_cpy = ggml_metal_op_try_fusion(ctx, idx, GGML_METAL_FUSION_CPY_BATCH);
-    if (n_cpy > 1) {
-        ggml_metal_kargs_cpy_batch args_batch = { args, {}, {} };
-        ggml_metal_op_cpy_batch_offsets(ctx, idx, n_cpy, args_batch.dsrc, args_batch.ddst);
-
-        ggml_metal_op_fusion_concurrency(ctx, idx, n_cpy);
-        ggml_metal_encoder_set_pipeline(enc, ggml_metal_library_get_pipeline_cpy_batch(lib, op->src[0]->type, op->type));
-        ggml_metal_encoder_set_bytes   (enc, &args_batch, sizeof(args_batch), 0);
-    } else {
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    }
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, nw0*(ne01 + nrptg - 1)/nrptg, ne02, ne03*n_cpy, nth, nrptg, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, nw0*(ne01 + nrptg - 1)/nrptg, ne02, ne03, nth, nrptg, 1);
 
-    return n_cpy;
+    return 1;
 }
 
 int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
@@ -2499,6 +2445,27 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// the number of nodes from idx on that the fusion table fuses as pattern id into one dispatch, 1 if it fuses none
+static int ggml_metal_op_try_fusion(ggml_metal_op_t ctx, int idx, ggml_metal_fusion_id id) {
+    if (!ctx->use_fusion()) {
+        return 1;
+    }
+
+    int n = 1;
+    const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
+    if (fusion == nullptr || ggml_metal_fusion_get_id(fusion) != id) {
+        return 1;
+    }
+
+    ctx->count_fusions(fusion);
+
+    if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
+        GGML_LOG_DEBUG("%s: fuse: %s to %s, %d nodes\n", __func__, ggml_op_name(ctx->node(idx)->op), ggml_op_name(ctx->node(idx + n - 1)->op), n);
+    }
+
+    return n;
+}
+
 struct ggml_metal_mma_tiling {
     int nsg; // simdgroups per threadgroup, each over a slice of K
     int nt;  // 8-row src0 tiles per threadgroup
@@ -2565,9 +2532,6 @@ static int ggml_metal_op_mul_mat_mma(ggml_metal_op_t ctx, int idx) {
     // the MMA store adds the residual when the table fuses the ADD after this mat-mul
     const int  n_fuse   = ggml_metal_op_try_fusion(ctx, idx, GGML_METAL_FUSION_MUL_MAT_ADD);
     const bool fuse_add = n_fuse > 1;
-    if (fuse_add) {
-        ggml_metal_op_fusion_concurrency(ctx, idx, n_fuse);
-    }
 
     const ggml_tensor * dst = fuse_add ? ctx->node(idx + 1) : op;
     const ggml_tensor * res = fuse_add ? ggml_metal_mul_mat_add_residual(op, dst) : dst;

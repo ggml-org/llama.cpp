@@ -1,5 +1,5 @@
-// checks the Metal concurrency ranges and the graph reorder (MUL_MAT+ADD packs, pack readers, copy runs, written view
-// extents, src1 rows), and that the encoder fuses no MUL_MAT+ADD the reorder leaves unpacked
+// checks the MUL_MAT+ADD packs of the Metal graph reorder (devices, pack readers, src1 rows), and that the encoder fuses
+// no MUL_MAT+ADD the reorder leaves unpacked
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -7,14 +7,11 @@
 #include "ggml-metal-common.h"
 #include "ggml-metal-device.h"
 #include "ggml-metal-fusion.h"
-#include "ggml-metal-impl.h"
 
 #include <cstdio>
 #include <vector>
 
 static constexpr int     n_tensors = 64;
-static constexpr int64_t n_block   = 8; // elements per block
-static constexpr int64_t n_blocks  = 4; // blocks per tensor
 static constexpr float   scale     = 2.0f;
 static constexpr float   norm_eps  = 1e-6f;
 // a mat-mul the few-row MMA kernels take: K a multiple of their 64-weight step, 2..16 src1 rows
@@ -23,58 +20,6 @@ static constexpr int64_t n_m       = 16;
 static constexpr int64_t n_rows    = 8;
 // src1 row counts below, inside and above the 2..16 rows of the few-row MMA kernels
 static const std::vector<int64_t> batch_rows = { 1, 4, 9, 64, 512 };
-// a gated delta net that writes n_gdn_snapshots state snapshots of n_gdn_tokens tokens into a cache
-static constexpr int64_t n_gdn_state     = 4;
-static constexpr int64_t n_gdn_tokens    = 2;
-static constexpr int64_t n_gdn_snapshots = 2;
-
-struct range_case {
-    const char *  name;
-    ggml_tensor * first;  // node already in the concurrent set
-    ggml_tensor * second; // node checked against it
-    bool          concurrent;
-};
-
-// n blocks of t starting at block i
-static ggml_tensor * blocks(ggml_context * ctx, ggml_tensor * t, int64_t i, int64_t n) {
-    return ggml_view_1d(ctx, t, n*n_block, i*n_block*ggml_element_size(t));
-}
-
-// a copy of n blocks from the start of src into dst at block i
-static ggml_tensor * copy_blocks(ggml_context * ctx, ggml_tensor * src, ggml_tensor * dst, int64_t i, int64_t n) {
-    return ggml_cpy(ctx, blocks(ctx, src, 0, n), blocks(ctx, dst, i, n));
-}
-
-static std::vector<range_case> make_cases(ggml_context * ctx, ggml_tensor * src, ggml_tensor * dst) {
-    return {
-        { "disjoint written views",           copy_blocks(ctx, src, dst, 0, 1), copy_blocks(ctx, src, dst, 2, 1),       true  },
-        { "adjacent written views",           copy_blocks(ctx, src, dst, 1, 1), copy_blocks(ctx, src, dst, 0, 1),       true  },
-        { "overlapping written views",        copy_blocks(ctx, src, dst, 0, 2), copy_blocks(ctx, src, dst, 1, 1),       false },
-        { "whole-tensor read after a write",  copy_blocks(ctx, src, dst, 0, 1), ggml_scale(ctx, dst, scale),            false },
-        { "view read after a disjoint write", copy_blocks(ctx, src, dst, 0, 1), ggml_scale(ctx, blocks(ctx, dst, 2, 1), scale), false },
-        { "view write after a disjoint read", ggml_scale(ctx, blocks(ctx, dst, 2, 1), scale), copy_blocks(ctx, src, dst, 0, 1), false },
-    };
-}
-
-static bool check_case(ggml_mem_ranges_t mrs, const range_case & c) {
-    ggml_mem_ranges_reset(mrs);
-    ggml_mem_ranges_add(mrs, c.first);
-    const bool concurrent = ggml_mem_ranges_check(mrs, c.second);
-
-    const bool ok = concurrent == c.concurrent;
-    std::printf("%s: concurrent %d (expected %d): %s\n", c.name, concurrent, c.concurrent, ok ? "OK" : "FAIL");
-    return ok;
-}
-
-static int run_cases(const std::vector<range_case> & cases) {
-    ggml_mem_ranges_t mrs = ggml_mem_ranges_init(0);
-    int failures = 0;
-    for (const range_case & c : cases) {
-        failures += check_case(mrs, c) ? 0 : 1;
-    }
-    ggml_mem_ranges_free(mrs);
-    return failures;
-}
 
 struct device_case {
     const char * name;
@@ -188,42 +133,6 @@ static int run_pack_cases(const std::vector<device_case> & cases) {
         failures += check_pack(c) ? 0 : 1;
     }
     return failures;
-}
-
-// an in-place clear of the first n_cleared blocks of an allocated cache, a read of the whole cache and an independent node,
-// as in recurrent-state graphs whose cleared views are empty in some ubatches.
-// the order must not depend on n_cleared, or the allocation of graphs with the same nodes changes between ubatches
-static std::vector<int> reorder_with_cleared_blocks(int64_t n_cleared) {
-    ggml_init_params params = { n_tensors*ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
-    ggml_context * ctx = ggml_init(params);
-    ggml_tensor * cache = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block);
-    ggml_tensor * other = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block);
-
-    ggml_tensor * clear = ggml_scale_inplace(ctx, blocks(ctx, cache, 0, n_cleared), 0.0f);
-    ggml_tensor * read  = ggml_scale(ctx, cache, scale);
-    ggml_tensor * indep = ggml_scale(ctx, other, scale);
-
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    for (ggml_tensor * t : { clear, read, indep }) {
-        ggml_build_forward_expand(graph, t);
-    }
-
-    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU));
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-
-    const ggml_metal_device_props props = device_props(true, false);
-    ggml_graph_optimize(graph, &props);
-    const std::vector<int> res = node_positions(graph, { clear, read, indep });
-
-    ggml_backend_buffer_free(buffer);
-    ggml_free(ctx);
-    return res;
-}
-
-static bool check_size_independent_order() {
-    const bool ok = reorder_with_cleared_blocks(1) == reorder_with_cleared_blocks(0);
-    std::printf("reorder independent of written view sizes: %s\n", ok ? "OK" : "FAIL");
-    return ok;
 }
 
 // true if every row count in rows gives the reorder of the first one, on a device that fuses MUL_MAT+ADD
@@ -369,136 +278,14 @@ static bool check_chained_pack_reader() {
     return report_reader("reader of a chained MUL_MAT+ADD sum", packed, after);
 }
 
-// a copy of block i of src into dst_view
-static ggml_tensor * copy_block_into(ggml_context * ctx, ggml_tensor * src, int64_t i, ggml_tensor * dst_view) {
-    return ggml_cpy(ctx, blocks(ctx, src, i, 1), dst_view);
-}
-
-// a copy of block i of src into block i of dst
-static ggml_tensor * copy_block(ggml_context * ctx, ggml_tensor * src, ggml_tensor * dst, int64_t i) {
-    return copy_block_into(ctx, src, i, blocks(ctx, dst, i, 1));
-}
-
-// two copies into a and two into b pack as two chained copy batches, and r reads a. the destination views come first
-// (as views that an earlier node used), and src is two nodes deep, so a barrier separates the views from the copies
-static bool check_copy_chain_reader() {
-    ggml_context * ctx = graph_ctx();
-    ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block);
-    ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block);
-    const std::vector<ggml_tensor *> views = { blocks(ctx, a, 0, 1), blocks(ctx, a, 1, 1), blocks(ctx, b, 0, 1), blocks(ctx, b, 1, 1) };
-    ggml_tensor * src = ggml_scale(ctx, ggml_scale(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block), scale), scale);
-    const std::vector<ggml_tensor *> copies = {
-        copy_block_into(ctx, src, 0, views[0]), copy_block_into(ctx, src, 1, views[1]),
-        copy_block_into(ctx, src, 0, views[2]), copy_block_into(ctx, src, 1, views[3]),
-    };
-    ggml_tensor * r = ggml_scale(ctx, a, scale);
-
-    std::vector<ggml_tensor *> outputs = views;
-    outputs.insert(outputs.end(), copies.begin(), copies.end());
-    outputs.push_back(r);
-    ggml_cgraph * graph = optimized_graph(ctx, outputs);
-    const bool packed = encoded_in_a_row(graph, copies);
-    const bool after  = encoded_index(graph, r) > encoded_index(graph, copies[1]);
-    ggml_free(ctx);
-
-    return report_reader("reader of the first of two chained copy batches", packed, after);
-}
-
-// a gated delta net whose snapshots a copy writes into a cache (one pack), and r reads the whole gated delta net output
-static bool check_gdn_cache_reader() {
-    ggml_context * ctx = graph_ctx();
-    const int64_t n_state = n_gdn_state*n_gdn_state;
-    ggml_tensor * q     = ggml_scale(ctx, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_gdn_state, 1, n_gdn_tokens, 1), scale);
-    ggml_tensor * k     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_gdn_state, 1, n_gdn_tokens, 1);
-    ggml_tensor * v     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_gdn_state, 1, n_gdn_tokens, 1);
-    ggml_tensor * g     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_gdn_tokens, 1);
-    ggml_tensor * beta  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_gdn_tokens, 1);
-    ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_gdn_state, n_gdn_state, 1, 1);
-    ggml_tensor * gdn   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, n_gdn_snapshots);
-    ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_state, n_gdn_snapshots);
-
-    // the snapshots follow the n_gdn_state x n_gdn_tokens attention scores
-    const size_t row = ggml_row_size(GGML_TYPE_F32, n_state);
-    ggml_tensor * snapshots = ggml_view_3d(ctx, gdn, n_state, 1, n_gdn_snapshots, row, row,
-        ggml_row_size(GGML_TYPE_F32, n_gdn_state*n_gdn_tokens));
-    ggml_tensor * cpy = ggml_cpy(ctx, snapshots, ggml_view_3d(ctx, cache, n_state, 1, n_gdn_snapshots, row, row, 0));
-    ggml_tensor * r   = ggml_scale(ctx, gdn, scale);
-
-    ggml_cgraph * graph = optimized_graph(ctx, { cpy, r });
-    const bool packed = encoded_in_a_row(graph, { gdn, cpy });
-    const bool after  = encoded_index(graph, r) > encoded_index(graph, gdn);
-    ggml_free(ctx);
-
-    return report_reader("reader of a GATED_DELTA_NET+CPY output", packed, after);
-}
-
-// copies of the first n blocks of src into the same blocks of dst
-static std::vector<ggml_tensor *> copy_blocks_each(ggml_context * ctx, ggml_tensor * src, ggml_tensor * dst, int64_t n) {
-    std::vector<ggml_tensor *> res;
-    for (int64_t i = 0; i < n; ++i) {
-        res.push_back(copy_block(ctx, src, dst, i));
-    }
-    return res;
-}
-
-// n_copies conv state snapshots: copies from views of src into views of a cache, each copy after its two views as the
-// graph builder emits them; next to src sits a, which only a node after the copies reads
-static bool check_copy_run(int64_t n_copies) {
-    ggml_context * ctx = graph_ctx();
-    ggml_tensor * src   = ggml_scale(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_copies*n_block), scale);
-    ggml_tensor * a     = ggml_scale(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_block), scale);
-    ggml_tensor * cache = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_copies*n_block);
-    const std::vector<ggml_tensor *> copies = copy_blocks_each(ctx, src, cache, n_copies);
-
-    std::vector<ggml_tensor *> outputs = { src, a };
-    outputs.insert(outputs.end(), copies.begin(), copies.end());
-    outputs.push_back(ggml_scale(ctx, a, scale));
-    ggml_cgraph * graph = optimized_graph(ctx, outputs);
-    const bool ok = encoded_in_a_row(graph, copies);
-    ggml_free(ctx);
-
-    std::printf("run of %lld snapshot copies encoded in a row: %s\n", (long long) n_copies, ok ? "OK" : "FAIL");
-    return ok;
-}
-
-static int run_copy_runs(const std::vector<int64_t> & lengths) {
-    int failures = 0;
-    for (int64_t n_copies : lengths) {
-        failures += check_copy_run(n_copies) ? 0 : 1;
-    }
-    return failures;
-}
-
-static int run_pack_reader_cases() {
-    const int failures = (check_chained_pack_reader() ? 0 : 1) + (check_copy_chain_reader() ? 0 : 1) +
-        (check_gdn_cache_reader() ? 0 : 1);
-
-    // 4, 6 and 8 snapshots for 3, 5 and 7 draft tokens, and the longest batch
-    return failures + run_copy_runs({ 4, 6, 8, GGML_METAL_CPY_BATCH_MAX });
-}
-
 int main() {
     const std::vector<device_case> devices = {
         { "native simdgroup matrices",          true,  false, true  },
         { "tensor API",                         true,  true,  false },
         { "probed or no simdgroup matrices",    false, false, false },
     };
-    const int pack_failures = run_pack_cases(devices) + (check_size_independent_order() ? 0 : 1) + run_pack_reader_cases() +
-        run_row_independent_pack_cases() + (check_encoder_skips_weight_residual() ? 0 : 1);
+    const int failures = run_pack_cases(devices) + (check_chained_pack_reader() ? 0 : 1) + run_row_independent_pack_cases() +
+        (check_encoder_skips_weight_residual() ? 0 : 1);
 
-    ggml_init_params params = { n_tensors*ggml_tensor_overhead(), nullptr, true };
-    ggml_context * ctx = ggml_init(params);
-    ggml_tensor * src = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block);
-    ggml_tensor * dst = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_blocks*n_block);
-    const std::vector<range_case> cases = make_cases(ctx, src, dst);
-
-    // the ranges use the allocated addresses, so every tensor needs a buffer
-    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU));
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-
-    const int failures = pack_failures + (buffer ? run_cases(cases) : 1);
-
-    ggml_backend_buffer_free(buffer);
-    ggml_free(ctx);
     return failures == 0 ? 0 : 1;
 }

@@ -193,9 +193,6 @@ struct ggml_mem_ranges {
     std::vector<ggml_mem_range> ranges;
 
     int debug = 0;
-
-    // narrowed ranges depend on view offsets and sizes, which change between graphs with the same nodes
-    bool narrow_dst_views = true;
 };
 
 ggml_mem_ranges_t ggml_mem_ranges_init(int debug) {
@@ -221,37 +218,31 @@ static bool ggml_mem_ranges_add(ggml_mem_ranges_t mrs, ggml_mem_range mr) {
     return true;
 }
 
-static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggml_mem_range_type pt, bool narrow_dst_views) {
-    // use the base tensor, except that a written view is narrowed to its own extent if narrow_dst_views
-    const ggml_tensor * base = tensor->view_src ? tensor->view_src : tensor;
+static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggml_mem_range_type pt) {
+    // always use the base tensor
+    tensor = tensor->view_src ? tensor->view_src : tensor;
 
-    GGML_ASSERT(!base->view_src);
+    GGML_ASSERT(!tensor->view_src);
 
     ggml_mem_range mr;
 
-    if (base->buffer) {
+    if (tensor->buffer) {
         // when the tensor is allocated, use the actual memory address range in the buffer
         //
         // take the actual allocated size with ggml_backend_buft_get_alloc_size()
         // this can be larger than the tensor size if the buffer type allocates extra memory
         // ref: https://github.com/ggml-org/llama.cpp/pull/15966
         mr = {
-            /*.pb =*/ (uint64_t) base->buffer,
-            /*.p0 =*/ (uint64_t) base->data,
-            /*.p1 =*/ (uint64_t) base->data + ggml_backend_buft_get_alloc_size(base->buffer->buft, base),
+            /*.pb =*/ (uint64_t) tensor->buffer,
+            /*.p0 =*/ (uint64_t) tensor->data,
+            /*.p1 =*/ (uint64_t) tensor->data + ggml_backend_buft_get_alloc_size(tensor->buffer->buft, tensor),
             /*.pt =*/ pt,
         };
-
-        // ops write only inside their destination view, so writes to disjoint views of one tensor do not conflict
-        if (narrow_dst_views && pt == MEM_RANGE_TYPE_DST && tensor != base && tensor->data) {
-            mr.p0 = (uint64_t) tensor->data;
-            mr.p1 = mr.p0 + ggml_nbytes(tensor);
-        }
     } else {
         // otherwise, the pointer address is used as an unique id of the memory ranges
         //   that the tensor will be using when it is allocated
         mr = {
-            /*.pb =*/ (uint64_t) base,
+            /*.pb =*/ (uint64_t) tensor,
             /*.p0 =*/ 0,    //
             /*.p1 =*/ 1024, // [0, 1024) is a dummy range, not used
             /*.pt =*/ pt,
@@ -262,11 +253,11 @@ static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggm
 }
 
 static ggml_mem_range ggml_mem_range_from_tensor_src(const ggml_tensor * tensor) {
-    return ggml_mem_range_from_tensor(tensor, MEM_RANGE_TYPE_SRC, false);
+    return ggml_mem_range_from_tensor(tensor, MEM_RANGE_TYPE_SRC);
 }
 
-static ggml_mem_range ggml_mem_range_from_tensor_dst(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
-    return ggml_mem_range_from_tensor(tensor, MEM_RANGE_TYPE_DST, mrs->narrow_dst_views);
+static ggml_mem_range ggml_mem_range_from_tensor_dst(const ggml_tensor * tensor) {
+    return ggml_mem_range_from_tensor(tensor, MEM_RANGE_TYPE_DST);
 }
 
 static bool ggml_mem_ranges_add_src(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
@@ -284,7 +275,7 @@ static bool ggml_mem_ranges_add_src(ggml_mem_ranges_t mrs, const ggml_tensor * t
 static bool ggml_mem_ranges_add_dst(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
     GGML_ASSERT(tensor);
 
-    ggml_mem_range mr = ggml_mem_range_from_tensor_dst(mrs, tensor);
+    ggml_mem_range mr = ggml_mem_range_from_tensor_dst(tensor);
 
     if (mrs->debug > 2) {
         GGML_LOG_DEBUG("%s: add dst range buf=%lld, [%lld, %lld)\n", __func__, mr.pb, mr.p0, mr.p1);
@@ -293,23 +284,14 @@ static bool ggml_mem_ranges_add_dst(ggml_mem_ranges_t mrs, const ggml_tensor * t
     return ggml_mem_ranges_add(mrs, mr);
 }
 
-// whether node reads its source i; the destination operand of a copy is written through the node itself, never read
-static bool ggml_mem_range_reads_src(const ggml_tensor * node, int i) {
-    return node->src[i] && !(node->op == GGML_OP_CPY && i == 1);
-}
-
-static bool ggml_mem_ranges_add_srcs(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
+bool ggml_mem_ranges_add(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (ggml_mem_range_reads_src(tensor, i) && !ggml_mem_ranges_add_src(mrs, tensor->src[i])) {
-            return false;
+        if (tensor->src[i]) {
+            ggml_mem_ranges_add_src(mrs, tensor->src[i]);
         }
     }
 
-    return true;
-}
-
-bool ggml_mem_ranges_add(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
-    return ggml_mem_ranges_add_srcs(mrs, tensor) && ggml_mem_ranges_add_dst(mrs, tensor);
+    return ggml_mem_ranges_add_dst(mrs, tensor);
 }
 
 static bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, ggml_mem_range mr) {
@@ -326,7 +308,7 @@ static bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, ggml_mem_range mr) {
             continue;
         }
 
-        if (mr.p0 < cmp.p1 && mr.p1 > cmp.p0) {
+        if (mr.p0 < cmp.p1 && mr.p1 >= cmp.p0) {
             if (mrs->debug > 2) {
                 GGML_LOG_DEBUG("%s: the %s range buf=%lld, [%lld, %lld) overlaps with a previous %s range buf=%lld, [%lld, %lld)\n",
                         __func__,
@@ -356,25 +338,23 @@ static bool ggml_mem_ranges_check_src(ggml_mem_ranges_t mrs, const ggml_tensor *
 static bool ggml_mem_ranges_check_dst(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
     GGML_ASSERT(tensor);
 
-    ggml_mem_range mr = ggml_mem_range_from_tensor_dst(mrs, tensor);
+    ggml_mem_range mr = ggml_mem_range_from_tensor_dst(tensor);
 
     const bool res = ggml_mem_ranges_check(mrs, mr);
 
     return res;
 }
 
-static bool ggml_mem_ranges_check_srcs(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
+bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (ggml_mem_range_reads_src(tensor, i) && !ggml_mem_ranges_check_src(mrs, tensor->src[i])) {
-            return false;
+        if (tensor->src[i]) {
+            if (!ggml_mem_ranges_check_src(mrs, tensor->src[i])) {
+                return false;
+            }
         }
     }
 
-    return true;
-}
-
-bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
-    return ggml_mem_ranges_check_srcs(mrs, tensor) && ggml_mem_ranges_check_dst(mrs, tensor);
+    return ggml_mem_ranges_check_dst(mrs, tensor);
 }
 
 struct node_info {
@@ -412,7 +392,7 @@ struct node_info {
 };
 
 static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
-    // helper to add the src and dst ranges of every node of a group
+    // helper to add node src and dst ranges
     const auto & h_add = [](ggml_mem_ranges_t mrs, const node_info & node) {
         // only external sources matter: sources produced by the fused group are internal
         for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -448,7 +428,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
         return true;
     };
 
-    // helper to check if a group can run concurrently with the existing set of nodes
+    // helper to check if a node can run concurrently with the existing set of nodes
     const auto & h_check = [](ggml_mem_ranges_t mrs, const node_info & node) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             const ggml_tensor * src = node.node->src[i];
@@ -530,10 +510,6 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
     // the memory ranges for the set of nodes that haven't been processed yet, when looking forward for a node to reorder
     ggml_mem_ranges_t mrs1 = ggml_mem_ranges_init(0);
-
-    // an order that depends on view extents changes the graph allocation between ubatches with the same nodes
-    mrs0->narrow_dst_views = false;
-    mrs1->narrow_dst_views = false;
 
     for (int i0 = 0; i0 < n; i0++) {
         if (used[i0]) {

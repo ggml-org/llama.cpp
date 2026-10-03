@@ -3,7 +3,6 @@
 #include "ggml-backend-impl.h"
 #include "ggml-metal-common.h"
 #include "ggml-metal-device.h"
-#include "ggml-metal-impl.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -695,82 +694,6 @@ static bool ggml_metal_fusion_check_mul_mat_add(
         (add->data == res->data || !ggml_metal_fusion_overlap(add, res));
 }
 
-// true if CPY a copies an f32 view of one tensor into an f32 view of another and can start a batch
-static bool ggml_metal_fusion_cpy_batch_start(const ggml_tensor * a) {
-    return (a->flags & GGML_TENSOR_FLAG_COMPUTE) && a->src[0]->type == GGML_TYPE_F32 && a->type == GGML_TYPE_F32 &&
-        a->src[0]->view_src && a->view_src && a->src[0]->view_src != a->view_src;
-}
-
-// true if CPY b moves the same view layout between the same two tensors as CPY a
-static bool ggml_metal_fusion_cpy_same_layout(const ggml_tensor * a, const ggml_tensor * b) {
-    return (b->flags & GGML_TENSOR_FLAG_COMPUTE) &&
-        b->src[0]->type == a->src[0]->type && b->type == a->type &&
-        b->src[0]->view_src == a->src[0]->view_src && b->view_src == a->view_src &&
-        ggml_are_same_shape(a->src[0], b->src[0]) && ggml_are_same_stride(a->src[0], b->src[0]) &&
-        ggml_are_same_shape(a, b) && ggml_are_same_stride(a, b);
-}
-
-// true if the first n copies all have the layout of the first one
-static bool ggml_metal_fusion_cpy_batch_same_layout(const ggml_tensor * const * nodes, int n) {
-    for (int j = 1; j < n; j++) {
-        if (!ggml_metal_fusion_cpy_same_layout(nodes[0], nodes[j])) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-// true if copy next writes where one of the n copies before it reads or writes, reads where one of them writes, or uses other buffers than the first copy
-static bool ggml_metal_fusion_cpy_batch_conflicts(const ggml_tensor * const * nodes, int n, const ggml_tensor * next) {
-    if (!ggml_metal_fusion_same_buffer(next->src[0], nodes[0]->src[0]) || !ggml_metal_fusion_same_buffer(next, nodes[0])) {
-        return true;
-    }
-
-    for (int i = 0; i < n; i++) {
-        const ggml_tensor * prev = nodes[i];
-        if (ggml_metal_fusion_overlap(next, prev) || ggml_metal_fusion_overlap(next->src[0], prev) ||
-            ggml_metal_fusion_overlap(next, prev->src[0])) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// true if no copy of the batch conflicts with the copies before it
-static bool ggml_metal_fusion_cpy_batch_disjoint(const ggml_tensor * const * nodes, int n) {
-    for (int j = 1; j < n; j++) {
-        if (ggml_metal_fusion_cpy_batch_conflicts(nodes, j, nodes[j])) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-// CPY x N: same-layout f32 copies between two tensors run as one dispatch; they do not chain, so the checks live here (unsafe = true)
-// the batch runs the copies concurrently, so in FULL mode no copy may write where another one reads or writes
-static bool ggml_metal_fusion_check_cpy_batch(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-        const ggml_metal_device_props * props,
-              ggml_metal_fusion_mode   mode) {
-    GGML_UNUSED(gf);
-    GGML_UNUSED(node_idxs);
-    GGML_UNUSED(idx);
-    GGML_UNUSED(props);
-
-    if (!ggml_metal_fusion_cpy_batch_start(nodes[0]) || !ggml_metal_fusion_cpy_batch_same_layout(nodes, (int) fusion->ops.size())) {
-        return false;
-    }
-
-    return mode != GGML_METAL_FUSION_FULL || ggml_metal_fusion_cpy_batch_disjoint(nodes, (int) fusion->ops.size());
-}
-
 // ---- patterns ------------------------------------------------------------
 
 static const std::vector<ggml_op> ops_norm_mul         = { GGML_OP_NORM, GGML_OP_MUL };
@@ -850,25 +773,7 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          {},     false, ggml_metal_fusion_check_ssm_conv_silu },
     { GGML_METAL_FUSION_MUL_MAT_ADD,   ops_mul_mat_add,            {},     false, ggml_metal_fusion_check_mul_mat_add },
-    // longest batch first, so ggml_metal_fusion_next checks no shorter batch once one matches
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(16, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(15, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(14, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(13, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(12, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(11, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>(10, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 9, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 8, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 7, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 6, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 5, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 4, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 3, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
-    { GGML_METAL_FUSION_CPY_BATCH,     std::vector<ggml_op>( 2, GGML_OP_CPY), {}, true,  ggml_metal_fusion_check_cpy_batch },
 };
-
-static_assert(GGML_METAL_CPY_BATCH_MAX <= GGML_METAL_FUSION_MAX, "a copy batch must fit in one fusion");
 
 // ---- alloc deps -----------------------------------------------------------
 
@@ -1288,6 +1193,6 @@ int ggml_metal_fusion_max(const ggml_cgraph * gf, int idx, const ggml_metal_devi
         return 1;
     }
 
-    // map the matched non-empty nodes back to the raw index span; its views do not count toward GGML_METAL_FUSION_MAX
-    return idxs[i_f - 1] - idx + 1;
+    // map the matched non-empty nodes back to the raw index span (views are included)
+    return std::min(GGML_METAL_FUSION_MAX, idxs[i_f - 1] - idx + 1);
 }

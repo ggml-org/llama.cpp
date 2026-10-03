@@ -19,7 +19,7 @@ extern "C" {
 struct ggml_metal_device_props;
 
 // the maximum number of nodes that can be fused in a single kernel
-// (also the most non-view nodes of a packed fusion group during graph optimization)
+// (also the maximum length of a packed fusion group during graph optimization)
 #define GGML_METAL_FUSION_MAX 16
 
 typedef enum ggml_metal_fusion_mode {
@@ -43,7 +43,6 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_MOE_REDUCE,   // MUL + expert VIEWs + ADD chain (MoE output reduction)
     GGML_METAL_FUSION_SSM_CONV_SILU, // SSM_CONV + UNARY (silu)
     GGML_METAL_FUSION_MUL_MAT_ADD,  // MUL_MAT + ADD (residual added in the few-row MMA store)
-    GGML_METAL_FUSION_CPY_BATCH,    // CPY x N (N in [2, GGML_METAL_CPY_BATCH_MAX]), one dispatch
 } ggml_metal_fusion_id;
 
 struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
