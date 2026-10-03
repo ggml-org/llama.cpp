@@ -69,6 +69,13 @@ if (CUDAToolkit_FOUND)
         endif()
     endif()
 
+    if(NOT DEFINED CMAKE_CUDA_COMPILER)
+        if(WIN32)
+            set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc.exe")
+        else()
+            set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc")
+        endif()
+    endif()
     enable_language(CUDA)
 
     if (GGML_CUDA_CCCL_VERSION)
