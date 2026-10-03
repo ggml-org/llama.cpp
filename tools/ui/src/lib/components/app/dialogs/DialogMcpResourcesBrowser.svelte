@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Braces, FolderOpen, Loader2, Plus } from '@lucide/svelte';
+	import { Braces, FolderOpen, Loader2, Plus, X } from '@lucide/svelte';
 	import {
 		McpResourcePreview,
 		McpResourcesBrowser,
@@ -253,7 +253,7 @@
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0">
-		<Dialog.Header class="border-b border-border/30 px-6 py-4">
+		<Dialog.Header class="border-b border-border/30 px-4 py-3" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />
 
@@ -267,6 +267,15 @@
 			<Dialog.Description>
 				Browse and attach resources from connected MCP servers to your chat context.
 			</Dialog.Description>
+
+			<!-- the body is flush with the dialog, so the corner close needs its own inset -->
+			<Dialog.Close
+				class="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden"
+			>
+				<X class="size-4" />
+
+				<span class="sr-only">Close</span>
+			</Dialog.Close>
 		</Dialog.Header>
 
 		<div class="flex h-[500px] min-w-0">
