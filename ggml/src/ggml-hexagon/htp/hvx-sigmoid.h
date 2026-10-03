@@ -178,4 +178,58 @@ static inline HVX_Vector hvx_vec_tanh_f16(HVX_Vector x) {
     return hvx_vec_add_f16_f16(hvx_vec_mul_f16_f16(sig2x, v_two), v_neg_one);
 }
 
+#define hvx_sigmoid_f16_loop_body(dst_type, src_type, vec_store)         \
+    do {                                                                 \
+        dst_type * restrict vdst = (dst_type *) dst;                     \
+        src_type * restrict vsrc = (src_type *) src;                     \
+                                                                         \
+        const uint32_t epv  = 128 / sizeof(_Float16);                    \
+        const uint32_t nvec = n / epv;                                   \
+        const uint32_t nloe = n % epv;                                   \
+                                                                         \
+        uint32_t i = 0;                                                  \
+                                                                         \
+        _Pragma("unroll(4)")                                             \
+        for (; i < nvec; i++) {                                          \
+             vdst[i] = hvx_vec_fast_sigmoid_f16(vsrc[i]);                \
+        }                                                                \
+        if (nloe) {                                                      \
+             HVX_Vector tmp = hvx_vec_fast_sigmoid_f16(vsrc[i]);         \
+             vec_store((void *) &vdst[i], nloe * sizeof(_Float16), tmp); \
+        }                                                                \
+    } while(0)
+
+#define hvx_tanh_f16_loop_body(dst_type, src_type, vec_store)            \
+    do {                                                                 \
+        dst_type * restrict vdst = (dst_type *) dst;                     \
+        src_type * restrict vsrc = (src_type *) src;                     \
+                                                                         \
+        const uint32_t epv  = 128 / sizeof(_Float16);                    \
+        const uint32_t nvec = n / epv;                                   \
+        const uint32_t nloe = n % epv;                                   \
+                                                                         \
+        uint32_t i = 0;                                                  \
+                                                                         \
+        _Pragma("unroll(4)")                                             \
+        for (; i < nvec; i++) {                                          \
+             vdst[i] = hvx_vec_tanh_f16(vsrc[i]);                        \
+        }                                                                \
+        if (nloe) {                                                      \
+             HVX_Vector tmp = hvx_vec_tanh_f16(vsrc[i]);                 \
+             vec_store((void *) &vdst[i], nloe * sizeof(_Float16), tmp); \
+        }                                                                \
+    } while(0)
+
+static inline void hvx_sigmoid_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_sigmoid_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_tanh_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_tanh_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
 #endif /* HVX_SIGMOID_H */

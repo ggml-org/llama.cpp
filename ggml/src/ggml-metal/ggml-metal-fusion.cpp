@@ -418,7 +418,8 @@ static bool ggml_metal_fusion_check_topk_moe(
     const int64_t n_tokens      = logits->ne[1];
     const int64_t n_expert_used = ids->ne[0];
 
-    if (n_expert <= 0 || n_tokens <= 0 || n_expert_used <= 0 || n_expert_used > n_expert ||
+    // note: n_tokens == 0 (no-output batch) must match so that the packing stays shape-independent
+    if (n_expert <= 0 || n_expert_used <= 0 || n_expert_used > n_expert ||
         n_expert > GGML_METAL_TOPK_MOE_MAX_EXPERTS || n_expert_used > GGML_METAL_TOPK_MOE_MAX_EXPERTS) {
         return false;
     }
@@ -545,7 +546,8 @@ static bool ggml_metal_fusion_match_moe_reduce(
     const int64_t n_embd   = experts->ne[0];
     const int64_t n_tokens = experts->ne[2];
 
-    if (n_embd <= 0 || n_tokens <= 0 || experts->ne[1] != n_expert_used || experts->ne[3] != 1 ||
+    // note: n_tokens == 0 (no-output batch) must match so that the packing stays shape-independent
+    if (n_embd <= 0 || experts->ne[1] != n_expert_used || experts->ne[3] != 1 ||
         weights->ne[0] != 1 || weights->ne[1] != n_expert_used || weights->ne[2] != n_tokens || weights->ne[3] != 1 ||
         dst->ne[0] != n_embd || dst->ne[1] != n_tokens || dst->ne[2] != 1 || dst->ne[3] != 1) {
         return false;
@@ -1079,16 +1081,17 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
 // transparent) node sequence that the compute phase uses, so the returned count is the raw index
 // span from idx to the last matched node (intermediate views are packed along).
 int ggml_metal_fusion_max(const ggml_cgraph * gf, int idx) {
-    // an empty/view node cannot start a pattern - pack it alone
-    if (ggml_op_is_empty(gf->nodes[idx]->op) || ggml_is_empty(gf->nodes[idx])) {
+    // a view node cannot start a pattern - pack it alone
+    if (ggml_op_is_empty(gf->nodes[idx]->op)) {
         return 1;
     }
 
-    // collect the non-empty node indices starting at idx
+    // collect the non-view node indices starting at idx; 0-element tensors are included so
+    // that empty graphs pack like their non-empty counterparts (see ggml_metal_fusion_filter_ops)
     int idxs[GGML_METAL_FUSION_MAX];
     int n_idxs = 0;
     for (int i = idx; i < gf->n_nodes && n_idxs < GGML_METAL_FUSION_MAX; i++) {
-        if (!ggml_op_is_empty(gf->nodes[i]->op) && !ggml_is_empty(gf->nodes[i])) {
+        if (!ggml_op_is_empty(gf->nodes[i]->op)) {
             idxs[n_idxs++] = i;
         }
     }
