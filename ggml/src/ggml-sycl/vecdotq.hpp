@@ -370,51 +370,87 @@ template <> struct reorder_vec_dot_shared_activations<GGML_TYPE_Q4_K> {
     static constexpr bool value = true;
 };
 
+template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_Q4_0> {
+    static constexpr bool value = true;
+};
+
+template <> struct reorder_vec_dot_shared_activations<GGML_TYPE_Q4_0> {
+    static constexpr bool value = true;
+};
+
 template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
     static constexpr ggml_type gtype = GGML_TYPE_Q4_0;
 
     using q4_0_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q4_0>;
     using q4_0_traits = typename q4_0_block::traits;
 
-    __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4, const sycl::half2 & ds8) {
-        int sumi = 0;
-        int sumu = 0;
+    struct weights {
+        int   v[2 * q4_0_traits::vdr_mmvq];
+        float d;
+    };
+
+    struct activations {
+        int   u[2 * q4_0_traits::vdr_mmvq];
+        float d8;
+    };
+
+    // Maps four packed nibbles q in [0, 15] to the signed bytes q - 8.
+    __dpct_inline__ static int nibbles_minus_8(const int q) {
+        return ((q | 0x80808080) - 0x08080808) ^ 0x80808080;
+    }
+
+    __dpct_inline__ static weights load(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                        const std::pair<int, int> d_offset, const int & iqs) {
+        const uint8_t * bq4_0 = static_cast<const uint8_t *>(vbq) + ibx_offset.first;
+
+        weights w;
+        w.d = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset.first));
 
 #pragma unroll
         for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
-            const int vi0 = (v[i] >> 0) & 0x0F0F0F0F;
-            const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
-
-            // SIMD dot product of quantized values
-            sumi = dpct::dp4a(vi0, u[2 * i + 0], sumi);
-            sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
-            sumu = dpct::dp4a(0x01010101, u[2 * i + 0], sumu);
-            sumu = dpct::dp4a(0x01010101, u[2 * i + 1], sumu);
+            const int v    = get_int_from_uint8(bq4_0, iqs + i);
+            w.v[2 * i + 0] = nibbles_minus_8((v >> 0) & 0x0F0F0F0F);
+            w.v[2 * i + 1] = nibbles_minus_8((v >> 4) & 0x0F0F0F0F);
         }
 
-        const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
+        return w;
+    }
 
-        return d4 * ds8f.x() * (float) (sumi - 8 * sumu);
+    __dpct_inline__ static activations load_activations(const int8_t * q8_1_quant_ptr,
+                                                        const sycl::half2 * q8_1_ds, const int & iqs) {
+        activations a;
+
+#pragma unroll
+        for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
+            a.u[2 * i + 0] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+            a.u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + q4_0_traits::qi);
+        }
+        a.d8 = (*q8_1_ds)[0];
+
+        return a;
+    }
+
+    __dpct_inline__ static float apply(const weights & w, const activations & a) {
+        int sumi = 0;
+
+#pragma unroll
+        for (size_t i = 0; i < 2 * q4_0_traits::vdr_mmvq; ++i) {
+            sumi = dpct::dp4a(w.v[i], a.u[i], sumi);
+        }
+
+        return w.d * a.d8 * (float) sumi;
+    }
+
+    __dpct_inline__ static float dot(const weights & w, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return apply(w, load_activations(q8_1_quant_ptr, q8_1_ds, iqs));
     }
 
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
                                      const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
                                      const sycl::half2 * q8_1_ds, const int & iqs) {
-        const uint8_t * bq4_0 = static_cast<const uint8_t *>(vbq) + ibx_offset.first;
-        const ggml_half d = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset.first));
-        int             v[q4_0_traits::vdr_mmvq];
-        int             u[2 * q4_0_traits::vdr_mmvq];
-
-
-#pragma unroll
-        for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
-            v[i]         = get_int_from_uint8(bq4_0, iqs + i);
-            u[2 * i + 0] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
-            u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + q4_0_traits::qi);
-        }
-
-        return vec_dot_q4_0_q8_1_impl(v, u, d, *q8_1_ds);
-    };
+        return dot(load(vbq, ibx_offset, d_offset, iqs), q8_1_quant_ptr, q8_1_ds, iqs);
+    }
 };
 
 // Load four contiguous dwords per operand instead of loading each value separately.

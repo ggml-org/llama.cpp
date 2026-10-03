@@ -24,6 +24,14 @@
 // every row count, so it does not consult this threshold.
 static constexpr int Q4_K_MMVQ_ROW_PAIR_MIN_NROWS = 6272;
 
+// Minimum weight-row count at which the Q4_0 multi-column MMVQ kernel handles two output rows per
+// subgroup, for every ncols_dst in 2..8. Measured on Intel Arc Pro B70 over nrows {1024, 2048, 4096,
+// 12288} x ncols {1024, 4096, 12288}: from 2048 rows up two rows were up to 35% faster, and never
+// slower except by up to 3% on the ~5 us ncols = 1024 shapes. At 1024 rows half as many subgroups
+// leave the device underoccupied and one row per subgroup was up to 18% faster. Four rows per
+// subgroup only gained about 5% at 4096 rows and lost elsewhere.
+static constexpr int Q4_0_MMVQ_ROW_PAIR_MIN_NROWS = 2048;
+
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                                   const int ncols, const int nrows, const sycl::nd_item<3> & nd_item) {
@@ -783,26 +791,40 @@ static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy,
     });
 }
 
-template <int ncols_dst>
-static void reorder_mul_mat_vec_q4_0_q8_1_sycl_ncols(
+template <int ncols_dst, int rows_per_sg>
+static void reorder_mul_mat_vec_q4_0_q8_1_sycl_ncols_impl(
         const void * vx, const void * vy, float * dst,
         const int ncols, const int nrows,
         const int stride_col_y_bytes, const int stride_col_dst,
         dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK4_0 == 0);
     constexpr size_t num_subgroups = WARP_SIZE;
-    const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y * (int) num_subgroups);
+    const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y * (int) num_subgroups * rows_per_sg);
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                             mul_mat_vec_q_reorder_ncols<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0>, ncols_dst>(
+                             mul_mat_vec_q_reorder_ncols<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0>, ncols_dst,
+                                                        /*has_fusion=*/ false, rows_per_sg>(
                                  vx, /*vgate=*/ nullptr, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst,
                                  /*glu_op=*/ GGML_GLU_OP_SWIGLU, nd_item);
                          });
     });
+}
+
+template <int ncols_dst>
+static void reorder_mul_mat_vec_q4_0_q8_1_sycl_ncols(
+        const void * vx, const void * vy, float * dst,
+        const int ncols, const int nrows,
+        const int stride_col_y_bytes, const int stride_col_dst,
+        dpct::queue_ptr stream) {
+    if (nrows >= Q4_0_MMVQ_ROW_PAIR_MIN_NROWS) {
+        reorder_mul_mat_vec_q4_0_q8_1_sycl_ncols_impl<ncols_dst, 2>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
+    } else {
+        reorder_mul_mat_vec_q4_0_q8_1_sycl_ncols_impl<ncols_dst, 1>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
+    }
 }
 
 static void reorder_mul_mat_vec_q4_0_q8_1_sycl_switch_ncols(
