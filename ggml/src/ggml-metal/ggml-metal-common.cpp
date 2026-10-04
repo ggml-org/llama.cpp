@@ -129,18 +129,14 @@ static bool ggml_metal_mul_mat_mma_shape_ok(const struct ggml_tensor * op) {
         src1->nb[0] == sizeof(float) && src1->nb[1] % 16 == 0 && src1->nb[2] % 16 == 0 && src1->nb[3] % 16 == 0;
 }
 
-static bool ggml_metal_mma_device_ok(bool has_native_simdgroup_mm, bool has_tensor) {
-    return has_native_simdgroup_mm && !has_tensor;
-}
-
-bool ggml_metal_mul_mat_use_mma(const struct ggml_tensor * op, bool has_native_simdgroup_mm, bool has_tensor, size_t max_tg_mem) {
+bool ggml_metal_op_mul_mat_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm, size_t max_tg_mem) {
     // the FWHT kernel takes the hadamard mat-muls first
-    return ggml_metal_mma_device_ok(has_native_simdgroup_mm, has_tensor) && !ggml_metal_op_mul_mat_use_fwht(op, max_tg_mem) &&
+    return has_simdgroup_mm && !ggml_metal_op_mul_mat_use_fwht(op, max_tg_mem) &&
         ggml_metal_mul_mat_mma_shape_ok(op);
 }
 
-bool ggml_metal_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_native_simdgroup_mm, bool has_tensor) {
-    return ggml_metal_mma_device_ok(has_native_simdgroup_mm, has_tensor) &&
+bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm) {
+    return has_simdgroup_mm &&
         ggml_get_op_params_i32(op, 1) != GGML_HINT_SRC0_IS_HADAMARD &&
         ggml_metal_mul_mv_mma_type_supported(op->src[0]->type) && op->src[1]->type == GGML_TYPE_F32;
 }

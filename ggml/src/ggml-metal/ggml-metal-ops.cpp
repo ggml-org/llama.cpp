@@ -2656,7 +2656,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     }
 
     // at two rows the 2-row Q4_0 variant of the mat-vec kernel beats the MMA kernels
-    if (ggml_metal_mul_mat_use_mma(op, props_dev->has_simdgroup_mm, props_dev->has_tensor, props_dev->max_theadgroup_memory_size)) {
+    if (ggml_metal_op_mul_mat_use_mma(op, props_dev->has_simdgroup_mm, props_dev->max_theadgroup_memory_size)) {
         return ggml_metal_mul_mat_use_nc(op) ? ggml_metal_op_mul_mat_mv(ctx, idx, true) : ggml_metal_op_mul_mat_mma(ctx, idx);
     }
 
@@ -4150,7 +4150,9 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     int n_fuse = 1;
     const ggml_metal_fusion * fusion = nullptr;
 
-    if (ctx->use_fusion()) {
+    const bool use_fusion = ctx->use_fusion();
+
+    if (use_fusion) {
         int n = 1;
         fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
         n_fuse = n;
@@ -4172,8 +4174,6 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
-
-    const bool use_fusion = ctx->use_fusion();
 
     const int debug_fusion = ggml_metal_fusion_info_debug(ctx->finfo);
 

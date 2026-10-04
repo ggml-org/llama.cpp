@@ -56,6 +56,9 @@ bool ggml_metal_op_mul_mat_use_fwht (const struct ggml_tensor * op, size_t max_t
 bool ggml_metal_op_mul_mat_use_mm   (const struct ggml_tensor * op, bool has_simdgroup_mm);
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm);
 
+bool ggml_metal_op_mul_mat_use_mma    (const struct ggml_tensor * op, bool has_simdgroup_mm, size_t max_tg_mem);
+bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm); // graph structure only
+
 // the few-row MMA kernel for a src0 type and rt src1 tiles: per 32-weight block (q4_0, q8_0 with one tile), q5_K, or the generic 64-weight chunk kernel
 enum ggml_metal_mma_kind { GGML_METAL_MMA_KIND_BLK, GGML_METAL_MMA_KIND_Q5_K, GGML_METAL_MMA_KIND_GEN };
 enum ggml_metal_mma_kind ggml_metal_mul_mv_mma_kind(enum ggml_type type, int rt);
@@ -65,14 +68,6 @@ int ggml_metal_mul_mv_mma_rt(const struct ggml_tensor * op);
 
 // the weights of K per simdgroup step of the few-row MMA kernel for a src0 type and rt src1 tiles, 0 if none takes the type
 int64_t ggml_metal_mul_mv_mma_k_step(enum ggml_type type, int rt);
-
-// true if the few-row MMA kernels take mat-mul op on a device with these properties. they fill simdgroup matrices
-// per lane, so they need a GPU with native simdgroup matrices (MTLGPUFamilyApple7+), not one enabled by the probe
-bool ggml_metal_mul_mat_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm, bool has_tensor, size_t max_tg_mem);
-
-// true if the device, the hadamard hint and the types allow the few-row MMA kernels for mat-mul op. it reads no shapes or
-// strides, so a decision based on it is the same for every batch size, and use_mma can still reject the op
-bool ggml_metal_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm, bool has_tensor);
 
 // true if the 2-row Q4_0 kernel takes mat-mul op instead of the MMA kernels
 bool ggml_metal_mul_mat_use_nc(const struct ggml_tensor * op);
