@@ -23,11 +23,31 @@ Config via environment:
   CTX            context size (default 16384)
   THREADS        CPU threads (default 12)
   REPEATS        measured runs per prompt, median reported (default 2)
-  MODE           'baseline' (6-arm sweep) | 'deadoff' | 'stress' (default baseline)
+  MODE           'baseline' (6-arm sweep) | 'deadoff' | 'stress' | 'ab' (default baseline)
   KV             KV cache type for MODE=deadoff/stress (default q8_0)
-  SETVARS        oneAPI setvars.sh (default /opt/intel/oneapi/setvars.sh)
+  SETVARS        oneAPI setvars.sh (default /opt/intel/oneapi/setvars.sh);
+                 empty = inherit the caller's oneAPI environment
   HEALTH_TIMEOUT seconds to wait for /health (default 180)
   REQ_TIMEOUT    per-request HTTP timeout seconds (default 300)
+  PLACEMENT      'full' (--device SYCL0 -ngl 999 --no-mmap, default) | 'fit'
+                 (--fit on --fit-target FIT_TARGET, for models larger than VRAM)
+  DRAFT_MODEL    optional --spec-draft-model gguf
+  SERVER_EXTRA   extra server flags appended to every arm (shell-split)
+
+MODE=ab is a paired A/B of two server builds under one speculative config:
+  SERVER_BIN_A / SERVER_BIN_B   the two llama-server binaries; each arm loads
+                                the shared libraries next to its own binary
+  NAME_A / NAME_B               arm labels (default a / b)
+  SPEC_ARGS      speculative flags for both arms (default: ngram-mod)
+  LAUNCHES       server launches per arm (default 4), run in ABBA order so
+                 drift cancels; the first request of every launch is discarded
+  OUT_TAG        suffix for the summary and log file names
+It refuses to start (exit 70) while another process holds the render node,
+reports new xe fault lines from dmesg, and prints paired 95% CIs per prompt.
+Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
+verified and how many restored a speculative checkpoint.
+Worked run and how to read the output:
+docs/research/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
 """
 from __future__ import annotations
 
@@ -69,6 +89,20 @@ SETVARS = os.environ.get("SETVARS", "/opt/intel/oneapi/setvars.sh")
 HEALTH_TIMEOUT = float(os.environ.get("HEALTH_TIMEOUT", "180"))
 REQ_TIMEOUT = float(os.environ.get("REQ_TIMEOUT", "300"))
 
+PLACEMENT = os.environ.get("PLACEMENT", "full")
+FIT_TARGET = os.environ.get("FIT_TARGET", "1024")
+DRAFT_MODEL = os.environ.get("DRAFT_MODEL", "")
+SPEC_ARGS = shlex.split(os.environ.get("SPEC_ARGS", ""))
+SERVER_EXTRA = shlex.split(os.environ.get("SERVER_EXTRA", ""))
+LAUNCHES = int(os.environ.get("LAUNCHES", "4"))
+OUT_TAG = os.environ.get("OUT_TAG", "")
+RENDER_NODE = os.environ.get("RENDER_NODE", "/dev/dri/renderD128")
+EXIT_GPU_BUSY = 70
+XE_FAULT_RE = re.compile(r"xe .*(reset|hang|timeout|GuC)", re.IGNORECASE)
+# two-sided 95% Student t quantiles, index = degrees of freedom (capped at 15)
+T95 = [float("nan"), 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365,
+       2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131]
+
 BASE = f"http://127.0.0.1:{PORT}"
 NGRAM_MOD_PARAMS = [
     "--spec-ngram-mod-n-match", os.environ.get("NMATCH", "24"),
@@ -80,8 +114,17 @@ NGRAM_MOD_PARAMS = [
 def build_arms() -> list[dict[str, Any]]:
     """Return the config matrix for the active MODE.
 
-    Each arm: {name, kv, spec_label, extra:[server flags]}.
+    Each arm: {name, kv, spec_label, extra:[server flags]}; MODE=ab arms also
+    carry their own server_bin.
     """
+    if MODE == "ab":
+        spec = SPEC_ARGS or ["--spec-type", "ngram-mod", *NGRAM_MOD_PARAMS]
+        label = spec[spec.index("--spec-type") + 1] if "--spec-type" in spec[:-1] else "custom"
+        return [
+            {"name": os.environ.get(f"NAME_{key}", key.lower()), "kv": KV, "spec_label": label,
+             "extra": spec, "server_bin": os.environ[f"SERVER_BIN_{key}"]}
+            for key in ("A", "B")
+        ]
     if MODE in {"deadoff", "stress"}:
         common = ["--spec-type", "ngram-mod", *NGRAM_MOD_PARAMS]
         arms = [
@@ -125,24 +168,29 @@ def load_prompts() -> list[dict[str, Any]]:
 
 
 def server_command(arm: dict[str, Any]) -> str:
+    if PLACEMENT == "fit":
+        placement = ["--fit", "on", "--fit-target", FIT_TARGET]
+    else:
+        placement = ["--device", "SYCL0", "--n-gpu-layers", "999", "--no-mmap"]
     args = [
-        SERVER_BIN,
+        arm.get("server_bin", SERVER_BIN),
         "-m", MODEL,
         "--host", "127.0.0.1",
         "--port", str(PORT),
         "--ctx-size", str(CTX),
-        "--device", "SYCL0",
-        "--n-gpu-layers", "999",
-        "--no-mmap",
+        *placement,
         "--flash-attn", "on",
         "--parallel", "1",
         "--threads", str(THREADS),
         "--cache-type-k", arm["kv"],
         "--cache-type-v", arm["kv"],
         *arm["extra"],
+        *(["--spec-draft-model", DRAFT_MODEL] if DRAFT_MODEL else []),
+        *SERVER_EXTRA,
     ]
     quoted = " ".join(shlex.quote(a) for a in args)
-    return f"source {shlex.quote(SETVARS)} >/dev/null && exec {quoted}"
+    prefix = f"source {shlex.quote(SETVARS)} >/dev/null && " if SETVARS else ""
+    return f"{prefix}exec {quoted}"
 
 
 def wait_health(timeout: float) -> bool:
@@ -279,7 +327,7 @@ def run_prompt(prompt: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_rejection_records(text: str) -> list[dict[str, int]]:
-    pattern = re.compile(r"task\s+(\d+)\s+\|\s+accepted\s+(\d+)/(\d+)\s+draft tokens")
+    pattern = re.compile(r"task\s+(\d+)\s+\|\s+accepted\s+(\d+)/\s*(\d+)\s+draft tokens")
     generated_by_task: dict[int, int] = {}
     records: list[dict[str, int]] = []
     for match in pattern.finditer(text):
@@ -304,9 +352,17 @@ def scan_log(logpath: Path) -> dict[str, Any]:
     try:
         text = logpath.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return {"fa_lines": [], "acceptance_lines": [], "hard_off_lines": [], "rejection_records": []}
+        return {"fa_lines": [], "acceptance_lines": [], "hard_off_lines": [], "rejection_records": [],
+                "draft_rounds": 0, "checkpoint_restores": 0, "checkpoint_creates_dbg": 0}
+    draft_rounds = 0
+    checkpoint_restores = 0
     for line in text.splitlines():
         low = line.lower()
+        # LLAMA_TRACE lines, one per verified draft; the debug-level twin ends in ", new n_tokens"
+        if "accepted" in low and "draft tokens" in low and "new n_tokens" not in low:
+            draft_rounds += 1
+            if "(restore checkpoint)" in low:
+                checkpoint_restores += 1
         if ("flash" in low or "fattn" in low or "flash_attn" in low) and "warn" not in low:
             fa_lines.append(line.strip())
         if "draft acceptance" in low or "statistics" in low:
@@ -318,6 +374,10 @@ def scan_log(logpath: Path) -> dict[str, Any]:
         "acceptance_lines": acc_lines[-12:],
         "hard_off_lines": hard_off_lines,
         "rejection_records": parse_rejection_records(text),
+        "draft_rounds": draft_rounds,
+        "checkpoint_restores": checkpoint_restores,
+        # only printed at debug verbosity (SERVER_EXTRA="-lv 5")
+        "checkpoint_creates_dbg": text.count("created speculative checkpoint"),
     }
 
 
@@ -325,6 +385,11 @@ def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
     env = dict(os.environ)
     env["ZES_ENABLE_SYSMAN"] = "1"
     env["UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS"] = "1"
+    if "server_bin" in arm:
+        # the build-tree RUNPATH points at one build dir; make each arm load its own libraries
+        bin_dir = str(Path(arm["server_bin"]).resolve().parent)
+        env["LD_LIBRARY_PATH"] = f"{bin_dir}:{env.get('LD_LIBRARY_PATH', '')}"
+        env.setdefault("LLAMA_TRACE", "1")
     with logpath.open("w", encoding="utf-8") as logf:
         return subprocess.Popen(
             ["bash", "-c", server_command(arm)],
@@ -358,8 +423,8 @@ def stop_server(proc: subprocess.Popen) -> None:
             pass
 
 
-def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, Any]:
-    logpath = RESULTS / f"{arm['name']}.log"
+def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]], tag: str = "") -> dict[str, Any]:
+    logpath = RESULTS / f"{arm['name']}{tag}.log"
     print(f"\n=== arm {arm['name']}  (kv={arm['kv']}, spec={arm['spec_label']}) ===", flush=True)
     proc = start_server(arm, logpath)
     try:
@@ -416,10 +481,150 @@ def md_table(summary: list[dict[str, Any]], prompt_ids: list[str], field: str, f
     return "\n".join(lines)
 
 
+def gpu_holders() -> list[str]:
+    """PIDs holding the render node; fuser prints them on stdout and exits 1 when there are none."""
+    try:
+        proc = subprocess.run(["fuser", RENDER_NODE], check=False, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [f"<fuser failed: {e}>"]
+    return proc.stdout.split()
+
+
+def dmesg_faults() -> list[str] | None:
+    """xe reset/hang/timeout/GuC lines from the kernel log, or None when dmesg is not readable."""
+    for cmd in (["dmesg"], ["sudo", "-n", "dmesg"]):
+        try:
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0:
+            return [line for line in proc.stdout.splitlines() if XE_FAULT_RE.search(line)]
+    return None
+
+
+def file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def paired_stats(a: list[float], b: list[float]) -> dict[str, Any]:
+    """Paired B-A difference with a 95% t interval; pair i is the i-th launch of each arm."""
+    n = min(len(a), len(b))
+    if n == 0:
+        return {"n": 0}
+    a, b = a[:n], b[:n]
+    diffs = [y - x for x, y in zip(a, b)]
+    a_mean = statistics.fmean(a)
+    delta = statistics.fmean(diffs)
+    half = T95[min(n - 1, 15)] * statistics.stdev(diffs) / math.sqrt(n) if n >= 2 else None
+    return {
+        "n": n,
+        "a_mean": a_mean,
+        "b_mean": statistics.fmean(b),
+        "delta": delta,
+        "ci95_half": half,
+        "delta_pct": 100.0 * delta / a_mean,
+        "ci95_half_pct": 100.0 * half / a_mean if half is not None else None,
+    }
+
+
+def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
+    prompt_ids = [p["id"] for p in prompts]
+    suffix = f"-{OUT_TAG}" if OUT_TAG else ""
+    out_path = RESULTS / f"summary_ab{suffix}.json"
+    a, b = arms
+    for arm in arms:
+        bin_dir = Path(arm["server_bin"]).resolve().parent
+        arm["sha256"] = {name: file_sha256(bin_dir / name) for name in ("llama-server", "libllama-server-impl.so")}
+        print(f"arm {arm['name']}: {arm['server_bin']}")
+
+    faults_before = dmesg_faults()
+    launches: dict[str, list[dict[str, Any]]] = {a["name"]: [], b["name"]: []}
+    out: dict[str, Any] = {
+        "mode": MODE, "model": MODEL, "draft_model": DRAFT_MODEL, "placement": PLACEMENT, "ctx": CTX,
+        "threads": THREADS, "repeats": REPEATS, "launches_per_arm": LAUNCHES, "prompt_ids": prompt_ids,
+        "arms": arms, "server_extra": SERVER_EXTRA, "launches": launches,
+    }
+    for i in range(LAUNCHES):
+        for arm in ((a, b) if i % 2 == 0 else (b, a)):
+            holders = gpu_holders()
+            if holders:
+                print(f"!! {RENDER_NODE} is held by {' '.join(holders)}; refusing to time a shared GPU", flush=True)
+                return EXIT_GPU_BUSY
+            launches[arm["name"]].append(run_arm(arm, prompts, tag=f"{suffix}-L{i}"))
+            out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+    def tg_of(launch: dict[str, Any], pid: str) -> float | None:
+        for pr in launch["prompts"]:
+            if pr["id"] == pid and isinstance(pr["tg_median"], (int, float)):
+                return float(pr["tg_median"])
+        return None
+
+    def series(name: str, pid: str | None) -> list[float]:
+        vals = []
+        for launch in launches[name]:
+            per_prompt = [tg_of(launch, p) for p in ([pid] if pid else prompt_ids)]
+            if launch.get("error") or any(v is None for v in per_prompt):
+                continue
+            vals.append(statistics.fmean(per_prompt))
+        return vals
+
+    ok = all(len(series(arm["name"], None)) == LAUNCHES for arm in arms)
+    stats = {pid or "all": paired_stats(series(a["name"], pid), series(b["name"], pid))
+             for pid in [*prompt_ids, None]} if ok else {}
+
+    def hashes(name: str, pid: str) -> set[str]:
+        return {run["token_sha256"] for launch in launches[name] for pr in launch["prompts"]
+                if pr["id"] == pid for run in pr["runs"]}
+
+    tokens = {pid: {"a_distinct": len(hashes(a["name"], pid)), "b_distinct": len(hashes(b["name"], pid)),
+                    "identical_across_arms": hashes(a["name"], pid) == hashes(b["name"], pid)}
+              for pid in prompt_ids}
+    events = {arm["name"]: {key: sum(launch.get("log_scan", {}).get(key, 0) for launch in launches[arm["name"]])
+                            for key in ("draft_rounds", "checkpoint_restores", "checkpoint_creates_dbg")}
+              for arm in arms}
+    faults_after = dmesg_faults()
+    new_faults = None if faults_before is None or faults_after is None else faults_after[len(faults_before):]
+    out.update({"paired_tg": stats, "token_identity": tokens, "checkpoint_events": events,
+                "dmesg_new_xe_faults": new_faults})
+    out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+    print(f"\n\n## Paired tg, {b['name']} minus {a['name']} ({LAUNCHES} launches per arm, ABBA order)\n")
+    print(f"| prompt | {a['name']} t/s | {b['name']} t/s | delta t/s | delta % | 95% CI half-width % |")
+    print("|---|---|---|---|---|---|")
+    for pid, st in stats.items():
+        half = f"{st['ci95_half_pct']:.2f}" if st.get("ci95_half_pct") is not None else "n/a"
+        print(f"| {pid} | {st['a_mean']:.2f} | {st['b_mean']:.2f} | {st['delta']:+.2f} | {st['delta_pct']:+.2f} | {half} |")
+    if not ok:
+        print("!! at least one launch failed or lacked timings; no paired statistics")
+    print("\n## Checkpoint activity (summed over launches)\n")
+    for name, ev in events.items():
+        print(f"  {name}: draft rounds {ev['draft_rounds']}, checkpoint restores {ev['checkpoint_restores']}, "
+              f"checkpoint creates (debug log only) {ev['checkpoint_creates_dbg']}")
+    print("\n## Token identity (temperature 0)\n")
+    for pid, t in tokens.items():
+        print(f"  {pid}: distinct streams {a['name']}={t['a_distinct']} {b['name']}={t['b_distinct']}, "
+              f"identical across arms: {t['identical_across_arms']}")
+    if new_faults is None:
+        print("\ndmesg not readable: xe fault gate NOT evaluated")
+    else:
+        print(f"\nnew xe fault lines in dmesg: {len(new_faults)}")
+        for line in new_faults[:5]:
+            print(f"  {line}")
+    print(f"\nsummary -> {out_path}")
+    return 0 if ok and not new_faults else 1
+
+
 def main() -> int:
     prompts = load_prompts()
     prompt_ids = [p["id"] for p in prompts]
     arms = build_arms()
+    if MODE == "ab":
+        print(f"MODE=ab  MODEL={MODEL}  DRAFT_MODEL={DRAFT_MODEL or '-'}")
+        print(f"PORT={PORT} CTX={CTX} THREADS={THREADS} REPEATS={REPEATS} LAUNCHES={LAUNCHES} PLACEMENT={PLACEMENT}")
+        return run_ab(arms, prompts)
     only = os.environ.get("ONLY", "").strip()
     if only:
         arms = [a for a in arms if only in a["name"]]
