@@ -823,6 +823,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     {
         std::map<int, int64_t> layer_extent;                      // layer -> leaf cache_k cell count
         std::map<int, const ggml_tensor *> layer_mask;            // layer -> mask it consumes
+        std::map<int, size_t> layer_buffer;                       // layer -> id of the buffer holding its cache_k
         int64_t max_extent = 0;
 
         for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -848,6 +849,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
             layer_extent[layer.value()] = leaf->ne[1];
             layer_mask[layer.value()] = mask;
+            layer_buffer[layer.value()] =
+                leaf->buffer != nullptr ? ggml_backend_openvino_buffer_get_ctx_id(leaf->buffer) : 0;
             max_extent = std::max(max_extent, leaf->ne[1]);
         }
 
@@ -862,6 +865,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
 
         // equal extents: tell the two masks apart by the layers that read them, the larger group is swa (gemma-4: 4 of 5 layers)
         // groups of equal size can not be told apart, so leave the layers unclassified
+        // two masks do not imply swa (deepseek sparse attention builds two full masks), so only classify once the window
+        // shows: the swa mask then keeps fewer keys per row than the other. Before that the two masks are equal.
+        // Remember it per KV cache buffer, so that a new sequence starting below the window keeps the same graph
         if (model_params.swa_layers.empty()) {
             std::map<const ggml_tensor *, std::vector<int>> mask_layers;
             for (const auto & [layer, mask] : layer_mask) {
@@ -874,8 +880,24 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 if (other->second.size() > swa->second.size()) {
                     std::swap(swa, other);
                 }
-                model_params.swa_layers = swa->second;
-                model_params.swa_mask = swa->first;
+                static std::mutex seen_mutex;
+                static std::map<size_t, std::vector<int>> seen_swa_layers;  // cache_k buffer id -> swa layers
+                const size_t buffer_id = layer_buffer[swa->second.front()];
+                const int swa_kept = get_swa_window_from_mask(swa->first);
+                const int other_kept = get_swa_window_from_mask(other->first);
+                bool is_swa = swa_kept > 0 && swa_kept < other_kept;
+                {
+                    std::lock_guard<std::mutex> lock(seen_mutex);
+                    if (is_swa && buffer_id != 0) {
+                        seen_swa_layers[buffer_id] = swa->second;
+                    }
+                    auto seen = seen_swa_layers.find(buffer_id);
+                    is_swa = is_swa || (buffer_id != 0 && seen != seen_swa_layers.end() && seen->second == swa->second);
+                }
+                if (is_swa) {
+                    model_params.swa_layers = swa->second;
+                    model_params.swa_mask = swa->first;
+                }
             }
         }
         std::sort(model_params.swa_layers.begin(), model_params.swa_layers.end());
