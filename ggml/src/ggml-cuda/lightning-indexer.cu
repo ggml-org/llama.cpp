@@ -386,8 +386,9 @@ static __global__ void lightning_indexer_kernel_vec(
 }
 
 // one block scores a tile of K_VECS_PER_BLOCK keys against TOKENS_PER_BLOCK tokens: the keys are
-// staged once in half precision, the queries one head at a time in float, and each thread owns one
-// key for TOKENS_PER_THREAD tokens, so no dot product needs a cross thread reduction
+// staged in half precision and the queries of every head in float, each thread owns one key for
+// TOKENS_PER_THREAD tokens and widens every key element once for all heads, so no dot product
+// needs a cross thread reduction
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
 static __global__ void lightning_indexer_kernel_tile(
         const float * Q, const char * K, const float * W, const half * M, float * dst,
@@ -416,8 +417,8 @@ static __global__ void lightning_indexer_kernel_tile(
 
     // the row padding keeps the keys of consecutive threads in distinct banks
     __shared__ half2 k_shared[K_VECS_PER_BLOCK][N_EMBD_H2 + 1];
-    __shared__ float2 q_shared[TOKENS_PER_BLOCK][N_EMBD_H2];
-    __shared__ float w_shared[TOKENS_PER_BLOCK];
+    __shared__ float2 q_shared[N_HEAD][TOKENS_PER_BLOCK][N_EMBD_H2];
+    __shared__ float w_shared[N_HEAD][TOKENS_PER_BLOCK];
 
     // phase 1 - stage the key tile four elements at a time, rows past n_kv are zero
 
@@ -426,71 +427,84 @@ static __global__ void lightning_indexer_kernel_tile(
         const int r  = i / (N_EMBD / 4);
         const int c4 = i % (N_EMBD / 4);
 
-        float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        half2 lo = make_half2(0.0f, 0.0f);
+        half2 hi = lo;
         if (start_kv + r < n_kv) {
             const char * k_row = K + (start_kv + r)*nbk2 + i_stream*nbk3;
-            if constexpr (TYPE_K == GGML_TYPE_F32) {
-                v = ((const float4 *) k_row)[c4];
+            if constexpr (TYPE_K == GGML_TYPE_F16) {
+                lo = ((const half2 *) k_row)[2*c4 + 0];
+                hi = ((const half2 *) k_row)[2*c4 + 1];
             } else {
-                constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, float, 4>();
-                dequantize_k(k_row, &v, c4 * 4);
+                float4 v;
+                if constexpr (TYPE_K == GGML_TYPE_F32) {
+                    v = ((const float4 *) k_row)[c4];
+                } else {
+                    constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, float, 4>();
+                    dequantize_k(k_row, &v, c4 * 4);
+                }
+                lo = make_half2(v.x, v.y);
+                hi = make_half2(v.z, v.w);
             }
         }
 
-        k_shared[r][2*c4 + 0] = make_half2(v.x, v.y);
-        k_shared[r][2*c4 + 1] = make_half2(v.z, v.w);
+        k_shared[r][2*c4 + 0] = lo;
+        k_shared[r][2*c4 + 1] = hi;
     }
+
+    // phase 2 - stage the queries and weights of every head, tokens past n_batch are zero
+
+#pragma unroll
+    for (int i = tid; i < N_HEAD * TOKENS_PER_BLOCK * (N_EMBD / 4); i += THREADS_PER_BLOCK) {
+        const int h  = i / (TOKENS_PER_BLOCK * (N_EMBD / 4));
+        const int r  = i / (N_EMBD / 4) % TOKENS_PER_BLOCK;
+        const int c4 = i % (N_EMBD / 4);
+
+        float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        if (start_batch + r < n_batch) {
+            v = *(const float4 *) ((const char *) Q + h*nbq1 + (start_batch + r)*nbq2 + i_stream*nbq3 + c4*sizeof(float4));
+        }
+
+        q_shared[h][r][2*c4 + 0] = make_float2(v.x, v.y);
+        q_shared[h][r][2*c4 + 1] = make_float2(v.z, v.w);
+    }
+
+    if (tid < N_HEAD * TOKENS_PER_BLOCK) {
+        const int h = tid / TOKENS_PER_BLOCK;
+        const int r = tid % TOKENS_PER_BLOCK;
+        w_shared[h][r] = start_batch + r < n_batch ?
+            ((const float *) ((const char *) W + (start_batch + r)*nbw1 + i_stream*nbw3))[h] : 0.0f;
+    }
+
+    __syncthreads();
+
+    // phase 3 - float products of the widened keys for every head, ReLU, weight
 
     const int kl = tid % K_VECS_PER_BLOCK;
     const int tl = tid / K_VECS_PER_BLOCK;
 
-    float score[TOKENS_PER_THREAD] = { 0.0f };
-
-    for (int i_head = 0; i_head < N_HEAD; ++i_head) {
-        // the previous head is fully consumed and, on the first pass, the key tile is complete
-        __syncthreads();
-
-        // phase 2 - stage the queries and weights of this head, tokens past n_batch are zero
+    float qk[N_HEAD][TOKENS_PER_THREAD] = { { 0.0f } };
 
 #pragma unroll
-        for (int i = tid; i < TOKENS_PER_BLOCK * (N_EMBD / 4); i += THREADS_PER_BLOCK) {
-            const int r  = i / (N_EMBD / 4);
-            const int c4 = i % (N_EMBD / 4);
-
-            float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            if (start_batch + r < n_batch) {
-                v = *(const float4 *) ((const char *) Q + i_head*nbq1 + (start_batch + r)*nbq2 + i_stream*nbq3 + c4*sizeof(float4));
-            }
-
-            q_shared[r][2*c4 + 0] = make_float2(v.x, v.y);
-            q_shared[r][2*c4 + 1] = make_float2(v.z, v.w);
-        }
-
-        if (tid < TOKENS_PER_BLOCK) {
-            w_shared[tid] = start_batch + tid < n_batch ?
-                ((const float *) ((const char *) W + (start_batch + tid)*nbw1 + i_stream*nbw3))[i_head] : 0.0f;
-        }
-
-        __syncthreads();
-
-        // phase 3 - float products of the widened keys, ReLU, weight
-
-        float qk[TOKENS_PER_THREAD] = { 0.0f };
-
+    for (int c = 0; c < N_EMBD_H2; ++c) {
+        const float2 k_val = __half22float2(k_shared[kl][c]);
 #pragma unroll
-        for (int c = 0; c < N_EMBD_H2; ++c) {
-            const float2 k_val = __half22float2(k_shared[kl][c]);
+        for (int h = 0; h < N_HEAD; ++h) {
 #pragma unroll
             for (int j = 0; j < TOKENS_PER_THREAD; ++j) {
-                const float2 q_val = q_shared[tl + j*TOKEN_GROUPS][c];
-                qk[j] = fmaf(k_val.x, q_val.x, qk[j]);
-                qk[j] = fmaf(k_val.y, q_val.y, qk[j]);
+                const float2 q_val = q_shared[h][tl + j*TOKEN_GROUPS][c];
+                qk[h][j] = fmaf(k_val.x, q_val.x, qk[h][j]);
+                qk[h][j] = fmaf(k_val.y, q_val.y, qk[h][j]);
             }
         }
+    }
+
+    float score[TOKENS_PER_THREAD] = { 0.0f };
 
 #pragma unroll
+    for (int h = 0; h < N_HEAD; ++h) {
+#pragma unroll
         for (int j = 0; j < TOKENS_PER_THREAD; ++j) {
-            score[j] += fmaxf(qk[j], 0.0f) * w_shared[tl + j*TOKEN_GROUPS];
+            score[j] += fmaxf(qk[h][j], 0.0f) * w_shared[h][tl + j*TOKEN_GROUPS];
         }
     }
 
