@@ -10,6 +10,10 @@ on:
             - 'conversion/base.py'
             - 'convert_hf_to_gguf_update.py'
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
     pre-tokenizer-hashes:
         runs-on: ubuntu-slim

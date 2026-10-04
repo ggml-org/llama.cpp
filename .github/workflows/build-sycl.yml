@@ -22,6 +22,10 @@ on:
       'ggml/src/ggml-sycl/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -78,7 +82,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: sycl-ubuntu-24-${{ matrix.build }}
+          restore: false
           save: false
 
       - name: ccache-buckets-restore
@@ -123,6 +127,11 @@ jobs:
 
   windows-latest-sycl:
     runs-on: windows-2022
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
 
     defaults:
       run:

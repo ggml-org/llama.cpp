@@ -30,6 +30,10 @@ on:
       '**/*.cpp'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -65,7 +69,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: cpu-${{ matrix.os }}
+          restore: false
           save: false
 
       - name: Build Dependencies
@@ -141,6 +145,11 @@ jobs:
   windows:
     name: windows / ${{ matrix.build }}
     runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
 
     env:
       OPENBLAS_VERSION: 0.3.23

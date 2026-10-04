@@ -31,6 +31,10 @@ on:
       '.github/workflows/server-sanitize.yml'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 env:
   # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
   HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}

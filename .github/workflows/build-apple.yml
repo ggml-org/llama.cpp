@@ -26,6 +26,10 @@ on:
       'ggml/src/ggml-rpc/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -50,7 +54,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: apple-arm64
+          restore: false
           save: false
 
       - name: ccache-buckets-restore
@@ -113,7 +117,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: apple-x64
+          restore: false
           save: false
 
       - name: ccache-buckets-restore
@@ -160,6 +164,10 @@ jobs:
 
   macos-latest-ios-xcode:
     runs-on: macos-latest
+
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -257,6 +265,10 @@ jobs:
   macos-latest-swift:
     runs-on: macos-latest
     needs: macos-latest-ios-xcode
+
+    permissions:
+      actions: read
+      contents: read
 
     strategy:
       matrix:

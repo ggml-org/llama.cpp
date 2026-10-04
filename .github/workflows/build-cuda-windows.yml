@@ -7,6 +7,11 @@ name: CI (CUDA, windows)
 on:
   workflow_dispatch: # allows manual triggering
 
+cache-mode: write
+permissions:
+  actions: write
+  contents: read
+
 # note: this will run in queue with the release workflow
 concurrency:
   group: release

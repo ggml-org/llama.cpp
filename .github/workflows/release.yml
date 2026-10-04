@@ -27,6 +27,11 @@ on:
       '**/*.glsl'
     ]
 
+cache-mode: write
+permissions:
+  actions: write
+  contents: read
+
 env:
   GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -114,9 +119,6 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    permissions:
-      actions: write
-
     steps:
       - name: Clone
         id: checkout
@@ -180,9 +182,6 @@ jobs:
             os: ubuntu-24.04-s390x
 
     runs-on: ${{ matrix.os }}
-
-    permissions:
-      actions: write
 
     steps:
       - name: Clone
@@ -261,9 +260,6 @@ jobs:
             os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
-
-    permissions:
-      actions: write
 
     steps:
       - name: Clone
@@ -358,9 +354,6 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
-
-    permissions:
-      actions: write
 
     steps:
       # the container has no git; install it before checkout so that a real git repository is created
@@ -470,9 +463,6 @@ jobs:
 
     runs-on: ubuntu-24.04  # previously ubuntu-latest
 
-    permissions:
-      actions: write
-
     env:
       NDK_VERSION: "29.0.14206865"
 
@@ -559,9 +549,6 @@ jobs:
     runs-on: ubuntu-latest
     container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
 
-    permissions:
-      actions: write
-
     defaults:
       run:
         shell: bash
@@ -615,9 +602,6 @@ jobs:
     runs-on: ubuntu-latest
     container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
 
-    permissions:
-      actions: write
-
     defaults:
       run:
         shell: bash
@@ -669,9 +653,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
-
-    permissions:
-      actions: write
 
     outputs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
@@ -783,9 +764,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
-
-    permissions:
-      actions: write
 
     outputs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
@@ -912,9 +890,6 @@ jobs:
 
     runs-on: windows-2025-vs2026
 
-    permissions:
-      actions: write
-
     strategy:
       matrix:
         include:
@@ -981,9 +956,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
-
-    permissions:
-      actions: write
 
     strategy:
       matrix:
@@ -1142,9 +1114,6 @@ jobs:
 
     runs-on: windows-2025
 
-    permissions:
-      actions: write
-
     env:
       OPENBLAS_VERSION: 0.3.23
       VULKAN_VERSION: 1.4.357.0
@@ -1237,9 +1206,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
-
-    permissions:
-      actions: write
 
     strategy:
       matrix:
@@ -1338,9 +1304,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
-
-    permissions:
-      actions: write
 
     defaults:
       run:
@@ -1455,9 +1418,6 @@ jobs:
 
     runs-on: ubuntu-24.04
 
-    permissions:
-      actions: write
-
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
       ONEAPI_INSTALLER_VERSION: "2026.1"
@@ -1537,9 +1497,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
-
-    permissions:
-      actions: write
 
     strategy:
       matrix:
@@ -1660,9 +1617,6 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
-    permissions:
-      actions: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1738,8 +1692,6 @@ jobs:
 #            build: 'Release'
 #            use_acl_graph: 'off'
 #    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-#    permissions:
-#      actions: write
 #    steps:
 #      - name: Checkout
 #        uses: actions/checkout@v6

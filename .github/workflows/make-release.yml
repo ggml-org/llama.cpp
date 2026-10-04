@@ -27,6 +27,7 @@ on:
 env:
   GH_TOKEN: ${{ github.token }}
 
+cache-mode: none
 permissions:
   contents: write
   packages: write
