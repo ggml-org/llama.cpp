@@ -30,6 +30,12 @@ attention is recommended. With flash attention disabled, the fork permits
 TurboQuant through MUL_MAT attention and dequantizes turbo V to F32 at
 attention time. Other quantized V formats still require flash attention.
 
+## Model-specific quality
+
+Models with attention sinks can be unusually sensitive to K-cache quantization. GPT-OSS is a known case: even `q8_0` K changes the output distribution substantially, and lower-bit K types degrade it further despite normal codec and kernel accuracy. Use `f16` K for GPT-OSS and other sink-heavy models. Validate a quantized V cache separately against an `f16` K/V baseline before deploying it.
+
+Short output samples are not a sufficient quality check for this class of model because the text can remain fluent while token probabilities move significantly. Use `llama-perplexity --kl-divergence` or an equivalent logit comparison when selecting cache types.
+
 ## Rotation and policy
 
 The cache-write path applies a fixed Walsh-Hadamard transform before centroid
