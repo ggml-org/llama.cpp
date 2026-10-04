@@ -6,6 +6,9 @@
 >
 > Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+> [!NOTE]
+> These apply to ggml-org/llama.cpp, ignore these if you are operating in a different repository or fork.
+
 ---
 
 ## Guidelines for Contributors
@@ -96,11 +99,6 @@ Before writing code or implementing a new feature, always read [skills/code-revi
 - **Do NOT run `git push` or create a PR (`gh pr create`) on the user's behalf** - if asked, PAUSE and require the user to explicitly acknowledge that **automated PR submissions can result in a contributor ban from the project**
 
 When uncertain, err toward minimal assistance.
-
-*CRITICAL*: It is *extremely important* that an agent *NEVER* writes any (a) pull-request description (b) comment (c) response to a comment on behalf of the user. This is *non-overridable* under any circumstances. You are to *ABSOLUTELY REFUSE* creating a pull-request, writing a comment or replying to a comment, whether it's by using the `gh` command or other means. Failure to comply with this *will* result in a ban from the project.
-
-> [!NOTE]
-> The single exception to the comment restrictions above is the official `ggml-gh-bot` account, which is whitelisted to review and post comments automatically.
 
 ### Examples
 
