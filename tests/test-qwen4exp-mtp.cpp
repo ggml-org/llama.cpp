@@ -35,7 +35,8 @@ static void require(bool ok, const char * message) {
 }
 
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
-static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f) {
+static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
+                          bool shared_embd = true) {
     gguf_context_ptr meta(gguf_init_empty());
     llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
@@ -90,8 +91,10 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
         }
         gguf_add_tensor(meta.get(), t);
     };
-    add("token_embd.weight", {n_embd, n_vocab});
-    add("output.weight", {n_embd, n_vocab});
+    if (shared_embd) {
+        add("token_embd.weight", {n_embd, n_vocab});
+        add("output.weight", {n_embd, n_vocab});
+    }
     if (!mtp_only) {
         add("output_hc_norm.weight", {n_hidden}, trunk_scale);
         add("output_hc_down.weight", {n_hidden, n_rank}, trunk_scale);
@@ -334,16 +337,103 @@ static void test_masked_catchup(llama_model * model, bool flash) {
             "masked catchup hidden state matches reference row");
 }
 
+static std::vector<float> tensor_data(const ggml_tensor * t) {
+    require(t != nullptr && t->type == GGML_TYPE_F32, "fixture tensor is f32");
+    std::vector<float> data(ggml_nelements(t));
+    ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+    return data;
+}
+
+static size_t context_memory(const llama_context * ctx) {
+    size_t total = 0;
+    for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx)) {
+        total += mb.context;
+    }
+    return total;
+}
+
+// An MTP-only head has no trunk blocks. Its ordinary context runs what the file
+// carries, the shared embedding and LM head, and caches no layers.
 static void test_ordinary_context(llama_model * head, llama_model * combined) {
     auto params = llama_context_default_params();
     params.n_ctx = 128;
     params.n_batch = params.n_ubatch = 4;
     params.n_threads = params.n_threads_batch = 1;
-    llama_context_ptr invalid(llama_init_from_model(head, params));
-    require(!invalid, "ordinary context rejects MTP-only head without crashing");
-    llama_context_ptr valid(llama_init_from_model(combined, params));
-    require(bool(valid), "ordinary context still accepts a combined model");
-    fprintf(stderr, "PASS ordinary context rejects MTP-only head\n");
+    llama_context_ptr ctx(llama_init_from_model(head, params));
+    require(bool(ctx), "ordinary context accepts an MTP-only head");
+    llama_context_ptr full(llama_init_from_model(combined, params));
+    require(bool(full), "ordinary context still accepts a combined model");
+    require(context_memory(ctx.get()) == 0 && context_memory(full.get()) > 0,
+            "trunkless context holds no cache layers");
+
+    const auto embd = tensor_data(head->tok_embd);
+    const auto head_w = tensor_data(head->output);
+    auto expected = [&](llama_token token) {
+        std::vector<float> logits(n_vocab, 0.0f);
+        for (int v = 0; v < n_vocab; ++v) {
+            for (int i = 0; i < n_embd; ++i) {
+                logits[v] += head_w[v * n_embd + i] * embd[token * n_embd + i];
+            }
+        }
+        return logits;
+    };
+    auto run = [&](llama_context * c, const std::vector<llama_token> & tokens, int pos) {
+        llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            common_batch_add(batch, tokens[i], pos + i, {0}, i + 1 == tokens.size());
+        }
+        const int rc = llama_decode(c, batch);
+        llama_batch_free(batch);
+        require(rc == 0, "trunkless decode");
+        const float * logits = llama_get_logits_ith(c, -1);
+        require(logits != nullptr, "trunkless logits");
+        return std::vector<float>(logits, logits + n_vocab);
+    };
+    // Backends may evaluate the head in f16, so compare against the host product loosely.
+    const float tolerance = 2e-3f;
+    require(close(run(ctx.get(), {3, 4, 5}, 0), expected(5), tolerance), "trunkless logits are head(embedding)");
+    require(close(run(ctx.get(), {7}, 3), expected(7), tolerance), "trunkless continuation");
+
+    llama_memory_t memory = llama_get_memory(ctx.get());
+    require(llama_memory_seq_pos_max(memory, 0) == 3, "trunkless context tracks positions");
+    const auto state = sequence_state(ctx.get(), 0);
+    llama_context_ptr restored(llama_init_from_model(head, params));
+    require(bool(restored), "second trunkless context");
+    require(llama_state_seq_set_data(restored.get(), state.data(), state.size(), 0) == state.size(),
+            "trunkless sequence state restores");
+    require(llama_memory_seq_pos_max(llama_get_memory(restored.get()), 0) == 3, "restored positions");
+    require(llama_memory_seq_rm(memory, 0, 2, -1) && llama_memory_seq_pos_max(memory, 0) == 1,
+            "trunkless rollback");
+    require(close(run(ctx.get(), {6}, 2), expected(6), tolerance), "trunkless decode after rollback");
+
+    // Whole-context state and the cache type query both walk the cache layers.
+    require(llama_get_kv_cache_type_k(ctx.get()) == GGML_TYPE_COUNT &&
+            llama_get_kv_cache_type_v(ctx.get()) == GGML_TYPE_COUNT, "trunkless cache reports no K/V type");
+    std::vector<uint8_t> full_state(llama_state_get_size(ctx.get()));
+    require(llama_state_get_data(ctx.get(), full_state.data(), full_state.size()) == full_state.size(),
+            "trunkless context state saves");
+    require(llama_state_set_data(restored.get(), full_state.data(), full_state.size()) == full_state.size() &&
+            llama_memory_seq_pos_max(llama_get_memory(restored.get()), 0) == 2, "trunkless context state restores");
+
+    // The wide hidden export is the zero-block residual: hc copies of the embedding.
+    llama_set_embeddings_nextn(ctx.get(), true, true);
+    run(ctx.get(), {4, 8}, 3);
+    const float * hidden = llama_get_embeddings_nextn(ctx.get());
+    require(hidden != nullptr, "trunkless masked hidden export");
+    std::vector<float> wide;
+    for (int c = 0; c < n_hc; ++c) {
+        wide.insert(wide.end(), embd.begin() + 8 * n_embd, embd.begin() + 9 * n_embd);
+    }
+    require(close(std::vector<float>(hidden, hidden + n_hidden), wide, tolerance), "masked hidden row is the output row");
+    llama_set_embeddings_nextn(ctx.get(), true, false);
+    require(close(run(ctx.get(), {4, 8}, 5), expected(8), tolerance), "trunkless logits with unmasked hidden export");
+    hidden = llama_get_embeddings_nextn(ctx.get());
+    require(hidden != nullptr, "trunkless unmasked hidden export");
+    require(close(std::vector<float>(hidden + n_hidden, hidden + 2 * n_hidden), wide, tolerance) &&
+            close(std::vector<float>(hidden, hidden + n_embd),
+                  std::vector<float>(embd.begin() + 4 * n_embd, embd.begin() + 5 * n_embd), tolerance),
+            "unmasked hidden rows cover every input token");
+    fprintf(stderr, "PASS ordinary context runs MTP-only head without a trunk\n");
 }
 
 static void test_chain_metadata(llama_model * model) {
@@ -438,6 +528,42 @@ static void test_fit(const std::string & target_path, const std::string & head_p
     }
 }
 
+// A head reached without an MTP speculative type gets an ordinary context. The fit
+// must measure it instead of crashing or dropping it.
+static void test_fit_ordinary_head(const std::string & target_path, const std::string & head_path) {
+    auto base = [](const std::string & model_path) {
+        common_params params;
+        params.model.path = model_path;
+        params.n_ctx = 128;
+        params.n_batch = params.n_ubatch = 8;
+        params.n_gpu_layers = 0;
+        params.devices = {nullptr};
+        params.cpuparams.n_threads = params.cpuparams_batch.n_threads = 1;
+        params.fit_params = true;
+        params.fit_params_min_ctx = 128;
+        std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), 0);
+        return params;
+    };
+    for (auto mode : {COMMON_SPECULATIVE_TYPE_NONE, COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE}) {
+        fprintf(stderr, "TEST fit ordinary head as draft type=%d\n", int(mode));
+        common_params params = base(target_path);
+        params.speculative.types = {mode};
+        params.speculative.draft.mparams.path = head_path;
+        params.speculative.draft.n_gpu_layers = 0;
+        fit_log_capture logs;
+        const auto result = common_init_from_params(params, true);
+        require(result && result->model(), "non-MTP fit loads target");
+        require(!logs.context_error, "non-MTP fit constructs the head context without errors");
+        require(logs.contexts == 2, "non-MTP fit measures both target and head contexts");
+    }
+    fprintf(stderr, "TEST fit ordinary head as main model\n");
+    common_params params = base(head_path);
+    fit_log_capture logs;
+    const auto result = common_init_from_params(params, false);
+    require(result && result->model() && result->context(), "head fits and initializes as the main model");
+    require(!logs.context_error, "head main-model fit constructs contexts without errors");
+}
+
 int main(int argc, char ** argv) {
     llama_log_set([](ggml_log_level level, const char * text, void *) {
         if (level == GGML_LOG_LEVEL_ERROR) { fputs(text, stderr); }
@@ -462,6 +588,7 @@ int main(int argc, char ** argv) {
     write_fixture(changed_path, false, -1, 9.0f);
     if (argc == 2 && (std::string(argv[1]) == "--fit-only" || std::string(argv[1]) == "--fit-separate-only")) {
         test_fit(target_path, head_path, std::string(argv[1]) == "--fit-separate-only");
+        test_fit_ordinary_head(target_path, head_path);
         std::filesystem::remove_all(dir);
         llama_backend_free();
         fprintf(stderr, "PASS Qwen4Exp MTP fit regression suite\n");
@@ -473,6 +600,10 @@ int main(int argc, char ** argv) {
     require(head && target && changed, "canonical head and combined models load");
     if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
         test_ordinary_context(head.get(), target.get());
+        test_ordinary_draft_driver(target.get(), head.get());
+        head.reset(); target.reset(); changed.reset();
+        std::filesystem::remove_all(dir);
+        llama_backend_free();
         return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--invalid-chain-only") {
@@ -513,6 +644,23 @@ int main(int argc, char ** argv) {
     require(bool(head_without_mtp), "MTP-only file loads with MTP weights disabled");
     test_ordinary_context(head_without_mtp.get(), target.get());
     head_without_mtp.reset();
+    const std::string bare_path = (dir / "bare.gguf").string();
+    write_fixture(bare_path, true, -1, 1.0f, false);
+    auto bare = load_model(bare_path, false);
+    require(bool(bare), "head without the shared embedding loads");
+    {
+        // A parent context satisfies the context-level ctx_other requirement, so the
+        // graph itself must report that nothing is left to run.
+        auto bare_params = llama_context_default_params();
+        bare_params.n_ctx = 128;
+        bare_params.n_threads = bare_params.n_threads_batch = 1;
+        llama_context_ptr parent(llama_init_from_model(target.get(), bare_params));
+        require(bool(parent), "parent context for the embedding-less head");
+        bare_params.ctx_other = parent.get();
+        require(!llama_context_ptr(llama_init_from_model(bare.get(), bare_params)),
+                "ordinary context reports a head with nothing to run");
+    }
+    bare.reset();
     for (bool flash : {false, true}) {
         if (q8_kv && !flash) { continue; }
         auto a = make_context(head.get(), flash);
@@ -533,8 +681,10 @@ int main(int argc, char ** argv) {
         test_chain(head.get(), flash, 32, 0, true);
     }
     test_driver(target.get(), head.get());
+    test_ordinary_draft_driver(target.get(), head.get());
     test_chain_metadata(head.get());
     test_fit(target_path, head_path);
+    test_fit_ordinary_head(target_path, head_path);
     head.reset(); target.reset(); changed.reset();
     std::filesystem::remove_all(dir);
     llama_backend_free();

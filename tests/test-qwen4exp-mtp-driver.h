@@ -160,3 +160,60 @@ static void test_driver(llama_model * target, llama_model * head) {
     require(chained == sequential, "driver honors supplied cap with an occupied context near its limit");
     fprintf(stderr, "PASS driver supplied cap near occupied context limit\n");
 }
+
+// A head handed to a non-MTP draft type gets an ordinary context. The public
+// draft-simple driver must run it; its greedy drafts follow the head's own logits.
+static void test_ordinary_draft_driver(llama_model * target_model, llama_model * head) {
+    auto cp = llama_context_default_params();
+    cp.n_ctx = 128;
+    cp.n_batch = cp.n_ubatch = 32;
+    cp.n_threads = cp.n_threads_batch = 1;
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    llama_context_ptr target(llama_init_from_model(target_model, cp));
+    llama_context_ptr draft(llama_init_from_model(head, cp));
+    llama_context_ptr reference(llama_init_from_model(head, cp));
+    require(target && draft && reference, "ordinary draft driver contexts");
+
+    common_params_speculative params;
+    params.types = {COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE};
+    params.draft.ctx_tgt = target.get();
+    params.draft.ctx_dft = draft.get();
+    params.draft.n_max = 4;
+    params.draft.backend_sampling = false;
+    common_speculative_ptr spec(common_speculative_init(params, 1));
+    require(bool(spec), "initialize draft-simple driver on an MTP-only head");
+
+    llama_tokens prompt = {3, 4};
+    llama_tokens result;
+    llama_batch batch = llama_batch_init(32, 0, 1);
+    for (size_t i = 0; i < prompt.size(); ++i) {
+        common_batch_add(batch, prompt[i], i, {0}, true);
+    }
+    require(llama_decode(target.get(), batch) == 0, "ordinary draft driver target prefill");
+    require(common_speculative_process(spec.get(), batch), "draft-simple driver mirrors the target batch");
+
+    common_speculative_begin(spec.get(), 0, prompt);
+    auto & dp = common_speculative_get_draft_params(spec.get(), 0);
+    dp.drafting = true;
+    dp.pos0 = prompt.size();
+    dp.id_last = 5;
+    dp.prompt = &prompt;
+    dp.result = &result;
+    dp.n_max = -1;
+    common_speculative_draft(spec.get());
+
+    // Without a trunk each draft token depends on its predecessor alone.
+    llama_tokens expected;
+    llama_token token = dp.id_last;
+    for (int i = 0; i < params.draft.n_max; ++i) {
+        common_batch_clear(batch);
+        common_batch_add(batch, token, i, {0}, true);
+        require(llama_decode(reference.get(), batch) == 0, "ordinary draft reference decode");
+        const float * logits = llama_get_logits_ith(reference.get(), -1);
+        token = std::max_element(logits, logits + n_vocab) - logits;
+        expected.push_back(token);
+    }
+    llama_batch_free(batch);
+    require(result == expected, "draft-simple drafts follow the trunkless head");
+    fprintf(stderr, "PASS draft-simple driver on an MTP-only head\n");
+}

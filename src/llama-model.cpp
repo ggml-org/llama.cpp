@@ -2704,6 +2704,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 const bool mtp_on_hybrid_nemotron =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && arch == LLM_ARCH_NEMOTRON_H_MOE;
 
+                // An MTP-only Qwen4Exp head has no trunk blocks: its ordinary context keeps
+                // a plain attention KV cache with no layers instead of the hybrid wrapper.
+                const bool trunkless_qwen4exp =
+                    params.ctx_type != LLAMA_CONTEXT_TYPE_MTP &&
+                    arch == LLM_ARCH_QWEN4EXP && layers[0].hc_attn_norm == nullptr;
+
                 if (llm_arch_is_recurrent(arch)) {
                     res = new llama_memory_recurrent(
                             *this,
@@ -2715,7 +2721,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_rs_seq,
                             cparams.gdn_replay,
                             nullptr);
-                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen && !mtp_on_hybrid_nemotron) {
+                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen && !mtp_on_hybrid_nemotron && !trunkless_qwen4exp) {
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
@@ -2843,6 +2849,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         } else {
                             filter = [&](uint32_t il) { return il <  hparams.n_layer(); };
                         }
+                    }
+
+                    if (trunkless_qwen4exp) {
+                        LLAMA_LOG_WARN("%s: this file is an MTP draft head without trunk blocks; an ordinary context "
+                                "runs only its embedding and LM head. Load it as a draft model (-md) with "
+                                "--spec-type draft-mtp to draft with it\n", __func__);
+                        filter = [](uint32_t) { return false; };
                     }
 
                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {

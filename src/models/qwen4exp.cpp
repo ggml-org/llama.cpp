@@ -302,9 +302,6 @@ std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const 
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         return std::make_unique<graph_mtp>(*this, params);
     }
-    if (layers.empty() || !layers.front().hc_attn_norm) {
-        throw std::runtime_error("QWEN4EXP MTP-only model requires an MTP context; trunk tensors are missing");
-    }
     return std::make_unique<graph>(*this, params);
 }
 
@@ -410,9 +407,50 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     int sections[4];
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
+    if (!model.tok_embd) {
+        throw std::runtime_error("QWEN4EXP model has no token embedding to build an ordinary graph from");
+    }
+
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     cb(inpL, "model.input_embed", -1);
     ggml_build_forward_expand(gf, inpL);
+
+    // An MTP-only head carries no trunk blocks and no trunk output mixer. Its ordinary
+    // graph is the zero-block trunk: the wide residual is hc copies of the embedding,
+    // which collapse back to the embedding in front of the shared LM head. No cache
+    // inputs are built, since llama_model::create_memory gives this model no layers.
+    if (!model.layers[0].hc_attn_norm) {
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+        const bool gather_now = !cparams.embeddings_nextn || cparams.embeddings_nextn_masked;
+
+        ggml_tensor * cur = inpL;
+        if (inp_out_ids && gather_now) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
+
+        if (cparams.embeddings_nextn) {
+            ggml_tensor * res_hc = ggml_repeat_4d(ctx0,
+                    ggml_reshape_3d(ctx0, cur, n_embd, 1, cur->ne[1]),
+                    n_embd, hc, cur->ne[1], 1);
+            cb(res_hc, "h_nextn", -1);
+            res->t_h_nextn = res_hc;
+            ggml_build_forward_expand(gf, res_hc);
+
+            if (inp_out_ids && !gather_now) {
+                cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+            }
+        }
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        cur = build_lora_mm(model.output, cur, model.output_s);
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+        return;
+    }
 
     auto * inp = build_inp_mem_hybrid();
 
