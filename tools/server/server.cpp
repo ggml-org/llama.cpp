@@ -112,9 +112,6 @@ int llama_server(int argc, char ** argv) {
 
     SRV_INF("%s", "initializing ...\n");
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
     const int result = llama_server(params, argc, argv);
     common_log_flush(common_log_main());
     return result;
@@ -122,6 +119,9 @@ int llama_server(int argc, char ** argv) {
 
 int llama_server(common_params & params, int argc, char ** argv) {
     bool is_run_by_cli = (argv == nullptr);
+
+    llama_backend_init();
+    llama_numa_init(params.numa);
 
     common_models_handler models_handler;
 
