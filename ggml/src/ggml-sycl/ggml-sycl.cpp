@@ -74,6 +74,7 @@
 #include "ggml-sycl/conv2d.hpp"
 #include "ggml-sycl/conv2d-dw.hpp"
 #include "ggml-sycl/conv2d-transpose.hpp"
+#include "ggml-sycl/wdecomp.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/ssm_scan.hpp"
@@ -3102,8 +3103,48 @@ inline void ggml_sycl_op_mul_mat_sycl(
         }
 
         DnnlGemmWrapper::gemm_wdecomp(ctx, src1_ncols, row_diff, ne10, src1_as_f16.get(), src0_dd_i,
-                                      is_q4_0 ? DnnlGemmWrapper::dt::u4 : DnnlGemmWrapper::dt::s8, is_q4_0,
-                                      scales.get(), dst_dd_i, stream);
+                                      is_q4_0 ? DnnlGemmWrapper::dt::u4 : DnnlGemmWrapper::dt::s8, QK4_0, is_q4_0,
+                                      scales.get(), dst_dd_i, false, stream);
+        GGML_UNUSED(src1_ddq_i);
+        GGML_UNUSED(src1_padded_row_size);
+        return;
+    }
+
+    ggml_sycl_wdecomp_fmt wfmt;
+    if (src1->type == GGML_TYPE_F32 && use_fp16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1] &&
+        dst->op_params[0] == GGML_PREC_DEFAULT && ggml_sycl_src1_prec_allows(dst, GGML_PREC_F16) &&
+        g_ggml_sycl_enable_dnn && g_ggml_sycl_dnnl_wdecomp && ggml_sycl_dnnl_has_optimized_gemm(ggml_sycl_get_device()) &&
+        ggml_sycl_wdecomp_format(src0->type, src0_extra && src0_extra->optimized_feature.reorder, wfmt) &&
+        ggml_sycl_wdecomp_pays(wfmt, src1_ncols, ne00)) {
+        const int64_t ngroups  = ne00 / wfmt.group;
+        const bool    is_s8    = wfmt.wt == GGML_SYCL_WDECOMP_S8;
+        const size_t  w_bytes  = is_s8 ? row_diff * ne00 : row_diff * ne00 / 2;
+
+        ggml_sycl_pool_alloc<uint8_t>    w(ctx.pool(), w_bytes);
+        ggml_sycl_pool_alloc<sycl::half> scales(ctx.pool(), row_diff * ngroups);
+        ggml_sycl_pool_alloc<sycl::half> bias(ctx.pool());
+        ggml_sycl_pool_alloc<sycl::half> gsum(ctx.pool());
+        if (wfmt.has_bias) {
+            bias.alloc(row_diff * ngroups);
+            gsum.alloc(src1_ncols * ngroups);
+        }
+        ggml_sycl_pool_alloc<sycl::half> src1_as_f16(ctx.pool(), src1_ncols * ne10);
+
+        ggml_sycl_dequantize_to_int(src0->type, src0_extra && src0_extra->optimized_feature.reorder, src0_dd_i,
+                                    w.get(), scales.get(), bias.get(), row_diff, ne00, stream);
+        if (wfmt.has_bias) {
+            ggml_sycl_f32_to_f16_gsum(src1_ddf_i, src1_as_f16.get(), gsum.get(), src1_ncols * ne10, wfmt.group, stream);
+            DnnlGemmWrapper::gemm_f16_rowmajor(ctx, src1_ncols, row_diff, ngroups, gsum.get(), bias.get(), dst_dd_i,
+                                               stream);
+        } else {
+            ggml_sycl_f32_to_f16_blocks(src1_ddf_i, src1_as_f16.get(), src1_ncols * ne10, stream);
+        }
+
+        const DnnlGemmWrapper::dt wt = is_s8 ? DnnlGemmWrapper::dt::s8 :
+                                       wfmt.wt == GGML_SYCL_WDECOMP_S4 ? DnnlGemmWrapper::dt::s4 :
+                                                                         DnnlGemmWrapper::dt::u4;
+        DnnlGemmWrapper::gemm_wdecomp(ctx, src1_ncols, row_diff, ne10, src1_as_f16.get(), w.get(), wt, wfmt.group,
+                                      false, scales.get(), dst_dd_i, wfmt.has_bias, stream);
         GGML_UNUSED(src1_ddq_i);
         GGML_UNUSED(src1_padded_row_size);
         return;
@@ -4176,7 +4217,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 // 243 / 1582, IQ2_S 255 / 1589, IQ4_NL 269 / 2272, IQ2_XXS 239 / 2146, IQ1_S 231 / 1584, IQ1_M 251 /
 // 1580, IQ3_XXS 255 / 2169, IQ3_S 313 / 1637), so their weights move to the reorder layout on the
 // first prefill matmul instead of the first decode.
-// Q5_K stays out (316 / 294).
+// Q5_K only joins when oneDNN weight decompression reads it (316 / 294 as fp16).
 inline bool ggml_sycl_reorder_on_prefill(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
@@ -4195,6 +4236,8 @@ inline bool ggml_sycl_reorder_on_prefill(enum ggml_type type) {
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
             return !g_ggml_sycl_prioritize_dmmv;
+        case GGML_TYPE_Q5_K:
+            return !g_ggml_sycl_prioritize_dmmv && g_ggml_sycl_enable_dnn && g_ggml_sycl_dnnl_wdecomp;
         default:
             return false;
     }

@@ -84,13 +84,12 @@ public:
     }
 
     // dst[M][N] (f32, row stride N) = src[M][K] (f16) x W^T, where W is stored [N][K] as packed
-    // weights of type wt (s8, or u4 with zero point 8 when zp8 is set) and scales[K/32][N] holds one
-    // fp16 scale per 32 weights along K. oneDNN dequantizes W inside the GEMM.
+    // weights of type wt (s8, s4, u4, or u4 with zero point 8 when zp8 is set) and scales[K/G][N] holds
+    // one fp16 scale per G weights along K. oneDNN dequantizes W inside the GEMM. With accumulate the
+    // product is added to dst instead of overwriting it.
     static void gemm_wdecomp(ggml_backend_sycl_context & ctx, int M, int N, int K,
-        const sycl::half * src, const void * w, dt wt, bool zp8, const sycl::half * scales,
-        float * dst, const queue_ptr & q) {
-        constexpr int G = 32;
-
+        const sycl::half * src, const void * w, dt wt, int G, bool zp8, const sycl::half * scales,
+        float * dst, bool accumulate, const queue_ptr & q) {
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
 
@@ -105,6 +104,11 @@ public:
         primitive_attr.set_scales(DNNL_ARG_WEIGHTS, (1 << 0) | (1 << 1), { G, 1 }, dt::f16);
         if (zp8) {
             primitive_attr.set_zero_points(DNNL_ARG_WEIGHTS, 0, {}, dt::u8);
+        }
+        if (accumulate) {
+            dnnl::post_ops post_ops;
+            post_ops.append_sum(1.0f);
+            primitive_attr.set_post_ops(post_ops);
         }
 
         auto matmul_pd = dnnl::matmul::primitive_desc(eng, src_md, wei_md, dst_md, primitive_attr);
@@ -126,6 +130,35 @@ public:
             matmul_args.insert({ DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_WEIGHTS,
                                  dnnl::memory({ { 1 }, dt::u8, { 1 } }, eng, zp.get()) });
         }
+
+        dnnl::matmul(matmul_pd).execute(stream, matmul_args);
+    }
+
+    // dst[M][N] (f32, row stride N) = a[M][K] x b[K][N], both fp16 and row-major.
+    static void gemm_f16_rowmajor(ggml_backend_sycl_context & ctx, int M, int N, int K,
+        const sycl::half * a, const sycl::half * b, float * dst, const queue_ptr & q) {
+        auto stream = ctx.stream_dnnl(q);
+        auto eng = ctx.engine_dnnl(q);
+
+        const auto a_md = dnnl::memory::desc({ M, K }, dt::f16, { K, 1 });
+        const auto b_md = dnnl::memory::desc({ K, N }, dt::f16, { N, 1 });
+        const auto c_md = dnnl::memory::desc({ M, N }, dt::f32, { N, 1 });
+
+        dnnl::primitive_attr primitive_attr;
+        primitive_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+        primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::f16);
+
+        auto matmul_pd = dnnl::matmul::primitive_desc(eng, a_md, b_md, c_md, primitive_attr);
+
+        const auto scratchpad_md = matmul_pd.scratchpad_desc();
+        ggml_sycl_pool_alloc<uint8_t> scratchpad(ctx.pool());
+        void * scratchpad_ptr = scratchpad_md.get_size() > 0 ? scratchpad.alloc(scratchpad_md.get_size()) : nullptr;
+
+        std::unordered_map<int, dnnl::memory> matmul_args;
+        matmul_args.insert({ DNNL_ARG_SRC, dnnl::memory(a_md, eng, const_cast<sycl::half *>(a)) });
+        matmul_args.insert({ DNNL_ARG_WEIGHTS, dnnl::memory(b_md, eng, const_cast<sycl::half *>(b)) });
+        matmul_args.insert({ DNNL_ARG_DST, dnnl::memory(c_md, eng, dst) });
+        matmul_args.insert({ DNNL_ARG_SCRATCHPAD, dnnl::memory(scratchpad_md, eng, scratchpad_ptr) });
 
         dnnl::matmul(matmul_pd).execute(stream, matmul_args);
     }
