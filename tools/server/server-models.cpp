@@ -1685,10 +1685,16 @@ void server_models::handle_child_state(const std::string & name, const std::stri
 // server_child
 //
 
-static FILE * child_cmd_out = nullptr; // the stdout the router reads the commands from
+server_child::server_child() {
+    if (is_child()) {
+        cmd_out = server_reserve_stdout();
+    }
+}
 
-void server_child::init() {
-    child_cmd_out = server_reserve_stdout();
+server_child::~server_child() {
+    if (cmd_out) {
+        fclose(cmd_out);
+    }
 }
 
 bool server_child::is_child() {
@@ -1813,8 +1819,8 @@ void server_child::notify_to_router(const std::string & state, const json & payl
         {"payload", payload},
     };
     std::lock_guard<std::mutex> lk(mtx_stdout);
-    fprintf(child_cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
-    fflush(child_cmd_out);
+    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(cmd_out);
 }
 
 

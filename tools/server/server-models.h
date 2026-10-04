@@ -320,12 +320,13 @@ struct server_child {
     std::mutex mtx_stdout;
     std::atomic<bool> is_finished_downloading = false; // set by run_download
 
-    // return true if the current process is a child server instance
-    static bool is_child();
-
-    // keep stdout for the commands to the router, called before anything else is written;
+    // in a child, keeps stdout for the commands to the router, so it is created before anything is written;
     // everything else written to stdout goes to stderr with the logs
-    static void init();
+    server_child();
+    ~server_child();
+
+    // return true if the current process is a child server instance
+    bool is_child();
     server_child_mode get_mode();
     int run_download(common_params & params);
 
@@ -336,6 +337,9 @@ struct server_child {
     // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
     // message will be handled by server_models::handle_child_state() on the router side
     void notify_to_router(const std::string & state_name, const json & payload);
+
+private:
+    FILE * cmd_out = nullptr; // the stdout the router reads the commands from
 };
 
 struct server_models_routes {
