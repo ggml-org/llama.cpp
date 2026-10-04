@@ -155,12 +155,13 @@ static llama_model_ptr load_model(const std::string & path, bool load_mtp = true
     return llama_model_ptr(llama_model_load_from_file(path.c_str(), params));
 }
 
-static llama_context_ptr make_context(llama_model * model, bool flash) {
+static llama_context_ptr make_context(llama_model * model, bool flash, int n_seq = 1, int n_ubatch = 32) {
     auto params = llama_context_default_params();
     params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     params.n_ctx = 128;
     params.n_batch = 32;
-    params.n_ubatch = 32;
+    params.n_ubatch = n_ubatch;
+    params.n_seq_max = n_seq;
     params.n_threads = params.n_threads_batch = 2;
     params.type_k = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
     params.type_v = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
@@ -258,6 +259,66 @@ static void test_chain(llama_model * model, bool flash, int depth, int catchup, 
     const auto b = decode(chain.get(), {7}, h, pos0 + catchup + 1);
     require(close(a.logits, b.logits) && close(a.hidden, b.hidden), "continuation matches after rejection");
     fprintf(stderr, "PASS chain flash=%d depth=%d catchup=%d masked=%d pos=%d\n", flash, depth, catchup, masked, pos0);
+}
+
+static std::vector<uint8_t> sequence_state(llama_context * ctx, llama_seq_id seq) {
+    std::vector<uint8_t> bytes(llama_state_seq_get_size(ctx, seq));
+    require(llama_state_seq_get_data(ctx, bytes.data(), bytes.size(), seq) == bytes.size(), "snapshot sequence cache");
+    return bytes;
+}
+
+static void test_invalid_chain(llama_model * model, bool flash) {
+    enum invalid_case { NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES };
+    for (auto kind : {NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES}) {
+        auto ctx = make_context(model, flash, 2, 2);
+        auto reference = make_context(model, flash, 2, 2);
+        const auto seed = decode(ctx.get(), {3}, initial_hidden(), 0);
+        decode(reference.get(), {3}, initial_hidden(), 0);
+        const auto before_0 = sequence_state(ctx.get(), 0);
+        const auto before_1 = sequence_state(ctx.get(), 1);
+        const llama_pos max_before = llama_memory_seq_pos_max(llama_get_memory(ctx.get()), 0);
+
+        const int n_bad = kind == OVER_UBATCH ? 4 : 2;
+        auto inputs = initial_hidden(n_bad);
+        llama_batch bad = llama_batch_init(n_bad, 0, 1);
+        for (int i = 0; i < n_bad; ++i) {
+            const llama_seq_id seq = kind == MULTIPLE_SEQUENCES ? i : 0;
+            const llama_pos pos = seq == 1 ? 0 : i + 1;
+            const bool output = kind == NO_OUTPUT ? false : kind == NON_PREFIX_MASK ? i == 0 :
+                    kind == OVER_UBATCH ? i >= 2 : true;
+            common_batch_add(bad, 5, pos, {seq}, output);
+        }
+        bad.embd = inputs.data();
+        llama_set_mtp_chain(ctx.get(), true);
+        const int rc = llama_decode(ctx.get(), bad);
+        bad.embd = nullptr;
+        llama_batch_free(bad);
+        require(rc == -1, "invalid public chain input returns -1");
+        require(llama_memory_seq_pos_max(llama_get_memory(ctx.get()), 0) == max_before &&
+                sequence_state(ctx.get(), 0) == before_0 && sequence_state(ctx.get(), 1) == before_1,
+                "rejected chain leaves existing and empty sequence caches unchanged");
+
+        // Keep chain mode enabled: a failed call must not poison the next valid decode.
+        std::vector<float> retry_input(2 * n_hidden, 0.0f);
+        std::copy(seed.hidden.begin(), seed.hidden.end(), retry_input.begin());
+        llama_batch retry = llama_batch_init(2, 0, 1);
+        common_batch_add(retry, 5, 1, {0}, true);
+        common_batch_add(retry, 0, 2, {0}, true);
+        retry.embd = retry_input.data();
+        const int retry_rc = llama_decode(ctx.get(), retry);
+        retry.embd = nullptr;
+        llama_batch_free(retry);
+        require(retry_rc == 0, "valid chain retry succeeds on the same context");
+        const float * logits = llama_get_logits(ctx.get());
+        const float * hidden = llama_get_embeddings_nextn(ctx.get());
+        require(logits && hidden, "valid retry has chain outputs");
+        const decoded actual{{logits, logits + 4}, {hidden, hidden + 2 * n_hidden}};
+        const auto expected = decode(reference.get(), {5, 0}, retry_input, 1, true);
+        require(close(actual.logits, expected.logits) && close(actual.hidden, expected.hidden),
+                "retry preserves packed chain probabilities and per-step hidden states");
+        llama_set_mtp_chain(ctx.get(), false);
+        fprintf(stderr, "PASS invalid chain flash=%d case=%d cache and retry\n", flash, int(kind));
+    }
 }
 
 static void test_masked_catchup(llama_model * model, bool flash) {
@@ -362,6 +423,13 @@ int main(int argc, char ** argv) {
     auto target = load_model(target_path);
     auto changed = load_model(changed_path);
     require(head && target && changed, "canonical head and combined models load");
+    if (argc == 2 && std::string(argv[1]) == "--invalid-chain-only") {
+        test_invalid_chain(head.get(), true);
+        head.reset(); target.reset(); changed.reset();
+        std::filesystem::remove_all(dir);
+        llama_backend_free();
+        return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--head-only") {
         auto ctx = make_context(head.get(), false);
         decode(ctx.get(), {5}, initial_hidden(), 0);
@@ -397,6 +465,7 @@ int main(int argc, char ** argv) {
         const auto bh = decode(b.get(), {5}, initial_hidden(), 0);
         const auto ch = decode(c.get(), {5}, initial_hidden(), 0);
         require(close(ah.logits, bh.logits) && close(bh.logits, ch.logits), "MTP logits independent of trunk mixer");
+        test_invalid_chain(head.get(), flash);
         test_masked_catchup(head.get(), flash);
         for (int depth : {1, 3, 4}) {
             for (int catchup : {0, 2}) {
@@ -404,6 +473,7 @@ int main(int argc, char ** argv) {
             }
         }
         test_chain(head.get(), flash, 4, 2, true, true);
+        test_chain(head.get(), flash, 32, 0, true);
     }
     test_driver(target.get(), head.get());
     test_fit(target_path, head_path);
@@ -411,4 +481,5 @@ int main(int argc, char ** argv) {
     std::filesystem::remove_all(dir);
     llama_backend_free();
     fprintf(stderr, "PASS Qwen4Exp MTP regression suite\n");
+    return 0;
 }

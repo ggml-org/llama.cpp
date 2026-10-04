@@ -81,10 +81,15 @@ See:
 ### Chained MTP (`--spec-chain N`)
 
 Chained MTP drafts N tokens in one decode. It supports dense Qwen3.5-family models and
-Qwen4Exp (Qwen3.8-Flash-Next), including its full hyper-connection hidden state. For
+Qwen4Exp (Qwen3.8-Flash-Next), including its full hyper-connection hidden state.
+Chaining is opt-in; use `--spec-chain N` to enable it. For
 recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2. Drafts that
 exceed the draft context's batch or microbatch capacity, and rounds with multiple
 drafting sequences, use sequential MTP.
+Deferred catch-up admission reserves space for the maximum draft depth; larger
+catch-up batches are processed before drafting. Both drafting paths honor the
+per-call `n_max` limit supplied by the server for remaining context and generation
+budget.
 
 Qwen4Exp MTP heads must contain all three `blk.N.nextn.hc_head_*` mixer tensors.
 The trunk's `output_hc_*` tensors are independently trained and cannot replace them.
@@ -99,6 +104,9 @@ llama-server -m target.gguf --spec-draft-model mtp-head.gguf \
 Qwen4Exp chained drafts use the full vocabulary and the sequential draft sampler's
 top-10 confidence normalization. Chaining reduces host round trips; it does not
 make target-model verification constant-cost as draft depth increases.
+Direct Qwen4Exp MTP API calls with chaining enabled must fit the complete batch
+in one microbatch and use one sequence with a nonempty output suffix after any
+catch-up rows. Invalid batches return a decode error before changing the KV cache.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)

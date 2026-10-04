@@ -2242,6 +2242,41 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const bool output_all   = cparams.embeddings;
     const bool has_samplers = !sampling.samplers.empty();
 
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.mtp_chain) {
+        // Splitting a chain restarts later steps from placeholder token/hidden inputs.
+        if (batch_inp.tokens.size() > std::min(cparams.n_batch, cparams.n_ubatch)) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain must fit in one batch and microbatch\n", __func__);
+            return -1;
+        }
+        const auto & seq_ids = batch_inp.tokens.front().seq_ids;
+        if (seq_ids.size() != 1) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires exactly one sequence\n", __func__);
+            return -1;
+        }
+        const llama_seq_id seq_id = *seq_ids.begin();
+        bool seen_output = false;
+        for (const auto & tok : batch_inp.tokens) {
+            if (tok.seq_ids.size() != 1 || tok.seq_ids.count(seq_id) == 0) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires the same sequence on every row\n", __func__);
+                return -1;
+            }
+            if (tok.id == LLAMA_TOKEN_NULL) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires token IDs\n", __func__);
+                return -1;
+            }
+            const bool output = output_all || tok.output;
+            if (seen_output && !output) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain outputs must form a contiguous suffix\n", __func__);
+                return -1;
+            }
+            seen_output |= output;
+        }
+        if (!seen_output) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires at least one output row\n", __func__);
+            return -1;
+        }
+    }
+
     // Reset each attached backend sampler's transactional draw state before this
     // round's batches are processed, so a candidate rejected earlier in
     // speculative decoding cannot leave rng_backend desynced from the
@@ -2908,7 +2943,15 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_KIMI_K3) {
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        // Chaining can be enabled after reservation. Each row can unroll a full
+        // projection, block, head and sampler, including their tensor views.
+        uint32_t nodes_per_step = 512;
+        for (const auto & lora : model.loras) {
+            nodes_per_step += lora->get_n_nodes();
+        }
+        res = std::max<uint32_t>(n_tokens * nodes_per_step, 32u * model.n_tensors());
+    } else if (model.arch == LLM_ARCH_KIMI_K3) {
         // the n_tokens*40 budget below is exhausted at ubatch 3840
         res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_HRM_TEXT) {
