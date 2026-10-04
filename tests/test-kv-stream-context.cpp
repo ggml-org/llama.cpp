@@ -24,6 +24,7 @@ static bool resident_control = false, trace_control = false;
 static bool mtp_memory_probe = false, mtp_sustained_control = false, mtp_sustained_rs_control = false;
 static bool target_drift_control = false, target_drift_rs_control = false;
 static bool rollback_probe = false;
+static bool vision_mtp_handoff = false;
 
 struct recurrent_snapshot : llama_io_write_i {
     std::vector<uint8_t> metadata;
@@ -350,7 +351,9 @@ int main(int argc,char ** argv) {
         target_drift_rs_control = target_drift_rs_control || !std::strcmp(argv[i],"--mtp-target-drift-rs");
         target_drift_control = target_drift_control || target_drift_rs_control;
         rollback_probe = rollback_probe || !std::strcmp(argv[i],"--mtp-rs-rollback-probe");
+        vision_mtp_handoff = vision_mtp_handoff || !std::strcmp(argv[i],"--vision-mtp-handoff");
     }
+    embedded_mtp_control |= vision_mtp_handoff;
     ggml_backend_load_all(); llama_backend_init();
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe;
@@ -996,6 +999,11 @@ int main(int argc,char ** argv) {
         p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
         p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
         p.kv_stream_pool_bytes = 16*1048576;
+        if (vision_mtp_handoff) {
+            p.n_ctx = 8192;
+            p.kv_stream_pool_bytes = 0;
+            p.shared_device_memory_bytes = 640*1048576;
+        }
         if (target_tg3_control) {
             p.kv_stream_pool_bytes = 0;
             p.shared_device_memory_bytes = 1800*1048576;
@@ -1156,13 +1164,19 @@ int main(int argc,char ** argv) {
             return;
         }
         t.assert_equal(size_t(257), target->tokens());
+        if (vision_mtp_handoff) t.assert_true(!context->get_compute_memory()->can_suspend_for_vision());
         auto draft_params = p;
         draft_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
         draft_params.ctx_other = context.get();
         draft_params.kv_stream_pool_bytes = 0;
+        draft_params.shared_device_memory_bytes = 0;
         draft_params.kv_stream_auxiliary_layers = 0;
         context_ptr draft(llama_init_from_model(model.get(), draft_params), llama_free);
         if (!t.assert_true(bool(draft))) return;
+        if (vision_mtp_handoff) {
+            t.assert_true("attached draft permits vision", context->get_compute_memory()->can_suspend_for_vision());
+            t.assert_true("draft cannot lend target parent", !draft->get_compute_memory()->can_suspend_for_vision());
+        }
         auto ordinary_params = draft_params;
         ordinary_params.ctx_other = nullptr;
         context_ptr ordinary_draft(llama_init_from_model(model.get(), ordinary_params), llama_free);
@@ -1425,6 +1439,33 @@ int main(int argc,char ** argv) {
                         draft.get(), saved_state.data(), saved_state.size(), 0))) return;
                 t.assert_equal(verified + 4, mtp->tokens());
             } else if (!t.assert_true(llama_kv_stream_mtp_release(context.get()))) return;
+        }
+        if (vision_mtp_handoff) {
+            auto * owner = llama_context_compute_memory(context.get());
+            const auto snapshot = [](llama_context * ctx) {
+                std::vector<uint8_t> bytes(llama_state_seq_get_size(ctx, 0));
+                bytes.resize(llama_state_seq_get_data(ctx, bytes.data(), bytes.size(), 0));
+                return bytes;
+            };
+            const auto target_state = snapshot(context.get()), draft_state = snapshot(draft.get());
+            const auto tokens = mtp->tokens();
+            const auto parent = owner->shared_parent();
+            if (!t.assert_true("populated draft permits suspension", owner->can_suspend_for_vision() && llama_context_suspend_kv_device(context.get()))) return;
+            t.assert_true("suspension retires MTP ring", owner->kv_device_suspended() && !target->has_mtp_layer());
+            t.assert_equal(size_t(0), target->device_grant_bytes());
+            t.assert_true("suspension preserves both states", snapshot(context.get()) == target_state && snapshot(draft.get()) == draft_state);
+            std::vector<ggml_backend_memory_lease_t> loans;
+            if (!t.assert_true(owner->lend_suspended({1024}, loans))) return;
+            ggml_backend_buffer_clear(ggml_backend_memory_lease_buffer(loans.front()), 0xa5);
+            t.assert_true(!llama_context_resume_kv_device(context.get(), llama_memory_text_phase::prefill));
+            for (auto * loan : loans) ggml_backend_memory_lease_free(loan);
+            if (!t.assert_true(llama_context_resume_kv_device(context.get(), llama_memory_text_phase::prefill))) return;
+            t.assert_true("resume preserves parent and admission", owner->shared_parent() == parent && owner->can_suspend_for_vision());
+            t.assert_equal(tokens, mtp->tokens());
+            t.assert_true("resume preserves both states", snapshot(context.get()) == target_state && snapshot(draft.get()) == draft_state);
+            t.assert_true(llama_memory_seq_rm(llama_get_memory(draft.get()), 0, llama_pos(verified), -1));
+            t.assert_true("resume permits new MTP lease", llama_kv_stream_mtp_prepare(context.get(), 4));
+            t.assert_true(llama_kv_stream_mtp_release(context.get()));
         }
         auto wrong_ctx = draft_params;
         wrong_ctx.n_ctx = 2048;

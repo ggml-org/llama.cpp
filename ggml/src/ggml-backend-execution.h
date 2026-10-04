@@ -20,3 +20,7 @@ GGML_API bool ggml_backend_execution_buffers_present();
 GGML_API bool ggml_backend_execution_owner(const ggml_tensor * op, ggml_backend_buffer_t & owner);
 GGML_API bool ggml_backend_execution_supports(ggml_backend_buffer_t owner, ggml_backend_dev_t device, const ggml_tensor * op);
 GGML_API ggml_status ggml_backend_execution_compute(ggml_backend_buffer_t owner, ggml_backend_t backend, ggml_tensor * op);
+
+// Managed attention may omit native output extras only when its graph uses external scratch.
+GGML_API void ggml_backend_execution_set_external_workspace(ggml_tensor * op, bool external);
+GGML_API bool ggml_backend_execution_has_external_workspace(const ggml_tensor * op);

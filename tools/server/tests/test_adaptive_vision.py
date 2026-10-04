@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline no-MTP vision qualification using local model/projector files."""
+"""Offline serial vision qualification, including bounded embedded MTP."""
 
 import argparse
 import base64
@@ -7,6 +7,7 @@ import contextlib
 import http.client
 import json
 import os
+import signal
 from pathlib import Path
 import socket
 import struct
@@ -35,7 +36,7 @@ def request(port, path, body=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data,
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=600) as response:
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, json.load(error)
@@ -55,16 +56,22 @@ def server(args, mode, extra=(), reject=False, env_extra=None):
                "--image-max-tokens", "4096", "--slots", "--no-webui", "--log-verbosity", str(getattr(args, "log_verbosity", 4))]
     if mode.startswith("arena"):
         command += ["--shared-device-memory-mib", str(args.arena_mib)]
+    if getattr(args,"mtp_length",0):
+        command += ["--spec-type","draft-mtp","--spec-draft-n-max",str(args.mtp_length),
+                    "--spec-draft-type-k","q8_0","--spec-draft-type-v","q4_0"]
     command += list(extra)
     env = dict(os.environ, LLAMA_MEDIA_MARKER="<__media__>")
     env.update(env_extra or {})
     env.pop("GGML_CUDA_ENABLE_UNIFIED_MEMORY", None)
+    if mode == "stock" and getattr(args, "stock_uvm", False):
+        env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
     with log_path.open("w") as log:
-        process = subprocess.Popen(command, stdout=log, stderr=log, env=env)
+        process = subprocess.Popen(command, stdout=log, stderr=log, env=env, start_new_session=os.name == "posix")
         try:
             if reject:
                 assert process.wait(timeout=30) != 0, f"unsupported startup admitted: {extra}"
-                assert "vision" in log_path.read_text().lower(), log_path
+                diagnostic = log_path.read_text().lower()
+                assert "vision arena" in diagnostic or "attached mtp kv streaming supports at most 3 draft tokens" in diagnostic, log_path
                 yield None
                 return
             deadline = time.monotonic() + 120
@@ -81,12 +88,23 @@ def server(args, mode, extra=(), reject=False, env_extra=None):
                 raise TimeoutError(f"{mode} startup timed out: {log_path}")
             yield port
         finally:
-            process.terminate()
+            if os.name == "posix":
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=20)
             except subprocess.TimeoutExpired:
-                process.kill()
+                if os.name == "posix":
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
                 process.wait(timeout=10)
+            if os.name == "posix":
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
 
 
 def completion(prompt, images=(), cache=False, decode=16):
@@ -119,6 +137,7 @@ def run(args, mode):
             assert len(result.get("tokens", [])) == args.decode, (name, result)
             results[name] = {"tokens": result["tokens"], "content": result["content"],
                              "cached": result.get("tokens_cached"), "timings": result.get("timings")}
+            (args.output / f"{mode}-partial.json").write_text(json.dumps(results,indent=2))
             print(mode, name, results[name]["cached"], flush=True)
         assert results["image"]["tokens"] == results["image_uncached_control"]["tokens"]
         assert (results["changed_image"]["timings"] or {})["prompt_n"] > (results["same_image_cached"]["timings"] or {})["prompt_n"]
@@ -172,9 +191,12 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--ubatch-size", type=int, default=64)
     parser.add_argument("--decode", type=int, default=16)
+    parser.add_argument("--mtp-length", type=int, choices=(0,1,2,3), default=0)
     parser.add_argument("--cache-ram-mib", type=int, default=2048)
     parser.add_argument("--background-tokens", type=int, default=128)
     parser.add_argument("--mode", choices=("arena", "stock", "compare"), default="compare")
+    parser.add_argument("--stock-uvm", action="store_true",
+                        help="allow only the eager correctness control to oversubscribe VRAM; the arena run keeps UVM disabled")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check-rejections", action="store_true")
     parser.add_argument("--skip-budget-rejection", action="store_true",
@@ -195,6 +217,7 @@ def main():
         cases = [("parallel", ("--parallel", "2")), ("mtp", ("--spec-type", "draft-mtp")),
                  ("cpu-projector", ("--no-mmproj-offload",)), ("kv-quant", ("-ctk", "f16")),
                  ("fit", ("--fit", "on")), ("embedding", ("--embedding",))]
+        cases[1] = ("mtp-length",("--spec-type","draft-mtp","--spec-draft-n-max","4"))
         for name, extra in cases:
             with server(args, f"arena-reject-{name}", extra, reject=True):
                 print("startup rejected:", name)

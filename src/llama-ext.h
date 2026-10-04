@@ -120,6 +120,9 @@ LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+// Private input seam: image embeddings and shifted target hidden rows stay distinct.
+LLAMA_API int llama_decode_mtp_embeddings(struct llama_context * ctx, const llama_batch & batch,
+    const float * hidden, size_t elements);
 
 // Set whether the context outputs the input embeddings of a specific layer
 LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);

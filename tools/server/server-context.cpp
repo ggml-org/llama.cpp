@@ -332,6 +332,7 @@ struct server_slot {
         if (ctx_dft) {
             llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         }
+        common_speculative_get_state(spec,id,cur->prompt.speculative_state);
 
         return true;
     }
@@ -340,6 +341,8 @@ struct server_slot {
         bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
+        } else if (!prompt.speculative_state.empty()) {
+            common_speculative_set_state(spec,id,prompt.speculative_state);
         }
 
         return res;
@@ -1335,7 +1338,10 @@ private:
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
             if (vision_arena) {
                 auto * owner = llama_context_compute_memory(ctx_tgt);
-                if (!owner || !owner->valid() || !owner->shares_kv_memory() || owner->has_speculative_consumer() ||
+                if (!owner || !owner->valid() || !owner->shares_kv_memory() || !owner->can_suspend_for_vision() ||
+                        (streamed_mtp && (!ctx_dft || !llama_context_compute_memory(ctx_dft) ||
+                            !llama_context_compute_memory(ctx_dft)->valid() ||
+                            !llama_context_compute_memory(ctx_dft)->borrows_serial_parent())) ||
                         !mtmd_support_vision(mctx) || mtmd_support_audio(mctx) || !mtmd_decode_use_mrope(mctx)) {
                     SRV_ERR("%s", "unsupported vision arena model/projector capabilities\n");
                     return false;
@@ -1888,7 +1894,7 @@ private:
                 send_error(task,"Prompt contains invalid tokens",ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
-            if (const auto * error = server_vision_arena_request_error(task)) {
+            if (const auto * error = server_vision_arena_request_error(task,common_params_uses_streamed_mtp(params_base))) {
                 send_error(task,error,ERROR_TYPE_NOT_SUPPORTED);
                 return false;
             }

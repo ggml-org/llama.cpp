@@ -147,6 +147,7 @@ def run(args, batch):
         if None in warm_idle or max(warm_idle)-min(warm_idle) > args.idle_tolerance_mib:
             raise AssertionError(f"post-warmup idle memory did not stabilize: {warm_idle}")
         payload = {"batch_size": batch, "context": args.context, "arena_mib": args.arena_mib,
+                   "mtp_length": getattr(args, "mtp_length", 0),
                    "image_size": args.image_size, "images": args.images, "background_tokens": args.background_tokens,
                    "sample_ms": args.sample_ms, "ready_memory": ready, "requests": rows,
                    "memory_samples": samples,
@@ -169,6 +170,7 @@ def main():
     parser.add_argument("--images", type=int, default=1)
     parser.add_argument("--background-tokens", type=int, default=6000)
     parser.add_argument("--decode", type=int, default=16)
+    parser.add_argument("--mtp-length", type=int, choices=(0, 1, 2, 3), default=0)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--sample-ms", type=int, default=50)
     parser.add_argument("--gpu", type=int, default=0)

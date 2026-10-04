@@ -281,7 +281,7 @@ int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_cont
     auto * owner = llama_context_compute_memory(target);
     auto * parent = owner ? owner->shared_parent() : nullptr;
     if (!owner || !owner->valid() || owner->kv_device_suspended() || !owner->shares_kv_memory() ||
-            owner->has_speculative_consumer() || !parent) return -1;
+            !owner->can_suspend_for_vision() || !parent) return -1;
     const auto begin_us = ggml_time_us();
     llama_context_memory_diagnostics before, during, after;
     const bool before_ok = owner->diagnostics(before);

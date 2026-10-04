@@ -153,13 +153,11 @@ void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
         ggml_backend_tensor_set(embd, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
     }
 
-    // TODO: extend llama_ubatch to differentiate between token embeddings and hidden states
-    //       for now, we assume that the hidden state is always provided as an embedding
-    //       ref: https://github.com/ggml-org/llama.cpp/pull/23643
-    if (ubatch->embd) {
+    // Image batches carry a separate hidden input; token-only MTP keeps its existing embd channel.
+    if (ubatch->embd_h || ubatch->embd) {
         GGML_ASSERT(n_embd == h->ne[0]);
 
-        ggml_backend_tensor_set(h, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
+        ggml_backend_tensor_set(h, ubatch->embd_h ? ubatch->embd_h : ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
     }
 }
 
@@ -2831,6 +2829,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        ggml_backend_execution_set_external_workspace(cur,
+            cparams.mtp_publish_host ? cparams.mtp_span_attention : cparams.kv_stream_decode);
         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);

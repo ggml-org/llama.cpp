@@ -765,6 +765,17 @@ bool llama_context_memory::has_speculative_consumer() const noexcept {
     for (auto * child : impl->serial_children) if (!child->impl->serial_prefill_only) return true;
     return false;
 }
+bool llama_context_memory::can_suspend_for_vision() const noexcept {
+    if (!valid() || !impl->shared_stream || impl->serial_borrowed) return false;
+    size_t drafts = 0;
+    for (auto * child : impl->serial_children) {
+        if (child->impl->serial_prefill_only) continue;
+        if (!child->valid() || !child->impl->serial_borrowed || child->impl->serial_suspended_borrow ||
+                child->impl->serial_parent != this) return false;
+        ++drafts;
+    }
+    return impl->shared_stream->auxiliary_cache() ? drafts == 1 : drafts == 0;
+}
 ggml_backend_buffer_t llama_context_memory::shared_parent() const noexcept { return impl->kv_parent; }
 size_t llama_context_memory::shared_parent_capacity() const noexcept { return impl->kv_parent_capacity; }
 uint64_t llama_context_memory::shared_arena_generation() const noexcept {

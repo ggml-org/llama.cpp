@@ -28,8 +28,9 @@ llama_batch_allocr::llama_batch_allocr(uint32_t n_pos_per_embd, bool allow_mixed
 bool llama_batch_allocr::init(
         const llama_batch_ext & batch_inp,
         const llama_vocab & vocab,
-        bool output_all) {
+        bool output_all, const float * hidden) {
     clear();
+    embd_h = hidden;
 
     this->vocab     = &vocab;
     this->n_embd    = batch_inp.n_embd > 0 ? batch_inp.n_embd : batch_inp.n_embd_inp;
@@ -817,6 +818,7 @@ void llama_batch_allocr::clear() {
     n_outputs = 0;
 
     batch = {};
+    embd_h = nullptr;
 
     token_vec   .clear();
     embd_vec    .clear();
@@ -869,6 +871,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
     udata->token     .resize(n_tokens);
     udata->embd      .resize(n_embd_all);
+    if (embd_h) udata->embd_h.resize(size_t(n_tokens)*n_embd);
     udata->pos       .resize(n_pos_all);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
@@ -891,6 +894,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         if (use_embd) {
             memcpy(udata->embd.data() + i*n_embd, batch.embd + (int64_t) idxs[i]*n_embd, n_embd*sizeof(float));
         }
+        if (embd_h) memcpy(udata->embd_h.data()+i*n_embd,embd_h+size_t(idxs[i])*n_embd,n_embd*sizeof(float));
 
         if (mixed) {
             udata->type[i] = is_embd_vec[idxs[i]];
@@ -952,6 +956,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.decision_order =*/ udata->decision_order.empty() ? nullptr : udata->decision_order.data(),
         /*.data         =*/ std::move(udata),
     };
+    if (embd_h) res.embd_h = res.data->embd_h.data();
 
     if (debug > 0) {
         LLAMA_LOG_DEBUG("%s: added ubatch to split:\n", __func__);

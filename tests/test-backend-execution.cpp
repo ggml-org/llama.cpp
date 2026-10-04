@@ -25,6 +25,24 @@ static const ggml_backend_execution_ops ops{
 int main(int argc, char ** argv) {
     testing t;
     ggml_backend_ptr backend(ggml_backend_cpu_init());
+    t.test("attention_workspace_hint_preserves_arithmetic_parameters", [&](testing & t) {
+        ggml_context_ptr ctx(ggml_init({8192, nullptr, true}));
+        auto * q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 32, 4, 2, 1);
+        auto * k = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 32, 256, 2, 1);
+        auto * v = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 32, 256, 2, 1);
+        auto * attention = ggml_flash_attn_ext(ctx.get(), q, k, v, nullptr, .125f, 0, 0);
+        ggml_flash_attn_ext_set_prec(attention, GGML_PREC_F32);
+        int32_t arithmetic[4];
+        std::memcpy(arithmetic, attention->op_params, sizeof(arithmetic));
+        t.assert_true(!ggml_backend_execution_has_external_workspace(attention));
+        t.assert_true(!ggml_backend_execution_has_external_workspace(q));
+        t.assert_true(!ggml_backend_execution_has_external_workspace(nullptr));
+        ggml_backend_execution_set_external_workspace(attention, true);
+        t.assert_true(ggml_backend_execution_has_external_workspace(attention));
+        t.assert_true(std::memcmp(arithmetic, attention->op_params, sizeof(arithmetic)) == 0);
+        ggml_backend_execution_set_external_workspace(attention, false);
+        t.assert_true(!ggml_backend_execution_has_external_workspace(attention));
+    });
     t.test("execution_buffer_retains_backing_and_dispatches_only_its_owner", [&](testing & t) {
         execution_probe probe;
         ggml_backend_buffer_ptr backing(ggml_backend_alloc_buffer(backend.get(),1024));
@@ -144,7 +162,7 @@ int main(int argc, char ** argv) {
         }
         t.assert_equal(4,probe.computes);
     });
-    if (argc > 1 && !std::strcmp(argv[1],"--cuda")) t.test("cuda_managed_attention_does_not_reserve_stock_kv_conversion", [&](testing & t) {
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda")) t.test("cuda_managed_attention_respects_native_and_external_workspace_contracts", [&](testing & t) {
         ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0");
         if (!t.assert_true(dev != nullptr)) return;
         auto * buft = ggml_backend_dev_buffer_type(dev);
@@ -170,7 +188,28 @@ int main(int argc, char ** argv) {
         auto * base = static_cast<char *>(ggml_backend_buffer_get_base(managed.get()));
         if (!t.assert_true(ggml_backend_tensor_alloc(managed.get(), k, base) == GGML_STATUS_SUCCESS &&
                 ggml_backend_tensor_alloc(managed.get(), v, base + ggml_nbytes(k)) == GGML_STATUS_SUCCESS)) return;
+        // Short prefill uses native MMA conversion scratch even with a managed KV owner.
+        t.assert_equal(stock, ggml_backend_buft_get_alloc_size(buft, attention));
+        t.assert_equal(stock_prefill, ggml_backend_buft_get_alloc_size(buft, prefill_attention));
+        ggml_flash_attn_ext_set_prec(attention, GGML_PREC_F32);
+        ggml_backend_execution_set_external_workspace(attention, true);
+        t.assert_true(ggml_backend_execution_has_external_workspace(attention));
+        t.assert_equal(GGML_PREC_F32, ggml_flash_attn_ext_get_prec(attention));
         t.assert_equal(ggml_nbytes(attention), ggml_backend_buft_get_alloc_size(buft, attention));
+        ggml_backend_execution_set_external_workspace(attention, false);
+        t.assert_equal(stock, ggml_backend_buft_get_alloc_size(buft, attention));
+        for (int64_t queries : {1, 2, 3}) {
+            auto * short_q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 256, queries, 24, 1);
+            auto * short_mask = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 512, queries, 1, 1);
+            auto * short_attention = ggml_flash_attn_ext(ctx.get(), short_q, k, v, short_mask, 1.0f/16, 0, 0);
+            k->buffer = v->buffer = nullptr;
+            const size_t native_size = ggml_backend_buft_get_alloc_size(buft, short_attention);
+            k->buffer = v->buffer = managed.get();
+            t.assert_equal(native_size, ggml_backend_buft_get_alloc_size(buft, short_attention));
+            ggml_backend_execution_set_external_workspace(short_attention, true);
+            t.assert_equal(ggml_nbytes(short_attention), ggml_backend_buft_get_alloc_size(buft, short_attention));
+        }
+        ggml_backend_execution_set_external_workspace(prefill_attention, true);
         t.assert_equal(stock_prefill, ggml_backend_buft_get_alloc_size(buft, prefill_attention));
         managed_ops.supports = [](void *, const ggml_tensor *) { return false; };
         ggml_backend_buffer_ptr unsupported(ggml_backend_execution_buffer_new(dev, backing.get(), managed_ops, &probe));

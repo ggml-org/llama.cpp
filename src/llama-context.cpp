@@ -835,9 +835,21 @@ void llama_context::sched_reserve() {
     const uint32_t n_outputs_pp = std::min(n_tokens, cparams.n_outputs_max);
 
     auto prepare_arenas = [&]() {
+        struct attention_intent_restore {
+            llama_cparams & params;
+            bool decode, mtp;
+            ~attention_intent_restore() {
+                params.kv_stream_decode = decode;
+                params.mtp_span_attention = mtp;
+            }
+        } restore{cparams, cparams.kv_stream_decode, cparams.mtp_span_attention};
         std::vector<size_t> measurements(2*backend_ptrs.size());
+        cparams.kv_stream_decode = false;
+        cparams.mtp_span_attention = false;
         auto * gf_pp = graph_reserve(
             n_tokens, n_seqs, n_outputs_pp, mctx.get(), true, measurements.data());
+        cparams.kv_stream_decode = cparams.kv_streaming();
+        cparams.mtp_span_attention = cparams.mtp_publish_host;
         auto * gf_tg = graph_reserve(
             n_seqs, n_seqs, n_seqs, mctx.get(), true,
             measurements.data() + backend_ptrs.size());
@@ -1694,11 +1706,12 @@ bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_
     if (!cache || !graph.t_mtp_k || !graph.t_mtp_v || !sched || !ubatch.n_tokens ||
             ubatch.n_seqs_unq != 1 || !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 ||
             !ubatch.pos || ubatch.pos[0] < 0) return false;
-    const size_t first = size_t(ubatch.pos[0]);
+    if (cache->tokens() < ubatch.n_tokens) return false;
+    const size_t first = cache->tokens()-ubatch.n_tokens;
     if (first > cache->tokens() || first > cache->host()->config().context_tokens ||
             ubatch.n_tokens > cache->host()->config().context_tokens - first) return false;
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-        if (ubatch.pos[i] != llama_pos(first + i)) return false;
+        if (ubatch.pos[i] < 0) return false;
     }
     auto * target_hybrid = mtp_target_ctx ?
         dynamic_cast<llama_memory_hybrid *>(llama_get_memory(mtp_target_ctx)) : nullptr;
@@ -1766,7 +1779,7 @@ llm_graph_result * llama_context::process_ubatch(
             static_cast<llama_kv_cache_context *>(mctx)->mtp_span_append(ubatch) &&
             target->mtp_layer_plan(1) != nullptr;
         cparams.mtp_span_attention = eligible &&
-            draft->set_mtp_span_mode(true, size_t(ubatch.pos[0]), ubatch.n_tokens);
+            draft->set_mtp_span_mode(true, draft->mtp_auxiliary_cache()->tokens(), ubatch.n_tokens);
         if (!cparams.mtp_span_attention) draft->set_mtp_span_mode(false);
     }
 
@@ -2118,7 +2131,45 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
     return false; // all sequences use backend sampling
 }
 
+int llama_context::decode_mtp_embeddings(const llama_batch & batch, const float * hidden, size_t elements) {
+    const auto width = model.hparams.n_embd_out();
+    if (!hidden || batch.n_tokens <= 0 || batch.token || !batch.embd || !batch.pos ||
+            width <= 0 || model.hparams.n_embd_inp() != width || size_t(batch.n_tokens) > SIZE_MAX/size_t(width) ||
+            elements != size_t(batch.n_tokens)*size_t(width)) return -1;
+    llama_batch_compat compat(this,batch);
+    return decode_mtp_embeddings(*compat.batch_ext,hidden,elements);
+}
+
+int llama_context::decode_mtp_embeddings(const llama_batch_ext & batch, const float * hidden, size_t elements) {
+    const auto width = model.hparams.n_embd_out();
+    if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP || model.arch != LLM_ARCH_QWEN35 ||
+            !hidden || mtp_visual_hidden || batch.tokens.empty() || batch.tokens.size() > cparams.n_batch ||
+            width <= 0 || model.hparams.n_embd_inp() != width || batch.n_embd != size_t(width) ||
+            batch.tokens.size() > SIZE_MAX/size_t(width) || elements != batch.tokens.size()*size_t(width)) return -1;
+    for (const auto & token : batch.tokens) {
+        if (token.id != LLAMA_TOKEN_NULL || !token.has_embd || token.pos[0] < 0) return -1;
+    }
+    struct hidden_scope {
+        const float * & pointer;
+        ~hidden_scope() { pointer = nullptr; }
+    } scope{mtp_visual_hidden};
+    mtp_visual_hidden = hidden;
+    return decode(batch);
+}
+
+int llama_decode_mtp_embeddings(llama_context * ctx, const llama_batch & batch, const float * hidden, size_t elements) {
+    try { return ctx ? ctx->decode_mtp_embeddings(batch,hidden,elements) : -1; } catch (...) { return -1; }
+}
+
+int llama_decode_mtp_embeddings(llama_context * ctx, const llama_batch_ext & batch, const float * hidden, size_t elements) {
+    try { return ctx ? ctx->decode_mtp_embeddings(batch,hidden,elements) : -1; } catch (...) { return -1; }
+}
+
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model.arch == LLM_ARCH_QWEN35 && !mtp_visual_hidden &&
+            std::any_of(batch_inp.tokens.begin(), batch_inp.tokens.end(), [](const auto & token) {
+                return token.id == LLAMA_TOKEN_NULL && token.has_embd;
+            })) return -1;
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -2146,7 +2197,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
         const auto previous_position = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_max(0);
         if (!llama_kv_stream_validate_append(batch_inp, {first, cparams.n_ctx_seq, previous_position,
-                model.hparams.n_pos_per_embd(), cparams.kv_stream_decode, cparams.kv_stream_auxiliary_layers != 0})) {
+                model.hparams.n_pos_per_embd(), cparams.kv_stream_decode, false})) {
             LLAMA_LOG_ERROR("%s: KV streaming rejected target payload, positions or sequence\n",__func__); return -1;
         }
     }
@@ -2190,7 +2241,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, output_all)) {
+    if (!balloc->init(batch_inp, vocab, output_all, mtp_visual_hidden)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -2264,8 +2315,18 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) :
             std::min(cparams.n_ctx, cparams.n_ubatch);
         const uint32_t reserve_outputs = std::min(reserve_tokens, cparams.n_outputs_max);
-        if (!reserve_context || !graph_reserve(reserve_tokens, 1, reserve_outputs,
-                reserve_context.get())) {
+        ggml_cgraph * reserved;
+        {
+            struct span_intent_restore {
+                bool & value;
+                bool saved;
+                ~span_intent_restore() { value = saved; }
+            } restore{cparams.mtp_span_attention, cparams.mtp_span_attention};
+            cparams.mtp_span_attention = text_phase == llama_memory_text_phase::decode;
+            reserved = reserve_context ? graph_reserve(reserve_tokens, 1, reserve_outputs,
+                    reserve_context.get()) : nullptr;
+        }
+        if (!reserved) {
             LLAMA_LOG_ERROR("%s: failed to rebuild MTP graph after shared scratch handoff\n", __func__);
             return -2;
         }

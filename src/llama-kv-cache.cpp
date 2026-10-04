@@ -536,7 +536,9 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     }
     if (mtp_proxy && p1 > p0) {
         if (seq_id != 0 && seq_id != -1) return false;
-        if (!mtp_proxy->remove_suffix(size_t(p0), size_t(p1))) return false;
+        size_t retained;
+        if (!llama_kv_stream_suffix(v_cells[0],attached_mtp_cache->tokens(),p0,p1,retained) ||
+                !mtp_proxy->remove_suffix(retained,std::numeric_limits<size_t>::max())) return false;
     }
 
     if (seq_id >= 0) {
@@ -2382,7 +2384,7 @@ const slot_info_vec_t *   sinfos_in) {
                 io.flush_tensor_reads();
                 const auto & cells = v_cells[strm];
                 res = strm == 0 && sinfo.is_contiguous() && sinfo.head() == 0 && cell_count <= kv_stream->host()->config().context_tokens;
-                res = res && llama_kv_stream_validate_cells(cells, cell_count, kv_stream->auxiliary_cache() != nullptr);
+                res = res && llama_kv_stream_validate_cells(cells, cell_count, false);
                 res = res && kv_stream->restore(cell_count);
                 if (res) v_heads[strm] = cell_count;
             }
@@ -2402,7 +2404,8 @@ const slot_info_vec_t *   sinfos_in) {
                     key->nb[1] == layout.k_token_bytes &&
                     value->nb[1] == layout.v_token_bytes;
                 for (uint32_t i = 0; res && i < cell_count; ++i)
-                    res = cells.pos_get(sinfo.idxs[0][i]) == llama_pos(i) &&
+                    res = cells.pos_get(sinfo.idxs[0][i]) >= 0 &&
+                        (i == 0 || cells.pos_get(sinfo.idxs[0][i]) >= cells.pos_get(sinfo.idxs[0][i-1])) &&
                         cells.seq_has(sinfo.idxs[0][i], 0);
                 if (res) res = mtp_proxy->remove_suffix(0, std::numeric_limits<size_t>::max());
                 const auto gather = [&](ggml_tensor * source, size_t stride,
@@ -3152,7 +3155,7 @@ bool llama_kv_cache_context::kv_stream_begin(const llama_ubatch & ubatch, bool d
     const llama_batch batch{int32_t(ubatch.n_tokens),ubatch.token,ubatch.embd,ubatch.pos,
         ubatch.n_seq_id,ubatch.seq_id,ubatch.output};
     if (!llama_kv_stream_validate_append(batch, {stream->tokens(), size_t(kv->get_size()), kv->seq_pos_max(0),
-            ubatch.n_pos, decode, stream->auxiliary_cache() != nullptr})) return false;
+            ubatch.n_pos, decode, false})) return false;
     const bool accepted = stream->begin(stream->tokens()+ubatch.n_tokens,ubatch.n_tokens,decode);
     if (!accepted) LLAMA_LOG_WARN("%s: session begin rejected: tokens=%zu rows=%u decode=%d revision=%llu\n",
         __func__, stream->tokens(), ubatch.n_tokens, int(decode), (unsigned long long) stream->binding_view().revision);
@@ -3167,9 +3170,11 @@ bool llama_kv_cache_context::mtp_span_append(const llama_ubatch & ubatch) const 
     if (info.empty() || !info.is_contiguous() || info.s0 != 0 || info.s1 != 0 ||
             info.strm.size() != 1 || info.strm[0] != 0 ||
             info.head() != cache->tokens() || info.size() != ubatch.n_tokens) return false;
-    for (uint32_t i = 0; i < ubatch.n_tokens; ++i)
-        if (ubatch.pos[i] != llama_pos(cache->tokens() + i)) return false;
-    return true;
+    const llama_batch batch{int32_t(ubatch.n_tokens),ubatch.token,ubatch.token ? nullptr : ubatch.embd,
+        ubatch.pos,ubatch.n_seq_id,ubatch.seq_id,ubatch.output};
+    const auto previous = cache->tokens() ? kv->get_cells(0).pos_get(uint32_t(cache->tokens()-1)) : -1;
+    return llama_kv_stream_validate_append(batch,{cache->tokens(),kv->get_size(),previous,ubatch.n_pos,
+        ubatch.token != nullptr,false});
 }
 
 

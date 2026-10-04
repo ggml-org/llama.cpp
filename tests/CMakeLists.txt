@@ -215,6 +215,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         if (Python3_Interpreter_FOUND)
             llama_test_cmd(${Python3_EXECUTABLE} NAME test-adaptive-vision-measurements
                 ARGS -B ${PROJECT_SOURCE_DIR}/tools/server/tests/test_adaptive_vision_measurements.py)
+            llama_test_cmd(${Python3_EXECUTABLE} NAME test-adaptive-vision-harness
+                ARGS -B ${PROJECT_SOURCE_DIR}/tools/server/tests/test_adaptive_vision_harness.py)
         endif()
     endif()
 

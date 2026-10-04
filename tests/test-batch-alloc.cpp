@@ -7,6 +7,9 @@
 #include "../src/llama-hparams.h"
 #include "../src/llama-memory.h"
 #include "../src/llama-vocab.h"
+#include "../src/llama-graph.h"
+#include "ggml-cpp.h"
+#include "ggml-cpu.h"
 
 #include <cstdlib>
 #include <initializer_list>
@@ -1193,6 +1196,52 @@ int main(int argc, char ** argv) {
     t.test("keep_tail",      test_keep_tail);
     t.test("mrope",          test_mrope);
     t.test("mtp_embd_width", test_mtp_embd_width);
+
+    t.test("mtp_visual_hidden_rows_are_owned_across_native_batch_splits", [](testing & t) {
+        llama_vocab vocab;
+        batch_builder builder(2, nullptr, 1, 4);
+        for (int i = 0; i < 5; ++i) {
+            const llama_pos pos[4] = {i/2,4+i,8-i,0};
+            builder.add_embd(pos,{0},true);
+        }
+        std::vector<float> hidden{10,11,20,21,30,31,40,41,50,51};
+        llama_batch_allocr allocator(4);
+        if (!t.assert_true(allocator.init(builder.b,vocab,false,hidden.data()))) return;
+        const auto first = allocator.split_simple(3), second = allocator.split_simple(3);
+        if (!t.assert_true(first.embd_h && second.embd_h)) return;
+        t.assert_equal(uint32_t(3),first.n_tokens);
+        t.assert_equal(uint32_t(2),second.n_tokens);
+        for (size_t i = 0; i < 6; ++i) t.assert_equal(hidden[i],first.embd_h[i]);
+        for (size_t i = 0; i < 4; ++i) t.assert_equal(hidden[6+i],second.embd_h[i]);
+        t.assert_equal(300.0f,second.embd[0]);
+        t.assert_equal(llama_pos(7),second.pos[2]);
+        std::fill(hidden.begin(),hidden.end(),-1);
+        t.assert_equal(10.0f,first.embd_h[0]);
+        t.assert_equal(40.0f,second.embd_h[0]);
+        if (!t.assert_true(allocator.init(builder.b,vocab,false))) return;
+        t.assert_true(allocator.split_simple(1).embd_h == nullptr);
+    });
+
+    t.test("mtp_graph_keeps_visual_and_hidden_planes_separate", [](testing & t) {
+        ggml_context_ptr ctx(ggml_init({4096,nullptr,true}));
+        llm_graph_input_embd_h input(2);
+        input.tokens = ggml_new_tensor_1d(ctx.get(),GGML_TYPE_I32,2);
+        input.embd = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,2,2);
+        input.h = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,2,2);
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(),ggml_backend_cpu_buffer_type()));
+        if (!t.assert_true(bool(buffer))) return;
+        float image[]{1,2,3,4}, hidden[]{5,6,7,8}, actual[4];
+        llama_ubatch batch{}; batch.n_tokens = 2; batch.embd = image; batch.embd_h = hidden;
+        input.set_input(&batch);
+        ggml_backend_tensor_get(input.embd,actual,0,sizeof(actual));
+        for (size_t i = 0; i < 4; ++i) t.assert_equal(image[i],actual[i]);
+        ggml_backend_tensor_get(input.h,actual,0,sizeof(actual));
+        for (size_t i = 0; i < 4; ++i) t.assert_equal(hidden[i],actual[i]);
+        llama_token tokens[]{1,2}; batch.token = tokens; batch.embd = hidden; batch.embd_h = nullptr;
+        input.set_input(&batch);
+        ggml_backend_tensor_get(input.h,actual,0,sizeof(actual));
+        for (size_t i = 0; i < 4; ++i) t.assert_equal(hidden[i],actual[i]);
+    });
 
     return t.summary();
 }

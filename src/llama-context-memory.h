@@ -82,6 +82,8 @@ public:
     LLAMA_API const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
     LLAMA_API bool shares_kv_memory() const noexcept;
     LLAMA_API bool has_speculative_consumer() const noexcept;
+    // Vision can suspend only the known host-backed auxiliary cache and its registered serial draft.
+    LLAMA_API bool can_suspend_for_vision() const noexcept;
     bool borrows_serial_parent() const noexcept;
     LLAMA_API ggml_backend_buffer_t shared_parent() const noexcept;
     size_t shared_parent_capacity() const noexcept;

@@ -48,17 +48,21 @@ const char * server_vision_arena_config_error(const common_params & params) {
     if (params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0 ||
             params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
         return "vision arena is currently qualified with -fa on, Q8_0 K and Q4_0 V";
-    if (params.kv_stream_auxiliary_layers || params.speculative.has_dft())
-        return "vision arena does not yet support draft/MTP execution";
-    for (auto type : params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE)
-        return "vision arena does not yet support speculation";
+    const bool mtp = common_params_uses_streamed_mtp(params);
+    if (params.speculative.has_dft() || (params.kv_stream_auxiliary_layers && !mtp) ||
+            params.kv_stream_auxiliary_layers > 1 || (mtp && (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 3)))
+        return "vision arena supports only serial embedded MTP with 1-3 draft tokens";
+    for (auto type : params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP)
+        return "vision arena does not support this speculation mode";
     return nullptr;
 }
 
-const char * server_vision_arena_request_error(const server_task & task) {
+const char * server_vision_arena_request_error(const server_task & task, bool embedded_mtp) {
     if (task.type != SERVER_TASK_TYPE_COMPLETION || !task.params.lora.empty()) return "vision arena supports completion requests without LoRA";
     if (task.params.speculative.has_dft()) return "vision arena request cannot enable a draft model";
-    for (auto type : task.params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE) return "vision arena request cannot enable speculation";
+    for (auto type : task.params.speculative.types) if (type != COMMON_SPECULATIVE_TYPE_NONE &&
+            !(embedded_mtp && type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && task.params.speculative.draft.n_max >= 1 && task.params.speculative.draft.n_max <= 3))
+        return "vision arena request cannot change the qualified speculation mode";
     try {
         for (size_t i = 0; i < task.tokens.size();) {
             if (task.tokens[i] != LLAMA_TOKEN_NULL) { ++i; continue; }

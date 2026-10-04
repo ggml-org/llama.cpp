@@ -1408,6 +1408,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     int32_t n_mtp_layers  = 1;
     bool    is_mem_shared = false;   // gemma4
     bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
+    bool    visual_catchup = false;
 
     // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
     // The last h-row of one process() call needs the first token of the NEXT
@@ -1437,6 +1438,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         GGML_ASSERT(n_embd == llama_model_n_embd_out(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+        char architecture[64] = {};
+        llama_model_meta_val_str(llama_get_model(ctx_dft), "general.architecture", architecture, sizeof(architecture));
+        visual_catchup = std::strcmp(architecture, "qwen35") == 0;
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1527,7 +1531,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
 
-        if (pos_max < N - 1 && !is_mem_shared) {
+        if (pos_max < 0) std::fill(pending_h[seq_id].begin(),pending_h[seq_id].end(),0.0f);
+        if (pos_max < N - 1 && !is_mem_shared && std::find(prompt.begin(),prompt.end(),LLAMA_TOKEN_NULL) == prompt.end()) {
             SPC_WRN("ctx_dft pos_max=%d < N-1=%d - "
                     "process() hook may not have run on every prefill ubatch "
                     "(need_embd / output flag on every prompt position?). "
@@ -1541,8 +1546,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             return true;
         }
 
-        // TODO: how to make it work with vision tokens?
-        if (!batch_in.has_token() || batch_in.has_embd()) {
+        const bool visual = !batch_in.has_token() && batch_in.has_embd();
+        if (visual && !visual_catchup) return true;
+        if (!visual && (!batch_in.has_token() || batch_in.has_embd())) {
             return true;
         }
 
@@ -1568,8 +1574,28 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
-        // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
-        if (!is_mem_shared) {
+        if (visual) {
+            if (is_mem_shared || chain_heads || n_seq != 1 || i_batch_beg[0] != 0 ||
+                    i_batch_end[0] != n_tokens-1) return false;
+            for (const auto & entry : batch_in.tokens) {
+                if (entry.id != LLAMA_TOKEN_NULL || !entry.embd.data || entry.embd.n_rows != 1 ||
+                        entry.embd.n_embd != size_t(n_embd) || entry.seq_id != 0 ||
+                        !entry.seq_ids_extra.empty()) return false;
+            }
+            std::vector<float> shifted(size_t(n_tokens)*size_t(n_embd));
+            std::memcpy(shifted.data(),pending_h[0].data(),row_bytes);
+            const auto * h = llama_get_embeddings_nextn(ctx_tgt);
+            if (!h) return false;
+            if (n_tokens > 1) std::memcpy(shifted.data()+n_embd,h,row_bytes*size_t(n_tokens-1));
+            common_batch visual_batch(ctx_dft);
+            if (visual_batch.n_pos != batch_in.n_pos) return false;
+            visual_batch.tokens = batch_in.tokens;
+            if (n_tokens <= 4 && !llama_kv_stream_mtp_prepare(ctx_tgt,uint32_t(std::clamp(params.n_max,0,4)))) return false;
+            if (llama_decode_mtp_embeddings(ctx_dft,*visual_batch.get(),shifted.data(),shifted.size()) != 0) {
+                llama_kv_stream_mtp_release(ctx_tgt);
+                return false;
+            }
+        } else if (!is_mem_shared) {
             batch.clear();
 
             // pair each token with the tgt embedding shifted right by one position, and
@@ -1841,6 +1867,26 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 !llama_kv_stream_mtp_release(params.ctx_tgt)) {
             SPC_ERR("%s", "failed to release the rejected adaptive MTP KV lease\n");
         }
+    }
+
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
+        if (seq_id < 0 || seq_id >= llama_seq_id(n_seq)) return false;
+        const uint32_t version = 1;
+        const size_t bytes = size_t(n_embd)*sizeof(float);
+        data.resize(sizeof(version)+bytes);
+        std::memcpy(data.data(),&version,sizeof(version));
+        std::memcpy(data.data()+sizeof(version),pending_h[seq_id].data(),bytes);
+        return true;
+    }
+
+    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+        if (seq_id < 0 || seq_id >= llama_seq_id(n_seq) || data.size() != sizeof(uint32_t)+size_t(n_embd)*sizeof(float)) return;
+        uint32_t version;
+        std::memcpy(&version,data.data(),sizeof(version));
+        if (version != 1) return;
+        std::memcpy(pending_h[seq_id].data(),data.data()+sizeof(version),size_t(n_embd)*sizeof(float));
+        verify_h_rows[seq_id] = 0;
+        verify_h[seq_id].clear();
     }
 };
 
