@@ -4983,6 +4983,9 @@ static bool ggml_sycl_mul_mat_glu_mmvq_plain(ggml_backend_sycl_context & ctx, gg
     if ((extra_u && extra_u->optimized_feature.reorder) || (extra_g && extra_g->optimized_feature.reorder)) {
         return false;
     }
+    if (!ggml_sycl_mul_mat_vec_q_glu_plain_supported(wg->type, wu->type, ggml_get_glu_op(glu), (int) wu->ne[0])) {
+        return false;
+    }
 
     // log the up mat-mul: glu's own srcs are the two intermediates the fusion never materialises
     scope_op_debug_print scope_dbg_print(__func__, up, /*num_src=*/2, " : fused with gate + GLU (plain layout)");
@@ -5020,6 +5023,10 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
     const ggml_tensor * wu   = up->src[0];
     const ggml_tensor * wg   = gate->src[0];
     const ggml_tensor * act  = up->src[1];
+
+    if (act->ne[1] > MMVQ_MAX_BATCH_SIZE) {
+        return false;
+    }
 
     // this writes glu->data directly rather than the per-device row slices that
     // ggml_sycl_op_mul_mat() stitches back together, so it cannot serve split weights
