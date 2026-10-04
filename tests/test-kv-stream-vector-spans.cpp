@@ -1,5 +1,7 @@
 #include "kv-stream-block-test.h"
 #include "../ggml/src/ggml-cuda/kv-stream-attention-dispatch.h"
+#include "../ggml/src/ggml-cuda/kv-stream-attention-plan.h"
+#include "../ggml/src/ggml-backend-execution.h"
 
 #include <algorithm>
 #include <chrono>
@@ -295,6 +297,96 @@ int main(int argc, char ** argv) {
             ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
         t.assert_true(get && get() && get()->version >= 8 && get()->spans && get()->spans_workspace && get()->convert_mma_rows);
+    });
+
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test("stock_selected_plan_matches_workspace_and_launch", [](testing & t) {
+        using status = ggml_cuda_kv_stream_plan_status;
+        using family = ggml_cuda_kv_stream_kernel_family;
+        using style = ggml_cuda_kv_stream_execution_style;
+        using query_t = status (*)(ggml_backend_t, const ggml_tensor *, const ggml_kv_stream_span_plan_view *, style, ggml_cuda_kv_stream_attention_plan &);
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        auto * reg = ggml_backend_dev_backend_reg(dev);
+        auto query = reinterpret_cast<query_t>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kv_stream_attention_plan"));
+        if (!t.assert_true(query != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 1025, false, 2, 4, 16);
+        if (!t.assert_true(ops && f.attach())) return;
+        auto pin = f.binding->acquire();
+        for (uint32_t queries : {1u, 2u, 3u, 4u}) {
+            block_inputs input(f, 513, queries, false, 24);
+            auto storage = span_storage::create(f, 0, 513, queries, {0, 256, 512, 513}, true);
+            if (!t.assert_true(pin && storage && storage->plan)) return;
+            ggml_context_ptr ctx(ggml_init({65536, nullptr, true}));
+            auto * node = f.resident->attention(ctx.get(), 0, input.q, input.mask, input.active, 1.0f/16);
+            if (!t.assert_true(node != nullptr)) return;
+            ggml_tensor op = *node;
+            op.buffer = input.output->buffer; op.data = input.output->data;
+            ggml_kv_stream_span_plan_view view;
+            if (!t.assert_true(ggml_kv_stream_span_plan_get_view(storage->plan, view))) return;
+            ggml_cuda_kv_stream_attention_plan plan;
+            if (!t.assert_true(query(backend.get(), &op, &view, style::spanned, plan) == status::success)) return;
+            t.assert_true(plan.family == (queries <= 2 ? family::vector : family::mma));
+            size_t bytes = 0;
+            t.assert_true(ops->spans_workspace(backend.get(), &op, storage->plan, bytes));
+            t.assert_equal(bytes, plan.requirements.scratch_bytes);
+            t.assert_equal(ggml_nbytes(&op), plan.output_allocation_bytes);
+            t.assert_true(plan.requirements.backend_scratch_known && plan.requirements.shared_bytes_known);
+            ggml_cuda_kv_stream_attention_plan native;
+            t.assert_true(query(backend.get(), &op, nullptr, style::native, native) == status::success);
+            t.assert_true(native.family == plan.family);
+            t.assert_true(!native.requirements.backend_scratch_known && !native.requirements.shared_bytes_known);
+            t.assert_equal(ggml_backend_buffer_get_alloc_size(op.buffer, &op), native.output_allocation_bytes);
+            if (queries >= 3) t.assert_true(native.output_allocation_bytes > ggml_nbytes(&op));
+            ggml_tensor metadata_only = op, q = *op.src[0], k = *op.src[1], v = *op.src[2], mask = *op.src[3];
+            metadata_only.buffer = q.buffer = k.buffer = v.buffer = mask.buffer = nullptr;
+            metadata_only.data = q.data = k.data = v.data = mask.data = nullptr;
+            metadata_only.src[0] = &q; metadata_only.src[1] = &k; metadata_only.src[2] = &v; metadata_only.src[3] = &mask;
+            ggml_cuda_kv_stream_attention_plan described;
+            t.assert_true(query(backend.get(), &metadata_only, &view, style::spanned, described) == status::success);
+            t.assert_equal(bytes, described.requirements.scratch_bytes);
+            ++k.nb[1];
+            t.assert_true(query(backend.get(), &metadata_only, &view, style::spanned, described) == status::unsupported_geometry);
+            --k.nb[1];
+            t.assert_equal(bytes, described.requirements.scratch_bytes);
+            auto stale = view; ++stale.query_tokens;
+            t.assert_true(query(backend.get(), &op, &stale, style::spanned, described) == status::invalid_metadata);
+            t.assert_equal(bytes, described.requirements.scratch_bytes);
+            block_workspace exact(f, bytes, 301), short_grant(f, bytes-1, 302);
+            t.assert_true(!ops->spans(backend.get(), &op, storage->plan, ggml_backend_memory_lease_buffer(short_grant.lease.get())));
+            const auto sentinel = input.read();
+            t.assert_true(std::all_of(sentinel.begin(), sentinel.end(), [](float value) { return value == -77; }));
+            t.assert_true(ops->spans(backend.get(), &op, storage->plan, ggml_backend_memory_lease_buffer(exact.lease.get())));
+            ggml_backend_synchronize(backend.get());
+            const auto expected = stock_attention(f, input, 0);
+            close_values(t, expected, input.read(), 1e-5f);
+        }
+    });
+
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test("native_fallback_cannot_use_a_bounded_output_declaration", [](testing & t) {
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 1024);
+        block_inputs input(f, 513, 4);
+        stock_attention_case stock(f, input);
+        ggml_tensor op = *ggml_graph_node(stock.graph, ggml_graph_n_nodes(stock.graph)-1);
+        ggml_backend_buffer_ptr parent(ggml_backend_alloc_buffer(backend.get(), 4*1024*1024));
+        if (!t.assert_true(ops && parent)) return;
+        ggml_backend_buffer_clear(parent.get(), 0x5a);
+        op.buffer = parent.get(); op.data = ggml_backend_buffer_get_base(parent.get());
+        ggml_backend_execution_set_external_workspace(&op, true);
+        t.assert_true(!ops->direct(backend.get(), &op));
+        ggml_tensor canary = op;
+        canary.type = GGML_TYPE_I8; canary.op = GGML_OP_NONE;
+        canary.data = static_cast<char *>(op.data) + ggml_nbytes(&op) + 128;
+        canary.ne[0] = 128; canary.nb[0] = 1;
+        for (int i = 1; i < 4; ++i) { canary.ne[i] = 1; canary.nb[i] = 128; }
+        uint8_t bytes[128]; ggml_backend_tensor_get(&canary, bytes, 0, sizeof(bytes));
+        for (uint8_t value : bytes) t.assert_equal(uint8_t(0x5a), value);
     });
 
     if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(

@@ -6286,6 +6286,7 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     if (strcmp(name,"ggml_backend_cuda_graph_is_capturing") == 0) return (void *)ggml_backend_cuda_graph_is_capturing;
     if (strcmp(name, "ggml_backend_kv_stream_partial_ops") == 0) return (void *)ggml_cuda_kv_stream_partial_ops;
+    if (strcmp(name, "ggml_backend_cuda_kv_stream_attention_plan") == 0) return (void *)ggml_cuda_kv_stream_attention_plan_query;
     if (strcmp(name, "ggml_backend_kv_stream_copy_ops") == 0) return (void *)ggml_cuda_kv_stream_copy_ops;
     if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_type") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_type;
     if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_register") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_register;

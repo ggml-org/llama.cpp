@@ -7,6 +7,7 @@
 #include "llama-kv-stream-prefetch.h"
 #include "llama-kv-stream-feedback.h"
 #include "../ggml/src/ggml-cuda-graph.h"
+#include "../ggml/src/ggml-backend-execution.h"
 #include "llama-impl.h"
 
 #include <cmath>
@@ -1110,6 +1111,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         op = *output; op.op = GGML_OP_FLASH_ATTN_EXT;
         std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+        ggml_backend_execution_set_external_workspace(&op, ggml_backend_execution_has_external_workspace(output));
         op.src[0] = q; op.src[1] = s.fallback ? &ck : &k; op.src[2] = s.fallback ? &cv : &v; op.src[3] = &slice;
         return ops->supports(s.backend,&op);
     };
@@ -1287,6 +1289,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         op=*output; op.op=GGML_OP_FLASH_ATTN_EXT;
         std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+        ggml_backend_execution_set_external_workspace(&op, ggml_backend_execution_has_external_workspace(output));
         op.src[0]=q; op.src[1]=&k; op.src[2]=&v; op.src[3]=&slice;
         ggml_kv_stream_span_plan_t raw=nullptr;
         if (ggml_kv_stream_span_plan_make(s.binding.config.shape,sources.data(),sources.size(),
@@ -1341,6 +1344,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         op = *output; op.op = GGML_OP_FLASH_ATTN_EXT;
         std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+        ggml_backend_execution_set_external_workspace(&op, ggml_backend_execution_has_external_workspace(output));
         op.src[0] = q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &slice;
         if (!ops->direct(s.backend,&op)) return false;
         ++s.attention_calls; direct_result = true; return finish();
