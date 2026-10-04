@@ -23,6 +23,10 @@ on:
       'ggml/src/ggml-zdnn/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

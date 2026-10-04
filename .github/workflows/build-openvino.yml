@@ -22,6 +22,10 @@ on:
       'ggml/src/ggml-openvino/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -93,6 +97,11 @@ jobs:
 
   openvino-windows-2022:
     runs-on: windows-2022
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile

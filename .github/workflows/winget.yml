@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '28 5 * * *' # Update every day at 5:28 UTC
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   update:
     name: Update Winget Package
@@ -31,10 +35,11 @@ jobs:
               repo: context.repo.repo,
             });
             const { tag_name: version, assets: assets } = releases.find(({assets}) => assets.find(asset => asset.name.includes('win-vulkan')));
-            const { browser_download_url: asset_url } = assets.find(asset => asset.name.includes('win-vulkan'));
+            const { browser_download_url: asset_url_x64 } = assets.find(asset => asset.name.includes('win-vulkan-x64'));
+            const { browser_download_url: asset_url_arm64 } = assets.find(asset => asset.name.includes('win-vulkan-arm64'));
             console.log("Latest release:", version);
             core.setOutput('VERSION', version);
-            core.setOutput('ASSETURL', asset_url);
+            core.setOutput('ASSETURL', `${asset_url_x64} ${asset_url_arm64}`);
 
       - name: Update manifest
         run: |

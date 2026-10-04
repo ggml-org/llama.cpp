@@ -586,6 +586,7 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
+    bool load_mtp          = false; // load MTP/NextN layers
 
     bool single_turn       = false; // single turn chat conversation
 
@@ -724,13 +725,14 @@ struct common_params {
     int32_t i_chunk     =  0; // start processing from this chunk
     int8_t  imat_dat    =  0; // whether the legacy imatrix.dat format should be output (gguf <= 0 < dat)
 
-    bool process_output  = false; // collect data for the output tensor
-    bool compute_ppl     = true;  // whether to compute perplexity
-    bool show_statistics = false; // show imatrix statistics per tensor
+    bool process_output         = false; // collect data for the output tensor
+    bool compute_ppl            = true;  // whether to compute perplexity
+    bool show_statistics        = false; // show imatrix statistics per tensor
+    bool activation_statistics  = false; // generate data to calculate activation based statistics
+    bool parse_special          = false; // whether to parse special tokens during imatrix tokenization
     std::vector<std::string> tensor_filter_prefix; // only collect imatrix data for tensors whose names start with any of these prefixes (empty = all)
-    bool stream_combine  = false; // combine imatrix files one at a time instead of loading all into memory
+    bool stream_combine         = false; // combine imatrix files one at a time instead of loading all into memory
     std::string stream_imatrix_dir; // directory for streaming per-tensor imatrix stats (single-pass, low-memory mode)
-    bool parse_special   = false; // whether to parse special tokens during imatrix tokenization
 
     // cvector-generator params
     int n_pca_batch = 100;
@@ -932,14 +934,6 @@ inline bool common_create_directories(const std::filesystem::path & path, std::e
 std::filesystem::path fs_get_cache_directory();
 std::filesystem::path fs_get_cache_file(const std::string & filename);
 std::filesystem::path fs_get_config_directory();
-
-struct common_file_info {
-    std::string path;
-    std::string name;
-    size_t      size = 0; // in bytes
-    bool        is_dir = false;
-};
-std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
 
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data);
 
