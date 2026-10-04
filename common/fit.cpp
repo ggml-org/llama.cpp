@@ -657,6 +657,82 @@ static void common_params_fit_impl(
         overflow_bufts.push_back(ggml_backend_cpu_buffer_type());
     }
 
+    // with pipeline parallelism, each device uploads the MoE weights in system memory of its own layers (keep the conditions in sync with llama_context)
+    // so give each device an equal slice of the layers and convert as many of its dense-only layers to full layers as fit
+    bool pipeline_parallel = nd > 1 && hp_nex > 0 && global_surplus_cpu_moe > 0 &&
+        mparams->split_mode == LLAMA_SPLIT_MODE_LAYER && cparams->op_offload && cparams->offload_kqv;
+    for (ggml_backend_dev_t dev : devs) {
+        ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(dev, &props);
+        pipeline_parallel = pipeline_parallel &&
+            (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU || (props.caps.async && props.caps.events));
+    }
+
+    if (pipeline_parallel) {
+        LOG_TRC("%s: filling equal slices of dense-only layers for pipeline parallelism:\n", __func__);
+        std::vector<ngl_t> ngl_per_device_slice(nd);
+        std::vector<uint32_t> n_convert_low(nd, 0); // number of converted layers that fits
+        std::vector<uint32_t> n_convert_high(nd);   // number of converted layers that does not fit
+        uint32_t n_unassigned = hp_ngl + 1;
+        for (size_t id = 0; id < nd; id++) {
+            ngl_per_device_slice[id].n_layer = n_unassigned / (nd - id);
+            ngl_per_device_slice[id].n_part  = id < nd - 1 ? ngl_per_device_slice[id].n_layer : ngl_per_device_slice[id].n_layer - 1; // the output layer must be full
+            n_unassigned -= ngl_per_device_slice[id].n_layer;
+            n_convert_high[id] = ngl_per_device_slice[id].n_part + 1;
+        }
+
+        // bisect all devices at once, the memory use of a device depends a bit on the other devices so the result is measured again at the end
+        bool fits = true;
+        while (fits) {
+            bool done = true;
+            for (size_t id = 0; id < nd; id++) {
+                done = done && n_convert_high[id] - n_convert_low[id] <= 1;
+            }
+            std::vector<ngl_t> ngl_per_device_test = ngl_per_device_slice;
+            std::vector<uint32_t> n_convert(nd);
+            for (size_t id = 0; id < nd; id++) {
+                n_convert[id] = done ? n_convert_low[id] : (n_convert_low[id] + n_convert_high[id]) / 2;
+                ngl_per_device_test[id].n_part -= n_convert[id];
+            }
+            const std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts);
+            for (size_t id = 0; id < nd; id++) {
+                if (mem_test[id] <= targets[id]) {
+                    n_convert_low[id] = n_convert[id];
+                } else if (n_convert[id] > n_convert_low[id]) {
+                    n_convert_high[id] = n_convert[id];
+                } else {
+                    fits = false;
+                }
+            }
+            if (done && fits) {
+                // try to fit part of one more layer on each device, like below
+                std::vector<int64_t> mem = mem_test;
+                for (const common_layer_fraction_t lf : {LAYER_FRACTION_GATE, LAYER_FRACTION_UP}) {
+                    std::vector<ngl_t> ngl_per_device_part = ngl_per_device_test;
+                    for (size_t id = 0; id < nd; id++) {
+                        if (ngl_per_device_part[id].n_part > 0 && ngl_per_device_part[id].overflow_type == LAYER_FRACTION_MOE) {
+                            ngl_per_device_part[id].overflow_type = lf;
+                        }
+                    }
+                    const std::vector<int64_t> mem_part = get_memory_for_layers(__func__, ngl_per_device_part, overflow_bufts);
+                    for (size_t id = 0; id < nd; id++) {
+                        if (ngl_per_device_part[id].overflow_type == lf && mem_part[id] <= targets[id]) {
+                            ngl_per_device_test[id].overflow_type = lf;
+                            mem[id] = mem_part[id];
+                        }
+                    }
+                }
+                for (size_t id = 0; id < nd; id++) {
+                    LOG_TRC("%s:   - %s: %2" PRIu32 " layers (%2" PRIu32 " overflowing), %6" PRId64 " MiB used, %6" PRId64 " MiB free\n",
+                        __func__, dev_names[id].c_str(), ngl_per_device_test[id].n_layer, ngl_per_device_test[id].n_part, mem[id]/MiB, (dmds_full[id].free - mem[id])/MiB);
+                }
+                set_ngl_tensor_split_tbo(ngl_per_device_test, overflow_bufts, *mparams);
+                return;
+            }
+        }
+        LOG_TRC("%s: equal slices of layers do not fit, falling back\n", __func__);
+    }
+
     std::vector<ngl_t> ngl_per_device(nd);
     std::vector<int64_t> mem = get_memory_for_layers(__func__, ngl_per_device, overflow_bufts);
 
