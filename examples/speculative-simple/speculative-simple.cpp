@@ -130,7 +130,11 @@ int main(int argc, char ** argv) {
             common_batch_add(batch_prompt, inp[i], i, { seq_id }, false);
         }
 
-        llama_decode(ctx_tgt, batch_prompt);
+        const int32_t rc = llama_decode(ctx_tgt, batch_prompt);
+        if (rc != 0) {
+            LOG_ERR("%s: prompt decode failed, ret = %d\n", __func__, rc);
+            return 1;
+        }
 
         if (!common_speculative_process(spec, batch_prompt)) {
             LOG_ERR("%s", "failed to process speculative prompt\n");
