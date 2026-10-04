@@ -4987,6 +4987,35 @@ static bool ggml_sycl_mul_mat_glu_mmvq_plain(ggml_backend_sycl_context & ctx, gg
                                              /*stride_col_dst=*/(int) glu->ne[0], stream);
 }
 
+// Gate and up weights of one type on the XMX engines: one launch reads the activations once and applies the GLU.
+// Both weights must already be in the reorder layout. Returns false if the kernel declined.
+static bool ggml_sycl_mul_mat_glu_xmx(ggml_backend_sycl_context & ctx,
+                                      ggml_tensor *               glu,
+                                      ggml_tensor *               up,
+                                      const ggml_tensor *         wu,
+                                      const ggml_tensor *         wg,
+                                      const ggml_tensor *         act) {
+    const int64_t ne00 = wu->ne[0];
+    const int64_t ne11 = act->ne[1];
+
+    const queue_ptr stream           = ctx.stream();
+    const int       src1_padded_cols = GGML_PAD((int) ne00, MATRIX_ROW_PADDING);
+    const int       stride_y_bytes   = src1_padded_cols * (int) sizeof(block_q8_1) / QK8_1;
+
+    // log the up mat-mul: glu's own srcs are the two intermediates the fusion never materialises
+    scope_op_debug_print scope_dbg_print(__func__, up, /*num_src=*/2, " : fused with gate + GLU (XMX)");
+
+    ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(), (size_t) ne11 * stride_y_bytes);
+    char *                     src1_ddq = src1_q8_alloc.get();
+
+    quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>((const float *) act->data, src1_ddq, (int) ne00, (int) ne11,
+                                                          src1_padded_cols, stream);
+
+    return ggml_sycl_mul_mat_vec_q_glu_xmx(ctx.device, wu->type, ggml_get_glu_op(glu), wu->data, wg->data, src1_ddq,
+                                           (float *) glu->data, (int) ne00, (int) wu->ne[1], (int) ne11, stride_y_bytes,
+                                           /*stride_col_dst=*/(int) glu->ne[0], stream);
+}
+
 // Fused dense-FFN mat-vec for the {mul_mat(gate), mul_mat(up), GLU} subgraph at node_idx.
 // Returns false if it declined, in which case the caller runs the three nodes normally.
 static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int node_idx) {
@@ -5012,9 +5041,36 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
         return false;
     }
 
+    // gate and up of one type the XMX kernel handles, it needs the reorder layout like the unfused mmvq path
+    static const bool no_xmx_glu = getenv("XMX_NOGLU") != nullptr;
+    if (wg->type == wu->type && gate->src[1] == act && !no_xmx_glu && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) &&
+        act->ne[1] <= GGML_SYCL_XMX_GLU_MAX_COLS) {
+        opt_for_reorder(&ctx, wu, act, up, mul_mat_algo::MMVQ);
+        opt_for_reorder(&ctx, wg, act, gate, mul_mat_algo::MMVQ);
+        if (can_use_xmx_batch(ctx.device, wu, act) && can_use_xmx_batch(ctx.device, wg, act) &&
+            ggml_sycl_mul_mat_glu_xmx(ctx, glu, up, wu, wg, act)) {
+            return true;
+        }
+    }
+
+    if (no_xmx_glu && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) && can_use_xmx_batch(ctx.device, wu, act) &&
+        can_use_xmx_batch(ctx.device, wg, act)) {
+        return false;
+    }
+    // the kernels below take up to MMVQ_MAX_BATCH_SIZE columns, a wider batch got here for the XMX kernel
+    if (act->ne[1] > MMVQ_MAX_BATCH_SIZE) {
+        return false;
+    }
+
     // quant pairs the reorder kernel cannot serve (mixed gate/up types) take the
     // standard-layout fused path instead; q4_K keeps the reorder path below
     if (wg->type != GGML_TYPE_Q4_K || wu->type != GGML_TYPE_Q4_K) {
+        const auto is_plain_type = [](ggml_type type) {
+            return type == GGML_TYPE_Q5_K || type == GGML_TYPE_IQ4_XS;
+        };
+        if (!is_plain_type(wu->type) || !is_plain_type(wg->type)) {
+            return false;
+        }
         return ggml_sycl_mul_mat_glu_mmvq_plain(ctx, glu, gate, up, wu, wg, act);
     }
 
@@ -5026,12 +5082,6 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
     const auto * extra_u = static_cast<const ggml_tensor_extra_gpu *>(wu->extra);
     const auto * extra_g = static_cast<const ggml_tensor_extra_gpu *>(wg->extra);
     if (!extra_u || !extra_g || !extra_u->optimized_feature.reorder || !extra_g->optimized_feature.reorder) {
-        return false;
-    }
-
-    // the XMX kernel reads each weight once for several columns, two launches of it beat this fused kernel
-    if (act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) && can_use_xmx_batch(ctx.device, wu, act) &&
-        can_use_xmx_batch(ctx.device, wg, act)) {
         return false;
     }
 

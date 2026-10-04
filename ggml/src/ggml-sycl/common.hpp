@@ -177,6 +177,9 @@ typedef sycl::float2 dfloat2;
 // most columns the XMX mul_mat_vec_q handles, wider batches use other kernels
 #define GGML_SYCL_XMX_MAX_COLS 80
 
+// most columns the fused gate and up XMX kernel handles
+#define GGML_SYCL_XMX_GLU_MAX_COLS 16
+
 static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q2_K:

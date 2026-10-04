@@ -593,8 +593,9 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q6_K> {
 // type supplies its loads and unpack as a traits struct.
 //
 using sycl::ext::intel::esimd::simd;
-constexpr int XMX_ROWS  = 16;  // weight rows per thread (DPAS N)
-constexpr int XMX_CHUNK = 64;  // widest single launch, more columns run as repeated launches
+constexpr int XMX_ROWS        = 16;  // weight rows per thread (DPAS N)
+constexpr int XMX_CHUNK       = 64;  // widest single launch, more columns run as repeated launches
+constexpr int XMX_FUSED_CHUNK = GGML_SYCL_XMX_GLU_MAX_COLS;  // widest launch of the fused gate and up kernel
 
 // threads that split K for one tile, sized so that the shared memory stays small
 template <int NC> constexpr int xmx_n_split() {
@@ -1026,27 +1027,25 @@ template <bool SR> struct xmx_traits_q8_0 {
 template <bool SR> using xmx_traits_q4_k = xmx_traits_q45_k<false, SR>;
 template <bool SR> using xmx_traits_q5_k = xmx_traits_q45_k<true, SR>;
 
-// registers per thread, the large file halves the resident threads but avoids spills in wide tiles
-template <typename T, int NC> constexpr int xmx_grf() {
-    return NC >= T::nc_wide ? 256 : 128;
+// registers per thread, the large file halves the resident threads but avoids spills in wide tiles, the fused
+// kernel keeps two sets of weights and scales and always takes it
+template <typename T, int NC, bool FUSED> constexpr int xmx_grf() {
+    return FUSED || NC >= T::nc_wide ? 256 : 128;
 }
 
-// activations come in through 2D block loads, one for the (d, s) pairs of a super-block (s is unused) and one per two
-// groups for the quants, the DPAS A operand needs no repacking. Groups with two scales (16 wide) mask the
-// weights instead, zeros in B drop the other half of K.
-// KS is the most threads that split K for one tile, the launch may use fewer.
-template <typename T, int NC, int KS>
-ESIMD_INLINE void xmx_mul_mat(const void * vx,
-                              const char * vy,
-                              float *      dst,
-                              const int    ncols,
-                              const int    nrows,
-                              const int    ncv,
-                              const int    stride_y_bytes,
-                              const int    ldd,
-                              const int    tile,
-                              const int    lid,
-                              const int    ks) {
+// one group of 32 of one weight set, accumulated into Cf for all the columns of the tile
+template <typename T, int NC, typename A2T, typename D8T>
+ESIMD_INLINE void xmx_group(simd<float, NC * XMX_ROWS> & Cf,
+                            const typename T::part_t &   pd,
+                            typename T::scales_t &       sc,
+                            A2T &                        A2,
+                            D8T &                        d8f,
+                            simd<int8_t, 512> &          Bl,
+                            simd<int8_t, 512> &          Bh,
+                            const simd<int8_t, 512> &    Ol,
+                            const simd<int8_t, 512> &    Oh,
+                            const int                    g,
+                            const int                    part) {
     using namespace sycl::ext::intel::esimd;
     namespace xmx = sycl::ext::intel::esimd::xmx;
 
@@ -1056,13 +1055,120 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
     constexpr bool split = !T::has_min && !T::plain;  // two scales per group of 32
     constexpr bool pair  = (RC * 32) % 64 == 0;       // a block of RC rows fills whole registers
 
+    const int gi = 4 * part + g;
+
+    simd<uint32_t, 128> x = T::unpack(pd, g, part);
+    simd<int8_t, 512>   B = x.template bit_cast_view<int8_t>();
+    if constexpr (split) {
+        Bl.template select<256, 1>(0)   = B.template select<256, 1>(0);
+        Bh.template select<256, 1>(256) = B.template select<256, 1>(256);
+    }
+
+    simd<float, NT> rd;
+    simd<float, NT> rm;
+    simd<float, NT> rs0;
+    simd<float, NT> rs1;
+    simd<float, NT> rm1;
+    if constexpr (T::plain) {
+        rd = sc.get_d(gi);
+    } else if constexpr (T::has_min) {
+        rd = sc.get_d(gi);
+        rm = sc.get_m(gi);
+    } else if constexpr (T::min16) {
+        rs0 = sc.get_d(2 * gi);
+        rs1 = sc.get_d(2 * gi + 1);
+        rm  = sc.get_m(2 * gi);
+        rm1 = sc.get_m(2 * gi + 1);
+    } else {
+        rs0 = sc.get(2 * gi);
+        rs1 = sc.get(2 * gi + 1);
+    }
+
+#pragma unroll
+    for (int b = 0; b < NB; ++b) {
+        simd<int8_t, RC * 32> A =
+            A2[b].template select<RC * 8, 1>(pair ? (g % 2) * RC * 8 : 0).template bit_cast_view<int8_t>();
+        simd<float, RC * NT> d8r =
+            d8f[b].template select<RC, RC == 1 ? 1 : 8>(gi).template replicate_vs_w_hs<RC, 1, NT, 0>(0);
+        auto Cb = Cf.template select<RC * NT, 1>(b * RC * NT);
+
+        if constexpr (T::plain) {
+            simd<int, RC * NT>   Cd = xmx::dpas<8, RC, int>(B, A);
+            simd<float, RC * NT> z  = convert<float>(Cd) * rd.template replicate<RC>();
+            Cb += z * d8r;
+        } else if constexpr (T::has_min) {
+            simd<int, RC * NT>   Cd = xmx::dpas<8, RC, int>(B, A);
+            simd<int, RC * NT>   Cs = xmx::dpas<8, RC, int>(Ol, A);  // sums of the activations
+            simd<float, RC * NT> z  = convert<float>(Cd) * rd.template replicate<RC>();
+            z -= convert<float>(Cs) * rm.template replicate<RC>();
+            Cb += z * d8r;
+        } else if constexpr (T::min16) {
+            simd<int, RC * NT>   C0 = xmx::dpas<8, RC, int>(Bl, A);
+            simd<int, RC * NT>   C1 = xmx::dpas<8, RC, int>(Bh, A);
+            simd<int, RC * NT>   S0 = xmx::dpas<8, RC, int>(Ol, A);  // sums of the activations
+            simd<int, RC * NT>   S1 = xmx::dpas<8, RC, int>(Oh, A);
+            simd<float, RC * NT> z  = convert<float>(C0) * rs0.template replicate<RC>();
+            z += convert<float>(C1) * rs1.template replicate<RC>();
+            z -= convert<float>(S0) * rm.template replicate<RC>();
+            z -= convert<float>(S1) * rm1.template replicate<RC>();
+            Cb += z * d8r;
+        } else {
+            simd<int, RC * NT>   C0 = xmx::dpas<8, RC, int>(Bl, A);
+            simd<int, RC * NT>   C1 = xmx::dpas<8, RC, int>(Bh, A);
+            simd<float, RC * NT> z  = convert<float>(C0) * rs0.template replicate<RC>();
+            z += convert<float>(C1) * rs1.template replicate<RC>();
+            Cb += z * d8r;
+        }
+    }
+}
+
+// activation of the GLU applied to the gate, uniform across the launch
+template <int N> ESIMD_INLINE simd<float, N> xmx_glu_act(const simd<float, N> & gate, const int glu_op) {
+    using namespace sycl::ext::intel::esimd;
+    if (glu_op == GGML_GLU_OP_SWIGLU) {
+        return gate / (1.0f + exp(-gate));
+    }
+    // GEGLU, the tanh is written with exp
+    simd<float, N> a = 0.79788456f * gate * (1.0f + 0.044715f * gate * gate);
+    simd<float, N> t = 1.0f - 2.0f / (exp(2.0f * a) + 1.0f);
+    return 0.5f * gate * (1.0f + t);
+}
+
+// activations come in through 2D block loads, one for the (d, s) pairs of a super-block (s is unused) and one per two
+// groups for the quants, the DPAS A operand needs no repacking. Groups with two scales (16 wide) mask the
+// weights instead, zeros in B drop the other half of K.
+// KS is the most threads that split K for one tile, the launch may use fewer.
+// FUSED computes up * act(gate) from the weights vx (up) and vg (gate), reading the activations once.
+template <typename T, int NC, int KS, bool FUSED>
+ESIMD_INLINE void xmx_mul_mat(const void * vx,
+                              const void * vg,
+                              const char * vy,
+                              float *      dst,
+                              const int    ncols,
+                              const int    nrows,
+                              const int    ncv,
+                              const int    stride_y_bytes,
+                              const int    ldd,
+                              const int    glu_op,
+                              const int    tile,
+                              const int    lid,
+                              const int    ks) {
+    using namespace sycl::ext::intel::esimd;
+
+    constexpr int  NT    = XMX_ROWS;
+    constexpr int  RC    = NC < 8 ? NC : 8;
+    constexpr int  NB    = NC / RC;
+    constexpr int  N_ACC = FUSED ? 2 : 1;
+    constexpr bool pair  = (RC * 32) % 64 == 0;  // a block of RC rows fills whole registers
+
     if constexpr (KS > 1) {
-        slm_init<KS * NC * NT * sizeof(float)>();
+        slm_init<N_ACC * KS * NC * NT * sizeof(float)>();
     }
 
     const int  bpr  = ncols / QK_K;
     const int  row0 = tile * NT;
     const auto c    = T::make(vx, nrows, bpr, row0);
+    const auto cg   = T::make(FUSED ? vg : vx, nrows, bpr, row0);
 
     simd<uint32_t, NT> rows;
 #pragma unroll
@@ -1077,11 +1183,12 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
     const unsigned   yh  = ncv - 1;
     const unsigned   yp  = stride_y_bytes - 1;
 
-    simd<float, NC * NT> Cf = 0.0f;
-    simd<int8_t, 512>    Bl = int8_t(0);
-    simd<int8_t, 512>    Bh = int8_t(0);
-    simd<int8_t, 512>    Ol = int8_t(0);
-    simd<int8_t, 512>    Oh = int8_t(0);
+    simd<float, NC * NT> Cf  = 0.0f;
+    simd<float, NC * NT> Cfg = 0.0f;  // gate, only used when fused
+    simd<int8_t, 512>    Bl  = int8_t(0);
+    simd<int8_t, 512>    Bh  = int8_t(0);
+    simd<int8_t, 512>    Ol  = int8_t(0);
+    simd<int8_t, 512>    Oh  = int8_t(0);
     if constexpr (T::has_min) {
         Ol = int8_t(1);
     }
@@ -1091,7 +1198,11 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
     }
 
     for (int sb = lid; sb < bpr; sb += ks) {
-        auto sc = T::load_scales(c, sb, rows);
+        auto                 sc = T::load_scales(c, sb, rows);
+        typename T::scales_t scg;
+        if constexpr (FUSED) {
+            scg = T::load_scales(cg, sb, rows);
+        }
 
         // d of the 8 groups of the super-block, [column * 8 + group]
         simd<float, 8 * RC> d8f[NB];
@@ -1104,7 +1215,11 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
 
 #pragma unroll
         for (int part = 0; part < 2; ++part) {
-            const auto pd = T::load_part(c, sb, part);
+            const auto         pd = T::load_part(c, sb, part);
+            typename T::part_t pdg;
+            if constexpr (FUSED) {
+                pdg = T::load_part(cg, sb, part);
+            }
 
             simd<uint32_t, 16 * RC> A2[NB];  // quants of two groups
 
@@ -1127,68 +1242,9 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
                     }
                 }
 
-                simd<uint32_t, 128> x = T::unpack(pd, g, part);
-                simd<int8_t, 512>   B = x.template bit_cast_view<int8_t>();
-                if constexpr (split) {
-                    Bl.template select<256, 1>(0)   = B.template select<256, 1>(0);
-                    Bh.template select<256, 1>(256) = B.template select<256, 1>(256);
-                }
-
-                simd<float, NT> rd;
-                simd<float, NT> rm;
-                simd<float, NT> rs0;
-                simd<float, NT> rs1;
-                simd<float, NT> rm1;
-                if constexpr (T::plain) {
-                    rd = sc.get_d(gi);
-                } else if constexpr (T::has_min) {
-                    rd = sc.get_d(gi);
-                    rm = sc.get_m(gi);
-                } else if constexpr (T::min16) {
-                    rs0 = sc.get_d(2 * gi);
-                    rs1 = sc.get_d(2 * gi + 1);
-                    rm  = sc.get_m(2 * gi);
-                    rm1 = sc.get_m(2 * gi + 1);
-                } else {
-                    rs0 = sc.get(2 * gi);
-                    rs1 = sc.get(2 * gi + 1);
-                }
-
-#pragma unroll
-                for (int b = 0; b < NB; ++b) {
-                    simd<int8_t, RC * 32> A =
-                        A2[b].template select<RC * 8, 1>(pair ? (g % 2) * RC * 8 : 0).template bit_cast_view<int8_t>();
-                    simd<float, RC * NT> d8r =
-                        d8f[b].template select<RC, RC == 1 ? 1 : 8>(gi).template replicate_vs_w_hs<RC, 1, NT, 0>(0);
-                    auto Cb = Cf.template select<RC * NT, 1>(b * RC * NT);
-
-                    if constexpr (T::plain) {
-                        simd<int, RC * NT>   Cd = xmx::dpas<8, RC, int>(B, A);
-                        simd<float, RC * NT> z  = convert<float>(Cd) * rd.template replicate<RC>();
-                        Cb += z * d8r;
-                    } else if constexpr (T::has_min) {
-                        simd<int, RC * NT>   Cd = xmx::dpas<8, RC, int>(B, A);
-                        simd<int, RC * NT>   Cs = xmx::dpas<8, RC, int>(Ol, A);  // sums of the activations
-                        simd<float, RC * NT> z  = convert<float>(Cd) * rd.template replicate<RC>();
-                        z -= convert<float>(Cs) * rm.template replicate<RC>();
-                        Cb += z * d8r;
-                    } else if constexpr (T::min16) {
-                        simd<int, RC * NT>   C0 = xmx::dpas<8, RC, int>(Bl, A);
-                        simd<int, RC * NT>   C1 = xmx::dpas<8, RC, int>(Bh, A);
-                        simd<int, RC * NT>   S0 = xmx::dpas<8, RC, int>(Ol, A);  // sums of the activations
-                        simd<int, RC * NT>   S1 = xmx::dpas<8, RC, int>(Oh, A);
-                        simd<float, RC * NT> z  = convert<float>(C0) * rs0.template replicate<RC>();
-                        z += convert<float>(C1) * rs1.template replicate<RC>();
-                        z -= convert<float>(S0) * rm.template replicate<RC>();
-                        z -= convert<float>(S1) * rm1.template replicate<RC>();
-                        Cb += z * d8r;
-                    } else {
-                        simd<int, RC * NT>   C0 = xmx::dpas<8, RC, int>(Bl, A);
-                        simd<int, RC * NT>   C1 = xmx::dpas<8, RC, int>(Bh, A);
-                        simd<float, RC * NT> z  = convert<float>(C0) * rs0.template replicate<RC>();
-                        z += convert<float>(C1) * rs1.template replicate<RC>();
-                        Cb += z * d8r;
-                    }
+                xmx_group<T, NC>(Cf, pd, sc, A2, d8f, Bl, Bh, Ol, Oh, g, part);
+                if constexpr (FUSED) {
+                    xmx_group<T, NC>(Cfg, pdg, scg, A2, d8f, Bl, Bh, Ol, Oh, g, part);
                 }
             }
         }
@@ -1196,15 +1252,26 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
 
     if constexpr (KS > 1) {
         slm_block_store<float, NC * NT>(lid * NC * NT * sizeof(float), Cf);
+        if constexpr (FUSED) {
+            slm_block_store<float, NC * NT>((KS + lid) * NC * NT * sizeof(float), Cfg);
+        }
         barrier();
         if (lid != 0) {
             return;
         }
-        Cf = 0.0f;
+        Cf  = 0.0f;
+        Cfg = 0.0f;
 #pragma unroll 4
         for (int j = 0; j < ks; ++j) {
             Cf += slm_block_load<float, NC * NT>(j * NC * NT * sizeof(float));
+            if constexpr (FUSED) {
+                Cfg += slm_block_load<float, NC * NT>((KS + j) * NC * NT * sizeof(float));
+            }
         }
+    }
+
+    if constexpr (FUSED) {
+        Cf *= xmx_glu_act<NC * NT>(Cfg, glu_op);
     }
 
     if (row0 + NT <= nrows && ldd % 4 == 0 && (uintptr_t) dst % 16 == 0) {
@@ -1230,8 +1297,9 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
 
 // KS_MAX bounds the threads that split K for one tile, the launch uses as few as keep every thread to the same
 // number of super-blocks as the busiest one
-template <typename T, int NC, int KS_MAX>
+template <typename T, int NC, int KS_MAX, bool FUSED>
 static void xmx_mul_mat_launch_ks(const void *    vx,
+                                  const void *    vg,
                                   const char *    vy,
                                   float *         dst,
                                   const int       ncols,
@@ -1239,6 +1307,7 @@ static void xmx_mul_mat_launch_ks(const void *    vx,
                                   const int       ncv,
                                   const int       stride_y_bytes,
                                   const int       ldd,
+                                  const int       glu_op,
                                   dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const size_t n_tiles = (nrows + XMX_ROWS - 1) / XMX_ROWS;
@@ -1246,18 +1315,20 @@ static void xmx_mul_mat_launch_ks(const void *    vx,
     const int    rounds  = (bpr + KS_MAX - 1) / KS_MAX;
     const int    ks      = (bpr + rounds - 1) / rounds;
     stream->submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
-            sycl::nd_range<1>(sycl::range<1>(n_tiles * ks), sycl::range<1>(ks)),
-            sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size<xmx_grf<T, NC>()> },
-            [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
-                xmx_mul_mat<T, NC, KS_MAX>(vx, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd, (int) it.get_group(0),
-                                           (int) it.get_local_id(0), ks);
-            });
+        cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(n_tiles * ks), sycl::range<1>(ks)),
+                         sycl::ext::oneapi::experimental::properties{
+                             sycl::ext::intel::experimental::grf_size<xmx_grf<T, NC, FUSED>()> },
+                         [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
+                             xmx_mul_mat<T, NC, KS_MAX, FUSED>(vx, vg, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd,
+                                                               glu_op, (int) it.get_group(0), (int) it.get_local_id(0),
+                                                               ks);
+                         });
     });
 }
 
-template <typename T, int NC>
+template <typename T, int NC, bool FUSED>
 static void xmx_mul_mat_launch(const void *    vx,
+                               const void *    vg,
                                const char *    vy,
                                float *         dst,
                                const int       ncols,
@@ -1265,12 +1336,18 @@ static void xmx_mul_mat_launch(const void *    vx,
                                const int       ncv,
                                const int       stride_y_bytes,
                                const int       ldd,
+                               const int       glu_op,
                                dpct::queue_ptr stream) {
-    xmx_mul_mat_launch_ks<T, NC, xmx_n_split<NC>()>(vx, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd, stream);
+    // the fused kernel keeps two sets of accumulators in shared memory, half the threads for the same size
+    constexpr int ks_max = xmx_n_split<NC>() / (FUSED ? 2 : 1);
+    xmx_mul_mat_launch_ks<T, NC, ks_max, FUSED>(vx, vg, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd, glu_op,
+                                                stream);
 }
 
-template <typename T>
+// FUSED: vx and vg are the up and gate weights, dst gets up * act(gate) with glu_op a ggml_glu_op
+template <typename T, bool FUSED = false>
 static void xmx_mul_mat_ncols(const void *    vx,
+                              const void *    vg,
                               const char *    vy,
                               float *         dst,
                               const int       ncols,
@@ -1278,16 +1355,18 @@ static void xmx_mul_mat_ncols(const void *    vx,
                               const int       ncols_dst,
                               const int       stride_y_bytes,
                               const int       ldd,
+                              const int       glu_op,
                               dpct::queue_ptr stream) {
-    for (int c0 = 0; c0 < ncols_dst; c0 += XMX_CHUNK) {
-        const int    n  = std::min(XMX_CHUNK, ncols_dst - c0);
+    constexpr int chunk_max = FUSED ? XMX_FUSED_CHUNK : XMX_CHUNK;
+    for (int c0 = 0; c0 < ncols_dst; c0 += chunk_max) {
+        const int    n  = std::min(chunk_max, ncols_dst - c0);
         const char * y  = vy + (size_t) c0 * stride_y_bytes;
         float *      d  = dst + (size_t) c0 * ldd;
         const int    nc = n > 32 ? 64 : (n > 16 ? 32 : (n > 8 ? 16 : n));
         switch (nc) {
-#define XMX_CASE(N)                                                                       \
-    case N:                                                                               \
-        xmx_mul_mat_launch<T, N>(vx, y, d, ncols, nrows, n, stride_y_bytes, ldd, stream); \
+#define XMX_CASE(N)                                                                                          \
+    case N:                                                                                                  \
+        xmx_mul_mat_launch<T, N, FUSED>(vx, vg, y, d, ncols, nrows, n, stride_y_bytes, ldd, glu_op, stream); \
         break
             XMX_CASE(1);
             XMX_CASE(2);
@@ -1299,11 +1378,11 @@ static void xmx_mul_mat_ncols(const void *    vx,
             XMX_CASE(8);
 #undef XMX_CASE
             // short row variants are for tests, not built for the wide tiles
-#define XMX_CASE_WIDE(N)                                                                      \
-    case N:                                                                                   \
-        if constexpr (!T::short_rows) {                                                       \
-            xmx_mul_mat_launch<T, N>(vx, y, d, ncols, nrows, n, stride_y_bytes, ldd, stream); \
-        }                                                                                     \
+#define XMX_CASE_WIDE(N)                                                                                         \
+    case N:                                                                                                      \
+        if constexpr (!T::short_rows && (!FUSED || N <= XMX_FUSED_CHUNK)) {                                      \
+            xmx_mul_mat_launch<T, N, FUSED>(vx, vg, y, d, ncols, nrows, n, stride_y_bytes, ldd, glu_op, stream); \
+        }                                                                                                        \
         break
             XMX_CASE_WIDE(16);
             XMX_CASE_WIDE(32);
