@@ -153,3 +153,17 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# Site configuration: host addresses and user names. Copy from nodes.ps1.template.
+
+scripts/nodes.ps1
+
+# Run output
+
+scripts/logs/
+*.log
+*.out
+
+# build.cmd work folder
+
+work/

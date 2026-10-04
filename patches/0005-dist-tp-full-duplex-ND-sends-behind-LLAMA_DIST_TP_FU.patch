@@ -1,0 +1,475 @@
+From af186ceac49fcfe0acb47bfc5ac07c255cadd274 Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Sun, 23 Aug 2026 10:27:47 -0700
+Subject: [PATCH 5/9] dist-tp: full-duplex ND sends behind
+ LLAMA_DIST_TP_FULL_DUPLEX
+
+dist-comm-nd.cpp had one tx staging buffer and waited for each send to
+complete before returning, and dist-comm.cpp ordered every exchange by
+rank parity, so a link carried one direction at a time.
+
+With LLAMA_DIST_TP_FULL_DUPLEX=1:
+- a 4-slot tx ring (ND_TX_DEPTH) with a post/wait split: nd_post_send
+  posts and returns, nd_step reaps completions, and nd_tx_slot_ready is
+  the only place that blocks. Sends retire in order, so while fewer than
+  ND_TX_DEPTH are outstanding the current slot is free.
+- bare headers (ack, bye) get their own slot (nd_post_hdr_only), so they
+  cannot overwrite a staged data chunk; drains guard teardown.
+- an exchange becomes post -> recv -> drain when the edge's send is on
+  ND. TCP edges, and rings that mix ND and TCP edges, keep the parity
+  order.
+
+Off by default: without the variable the send path and the exchange
+order are unchanged.
+
+Also makes the collective-name filter opt in: it applies only when
+LLAMA_DIST_TP_COLLECT_PREFIXES is set, and there is no built-in list.
+---
+ common/dist-comm-nd.cpp        | 118 +++++++++++++++++++++++++++++----
+ common/dist-comm-nd.h          |   3 +
+ common/dist-comm.cpp           |  56 +++++++++++-----
+ ggml/src/ggml-backend-meta.cpp | 100 ++++++++++++++++++----------
+ 4 files changed, 214 insertions(+), 63 deletions(-)
+
+diff --git a/common/dist-comm-nd.cpp b/common/dist-comm-nd.cpp
+index c8ddede..3bc36f0 100644
+--- a/common/dist-comm-nd.cpp
++++ b/common/dist-comm-nd.cpp
+@@ -17,6 +17,7 @@ bool dist_nd_send2(dist_nd_conn *, const void *, size_t, const void *, size_t, s
+     return false;
+ }
+ bool dist_nd_recv(dist_nd_conn *, void *, size_t, std::string & err) { err = "no ND"; return false; }
++bool dist_nd_send_drain(dist_nd_conn *, std::string &) { return true; }
+ void dist_nd_free(dist_nd_conn *) {}
+ 
+ #else // LLAMA_DIST_TP_ND
+@@ -66,6 +67,10 @@ static constexpr uint32_t ND_HELLO_VER   = 1;
+ static constexpr size_t   ND_PAYLOAD    = 256 * 1024;      // provider caps a transfer at 1 MiB
+ static constexpr int      ND_RX_DEPTH   = 24;              // pre-posted receives: 24 x 256 KiB = 6 MiB
+ static constexpr int      ND_WINDOW     = ND_RX_DEPTH - 1; // chunks in flight before an ack is required
++// Staging slots for outbound chunks. ONE slot meant one outstanding send, which forced the whole
++// exchange to serialize; a small ring lets a send stay on the wire while this rank receives. Kept
++// well under ND_WINDOW so flow control, not the ring, stays what bounds messages in flight.
++static constexpr int      ND_TX_DEPTH   = 4;
+ static constexpr int      ND_CONNECT_TIMEOUT_S = 30;
+ static constexpr uint64_t ND_POLL_SPIN  = 4096;
+ static constexpr uint32_t ND_POLL_TICK_MS = 200;   // how long to sleep on the CQ between peer liveness checks
+@@ -186,8 +191,14 @@ struct dist_nd_conn {
+     int      tx_since_ack = 0;
+     int      rx_since_ack = 0;
+     uint32_t tx_seq       = 0;
+-    size_t   tx_fill      = 0;   // payload bytes staged in tx_buf behind the header
++    size_t   tx_fill      = 0;   // payload bytes staged in the current tx slot behind the header
+     int      corked       = 0;
++    int      tx_slot_cur  = 0;   // ring index currently being staged into
++    int      tx_inflight  = 0;   // sends posted whose completion has not been reaped yet
++
++    uint8_t * tx_slot(int i) const {
++        return tx_buf + (size_t)i * ND_SLOT;
++    }
+ 
+     uint8_t * rx_slot(int i) const {
+         return rx_buf + (size_t)i * ND_SLOT;
+@@ -349,7 +360,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
+         return false;
+     }
+ 
+-    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT, 4096);
++    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_TX_DEPTH, 4096);
+     c->rx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_RX_DEPTH, 4096);
+     if (!c->tx_buf || !c->rx_buf) {
+         return false;
+@@ -363,7 +374,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
+     if (FAILED(hr)) {
+         return false;
+     }
+-    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
++    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT * ND_TX_DEPTH, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
+     if (!nd_done(hr, c->tx_mr, &c->ov.ov)) {
+         ND_LOG_DBG("tx Register failed: 0x%08lx\n", (unsigned long)hr);
+         return false;
+@@ -669,6 +680,9 @@ static bool nd_step(dist_nd_conn * c) {
+     }
+     if (res.RequestContext == ND_CTX_SEND) {
+         c->send_done++;
++        if (c->tx_inflight > 0) {
++            c->tx_inflight--;   // the slot that send occupied is free to stage into again
++        }
+         return true;
+     }
+     const int slot = nd_ctx_slot(res.RequestContext);
+@@ -699,18 +713,51 @@ static bool nd_step(dist_nd_conn * c) {
+     return true;
+ }
+ 
+-static bool nd_post_send(dist_nd_conn * c, size_t len) {
++static bool nd_flush(dist_nd_conn * c);
++
++// Opt-in. Unset, every send still retires before dist_nd_send2 returns, which is exactly what the
++// committed known-good build does.
++static bool nd_full_duplex() {
++    static const bool on = []() {
++        const char * v = std::getenv("LLAMA_DIST_TP_FULL_DUPLEX");
++        return v && v[0] != '\0' && v[0] != '0';
++    }();
++    return on;
++}
++
++// The slot about to be staged into must not still be on the wire. Sends are posted round-robin and
++// retire in order, so while fewer than ND_TX_DEPTH are outstanding the current slot is the free
++// one; that invariant is why this is the only place a staging write can block.
++static bool nd_tx_slot_ready(dist_nd_conn * c) {
++    while (c->tx_inflight >= ND_TX_DEPTH) {
++        if (!nd_step(c)) {
++            return false;
++        }
++    }
++    return true;
++}
++
++// Post WITHOUT waiting for the completion. This is the change that lets an exchange overlap: this
++// function used to spin on its own send completion, so a full-duplex link carried one direction at
++// a time and every collective paid two serial transfers instead of one.
++static bool nd_post_send(dist_nd_conn * c, int slot, size_t len) {
+     ND2_SGE sge = {};
+-    sge.Buffer            = c->tx_buf;
++    sge.Buffer            = c->tx_slot(slot);
+     sge.BufferLength      = (ULONG)len;
+     sge.MemoryRegionToken = c->tx_token;
+ 
+-    c->send_done = 0;
+     if (FAILED(c->qp->Send(ND_CTX_SEND, &sge, 1, 0))) {
+         ND_LOG_ERR("Send post failed\n");
+         return false;
+     }
+-    while (c->send_done == 0) {
++    c->tx_inflight++;
++    return true;
++}
++
++// Wait until every posted send has retired, so a staging slot is never recycled or freed while a
++// transfer still references it.
++static bool nd_send_drain_local(dist_nd_conn * c) {
++    while (c->tx_inflight > 0) {
+         if (!nd_step(c)) {
+             return false;
+         }
+@@ -718,10 +765,27 @@ static bool nd_post_send(dist_nd_conn * c, size_t len) {
+     return true;
+ }
+ 
++// A bare header (ack, bye) takes its own slot so it cannot overwrite a staged data chunk. Anything
++// still staged is flushed first, which also keeps tx_seq ordering intact.
++static bool nd_post_hdr_only(dist_nd_conn * c, const nd_msg_hdr & hdr) {
++    if (c->tx_fill != 0 && !nd_flush(c)) {
++        return false;
++    }
++    if (!nd_tx_slot_ready(c)) {
++        return false;
++    }
++    const int slot = c->tx_slot_cur;
++    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
++    if (!nd_post_send(c, slot, sizeof(hdr))) {
++        return false;
++    }
++    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
++    return true;
++}
++
+ static bool nd_send_ack(dist_nd_conn * c) {
+     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_ACK, 0, c->tx_seq++ };
+-    memcpy(c->tx_buf, &hdr, sizeof(hdr));
+-    return nd_post_send(c, sizeof(hdr));
++    return nd_post_hdr_only(c, hdr);
+ }
+ 
+ // The provider raises no completion and no notification when a peer disconnects, so an
+@@ -729,8 +793,7 @@ static bool nd_send_ack(dist_nd_conn * c) {
+ // in the slot ND_WINDOW keeps spare, so it needs no flow control of its own.
+ static bool nd_send_bye(dist_nd_conn * c) {
+     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_BYE, 0, c->tx_seq++ };
+-    memcpy(c->tx_buf, &hdr, sizeof(hdr));
+-    return nd_post_send(c, sizeof(hdr));
++    return nd_post_hdr_only(c, hdr);
+ }
+ 
+ static bool nd_flush(dist_nd_conn * c) {
+@@ -746,13 +809,15 @@ static bool nd_flush(dist_nd_conn * c) {
+         c->ack_pending--;
+         c->tx_since_ack = 0;
+     }
++    const int slot = c->tx_slot_cur;
+     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
+-    memcpy(c->tx_buf, &hdr, sizeof(hdr));
++    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
+     const size_t len = sizeof(hdr) + c->tx_fill;
+     c->tx_fill = 0;
+-    if (!nd_post_send(c, len)) {
++    if (!nd_post_send(c, slot, len)) {
+         return false;
+     }
++    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
+     c->tx_since_ack++;
+     return true;
+ }
+@@ -764,8 +829,12 @@ static bool nd_send_raw(dist_nd_conn * c, const void * data, size_t size) {
+         if (c->tx_fill == ND_PAYLOAD && !nd_flush(c)) {
+             return false;
+         }
++        // Starting a fresh chunk: the slot must not still be on the wire before we write it.
++        if (c->tx_fill == 0 && !nd_tx_slot_ready(c)) {
++            return false;
++        }
+         const size_t take = std::min(rem, ND_PAYLOAD - c->tx_fill);
+-        memcpy(c->tx_buf + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
++        memcpy(c->tx_slot(c->tx_slot_cur) + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
+         c->tx_fill += take;
+         src += take;
+         rem -= take;
+@@ -984,6 +1053,12 @@ bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
+     if (ok) {
+         ok = nd_flush(c);
+     }
++    // Default retires the send before returning, identical to the previous behaviour. Full-duplex
++    // mode drains after the matching receive instead, which is the whole point: both directions
++    // are then on the wire at once.
++    if (ok && !nd_full_duplex()) {
++        ok = nd_send_drain_local(c);
++    }
+     if (!ok) {
+         c->tx_fill = 0;   // drop the half-staged chunk; the connection is finished either way
+         err = c->peer_gone ? "peer closed connection" : "NetworkDirect send failed";
+@@ -992,6 +1067,17 @@ bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
+     return true;
+ }
+ 
++bool dist_nd_send_drain(dist_nd_conn * c, std::string & err) {
++    if (!c) {
++        return true;
++    }
++    if (!nd_send_drain_local(c)) {
++        err = c->peer_gone ? "peer closed connection" : "NetworkDirect send drain failed";
++        return false;
++    }
++    return true;
++}
++
+ bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err) {
+     if (!nd_recv_raw(c, data, size)) {
+         err = c->peer_gone ? "peer closed connection" : "NetworkDirect recv failed";
+@@ -1005,7 +1091,11 @@ void dist_nd_free(dist_nd_conn * c) {
+         return;
+     }
+     if (c->connected && !c->peer_gone) {
++        // Retire outstanding sends around the bye, so teardown never frees a staging slot that
++        // still has a transfer against it.
++        (void) nd_send_drain_local(c);
+         (void) nd_send_bye(c);
++        (void) nd_send_drain_local(c);
+     }
+     delete c;
+ }
+diff --git a/common/dist-comm-nd.h b/common/dist-comm-nd.h
+index 878e6da..0b4717d 100644
+--- a/common/dist-comm-nd.h
++++ b/common/dist-comm-nd.h
+@@ -50,5 +50,8 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool liste
+ bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
+                    const void * payload, size_t payload_size, std::string & err);
+ bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err);
++// Wait for sends posted but not yet retired. Only needed in full-duplex mode, where dist_nd_send2
++// returns as soon as the chunk is posted rather than when it has completed.
++bool dist_nd_send_drain(dist_nd_conn * c, std::string & err);
+ 
+ void dist_nd_free(dist_nd_conn * c);
+diff --git a/common/dist-comm.cpp b/common/dist-comm.cpp
+index e507763..1f1c778 100644
+--- a/common/dist-comm.cpp
++++ b/common/dist-comm.cpp
+@@ -538,23 +538,49 @@ struct dist_comm_socket_context::impl {
+             return true;
+         };
+ 
+-        // Rank parity avoids blocking send/send for large payloads.
++        // Full-duplex exchange, opt-in via LLAMA_DIST_TP_FULL_DUPLEX=1.
+         //
+-        // Parity is a 2-colouring of the ring, and an odd-length cycle cannot be 2-coloured, so
+-        // from world_size 3 up exactly one edge has both ends calling send_payload() first. That
+-        // is a property of the topology, not a bug to schedule around: no assignment of
+-        // send-first / recv-first to ranks can do better than one such edge on an odd ring, and
+-        // parity already achieves that minimum. Do not "fix" this by switching to a rank < peer
+-        // rule; a rank sits on two edges and one sequential ordering cannot satisfy both.
++        // A small collective cost several times its wire time, and decode runs one collective per
++        // subgraph boundary for every token. Both halves of
++        // the cause were structural. dist_nd_send2 blocked until its own send completion arrived
++        // because there was a single tx staging buffer, and the parity order below then made
++        // rank 1 wait for the entire inbound payload before it could begin sending. On a
++        // full-duplex link that is two serial transfers where one would do.
+         //
+-        // It is safe because neither transport requires the peer to be inside recv_payload()
+-        // before a send can make progress. TCP has SOCKET_BUFSIZE of socket buffer to absorb the
+-        // payload, and ND completes a send into the receives the peer posted at setup time. It
+-        // costs latency on that one edge, not correctness. The real remedy is a full-duplex send
+-        // on its own thread, which is a larger change than this one.
+-        const bool ok = ((cfg.rank & 1) == 0)
+-            ? (send_payload() && recv_payload())
+-            : (recv_payload() && send_payload());
++        // With the tx ring, dist_nd_send2 returns once the chunk is posted, so posting first and
++        // draining after the receive puts both directions on the wire together. The drain is what
++        // makes it safe: a staging slot is never reused until its transfer has retired.
++        //
++        // Taken only when this edge's send is actually on ND. A TCP send blocks in the socket
++        // buffer and gains nothing, and a mixed edge (ND one way, TCP the other, which happens
++        // from world_size 3 up) keeps the ordering it was reasoned about with.
++        static const bool full_duplex = []() {
++            const char * v = getenv("LLAMA_DIST_TP_FULL_DUPLEX");
++            return v && v[0] != '\0' && v[0] != '0';
++        }();
++
++        bool ok;
++        if (full_duplex && use_nd_send) {
++            ok = send_payload() && recv_payload() && dist_nd_send_drain(nd_send, err);
++        } else {
++            // Rank parity avoids blocking send/send for large payloads.
++            //
++            // Parity is a 2-colouring of the ring, and an odd-length cycle cannot be 2-coloured,
++            // so from world_size 3 up exactly one edge has both ends calling send_payload()
++            // first. That is a property of the topology, not a bug to schedule around: no
++            // assignment of send-first / recv-first to ranks can do better than one such edge on
++            // an odd ring, and parity already achieves that minimum. Do not "fix" this by
++            // switching to a rank < peer rule; a rank sits on two edges and one sequential
++            // ordering cannot satisfy both.
++            //
++            // It is safe because neither transport requires the peer to be inside recv_payload()
++            // before a send can make progress. TCP has SOCKET_BUFSIZE of socket buffer to absorb
++            // the payload, and ND completes a send into the receives the peer posted at setup
++            // time. It costs latency on that one edge, not correctness.
++            ok = ((cfg.rank & 1) == 0)
++                ? (send_payload() && recv_payload())
++                : (recv_payload() && send_payload());
++        }
+ 
+         if (ok) {
+             // Recorded so the trace report accounts for the bytes this collective actually put
+diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
+index e67ab55..0249de5 100644
+--- a/ggml/src/ggml-backend-meta.cpp
++++ b/ggml/src/ggml-backend-meta.cpp
+@@ -2629,44 +2629,56 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend,
+         return GGML_STATUS_SUCCESS;
+     };
+ 
+-    auto is_dist_collective_boundary = [](const ggml_tensor * node) -> bool {
+-        // PATCHED: accept every node. nodes_dist_per_backend is ALREADY the curated set of
+-        // collective boundaries and the known-good code reduces every node in it. Filtering
+-        // it again by tensor-name prefix silently dropped required all-reduces on this model,
+-        // leaving each rank holding only its own partial sum: fast, and completely wrong.
+-        return node != nullptr;
+-        if (node == nullptr || node->name[0] == '\0') {
+-            return false;
+-        }
+-
+-        // Collective boundary prefixes. Defaults match the built-in TP reduction
+-        // points; LLAMA_DIST_TP_COLLECT_PREFIXES (comma-separated) overrides them
+-        // (used to experiment with reducing the number of cross-node barriers).
+-        static const std::vector<std::string> prefixes = []() {
+-            std::vector<std::string> v;
+-            const char * raw = getenv("LLAMA_DIST_TP_COLLECT_PREFIXES");
+-            if (raw != nullptr && *raw != '\0') {
+-                std::string s(raw);
+-                size_t p = 0;
+-                while (p <= s.size()) {
+-                    const size_t c = s.find(',', p);
+-                    const std::string tok = s.substr(p, c == std::string::npos ? std::string::npos : c - p);
+-                    if (!tok.empty()) {
+-                        v.push_back(tok);
+-                    }
+-                    if (c == std::string::npos) {
+-                        break;
+-                    }
+-                    p = c + 1;
++    // Boundary predicate.
++    //
++    // nodes_dist_per_backend holds exactly ONE tensor per subgraph boundary: graph_compute pushes
++    // cgraph->nodes[n_nodes-1] of each subgraph, and boundaries are i < n_subgraphs-1. A subgraph
++    // boundary exists PRECISELY BECAUSE a partial result has to be summed across ranks, so the
++    // number of collectives per token is n_subgraphs-1 and every one of them is load-bearing.
++    // Dropping a single boundary leaves each rank holding only its own partial sum and corrupts
++    // every layer downstream: fast, and completely wrong.
++    //
++    // The base branch's built-in default list {linear_attn_out-, attn_output-, ffn_down-,
++    // ffn_out-, ffn_moe_out-} names a different model family (linear_attn_* is DeltaNet,
++    // ffn_moe_* is MoE) and can match the wrong subset of boundaries on other models. The
++    // filter is now OPT-IN: set LLAMA_DIST_TP_COLLECT_PREFIXES to a list that actually
++    // matches this model's boundary names and the filter engages; leave it unset and we keep
++    // known-good semantics. Deliberately there is NO built-in default list any more, because a
++    // wrong one fails silently and looks like a speedup.
++    static const std::vector<std::string> dist_collect_prefixes = []() {
++        std::vector<std::string> v;
++        const char * raw = getenv("LLAMA_DIST_TP_COLLECT_PREFIXES");
++        if (raw != nullptr && *raw != '\0') {
++            std::string s(raw);
++            size_t p = 0;
++            while (p <= s.size()) {
++                const size_t c = s.find(',', p);
++                const std::string tok = s.substr(p, c == std::string::npos ? std::string::npos : c - p);
++                if (!tok.empty()) {
++                    v.push_back(tok);
++                }
++                if (c == std::string::npos) {
++                    break;
+                 }
+-            } else {
+-                v = { "linear_attn_out-", "attn_output-", "ffn_down-", "ffn_out-", "ffn_moe_out-" };
++                p = c + 1;
+             }
+-            return v;
+-        }();
++        }
++        return v;
++    }();
++
++    // One-shot inventory of the boundaries this model actually produces, so a prefix list can be
++    // chosen from evidence instead of guessed. LLAMA_DIST_TP_DUMP_BOUNDARIES=1.
++    static const bool dist_dump_boundaries = getenv("LLAMA_DIST_TP_DUMP_BOUNDARIES") != nullptr;
+ 
++    auto is_dist_collective_boundary = [](const ggml_tensor * node) -> bool {
++        if (node == nullptr) {
++            return false;
++        }
++        if (dist_collect_prefixes.empty()) {
++            return true;
++        }
+         const std::string_view name(node->name);
+-        for (const auto & pfx : prefixes) {
++        for (const auto & pfx : dist_collect_prefixes) {
+             if (name.rfind(pfx, 0) == 0) {
+                 return true;
+             }
+@@ -2693,6 +2705,26 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend,
+                 if (node_dst == nullptr) {
+                     continue;
+                 }
++                if (dist_dump_boundaries) {
++                    // Print each distinct boundary once: name, dtype, shape, bytes. This is the
++                    // exact set any prefix filter would have to match, and it is what shows
++                    // whether a name-based filter can express the required set at all.
++                    static std::vector<std::string> seen;
++                    const std::string nm = node_dst->name[0] ? node_dst->name : "<unnamed>";
++                    bool is_new = true;
++                    for (const std::string & s : seen) {
++                        if (s == nm) { is_new = false; break; }
++                    }
++                    if (is_new) {
++                        seen.push_back(nm);
++                        fprintf(stderr, "[dist-tp] boundary #%d name='%s' type=%s ne=[%lld,%lld,%lld,%lld] nbytes=%zu\n",
++                                (int) seen.size(), nm.c_str(), ggml_type_name(node_dst->type),
++                                (long long) node_dst->ne[0], (long long) node_dst->ne[1],
++                                (long long) node_dst->ne[2], (long long) node_dst->ne[3],
++                                ggml_nbytes(node_dst));
++                        fflush(stderr);
++                    }
++                }
+                 if (!is_dist_collective_boundary(node_dst)) {
+                     continue;
+                 }

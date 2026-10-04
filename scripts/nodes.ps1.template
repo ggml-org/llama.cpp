@@ -1,0 +1,177 @@
+# Site config and node access helper. Copy to nodes.ps1 and describe YOUR cluster here; it is the
+# only file a site edits. Every script in this folder dot-sources it.
+#
+# nodes.ps1 is gitignored: it holds host addresses and user names. Key auth only, no passwords.
+#
+# Every name defined here is CLUSTER_-prefixed. PowerShell variables are case-insensitive and this
+# file is dot-sourced into the caller's scope, so a short name like $nodes would be overwritten by
+# any script-level variable of the same name.
+#
+# Run the scripts from a controller machine that is NOT one of the nodes: prep_fabric.ps1 reboots
+# every participating node and waits for it to come back.
+
+# The private key the controller uses for every node. Its .pub goes into each node's
+# C:\ProgramData\ssh\administrators_authorized_keys (see README).
+$KEY = "$env:USERPROFILE\.ssh\llama_cluster_ed25519"
+
+# One entry per machine. Names are free-form.
+#   HostIp        what the controller ssh's to: the node's normal network address, never a USB4 leg.
+#   User          an account in the node's local Administrators group (prep changes adapter
+#                 settings and reboots).
+#   RendezvousIp  optional. What the other ranks dial to reach this node when it is rank 0
+#                 (--dist-master). Defaults to HostIp; set it only if the two differ.
+#   Readdress     optional. $true for a node whose USB4 adapters come back as new device instances
+#                 after a boot, so static addresses can land on the wrong cable. prep_fabric.ps1
+#                 then assigns that node's leg addresses by probing the far ends (fix_p2p_legs.ps1).
+$CLUSTER_NODES = [ordered]@{
+    A = @{ HostIp = "10.0.0.1"; User = "USER" }
+    B = @{ HostIp = "10.0.0.2"; User = "USER" }
+    C = @{ HostIp = "10.0.0.3"; User = "USER" }
+}
+
+# One entry per USB4 cable, keyed "X|Y", giving each end's static address ON THAT CABLE. Use one
+# /24 per cable: with two cables on one subnet both ends can claim the same address while the link
+# still reports Up. A ring of N ranks needs a cable between every consecutive pair, including
+# last -> first, so 3 ranks need 3 cables and 2 ranks need 1.
+$CLUSTER_P2P = [ordered]@{
+    'A|B' = @{ A = '192.168.77.1'; B = '192.168.77.2' }
+    'B|C' = @{ B = '192.168.78.1'; C = '192.168.78.2' }
+    'A|C' = @{ A = '192.168.79.1'; C = '192.168.79.2' }
+}
+
+# Ring order per rank count. Rank 0 is the first node. List only rings whose nodes are all cabled
+# and powered.
+#
+# Order matters for RDMA:
+#  - Connect direction. On each ring edge the LOWER rank accepts the NetworkDirect connection and
+#    the HIGHER rank connects. Test every direction with nd_all_directions.ps1 first.
+#  - Data direction. From 3 ranks up each edge carries tensor data one way, rank r -> r+1. A link
+#    can pass a connect test and still fail to stream data in one direction, so confirm a new ring
+#    order with a real run. 2 ranks share one connection and are not affected.
+$CLUSTER_RINGS = @{
+    2 = 'A,B'
+    3 = 'A,B,C'
+}
+
+$CLUSTER_CFG = @{
+    RunDir     = 'C:\disttp'         # the build (llama-cli.exe + DLLs), same path on every node
+    # RunDirByNode = @{ C = 'C:\disttp_other' }   # optional per-node override of RunDir
+    NdDir      = 'C:\nd'             # ndping.exe, and the NetworkDirect provider ndprov.dll
+    Model      = 'C:\models\model.gguf'           # same path on every node; first shard of a split GGUF
+    Prompt     = 'C:\disttp\prompts\prompt_1k.txt' # same bytes on every node (prompts\ in this repo)
+    Device     = 'Vulkan0'           # llama.cpp --device
+    Threads    = 8
+    MasterPort = 29500               # rank 0 listens here; ring edges use the ports just above it
+    # Regex on InterfaceDescription that selects the USB4 P2P adapters. It is one of two guards that
+    # keep prep_fabric.ps1 off the normal network adapter; the other is that an adapter holding a
+    # default route is never touched.
+    P2PMatch   = 'USB4'
+    # The USB4 networking / RDMA driver files. verify_binaries.ps1 hashes the image each driver
+    # service actually loads on every node, because an OS update can replace a driver silently, and
+    # an "RDMA" run then falls back to TCP.
+    DriverFiles = @('usb4p2pnetadapter.sys','Usb4HostRouter.sys','Usb4DeviceRouter.sys','NetAdapterCx.sys')
+    # Known-good SHA256 per driver file: the set that produced a verified RDMA run on your cluster
+    # (take them from verify_binaries.ps1's output). Empty = the check only reports the hashes and
+    # warns when nodes differ. Filled = any other image fails.
+    DriverSha256 = @{}
+}
+
+# Fail when this file is loaded, not halfway through a run. Runs in a child scope so nothing here
+# leaks into the caller.
+& {
+    foreach($k in $CLUSTER_P2P.Keys){
+        foreach($side in ($k -split '\|')){
+            if(-not $CLUSTER_NODES.Contains($side)){ throw "`$CLUSTER_P2P cable '$k' names '$side', which is not in `$CLUSTER_NODES" }
+            if(-not $CLUSTER_P2P[$k][$side]){ throw "`$CLUSTER_P2P cable '$k' has no address for '$side'" }
+        }
+    }
+    foreach($k in $CLUSTER_RINGS.Keys){
+        foreach($n in ($CLUSTER_RINGS[$k] -split '[,\s]+' | Where-Object { $_ })){
+            if(-not $CLUSTER_NODES.Contains($n)){ throw "`$CLUSTER_RINGS[$k] names '$n', which is not in `$CLUSTER_NODES" }
+        }
+    }
+}
+
+function Node-Target([string]$N) {
+    $e = $CLUSTER_NODES[$N]
+    # Fail loudly here rather than hand ssh a malformed destination.
+    if (-not $e -or -not $e.User -or -not $e.HostIp) {
+        throw "node '$N' is not in `$CLUSTER_NODES (or lacks User/HostIp). If you assigned a local variable named `$CLUSTER_NODES, it replaced the table."
+    }
+    "$($e.User)@$($e.HostIp)"
+}
+function Node-Ip([string]$N) {
+    $e = $CLUSTER_NODES[$N]
+    if (-not $e -or -not $e.HostIp) { throw "node '$N' is not in `$CLUSTER_NODES" }
+    $e.HostIp
+}
+function Node-RendezvousIp([string]$N) { $e = $CLUSTER_NODES[$N]; if($e.RendezvousIp){ $e.RendezvousIp } else { Node-Ip $N } }
+
+# Parse a node list and validate every name. Splits on commas AND whitespace: powershell -File
+# hands a script "A,B,C" as one string, but a call from a PowerShell prompt passes A,B,C as an
+# array, which a [string] parameter flattens to "A B C". Both must work.
+function Get-NodeList([string]$Spec) {
+    $l = @($Spec -split '[,\s]+' | Where-Object { $_ })
+    foreach($n in $l){ if(-not $CLUSTER_NODES.Contains($n)){ throw "unknown node '$n'; nodes.ps1 defines: $(@($CLUSTER_NODES.Keys) -join ', ')" } }
+    if(@($l | Select-Object -Unique).Count -ne $l.Count){ throw "a node appears twice in '$Spec'" }
+    $l
+}
+
+# The address $From dials to reach $To: $To's end of the cable between them.
+function Get-P2PAddr([string]$From, [string]$To) {
+    if($From -eq $To){ throw "Get-P2PAddr: '$From' cannot be its own peer" }
+    foreach($k in $CLUSTER_P2P.Keys){
+        $pair = $k -split '\|'
+        if(($pair -contains $From) -and ($pair -contains $To)){ return $CLUSTER_P2P[$k][$To] }
+    }
+    throw "no USB4 cable between $From and $To in `$CLUSTER_P2P; the collective would route over the normal network"
+}
+
+# Both directions of every cable whose two ends are both in $Nodes.
+function Get-P2PEdges($Nodes) {
+    foreach($k in $CLUSTER_P2P.Keys){
+        $x, $y = $k -split '\|'
+        if(($Nodes -contains $x) -and ($Nodes -contains $y)){
+            @{ From=$x; ToNode=$y; To=$CLUSTER_P2P[$k][$y]; Label="$x -> $y" }
+            @{ From=$y; ToNode=$x; To=$CLUSTER_P2P[$k][$x]; Label="$y -> $x" }
+        }
+    }
+}
+
+# The /24 prefixes ("192.168.77") of every configured cable.
+function Get-P2PPrefixes { @(foreach($v in $CLUSTER_P2P.Values){ foreach($ip in $v.Values){ ($ip -split '\.')[0..2] -join '.' } }) | Select-Object -Unique }
+
+function Invoke-Node {
+    param(
+        [Parameter(Mandatory)] [string]$N,
+        [Parameter(Mandatory)] [string]$Cmd,
+        [switch]$Ps,                # run $Cmd as a remote PowerShell EncodedCommand
+        [int]$TimeoutSec = 120
+    )
+    $target = Node-Target $N
+    $sshArgs = @("-i", $KEY, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+                 "-o", "ConnectTimeout=45", "-o", "ServerAliveInterval=15", $target)
+    if ($Ps) {
+        # EncodedCommand avoids every layer of quote mangling between ssh, cmd and PowerShell. The
+        # encoded command must stay under cmd's 8,191-character command line limit.
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Cmd))
+        $sshArgs += @("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $b64)
+    } else {
+        $sshArgs += $Cmd
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "ssh"
+    $psi.Arguments = ($sshArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    # Set $env:NODES_DEBUG to a file path to log the exact ssh argument string of every call.
+    if ($env:NODES_DEBUG) { Add-Content -Path $env:NODES_DEBUG -Value ("{0:s} ssh {1}" -f (Get-Date), $psi.Arguments) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute = $false
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEndAsync()
+    $err = $p.StandardError.ReadToEndAsync()
+    $timedOut = $false
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) { $timedOut = $true; try { $p.Kill(); $p.WaitForExit(5000) | Out-Null } catch {} }
+    $code = try { $p.ExitCode } catch { -1 }
+    [pscustomobject]@{ StdOut = $out.Result; StdErr = $err.Result; ExitCode = $code; TimedOut = $timedOut }
+}

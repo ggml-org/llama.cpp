@@ -1,0 +1,52 @@
+From 2e37636371f2e2e055d8ec5253472e9af3e73f37 Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Sun, 4 Oct 2026 01:52:03 -0700
+Subject: [PATCH 9/9] dist-tp: build the NetworkDirect loader as a static
+ library
+
+The ndutil loader sources (ndaddr.cpp, ndfrmwrk.cpp, ndprov.cpp) were
+compiled straight into llama-common, which in a shared build exports
+every symbol through a generated .def file. Under MSVC, ndprov.cpp
+produces two external symbols named plainly == and !=; the .def file
+lists them and the link of llama-common.dll fails with LNK2001.
+
+Build the three sources as a private static library, llama-nd-util,
+and link it into llama-common. The export scan only covers the DLL's
+own objects, so the two symbols no longer reach the .def file. No
+code changes.
+---
+ common/CMakeLists.txt | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index 062a7a8..fcdb423 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -213,17 +213,22 @@ if (LLAMA_DIST_TP_ND)
+     if (NOT LLAMA_DIST_TP_ND_STATUS_DIR)
+         message(FATAL_ERROR "ndstatus.h not found under ${LLAMA_DIST_TP_ND_SDK}/out - build the NetworkDirect SDK first")
+     endif()
+-    # the prebuilt ndutil.lib is /MT, so compile the loader sources in instead of linking it
+-    set(LLAMA_ND_UTIL_SOURCES
++    # the prebuilt ndutil.lib is /MT, so build the loader sources here instead of linking it.
++    # They go in a static library of their own, outside the export-all scan of this DLL: MSVC
++    # emits two external symbols in ndprov.cpp named plainly == and !=, and once they are
++    # written to the generated .def file the link fails with LNK2001.
++    add_library(llama-nd-util STATIC
+         "${LLAMA_ND_UTIL_DIR}/ndaddr.cpp"
+         "${LLAMA_ND_UTIL_DIR}/ndfrmwrk.cpp"
+         "${LLAMA_ND_UTIL_DIR}/ndprov.cpp")
+-    target_sources(${TARGET} PRIVATE ${LLAMA_ND_UTIL_SOURCES})
++    target_include_directories(llama-nd-util PRIVATE "${LLAMA_ND_UTIL_DIR}" "${LLAMA_DIST_TP_ND_STATUS_DIR}")
++    target_compile_definitions(llama-nd-util PRIVATE _CRT_SECURE_NO_WARNINGS)
+     if (MSVC)
+-        set_source_files_properties(${LLAMA_ND_UTIL_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
++        target_compile_options(llama-nd-util PRIVATE /W0)
+     else()
+-        set_source_files_properties(${LLAMA_ND_UTIL_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
++        target_compile_options(llama-nd-util PRIVATE -w)
+     endif()
++    target_link_libraries(${TARGET} PRIVATE llama-nd-util)
+     target_include_directories(${TARGET} PRIVATE "${LLAMA_ND_UTIL_DIR}" "${LLAMA_DIST_TP_ND_STATUS_DIR}")
+     target_compile_definitions(${TARGET} PRIVATE LLAMA_DIST_TP_ND _CRT_SECURE_NO_WARNINGS)
+     message(STATUS "llama: NetworkDirect dist-TP transport enabled (${LLAMA_DIST_TP_ND_SDK})")
