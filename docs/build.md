@@ -214,7 +214,7 @@ For a build covering all CUDA GPUs, disable `GGML_NATIVE`:
 cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF
 ```
 
-The resulting binary should run on all CUDA GPUs with optimal performance, though some just-in-time compilation may be required.
+The resulting binary covers the GPU targets supported by the selected toolkit, though some just-in-time compilation may be required. CUDA 13 does not compile Maxwell, Pascal or Volta targets.
 
 ### Override Compute Capability Specifications
 
@@ -251,6 +251,43 @@ If you have multiple CUDA installations on your system and want to compile llama
 ```bash
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER=/opt/cuda-11.7/bin/nvcc -DCMAKE_INSTALL_RPATH="/opt/cuda-11.7/lib64;\$ORIGIN" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
 ```
+
+#### Pascal / GTX 10-series build qualification
+
+SM61 requires CUDA 12.9 or earlier. Use a separate toolkit and build directory; do not downgrade the production driver or change the default CUDA installation. The following Linux profile is compile-qualified with CUDA 12.9.1, NVCC 12.9.86, GCC 13.3 and CMake 3.28.3 on Ubuntu 24.04:
+
+```bash
+cmake -S . -B build-sm61 -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=61 \
+  -DCMAKE_CUDA_COMPILER=/opt/cuda-12.9/bin/nvcc \
+  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-13 \
+  -DGGML_CUDA_FA_ALL_QUANTS=ON -DLLAMA_BUILD_TESTS=ON
+cmake --build build-sm61 --target llama-server test-cuda-compiled-features test-kv-stream-attention-plan -j
+ctest --test-dir build-sm61 --output-on-failure \
+  -R '^(test-cuda-architecture-config|test-cuda-compiled-features|test-kv-stream-attention-plan)$'
+```
+
+Replace the example compiler paths with those of your isolated toolkit and supported host compiler. A compile-only container also works without NVIDIA device access: use `nvidia/cuda:12.9.1-devel-ubuntu24.04`, install CMake/Ninja and normal build dependencies inside that container, mount the source read-only and a separate build directory writable, then use `-DCMAKE_CUDA_ARCHITECTURES=61`. Keep the container's default NVCC/GCC paths instead of the `/opt` paths above.
+
+In a container without a driver, final executable linking can fail because the SDK's `libcuda.so` stub has the SONAME `libcuda.so.1`, but no matching symlink. For compile-only qualification with `/source` and `/build` mounts:
+
+```bash
+mkdir -p /build/driver-stubs
+ln -s /usr/local/cuda/targets/x86_64-linux/lib/stubs/libcuda.so /build/driver-stubs/libcuda.so.1
+cmake -S /source -B /build -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=61 \
+  -DGGML_CUDA_FA_ALL_QUANTS=ON -DLLAMA_BUILD_TESTS=ON \
+  -DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link=/build/driver-stubs
+cmake --build /build --target llama-server test-cuda-compiled-features test-kv-stream-attention-plan -j
+LD_LIBRARY_PATH=/build/driver-stubs ctest --test-dir /build --output-on-failure \
+  -R '^(test-cuda-architecture-config|test-cuda-compiled-features|test-kv-stream-attention-plan)$'
+```
+
+This stub is only for linking and GPU-independent tests. Do not install it as a driver, put it on an inference runtime's library path, or count these tests as GPU execution. Inference needs the real NVIDIA driver and device access.
+
+`test-cuda-compiled-features` uses the CUDA backend's actual architecture list and build definitions, but does not initialize a GPU. An SM61-only build reports compiled target `610`, slow FP16 and no Tensor Core / `cp.async` support, even when queried for a newer hypothetical GPU. The normal CUDA source guards keep newer instructions out of this target. For mixed Q8_0 K / Q4_0 V, keep `GGML_CUDA_FA_ALL_QUANTS=ON`; the default vector build compiles only matching F16/F16, BF16/BF16, Q4_0/Q4_0 and Q8_0/Q8_0 pairs. Other stock attention paths may use bounded conversion; a missing direct pair is not proof that the hardware is unsupported.
+
+This is build qualification, not Pascal adaptive-streaming runtime qualification. The existing streamed admission checks remain in place until the vector and tile execution stages are validated on appropriate hardware. No Windows/MSVC build or GTX 10-series inference result is claimed by these Linux compile tests. Modern CUDA 13 builds retain their existing target selection and optimized kernels.
 
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 
