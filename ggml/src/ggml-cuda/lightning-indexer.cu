@@ -386,9 +386,9 @@ static __global__ void lightning_indexer_kernel_vec(
 }
 
 // one block scores a tile of K_VECS_PER_BLOCK keys against TOKENS_PER_BLOCK tokens: the keys are
-// staged in half precision and the queries of every head in float, each thread owns one key for
-// TOKENS_PER_THREAD tokens and widens every key element once for all heads, so no dot product
-// needs a cross thread reduction
+// staged in half precision and the queries of every head in float, each thread owns KEYS_PER_THREAD
+// keys for one token, a warp shares its token so the query reads are broadcasts, and every key
+// element is widened once for all heads, so no dot product needs a cross thread reduction
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
 static __global__ void lightning_indexer_kernel_tile(
         const float * Q, const char * K, const float * W, const half * M, float * dst,
@@ -402,13 +402,13 @@ static __global__ void lightning_indexer_kernel_tile(
     ) {
 
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
-    constexpr int TOKEN_GROUPS      = THREADS_PER_BLOCK / K_VECS_PER_BLOCK;
-    constexpr int TOKENS_PER_THREAD = LIGHTNING_INDEXER_TILE_TOKENS / TOKEN_GROUPS;
     constexpr int TOKENS_PER_BLOCK  = LIGHTNING_INDEXER_TILE_TOKENS;
+    constexpr int KEY_LANES         = THREADS_PER_BLOCK / TOKENS_PER_BLOCK;
+    constexpr int KEYS_PER_THREAD   = K_VECS_PER_BLOCK / KEY_LANES;
     constexpr int N_EMBD_H2         = N_EMBD / 2;
 
-    static_assert(THREADS_PER_BLOCK % K_VECS_PER_BLOCK == 0, "threads must cover the key tile");
-    static_assert(TOKENS_PER_BLOCK % TOKEN_GROUPS == 0, "token groups must cover the token tile");
+    static_assert(THREADS_PER_BLOCK % TOKENS_PER_BLOCK == 0, "threads must cover the token tile");
+    static_assert(K_VECS_PER_BLOCK % KEY_LANES == 0, "key lanes must cover the key tile");
 
     const int tid         = threadIdx.y * WARP_SIZE + threadIdx.x;
     const int start_kv    = blockIdx.x * K_VECS_PER_BLOCK;
@@ -479,48 +479,53 @@ static __global__ void lightning_indexer_kernel_tile(
 
     // phase 3 - float products of the widened keys for every head, ReLU, weight
 
-    const int kl = tid % K_VECS_PER_BLOCK;
-    const int tl = tid / K_VECS_PER_BLOCK;
+    const int kl = tid % KEY_LANES;
+    const int tl = tid / KEY_LANES;
 
-    float qk[N_HEAD][TOKENS_PER_THREAD] = { { 0.0f } };
+    float qk[N_HEAD][KEYS_PER_THREAD] = { { 0.0f } };
 
-#pragma unroll
+#pragma unroll 8
     for (int c = 0; c < N_EMBD_H2; ++c) {
-        const float2 k_val = __half22float2(k_shared[kl][c]);
+        float2 k_val[KEYS_PER_THREAD];
+#pragma unroll
+        for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+            k_val[j] = __half22float2(k_shared[kl + j*KEY_LANES][c]);
+        }
 #pragma unroll
         for (int h = 0; h < N_HEAD; ++h) {
+            const float2 q_val = q_shared[h][tl][c];
 #pragma unroll
-            for (int j = 0; j < TOKENS_PER_THREAD; ++j) {
-                const float2 q_val = q_shared[h][tl + j*TOKEN_GROUPS][c];
-                qk[h][j] = fmaf(k_val.x, q_val.x, qk[h][j]);
-                qk[h][j] = fmaf(k_val.y, q_val.y, qk[h][j]);
+            for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+                qk[h][j] = fmaf(k_val[j].x, q_val.x, qk[h][j]);
+                qk[h][j] = fmaf(k_val[j].y, q_val.y, qk[h][j]);
             }
         }
     }
 
-    float score[TOKENS_PER_THREAD] = { 0.0f };
+    float score[KEYS_PER_THREAD] = { 0.0f };
 
 #pragma unroll
     for (int h = 0; h < N_HEAD; ++h) {
 #pragma unroll
-        for (int j = 0; j < TOKENS_PER_THREAD; ++j) {
-            score[j] += fmaxf(qk[h][j], 0.0f) * w_shared[h][tl + j*TOKEN_GROUPS];
+        for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+            score[j] += fmaxf(qk[h][j], 0.0f) * w_shared[h][tl];
         }
     }
 
     // phase 4 - add the mask and write, consecutive threads write consecutive keys
 
-    const int i_kv = start_kv + kl;
-    if (i_kv >= n_kv) {
+    const int i_batch = start_batch + tl;
+    if (i_batch >= n_batch) {
         return;
     }
 
+    const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+    float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+
 #pragma unroll
-    for (int j = 0; j < TOKENS_PER_THREAD; ++j) {
-        const int i_batch = start_batch + tl + j*TOKEN_GROUPS;
-        if (i_batch < n_batch) {
-            const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
-            float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+    for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+        const int i_kv = start_kv + kl + j*KEY_LANES;
+        if (i_kv < n_kv) {
             dst_base[i_kv] = score[j] + __half2float(m_base[i_kv]);
         }
     }
