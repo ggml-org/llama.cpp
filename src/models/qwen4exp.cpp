@@ -443,6 +443,14 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
+        if (cparams.embeddings) {
+            // llama_context reads embeddings n_embd_out = hc * n_embd wide: export the wide residual
+            ggml_tensor * wide = ggml_repeat_4d(ctx0,
+                    ggml_reshape_3d(ctx0, cur, n_embd, 1, cur->ne[1]),
+                    n_embd, hc, cur->ne[1], 1);
+            res->t_embd = ggml_cont(ctx0, ggml_reshape_2d(ctx0, wide, n_embd * hc, cur->ne[1]));
+            ggml_build_forward_expand(gf, res->t_embd);
+        }
 
         cur = build_lora_mm(model.output, cur, model.output_s);
         cb(cur, "result_output", -1);
@@ -562,6 +570,12 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+    if (cparams.embeddings) {
+        // llama_context reads embeddings n_embd_out = hc * n_embd wide. That is the residual the mixer
+        // just collapsed, not its n_embd output, so export the residual.
+        res->t_embd = ggml_cont(ctx0, ggml_reshape_2d(ctx0, res_hc, n_embd * hc, res_hc->ne[2]));
+        ggml_build_forward_expand(gf, res->t_embd);
+    }
 
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
