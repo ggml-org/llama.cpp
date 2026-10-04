@@ -4411,6 +4411,7 @@ server_context_meta server_context::get_meta() const {
         /* model_aliases          */ impl->model_aliases,
         /* model_tags             */ impl->model_tags,
         /* model_path             */ impl->params_base.model.path,
+        /* model_kind             */ server_model_kind(common_get_decision_type(impl->model_tgt)),
         /* has_mtmd               */ impl->mctx != nullptr,
         /* has_inp_image          */ impl->chat_params.allow_image,
         /* has_inp_audio          */ impl->chat_params.allow_audio,
@@ -4767,6 +4768,7 @@ static json get_res_model_info(const server_context_meta & meta) {
         {"aliases",  meta.model_aliases},
         {"tags",     meta.model_tags},
         {"object",   "model"},
+        {"type",     meta.model_kind},
         {"created",  std::time(0)},
         {"owned_by", "llamacpp"},
         {"meta",     {

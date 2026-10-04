@@ -144,6 +144,26 @@ const char * get_media_marker() {
 }
 
 //
+// model kind
+//
+
+std::string server_model_kind(common_decision_type decision_type) {
+    switch (decision_type) {
+        case COMMON_DECISION_TYPE_OPENJEV:
+        case COMMON_DECISION_TYPE_LEV:
+        case COMMON_DECISION_TYPE_KEV:
+        case COMMON_DECISION_TYPE_NIMBLE:
+        case COMMON_DECISION_TYPE_LAYA:
+        case COMMON_DECISION_TYPE_CLEF:
+            return "classifier";
+        case COMMON_DECISION_TYPE_NONE:
+            return "model"; // plain model
+        default:
+            return "unknown"; // unsupported type, or missing or malformed metadata
+    }
+}
+
+//
 // lora utils
 //
 

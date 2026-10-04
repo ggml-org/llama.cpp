@@ -525,9 +525,16 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     }
 }
 
-void server_model_meta::update_caps() {
+void server_model_meta::update_caps(const common_params & base) {
+    multimodal = { false, false };
+    model_kind = "unknown";
+
+    // resolve the model file offline, with no download
+    common_params params;
+    params.model = base.model;
+    // --no-mmproj reaches the children too, so it must also block auto-attached projectors
+    params.no_mmproj = base.no_mmproj;
     try {
-        common_params params;
         preset.apply_to_params(params, {
             "LLAMA_ARG_MODEL",
             "LLAMA_ARG_MODEL_URL",
@@ -539,14 +546,25 @@ void server_model_meta::update_caps() {
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-        common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
+        common_models_handler_apply(handler, params);
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to resolve the model of '%s': %s\n", name.c_str(), e.what());
+        return;
+    }
+
+    // read the kind from the GGUF metadata before the projector check
+    if (!params.model.path.empty()) {
+        model_kind = server_model_kind(common_get_decision_type(params.model.path));
+    }
+
+    try {
         if (params.no_mmproj || params.mmproj.path.empty()) {
             multimodal = { false, false };
         } else {
             multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
         }
     } catch (const std::exception & e) {
-        LOG_WRN("failed to initialize common_params for multimodal capability detection: %s\n", e.what());
+        LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
         multimodal = { false, false };
     }
 }
@@ -639,7 +657,7 @@ void server_models::add_model(server_model_meta && meta) {
     }
 
     meta.update_args(ctx_preset, bin_path); // render args
-    meta.update_caps();
+    meta.update_caps(base_params);
     std::string name = meta.name;
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<server_subproc>(),
@@ -949,7 +967,7 @@ void server_models::load_models() {
 
             inst.meta.exit_code = 0; // clear failed state so the model can be reloaded
             inst.meta.update_args(ctx_preset, bin_path);
-            inst.meta.update_caps();
+            inst.meta.update_caps(base_params);
         }
 
         // add models that are new in this reload, load-on-startup is not honored here since a
@@ -1295,6 +1313,10 @@ void server_models::update_status(const std::string & name, const update_status_
         }
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
+            // keep the child's kind after unload
+            if (args.loaded_info.contains("type") && args.loaded_info.at("type").is_string()) {
+                meta.model_kind = args.loaded_info.at("type").get<std::string>();
+            }
         }
         if (!args.progress.is_null()) {
             meta.progress = args.progress;
@@ -2085,6 +2107,10 @@ void server_models_routes::init_routes() {
                     }
                 }
             }
+
+            // meta.model_kind comes from the child's metadata while it is loaded or sleeping
+            // it stays after unload (see update_status)
+            model_info["type"] = meta.model_kind.empty() ? "unknown" : meta.model_kind;
             models_json.push_back(model_info);
         }
         res_ok(res, {

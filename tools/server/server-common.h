@@ -106,6 +106,13 @@ std::string gen_tool_call_id();
 const char * get_media_marker();
 
 //
+// model kind
+//
+
+// model kind, for the "type" field of GET /models
+std::string server_model_kind(common_decision_type decision_type);
+
+//
 // lora utils
 //
 

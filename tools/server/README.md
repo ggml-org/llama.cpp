@@ -1248,6 +1248,20 @@ Returns information about the loaded model. See [OpenAI Models API documentation
 
 The returned list always has one single element. The `meta` field can be `null` (for example, while the model is still loading).
 
+Each object in `data` has a `type` field describing the kind of the model:
+
+| Value | Meaning |
+|---|---|
+| `classifier` | A recognized native decision model, served through [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api) |
+| `model` | Readable model metadata without a native decision type |
+| `unknown` | The metadata is missing, malformed, or the decision type is unsupported |
+
+Use `classifier` to select [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api) instead of chat completions. `model` is a neutral value: it is not about chat, embedding, or reranking, and it is independent of those settings. `unknown` means there is not enough information; do not treat it as a classifier.
+
+The same `type` field is also in [`GET /models`](#get-models-list-available-models) for router mode. A client can discover a classifier without a probe or a model load. This also works for unloaded and sleeping models. Clients must tolerate an absent `type` field when they connect to older servers.
+
+Note: this is not the same as the compatibility field `type` of the objects in `models`, which stays `"model"`.
+
 By default, model `id` field is the path to model file, specified via `-m`. You can set a custom value for model `id` field via `--alias` argument. For example, `--alias gpt-4o-mini`.
 
 Example:
@@ -1259,6 +1273,7 @@ Example:
         {
             "id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             "object": "model",
+            "type": "model",
             "created": 1735142223,
             "owned_by": "llamacpp",
             "meta": {
@@ -1966,6 +1981,7 @@ Listing all models in cache. The model metadata will also include a field to ind
   "data": [{
     "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
     "path": "/Users/REDACTED/Library/Caches/llama.cpp/ggml-org_gemma-3-4b-it-GGUF_gemma-3-4b-it-Q4_K_M.gguf",
+    "type": "model",
     "status": {
       "value": "loaded",
       "args": ["llama-server", "-ctx", "4096"]
@@ -1989,6 +2005,26 @@ Note:
     - If a model is running but updated or removed from the source, it will be unloaded
     - If a model is not running, it will be added or updated according to the source
 2. When the model is loaded, the info from `/v1/models` is forwarded to router's `/v1/models`. This includes metadata about the model and the runtime instance.
+
+Each object in `data` also has a [`type` field](#get-v1models-openai-compatible-model-info-api) for the kind of the model. The server reads it from the GGUF metadata. It does not load the model, download files, or run inference. A native decision model shows `classifier` before its first load, after unloading, and while it sleeps:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "my-classifier",
+      "object": "model",
+      "type": "classifier",
+      "status": {
+        "value": "unloaded"
+      }
+    }
+  ]
+}
+```
+
+Precedence: for a loaded or sleeping instance, the `type` from the model instance wins. For an unloaded model, the server uses the cached `type` from the local metadata. A known classifier stays `classifier` through sleep and unload. If nothing is available, the server reports `unknown`.
 
 The `status` object can be:
 

@@ -85,6 +85,7 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
+    std::string model_kind = "unknown"; // kind from the GGUF metadata
     bool hidden = false; // hidden from GET /models, but still accept if requested
 
     bool is_ready() const {
@@ -104,7 +105,7 @@ struct server_model_meta {
     }
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
-    void update_caps();
+    void update_caps(const common_params & base);
 };
 
 struct server_models_routes;
