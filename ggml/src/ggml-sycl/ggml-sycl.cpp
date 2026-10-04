@@ -5029,6 +5029,12 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
         return false;
     }
 
+    // the XMX kernel reads each weight once for several columns, two launches of it beat this fused kernel
+    if (act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) && can_use_xmx_batch(ctx.device, wu, act) &&
+        can_use_xmx_batch(ctx.device, wg, act)) {
+        return false;
+    }
+
     // log the up mat-mul: glu's own srcs are the two intermediates the fusion never materialises
     scope_op_debug_print scope_dbg_print(__func__, up, /*num_src=*/2, " : fused with gate + GLU");
 

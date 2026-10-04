@@ -2380,6 +2380,10 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
     }
 
     const int stride_y_bytes = src1_padded_col_size * sizeof(block_q8_1) / QK8_1;
+    // the 2D block loads of the activations need a 64 byte aligned base and a pitch of 16 bytes
+    if ((uintptr_t) src1_ddq_i % 64 != 0 || stride_y_bytes % 16 != 0) {
+        return false;
+    }
     switch (src0->type) {
         case GGML_TYPE_Q2_K:
             ggml_sycl_mul_mat_vec_q_xmx_run<ggml_sycl_esimd::xmx_traits_q2_k>(
