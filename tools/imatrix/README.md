@@ -47,12 +47,12 @@ Recent versions of `llama-imatrix` store data in GGUF format by default. For the
 ```
 
 ```bash
-# generate importance matrix including embedded NextN layers 
+# generate importance matrix including embedded NextN layers
 ./llama-imatrix -m ggml-model-f16.gguf -f calibration-data.txt --nextn -o imatrix-mtp.gguf -ngl 99
 ```
 
 ```bash
-# generate importance matrix including stand-alone NextN draft 
+# generate importance matrix including stand-alone NextN draft
 ./llama-imatrix -m ggml-model-f16.gguf -f calibration-data.txt --model-draft draft.gguf -o imatrix-mtp.gguf -ngl 99
 ```
 
