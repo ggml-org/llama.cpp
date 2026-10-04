@@ -137,7 +137,8 @@ Ordinary context creation now rejects MTP-only Qwen4Exp heads before graph
 construction reaches absent trunk tensors. The new regression reproduced exit
 139 with the saved `4a9092768` libraries, then passed with the guard. It tests
 heads loaded with MTP both enabled and disabled, and verifies that a combined
-model still accepts an ordinary context.
+model still accepts an ordinary context. This rejection is superseded by the
+trunkless ordinary context below.
 
 Invalid-chain coverage now includes `LLAMA_TOKEN_NULL`, with unchanged serialized
 sequence caches and a successful retry. The driver capacity tests observe actual
@@ -170,6 +171,78 @@ variant. The rebuilt SYCL suite passed both registered A770 entries,
 `ONEAPI_DEVICE_SELECTOR=level_zero:0`, `SYCL_CACHE_PERSISTENT=1`, and
 `GGML_SYCL_ENABLE_GRAPH=0`. These correctness runs supersede the earlier
 follow-up's build-only SYCL evidence; their durations are not benchmarks.
+
+## Trunkless ordinary context follow-up
+
+The rejection above made `--fit` drop a head reached without an MTP speculative
+type ("fitting without it") and turned `-m head.gguf` into a hard fit error. An
+ordinary context on an MTP-only head now initializes instead:
+
+- The trunk graph has a zero-block branch. The wide residual is `hc` copies of
+  the token embedding, the absent trunk output mixer is skipped, and the shared
+  LM head produces the logits. Hidden-state export keeps its masked and
+  unmasked row contract.
+- `llama_model::create_memory` gives that context a plain attention KV cache
+  whose filter rejects every layer, following the existing MTP-on-hybrid
+  pattern. Position tracking, rollback and state save/restore work; the cache
+  holds no layer tensors. `llama_get_kv_cache_type_k/v` return
+  `GGML_TYPE_COUNT` for it instead of indexing a missing first layer.
+- A head with no token embedding still fails context creation with an error,
+  since no graph can be built from it.
+- Context creation logs one warning naming the file as an MTP draft head and
+  pointing at `-md` with `--spec-type draft-mtp`.
+
+Three external lines of work were read for comparison; none builds a context in
+this situation. Upstream draft ggml-org/llama.cpp#27836 requires the trunk
+tensors, so a separate head does not load. The `freqmod/llama.cpp` branch
+`qwen4exp-mtp` relaxes them the same way this loader does and leaves the
+ordinary graph unguarded. Upstream PR #28104 (closed, unmerged) aborts in the
+trunk graph with guidance to load the file through `-md`; that guidance is kept
+here as the warning. Its note that a hybrid memory with an empty recurrent layer
+set is unsuitable matches the plain-cache choice: on this fork the hybrid
+wrapper allocated but refused partial rollback.
+
+Control runs on CPU with the synthetic fixtures and `--fit on`, using the saved
+pre-PR libraries and the PR head before this change (`e68c49ca7`):
+
+| Scenario | Pre-PR libraries | `e68c49ca7` | This change |
+| --- | --- | --- | --- |
+| Ordinary context on head | SIGSEGV, exit 139 | null context, error | context, logits |
+| Head as `-md`, `none`/`draft-simple`/`ngram-mod` | SIGSEGV, exit 139 | fit drops the head | fit measures both contexts |
+| Head as `-m` | SIGSEGV, exit 139 | hard fit error | fit and context succeed |
+
+The pre-PR libraries crash in every row, so the earlier rejection was not a
+regression against `master`; it replaced a crash with an error.
+
+The regression suite now checks that trunkless logits equal the host product of
+the LM head and the token embedding, across a multi-token batch, a continuation,
+a rollback and both hidden-export modes. It checks zero context memory against a
+nonzero combined-model control, sequence and whole-context state round trips,
+the cache type query, the public draft-simple driver against the head's own
+greedy chain, and fit measurement of the head as a draft and as the main model.
+Removing the embedding guard reproduced exit 139 in the embedding-less case.
+
+With the original `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` on CPU, `llama-completion
+-m head -n 8` and `llama-cli -m head -st -n 8` both exited 0 and generated text.
+`llama-completion` printed the warning once and evaluated eight tokens;
+`llama-cli` hides library warnings at its default verbosity. The same
+`llama-completion` binary on the pre-PR libraries exited 139. The two local
+workaround heads that carry a mixer under the trunk's `output_hc_*` names also
+exited 0 with one warning. The generated text is meaningless by construction:
+without a trunk each token depends on its predecessor alone.
+
+The full CPU suite, its q8_0 KV variant, both targeted CTest entries,
+`test-llama-archs` (131 cases) and `test-kv-cache-adaptive-mode` passed.
+Both registered A770 entries, `test-qwen4exp-mtp-sycl-f16` and
+`test-qwen4exp-mtp-sycl-q8`, passed with `ONEAPI_DEVICE_SELECTOR=level_zero:0`,
+`SYCL_CACHE_PERSISTENT=1` and `GGML_SYCL_ENABLE_GRAPH=0` while another
+`llama-server` held the device; these are correctness runs, not timings.
+
+Limits: other architectures with MTP-only heads keep their existing behavior
+and were not examined. No real-weight run paired the head with the 54 GiB trunk
+under a non-MTP speculative type, and no server process was started. Draft-simple
+drafts from a trunkless head are valid to verify but carry no trunk context, so
+their acceptance is expected to be poor; it was not measured.
 
 ## User-reported real-head evidence
 

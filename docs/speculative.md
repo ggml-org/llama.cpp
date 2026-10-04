@@ -94,8 +94,11 @@ budget.
 Qwen4Exp MTP heads must contain all three `blk.N.nextn.hc_head_*` mixer tensors.
 The trunk's `output_hc_*` tensors are independently trained and cannot replace them.
 Use the original head GGUF; output-only renamed workaround files are rejected.
-An MTP-only head requires an MTP context; ordinary context creation returns an
-error because the head has no trunk tensors.
+An MTP-only head carries no trunk blocks, so drafting requires an MTP context.
+An ordinary context on such a head (a non-MTP `--spec-type`, or `-m head.gguf`)
+still initializes: it runs only the shared embedding and LM head and caches no
+layers, which lets `--fit` measure it. Its logits depend on the current token
+alone and are not a usable language model; context creation logs a warning.
 Both fixed and adaptive MTP support a separate head with `--fit on`:
 
 ```bash
