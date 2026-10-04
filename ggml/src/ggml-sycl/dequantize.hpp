@@ -15,6 +15,7 @@
 
 #include "common.hpp"
 #include "convert.hpp"
+#include "iq4nl.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -1616,16 +1617,22 @@ dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
     const block_iq4_xs * x = (const block_iq4_xs *)vx;
 
     const int64_t tid = item_ct1.get_local_id(2);
-    const int64_t il = tid/8; // 0...3
-    const int64_t ib = tid%8; // 0...7
+    const int64_t il = tid%4; // 0...3
+    const int64_t ib = tid/4; // 0...7
     dst_t * y = yy + i*QK_K + 32*ib + 4*il;
-    const uint8_t  * q4 = x[i].qs + 16*ib + 4*il;
+    const uint32_t q4 = *(const uint32_t *)(x[i].qs + 16*ib + 4*il);
     const float d = (float)x[i].d * ((((x[i].scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((x[i].scales_h >> 2*ib) & 3) << 4)) - 32);
+    const uint32_t lo = iq4nl_lookup4(q4 & 0x0F0F0F0F);
+    const uint32_t hi = iq4nl_lookup4((q4 >> 4) & 0x0F0F0F0F);
+    sycl::vec<dst_t, 4> vlo;
+    sycl::vec<dst_t, 4> vhi;
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
-        y[j+ 0] = d * kvalues_iq4nl[q4[j] & 0xf];
-        y[j+16] = d * kvalues_iq4nl[q4[j] >>  4];
+        vlo[j] = d * (int8_t) (lo >> (8*j));
+        vhi[j] = d * (int8_t) (hi >> (8*j));
     }
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y +  0) = vlo;
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + 16) = vhi;
 }
 
 template<typename dst_t>
