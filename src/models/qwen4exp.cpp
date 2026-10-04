@@ -674,7 +674,6 @@ public:
         // the scatter mask shape follows n_kv
         res &= n_kv              == idx->get_n_kv();
         res &= n_new             == mctx->get_n_kpool_new();
-        res &= cache_safe        == mctx->get_kpool_cache_safe();
 
         return res;
     }
@@ -693,7 +692,6 @@ public:
     uint32_t n_new = 0; // padded to a stable bound, never below 1
     uint32_t n_sel = 0;
     uint32_t n_kv  = 0;
-    bool cache_safe = true;
 };
 
 llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb) {
@@ -721,18 +719,17 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
     ggml_build_forward_expand(gf, inp->pool_mask);
     ggml_build_forward_expand(gf, inp->tail_idxs);
 
-    inp->n_kv       = mctx_idx->get_n_kv();
-    inp->n_new      = mctx_hyb->get_n_kpool_new();
-    inp->cache_safe = mctx_hyb->get_kpool_cache_safe();
+    inp->n_kv  = mctx_idx->get_n_kv();
+    inp->n_new = mctx_hyb->get_n_kpool_new();
     // the top blocks plus the tail
-    inp->n_sel      = kpool*std::min<uint32_t>(n_pool, hparams.indexer_top_k / kpool) + kpool - 1;
+    inp->n_sel = kpool*std::min<uint32_t>(n_pool, hparams.indexer_top_k / kpool) + kpool - 1;
 
     inp->new_pool_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, inp->n_new);
     ggml_set_input(inp->new_pool_idxs);
-    if (inp->cache_safe) {
-        inp->new_pool_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, inp->n_new);
-        ggml_set_input(inp->new_pool_rep);
-    }
+    // the scatter target is part of the graph shape: llama_context reserves the full-context graph,
+    // so this must not depend on cache_safe, which only the decode-time graph can know
+    inp->new_pool_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, inp->n_new);
+    ggml_set_input(inp->new_pool_rep);
     inp->new_pool_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*inp->n_new);
     ggml_set_input(inp->new_pool_pos);
 
@@ -790,17 +787,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     pooled_new = ggml_reshape_2d(ctx0, pooled_new, idx_dim, n_new);
     cb(pooled_new, "indexer_pool_k_new", il);
 
-    ggml_tensor * pooled = nullptr;
-    if (inp_kpool->cache_safe) {
-        // write before the pool gather
-        ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
-        pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
-    } else {
-        // shared cells re-pool every pool, in layout order
-        GGML_ASSERT(n_new < n_pool);
-        ggml_tensor * pad = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, idx_dim, n_pool - n_new), 0.0f);
-        pooled = ggml_concat(ctx0, pooled_new, pad, 1);
-    }
+    // scatter the fresh pooled keys, then gather all n_pool of them by cell, in both cache modes:
+    // the reserved graph cannot branch on cache_safe, and without sharing every pool is re-pooled
+    // anyway (n_new == n_pool_real, layout order), so the gather returns exactly pooled_new
+    ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
+    ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
     pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_pool);
     cb(pooled, "indexer_k", il);
 
