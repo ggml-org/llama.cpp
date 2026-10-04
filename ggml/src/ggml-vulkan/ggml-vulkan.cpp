@@ -7428,12 +7428,10 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 
     GGML_ASSERT(mmp_map != nullptr);
 
-    // Intel MoE tiles are tuned for selection by total token count
-    const uint32_t tile_n = ctx->device->vendor_id == VK_VENDOR_ID_INTEL ? (uint32_t)nei1 : (uint32_t)CEIL_DIV(nei0 * nei1, n_as);
-    const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, tile_n, true));
-    const bool aligned = !quantize_y && ne10 == kpad && ne01 > 8 && tile_n > 8;
+    const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, nei1, true));
+    const bool aligned = !quantize_y && ne10 == kpad && ne01 > 8 && nei1 > 8;
 
-    vk_pipeline pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *mmp_map, ne01, tile_n, aligned, true);
+    vk_pipeline pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *mmp_map, ne01, nei1, aligned, true);
 
     if (ggml_nbytes(src0) > ctx->device->properties.limits.maxStorageBufferRange) {
         pipeline = ggml_vk_get_64b_indexing_pipeline(ctx, pipeline);
