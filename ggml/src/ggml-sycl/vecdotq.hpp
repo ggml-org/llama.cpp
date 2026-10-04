@@ -375,6 +375,14 @@ template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_Q4_0> {
     static constexpr bool value = true;
 };
 
+template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_IQ4_NL> {
+    static constexpr bool value = true;
+};
+
+template <> struct reorder_vec_dot_shared_activations<GGML_TYPE_IQ4_NL> {
+    static constexpr bool value = true;
+};
+
 template <> struct reorder_vec_dot_shared_activations<GGML_TYPE_Q4_0> {
     static constexpr bool value = true;
 };
@@ -704,6 +712,150 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ3_S> {
         const int *      q8    = reinterpret_cast<const int *>(q8_1_quant_ptr + iqs * QK8_1);
 
         return vec_dot_iq3_s_q8_1_impl(qs[0], qs[1], qh, signs, d, q8, q8_1_ds[iqs][0]);
+    }
+};
+
+// The Q4_0 reorder vec_dot with the IQ4_NL codebook in place of q - 8.
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_NL> {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ4_NL;
+
+    using iq4_nl_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_IQ4_NL>;
+    using iq4_nl_traits = typename iq4_nl_block::traits;
+
+    struct weights {
+        int   v[2 * iq4_nl_traits::vdr_mmvq];
+        float d;
+    };
+
+    struct activations {
+        int   u[2 * iq4_nl_traits::vdr_mmvq];
+        float d8;
+    };
+
+    __dpct_inline__ static weights load(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                        const std::pair<int, int> d_offset, const int & iqs) {
+        const uint8_t * bq4 = static_cast<const uint8_t *>(vbq) + ibx_offset.first;
+
+        weights w;
+        w.d = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset.first));
+
+#pragma unroll
+        for (size_t i = 0; i < iq4_nl_traits::vdr_mmvq; ++i) {
+            const int v    = get_int_from_uint8(bq4, iqs + i);
+            w.v[2 * i + 0] = iq4nl_lookup4((v >> 0) & 0x0F0F0F0F);
+            w.v[2 * i + 1] = iq4nl_lookup4((v >> 4) & 0x0F0F0F0F);
+        }
+
+        return w;
+    }
+
+    __dpct_inline__ static activations load_activations(const int8_t * q8_1_quant_ptr,
+                                                        const sycl::half2 * q8_1_ds, const int & iqs) {
+        activations a;
+
+#pragma unroll
+        for (size_t i = 0; i < iq4_nl_traits::vdr_mmvq; ++i) {
+            a.u[2 * i + 0] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+            a.u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + iq4_nl_traits::qi);
+        }
+        a.d8 = (*q8_1_ds)[0];
+
+        return a;
+    }
+
+    __dpct_inline__ static float apply(const weights & w, const activations & a) {
+        int sumi = 0;
+
+#pragma unroll
+        for (size_t i = 0; i < 2 * iq4_nl_traits::vdr_mmvq; ++i) {
+            sumi = dpct::dp4a(w.v[i], a.u[i], sumi);
+        }
+
+        return w.d * a.d8 * (float) sumi;
+    }
+
+    __dpct_inline__ static float dot(const weights & w, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return apply(w, load_activations(q8_1_quant_ptr, q8_1_ds, iqs));
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return dot(load(vbq, ibx_offset, d_offset, iqs), q8_1_quant_ptr, q8_1_ds, iqs);
+    }
+};
+
+// Dot product of one 32-element IQ2_XS sub-block, given its 4 grid/sign words (q2 low and high
+// dwords) and its scale byte. Signs come from the 7 stored bits and their parity.
+static __dpct_inline__ float vec_dot_iq2_xs_q8_1_impl(const uint32_t q2_lo, const uint32_t q2_hi, const uint32_t sc,
+                                                      const float d, const int * __restrict__ q8, const float d8) {
+    int sumi[2] = { 0, 0 };
+#pragma unroll
+    for (int l = 0; l < 4; ++l) {
+        const uint32_t q    = ((l < 2 ? q2_lo : q2_hi) >> (16 * (l % 2))) & 0xFFFF;
+        const uint64_t g    = iq2xs_grid[q & 511];
+        const uint32_t s7   = q >> 9;
+        const uint32_t s8   = s7 | ((sycl::popcount(s7) & 1) << 7);
+        const int grid_l    = iq_negate_bytes((uint32_t) g, iq_sign_mask4(s8 & 0xF));
+        const int grid_h    = iq_negate_bytes((uint32_t) (g >> 32), iq_sign_mask4(s8 >> 4));
+        sumi[l / 2] = dpct::dp4a(grid_l, q8[2 * l + 0], sumi[l / 2]);
+        sumi[l / 2] = dpct::dp4a(grid_h, q8[2 * l + 1], sumi[l / 2]);
+    }
+    const float dd = d * d8 * 0.25f;
+    return dd * ((0.5f + (sc & 0xf)) * sumi[0] + (0.5f + (sc >> 4)) * sumi[1]);
+}
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ2_XS> {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ2_XS;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *  base = static_cast<const uint8_t *>(vbq);
+        const uint32_t * q2   = reinterpret_cast<const uint32_t *>(base + ibx_offset.first + 8 * iqs);
+        const uint32_t   sc   = base[ibx_offset.second + iqs];
+        const float      d    = *reinterpret_cast<const ggml_half *>(base + d_offset.first);
+        const int *      q8   = reinterpret_cast<const int *>(q8_1_quant_ptr + iqs * QK8_1);
+
+        return vec_dot_iq2_xs_q8_1_impl(q2[0], q2[1], sc, d, q8, q8_1_ds[iqs][0]);
+    }
+};
+
+// Dot product of one 32-element IQ2_S sub-block, given its 4 low grid index bytes, the 2 high
+// index bits of each in qh, its 32 sign bits and its scale byte.
+static __dpct_inline__ float vec_dot_iq2_s_q8_1_impl(const uint32_t grid_idx, const uint32_t qh, const uint32_t signs,
+                                                     const uint32_t sc, const float d, const int * __restrict__ q8,
+                                                     const float d8) {
+    int sumi[2] = { 0, 0 };
+#pragma unroll
+    for (int l = 0; l < 4; ++l) {
+        const uint64_t g  = iq2s_grid[((grid_idx >> (8 * l)) & 0xFF) | ((qh << (8 - 2 * l)) & 0x300)];
+        const uint32_t s8 = (signs >> (8 * l)) & 0xFF;
+        const int grid_l  = iq_negate_bytes((uint32_t) g, iq_sign_mask4(s8 & 0xF));
+        const int grid_h  = iq_negate_bytes((uint32_t) (g >> 32), iq_sign_mask4(s8 >> 4));
+        sumi[l / 2] = dpct::dp4a(grid_l, q8[2 * l + 0], sumi[l / 2]);
+        sumi[l / 2] = dpct::dp4a(grid_h, q8[2 * l + 1], sumi[l / 2]);
+    }
+    const float dd = d * d8 * 0.25f;
+    return dd * ((0.5f + (sc & 0xf)) * sumi[0] + (0.5f + (sc >> 4)) * sumi[1]);
+}
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ2_S> {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ2_S;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t * base     = static_cast<const uint8_t *>(vbq);
+        const uint32_t  grid_idx = *reinterpret_cast<const uint32_t *>(base + ibx_offset.first + 4 * iqs);
+        const uint32_t  signs    = *reinterpret_cast<const uint32_t *>(base + ibx_offset.second + 4 * iqs);
+        const uint32_t  qh       = base[d_offset.first + iqs];
+        const uint32_t  sc       = base[d_offset.first + QK_K / 32 + iqs];
+        const float     d        = *reinterpret_cast<const ggml_half *>(base + d_offset.second);
+        const int *     q8       = reinterpret_cast<const int *>(q8_1_quant_ptr + iqs * QK8_1);
+
+        return vec_dot_iq2_s_q8_1_impl(grid_idx, qh, signs, sc, d, q8, q8_1_ds[iqs][0]);
     }
 };
 
