@@ -1524,11 +1524,15 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
         } break;
         case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
             GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+            // The all-reduce sums a PARTIAL tensor, so the shares must add up to the tensor. Under dist-TP each
+            // rank holds one buffer and the network sum adds the ranks too: divide by both, or a bias that is
+            // added before the all-reduce (ffn_down_exps.bias in gpt-oss) is counted once per rank.
+            const float n_shares = (float) n_bufs * (float) dist_world_size;
             const int64_t ne = ggml_nelements(tensor);
             std::vector<float> tmp;
             tmp.reserve(ne);
             for (int64_t i = 0; i < ne; i++) {
-                tmp.push_back(((const float *) data)[i] / n_bufs);
+                tmp.push_back(((const float *) data)[i] / n_shares);
             }
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
