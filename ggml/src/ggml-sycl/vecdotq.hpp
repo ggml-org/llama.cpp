@@ -1746,6 +1746,39 @@ vec_dot_iq1_m_q8_1(const void *__restrict__ vbq,
 
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
 
+// One quarter (4 entries, selected by index bits 0 and 1) of the kvalues_iq4nl lookup in
+// iq4nl_lookup4, written as k0 ^ (d1 & m0) ^ (d2 & m1) ^ (d3 & m0 & m1) with byte-replicated
+// constants, so each constant is the immediate of a single and/xor.
+static __dpct_inline__ uint32_t iq4nl_quarter(const int q, const uint32_t m0, const uint32_t m1, const uint32_t m01) {
+    constexpr uint8_t k[16] = { 0x81, 0x98, 0xAD, 0xBF, 0xCF, 0xDD, 0xEA, 0xF6, 0x01, 0x0D, 0x19, 0x26, 0x35, 0x45, 0x59, 0x71 };
+    const uint32_t k0 = k[4 * q + 0] * 0x01010101u;
+    const uint32_t d1 = (k[4 * q + 0] ^ k[4 * q + 1]) * 0x01010101u;
+    const uint32_t d2 = (k[4 * q + 0] ^ k[4 * q + 2]) * 0x01010101u;
+    const uint32_t d3 = (k[4 * q + 0] ^ k[4 * q + 1] ^ k[4 * q + 2] ^ k[4 * q + 3]) * 0x01010101u;
+    return k0 ^ ((d1 & m0) ^ (d2 & m1) ^ (d3 & m01));
+}
+
+// Looks up kvalues_iq4nl for the four indices held in the low nibbles of the bytes of x (the high
+// nibbles must be zero), entirely in registers: the byte gathers of get_int_from_table_16 saturate
+// the send queue on Xe. Byte-wide masks of the index bits pick the entry from each quarter of the
+// table and then the quarter.
+static __dpct_inline__ int iq4nl_lookup4(const uint32_t x) {
+    const uint32_t m0  = ((x >> 0) & 0x01010101u) * 0xffu;
+    const uint32_t m1  = ((x >> 1) & 0x01010101u) * 0xffu;
+    const uint32_t m2  = ((x >> 2) & 0x01010101u) * 0xffu;
+    const uint32_t m3  = ((x >> 3) & 0x01010101u) * 0xffu;
+    const uint32_t m01 = m0 & m1;
+
+    const uint32_t g0 = iq4nl_quarter(0, m0, m1, m01);
+    const uint32_t g1 = iq4nl_quarter(1, m0, m1, m01);
+    const uint32_t g2 = iq4nl_quarter(2, m0, m1, m01);
+    const uint32_t g3 = iq4nl_quarter(3, m0, m1, m01);
+
+    auto sel = [](const uint32_t a, const uint32_t b, const uint32_t m) { return (a & ~m) | (b & m); };
+
+    return (int) sel(sel(g0, g1, m2), sel(g2, g3, m2), m3);
+}
+
 static __dpct_inline__ float
 vec_dot_iq4_nl_q8_1(const void *__restrict__ vbq,
                     const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
@@ -1755,13 +1788,12 @@ vec_dot_iq4_nl_q8_1(const void *__restrict__ vbq,
     const uint16_t * q4 = (const uint16_t *)bq->qs + 2*iqs;
     const int32_t  * q8 = (const int32_t  *)bq8_1->qs + iqs;
 
-    const uint8_t * values = (const uint8_t *)kvalues_iq4nl;
-
     int v1, v2;
     int sumi1 = 0, sumi2 = 0;
     for (int l = 0; l < VDR_Q4_0_Q8_1_MMVQ; ++l) {
         const uint32_t aux = q4[2*l] | (q4[2*l+1] << 16);
-        get_int_from_table_16(aux, values, v1, v2);
+        v1 = iq4nl_lookup4(aux & 0x0F0F0F0F);
+        v2 = iq4nl_lookup4((aux >> 4) & 0x0F0F0F0F);
         sumi1 = dpct::dp4a(v1, q8[l + 0], sumi1);
         sumi2 = dpct::dp4a(v2, q8[l + 4], sumi2);
     }
@@ -1779,7 +1811,6 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
 
 #if QK_K == 256
     const block_iq4_xs * bq4 = (const block_iq4_xs *) vbq;
-    const uint8_t * values = (const uint8_t *)kvalues_iq4nl;
 
     // iqs is 0...7
     const int ib32 = iqs;
@@ -1790,7 +1821,8 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
     int v1, v2;
     int sumi1 = 0, sumi2 = 0;
     for (int j = 0; j < 4; ++j) {
-        get_int_from_table_16(q4[j], values, v1, v2);
+        v1 = iq4nl_lookup4(q4[j] & 0x0F0F0F0F);
+        v2 = iq4nl_lookup4((q4[j] >> 4) & 0x0F0F0F0F);
         sumi1 = dpct::dp4a(v1, q8[j + 0], sumi1);
         sumi2 = dpct::dp4a(v2, q8[j + 4], sumi2);
     }
