@@ -2502,7 +2502,7 @@ class TextModel(ModelBase):
     def _set_vocab_plamo(
         self,
         eot_token: str,
-        user_defined_tokens: Iterable[str] = (),
+        normal_tokens: Iterable[str] = (),
     ):
         # PLaMo models use a custom tokenizer with a .jsonl file
         tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
@@ -2527,7 +2527,7 @@ class TextModel(ModelBase):
         tokens = []
         scores = []
         toktypes = []
-        user_defined_tokens = set(user_defined_tokens)
+        normal_tokens = set(normal_tokens)
 
         with open(tokenizer_jsonl_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f):
@@ -2542,8 +2542,8 @@ class TextModel(ModelBase):
                     tokens.append(token)
                     scores.append(score)
 
-                    if token_str in user_defined_tokens:
-                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                    if token_str in normal_tokens:
+                        toktypes.append(gguf.TokenType.NORMAL)
                     elif token_type_str == "UNKNOWN":
                         toktypes.append(gguf.TokenType.UNKNOWN)
                     elif token_type_str == "CONTROL":
