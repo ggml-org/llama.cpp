@@ -322,7 +322,7 @@ extern "C" {
     // Callback while copying input weights for a graph split
     // the callback is called for weight inputs after all non-weights inputs have been copied
     // if the callback returns false the scheduler copies the entire input
-    // `src` is the tensor in the previous split 
+    // `src` is the tensor in the previous split
     // `dst` is the copy of `src` in the split
     // `graph` is the compute graph of the split
     typedef bool (*ggml_backend_sched_copy_callback)(ggml_backend_t backend, const struct ggml_tensor * src, struct ggml_tensor * dst, struct ggml_cgraph * graph, void * user_data);
