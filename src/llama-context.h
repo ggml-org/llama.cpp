@@ -413,6 +413,10 @@ private:
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
 
+    // the compute buffers fit the worst-case graph of sched_reserve, reserved with this number of sequences [TAG_PIPELINE_RESERVE]
+    bool     worst_case_reserved = false;
+    uint32_t n_seqs_worst_case   = 1;
+
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;

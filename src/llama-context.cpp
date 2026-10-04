@@ -1412,6 +1412,21 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    // [TAG_PIPELINE_RESERVE] with pipeline parallelism, reserve the worst-case graph of sched_reserve again after a different graph
+    // e.g. with weights in host memory, the ops of small batches run in other splits, so their graphs reallocate the compute buffers
+    // otherwise the buffers fit only the last graph, and every ubatch of the prompt reallocates them as the context grows
+    if (cparams.pipeline_parallel && gtype == ctx_type_to_graph_type(cparams.ctx_type)) {
+        const uint32_t n_tokens_reserve = std::min(cparams.n_ctx, cparams.n_ubatch);
+        if (ubatch.n_tokens != n_tokens_reserve) {
+            worst_case_reserved = false;
+        } else if (!worst_case_reserved) {
+            const auto mctx_reserve = memory ? memory->init_full() : nullptr;
+            if ((memory && !mctx_reserve) || !graph_reserve(n_tokens_reserve, n_seqs_worst_case, std::min(n_tokens_reserve, cparams.n_outputs_max), mctx_reserve.get())) {
+                LLAMA_LOG_ERROR("%s: failed to reserve the worst-case graph\n", __func__);
+            }
+        }
+    }
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -2542,6 +2557,9 @@ ggml_cgraph * llama_context::graph_reserve(
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
+    // [TAG_PIPELINE_RESERVE] the worst-case graph of sched_reserve
+    const bool worst_case = n_tokens == std::min(cparams.n_ctx, cparams.n_ubatch) && n_outputs == std::min(n_tokens, cparams.n_outputs_max);
+
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
@@ -2590,6 +2608,12 @@ ggml_cgraph * llama_context::graph_reserve(
         GGML_ASSERT(!sizes);
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         return nullptr;
+    } else {
+        // [TAG_PIPELINE_RESERVE]
+        worst_case_reserved = worst_case;
+        if (worst_case) {
+            n_seqs_worst_case = n_seqs;
+        }
     }
 
     return gf;
