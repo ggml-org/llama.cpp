@@ -957,8 +957,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
+// force_tiling lets the host use the native tiled path for configs that normally use Stream-K.
 
-template <ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8>
+template <ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8, bool force_tiling = false>
 __launch_bounds__(ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1), ggml_cuda_mmq_get_occupancy(type, J, fallback, prec_src1))
 static __global__ void mul_mat_q(
         const char * __restrict__ x, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
@@ -998,7 +999,7 @@ static __global__ void mul_mat_q(
     }
     __syncthreads();
 
-    if constexpr (!ggml_cuda_mmq_get_stream_k(type, J, fallback, prec_src1)) {
+    if constexpr (force_tiling || !ggml_cuda_mmq_get_stream_k(type, J, fallback, prec_src1)) {
         const uint2 tmp2 = fast_div_modulo(blockIdx.z, nchannels_y);
         const int wt = tmp2.x;
         const int zt = tmp2.y;
@@ -1456,12 +1457,27 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
         return;
     }
 
-    // For the stream-k kernel it is possible to run it with tiling by setting the number of CUDA blocks equal to the number of tiles.
-    // This is worthwhile if the efficiency of tiling is high and skipping the fixup kernel is more important.
+    // Stream-K adds scheduling and fixup overhead when regular tiling already provides enough parallel work.
     const int ntiles_dst = ntx * nty * ntzw;
     const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
     const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm*tiles_nwaves);
-    const dim3 block_nums_stream_k(GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst : nsm, 1, 1);
+    const int stream_k_blocks = GGML_CUDA_CC_IS_GCN(cc) ? nsm * config.occupancy : nsm;
+
+    // TODO: Test other AMD architectures.
+    const bool use_stream_k = !GGML_CUDA_CC_IS_GCN(cc) ||
+        (tiles_efficiency_percent < 90 && ntiles_dst < 2*stream_k_blocks);
+
+    if (!use_stream_k) {
+        mul_mat_q<type, J, fallback, prec_src1, true><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr, args.y_scale,
+             blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+             channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+             sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+             ntx_fd);
+        return;
+    }
+
+    const dim3 block_nums_stream_k(GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst : stream_k_blocks, 1, 1);
 
     GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30)); // Assert that variable kbc will not overflow.
 
