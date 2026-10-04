@@ -36,7 +36,7 @@ static void require(bool ok, const char * message) {
 
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
 static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
-                          bool shared_embd = true, float output_scale = 1.0f) {
+                          bool shared_embd = true, float output_scale = 1.0f, int vocab_size = n_vocab) {
     gguf_context_ptr meta(gguf_init_empty());
     llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
@@ -66,11 +66,11 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K, uint32_t(128));
     ms.add_kv(LLM_KV_TOKENIZER_MODEL, "test");
     std::vector<std::string> vocab;
-    for (int i = 0; i < n_vocab; ++i) {
+    for (int i = 0; i < vocab_size; ++i) {
         vocab.push_back("tok_" + std::to_string(i));
     }
     ms.add_kv(LLM_KV_TOKENIZER_LIST, vocab);
-    ms.add_kv(LLM_KV_TOKENIZER_SCORES, std::vector<float>(n_vocab, 0.0f));
+    ms.add_kv(LLM_KV_TOKENIZER_SCORES, std::vector<float>(vocab_size, 0.0f));
 
     ggml_context_ptr tensors(ggml_init({8 * 1024 * 1024, nullptr, false}));
     auto add = [&](const std::string & name, std::initializer_list<int64_t> dims, float scale = 1.0f) {
@@ -92,8 +92,8 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
         gguf_add_tensor(meta.get(), t);
     };
     if (shared_embd) {
-        add("token_embd.weight", {n_embd, n_vocab});
-        add("output.weight", {n_embd, n_vocab}, output_scale);
+        add("token_embd.weight", {n_embd, vocab_size});
+        add("output.weight", {n_embd, vocab_size}, output_scale);
     }
     if (!mtp_only) {
         add("output_hc_norm.weight", {n_hidden}, trunk_scale);
@@ -184,6 +184,14 @@ struct decoded {
     std::vector<float> hidden;
 };
 
+static size_t compute_bytes(const llama_context * ctx) {
+    size_t total = 0;
+    for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx)) {
+        total += mb.compute;
+    }
+    return total;
+}
+
 static decoded decode(llama_context * ctx, const std::vector<llama_token> & tokens,
                       const std::vector<float> & hidden, int pos, bool chain = false, int catchup = 0, bool masked = true) {
     llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
@@ -228,6 +236,7 @@ static bool close(const std::vector<float> & a, const std::vector<float> & b, fl
 static void test_chain(llama_model * model, bool flash, int depth, int catchup, bool masked, bool at_limit = false) {
     auto seq = make_context(model, flash);
     auto chain = make_context(model, flash);
+    const size_t reserved = compute_bytes(chain.get());
     std::vector<llama_token> tokens(depth + catchup, 0);
     const int pos0 = at_limit ? int(llama_n_ctx(seq.get())) - int(tokens.size()) : 0;
     tokens[catchup] = 5;
@@ -255,6 +264,10 @@ static void test_chain(llama_model * model, bool flash, int depth, int catchup, 
         all_hidden.insert(all_hidden.end(), h.begin(), h.end());
     }
     auto out = decode(chain.get(), tokens, inputs, pos0, true, catchup, masked);
+    // --fit measures the ordinary reservation, which never builds the chain graph. The chain has to
+    // run inside it, or at least inside what one-row decodes of the same rows grew it to.
+    require(compute_bytes(chain.get()) <= std::max(reserved, compute_bytes(seq.get())),
+            "chain decode stays within the compute buffers of the ordinary graph");
     require(close(pairs, out.logits), "chain greedy tokens and top-10 probabilities match sequential");
     require(close(all_hidden, out.hidden), "chain exports full-width hidden states matching sequential");
     // Reject every candidate after the first, then re-enter both caches with a different token.
@@ -266,6 +279,28 @@ static void test_chain(llama_model * model, bool flash, int depth, int catchup, 
     const auto b = decode(chain.get(), {7}, h, pos0 + catchup + 1);
     require(close(a.logits, b.logits) && close(a.hidden, b.hidden), "continuation matches after rejection");
     fprintf(stderr, "PASS chain flash=%d depth=%d catchup=%d masked=%d pos=%d\n", flash, depth, catchup, masked, pos0);
+}
+
+// A sequence snapshot kept on the device restores the cache it was taken from for every K/V type.
+// Block-quantized rows are sized in blocks, so both directions have to convert to elements.
+static void test_on_device_state(llama_model * model, bool flash) {
+    auto ctx = make_context(model, flash);
+    decode(ctx.get(), {3, 4, 5}, initial_hidden(3), 0);
+    const llama_state_seq_flags flags = LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
+    std::vector<uint8_t> state(llama_state_seq_get_size_ext(ctx.get(), 0, flags));
+    require(llama_state_seq_get_data_ext(ctx.get(), state.data(), state.size(), 0, flags) == state.size(),
+            "on-device snapshot");
+    const auto expected = decode(ctx.get(), {6}, initial_hidden(), 3);
+
+    // put other rows into the same cells, then restore over them
+    require(llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, 0, -1), "drop the snapshotted rows");
+    decode(ctx.get(), {7, 8, 9}, initial_hidden(3), 0);
+    require(llama_state_seq_set_data_ext(ctx.get(), state.data(), state.size(), 0, flags) == state.size(),
+            "on-device restore");
+    const auto actual = decode(ctx.get(), {6}, initial_hidden(), 3);
+    require(close(expected.logits, actual.logits) && close(expected.hidden, actual.hidden),
+            "on-device restore reproduces the snapshotted cache");
+    fprintf(stderr, "PASS on-device sequence state flash=%d\n", flash);
 }
 
 static std::vector<uint8_t> sequence_state(llama_context * ctx, llama_seq_id seq) {
@@ -430,6 +465,60 @@ static void test_ordinary_context(llama_model * head, llama_model * combined) {
     require(llama_state_set_data(restored.get(), full_state.data(), full_state.size()) == full_state.size() &&
             llama_memory_seq_pos_max(llama_get_memory(restored.get()), 0) == 2, "trunkless context state restores");
 
+    // The hidden export is switched on after the context exists. The buffers were planned without it,
+    // so the context has to plan them again or a later node overwrites the exported tensor in place.
+    {
+        std::vector<float> computed;
+        auto export_params = params;
+        export_params.cb_eval = [](ggml_tensor * t, bool ask, void * data) {
+            if (std::string(t->name) != "h_nextn") { return !ask; }
+            if (!ask) {
+                auto & values = *static_cast<std::vector<float> *>(data);
+                values.resize(ggml_nelements(t));
+                ggml_backend_tensor_get(t, values.data(), 0, ggml_nbytes(t));
+            }
+            return true;
+        };
+        export_params.cb_eval_user_data = &computed;
+        llama_context_ptr export_ctx(llama_init_from_model(combined, export_params));
+        require(bool(export_ctx), "hidden export context");
+        llama_set_embeddings_nextn(export_ctx.get(), true, true);
+        llama_batch batch = llama_batch_init(2, 0, 1);
+        common_batch_add(batch, 4, 0, {0}, true);
+        common_batch_add(batch, 8, 1, {0}, true);
+        const int rc = llama_decode(export_ctx.get(), batch);
+        llama_batch_free(batch);
+        require(rc == 0 && computed.size() == size_t(2 * n_hidden), "hidden export decode");
+        const float * exported = llama_get_embeddings_nextn(export_ctx.get());
+        require(exported != nullptr && close(computed, std::vector<float>(exported, exported + 2 * n_hidden)),
+                "the hidden export is the wide residual as it was computed");
+        fprintf(stderr, "PASS hidden export survives the graph\n");
+    }
+
+    // Embeddings are read n_embd_out = hc * n_embd wide, which is the wide residual the hidden export
+    // carries, for the trunkless head and for a full trunk alike.
+    for (llama_model * model : {head, combined}) {
+        auto embd_params = params;
+        embd_params.embeddings = true;
+        embd_params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        llama_context_ptr embd_ctx(llama_init_from_model(model, embd_params));
+        require(bool(embd_ctx), "embeddings context");
+        llama_set_embeddings_nextn(embd_ctx.get(), true, true);
+        llama_batch batch = llama_batch_init(2, 0, 1);
+        common_batch_add(batch, 4, 0, {0}, true);
+        common_batch_add(batch, 8, 1, {0}, true);
+        const int rc = llama_decode(embd_ctx.get(), batch);
+        llama_batch_free(batch);
+        require(rc == 0, "embeddings decode");
+        const float * embd_out = llama_get_embeddings(embd_ctx.get());
+        const float * hidden_out = llama_get_embeddings_nextn(embd_ctx.get());
+        require(embd_out != nullptr && hidden_out != nullptr, "embeddings and hidden export");
+        require(close(std::vector<float>(embd_out, embd_out + 2 * n_hidden),
+                      std::vector<float>(hidden_out, hidden_out + 2 * n_hidden)),
+                "embeddings are the wide residual");
+    }
+    fprintf(stderr, "PASS embeddings width\n");
+
     // The wide hidden export is the zero-block residual: hc copies of the embedding.
     llama_set_embeddings_nextn(ctx.get(), true, true);
     run(ctx.get(), {4, 8}, 3);
@@ -550,6 +639,24 @@ static void test_borrowed_tables(const std::string & bare_path, const std::strin
                 "a target without tables is reported, not borrowed from");
     }
     fprintf(stderr, "PASS table-less target rejected\n");
+
+    // A target with another vocabulary has tables of the wrong shape: creation fails instead of reading them.
+    {
+        const std::string wider_path = (std::filesystem::path(bare_path).parent_path() / "wider.gguf").string();
+        write_fixture(wider_path, false, -1, 1.0f, true, 1.0f, n_vocab + 16);
+        auto wider = load_model(wider_path);
+        require(bool(wider), "target with a wider vocabulary loads");
+        llama_context_ptr parent_wider(llama_init_from_model(wider.get(), parent_params));
+        require(bool(parent_wider), "parent context for the wider vocabulary");
+        auto params = llama_context_default_params();
+        params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        params.n_ctx = 128;
+        params.n_threads = params.n_threads_batch = 1;
+        params.ctx_other = parent_wider.get();
+        require(!llama_context_ptr(llama_init_from_model(bare.get(), params)),
+                "a target with another vocabulary is reported, not borrowed from");
+    }
+    fprintf(stderr, "PASS mismatched target tables rejected\n");
 }
 
 struct fit_log_capture {
@@ -576,6 +683,45 @@ struct fit_log_capture {
         capture.context_error |= message.find("failed to initialize the context") != std::string::npos;
     }
 };
+
+struct reserve_log_capture {
+    ggml_log_callback previous;
+    void * previous_data;
+    int reserves = 0;
+
+    reserve_log_capture() {
+        llama_log_get(&previous, &previous_data);
+        llama_log_set(callback, this);
+    }
+
+    ~reserve_log_capture() {
+        llama_log_set(previous, previous_data);
+    }
+
+    static void callback(ggml_log_level, const char * text, void * data) {
+        if (std::string(text).find("sched_reserve: reserving ...") != std::string::npos) {
+            ++static_cast<reserve_log_capture *>(data)->reserves;
+        }
+    }
+};
+
+// Chain batches grow by a row at a time while catch-up rows accumulate. A new maximum may need a
+// larger graph, but not a scheduler reservation for every single row.
+static void test_chain_reserve_growth(llama_model * model) {
+    auto ctx = make_context(model, true);
+    reserve_log_capture logs;
+    const int max_rows = 32;
+    for (int rows = 1; rows <= max_rows; ++rows) {
+        llama_memory_clear(llama_get_memory(ctx.get()), true);
+        std::vector<llama_token> tokens(rows, 0);
+        tokens[0] = 5;
+        decode(ctx.get(), tokens, initial_hidden(rows), 0, true);
+    }
+    fprintf(stderr, "chain rows 1..%d took %d scheduler reservations\n", max_rows, logs.reserves);
+    // one for switching the hidden export on, then one per doubling: 4, 8, 16, 32 rows
+    require(logs.reserves <= 6, "chain row growth reserves geometrically, not per row");
+    fprintf(stderr, "PASS chain reserve growth\n");
+}
 
 static void test_fit(const std::string & target_path, const std::string & head_path, bool separate_only = false) {
     for (auto mode : {COMMON_SPECULATIVE_TYPE_DRAFT_MTP, COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE}) {
@@ -632,6 +778,49 @@ static void test_fit_borrowed_head(const std::string & target_path, const std::s
         require(logs.contexts == 4, "fit measures a table-less head next to its target");
         fprintf(stderr, "PASS fit table-less head adaptive=%d\n", mode == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE);
     }
+}
+
+// With a separate draft head the target's own MTP block is never used, so the target skips it.
+// A combined target whose block lacks the draft mixer then still serves next to a complete head.
+static void test_separate_head_target(const std::string & mixerless_path, const std::string & head_path,
+                                      llama_model * target, llama_model * head) {
+    for (auto mode : {COMMON_SPECULATIVE_TYPE_DRAFT_MTP, COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE}) {
+        common_params params;
+        params.model.path = mixerless_path;
+        params.n_ctx = 128;
+        params.n_batch = params.n_ubatch = 8;
+        params.n_gpu_layers = 0;
+        params.devices = {nullptr};
+        params.cpuparams.n_threads = params.cpuparams_batch.n_threads = 1;
+        params.fit_params = false;
+        params.speculative.types = {mode};
+        require(common_model_params_to_llama(params).load_mtp, "a target that drafts for itself loads its MTP block");
+        params.speculative.draft.mparams.path = head_path;
+        params.speculative.draft.n_gpu_layers = 0;
+        require(!common_model_params_to_llama(params).load_mtp, "a target with a separate draft head skips its own MTP block");
+        common_params params_dft = common_base_params_to_speculative(params);
+        require(common_model_params_to_llama(params_dft).load_mtp, "the separate draft head loads its MTP block");
+        const auto result = common_init_from_params(params, true);
+        require(result && result->model(), "a target without the draft mixer loads next to a separate head");
+    }
+    // The trunk is the same in both files, so skipping the target's MTP block leaves the drafts unchanged.
+    auto mixerless = load_model(mixerless_path, false);
+    require(bool(mixerless), "target without the draft mixer loads with its MTP block skipped");
+    for (bool chained : {false, true}) {
+        require(driver_drafts(mixerless.get(), head, chained, 1, 8, false) == driver_drafts(target, head, chained, 1, 8, false),
+                "driver drafts match when the target skips its own MTP block");
+    }
+    fprintf(stderr, "PASS separate head target\n");
+}
+
+// The catch-up rows of a failed draft decode have to reach the draft cache on the next attempt.
+// Dropping them leaves a hole below the draft position and every later draft decode is refused.
+static void test_driver_failed_draft(llama_model * target, llama_model * head) {
+    // only a chain decode refuses the backend sampler the driver test uses to make it fail
+    require(driver_drafts(target, head, true, 1, 8, false, 1, false, nullptr, true) ==
+            driver_drafts(target, head, true, 1, 8, false),
+            "drafting recovers after a failed chain decode");
+    fprintf(stderr, "PASS driver recovers from a failed chain decode\n");
 }
 
 // A head reached without an MTP speculative type gets an ordinary context. The fit
@@ -756,6 +945,7 @@ int main(int argc, char ** argv) {
     write_fixture(output_only, false, 3);
     require(!load_model(output_only), "trunk mixer does not substitute for missing draft mixer");
     require(bool(load_model(output_only, false)), "ordinary loading does not require unused draft mixers");
+    test_separate_head_target(output_only, head_path, target.get(), head.get());
     require(llama_model_supports_mtp_chain(head.get()), "Qwen4Exp advertises implemented chain support");
     test_ordinary_context(head.get(), target.get());
     auto head_without_mtp = load_model(head_path, false);
@@ -788,6 +978,7 @@ int main(int argc, char ** argv) {
         const auto ch = decode(c.get(), {5}, initial_hidden(), 0);
         require(close(ah.logits, bh.logits) && close(bh.logits, ch.logits), "MTP logits independent of trunk mixer");
         test_invalid_chain(head.get(), flash);
+        test_on_device_state(head.get(), flash);
         test_masked_catchup(head.get(), flash);
         for (int depth : {1, 3, 4}) {
             for (int catchup : {0, 2}) {
@@ -798,8 +989,10 @@ int main(int argc, char ** argv) {
         test_chain(head.get(), flash, 32, 0, true);
     }
     test_driver(target.get(), head.get());
+    test_driver_failed_draft(target.get(), head.get());
     test_ordinary_draft_driver(target.get(), head.get());
     test_chain_metadata(head.get());
+    test_chain_reserve_growth(head.get());
     test_fit(target_path, head_path);
     test_fit_ordinary_head(target_path, head_path);
     test_fit_borrowed_head(target_path, bare_path);

@@ -36,7 +36,7 @@ struct driver_graph_observation {
 static std::vector<llama_tokens> driver_drafts(
         llama_model * target_model, llama_model * draft_model,
         bool chained, int n_seq, int draft_ubatch, bool adaptive, int prompt_length = 1, bool at_limit = false,
-        driver_graph_observation * observed = nullptr) {
+        driver_graph_observation * observed = nullptr, bool fail_first_draft = false) {
     auto cp = llama_context_default_params();
     cp.n_ctx = 128 * n_seq;
     cp.n_batch = cp.n_ubatch = 32;
@@ -98,15 +98,30 @@ static std::vector<llama_tokens> driver_drafts(
         }
         llama_batch_free(batch);
 
+        auto request_drafts = [&]() {
+            for (int seq = 0; seq < n_seq; ++seq) {
+                auto & dp = common_speculative_get_draft_params(spec.get(), seq);
+                dp.drafting = true;
+                dp.pos0 = prompt_length;
+                dp.id_last = 5 + seq;
+                dp.prompt = &prompts[seq];
+                dp.result = &results[seq];
+                dp.n_max = at_limit ? 2 : adaptive && round + 1 == expected_lengths.size() ? 1 : -1;
+            }
+        };
         for (int seq = 0; seq < n_seq; ++seq) {
             common_speculative_begin(spec.get(), seq, prompts[seq]);
-            auto & dp = common_speculative_get_draft_params(spec.get(), seq);
-            dp.drafting = true;
-            dp.pos0 = prompt_length;
-            dp.id_last = 5 + seq;
-            dp.prompt = &prompts[seq];
-            dp.result = &results[seq];
-            dp.n_max = at_limit ? 2 : adaptive && round + 1 == expected_lengths.size() ? 1 : -1;
+        }
+        request_drafts();
+        if (fail_first_draft && round == 0) {
+            // A backend sampler makes a chain decode return -1 before it touches the cache.
+            llama_sampler_ptr sampler(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+            llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
+            require(llama_set_sampler(draft.get(), 0, sampler.get()), "backend sampler attaches to the draft context");
+            common_speculative_draft(spec.get());
+            require(llama_set_sampler(draft.get(), 0, nullptr), "backend sampler detaches");
+            require(results[0].empty(), "a failed draft decode drafts nothing");
+            request_drafts();
         }
         if (observed) {
             observed->input_rows = 0;
