@@ -219,17 +219,22 @@ if (LLAMA_DIST_TP_ND)
     if (NOT LLAMA_DIST_TP_ND_STATUS_DIR)
         message(FATAL_ERROR "ndstatus.h not found under ${LLAMA_DIST_TP_ND_SDK}/out - build the NetworkDirect SDK first")
     endif()
-    # the prebuilt ndutil.lib is /MT, so compile the loader sources in instead of linking it
-    set(LLAMA_ND_UTIL_SOURCES
+    # the prebuilt ndutil.lib is /MT, so build the loader sources here instead of linking it.
+    # They go in a static library of their own, outside the export-all scan of this DLL: MSVC
+    # emits two external symbols in ndprov.cpp named plainly == and !=, and once they are
+    # written to the generated .def file the link fails with LNK2001.
+    add_library(llama-nd-util STATIC
         "${LLAMA_ND_UTIL_DIR}/ndaddr.cpp"
         "${LLAMA_ND_UTIL_DIR}/ndfrmwrk.cpp"
         "${LLAMA_ND_UTIL_DIR}/ndprov.cpp")
-    target_sources(${TARGET} PRIVATE ${LLAMA_ND_UTIL_SOURCES})
+    target_include_directories(llama-nd-util PRIVATE "${LLAMA_ND_UTIL_DIR}" "${LLAMA_DIST_TP_ND_STATUS_DIR}")
+    target_compile_definitions(llama-nd-util PRIVATE _CRT_SECURE_NO_WARNINGS)
     if (MSVC)
-        set_source_files_properties(${LLAMA_ND_UTIL_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
+        target_compile_options(llama-nd-util PRIVATE /W0)
     else()
-        set_source_files_properties(${LLAMA_ND_UTIL_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+        target_compile_options(llama-nd-util PRIVATE -w)
     endif()
+    target_link_libraries(${TARGET} PRIVATE llama-nd-util)
     target_include_directories(${TARGET} PRIVATE "${LLAMA_ND_UTIL_DIR}" "${LLAMA_DIST_TP_ND_STATUS_DIR}")
     target_compile_definitions(${TARGET} PRIVATE LLAMA_DIST_TP_ND _CRT_SECURE_NO_WARNINGS)
     message(STATUS "llama: NetworkDirect dist-TP transport enabled (${LLAMA_DIST_TP_ND_SDK})")
