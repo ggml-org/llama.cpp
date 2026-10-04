@@ -1,3 +1,6 @@
+// TODO: merge with test-save-load-state.cpp
+// TODO: merge with test-state-restore-fragmented.cpp
+
 #include "arg.h"
 #include "common.h"
 #include "ggml-backend.h"

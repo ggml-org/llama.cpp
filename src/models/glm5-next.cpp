@@ -327,6 +327,7 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
         inp->n_sel = (uint32_t) n_sel;
         // both terms are context constants: n_ubatch bounds every ubatch and top_k + kpool - 1 bounds
         // n_sel, so the graph shape follows neither n_tokens nor n_kv, which the reserve cannot predict
+        // TODO: remove "gather" logic and everything related. the backends now support sparse attension so this is obsolete
         inp->gather = (int64_t) cparams.n_ubatch <= max_ub && (int64_t) cparams.n_ctx > hparams.indexer_top_k + kpool - 1;
 
         // Both paths read the slot mask: gather adds it to the scores, scatter maps its dead slots to dump rows.
