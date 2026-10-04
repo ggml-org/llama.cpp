@@ -94,7 +94,7 @@ private:
         std::shared_ptr<server_subproc> proc;
         server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
         int port = 0;
-        std::string buf;      // partial line
+        std::string buf[SERVER_SUBPROC_STREAMS]; // partial line of each pipe
         bool eof = false;     // output closed, waiting for the process to be reaped
         int64_t deadline = 0; // force-kill time in ms, 0 when no stop is pending
     };
@@ -147,46 +147,56 @@ private:
         return false;
     }
 
-    // read what the child wrote, forward complete lines
+    // read what the child wrote, handle its commands and forward its logs, line by line
     void read_output(child_t & c) {
+        for (int i = 0; i < SERVER_SUBPROC_STREAMS; i++) {
+            read_stream(c, (server_subproc_stream) i);
+        }
+        c.eof = c.proc->output_closed();
+    }
+
+    void read_stream(child_t & c, server_subproc_stream stream) {
         char chunk[4096];
-        while (!c.eof) {
-            int n = c.proc->read_output(chunk, sizeof(chunk));
+        std::string & buf = c.buf[stream];
+        bool closed = false;
+        while (true) {
+            int n = c.proc->read_output(stream, chunk, sizeof(chunk));
             if (n < 0) {
-                c.eof = true;
+                closed = true;
                 break;
             }
             if (n == 0) {
                 break;
             }
-            c.buf.append(chunk, (size_t) n);
+            buf.append(chunk, (size_t) n);
             size_t start = 0;
             while (true) {
-                size_t nl = c.buf.find('\n', start);
+                size_t nl = buf.find('\n', start);
                 if (nl == std::string::npos) {
                     break;
                 }
-                std::string line = c.buf.substr(start, nl + 1 - start);
+                on_line(c, stream, buf.substr(start, nl + 1 - start));
                 start = nl + 1;
-                on_line(c, line);
             }
-            c.buf.erase(0, start);
-            if (c.buf.size() > max_line) {
-                c.buf.clear(); // a child that never writes a newline must not grow this without bound
+            buf.erase(0, start);
+            if (buf.size() > max_line) {
+                buf.clear(); // a child that never writes a newline must not grow this without bound
             }
         }
-        if (c.eof && !c.buf.empty()) {
-            on_line(c, c.buf);
-            c.buf.clear();
+        if (closed && !buf.empty()) {
+            on_line(c, stream, buf);
+            buf.clear();
         }
     }
 
-    void on_line(child_t & c, const std::string & line) {
-        if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
+    void on_line(child_t & c, server_subproc_stream stream, const std::string & line) {
+        if (stream == SERVER_SUBPROC_STDERR) {
+            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+        } else if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
             LOG_DBG("[%5d] %s", c.port, line.c_str()); // prevent spamming the log
             models.handle_child_state(c.name, line);
         } else {
-            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+            SRV_WRN("[%5d] unexpected output on the command pipe: %s", c.port, line.c_str());
         }
     }
 
@@ -513,6 +523,8 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     preset.set_option(ctx_preset, "LLAMA_ARG_HOST",  CHILD_ADDR);
     preset.set_option(ctx_preset, "LLAMA_ARG_PORT",  std::to_string(port));
     preset.set_option(ctx_preset, "LLAMA_ARG_ALIAS", name);
+    // the child output goes through the router to its terminal, so it follows the router colors
+    preset.set_option(ctx_preset, "LLAMA_ARG_LOG_COLORS", common_log_get_colors(common_log_main()) ? "on" : "off");
     // TODO: maybe validate preset before rendering ?
     // render args
     args = preset.to_args(bin_path);
@@ -796,11 +808,12 @@ void server_models::load_models() {
             inst.meta.hidden = hidden_models.count(name) > 0;
         }
     };
-    // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
+    // update_args() injects HOST/PORT/ALIAS/LOG_COLORS, so strip them before comparing presets
     auto preset_options_for_compare = [](common_preset p) {
         p.unset_option("LLAMA_ARG_HOST");
         p.unset_option("LLAMA_ARG_PORT");
         p.unset_option("LLAMA_ARG_ALIAS");
+        p.unset_option("LLAMA_ARG_LOG_COLORS");
         return p.options;
     };
 
@@ -1171,9 +1184,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
         inst.meta.args = child_args; // save for debugging
 
-        // TODO @ngxson : maybe separate stdout and stderr in the future
-        //                so that we can use stdout for commands and stderr for logging
-        int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
+        // the child writes its commands to stdout and its logs to stderr
+        int options = subprocess_option_no_window;
         if (!inst.subproc->sproc.create(child_args, options, child_env)) {
             throw std::runtime_error("failed to spawn server instance");
         }
@@ -1673,6 +1685,18 @@ void server_models::handle_child_state(const std::string & name, const std::stri
 // server_child
 //
 
+server_child::server_child() {
+    if (is_child()) {
+        cmd_out = server_reserve_stdout();
+    }
+}
+
+server_child::~server_child() {
+    if (cmd_out) {
+        fclose(cmd_out);
+    }
+}
+
 bool server_child::is_child() {
     const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
     return router_port != nullptr;
@@ -1795,14 +1819,8 @@ void server_child::notify_to_router(const std::string & state, const json & payl
         {"payload", payload},
     };
     std::lock_guard<std::mutex> lk(mtx_stdout);
-    common_log_pause(common_log_main());
-    fflush(stdout);
-    // the router matches the command on a line prefix, so the leading newline
-    // closes whatever the logger left open on the shared pipe, down to the
-    // trailing color reset that carries no newline of its own
-    fprintf(stdout, "\n%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
-    fflush(stdout);
-    common_log_resume(common_log_main());
+    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(cmd_out);
 }
 
 
