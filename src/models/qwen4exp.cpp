@@ -570,6 +570,15 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     ggml_build_forward_expand(gf, cur);
 }
 
+// A draft head exported without token_embd.weight and output.weight borrows both tables from
+// the model it drafts for. llama_context keeps ctx_other only for such a head.
+static const llama_model & qwen4exp_mtp_lender(const llama_cparams & cparams) {
+    if (cparams.ctx_other == nullptr) {
+        throw std::runtime_error("QWEN4EXP MTP head has no token embedding or LM head and no target context to borrow them from");
+    }
+    return *llama_get_model(cparams.ctx_other);
+}
+
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for qwen4exp.
 //
 // The head folds the next token's embedding into the trunk's wide hyper-connection residual,
@@ -615,9 +624,13 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     ggml_set_input(inp->h);
     ggml_set_name(inp->h, "mtp_h_input");
 
-    GGML_ASSERT((layer.nextn.embed_tokens || model.tok_embd) &&
-            "QWEN4EXP MTP: checkpoint has neither nextn.embed_tokens nor a trunk token_embd.weight to draft from");
     ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+    if (tok_embd_w == nullptr) {
+        tok_embd_w = qwen4exp_mtp_lender(cparams).tok_embd;
+        if (tok_embd_w == nullptr) {
+            throw std::runtime_error("QWEN4EXP MTP head has no token embedding and the target model has none to lend");
+        }
+    }
     ggml_tensor * tok_embd   = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     cb(tok_embd, "mtp_tok_embd", il);
 
@@ -763,14 +776,22 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
         return res_hc;
     };
 
+    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
+    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
+    if (head_w == nullptr) {
+        const llama_model & lender = qwen4exp_mtp_lender(cparams);
+        head_w = lender.output;
+        head_s = lender.output_s;
+        if (head_w == nullptr) {
+            throw std::runtime_error("QWEN4EXP MTP head has no LM head and the target model has none to lend");
+        }
+    }
+
     auto build_head = [&](ggml_tensor * hidden) {
         ggml_tensor * mixed = build_hc_mix(hidden,
                 layer.nextn.hc_head_norm, layer.nextn.hc_head_down, layer.nextn.hc_head_up,
                 nullptr, nullptr, -1);
         cb(mixed, "mtp_hc_head", -1);
-        ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
-        ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
-        GGML_ASSERT(head_w && "QWEN4EXP MTP: missing LM head (nextn.shared_head_head or model.output)");
         return build_lora_mm(head_w, mixed, head_s);
     };
 

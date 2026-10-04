@@ -36,7 +36,7 @@ static void require(bool ok, const char * message) {
 
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
 static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
-                          bool shared_embd = true) {
+                          bool shared_embd = true, float output_scale = 1.0f) {
     gguf_context_ptr meta(gguf_init_empty());
     llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
@@ -93,7 +93,7 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
     };
     if (shared_embd) {
         add("token_embd.weight", {n_embd, n_vocab});
-        add("output.weight", {n_embd, n_vocab});
+        add("output.weight", {n_embd, n_vocab}, output_scale);
     }
     if (!mtp_only) {
         add("output_hc_norm.weight", {n_hidden}, trunk_scale);
@@ -160,9 +160,11 @@ static llama_model_ptr load_model(const std::string & path, bool load_mtp = true
     return llama_model_ptr(llama_model_load_from_file(path.c_str(), params));
 }
 
-static llama_context_ptr make_context(llama_model * model, bool flash, int n_seq = 1, int n_ubatch = 32) {
+static llama_context_ptr make_context(llama_model * model, bool flash, int n_seq = 1, int n_ubatch = 32,
+                                      llama_context * other = nullptr) {
     auto params = llama_context_default_params();
     params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    params.ctx_other = other;
     params.n_ctx = 128;
     params.n_batch = 32;
     params.n_ubatch = n_ubatch;
@@ -472,6 +474,71 @@ static void test_chain_metadata(llama_model * model) {
 
 #include "test-qwen4exp-mtp-driver.h"
 
+// A head exported without token_embd.weight and output.weight drafts with the tables of the
+// model it drafts for, reached through llama_context_params::ctx_other.
+static void test_borrowed_tables(const std::string & bare_path, const std::string & doubled_path,
+                                 llama_model * head, llama_model * target) {
+    auto bare = load_model(bare_path);
+    auto doubled = load_model(doubled_path);
+    require(bare && doubled, "table-less head and target with a doubled LM head load");
+
+    auto parent_params = llama_context_default_params();
+    parent_params.n_ctx = 128;
+    parent_params.n_threads = parent_params.n_threads_batch = 1;
+    llama_context_ptr parent(llama_init_from_model(target, parent_params));
+    llama_context_ptr parent_doubled(llama_init_from_model(doubled.get(), parent_params));
+    require(parent && parent_doubled, "parent contexts for the table-less head");
+
+    for (bool flash : {false, true}) {
+        if (q8_kv && !flash) { continue; }
+        // The fixtures seed tensors by name, so the target's tables equal the canonical head's.
+        auto own = make_context(head, flash);
+        auto borrowed = make_context(bare.get(), flash, 1, 32, parent.get());
+        const auto a = decode(own.get(), {5}, initial_hidden(), 0);
+        const auto b = decode(borrowed.get(), {5}, initial_hidden(), 0);
+        require(close(a.logits, b.logits) && close(a.hidden, b.hidden),
+                "borrowed tables reproduce the canonical head");
+
+        // A chain looks up the embedding of every drafted token inside the graph.
+        const int depth = 3, catchup = 2;
+        std::vector<llama_token> tokens(depth + catchup, 3);
+        tokens[catchup] = 5;
+        auto own_chain = make_context(head, flash);
+        auto borrowed_chain = make_context(bare.get(), flash, 1, 32, parent.get());
+        const auto c = decode(own_chain.get(), tokens, initial_hidden(depth + catchup), 0, true, catchup);
+        const auto d = decode(borrowed_chain.get(), tokens, initial_hidden(depth + catchup), 0, true, catchup);
+        require(close(c.logits, d.logits) && close(c.hidden, d.hidden),
+                "borrowed tables reproduce the canonical chain");
+
+        // The LM head is the last, linear step, so doubling the target's output.weight doubles the logits.
+        auto scaled = make_context(bare.get(), flash, 1, 32, parent_doubled.get());
+        auto e = decode(scaled.get(), {5}, initial_hidden(), 0);
+        for (float & logit : e.logits) { logit *= 0.5f; }
+        require(close(a.logits, e.logits) && close(a.hidden, e.hidden), "the LM head is the target model's");
+        fprintf(stderr, "PASS borrowed tables flash=%d\n", flash);
+    }
+
+    // The public driver hands the target context to the draft context the same way the server does.
+    for (bool chained : {false, true}) {
+        require(driver_drafts(target, bare.get(), chained, 1, 8, false) == driver_drafts(target, head, chained, 1, 8, false),
+                "driver drafts match with borrowed tables");
+    }
+    fprintf(stderr, "PASS borrowed tables through the public driver\n");
+
+    // A parent whose model has no tables either cannot lend any: creation fails instead of aborting.
+    {
+        auto lender = make_context(bare.get(), q8_kv, 1, 32, parent.get());
+        auto params = llama_context_default_params();
+        params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        params.n_ctx = 128;
+        params.n_threads = params.n_threads_batch = 1;
+        params.ctx_other = lender.get();
+        require(!llama_context_ptr(llama_init_from_model(bare.get(), params)),
+                "a target without tables is reported, not borrowed from");
+    }
+    fprintf(stderr, "PASS table-less target rejected\n");
+}
+
 struct fit_log_capture {
     ggml_log_callback previous;
     void * previous_data;
@@ -525,6 +592,32 @@ static void test_fit(const std::string & target_path, const std::string & head_p
             // This also detects shared adaptive drafts silently omitted from fitting.
             require(logs.contexts == 2, "fit measures both target and MTP draft contexts");
         }
+    }
+}
+
+// A head without its own tables only builds next to its target's context. The fit must
+// measure it there instead of dropping it and overcommitting the device.
+static void test_fit_borrowed_head(const std::string & target_path, const std::string & bare_path) {
+    for (auto mode : {COMMON_SPECULATIVE_TYPE_DRAFT_MTP, COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE}) {
+        common_params params;
+        params.model.path = target_path;
+        params.n_ctx = 128;
+        params.n_batch = params.n_ubatch = 8;
+        params.n_gpu_layers = 0;
+        params.devices = {nullptr};
+        params.cpuparams.n_threads = params.cpuparams_batch.n_threads = 1;
+        params.fit_params = true;
+        params.fit_params_min_ctx = 128;
+        std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), 0);
+        params.speculative.types = {mode};
+        params.speculative.draft.mparams.path = bare_path;
+        params.speculative.draft.n_gpu_layers = 0;
+        fit_log_capture logs;
+        const auto result = common_init_from_params(params, true);
+        require(result && result->model(), "fit initialization loads target");
+        // target, the head alone (refused), then the target again as parent and the head beside it
+        require(logs.contexts == 4, "fit measures a table-less head next to its target");
+        fprintf(stderr, "PASS fit table-less head adaptive=%d\n", mode == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE);
     }
 }
 
@@ -583,12 +676,17 @@ int main(int argc, char ** argv) {
     const std::string head_path = (dir / "head.gguf").string();
     const std::string target_path = (dir / "combined.gguf").string();
     const std::string changed_path = (dir / "changed.gguf").string();
+    const std::string bare_path = (dir / "bare.gguf").string();
+    const std::string doubled_path = (dir / "doubled.gguf").string();
     write_fixture(head_path, true);
+    write_fixture(bare_path, true, -1, 1.0f, false);
+    write_fixture(doubled_path, false, -1, 1.0f, true, 2.0f);
     write_fixture(target_path, false);
     write_fixture(changed_path, false, -1, 9.0f);
     if (argc == 2 && (std::string(argv[1]) == "--fit-only" || std::string(argv[1]) == "--fit-separate-only")) {
         test_fit(target_path, head_path, std::string(argv[1]) == "--fit-separate-only");
         test_fit_ordinary_head(target_path, head_path);
+        test_fit_borrowed_head(target_path, bare_path);
         std::filesystem::remove_all(dir);
         llama_backend_free();
         fprintf(stderr, "PASS Qwen4Exp MTP fit regression suite\n");
@@ -601,6 +699,13 @@ int main(int argc, char ** argv) {
     if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
         test_ordinary_context(head.get(), target.get());
         test_ordinary_draft_driver(target.get(), head.get());
+        head.reset(); target.reset(); changed.reset();
+        std::filesystem::remove_all(dir);
+        llama_backend_free();
+        return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--borrowed-tables-only") {
+        test_borrowed_tables(bare_path, doubled_path, head.get(), target.get());
         head.reset(); target.reset(); changed.reset();
         std::filesystem::remove_all(dir);
         llama_backend_free();
@@ -644,8 +749,6 @@ int main(int argc, char ** argv) {
     require(bool(head_without_mtp), "MTP-only file loads with MTP weights disabled");
     test_ordinary_context(head_without_mtp.get(), target.get());
     head_without_mtp.reset();
-    const std::string bare_path = (dir / "bare.gguf").string();
-    write_fixture(bare_path, true, -1, 1.0f, false);
     auto bare = load_model(bare_path, false);
     require(bool(bare), "head without the shared embedding loads");
     {
@@ -661,6 +764,7 @@ int main(int argc, char ** argv) {
                 "ordinary context reports a head with nothing to run");
     }
     bare.reset();
+    test_borrowed_tables(bare_path, doubled_path, head.get(), target.get());
     for (bool flash : {false, true}) {
         if (q8_kv && !flash) { continue; }
         auto a = make_context(head.get(), flash);
@@ -685,6 +789,7 @@ int main(int argc, char ** argv) {
     test_chain_metadata(head.get());
     test_fit(target_path, head_path);
     test_fit_ordinary_head(target_path, head_path);
+    test_fit_borrowed_head(target_path, bare_path);
     head.reset(); target.reset(); changed.reset();
     std::filesystem::remove_all(dir);
     llama_backend_free();

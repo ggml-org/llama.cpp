@@ -47,6 +47,8 @@ static std::vector<llama_tokens> driver_drafts(
     llama_context_ptr target(llama_init_from_model(target_model, cp));
     require(bool(target), "driver target context");
     cp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    // as the server does: a head without its own tables borrows them from the target
+    cp.ctx_other = target.get();
     if (observed) {
         cp.cb_eval = driver_graph_observation::callback;
         cp.cb_eval_user_data = observed;
