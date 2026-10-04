@@ -4128,6 +4128,26 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
     return false;
 }
 
+// Types whose fp16 conversion from the reorder layout is at least as fast as from the standard
+// layout (unitrace on Arc Pro B70, 4096 x 14336 at n = 512, us per call reorder / standard: Q4_0
+// 267 / 656, Q8_0 324 / 356, Q2_K 244 / 483, Q3_K 366 / 1247, Q4_K 303 / 549, Q6_K 304 / 374), so
+// their weights move to the reorder layout on the first prefill matmul instead of the first decode.
+// Q5_K stays out (316 / 294).
+inline bool ggml_sycl_reorder_on_prefill(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+            return true;
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q6_K:
+            return !g_ggml_sycl_prioritize_dmmv;
+        default:
+            return false;
+    }
+}
+
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:
@@ -4970,7 +4990,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     } else if (use_mul_mat_q) {
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
     } else {
-        if (!split && src0->type == GGML_TYPE_Q4_0 && !src0->view_src && ggml_is_contiguous(src0)) {
+        if (!split && ggml_sycl_reorder_on_prefill(src0->type) && !src0->view_src && ggml_is_contiguous(src0)) {
             opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::MUL_MAT_SYCL);
         }
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
