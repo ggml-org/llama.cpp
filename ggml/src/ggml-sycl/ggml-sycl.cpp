@@ -107,6 +107,7 @@ int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_fp16_gemm = 2;
 int g_ggml_sycl_use_async_mem_op = 0;
+std::atomic<uint64_t> g_ggml_sycl_graph_epoch{0};
 int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_use_level_zero_api = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
@@ -1873,6 +1874,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
         SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(ptr, *qptr)));
         pool_size -= size;
+        g_ggml_sycl_graph_epoch.fetch_add(1);
     }
 };
 
@@ -4825,6 +4827,7 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 
     if (reorder_qw(src0, ctx->stream())) {
         extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
+        g_ggml_sycl_graph_epoch.fetch_add(1);
     }
 }
 
@@ -4842,6 +4845,7 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
     }
     if (reorder_qw(src0, ctx->stream())) {
         extra->optimized_feature.reorder = true;
+        g_ggml_sycl_graph_epoch.fetch_add(1);
     }
 }
 
@@ -6308,12 +6312,83 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
 }
 #endif
 
+#ifdef GGML_SYCL_GRAPH
+// Mirrors ggml_cuda_graph_update_required(): true when any node or source differs from the
+// properties recorded for this graph key. Like the CUDA backend, a changed graph runs directly
+// until two consecutive calls agree, so one-time work (weight reorder, scratch growth) happens
+// outside the recording, and is replayed without re-recording after that.
+static bool ggml_sycl_graph_update_required(ggml_backend_sycl_context::sycl_graph & graph, const ggml_cgraph * cgraph) {
+    if (cgraph->uid != 0 && cgraph->uid == graph.uid) {
+        GGML_ASSERT((int) graph.node_props.size() == cgraph->n_nodes);
+        return false;
+    }
+    graph.uid = cgraph->uid;
+
+    bool res = false;
+    if ((int) graph.node_props.size() != cgraph->n_nodes) {
+        res = true;
+        graph.node_props.resize(cgraph->n_nodes);
+    }
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+
+        ggml_backend_sycl_context::sycl_graph::node_properties prop;
+        memset(&prop, 0, sizeof(prop));
+        memcpy(&prop.node, node, sizeof(ggml_tensor));
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            if (node->src[j]) {
+                prop.src_data[j] = node->src[j]->data;
+                memcpy(prop.src_ne[j], node->src[j]->ne, sizeof(prop.src_ne[j]));
+                memcpy(prop.src_nb[j], node->src[j]->nb, sizeof(prop.src_nb[j]));
+            }
+        }
+
+        if (res || memcmp(&graph.node_props[i], &prop, sizeof(prop)) != 0) {
+            graph.node_props[i] = prop;
+            res = true;
+        }
+    }
+
+    return res;
+}
+
+static void ggml_sycl_graph_record(ggml_backend_sycl_context * sycl_ctx, ggml_backend_sycl_context::sycl_graph & graph,
+                                   ggml_cgraph * cgraph) {
+    sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
+
+    graph.epoch = g_ggml_sycl_graph_epoch.load();
+
+    model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
+    ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+    model_sycl_graph.end_recording();
+
+    const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
+    if (!graph.exec_graph || !graph_update_support) {
+        auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
+                                                 model_sycl_graph.finalize();
+        graph.exec_graph = std::make_unique<
+            sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+    } else {
+        try {
+            graph.exec_graph->update(model_sycl_graph);
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
+        } catch (sycl::exception const & e) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] Exception when updating graph, %s\n", e.what());
+            auto exec_graph = model_sycl_graph.finalize({sycl_ex::property::graph::updatable{}});
+            graph.exec_graph = std::make_unique<
+                sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+        }
+    }
+}
+#endif
+
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
 
 #ifdef GGML_SYCL_GRAPH
     bool use_sycl_graph = false;
-    if (g_ggml_sycl_enable_graph) {
+    if (g_ggml_sycl_enable_graph && cgraph->n_nodes > 0) {
         use_sycl_graph = check_graph_compatibility(cgraph);
     }
     if (use_sycl_graph) {
@@ -6324,36 +6399,40 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             return GGML_STATUS_SUCCESS;
         }
 
-        sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
+        const void * graph_key = cgraph->nodes[0];
+        if (sycl_ctx->sycl_graphs.size() >= ggml_backend_sycl_context::max_sycl_graphs &&
+            sycl_ctx->sycl_graphs.find(graph_key) == sycl_ctx->sycl_graphs.end()) {
+            sycl_ctx->sycl_graphs.clear();
+        }
+        ggml_backend_sycl_context::sycl_graph & graph = sycl_ctx->sycl_graphs[graph_key];
 
-        model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
-        model_sycl_graph.end_recording();
+        const bool properties_changed = ggml_sycl_graph_update_required(graph, cgraph);
 
-        const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
-        if (!sycl_ctx->exec_graph || !graph_update_support) {
-            auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
-                                                     model_sycl_graph.finalize();
-            sycl_ctx->exec_graph = std::make_unique<
-                sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
-        } else {
-            try {
-                sycl_ctx->exec_graph->update(model_sycl_graph);
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
-            } catch (sycl::exception const & e) {
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] Exception when updating graph, %s\n", e.what());
-                auto exec_graph = model_sycl_graph.finalize({sycl_ex::property::graph::updatable{}});
-                sycl_ctx->exec_graph = std::make_unique<
-                    sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+        bool replay = false;
+        bool record = false;
+        if (!graph.warmup_complete) {
+            if (!properties_changed) {
+                graph.warmup_complete = true;
+                replay                = true;
+                record                = true;
             }
+        } else if (properties_changed) {
+            graph.warmup_complete = false;
+        } else {
+            replay = true;
+            record = !graph.exec_graph || graph.epoch != g_ggml_sycl_graph_epoch.load();
         }
 
-        sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
-    } else
-#endif
-    {
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        if (replay) {
+            if (record) {
+                ggml_sycl_graph_record(sycl_ctx, graph, cgraph);
+            }
+            sycl_ctx->stream()->ext_oneapi_graph(*graph.exec_graph);
+            return GGML_STATUS_SUCCESS;
+        }
     }
+#endif
+    ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
     return GGML_STATUS_SUCCESS;
 }
 

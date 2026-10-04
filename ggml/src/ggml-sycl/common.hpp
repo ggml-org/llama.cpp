@@ -13,10 +13,13 @@
 #ifndef GGML_SYCL_COMMON_HPP
 #define GGML_SYCL_COMMON_HPP
 
+#include <atomic>
 #include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "base.hpp"
 #include "dpct/helper.hpp"
@@ -61,6 +64,9 @@ void ggml_sycl_host_free(void* ptr);
 
 
 extern int g_ggml_sycl_debug;
+// Bumped whenever device memory or weight layout that a recorded SYCL graph may reference changes
+// (weight reorder, scratch buffer reallocation), so cached graphs are re-recorded before replay.
+extern std::atomic<uint64_t> g_ggml_sycl_graph_epoch;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
@@ -445,7 +451,24 @@ struct ggml_backend_sycl_context {
     }
 
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // One recorded graph per ggml graph key, replayed while the node properties stay identical.
+    struct sycl_graph {
+        struct node_properties {
+            ggml_tensor node;
+            void *      src_data[GGML_MAX_SRC];
+            int64_t     src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+            size_t      src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+        };
+
+        std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+        std::vector<node_properties> node_props;
+        uint64_t                     uid             = 0;
+        uint64_t                     epoch           = 0;
+        bool                         warmup_complete = false;
+    };
+
+    static constexpr size_t max_sycl_graphs = 32;
+    std::unordered_map<const void *, sycl_graph> sycl_graphs;
 #endif
 
     ggml_sycl_pool & host_pool(int device) {

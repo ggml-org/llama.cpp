@@ -25,6 +25,7 @@ sycl::half * ggml_sycl_fattn_kv_buffers::kv_buffer::ensure_half(size_t n_elems) 
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         ptr = nullptr;
         capacity = 0;
+        g_ggml_sycl_graph_epoch.fetch_add(1);
     }
 
     size_t cap = 0;
