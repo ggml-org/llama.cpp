@@ -795,6 +795,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             // three stay in lockstep per device
             const int64_t granularity_v  = (granularity_kv / hparams.n_embd_head_k(il)) * hparams.n_embd_head_v(il);
             if (std::regex_match(tensor_name, pattern_kv_weight) ||
+                std::regex_match(tensor_name, pattern_v_exps_weight) ||
                 std::regex_match(tensor_name, pattern_kv_bias) ||
                 std::regex_match(tensor_name, pattern_kv_cache)) {
                 GGML_ASSERT(segments.size() == 1);
