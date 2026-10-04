@@ -211,6 +211,11 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     if (LLAMA_BUILD_SERVER)
         llama_build_and_test(test-server-vision.cpp)
         target_link_libraries(test-server-vision PRIVATE server-context)
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if (Python3_Interpreter_FOUND)
+            llama_test_cmd(${Python3_EXECUTABLE} NAME test-adaptive-vision-measurements
+                ARGS -B ${PROJECT_SOURCE_DIR}/tools/server/tests/test_adaptive_vision_measurements.py)
+        endif()
     endif()
 
     if (NOT GGML_BACKEND_DL)

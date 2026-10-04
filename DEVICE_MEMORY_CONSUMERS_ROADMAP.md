@@ -444,8 +444,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.4a | Committed | 0092cef1e | Separate file source, stable tensor metadata and shared eager weight bindings; original CPU/CUDA embedding equivalence, shared-owner teardown and memory checks pass. |
 | 7.4b | Committed | d2d996604 | Explicit pinned weight unload/reload, native retirement, generation-safe rebinding and retry; CPU/CUDA equivalence, borrowed-workspace return and memory checks pass. |
 | 7.4c | Committed | `b6b9b38e0` | Deferred projector startup, bounded weight/compute loans, phase cleanup/recovery and outside-budget accounting; combined image/text and lifetime qualifications pass. |
-| 7.5a | Ready for review | - | Serial no-MTP server admission, deferred projector startup, bounded image encoding, media/prompt-cache reuse and request cleanup qualified. |
-| 7.5b-7.5c | Planned | - | Full-device memory/performance reporting and image-aware MTP remain pending. |
+| 7.5a | Committed | `1c7d40879` | Serial no-MTP server admission, deferred projector startup, bounded image encoding, media/prompt-cache reuse and request cleanup qualified. |
+| 7.5b | Ready for review | - | Repeated image-request memory sampling, phase/reload diagnostics, variable workspace accounting and no-MTP documentation qualified. |
+| 7.5c | Planned | - | Image-aware MTP admission and its full lifecycle qualification remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -4081,3 +4082,52 @@ The executable harness is `tools/server/tests/test_adaptive_vision.py`; its usag
 #### Remaining boundary
 
 Stage 7.5b must measure full-device peaks, transition/reload latency and post-request baselines, including batch-dependent workspace. Stage 7.5c must separately qualify image-aware MTP. Native context capacity, short matching continuations and host sanitizer coverage do not establish arbitrary full-context image equivalence, accelerator portability or GPU race freedom.
+
+### Stage 7.5b: measured no-MTP vision memory and handoff costs
+
+This stage adds qualification and low-frequency diagnostics, not a new allocation policy. The CUDA/CPU ownership, bounded grants, image batching, numerical execution and no-MTP admission rules remain unchanged. The reproducible measurement companion is `tools/server/tests/measure_adaptive_vision.py`; its report tests are registered with CTest when Python and server tests are available.
+
+#### Distinct timings and accounting
+
+`vision_phase` reports actual weight/device-compute/host-compute bytes, peak borrowed grants, the target KV grant before and after restoration, returned-grant status, and wall times for planning, suspension, loan creation, projector reload, encoding, retirement and text restoration. Records are emitted only after successful retirement/restoration, with explicit diagnostics validity. A successful inference is not turned into a failure merely because a diagnostic snapshot is unavailable; the measurement harness rejects such a record rather than inventing accounting.
+
+`text_resume_us` is not a measurement of uploading the entire KV cache. It rebuilds the target's grants and graph reservations. The existing resident mirror is populated lazily by its next consumer. A new `KV_reload` record measures the first refresh of each new mirror: actual copied bytes/calls, its existing backend-drain time, and the host wall time for planning and synchronous tensor copies. Timing is conditional on first use; no GPU events, new GPU synchronization or per-token logging are added. These records also cover ordinary startup and other binding replacements, so the report identifies the first refill **after each vision phase**, rather than treating every cold mirror as an image-related reload. Nonresident ring transfers and later attention computation are outside that first-refill measurement.
+
+The owner/refresh diagnostics remain backend-neutral. The external observer is explicitly NVIDIA/Linux-specific: it samples the selected physical device every 50 ms, selects that device for the temporary server, and correlates samples with the existing Linux monotonic clock. It records raw samples and request/vision/idle windows. Missing samples remain unknown, not zero. Device-wide memory includes any other activity on that GPU; sampling can miss short-lived allocations and is not an instantaneous peak guarantee.
+
+#### Observed memory and variable workspace
+
+The qualified configuration uses IQ4_XS, the matching F16 projector, Q8_0/Q4_0 KV, enabled FA, serial execution, speculation disabled and UVM disabled on the RTX 5070 Ti (16,303 MiB). Temporary image-token limits are 64-4096 to exercise variable encoder geometry; these are not a grounding-quality recommendation or a change to production defaults. Each point performs three uncached image requests with identical 16-token output IDs and a matching text continuation before/after them. The native-capacity points use a 6K-token background, not a full-262K history.
+
+| Context capacity / background | Parent MiB | Image requests | b/ub | Ready device MiB | Sampled request peak / warm idle MiB |
+| --- | --- | --- | --- | --- | --- |
+| 8,192 / 6K | 1,024 | One 512x512 image | 64/64 and 256/256 | 14,168 | 14,208 / 14,208 |
+| 262,144 / 6K | 2,240 | One 1024x1024 image | 64/64 and 256/256 | 15,396 | 15,466 / 15,466 |
+| 8,192 / 6K | 1,024 | Two 512x512 images | 64/64 | 14,168 | 14,208 / 14,208 |
+| 49,152 / 40K | 1,024 | One 512x512 image, streamed decode | 64/64 | 14,170 | 14,210 / 14,210 |
+
+- Projector weights occupy **884.618 MiB**. A 512x512 image needs **30.016 MiB device compute + 3.016 MiB host compute**; a 1024x1024 image needs **120.062 MiB device compute + 12.062 MiB host compute**. Therefore actual preprocessed image geometry, not startup warmup, determines vision scratch. Host compute is outside the parent.
+- At native capacity, the resumed **prefill** KV grant is **757.701 MiB** with 64/64 and **631.695 MiB** with 256/256. Both regain **2,228.040 MiB decode KV** inside the same 2,240 MiB parent. Larger text ubatches change prefill workspace, not the measured projector weight bytes; the vision allocation follows the actual encoder batch.
+- The native image phase uses **1,004.680 MiB** of bounded vision grants, then returns every borrowed byte and clears suspension before embedding prefill. Retaining the ready text allocation and adding those measured vision buffers separately would require an estimated **16,400.680 MiB**, above this card's total. The actual sampled peak is **15,466 MiB**. This is a counterfactual for retaining the configured text parent, not a measured stock server or a complete driver-memory prediction.
+- The first request establishes native graph/driver allocations outside the parent: device usage rises 40 MiB in the smaller configuration and 70 MiB at native capacity, then stays unchanged across the later repeats. Returning a lease does not free the retained parent to the driver; the expected baseline is the warmed allocation, not the pre-model or pre-capture value.
+- The two-image point uses two encoder batches per HTTP request with the current projector settings. All six phases across three requests are accounted for independently, including each projector reload and target refill. No one-image/one-phase assumption is made by the report.
+- The 40K point explicitly reaches `streaming=1` and returns to the same warmed baseline over all three requests. The first post-vision resident refill copies **728 MiB** in 32 calls; later decode rebindings and ring traffic are listed separately, not attributed to that initial refill.
+
+#### Handoff latency
+
+At the quiet native-capacity point, subsequent projector reloads take **150.5-152.2 ms**, image encoding **224.1-230.4 ms**, and text-grant restoration **1.40-1.47 ms**. The first post-vision resident refill copies **156 MiB** in 32 calls and takes **3.46-3.64 ms**, separately from restoration. A later prefill-to-decode replacement may refill another mirror; the raw report preserves those records too. Projector reload includes file access and upload preparation; mirror refill includes host planning and its existing synchronous copies. Neither number is a pure PCIe bandwidth measurement.
+
+The long-history point is used for streaming-memory stability, not a throughput claim: some qualification builds overlapped that run, and its host wall timings vary with CPU load. Native-capacity handoff timings above come from the separate quiet run. These are a few representative repetitions with already-cached source files, not statistical cold-I/O or steady-decode benchmarks.
+
+#### TDD and regression evidence
+
+- Host report tests started red for missing phase parsing, then for request grouping and lazy-refill parsing. A further red overlap/orphan case catches duplicated attribution that simple total-count checking would miss. The final **5 unittest cases** cover missing/malformed records, invalid returned grants, negative timing, timestamp ordering, absent samples, multiple batches per request and unambiguous attribution. Live reports additionally require a refill after every successful vision phase.
+- The complete registered Release selection passes **4 CTest targets**: report tests, server admission/media policy (**5/30**), session controls (**12/146**) and resident controls (**15/275**). Session/resident controls also pass ASan with leak checking and UBSan. Targeted host session TSan passes **12/146** with process-local ASLR disabled. The resident suite's ordinary TSan run reports a race in unchanged CPU OpenMP graph execution (`ggml-cpu.c:3385`), outside the new diagnostics; that broader run is not counted as passing. A separate `OMP_THREAD_LIMIT=1` control passes **15/275** and qualifies the host logic only, not multithreaded OpenMP or GPU race freedom.
+- The real no-MTP phase-arena fixture passes **13 cases / 231 assertions**. Initial, follow-up and post-decode image logits have **zero maximum difference**; recurrent state bytes and 16-token continuations match the ordinary adapter. Interrupted encoding, upload cancellation and target-restoration retry remain covered. The first invocation used the fixture's streaming expectation with an all-resident 1,024 MiB parent and failed that expectation; the corrected `--resident-control` invocation passes without a code change or weakened assertion.
+- The final repeated-image studies qualify returned grants, stable warmed device usage, unchanged token IDs, post-image text recovery and separate reload timings. A small-image run separately checks the diagnostic/report path at verbosity 3. No image-aware MTP, other accelerator execution or full-262K image history is claimed.
+
+Artifacts are `/tmp/vision-7.5b-*`, notably `native-reload-final`, `two-image-reload-final`, `streamed-reload-final`, `verbosity3-passed`, `real-session-final.log`, CTest and host sanitizer logs. The initial two-image report correctly stopped when its one-phase-per-request assumption was disproved; grouping now preserves all completed phases. The initial verbosity-3 check also exposed the generic backend callback's INFO-to-verbosity-4 mapping. Diagnostics now use the existing `memory_phase` warning-level visibility so they remain present at verbosity 3; this severity does not indicate an inference failure. The production container is restored using its original image/configuration. Only this stage's source, test and documentation files are staged; no assistant commit or push is made.
+
+#### Next boundary
+
+Stage 7.5c must qualify the existing embedded MTP path across vision/text transitions, including image-embedding catch-up, M-RoPE positions, target/draft/vision scheduler ownership, ring-guard retirement, rejection replay, cancellation and peak memory. The no-MTP path and its measured baselines remain the control. The current speculative vision guard stays closed until those qualifications pass.

@@ -68,6 +68,8 @@ This requires a shared arena, not the legacy fixed KV-pool flag. Parallel slots,
 
 An offline [server qualification harness](tools/server/tests/test_adaptive_vision.py) compares the ordinary eager server with the arena server using deterministic local PNGs. It checks token IDs, cached/changed/follow-up and multiple images, RAM prompt-cache restoration, socket cancellation, oversized-batch recovery and optional rejected startup configurations. See [test instructions](tools/server/tests/README.md#adaptive-kv-vision-qualification). It does not stop production containers or download models.
 
+Repeated no-MTP image requests at native context capacity with a 2,240 MiB parent were also memory-qualified at 64/64 and 256/256: sampled device usage settled at 15,466 MiB on the 16,303 MiB RTX 5070 Ti, with every vision grant returned before text resumed. These used 6K-token backgrounds, not full-262K histories. See the [memory/latency measurement companion](tools/server/tests/README.md#vision-memory-and-handoff-measurements) for reproduction and the distinction between projector reload, text restoration and lazy KV refill. Sampling does not guarantee an instantaneous peak bound; image dimensions and batch limits still matter.
+
 ## KV data movement and attention
 
 Target and MTP have separate logical histories in pinned host RAM. Their GPU pages share one physical pool. For this model a page holds 256 token positions; K and V page sizes follow the selected quants.

@@ -284,8 +284,11 @@ struct llama_kv_stream_resident::implementation {
 
     // Refresh only the capacity assigned to each layer; concentrated layouts may assign zero rows.
     bool refresh(size_t padded, uint32_t only_layer = UINT32_MAX) {
+        const bool cold = !initialized;
+        const auto start_us = cold ? ggml_time_us() : 0;
         bytes = calls = 0;
         ggml_backend_synchronize(backend);
+        const auto drained_us = cold ? ggml_time_us() : 0;
         if (!initialized) {
             if (!content->reset_mirror()) return false;
             initialized = true;
@@ -295,6 +298,7 @@ struct llama_kv_stream_resident::implementation {
             if (only_layer != UINT32_MAX) range.layer = only_layer;
             range.count = std::min(padded, placement(range.layer).planes.tokens);
         }
+        const auto upload_start_us = cold ? ggml_time_us() : 0;
         if (!content->flush(selected, [&](const llama_kv_stream_copy_span & span) {
             const bool value = span.rows.operand == ggml_kv_stream_operand::v;
             const auto & planes = placement(span.rows.layer).planes;
@@ -304,6 +308,13 @@ struct llama_kv_stream_resident::implementation {
             bytes += span.bytes; ++calls;
             return true;
         })) return false;
+        // Measure first-use mirror refill without adding a wait to its existing synchronous copies.
+        if (cold) {
+            const auto end_us = ggml_time_us();
+            LLAMA_LOG_WARN("KV_reload: bytes=%zu calls=%zu padded_rows=%zu drain_us=%lld upload_us=%lld begin_us=%lld end_us=%lld\n",
+                bytes,calls,padded,static_cast<long long>(drained_us-start_us),static_cast<long long>(end_us-upload_start_us),
+                static_cast<long long>(start_us),static_cast<long long>(end_us));
+        }
         return true;
     }
 

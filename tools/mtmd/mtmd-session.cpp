@@ -1,6 +1,7 @@
 #include "mtmd-session.h"
 #include "mtmd-workspace.h"
 #include "mtmd-projector-storage.h"
+#include "mtmd-helper-common.h"
 #include "../../src/llama-context-memory.h"
 
 #include <limits>
@@ -281,22 +282,31 @@ int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_cont
     auto * parent = owner ? owner->shared_parent() : nullptr;
     if (!owner || !owner->valid() || owner->kv_device_suspended() || !owner->shares_kv_memory() ||
             owner->has_speculative_consumer() || !parent) return -1;
+    const auto begin_us = ggml_time_us();
+    llama_context_memory_diagnostics before, during, after;
+    const bool before_ok = owner->diagnostics(before);
     struct phase_return {
         mtmd_context * ctx;
         llama_context * target;
         std::vector<ggml_backend_memory_lease_t> grants;
         std::vector<std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>> host;
         bool suspended = false, finished = false, armed = false;
+        int64_t release_us = 0, resume_us = 0;
         phase_return(mtmd_context * ctx,llama_context * target) : ctx(ctx),target(target) {}
         bool finish() noexcept {
             if (finished) return true;
             finished = true;
             if (!armed) return true;
+            const auto start_us = ggml_time_us();
             bool released = false;
             try { released = mtmd_release_compute_workspace(ctx) && mtmd_unload_projector_weights(ctx); } catch (...) {}
             for (auto * lease : grants) ggml_backend_memory_lease_free(lease);
             grants.clear(); host.clear();
-            return released && (!suspended || llama_context_resume_kv_device(target,llama_memory_text_phase::prefill));
+            release_us = ggml_time_us()-start_us;
+            const auto resume_start = ggml_time_us();
+            const bool resumed = released && (!suspended || llama_context_resume_kv_device(target,llama_memory_text_phase::prefill));
+            resume_us = ggml_time_us()-resume_start;
+            return resumed;
         }
         ~phase_return() { finish(); }
     } returned{ctx,target};
@@ -305,10 +315,14 @@ int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_cont
         returned.armed = true;
         mtmd_vision_phase_requirements plan;
         if (!mtmd_batch_measure_vision_phase(batch,parent,plan)) return -1;
+        const auto measured_us = ggml_time_us();
         if (!llama_context_suspend_kv_device(target)) return -1;
         returned.suspended = true;
+        const auto suspended_us = ggml_time_us();
         if (!owner->lend_suspended({plan.weight_bytes,plan.device_compute_bytes},returned.grants)) return -1;
+        const auto loaned_us = ggml_time_us();
         if (!mtmd_reload_projector_weights_in(ctx,returned.grants[0],progress,user_data)) return -1;
+        const auto loaded_us = ggml_time_us();
         std::vector<ggml_backend_memory_lease_t> compute;
         for (size_t i = 0; i < plan.groups.size(); ++i) {
             const auto & group = plan.groups[i];
@@ -325,8 +339,23 @@ int32_t mtmd_batch_encode_arena(mtmd_context * ctx,mtmd_batch * batch,llama_cont
             }
         }
         if (!mtmd_attach_compute_workspace(ctx,compute)) return -1;
+        const bool during_ok = owner->diagnostics(during);
+        const auto encode_start = ggml_time_us();
         const auto result = mtmd_batch_encode(batch);
+        const auto encoded_us = ggml_time_us();
         if (result) return result;
-        return returned.finish() ? 0 : -1;
+        if (!returned.finish()) return -1;
+        const bool after_ok = owner->diagnostics(after);
+        // Resume rebuilds text grants. Attention uploads host KV lazily after this phase.
+        // Match memory_phase visibility through the server's backend log callback.
+        LOG_WRN("vision_phase: parent=%zu weights=%zu compute=%zu host_compute=%zu grants=%zu before_kv=%zu resumed_kv=%zu borrowed_after=%zu suspended_after=%d diagnostics=%d measure_us=%lld suspend_us=%lld loan_us=%lld projector_reload_us=%lld encode_us=%lld release_us=%lld text_resume_us=%lld begin_us=%lld end_us=%lld\n",
+            ggml_backend_buffer_get_size(parent),plan.weight_bytes,plan.device_compute_bytes,plan.host_compute_bytes,
+            during.borrowed_phase_bytes,before.kv_pool_bytes,after.kv_pool_bytes,after.borrowed_phase_bytes,int(after.kv_device_suspended),
+            int(before_ok && during_ok && after_ok),static_cast<long long>(measured_us-begin_us),
+            static_cast<long long>(suspended_us-measured_us),static_cast<long long>(loaned_us-suspended_us),
+            static_cast<long long>(loaded_us-loaned_us),static_cast<long long>(encoded_us-encode_start),
+            static_cast<long long>(returned.release_us),static_cast<long long>(returned.resume_us),
+            static_cast<long long>(begin_us),static_cast<long long>(ggml_time_us()));
+        return 0;
     } catch (...) { return -1; }
 }

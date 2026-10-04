@@ -42,7 +42,7 @@ def request(port, path, body=None):
 
 
 @contextlib.contextmanager
-def server(args, mode, extra=(), reject=False):
+def server(args, mode, extra=(), reject=False, env_extra=None):
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
@@ -52,11 +52,12 @@ def server(args, mode, extra=(), reject=False):
                "--ctx-size", str(args.context), "-b", str(args.batch_size), "-ub", str(args.ubatch_size), "-ngl", "999", "-fa", "on",
                "-ctk", "q8_0", "-ctv", "q4_0", "--spec-type", "none", "--no-context-shift", "--no-warmup",
                "--cache-ram", str(args.cache_ram_mib), "--ctx-checkpoints", "8", "--image-min-tokens", "64",
-               "--image-max-tokens", "4096", "--slots", "--no-webui", "--log-verbosity", "4"]
+               "--image-max-tokens", "4096", "--slots", "--no-webui", "--log-verbosity", str(getattr(args, "log_verbosity", 4))]
     if mode.startswith("arena"):
         command += ["--shared-device-memory-mib", str(args.arena_mib)]
     command += list(extra)
     env = dict(os.environ, LLAMA_MEDIA_MARKER="<__media__>")
+    env.update(env_extra or {})
     env.pop("GGML_CUDA_ENABLE_UNIFIED_MEMORY", None)
     with log_path.open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=log, env=env)
