@@ -1138,7 +1138,9 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
                     ext.y = ubatch.pos[i + ubatch.n_tokens];
                 }
 
-                if (ubatch.token) {
+                const bool is_embd = !ubatch.token || (ubatch.is_mixed() && ubatch.type[i]);
+
+                if (!is_embd) {
                     ext.tok = ubatch.token[i];
                 } else if (hparams.ple_n_heads > 0) {
                     // embd batch (multimodal input) has no token ids, need to pad it with the correct ID for PLE layers
@@ -1862,10 +1864,13 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
 
     // an embd (multimodal) ubatch can repeat one position for a whole image, so positions
     // do not encode the token order; resolve its predecessors by ubatch order instead
+    // same for a mixed ubatch
+    const bool by_order = !ubatch.token || ubatch.is_mixed();
+
     std::vector<uint32_t> ord; // index among the ubatch tokens of the same seq
     std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idx;
 
-    if (!ubatch.token) {
+    if (by_order) {
         ord.resize(n_tokens);
         for (uint32_t i = 0; i < n_tokens; ++i) {
             auto & v = seq_idx[ubatch.seq_id[i][0]];
@@ -1883,7 +1888,7 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
             const llama_pos d = (llama_pos) (n - j);
 
             llama_pos p;
-            if (!ubatch.token) {
+            if (by_order) {
                 const auto & v = seq_idx[seq_id];
                 const int64_t k = (int64_t) ord[i] - d;
                 // k >= 0: an earlier token of this very ubatch; k < 0: before the chunk

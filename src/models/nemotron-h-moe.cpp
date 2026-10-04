@@ -34,6 +34,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     ggml_set_input(inp->embd);
 
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     } else {
