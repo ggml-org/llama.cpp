@@ -6,6 +6,8 @@ Last source review: 2026-10-05 for shared target/MTP workspace admission; earlie
 
 ## Status and how to resume
 
+Current focus: milestone 7 is complete through `143b3fd05`, merged into `feature/adaptive-kv-stream-v2` at `a0ddf8719`. Consumer CUDA compatibility is being developed on `compat/various-arch-support-v2`, followed by comprehensive arena-size verification. Stage C1a's metadata/requirements contract is complete for user review; runtime integration starts in C1b. The `C` stage identifiers below are independent of existing milestone numbers; milestone 8's encoder-free roadmap is not renumbered or started. No older-device qualification is claimed.
+
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
 Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`, and **6.3b** at `4bf33a5e3`, and **6.3c** at `7ad14ee86`, and **6.4a** at `5eb1088d2`, and **6.4b** at `73a30439c`; stages **6.5a-6.5c** are implemented and qualified together for user review.
@@ -344,6 +346,167 @@ Acceptance:
 - Unsupported streaming paths are explicitly identified.
 - If no appropriate cross-attention model is supported locally, its real adapter is a named follow-up; contract tests do not count as production model support.
 
+## Consumer CUDA compatibility workstream: planned
+
+### Objective and scope
+
+Support NVIDIA GTX 10-series hardware through an SM61/Pascal baseline, while preserving optimized execution on SM75/RTX 20-series, SM86/RTX 30-series, SM89/RTX 40-series and SM120/RTX 50-series. AMD RX hardware is not part of this CUDA workstream. Dedicated SM10.x data-center Blackwell implementation and qualification are excluded. SM70, SM80 and SM90 remain best-effort through existing compatible paths; do not reject a working device solely because it is outside the consumer priority list.
+
+This work precedes the separate arena-size verification target. It provides the kernel-selection and exact workspace contract that the later verifier consumes. It does not itself claim complete startup verification of arbitrary text/vision requests or all external driver allocations.
+
+Stock llama.cpp already adapts attention and other CUDA kernels to hardware and compiled architectures. This work connects those existing decisions to our different KV storage contract; it does not replace stock hardware adaptation with a new CUDA backend or duplicate per-generation kernel policies.
+
+| Component | Change boundary |
+| --- | --- |
+| Stock weight/matmul kernels and other CUDA operators | Unchanged; no new quantized weight kernels or arithmetic modes. |
+| Stock attention family selection and tuning | Reuse through a thin private adapter; do not copy the decision tree into a second selector. |
+| Existing streamed vector/MMA paths | Correct wrapper admission, use stock configurations and report their actual workspace; preserve existing kernel arithmetic and pipelines. |
+| Stock tile attention | Add only the missing span-addressing and safe accumulator-resume machinery, reusing stock tile arithmetic and configuration. This is the substantive new kernel work. |
+| Strict gathered prefill | Keep its existing native execution initially; no new prefill streaming algorithm. |
+| Common memory manager and scheduler | Keep ownership, leasing and phase coordination intact; expose/reuse backend-neutral requirements without putting CUDA-generation policy into these components. Comprehensive arena verification remains the next target. |
+
+Stock tensors use base pointers and regular strides. Our resident prefix, ring suffix, wraparound and refill waves are not automatically handled by stock's hardware selection. Only this storage/execution gap needs a streamed counterpart. A missing streamed counterpart is a specific unsupported-operation reason, not proof that the GPU cannot run stock inference.
+
+The initial full real-model qualification remains the existing serial Qwen35 target, Q8_0 K/Q4_0 V, current page/head geometry, optional single embedded MTP head with draft lengths 1-3, and the qualified F16 vision projector. Keep quantization geometry generic and preserve currently qualified modern combinations; this initial test configuration must not become another hardcoded allocation formula. Other type/geometry combinations are admitted only when their selected implementation, conversions and requirements are actually supported.
+
+Architecture support does not guarantee that the production IQ4 model fits a GTX card. Standalone attention fixtures can qualify matching geometry without loading all model weights. Real-model tests require a compatible quantization that fits, or an explicitly labeled alternative device with the same instruction family. Do not quietly change the fork's all-GPU-layer requirement or use UVM to disguise a failed physical-memory test.
+
+### Existing code and implementation gaps
+
+- `ggml/src/ggml-cuda/kv-stream-attention-dispatch.h` has a small selector that accepts quantized TG1 on Ampere, Q8/Q4 TG2 MMA on Ampere and vector TG1/TG2 on Ada and newer. It returns `none` for Pascal and several operation/type combinations. This is not a universal CUDA storage restriction.
+- `ggml/src/ggml-cuda/fattn.cu` already selects stock vector, tile and MMA kernels based on geometry, types, hardware and compiled architecture. Reuse that selection knowledge rather than maintain a second approximate CC threshold ladder.
+- `fattn-vec.cuh` and generated `kv-stream-instance.cu.in` already have per-thread resumable vector accumulators for TG1/TG2. Their legacy instruction availability, occupancy, synchronization and reductions still need qualification.
+- `fattn-tile.cuh` already has FP32-oriented and fast-FP16 configurations. There is no qualified streamed/span-aware tile execution path. Pascal TG3/TG4 requires this new path; the current MMA span launcher requires Turing-compatible MMA.
+- `ggml-cuda.cu` deliberately disables CUDA graph capture below Volta. Preserve that initial policy; eager kernel execution is a supported baseline, not a startup rejection. Native-cache retirement interfaces must remain valid when there is nothing captured to retire.
+- CUDA 13 cannot compile SM61. A CUDA 12.9-or-earlier toolkit and compatible host compiler/driver are required for the legacy build. Keep the current production CUDA installation, driver, kernel and default toolkit unchanged. A side-by-side toolkit or isolated development build is a later implementation prerequisite, not authorized by saving this plan.
+- Existing storage views, fixed device-local parents, pinned host storage, DMA streams, events, publication and ring ownership should be reused. Tensor Cores, `cp.async`, PDL, VMM allocation and graph capture must not become baseline requirements where a valid ordinary implementation exists.
+
+Hardware references: [legacy GPU capabilities](https://developer.nvidia.com/cuda/gpus/legacy), [CUDA 13 architecture removal](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html), [Pascal arithmetic/resource differences](https://docs.nvidia.com/cuda/pascal-tuning-guide/index.html), and [current GPU capabilities](https://developer.nvidia.com/cuda/gpus).
+
+### Contract and invariants
+
+1. Separate hardware support, compiled implementation availability, operation geometry and optimization preference. A known function pointer or high device CC alone is not proof that executable device code exists for the requested operation.
+2. Reuse stock family selection before choosing its streamed counterpart or committing storage. The thin adapter's sizing query and execution must use the same selected family, conversion rules, split/tile ownership and scratch requirements; do not introduce an independent architecture preference policy.
+3. Keep backend-specific kernel identity and launch details inside CUDA. The common memory manager receives backend-neutral byte sizes, alignment, lifetimes and alias restrictions, not CC thresholds or CUDA instructions.
+4. Planning must work from operation metadata without allocating/uploading the full KV cache or requiring prototype data pointers to be live. Query actual compiled-kernel/resource limits where necessary; catch unsupported probes without a fatal CUDA assertion.
+5. Describe output allocation extras, global conversion/resume/fixup scratch and device shared-memory requirements separately. Shared memory affects launch legality/occupancy, but is not another VRAM arena region. Do not double count aliases or hide full-layer conversions outside the declared grant.
+6. A fallback with different requirements is re-planned and validated before execution. Do not silently gather an entire layer into a grant sized only for bounded streaming.
+7. Span boundaries change storage addressing, not the numerical reduction topology. Preserve stock conversions, intermediate precision, logical tile order, accumulators and final reduction on the same device and execution mode. Never qualify TG4 by replacing it with four serial TG1 calls.
+8. Resume boundaries occur only where producer/reader lifetimes and the stock calculation state permit them. Ring slots are released after the last actual read; optional early-launch features cannot bypass that ownership rule.
+9. Preserve stock's existing optimized choices when their streamed counterparts are available; do not route modern GPUs through the slower baseline by default. Adding Pascal compatibility is not an instruction to make every GPU execute like Pascal or to retune all generations.
+10. Requirements and dispatch are generation/shape sensitive. Cache a selected plan only across compatible device/build, graph intent, geometry, query width, active/padded context, types, strides and layout/executable identities. No new capability probe or memory-manager transaction on every steady-state token/page.
+
+```mermaid
+flowchart TD
+    R["Request geometry, phase, types and query width"] --> S["Reuse stock CUDA family selection and tuning"]
+    S --> A["Thin adapter: corresponding streamed implementation, compiled availability and launch limits"]
+    A --> P["Selected backend implementation and requirements"]
+    P --> M["Common manager validates bytes, alignment and lifetimes"]
+    M --> E["Execute that same selected implementation"]
+    A --> U["Missing streamed implementation or required feature: specific diagnostic"]
+    M --> F["Insufficient grant: fail before launch"]
+    F --> C["Optional qualified fallback candidate"]
+    C --> P
+```
+
+Extend existing private/versioned execution hooks only where necessary; do not introduce a parallel public execution framework. If the backend interface needs extension, retain explicit version checks and require full server/backend rebuilds before live qualification. Changing an interface is not permission to use stale server binaries against new libraries.
+
+### Phase C1: thin stock-selection adapter without changing behavior
+
+| Stage | Dependencies | Implementation boundary | Required TDD evidence |
+| --- | --- | --- | --- |
+| C1a | Completed M7 | Audit the existing stock selector and wrapper-only restrictions; define the minimal adapter metadata, selected-family/style description, requirements and unavailable reasons. First capture the existing modern dispatch, allocation and numerical baseline at `a0ddf8719`. | Host tests distinguish stock family selection from streamed-counterpart availability, hardware from compiled features, invalid metadata and missing pairs. Preserve current SM86/SM89/SM120 behavior; distinguish native output extras from external scratch. No new per-generation preference table. |
+| C1b | C1a | Connect existing workspace queries and streamed launch dispatch to that stock-selected family through current private hooks. Keep kernel bodies, arithmetic, native entry points and stock tuning intact. | Size/launch agreement, exact-size and one-byte-short grants, stale shape/intent rejection, no unplanned allocation/fallback, and current TG1-TG4 stock comparisons. Full server rebuild and short live no-MTP/MTP/vision regression; no expected numerical or performance change. |
+
+Checkpoint C1 is a behavior-preserving foundation, not newly advertised Pascal support. This checkpoint supplies the seam that the later comprehensive arena verifier will reuse.
+
+#### C1a implementation and validation
+
+Status: complete, pending user commit. Base is `a0ddf8719`; branch is `compat/various-arch-support-v2`.
+
+- Added private host-only `ggml/src/ggml-cuda/kv-stream-attention-plan.h`. The constructor receives the stock-selected vector/tile/MMA family, native/spanned/resumable style, serial geometry, backend evidence and reported workspace requirements. It does not implement a CC preference table, probe a device, select another family, allocate memory or launch kernels. No production source includes it yet; C1b performs the runtime hookup.
+- Dtype integers are range checked before GGML trait calls. Positive extents, grouped-head geometry, quant block divisibility, active/padded token consistency, alignment and output/scratch arithmetic are checked. Failures leave the previous descriptor unchanged. Kernel-specific live tensor, stride, mask and launch validation remains with the backend adapter; the descriptor is not proof that an arbitrary caller's supplied requirements are accurate.
+- Native output-adjacent extras are distinct from separately allocated global scratch and per-block shared memory. Bounded spanned/resumable styles reject undeclared native output extras. Scratch byte counts remain exact rather than being rounded into an invented reserve; the allocator applies alignment later. Unknown requirements are rejected rather than treated as zero.
+- Structured reasons distinguish invalid metadata, no stock family, missing native code, missing streamed code/pair, missing required device features, unsupported geometry/launch resources, missing or inconsistent requirements and arithmetic overflow. Hypothetical family/type support in host tests is supplied backend evidence, not a newly advertised hardware or quantization capability.
+- TDD starts with `test-kv-stream-attention-plan.cpp` and its registered target failing because the contract header is absent; evidence is `/tmp/cuda-c1a-red.log` and `red-compile.log`. The implemented contract passes **9 tests / 535 assertions** in Release, CUDA-disabled ASan with leak checking, UBSan with halt-on-error, and CUDA-disabled TSan with process-local ASLR disabled (`setarch x86_64 -R`). No global ASLR setting is changed.
+- Tests preserve the existing Q8/Q4 wrapper observations for SM86/SM89/SM120, including SM86 TG2 MMA and SM89/SM120 TG2 vector. Existing Pascal and unsupported-pair returns remain unchanged. Additional tests cover general native prefill query widths/head geometry, mixed quant metadata, unsupported backend evidence, invalid/removed type slots, zero/negative dimensions, invalid enum tags, overflow, snapshot ownership and native-vs-external workspace roles. The test is registered outside the Windows shared-library exclusion because it uses public GGML traits and no CUDA headers/runtime; Windows execution is not claimed.
+- The focused Release regression selection passes **31 CTest targets**. The stock/native and existing streamed CUDA baseline on the SM120 RTX 5070 Ti, before adding this contract, passes **14 span tests / 559 assertions**, **6 allocation tests / 75 assertions**, and **1 short-prefill test / 52 assertions**. Existing kernel bodies and live dispatch are unchanged, so this stage introduces no production path overhead.
+- Saved the existing Q8/Q4 span microbenchmark at 8K, 32K, 64K and approximately 128K histories, TG1/TG4, one/two/three spans. For example, at 131073 positions TG1 stock/three-span is 184.129/204.520 us; TG4 is 817.276/747.544 us. These are existing kernel-level reference timings, not new improvements, full-server throughput or performance evidence for other GPUs.
+
+Artifacts are `/tmp/cuda-c1a-*`, including `baseline-spans.log`, `baseline-allocation.log`, `baseline-prefill.log`, `baseline-bench.log`, `final-test.log`, `regression.log` and each host sanitizer's configure/build/test logs. The production `llm-llmster` container was temporarily stopped only for baseline capture, then restored on its unchanged image/configuration and health checked. Unrelated benchmark files remain untouched. Only this stage's header, tests, registration and roadmap are staged; no assistant commit or push is made. C1b must build real backend evidence and connect sizing/dispatch to stock selection; C1a does not remove the Pascal guard or claim complete arena verification.
+
+### Phase C2: legacy build and runtime prerequisites
+
+| Stage | Dependencies | Implementation boundary | Required TDD evidence |
+| --- | --- | --- | --- |
+| C2a | C1 | Use existing CMake architecture/toolkit controls to document and qualify an isolated CUDA 12.9 SM61 build and accurate compiled-feature reporting. Add only missing guards/diagnostics; preserve modern CUDA 13 defaults. | Compile vector/tile/conversion/publication/copy sources for SM61; prove unavailable instruction families are guarded. Diagnose SM61 plus CUDA 13 explicitly. Check the supported host compiler and build options, including FA pair availability. Linux/Windows builds are recorded separately; unavailable jobs are not passes. |
+| C2b | C2a | Audit existing allocation, pinned-host/DMA/events, retirement and eager scheduling without VMM, PDL, Tensor Cores or CUDA graph capture. Reuse valid stock fallbacks; do not rewrite these systems or re-enable Pascal capture without separate evidence. | Simulated missing-optional-feature tests, byte-boundary and lifetime tests, queue drain before reuse, and diagnostic distinctions between unsupported hardware, missing compiled kernels and insufficient resources. No missing optimization causes a false device rejection. |
+
+Do not replace or downgrade the production driver/toolkit to perform this phase. Actual legacy hardware access is a qualification prerequisite, not a reason to stop development of host tests or the legacy build.
+
+### Phase C3: Pascal TG1/TG2 vector execution
+
+| Stage | Dependencies | Implementation boundary | Required TDD evidence |
+| --- | --- | --- | --- |
+| C3a | C2 | Remove inappropriate streamed-wrapper restrictions for stock-selected quantized TG1 vector/resume execution on SM61. Reuse the existing vector body, per-thread accumulator state and final reduction. | All-resident, resident plus suffix, physical wraparound, partial page, multiple transfer waves, page boundaries, mask/tail handling and publication ordering. Same-device stock kernel comparison; declared resume requirements include every saved accumulator. |
+| C3b | C3a | Admit and qualify the existing two-query vector/resume variant when stock selects it on SM61; retain modern TG2 choices. Only make kernel changes for demonstrated legacy incompatibilities. | Two-query causal masking, independent query outputs, rejection/catch-up boundaries, same stock split selection and numerical comparisons, stale plan rejection and bounded ring reuse. No TG2-to-two-TG1 substitution. |
+
+Checkpoint C3 may describe qualified non-MTP TG1 compatibility, but must not advertise complete Pascal MTP support. TG3/TG4 and other stock tile-selected shapes remain explicitly unavailable until C4 passes. Avoid routing unsupported unquantized shapes into a vector family solely because a vector kernel can be compiled.
+
+### Phase C4: stock-compatible tile streaming baseline
+
+This is the substantive new kernel implementation: a streamed counterpart for stock tile attention, not a replacement tile algorithm. First establish the unchanged stock arithmetic and tile-access contract, then introduce physical spans, then resumable execution. Keep native contiguous calls on their existing path and avoid broad stock-kernel refactoring.
+
+| Stage | Dependencies | Implementation boundary | Required TDD evidence |
+| --- | --- | --- | --- |
+| C4a | C3 | Introduce the smallest reusable tile-access seam needed by the streamed variant. Reuse stock arithmetic and Pascal's FP32-oriented configuration; keep default contiguous access and native entry-point behavior unchanged. | Contiguous/all-resident TG1-TG4 where stock chooses tile, odd tails and supported masks/types. Compare outputs and intermediate precision with untouched stock on the same device. Check native performance/register use where a shared helper changes generated code; no new spans or resume scheduling in this step. |
+| C4b | C4a | Read a complete logical layer through resident, ring suffix and optional wraparound spans. Convert encoded KV in bounded tile storage while reproducing stock conversion rounding. | One/two/three spans, boundaries inside/at tile edges, wraparound, unaligned logical tails, matching stock outputs, canaries around every grant and exact workspace reports. No full-context global F16 gather is introduced as a hidden decode allocation. |
+| C4c | C4b | Save/restore stock tile accumulators at valid tile boundaries for multiple ring transfer waves, and perform the original final reduction once. | Splits crossing spans/refill waves, ordered tiles, masks and causal queries, resumed vs uninterrupted equivalence, slot reuse only after read completion, cancellation and partial-publication failures. Preserve native accumulator types/bit patterns during save/restore. |
+| C4d | C4c | Integrate the qualified tile path into target verification, MTP catch-up/prediction and existing context dispatch. Keep prefill on its existing strict-gather/native path initially. | Real query widths 1-4 as applicable, draft lengths 1-3, rollback/replay, checkpoint and RAM cache restoration, serial requests and vision handoffs. Scope admission to supported geometry/pairs; missing conversions or larger fallback scratch cause an explicit pre-launch rejection. |
+
+Unquantized and other supported KV pairs use the same geometry/access logic when their conversions and stock family are qualified. Q8/Q4 is the initial full-model qualification pair, not a separate allocation policy. Preserve existing modern pair support while older-device pairs are being qualified.
+
+Checkpoint C4 establishes complete SM61 kernel functionality only after an actual SM61 run passes. Forced baseline execution on SM120 provides useful logic evidence but is not legacy-hardware qualification.
+
+### Phase C5: existing consumer-path qualification and regression protection
+
+| Stage | Dependencies | Implementation boundary | Required TDD evidence |
+| --- | --- | --- | --- |
+| C5a | C4 | Audit and qualify existing SM75/SM86 vector/MMA wrappers against stock selection and launch limits. Preserve ordinary SM75 staging and the existing SM86 asynchronous pipeline; correct only demonstrated admission/compatibility gaps. | Compiled-feature and resource-limited fallback tests, same-device stock TG1-TG4 comparisons, full/streamed MTP cases and bounded scratch. Do not assume every tensor/quant pair has a compatible MMA implementation. Unsupported probes return a reason instead of aborting. |
+| C5b | C5a | Verify that existing optimized SM89/SM120 paths remain selected and unchanged. Reuse test seams to force baseline/disable optional features, adding a narrow private seam only if necessary. Fix demonstrated regressions, not speculative per-generation tuning. | Fixed-budget A/B checks for standalone attention and live prefill/decode, no-ring/light/moderate/heavy streaming, and correct fallback requirement revalidation. Investigate reproducible modern regressions above 5% after controlling measurement noise; do not hide them with different pool sizes. |
+
+Consumer tiers are feature/implementation selections, not five copies of the memory manager. Host-to-device DMA/prefetch overlap remains available in the baseline. `cp.async` improves global-to-shared movement inside the GPU, not PCIe bandwidth. Keep existing PDL use only where compiled and already qualified; new TMA, PDL scheduling changes, FP4 weight kernels and architecture-specific numerical shortcuts are outside this compatibility milestone.
+
+The architecture optimization table discussed with the user is a map of stock features to preserve and qualify, not a mandate to implement new optimized kernels for every node. Existing stock tuning is the default source of truth; any additional performance project requires a separately named scope.
+
+Do not force equal launch dimensions across generations: query actual SM resources and respect the stock family/configuration. Likewise, higher CC does not imply that every instruction used on a different GPU family exists on that device/build. No dedicated SM10.x work is added.
+
+### Phase C6: end-to-end acceptance and handoff
+
+| Stage | Dependencies | Implementation boundary | Required TDD evidence |
+| --- | --- | --- | --- |
+| C6a | C5 | Qualify the full supported serial configuration and failures using the existing kernel, context, sweep and vision harnesses. Extend those harnesses only where required; retain accepted partial evidence. | Text/MTP/vision, native capacity plus sufficiently populated streamed histories, mutable tails, partition changes, cached short prefill, cancellation/error recovery, missing kernel/build features and under-sized grants. Distinguish host RAM, arena and external driver failures. Verify no-UVM physical-budget runs separately from UVM compatibility. |
+| C6b | C6a | Record the hardware/build/support matrix, numerical and representative performance results, invocation guidance and remaining limits. Prepare the requirements handoff to the later arena-verification target. | Actual SM61/SM75/SM86/SM89/SM120 evidence or explicit unqualified entries. Modern optimized paths retain their prior behavior and throughput. The user reviews staged code/docs and creates commits/checkpoints; production is restored with its original configuration after each GPU test window. |
+
+No mandatory full-context sweep after every tiny change. Start with targeted failing tests and short live regressions. Use representative all-resident/light/moderate/heavy ring contexts and at least 256 generated tokens for final live throughput comparisons; repeat suspicious regressions rather than repeating already accepted points. Hold model, prompt, execution mode, context, b/ub, UVM and memory budget constant for A/B. Label maximum-allocatable-arena sweeps separately.
+
+### Acceptance gates and limitations
+
+- Required consumer families: SM61, SM75, SM86, SM89 and SM120. A host selector test, successful build, forced baseline run or another family passing is not an actual-device pass.
+- Q8_0/Q4_0 TG1-TG4 uses the appropriate stock-compatible family. Target/MTP numerical tests compare the same inputs and execution modes on the same hardware; cross-generation bit identity is not promised.
+- Each selected implementation provides requirements sufficient for its real execution, including resume state, conversion, descriptors, output extras and final fixups. Insufficient storage is rejected before launching or mutating inference state.
+- All-resident operation, multi-wave streaming, MTP rejection replay and vision/text/MTP lending remain correct. Optional acceleration can be absent without disabling fundamental storage or streaming functionality.
+- Preserve serial scope, all-layer GPU placement and existing model/geometry admission. Do not quietly add parallelism, multi-GPU splitting, AMD support or new model/quant support claims.
+- No global machine/driver/kernel changes, production deployment, automatic commits or pushes are part of this plan. Stage completed units and their evidence for user review; update this section after each completed unit. If kernel scope expands or numerical gates cannot be met, record a named extension and obtain direction instead of silently relaxing acceptance.
+
+### Dependencies and immediate next step
+
+`M7 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6 -> arena-size verification`
+
+The first implementation step is **C1a**, not removing the Pascal guard or rewriting stock dispatch. Capture existing behavior, define and test the minimal stock-selection/streamed-requirements adapter, and leave live kernel choices unchanged. A development branch such as `feature/cuda-consumer-compat` may be created when implementation is explicitly started; saving this plan does not create it.
+
+Implementation status: C1a is complete for user review; C1b and C2-C6 remain planned. No older GPU or legacy build is currently qualified. Actual GTX 10-series access, or a community tester who can run the provided fixtures, must be arranged before the baseline is advertised as supported. Synthetic attention tests avoid requiring the production IQ4 weights to fit a smaller card; full-model limits are documented separately.
+
 ## Subsequent work, outside milestones 4-8
 
 - Concurrent request execution and overlapping stages.
@@ -446,7 +609,7 @@ Record substage completion here only after the required validation succeeds. Exp
 | 7.4c | Committed | `b6b9b38e0` | Deferred projector startup, bounded weight/compute loans, phase cleanup/recovery and outside-budget accounting; combined image/text and lifetime qualifications pass. |
 | 7.5a | Committed | `1c7d40879` | Serial no-MTP server admission, deferred projector startup, bounded image encoding, media/prompt-cache reuse and request cleanup qualified. |
 | 7.5b | Committed | `b17fabc1a` | Repeated image-request memory sampling, phase/reload diagnostics, variable workspace accounting and no-MTP documentation qualified. |
-| 7.5c | Complete, pending user commit | - | Image-aware embedded MTP, physical/M-RoPE cache addressing, native short-prefill allocation contract, serial suspension and full M7 acceptance qualified on CUDA. |
+| 7.5c | Complete | 143b3fd05 | Image-aware embedded MTP, physical/M-RoPE cache addressing, native short-prefill allocation contract, serial suspension and full M7 acceptance qualified on CUDA; merged at a0ddf8719. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -4134,7 +4297,7 @@ Stage 7.5c must qualify the existing embedded MTP path across vision/text transi
 
 ### Stage 7.5c: image-aware embedded MTP qualification
 
-Milestone 7's acceptance gate is met for the documented CUDA/Qwen configuration, pending the user's commit. Admission accepts only the single embedded Qwen MTP head with draft lengths 1-3, matching Q8_0/Q4_0 KV, a registered borrowed draft and the existing serial shared-arena vision configuration. No new claim is made for arbitrary models, accelerator backends, image dimensions or universally identical generations.
+Milestone 7's acceptance gate is met for the documented CUDA/Qwen configuration, committed by the user at `143b3fd05` and merged at `a0ddf8719`. Admission accepts only the single embedded Qwen MTP head with draft lengths 1-3, matching Q8_0/Q4_0 KV, a registered borrowed draft and the existing serial shared-arena vision configuration. No new claim is made for arbitrary models, accelerator backends, image dimensions or universally identical generations.
 
 - Raw visual embeddings and shifted target hidden rows use separate MTP input channels. Owning microbatch copies preserve both through splitting and caller lifetime changes. The original split regression was red before this input existed; host tests now cover both channel separation and lifetime.
 - Target and auxiliary caches use dense physical append/suffix indices while retaining monotone image M-RoPE metadata. Checkpoint/RAM prompt-cache restoration also saves the draft's pending hidden row. The suspension adapter accepts only its registered borrowed draft and host-backed auxiliary cache; unknown speculative consumers remain rejected. Other model families keep their existing visual catch-up behavior.
