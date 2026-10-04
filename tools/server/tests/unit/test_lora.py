@@ -66,6 +66,36 @@ def test_lora_per_request():
         assert match_regex(re_test, res.body["content"])
 
 
+def test_lora_per_request_alternating_scales():
+    global server
+    server.start()
+
+    # alternating scales on the same slot must keep producing the same outputs
+    prompt = "Look in thy glass"
+    lora_config = [
+        ( [{"id": 0, "scale": 0.0}], "(bright|day|many|happy)+" ),
+        ( [{"id": 0, "scale": 1.0}], "(eye|love|glass|sun)+" ),
+        ( [{"id": 0, "scale": 0.0}], "(bright|day|many|happy)+" ),
+        ( [{"id": 0, "scale": 1.0}], "(eye|love|glass|sun)+" ),
+    ]
+
+    results = []
+    for lora, re_test in lora_config:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "lora": lora,
+            "seed": 42,
+            "temperature": 0.0,
+            "cache_prompt": False, # TODO: remove this once test_cache_vs_nocache_prompt is fixed
+        })
+        assert res.status_code == 200
+        assert match_regex(re_test, res.body["content"])
+        results.append(res.body["content"])
+
+    assert results[0] == results[2]
+    assert results[1] == results[3]
+
+
 @pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
 def test_with_big_model():
     server = ServerProcess()
