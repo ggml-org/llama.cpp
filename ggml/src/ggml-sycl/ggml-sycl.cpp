@@ -5042,8 +5042,7 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
     }
 
     // gate and up of one type the XMX kernel handles, it needs the reorder layout like the unfused mmvq path
-    static const bool no_xmx_glu = getenv("XMX_NOGLU") != nullptr;
-    if (wg->type == wu->type && gate->src[1] == act && !no_xmx_glu && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) &&
+    if (wg->type == wu->type && gate->src[1] == act && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) &&
         act->ne[1] <= GGML_SYCL_XMX_GLU_MAX_COLS) {
         opt_for_reorder(&ctx, wu, act, up, mul_mat_algo::MMVQ);
         opt_for_reorder(&ctx, wg, act, gate, mul_mat_algo::MMVQ);
@@ -5053,10 +5052,6 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
         }
     }
 
-    if (no_xmx_glu && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) && can_use_xmx_batch(ctx.device, wu, act) &&
-        can_use_xmx_batch(ctx.device, wg, act)) {
-        return false;
-    }
     // the kernels below take up to MMVQ_MAX_BATCH_SIZE columns, a wider batch got here for the XMX kernel
     if (act->ne[1] > MMVQ_MAX_BATCH_SIZE) {
         return false;
