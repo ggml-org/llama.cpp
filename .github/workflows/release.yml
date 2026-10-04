@@ -41,8 +41,12 @@ jobs:
   check-release:
     runs-on: ubuntu-slim
 
+    permissions:
+      contents: write
+
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
+      tag_name: ${{ steps.tag.outputs.name }}
 
     steps:
       - id: check
@@ -59,6 +63,29 @@ jobs:
             fi
           else
             echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Clone
+        if: ${{ steps.check.outputs.should_release == 'true' }}
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        if: ${{ steps.check.outputs.should_release == 'true' }}
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Create and push git tag
+        if: ${{ steps.check.outputs.should_release == 'true' }}
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
           fi
 
   macos-cpu:
@@ -97,7 +124,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -121,21 +148,17 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-${{ matrix.build }}.tar.gz -s ",^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-macos-${{ matrix.build }}.tar.gz -s ",^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-macos-${{ matrix.build }}.tar.gz
-          name: llama-bin-macos-${{ matrix.build }}.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-macos-${{ matrix.build }}.tar.gz
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -168,7 +191,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -206,21 +229,17 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
-          name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
+          archive: false
 
       - name: ccache-clear
         if: ${{ matrix.build != 's390x' }}
@@ -253,7 +272,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -292,21 +311,17 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
-          name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -347,8 +362,7 @@ jobs:
       actions: write
 
     steps:
-      # the container has no git; install it before checkout so that a real git
-      # repository is created (the get-tag-name action and the build both need it)
+      # the container has no git; install it before checkout so that a real git repository is created
       - name: Install git
         run: |
           apt-get update
@@ -368,7 +382,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -411,21 +425,17 @@ jobs:
             ${{ env.CMAKE_ARGS }} ${{ matrix.defines }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
-          name: llama-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          archive: false
 
       # ship the CUDA runtime libraries the backend links against, mirroring
       # the windows-cuda cudart zip - extract next to the binaries ($ORIGIN rpath)
@@ -440,13 +450,13 @@ jobs:
           cp -L /usr/local/cuda/lib64/libcudart.so.${major} ./cudart/
           cp -L /usr/local/cuda/lib64/libcublas.so.${major} ./cudart/
           cp -L /usr/local/cuda/lib64/libcublasLt.so.${major} ./cudart/
-          tar -czvf cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}," -C ./cudart .
+          tar -czvf cudart-llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,cudart-llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}," -C ./cudart .
 
       - name: Upload CUDA runtime
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
-          name: cudart-llama-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          path: cudart-llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -459,8 +469,8 @@ jobs:
 
     runs-on: ubuntu-24.04  # previously ubuntu-latest
 
-    #permissions:
-    #  actions: write
+    permissions:
+      actions: write
 
     env:
       NDK_VERSION: "29.0.14206865"
@@ -473,7 +483,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -529,21 +539,17 @@ jobs:
       #  with:
       #    key: release-android-arm64
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-android-arm64.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz
-          name: llama-bin-android-arm64.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-android-arm64.tar.gz
+          archive: false
 
   android-arm64-snapdragon:
     needs: [check-release, ui-build]
@@ -551,6 +557,9 @@ jobs:
 
     runs-on: ubuntu-latest
     container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
+
+    permissions:
+      actions: write
 
     defaults:
       run:
@@ -569,7 +578,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -586,21 +595,17 @@ jobs:
           cmake --build build -j $(nproc)
           cmake --install build --prefix pkg-snapdragon/llama.cpp
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE pkg-snapdragon/llama.cpp/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-android-arm64-snapdragon.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C pkg-snapdragon/llama.cpp .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-android-arm64-snapdragon.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C pkg-snapdragon/llama.cpp .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-android-arm64-snapdragon.tar.gz
-          name: llama-bin-android-arm64-snapdragon.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-android-arm64-snapdragon.tar.gz
+          archive: false
 
   linux-arm64-snapdragon:
     needs: [check-release, ui-build]
@@ -608,6 +613,9 @@ jobs:
 
     runs-on: ubuntu-latest
     container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
+
+    permissions:
+      actions: write
 
     defaults:
       run:
@@ -626,7 +634,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -643,21 +651,17 @@ jobs:
           cmake --build build -j $(nproc)
           cmake --install build --prefix pkg-snapdragon/llama.cpp
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE pkg-snapdragon/llama.cpp/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-linux-arm64-snapdragon.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C pkg-snapdragon/llama.cpp .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-linux-arm64-snapdragon.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C pkg-snapdragon/llama.cpp .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-linux-arm64-snapdragon.tar.gz
-          name: llama-bin-linux-arm64-snapdragon.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-linux-arm64-snapdragon.tar.gz
+          archive: false
 
   ubuntu-24-openvino:
     needs: [check-release, ui-build]
@@ -688,7 +692,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -738,10 +742,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build/ReleaseOV --config Release --parallel
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -764,13 +764,13 @@ jobs:
           cp -r "$OPENVINO_ROOT"/docs/licensing "$dest"/openvino-licensing
 
           cp LICENSE "$dest"
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C "$dest" .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C "$dest" .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
-          name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -782,6 +782,9 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     outputs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
@@ -804,7 +807,7 @@ jobs:
             fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -862,10 +865,6 @@ jobs:
 
           cmake --build build\ReleaseOV --config Release -- /m
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         shell: powershell
@@ -892,13 +891,13 @@ jobs:
           Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
 
           Copy-Item LICENSE $dest
-          7z a -snl llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
+          7z a -snl llama-${{ needs.check-release.outputs.tag_name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
-          name: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -928,7 +927,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -964,10 +963,10 @@ jobs:
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: llama-bin-win-cpu-${{ matrix.arch }}.zip
-          name: llama-bin-win-cpu-${{ matrix.arch }}.zip
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -981,6 +980,9 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -1080,10 +1082,6 @@ jobs:
           Write-Host "HIP backend artifact found:"
           $hipDll | Format-Table FullName, Length -AutoSize
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Get ROCm short version
         run: |
           $rocmVersionShort = ('${{ matrix.ROCM_VERSION }}'.Split('.')[0..1] -join '.')
@@ -1125,10 +1123,10 @@ jobs:
             .\build\bin\Release\amd_comgr.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
-          name: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -1225,10 +1223,10 @@ jobs:
           7z a -snl llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
-          name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+          archive: false
 
   # note: builds only the ggml-cuda backend - llama-server is injected from the
   #       windows-cpu zip during the release "Merge artifacts" step
@@ -1298,10 +1296,10 @@ jobs:
           7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip .\build\bin\Release\ggml-cuda.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
-          name: llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
+          archive: false
 
       - name: Copy and pack Cuda runtime (x64)
         if: ${{ matrix.arch == 'x64' }}
@@ -1322,10 +1320,10 @@ jobs:
           7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip $dst\*
 
       - name: Upload Cuda runtime
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
-          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -1339,6 +1337,9 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     defaults:
       run:
@@ -1428,10 +1429,10 @@ jobs:
           7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
 
       - name: Upload the release package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: llama-bin-win-sycl-x64.zip
-          name: llama-bin-win-sycl-x64.zip
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -1452,6 +1453,9 @@ jobs:
             fp16: ON
 
     runs-on: ubuntu-24.04
+
+    permissions:
+      actions: write
 
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
@@ -1482,7 +1486,7 @@ jobs:
           sudo apt-get install -y ./libze1.deb ./libze-dev.deb
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -1510,21 +1514,17 @@ jobs:
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
-          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -1555,7 +1555,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download UI build
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
           path: tools/ui/dist
@@ -1634,10 +1634,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Get ROCm short version
         run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
 
@@ -1645,13 +1641,13 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
-          name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+          archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -1662,6 +1658,9 @@ jobs:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
+
+    permissions:
+      actions: write
 
     steps:
       - name: Checkout code
@@ -1700,22 +1699,18 @@ jobs:
       - name: Build Xcode project
         run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           # Zip file is required for Swift Package Manager, which does not support tar.gz for binary targets.
           # For more details, see https://developer.apple.com/documentation/xcode/distributing-binary-frameworks-as-swift-packages
-          zip -r -y llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+          zip -r -y llama-${{ needs.check-release.outputs.tag_name }}-xcframework.zip build-apple/llama.xcframework
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
-          name: llama-${{ steps.tag.outputs.name }}-xcframework.zip
+          path: llama-${{ needs.check-release.outputs.tag_name }}-xcframework.zip
+          archive: false
 
 # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
 #       in order to enable it again, we have to provision dedicated runners  to run it
@@ -1742,6 +1737,8 @@ jobs:
 #            build: 'Release'
 #            use_acl_graph: 'off'
 #    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+#    permissions:
+#      actions: write
 #    steps:
 #      - name: Checkout
 #        uses: actions/checkout@v6
@@ -1794,247 +1791,18 @@ jobs:
 #              chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
 #            '
 #
-#      - name: Determine tag name
-#        id: tag
-#        uses: ./.github/actions/get-tag-name
-#
 #      - name: Pack artifacts
 #        run: |
 #          cp LICENSE ./build/bin/
-#          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+#          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
 #
 #      - name: Upload artifacts
-#        uses: actions/upload-artifact@v6
+#        uses: actions/upload-artifact@v7
 #        with:
-#          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
-#          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
+#          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
+#          archive: false
 
   ui-build:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
-
-  release:
-    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-
-    # Fine-grant permission
-    # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
-    permissions:
-        contents: write # for creating release
-        id-token: write
-        attestations: write
-
-    runs-on: ubuntu-slim
-
-    needs:
-      - windows
-      - windows-cpu
-      - windows-cuda
-      - windows-sycl
-      - windows-rocm
-      - windows-openvino
-      - ubuntu-24-rocm
-      - ubuntu-cpu
-      - ubuntu-vulkan
-      - ubuntu-cuda
-      - ubuntu-24-openvino
-      - ubuntu-24-sycl
-      - android-arm64
-      - android-arm64-snapdragon
-      - linux-arm64-snapdragon
-      - macos-cpu
-      - ios-xcode
-      #- openEuler-cann
-      - ui-build
-
-    outputs:
-      tag_name: ${{ steps.tag.outputs.name }}
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Download artifacts
-        id: download-artifact
-        uses: actions/download-artifact@v7
-        with:
-          path: ./artifact
-          merge-multiple: true
-
-      - name: Merge artifacts
-        id: move_artifacts
-        run: |
-          mkdir -p release
-
-          # the windows-cpu zip contains the full toolset (llama-server with the embedded
-          # UI, ggml-cpu) - inject it into the other windows zips so that every archive
-          # ships the same binaries, only with a different backend library on top
-          echo "Injecting windows-cpu binaries (llama-server + CPU backend) into the backend zips..."
-          for arch in x64 arm64; do
-            cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
-            temp_dir=$(mktemp -d)
-            echo "Extracting windows-cpu-${arch} package..."
-            unzip "$cpu_zip" -d "$temp_dir"
-
-            echo "Merging into $arch zips..."
-            for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
-              if [[ "$target_zip" == "$cpu_zip" ]]; then
-                continue
-              fi
-              echo "Injecting into $(basename "$target_zip")"
-              realpath_target_zip=$(realpath "$target_zip")
-              (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
-            done
-
-            rm -rf "$temp_dir"
-          done
-
-          echo "Renaming and moving zips to release..."
-          for zip_file in artifact/llama-bin-win-*.zip; do
-            base_name=$(basename "$zip_file" .zip)
-            zip_name="llama-${{ steps.tag.outputs.name }}-${base_name#llama-}.zip"
-            echo "Moving $zip_file to release/$zip_name"
-            mv "$zip_file" "release/$zip_name"
-          done
-
-          echo "Moving other artifacts..."
-          mv -v artifact/*.zip release
-          mv -v artifact/*.tar.gz release
-
-      - name: Download UI build
-        id: download_ui
-        uses: actions/download-artifact@v7
-        with:
-          name: llama-ui.zip
-          path: ./ui-dist
-
-      - name: Package UI
-        id: package_ui
-        run: |
-          tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
-
-      - name: Attest release artifacts
-        id: attest
-        uses: actions/attest@v4
-        with:
-          subject-path: 'release/*'
-
-      - name: Create and push git tag
-        run: |
-          TAG="${{ steps.tag.outputs.name }}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists, skipping creation"
-          else
-            git tag "${TAG}"
-            git push origin "${TAG}"
-          fi
-
-      - name: Create release
-        id: create_release
-        uses: ggml-org/action-create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          prerelease: true
-          body: |
-            <details open>
-
-            ${{ github.event.head_commit.message }}
-
-            </details>
-
-            **Website:**
-            - <https://llama.app>
-
-            **Attestations:**
-            - <${{ steps.attest.outputs.attestation-url }}>
-
-            **macOS/iOS:**
-            - [macOS Apple Silicon (arm64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz)
-            - macOS Apple Silicon (arm64, KleidiAI enabled) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23780)
-            - [macOS Intel (x64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz)
-            - [iOS XCFramework](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-xcframework.zip)
-
-            **Linux:**
-            - [Ubuntu x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.tar.gz)
-            - [Ubuntu arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-arm64.tar.gz)
-            - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
-            - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
-            - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
-            - [Ubuntu x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz) - [CUDA 12.8 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz)
-            - [Ubuntu x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-x64.tar.gz) - [CUDA 13.4 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-x64.tar.gz)
-            - [Ubuntu arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-arm64.tar.gz) - [CUDA 13.4 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-arm64.tar.gz)
-            - [Ubuntu x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-10.0-x64.tar.gz)
-            - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
-            - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
-            - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
-            - [Linux arm64 (Snapdragon: CPU, Adreno GPU, Hexagon NPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-linux-arm64-snapdragon.tar.gz) - [setup guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/snapdragon/linux.md)
-
-            **Android:**
-            - [Android arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz)
-            - [Android arm64 (Snapdragon: CPU, Adreno GPU, Hexagon NPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-android-arm64-snapdragon.tar.gz) - [setup guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/snapdragon/README.md)
-
-            **Windows:**
-            - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
-            - [Windows arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
-            - [Windows arm64 (OpenCL Adreno)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-opencl-adreno-arm64.zip)
-            - [Windows x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-12.4-x64.zip)
-            - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-x64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-x64.zip)
-            - [Windows arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-arm64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-arm64.zip)
-            - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
-            - [Windows x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ needs.windows-openvino.outputs.openvino_version }}-x64.zip)
-            - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
-            - [Windows x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-rocm-10.0-x64.zip)
-
-            **openEuler:**
-            - [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
-            - openEuler x86 (310p)
-            - openEuler x86 (910b, ACL Graph)
-            - openEuler aarch64 (310p)
-            - openEuler aarch64 (910b, ACL Graph)
-
-            **UI:**
-            - [UI](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-ui.tar.gz)
-
-      - name: Upload release
-        id: upload_release
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{secrets.GITHUB_TOKEN}}
-          script: |
-            const path = require('path');
-            const fs = require('fs');
-            const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./release')) {
-              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
-                console.log('uploadReleaseAsset', file);
-                await github.rest.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: release_id,
-                  name: file,
-                  data: await fs.readFileSync(`./release/${file}`)
-                });
-              }
-            }
-
-  ui-publish:
-    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-
-    needs:
-      - release
-
-    uses: ./.github/workflows/ui-publish.yml
-    with:
-      version_tag: ${{ needs.release.outputs.tag_name }}
-    secrets:
-      hf_token: ${{ secrets.HF_TOKEN_UI_STATIC_OUTPUT }}
