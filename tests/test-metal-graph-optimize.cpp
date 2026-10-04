@@ -89,7 +89,7 @@ static ggml_tensor * new_add_operand(ggml_context * ctx, ggml_context * ctx_w, a
 
 // the reordered positions of a mat-mul with rows src1 rows, the add of an operand of kind to it and an independent
 // mat-mul, which the reorder runs between the first mat-mul and the add unless the pair is packed
-static std::vector<int> reorder_mul_mat_add(int64_t rows, add_operand_kind kind, const ggml_metal_device_props & props) {
+static std::vector<int> reorder_mul_mat_add(int64_t rows, add_operand_kind kind) {
     ggml_init_params params = { n_tensors*ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
     ggml_context * ctx   = ggml_init(params);
     ggml_context * ctx_w = ggml_init(params);
@@ -102,7 +102,7 @@ static std::vector<int> reorder_mul_mat_add(int64_t rows, add_operand_kind kind,
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, add);
     ggml_build_forward_expand(graph, other);
-    ggml_graph_optimize(graph, &props);
+    ggml_graph_optimize(graph);
     const std::vector<int> res = node_positions(graph, { mm, add, other });
 
     ggml_backend_buffer_free(weights);
@@ -117,7 +117,7 @@ static bool add_packed(const std::vector<int> & pos) {
 }
 
 static bool check_pack(const device_case & c) {
-    const std::vector<int> pos = reorder_mul_mat_add(n_rows, ADD_RESIDUAL, device_props(c.has_native_simdgroup_mm));
+    const std::vector<int> pos = reorder_mul_mat_add(n_rows, ADD_RESIDUAL);
     const bool packed = add_packed(pos);
 
     const bool ok = packed == c.packed;
@@ -135,10 +135,9 @@ static int run_pack_cases(const std::vector<device_case> & cases) {
 
 // true if every row count in rows gives the reorder of the first one, on a device that fuses MUL_MAT+ADD
 static bool same_reorder_for_rows(const std::vector<int64_t> & rows, add_operand_kind kind) {
-    const ggml_metal_device_props props = device_props(true);
-    const std::vector<int> first = reorder_mul_mat_add(rows.front(), kind, props);
+    const std::vector<int> first = reorder_mul_mat_add(rows.front(), kind);
     for (auto r = rows.begin() + 1; r != rows.end(); ++r) {
-        if (reorder_mul_mat_add(*r, kind, props) != first) {
+        if (reorder_mul_mat_add(*r, kind) != first) {
             return false;
         }
     }
@@ -149,7 +148,7 @@ static bool same_reorder_for_rows(const std::vector<int64_t> & rows, add_operand
 // and a bias add, which the encoder never fuses, must stay free to run next to independent nodes
 static bool check_row_independent_pack(add_operand_kind kind) {
     const bool same = same_reorder_for_rows(batch_rows, kind);
-    const bool packed = add_packed(reorder_mul_mat_add(batch_rows.front(), kind, device_props(true)));
+    const bool packed = add_packed(reorder_mul_mat_add(batch_rows.front(), kind));
     const bool expected = kind == ADD_RESIDUAL;
     const bool ok = same && packed == expected;
     std::printf("MUL_MAT+ADD of a %s, reorder independent of src1 rows %d, packed %d (expected %d): %s\n",
@@ -185,9 +184,8 @@ static bool encoder_fuses_mul_mat_add(bool weight_res) {
     ggml_build_forward_expand(gf, add);
 
     const int idxs[] = { 0, 1 };
-    const ggml_metal_device_props props = device_props(true);
     int n_fused = 1;
-    const ggml_metal_fusion * fusion = ggml_metal_fusion_next(&props, gf, idxs, 2, 0, GGML_METAL_FUSION_FULL, &n_fused);
+    const ggml_metal_fusion * fusion = ggml_metal_fusion_next(gf, idxs, 2, 0, GGML_METAL_FUSION_FULL, &n_fused);
     const bool fused = fusion != nullptr && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_MUL_MAT_ADD;
     ggml_free(ctx_gf);
 
@@ -223,8 +221,7 @@ static void expand_all(ggml_cgraph * graph, const std::vector<ggml_tensor *> & o
 static ggml_cgraph * optimized_graph(ggml_context * ctx, const std::vector<ggml_tensor *> & outputs) {
     ggml_cgraph * graph = ggml_new_graph(ctx);
     expand_all(graph, outputs);
-    const ggml_metal_device_props props = device_props(true);
-    ggml_graph_optimize(graph, &props);
+    ggml_graph_optimize(graph);
     return graph;
 }
 
@@ -278,8 +275,8 @@ static bool check_chained_pack_reader() {
 
 int main() {
     const std::vector<device_case> devices = {
-        { "native simdgroup matrices",       true,  true  },
-        { "probed or no simdgroup matrices", false, false },
+        { "native simdgroup matrices",       true,  true },
+        { "probed or no simdgroup matrices", false, true },
     };
     const int failures = run_pack_cases(devices) + (check_chained_pack_reader() ? 0 : 1) + run_row_independent_pack_cases() +
         (check_encoder_skips_weight_residual() ? 0 : 1);

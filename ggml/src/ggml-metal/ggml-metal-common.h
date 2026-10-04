@@ -13,7 +13,6 @@ extern "C" {
 
 struct ggml_tensor;
 struct ggml_cgraph;
-struct ggml_metal_device_props;
 
 enum ggml_mem_range_type {
     MEM_RANGE_TYPE_SRC = 0,
@@ -49,15 +48,15 @@ bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const struct ggml_tensor * ten
 //
 // note: this implementation is generic and not specific to metal
 //       if it proves to work well, we can start using it for other backends in the future
-void ggml_graph_optimize(struct ggml_cgraph * gf, const struct ggml_metal_device_props * props);
+void ggml_graph_optimize(struct ggml_cgraph * gf);
 
 // mat-mat vs mat-vec dispatch; used by both supports_op and ggml_metal_op_mul_mat*
 bool ggml_metal_op_mul_mat_use_fwht (const struct ggml_tensor * op, size_t max_tg_mem);
 bool ggml_metal_op_mul_mat_use_mm   (const struct ggml_tensor * op, bool has_simdgroup_mm);
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm);
 
-bool ggml_metal_op_mul_mat_use_mma    (const struct ggml_tensor * op, bool has_simdgroup_mm, size_t max_tg_mem);
-bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm); // graph structure only
+bool ggml_metal_op_mul_mat_use_mma    (const struct ggml_tensor * op);
+bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op); // graph structure only
 
 // the few-row MMA kernel for a src0 type and rt src1 tiles: per 32-weight block (q4_0, q8_0 with one tile), q5_K, or the generic 64-weight chunk kernel
 enum ggml_metal_mma_kind { GGML_METAL_MMA_KIND_BLK, GGML_METAL_MMA_KIND_Q5_K, GGML_METAL_MMA_KIND_GEN };

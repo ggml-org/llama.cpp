@@ -87,7 +87,7 @@ struct ggml_metal_op {
         assert(use_fusion());
         assert(i0 >= 0 && i0 < n_nodes());
 
-        return ggml_metal_fusion_next(ggml_metal_device_get_props(dev), gf, idxs.data(), (int) idxs.size(), i0, mode, n_out);
+        return ggml_metal_fusion_next(gf, idxs.data(), (int) idxs.size(), i0, mode, n_out);
     }
 
     // whether to attempt fusion; the toggle lives in the shared fusion debugging context owned
@@ -2597,7 +2597,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         return ggml_metal_op_fwht(ctx, idx);
     }
 
-    if (ggml_metal_op_mul_mat_use_mma(op, props_dev->has_simdgroup_mm, props_dev->max_theadgroup_memory_size)) {
+    if (props_dev->has_simdgroup_mm && ggml_metal_op_mul_mat_use_mma(op)) {
         return ggml_metal_op_mul_mat_mma(ctx, idx);
     }
 

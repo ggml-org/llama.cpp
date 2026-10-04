@@ -115,7 +115,7 @@ static int64_t ggml_metal_mul_mv_mma_rows_min(enum ggml_type type) {
     }
 }
 
-static bool ggml_metal_mul_mat_mma_shape_ok(const struct ggml_tensor * op) {
+bool ggml_metal_op_mul_mat_use_mma(const struct ggml_tensor * op) {
     const ggml_tensor * src0 = op->src[0];
     const ggml_tensor * src1 = op->src[1];
 
@@ -128,16 +128,8 @@ static bool ggml_metal_mul_mat_mma_shape_ok(const struct ggml_tensor * op) {
         src1->nb[0] == sizeof(float) && src1->nb[1] % 16 == 0 && src1->nb[2] % 16 == 0 && src1->nb[3] % 16 == 0;
 }
 
-bool ggml_metal_op_mul_mat_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm, size_t max_tg_mem) {
-    // the FWHT kernel takes the hadamard mat-muls first
-    return has_simdgroup_mm && !ggml_metal_op_mul_mat_use_fwht(op, max_tg_mem) &&
-        ggml_metal_mul_mat_mma_shape_ok(op);
-}
-
-bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_simdgroup_mm) {
-    return has_simdgroup_mm &&
-        ggml_get_op_params_i32(op, 1) != GGML_HINT_SRC0_IS_HADAMARD &&
-        ggml_metal_mul_mv_mma_type_supported(op->src[0]->type) && op->src[1]->type == GGML_TYPE_F32;
+bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op) {
+    return ggml_metal_mul_mv_mma_type_supported(op->src[0]->type) && op->src[1]->type == GGML_TYPE_F32;
 }
 
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
@@ -542,7 +534,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
     return res;
 }
 
-void ggml_graph_optimize(ggml_cgraph * gf, const ggml_metal_device_props * props) {
+void ggml_graph_optimize(ggml_cgraph * gf) {
     const int n = gf->n_nodes;
 
     std::vector<node_info> nodes;
@@ -560,7 +552,7 @@ void ggml_graph_optimize(ggml_cgraph * gf, const ggml_metal_device_props * props
             /*.fused =*/ {},
         };
 
-        const int f = ggml_metal_fusion_max(gf, i, props);
+        const int f = ggml_metal_fusion_max(gf, i);
 
         // add the fused tensors into the node info so we can unfuse them later
         for (int k = 1; k < f; k++) {
