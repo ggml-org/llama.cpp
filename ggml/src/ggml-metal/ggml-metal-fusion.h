@@ -86,11 +86,11 @@ void ggml_metal_fusion_info_labels_init(      struct ggml_metal_fusion_info * fi
 // compute phase: longest fusion starting at idx (a position in node_idxs) that matches in `mode` on a device with
 // props. returns the matching pattern (nullptr if no fusion) and sets *n_out to the number of nodes consumed.
 const ggml_metal_fusion * ggml_metal_fusion_next(
+        const struct ggml_metal_device_props * props,
         const struct ggml_cgraph * gf,
         const int * node_idxs,
         int n_idxs,
         int idx,
-        const struct ggml_metal_device_props * props,
         ggml_metal_fusion_mode mode,
         int * n_out);
 

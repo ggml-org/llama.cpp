@@ -305,8 +305,6 @@ struct ggml_metal_device_props {
     bool use_residency_sets;
     bool use_shared_buffers;
 
-    bool supports_gpu_family_apple7;
-
     enum ggml_metal_device_id device_id;
     int gpu_family;
 

@@ -31,9 +31,8 @@ struct device_case {
 // a device with probed simdgroup matrices that are native (MTLGPUFamilyApple7+) only if has_native_simdgroup_mm
 static ggml_metal_device_props device_props(bool has_native_simdgroup_mm, bool has_tensor) {
     ggml_metal_device_props props = {};
-    props.has_simdgroup_mm           = true;
-    props.supports_gpu_family_apple7 = has_native_simdgroup_mm;
-    props.has_tensor                 = has_tensor;
+    props.has_simdgroup_mm = has_native_simdgroup_mm;
+    props.has_tensor       = has_tensor;
     return props;
 }
 
@@ -189,7 +188,7 @@ static bool encoder_fuses_mul_mat_add(bool weight_res) {
     const int idxs[] = { 0, 1 };
     const ggml_metal_device_props props = device_props(true, false);
     int n_fused = 1;
-    const ggml_metal_fusion * fusion = ggml_metal_fusion_next(gf, idxs, 2, 0, &props, GGML_METAL_FUSION_FULL, &n_fused);
+    const ggml_metal_fusion * fusion = ggml_metal_fusion_next(&props, gf, idxs, 2, 0, GGML_METAL_FUSION_FULL, &n_fused);
     const bool fused = fusion != nullptr && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_MUL_MAT_ADD;
     ggml_free(ctx_gf);
 

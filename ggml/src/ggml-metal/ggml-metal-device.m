@@ -1278,8 +1278,6 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                     dev->props.use_shared_buffers = true;
                 }
 
-                dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
-
                 dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
 
                 dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
