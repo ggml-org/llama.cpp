@@ -118,6 +118,10 @@ LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t 
 
 LLAMA_API bool llama_model_supports_mtp_chain(const struct llama_model * model);
 
+// Candidates an MTP draft's confidence is normalized over. The sequential driver samples with top_k set
+// to this and the chain graph computes the same probability in-graph, so p_min means the same in both.
+#define LLAMA_MTP_DRAFT_TOP_K 10
+
 // True only for architectures whose "draft" is a same-position early-exit of the
 // target's own trunk (gemma4-assistant), where every drafted token in a round shares
 // llama_pos n_past. A dedicated trained NextN/MTP head (qwen35, qwen4exp, deepseek, ...)
