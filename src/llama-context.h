@@ -431,6 +431,10 @@ private:
     // true after the prism.hadamard coverage check passes on a reserved graph
     bool hadamard_verified = false;
 
+    // the compute buffers fit the worst-case graph of sched_reserve, reserved with this number of sequences [TAG_PIPELINE_RESERVE]
+    bool     worst_case_reserved = false;
+    uint32_t n_seqs_worst_case   = 1;
+
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;
