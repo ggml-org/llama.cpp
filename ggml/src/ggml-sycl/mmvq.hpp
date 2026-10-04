@@ -74,14 +74,6 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(
     dpct::queue_ptr    stream);
 
 
-// Whether ggml_sycl_mul_mat_vec_q_glu_plain handles this gate/up type pair, GLU op and K,
-// so callers can decline before quantizing src1.
-bool ggml_sycl_mul_mat_vec_q_glu_plain_supported(
-    enum ggml_type     gate_type,
-    enum ggml_type     up_type,
-    enum ggml_glu_op   glu_op,
-    int                ncols);
-
 // Fused dense-FFN GEMV + GLU over the standard (non-reorder) layout; the gate and up
 // weights may carry different block types (q5_K / iq4_xs, mixed included).
 // vy: src1 quantized with plain quantize_q8_1 (padded rows). stride_col_y is in

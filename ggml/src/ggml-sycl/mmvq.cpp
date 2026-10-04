@@ -3235,24 +3235,14 @@ static bool dispatch_mul_mat_vec_q_glu_plain(const void * vgate, const void * vu
 // vgate/vup must be in the standard block layout; vy must be quantized with plain
 // quantize_q8_1 (padded rows). stride_col_y is in block_q8_1 units.
 // Returns false if the type pair or batch is unhandled; caller should fall back.
-bool ggml_sycl_mul_mat_vec_q_glu_plain_supported(enum ggml_type gate_type, enum ggml_type up_type,
-                                                 enum ggml_glu_op glu_op, int ncols) {
-    if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
-        return false;
-    }
-    if (ncols % QK_K != 0) {
-        return false;
-    }
-    const bool gate_ok = gate_type == GGML_TYPE_Q5_K || gate_type == GGML_TYPE_IQ4_XS;
-    const bool up_ok   = up_type == GGML_TYPE_Q5_K || up_type == GGML_TYPE_IQ4_XS;
-    return gate_ok && up_ok;
-}
-
 bool ggml_sycl_mul_mat_vec_q_glu_plain(enum ggml_type gate_type, enum ggml_type up_type,
                                        enum ggml_glu_op glu_op, const void * vgate, const void * vup,
                                        const void * vy, float * dst, int ncols, int nrows, int ncols_dst,
                                        int stride_col_y, int stride_col_dst, dpct::queue_ptr stream) {
-    if (!ggml_sycl_mul_mat_vec_q_glu_plain_supported(gate_type, up_type, glu_op, ncols)) {
+    if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
+        return false;
+    }
+    if (ncols % QK_K != 0) {
         return false;
     }
     if (gate_type == GGML_TYPE_Q5_K && up_type == GGML_TYPE_Q5_K) {
