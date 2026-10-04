@@ -2356,7 +2356,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
             cparams.mtp_chain && n_tokens_all > mtp_chain_rows) {
-        mtp_chain_rows = n_tokens_all;
+        // Chains grow by a row as catch-up rows pile up. Double the high-water mark, up to the longest
+        // chain the checks above let through, so that not every new maximum costs a reservation.
+        const uint32_t rows_max = std::min(cparams.n_batch, cparams.n_ubatch);
+        mtp_chain_rows = std::min(rows_max, std::max<uint32_t>(n_tokens_all, 2 * mtp_chain_rows));
         const uint32_t reserve_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
         if (graph_max_nodes(reserve_tokens) > gf_res_reserve->get_max_nodes()) {
             sched_need_reserve = true;
