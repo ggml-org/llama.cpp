@@ -244,6 +244,77 @@ under a non-MTP speculative type, and no server process was started. Draft-simpl
 drafts from a trunkless head are valid to verify but carry no trunk context, so
 their acceptance is expected to be poor; it was not measured.
 
+## Borrowed tables and chain sampler follow-up
+
+A merge had kept the context-level rule that a Qwen4Exp head without its own
+`token_embd.weight` or `output.weight` needs `ctx_other`, and dropped the graph
+code that then uses the target's tables (commit `4deec5587`). With a target
+context supplied, the MTP graph aborted on its embedding assertion. The graph now
+takes both tables from the model of `ctx_other`. A target that has none to lend,
+or a missing target context, fails context creation with an error instead of an
+abort.
+
+`--fit` could not measure such a head: the head only builds next to a target
+context, so the measurement failed and the fit continued "without it". The fit
+now retries the extra model beside a measuring context of the main model, reusing
+the existing parent-measurement path.
+
+The regression suite builds the table-less fixture as an MTP context beside the
+combined model. Sequential logits and hidden states, and a chain with two
+catch-up rows and depth three, equal the canonical head (the fixtures seed
+tensors by name, so the tables are identical). A target whose `output.weight` is
+doubled yields exactly doubled logits, which shows the LM head is the target's.
+The public driver produces the same drafts with either head, sequential and
+chained. A target without tables is rejected, and fit initialization constructs
+four contexts: target, head alone (refused), target as parent, head beside it.
+Before the port the first of these tests aborted at `qwen4exp.cpp:618`, and the
+fit test failed with "fitting without it".
+
+Real weights on CPU: a copy of `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` with the two
+tables removed (2.60 GiB instead of 3.85 GiB; each table is 0.629 GiB at Q8_0),
+borrowing from a context of the unmodified head, reproduces the unmodified head's
+MTP output bit for bit: 744,960 logits and the hidden states, three tokens,
+synthetic hidden input.
+
+Real trunk on the Arc A770, one launch per head, `--fit on --fit-target 1024`,
+sequential `draft-mtp`, `--spec-draft-n-max 6`, three prompts twice at 192
+tokens. Observed once; the two launches are not a paired benchmark.
+
+| | head with own tables | table-less head |
+| --- | --- | --- |
+| trunk weights on the GPU | 9455.72 MiB | 10134.54 MiB |
+| head weights on the GPU | 3291.18 MiB | 2647.04 MiB |
+| head weights on the host | 644.14 MiB | none |
+| drafted tokens accepted | 838 of 1810 (46.3%) | 857 of 1702 (50.4%) |
+| decode, six requests | 9.63 to 14.38 t/s | 11.26 to 15.64 t/s |
+| time to healthy | 108 s | 84 s |
+
+The borrowed tables are the trunk's `token_embd.weight` (IQ4_XS) and
+`output.weight` (Q6_K) in place of the head's Q8_0 copies. Acceptance did not drop
+in this sample. Before the fit change the same launch aborted: the fit dropped
+the head, the trunk took 12886.98 MiB of the GPU, and loading the head failed
+with a SYCL allocation error.
+
+The second fix closes a decode-time hole. The Qwen4Exp chain preflight computed
+whether backend samplers were attached and did not use it, so a chained batch
+with one output row reached sampling with packed `[token, probability]` rows in
+place of vocabulary logits. On the synthetic fixture that decode returned 0; a
+sampler that indexes the vocabulary can abort instead. The preflight now returns
+-1 before the KV cache changes, and the invalid-chain test covers it with an
+unchanged-cache check and a retry on the same context.
+
+Both registered A770 entries and the CPU suites passed on the final source (see
+the PR description for the run list).
+
+Limits: the fit retry runs for any extra model whose first measurement fails,
+which costs one more metadata-only load of the main model. A head paired with a
+target of different width or vocabulary is not checked and will assert in ggml.
+Pinning the draft to a device that does not hold the target's tables
+(`--spec-draft-device`) was not tested. The dense Qwen3.5 chain packs its output
+the same way and has no such preflight; that path predates this branch and was
+not changed. The A770 acceptance figures come from a decode that is not
+reproducible run to run, so differences of a few points are within noise.
+
 ## User-reported real-head evidence
 
 The user independently tested `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` on CPU at

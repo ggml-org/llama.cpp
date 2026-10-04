@@ -177,13 +177,15 @@ VRAM exhaustion in the unmodified code path and is independent of the flag.
   merged #29761 exists here, and the draft-path load fix from both does not
   apply (the fork passes draft params whose `model.path` is the draft file; the
   live log shows the head file being loaded).
-- Two behaviours of those PRs are absent here. Shared-embedding heads
-  (`--mtp-shared-embd` in #28243, which borrow `token_embd`/`output` from the
-  target) abort on the `GGML_ASSERT` in `graph_mtp` instead of borrowing. The
-  MTP block attends densely over a plain KV cache, as #28243 did, while the
-  merged #29761 runs it through the indexer cache and block-sparse attention;
-  the two differ once the context exceeds `indexer_top_k + 3` = 2051 cells.
-  Neither was tested.
+- At the time of this run two behaviours of those PRs were absent here.
+  Shared-embedding heads (`--mtp-shared-embd` in #28243, which borrow
+  `token_embd`/`output` from the target) aborted on the `GGML_ASSERT` in
+  `graph_mtp`; that was ported afterwards on the same branch, see "Borrowed
+  tables and chain sampler follow-up" in `qwen4exp-mtp-correctness-2026-10-04.md`.
+  Still absent and untested: the MTP block attends densely over a plain KV
+  cache, as #28243 did, while the merged #29761 runs it through the indexer
+  cache and block-sparse attention; the two differ once the context exceeds
+  `indexer_top_k + 3` = 2051 cells.
 
 ## Not claimed
 

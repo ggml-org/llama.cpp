@@ -106,14 +106,21 @@ llama-server -m target.gguf --spec-draft-model mtp-head.gguf \
     --spec-type draft-mtp-adaptive --spec-chain 4 --fit on
 ```
 
+A head exported without `token_embd.weight` and `output.weight` borrows both tables
+from the target model, so they are held once. The borrowed tables have the target's
+quantization, not the head's. `--fit` measures such a head next to the target's
+context; one "requires ctx_other" error line during fitting is expected. Outside an
+MTP context the head has nothing to run and context creation fails with an error.
+
 Qwen4Exp chained drafts use the full vocabulary and the sequential draft sampler's
 top-10 confidence normalization. Chaining reduces host round trips; it does not
 make target-model verification constant-cost as draft depth increases.
 Direct Qwen4Exp MTP API calls with chaining enabled must fit the complete batch
 in one microbatch and use one sequence with a nonempty output suffix after any
 catch-up rows. Every row must carry both a token ID and a hidden-state embedding;
-later generated rows may use zero placeholders. Invalid batches return a decode
-error before changing the KV cache.
+later generated rows may use zero placeholders. A context with a backend sampler
+attached cannot chain: a chain returns packed token and probability rows instead of
+vocabulary logits. Invalid batches return a decode error before changing the KV cache.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)
