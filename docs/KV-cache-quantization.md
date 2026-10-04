@@ -32,9 +32,19 @@ attention time. Other quantized V formats still require flash attention.
 
 ## Model-specific quality
 
-Models with attention sinks can be unusually sensitive to K-cache quantization. GPT-OSS is a known case: even `q8_0` K changes the output distribution substantially, and lower-bit K types degrade it further despite normal codec and kernel accuracy. Use `f16` K for GPT-OSS and other sink-heavy models. Validate a quantized V cache separately against an `f16` K/V baseline before deploying it.
+Models with attention sinks may be more sensitive to K-cache quantization
+than the models this fork measures. The TurboQuant source tree reports
+GPT-OSS as such a case: `q8_0` K is said to shift the output distribution,
+and lower-bit K types more so, while codec and kernel accuracy stay normal.
+That report came without numbers and this repository has none either: no
+GPT-OSS or other sink-heavy model appears in the `docs/research/` results,
+for any K or V cache type. Read it as a caution, not as a measured result.
 
-Short output samples are not a sufficient quality check for this class of model because the text can remain fluent while token probabilities move significantly. Use `llama-perplexity --kl-divergence` or an equivalent logit comparison when selecting cache types.
+Until such a model is measured, start it from `f16` K and compare every
+quantized K or V cache against an `f16` K/V baseline before deploying it.
+Short output samples are not a sufficient check, because text can stay fluent
+while token probabilities move. Use `llama-perplexity --kl-divergence` or an
+equivalent logit comparison when selecting cache types.
 
 ## Rotation and policy
 
