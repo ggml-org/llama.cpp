@@ -400,6 +400,13 @@ struct common_params_speculative {
         return !draft.mparams.empty();
     }
 
+    // whether a multi-token prediction head drafts, with a fixed or an adaptive depth
+    bool has_mtp() const {
+        return std::any_of(types.begin(), types.end(), [](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE;
+        });
+    }
+
     bool has_synth() const {
         return synth_len != -1.0 || !synth_rates.empty();
     }
