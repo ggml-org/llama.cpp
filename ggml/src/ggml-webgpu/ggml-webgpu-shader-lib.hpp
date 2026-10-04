@@ -179,20 +179,22 @@ struct ggml_webgpu_argsort_shader_lib_context {
 /** Set Rows **/
 
 struct ggml_webgpu_set_rows_pipeline_key {
+    int src0_type;
     int dst_type;
     int vec4;
     int i64_idx;
     int pair_blocks;
 
     bool operator==(const ggml_webgpu_set_rows_pipeline_key & other) const {
-        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx &&
-               pair_blocks == other.pair_blocks;
+        return src0_type == other.src0_type && dst_type == other.dst_type && vec4 == other.vec4 &&
+               i64_idx == other.i64_idx && pair_blocks == other.pair_blocks;
     }
 };
 
 struct ggml_webgpu_set_rows_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_set_rows_pipeline_key & key) const {
         size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.vec4);
         ggml_webgpu_hash_combine(seed, key.i64_idx);
@@ -1387,9 +1389,10 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_set_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         const bool                        quantized = ggml_is_quantized(context.dst->type);
         ggml_webgpu_set_rows_pipeline_key key       = {};
+        key.src0_type                               = context.src0->type;
         key.dst_type                                = context.dst->type;
-        key.vec4 =
-            (context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16) && context.src0->ne[0] % 4 == 0;
+        key.vec4        = (context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16) &&
+                          context.src0->type == GGML_TYPE_F32 && context.src0->ne[0] % 4 == 0;
         key.i64_idx     = context.src1->type == GGML_TYPE_I64;
         key.pair_blocks = quantized && ((context.src0->ne[0] / ggml_blck_size(context.dst->type)) % 2 == 0);
 
@@ -1420,6 +1423,11 @@ class ggml_webgpu_shader_lib {
                 break;
             default:
                 GGML_ABORT("Unsupported dst type for set_rows shader");
+        }
+
+        if (context.src0->type == GGML_TYPE_F16) {
+            defines.push_back("TYPE_F16");
+            variant += "_src0_f16";
         }
 
         if (key.vec4) {

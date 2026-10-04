@@ -1,3 +1,5 @@
+enable f16;
+
 #ifdef DST_Q8_0
 #define BLOCK_SIZE 32u
 #define BLOCK_BYTES 34u
@@ -8,8 +10,14 @@
 #define QS_WORDS 4u
 #endif
 
+#ifdef TYPE_F16
+#define SRC_TYPE f16
+#else
+#define SRC_TYPE f32
+#endif
+
 @group(0) @binding(0)
-var<storage, read_write> src: array<f32>;
+var<storage, read_write> src: array<SRC_TYPE>;
 
 @group(0) @binding(1)
 var<storage, read_write> idx: array<u32>;
@@ -112,7 +120,7 @@ fn quantize_block_params(src_block: u32) -> vec2<f32> {
 #ifdef DST_Q8_0
     var amax = 0.0;
     for (var j: u32 = 0u; j < BLOCK_SIZE; j++) {
-        amax = max(amax, abs(src[src_block + j]));
+        amax = max(amax, abs(f32(src[src_block + j])));
     }
 
     let d = amax / 127.0;
@@ -122,7 +130,7 @@ fn quantize_block_params(src_block: u32) -> vec2<f32> {
     var amax = 0.0;
     var max_val = 0.0;
     for (var j: u32 = 0u; j < BLOCK_SIZE; j++) {
-        let v = src[src_block + j];
+        let v = f32(src[src_block + j]);
         let av = abs(v);
         if (amax < av) {
             amax = av;
@@ -139,15 +147,15 @@ fn quantize_block_params(src_block: u32) -> vec2<f32> {
 fn quantize_block_word(src_block: u32, j: u32, id: f32) -> u32 {
 #ifdef DST_Q8_0
     let base = src_block + j * 4u;
-    return (u32(i32(round(src[base + 0u] * id)) & 0xFF) << 0u) |
-           (u32(i32(round(src[base + 1u] * id)) & 0xFF) << 8u) |
-           (u32(i32(round(src[base + 2u] * id)) & 0xFF) << 16u) |
-           (u32(i32(round(src[base + 3u] * id)) & 0xFF) << 24u);
+    return (u32(i32(round(f32(src[base + 0u]) * id)) & 0xFF) << 0u) |
+           (u32(i32(round(f32(src[base + 1u]) * id)) & 0xFF) << 8u) |
+           (u32(i32(round(f32(src[base + 2u]) * id)) & 0xFF) << 16u) |
+           (u32(i32(round(f32(src[base + 3u]) * id)) & 0xFF) << 24u);
 #elif defined(DST_Q4_0)
     var packed_q = 0u;
     for (var k: u32 = 0u; k < 4u; k++) {
-        let x0 = src[src_block + j * 4u + k] * id;
-        let x1 = src[src_block + 16u + j * 4u + k] * id;
+        let x0 = f32(src[src_block + j * 4u + k]) * id;
+        let x1 = f32(src[src_block + 16u + j * 4u + k]) * id;
         let q0 = u32(clamp(i32(x0 + 8.5), 0, 15));
         let q1 = u32(clamp(i32(x1 + 8.5), 0, 15));
         packed_q |= (q0 & 0xFu) << (8u * k);
