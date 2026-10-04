@@ -32,6 +32,12 @@ static constexpr int Q4_K_MMVQ_ROW_PAIR_MIN_NROWS = 6272;
 // subgroup only gained about 5% at 4096 rows and lost elsewhere.
 static constexpr int Q4_0_MMVQ_ROW_PAIR_MIN_NROWS = 2048;
 
+// Minimum nrows * ncols_dst at which the IQ4_XS multi-column MMVQ kernel handles two output rows per
+// subgroup. Measured on Intel Arc Pro B70 over nrows {1024, 2048, 4096, 12288} x ncols {1024, 4096,
+// 12288} x ncols_dst {2, 3, 4, 8}: at or above 8192 outputs two rows were up to 28% faster and at
+// worst equal, below it one row was up to 22% faster (1024 rows at ncols_dst 2).
+static constexpr int IQ4_XS_MMVQ_ROW_PAIR_MIN_OUTPUTS = 8192;
+
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                                   const int ncols, const int nrows, const sycl::nd_item<3> & nd_item) {
@@ -724,6 +730,74 @@ static void mul_mat_vec_q_iq4_nl_q8_1(const void *__restrict__ vx,
     }
 }
 
+
+// mul_mat_vec_q_ncols for IQ4_XS that looks the codebook up once per sub-block and applies the
+// decoded weights to every column, instead of repeating the lookup per column. With rows_per_sg > 1
+// a subgroup also shares each activation load between that many rows.
+template <int ncols_dst, int rows_per_sg>
+static void mul_mat_vec_q_iq4_xs_q8_1_ncols(const void * __restrict__ vx, const void * __restrict__ vy,
+                                            float * __restrict__ dst, const int ncols, const int nrows,
+                                            const int stride_col_y, const int stride_col_dst,
+                                            const sycl::nd_item<3> & item_ct1) {
+    const int row0 = (item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1)) * rows_per_sg;
+
+    if (row0 >= nrows) {
+        return;
+    }
+
+    constexpr int qi              = QI4_XS / 4;
+    constexpr int blocks_per_warp = WARP_SIZE / qi;
+    const int     blocks_per_row  = ncols / QK_K;
+
+    float tmp[ncols_dst][rows_per_sg] = {};
+
+    const block_iq4_xs * x = (const block_iq4_xs *) vx;
+    const block_q8_1 *   y = (const block_q8_1 *) vy;
+
+    for (int i = item_ct1.get_local_id(2) / qi; i < blocks_per_row; i += blocks_per_warp) {
+        const int iby  = i * (QK_K / QK8_1);
+        const int ib32 = item_ct1.get_local_id(2) % qi;
+
+        iq4_xs_weights w[rows_per_sg];
+#pragma unroll
+        for (int r = 0; r < rows_per_sg; ++r) {
+            const int row = sycl::min(row0 + r, nrows - 1);
+            w[r]          = load_iq4_xs_weights(&x[row * blocks_per_row + i], ib32);
+        }
+
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            const iq4_xs_activations a = load_iq4_xs_activations(&y[j * stride_col_y + iby + ib32]);
+#pragma unroll
+            for (int r = 0; r < rows_per_sg; ++r) {
+                tmp[j][r] += apply_iq4_xs(w[r], a);
+            }
+        }
+    }
+
+#pragma unroll
+    for (int j = 0; j < ncols_dst; ++j) {
+#pragma unroll
+        for (int r = 0; r < rows_per_sg; ++r) {
+#pragma unroll
+            for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+                tmp[j][r] += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp[j][r], mask);
+            }
+        }
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+#pragma unroll
+            for (int r = 0; r < rows_per_sg; ++r) {
+                if (row0 + r < nrows) {
+                    dst[j * stride_col_dst + row0 + r] = tmp[j][r];
+                }
+            }
+        }
+    }
+}
 
 template <int qk, int qi, typename block_q_t, int vdr>
 static void mul_mat_vec_q_iq4_xs_q8_1(const void *__restrict__ vx,
@@ -2299,14 +2373,14 @@ static void mul_mat_vec_iq4_xs_q8_1_sycl(const void *vx, const void *vy,
     }
 }
 
-template <int ncols_dst>
-static void mul_mat_vec_iq4_xs_q8_1_sycl_ncols(
+template <int ncols_dst, int rows_per_sg>
+static void mul_mat_vec_iq4_xs_q8_1_sycl_ncols_impl(
         const void * vx, const void * vy, float * dst,
         const int ncols, const int nrows,
         const int stride_col_y, const int stride_col_dst,
         dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y * rows_per_sg - 1) / (GGML_SYCL_MMV_Y * rows_per_sg);
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
 
@@ -2315,14 +2389,24 @@ static void mul_mat_vec_iq4_xs_q8_1_sycl_ncols(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1)
                 [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    mul_mat_vec_q_ncols<QK_K, QI4_XS/4, block_iq4_xs,
-                                        1,
-                                        vec_dot_iq4_xs_q8_1,
-                                        ncols_dst>(
+                    mul_mat_vec_q_iq4_xs_q8_1_ncols<ncols_dst, rows_per_sg>(
                         vx, vy, dst, ncols, nrows,
                         stride_col_y, stride_col_dst, item_ct1);
                 });
     });
+}
+
+template <int ncols_dst>
+static void mul_mat_vec_iq4_xs_q8_1_sycl_ncols(
+        const void * vx, const void * vy, float * dst,
+        const int ncols, const int nrows,
+        const int stride_col_y, const int stride_col_dst,
+        dpct::queue_ptr stream) {
+    if (nrows * ncols_dst >= IQ4_XS_MMVQ_ROW_PAIR_MIN_OUTPUTS) {
+        mul_mat_vec_iq4_xs_q8_1_sycl_ncols_impl<ncols_dst, 2>(vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, stream);
+    } else {
+        mul_mat_vec_iq4_xs_q8_1_sycl_ncols_impl<ncols_dst, 1>(vx, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, stream);
+    }
 }
 
 static void mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols(

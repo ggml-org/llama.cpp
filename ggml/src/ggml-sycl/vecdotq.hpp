@@ -1805,28 +1805,67 @@ vec_dot_iq4_nl_q8_1(const void *__restrict__ vbq,
 
 #define VDR_IQ4_XS_Q8_1_MMVQ 1
 
+// The decoded weights of one 32-element IQ4_XS sub-block, so a multi-column kernel can look them
+// up once and dot them against every activation column.
+struct iq4_xs_weights {
+    int   v[8];
+    float d;
+};
+
+static __dpct_inline__ iq4_xs_weights load_iq4_xs_weights(const block_iq4_xs * __restrict__ bq4, const int ib32) {
+    const uint32_t * q4 = (const uint32_t *)bq4->qs + 4*ib32;
+    const int8_t ls = ((bq4->scales_l[ib32/2] >> 4*(ib32%2)) & 0xf) | (((bq4->scales_h >> 2*ib32) & 3) << 4);
+
+    iq4_xs_weights w;
+    w.d = (float)bq4->d * (ls - 32);
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        w.v[j + 0] = iq4nl_lookup4(q4[j] & 0x0F0F0F0F);
+        w.v[j + 4] = iq4nl_lookup4((q4[j] >> 4) & 0x0F0F0F0F);
+    }
+    return w;
+}
+
+struct iq4_xs_activations {
+    int   u[8];
+    float d8;
+};
+
+static __dpct_inline__ iq4_xs_activations load_iq4_xs_activations(const block_q8_1 * __restrict__ bq8) {
+    const int32_t * q8 = (const int *)bq8->qs;
+
+    iq4_xs_activations a;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        a.u[j] = q8[j];
+    }
+    a.d8 = bq8->ds[0];
+    return a;
+}
+
+static __dpct_inline__ float apply_iq4_xs(const iq4_xs_weights & w, const iq4_xs_activations & a) {
+    const float d = w.d * a.d8;
+    int sumi1 = 0, sumi2 = 0;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        sumi1 = dpct::dp4a(w.v[j + 0], a.u[j + 0], sumi1);
+        sumi2 = dpct::dp4a(w.v[j + 4], a.u[j + 4], sumi2);
+    }
+    return d * (sumi1 + sumi2);
+}
+
+static __dpct_inline__ float apply_iq4_xs_weights(const iq4_xs_weights & w, const block_q8_1 * __restrict__ bq8) {
+    return apply_iq4_xs(w, load_iq4_xs_activations(bq8));
+}
+
 static __dpct_inline__ float
 vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
                     const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
 
 #if QK_K == 256
-    const block_iq4_xs * bq4 = (const block_iq4_xs *) vbq;
-
     // iqs is 0...7
     const int ib32 = iqs;
-    const int32_t  * q8 = (const int *)bq8_1[ib32].qs;
-    const uint32_t * q4 = (const uint32_t *)bq4->qs + 4*ib32;
-    const int8_t ls = ((bq4->scales_l[ib32/2] >> 4*(ib32%2)) & 0xf) | (((bq4->scales_h >> 2*ib32) & 3) << 4);
-    const float d = (float)bq4->d * (ls - 32) * bq8_1[ib32].ds[0];
-    int v1, v2;
-    int sumi1 = 0, sumi2 = 0;
-    for (int j = 0; j < 4; ++j) {
-        v1 = iq4nl_lookup4(q4[j] & 0x0F0F0F0F);
-        v2 = iq4nl_lookup4((q4[j] >> 4) & 0x0F0F0F0F);
-        sumi1 = dpct::dp4a(v1, q8[j + 0], sumi1);
-        sumi2 = dpct::dp4a(v2, q8[j + 4], sumi2);
-    }
-    return d * (sumi1 + sumi2);
+    return apply_iq4_xs_weights(load_iq4_xs_weights((const block_iq4_xs *) vbq, ib32), bq8_1 + ib32);
 #else
     assert(false);
 #endif
