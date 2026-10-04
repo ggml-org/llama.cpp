@@ -105,6 +105,74 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         self.assertEqual([record["rejection_position"] for record in records], [1, 88])
         self.assertEqual([record["task"] for record in records], [7, 7])
 
+    def test_gpu_fault_re_covers_i915_and_xe(self) -> None:
+        faults = [
+            "[  812.101] i915 0000:03:00.0: [drm] GPU HANG: ecode 12:1:85dffffb, in llama-server [4242]",
+            "[  812.102] i915 0000:03:00.0: [drm] Resetting rcs0 for preemption time out",
+            "[  812.103] xe 0000:03:00.0: [drm] GT0: Engine reset: engine_class=rcs, logical_mask: 0x1",
+            "[  812.104] xe 0000:03:00.0: [drm] GT0: GuC load failed",
+            "[  812.105] xe 0000:03:00.0: [drm] device lost",
+        ]
+        clean = [
+            "[  812.106] pci 0000:03:00.0: reset complete",
+            "[  812.107] usb 1-2: reset high-speed USB device number 3 using xhci_hcd",
+            "[  812.108] xe 0000:03:00.0: [drm] Found dg2/g10 (device ID 56a0) display version 13.00",
+        ]
+
+        for line in faults:
+            self.assertIsNotNone(BENCH_SPEC.GPU_FAULT_RE.search(line), line)
+        for line in clean:
+            self.assertIsNone(BENCH_SPEC.GPU_FAULT_RE.search(line), line)
+
+    def test_kmsg_lines_since_returns_only_appended_lines(self) -> None:
+        self.assertEqual(BENCH_SPEC.kmsg_lines_since(["a", "b"], ["a", "b", "c"]), ["c"])
+        self.assertEqual(BENCH_SPEC.kmsg_lines_since(["a", "b"], ["a", "b"]), [])
+        # the ring buffer dropped its oldest lines while the run appended new ones
+        self.assertEqual(BENCH_SPEC.kmsg_lines_since(["a", "b", "c"], ["c", "d", "e"]), ["d", "e"])
+        self.assertEqual(BENCH_SPEC.kmsg_lines_since(["a", "b", "a", "b"], ["b", "a", "b", "c"]), ["c"])
+
+    def test_kmsg_lines_since_is_indeterminate_without_overlap(self) -> None:
+        # wrapped past the first read, cleared, or nothing to anchor on
+        self.assertIsNone(BENCH_SPEC.kmsg_lines_since(["a", "b"], ["x", "y"]))
+        self.assertIsNone(BENCH_SPEC.kmsg_lines_since(["a", "b"], []))
+        self.assertIsNone(BENCH_SPEC.kmsg_lines_since([], ["a"]))
+
+    def test_new_gpu_faults_survives_eviction_of_an_identical_old_fault(self) -> None:
+        fault = "xe 0000:03:00.0: [drm] GT0: Engine reset: engine_class=rcs"
+        before = [fault, "usb 1-2: new device"]
+        after = ["usb 1-2: new device", fault]
+
+        # counting fault lines sees one before and one after and reports nothing new
+        self.assertEqual(BENCH_SPEC.new_gpu_faults(before, after), [fault])
+        self.assertEqual(BENCH_SPEC.new_gpu_faults(before, before), [])
+        self.assertIsNone(BENCH_SPEC.new_gpu_faults(None, after))
+        self.assertIsNone(BENCH_SPEC.new_gpu_faults(before, None))
+        self.assertIsNone(BENCH_SPEC.new_gpu_faults(before, ["unrelated"]))
+
+    def test_gpu_holders_only_clears_an_idle_render_node(self) -> None:
+        def fuser(returncode: int, stdout: str = "", stderr: str = "") -> mock.Mock:
+            return mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)
+
+        with mock.patch.object(BENCH_SPEC.subprocess, "run", return_value=fuser(1)):
+            self.assertEqual(BENCH_SPEC.gpu_holders(), [])
+        with mock.patch.object(BENCH_SPEC.subprocess, "run",
+                               return_value=fuser(0, " 4242", "/dev/dri/renderD128:")):
+            self.assertTrue(BENCH_SPEC.gpu_holders())
+        # fuser also exits 1 for a node that does not exist; only stderr tells that apart
+        with mock.patch.object(BENCH_SPEC.subprocess, "run",
+                               return_value=fuser(1, "", "Specified filename /dev/dri/renderD129 does not exist.")):
+            self.assertTrue(BENCH_SPEC.gpu_holders())
+        with mock.patch.object(BENCH_SPEC.subprocess, "run", return_value=fuser(0)):
+            self.assertTrue(BENCH_SPEC.gpu_holders())
+        with mock.patch.object(BENCH_SPEC.subprocess, "run", side_effect=OSError("no fuser")):
+            self.assertTrue(BENCH_SPEC.gpu_holders())
+
+    def test_ab_exit_code_fails_closed_on_an_unevaluated_fault_gate(self) -> None:
+        self.assertEqual(BENCH_SPEC.ab_exit_code(True, []), 0)
+        self.assertEqual(BENCH_SPEC.ab_exit_code(True, ["xe 0000:03:00.0: [drm] GT0: Engine reset"]), 1)
+        self.assertEqual(BENCH_SPEC.ab_exit_code(True, None), 1)
+        self.assertEqual(BENCH_SPEC.ab_exit_code(False, []), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

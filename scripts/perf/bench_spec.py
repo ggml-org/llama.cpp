@@ -43,7 +43,9 @@ MODE=ab is a paired A/B of two server builds under one speculative config:
                  drift cancels; the first request of every launch is discarded
   OUT_TAG        suffix for the summary and log file names
 It refuses to start (exit 70) while another process holds the render node,
-reports new xe fault lines from dmesg, and prints paired 95% CIs per prompt.
+reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt.
+It exits non-zero when a launch failed, a fault line appeared, or the kernel log
+could not be compared (unreadable, wrapped or cleared during the run).
 Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
 verified and how many restored a speculative checkpoint.
 Worked run and how to read the output:
@@ -98,7 +100,8 @@ LAUNCHES = int(os.environ.get("LAUNCHES", "4"))
 OUT_TAG = os.environ.get("OUT_TAG", "")
 RENDER_NODE = os.environ.get("RENDER_NODE", "/dev/dri/renderD128")
 EXIT_GPU_BUSY = 70
-XE_FAULT_RE = re.compile(r"xe .*(reset|hang|timeout|GuC)", re.IGNORECASE)
+# both Arc kernel drivers: i915 and xe ("hang" also covers i915's "GPU HANG")
+GPU_FAULT_RE = re.compile(r"\b(?:i915|xe)\b.*(?:reset|hang|timeout|GuC|device.?lost)", re.IGNORECASE)
 # two-sided 95% Student t quantiles, index = degrees of freedom (capped at 15)
 T95 = [float("nan"), 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365,
        2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131]
@@ -482,24 +485,61 @@ def md_table(summary: list[dict[str, Any]], prompt_ids: list[str], field: str, f
 
 
 def gpu_holders() -> list[str]:
-    """PIDs holding the render node; fuser prints them on stdout and exits 1 when there are none."""
+    """What holds the render node; empty only when fuser reports an idle node.
+
+    fuser exits 1 without any output for an idle node. It also exits 1 for a node that does not
+    exist, with the reason on stderr. Every outcome but the first counts as held, as
+    check_sole_tenancy in scripts/bench-a770-fork-unique.py does.
+    """
     try:
         proc = subprocess.run(["fuser", RENDER_NODE], check=False, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:
         return [f"<fuser failed: {e}>"]
-    return proc.stdout.split()
+    output = [line.strip() for part in (proc.stdout, proc.stderr) for line in part.splitlines() if line.strip()]
+    if proc.returncode == 1 and not output:
+        return []
+    return output or [f"<fuser exited {proc.returncode} without holder or error details>"]
 
 
-def dmesg_faults() -> list[str] | None:
-    """xe reset/hang/timeout/GuC lines from the kernel log, or None when dmesg is not readable."""
+def dmesg_lines() -> list[str] | None:
+    """The kernel log, or None when dmesg is not readable."""
     for cmd in (["dmesg"], ["sudo", "-n", "dmesg"]):
         try:
             proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             continue
         if proc.returncode == 0:
-            return [line for line in proc.stdout.splitlines() if XE_FAULT_RE.search(line)]
+            return proc.stdout.splitlines()
     return None
+
+
+def kmsg_lines_since(before: list[str], after: list[str]) -> list[str] | None:
+    """Lines the kernel log gained between two reads.
+
+    The ring buffer drops its oldest lines first, so the second read starts with a suffix of the
+    first for as long as any line of the first survives. None means no line survived (the buffer
+    wrapped past the first read or was cleared), so lines logged in between may be gone.
+    """
+    for dropped in range(len(before)):
+        kept = len(before) - dropped
+        if kept <= len(after) and after[:kept] == before[dropped:]:
+            return after[kept:]
+    return None
+
+
+def new_gpu_faults(before: list[str] | None, after: list[str] | None) -> list[str] | None:
+    """i915/xe fault lines logged between two kernel log reads, or None when that cannot be told."""
+    if before is None or after is None:
+        return None
+    gained = kmsg_lines_since(before, after)
+    if gained is None:
+        return None
+    return [line for line in gained if GPU_FAULT_RE.search(line)]
+
+
+def ab_exit_code(ok: bool, new_faults: list[str] | None) -> int:
+    """0 only for complete launches and an evaluated, empty fault gate."""
+    return 0 if ok and new_faults == [] else 1
 
 
 def file_sha256(path: Path) -> str | None:
@@ -540,7 +580,7 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
         arm["sha256"] = {name: file_sha256(bin_dir / name) for name in ("llama-server", "libllama-server-impl.so")}
         print(f"arm {arm['name']}: {arm['server_bin']}")
 
-    faults_before = dmesg_faults()
+    kmsg_before = dmesg_lines()
     launches: dict[str, list[dict[str, Any]]] = {a["name"]: [], b["name"]: []}
     out: dict[str, Any] = {
         "mode": MODE, "model": MODEL, "draft_model": DRAFT_MODEL, "placement": PLACEMENT, "ctx": CTX,
@@ -585,10 +625,9 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     events = {arm["name"]: {key: sum(launch.get("log_scan", {}).get(key, 0) for launch in launches[arm["name"]])
                             for key in ("draft_rounds", "checkpoint_restores", "checkpoint_creates_dbg")}
               for arm in arms}
-    faults_after = dmesg_faults()
-    new_faults = None if faults_before is None or faults_after is None else faults_after[len(faults_before):]
+    new_faults = new_gpu_faults(kmsg_before, dmesg_lines())
     out.update({"paired_tg": stats, "token_identity": tokens, "checkpoint_events": events,
-                "dmesg_new_xe_faults": new_faults})
+                "dmesg_new_gpu_faults": new_faults})
     out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
 
     print(f"\n\n## Paired tg, {b['name']} minus {a['name']} ({LAUNCHES} launches per arm, ABBA order)\n")
@@ -608,13 +647,13 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
         print(f"  {pid}: distinct streams {a['name']}={t['a_distinct']} {b['name']}={t['b_distinct']}, "
               f"identical across arms: {t['identical_across_arms']}")
     if new_faults is None:
-        print("\ndmesg not readable: xe fault gate NOT evaluated")
+        print("\n!! dmesg unreadable, wrapped or cleared during the run: GPU fault gate NOT evaluated")
     else:
-        print(f"\nnew xe fault lines in dmesg: {len(new_faults)}")
+        print(f"\nnew i915/xe fault lines in dmesg: {len(new_faults)}")
         for line in new_faults[:5]:
             print(f"  {line}")
     print(f"\nsummary -> {out_path}")
-    return 0 if ok and not new_faults else 1
+    return ab_exit_code(ok, new_faults)
 
 
 def main() -> int:
