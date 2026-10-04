@@ -1,8 +1,9 @@
 #include "ggml-metal-fusion.h"
 
-#include "ggml-backend-impl.h"
 #include "ggml-metal-common.h"
 #include "ggml-metal-device.h"
+
+#include "ggml-backend-impl.h"
 
 #include <algorithm>
 #include <cstddef>

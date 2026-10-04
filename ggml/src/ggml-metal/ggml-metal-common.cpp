@@ -1,6 +1,5 @@
 #include "ggml-metal-common.h"
 #include "ggml-metal-fusion.h"
-#include "ggml-metal-impl.h"
 
 #include "ggml.h"
 #include "ggml-impl.h"

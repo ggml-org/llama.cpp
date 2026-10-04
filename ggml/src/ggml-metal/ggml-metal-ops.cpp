@@ -16,18 +16,8 @@
 #include <cmath>
 
 // threadgroups needed to fill the GPU
+// TODO: dedup
 static constexpr int64_t GGML_METAL_MIN_THREADGROUPS = 128;
-
-// few-row MMA mat-mul: 8x8 simdgroup matrices for the src1 rows of ggml_metal_mul_mat_use_mma
-static constexpr int     GGML_METAL_MMA_TILE          = 8;
-static constexpr int     GGML_METAL_MMA_NT_MAX        = 4;
-static constexpr int     GGML_METAL_MMA_SMEM_MAX      = 16384;
-// simdgroups per threadgroup for at most FEW_ROWS, at most MANY_ROWS, and more src0 rows
-static constexpr int64_t GGML_METAL_MMA_FEW_ROWS      = 64;
-static constexpr int64_t GGML_METAL_MMA_MANY_ROWS     = 6144;
-static constexpr int     GGML_METAL_MMA_NSG_FEW_ROWS  = 32;
-static constexpr int     GGML_METAL_MMA_NSG_MID_ROWS  = 16;
-static constexpr int     GGML_METAL_MMA_NSG_MANY_ROWS = 8;
 
 static ggml_metal_buffer_id ggml_metal_get_buffer_id(const ggml_tensor * t) {
     if (!t) {
@@ -2465,57 +2455,6 @@ static int ggml_metal_op_try_fusion(ggml_metal_op_t ctx, int idx, ggml_metal_fus
     return n;
 }
 
-struct ggml_metal_mma_tiling {
-    int nsg; // simdgroups per threadgroup, each over a slice of K
-    int nt;  // 8-row src0 tiles per threadgroup
-    int rt;  // 8-row src1 tiles per threadgroup
-};
-
-// halves n while it is above limit
-static int ggml_metal_halve_to_limit(int n, int64_t limit) {
-    while (n > 1 && n > limit) {
-        n /= 2;
-    }
-    return n;
-}
-
-// fewer src0 rows need more simdgroups per threadgroup (a finer K split) to fill the GPU.
-// the tiles become narrower when the K-slice reduction buffer is too large or when too few threadgroups fill the GPU.
-static ggml_metal_mma_tiling ggml_metal_op_mul_mat_mma_tiling(const ggml_tensor * op) {
-    const ggml_type type = op->src[0]->type;
-    const int64_t   ne00 = op->src[0]->ne[0];
-    const int64_t   ne01 = op->src[0]->ne[1];
-
-    ggml_metal_mma_tiling res;
-    res.rt = ggml_metal_mul_mv_mma_rt(op);
-
-    const int64_t n_steps = ne00/ggml_metal_mul_mv_mma_k_step(type, res.rt);
-
-    int nsg = GGML_METAL_MMA_NSG_MANY_ROWS;
-    if (ne01 <= GGML_METAL_MMA_FEW_ROWS) {
-        nsg = GGML_METAL_MMA_NSG_FEW_ROWS;
-    } else if (ne01 <= GGML_METAL_MMA_MANY_ROWS) {
-        nsg = GGML_METAL_MMA_NSG_MID_ROWS;
-    }
-    res.nsg = ggml_metal_halve_to_limit(nsg, n_steps);
-
-    const int64_t nt_smem   = GGML_METAL_MMA_SMEM_MAX/(int64_t) ggml_metal_mul_mv_mma_smem(res.nsg, 1, res.rt);
-    const int64_t nt_rows   = ne01/(GGML_METAL_MIN_THREADGROUPS*GGML_METAL_MMA_TILE);
-    res.nt = ggml_metal_halve_to_limit(GGML_METAL_MMA_NT_MAX, std::min(nt_smem, nt_rows));
-
-    return res;
-}
-
-// the pipeline for the tiling, with fewer simdgroups when the device cannot run that many threads
-static ggml_metal_pipeline_with_params ggml_metal_op_mul_mat_mma_pipeline(ggml_metal_library_t lib, const ggml_tensor * op, ggml_metal_mma_tiling & tiling, bool add) {
-    auto pipeline = ggml_metal_library_get_pipeline_mul_mv_mma(lib, op, tiling.nsg, tiling.nt, tiling.rt, add);
-    while (tiling.nsg > 1 && ggml_metal_pipeline_max_theads_per_threadgroup(pipeline) < tiling.nsg*32) {
-        tiling.nsg /= 2;
-        pipeline = ggml_metal_library_get_pipeline_mul_mv_mma(lib, op, tiling.nsg, tiling.nt, tiling.rt, add);
-    }
-    return pipeline;
-}
-
 static int ggml_metal_op_mul_mat_mma(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2540,9 +2479,7 @@ static int ggml_metal_op_mul_mat_mma(ggml_metal_op_t ctx, int idx) {
         res = dst->src[0]->op == GGML_OP_MUL_MAT ? dst->src[1] : dst->src[0];
     }
 
-    ggml_metal_mma_tiling tiling = ggml_metal_op_mul_mat_mma_tiling(op);
-
-    auto pipeline = ggml_metal_op_mul_mat_mma_pipeline(lib, op, tiling, fuse_add);
+    auto pipeline = ggml_metal_library_get_pipeline_mul_mv_mma_auto(lib, op, fuse_add);
 
     ggml_metal_kargs_mul_mv_ext args = {
         /*.ne00  =*/ ne00,
@@ -2574,10 +2511,10 @@ static int ggml_metal_op_mul_mat_mma(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
 
-    const int rows0 = GGML_METAL_MMA_TILE*tiling.nt;
-    const int rows1 = GGML_METAL_MMA_TILE*tiling.rt;
+    const int rows0 = pipeline.nr0;
+    const int rows1 = pipeline.nr1;
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rows0 - 1)/rows0, (ne11 + rows1 - 1)/rows1, ne12*ne13, 32, tiling.nsg, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rows0 - 1)/rows0, (ne11 + rows1 - 1)/rows1, ne12*ne13, 32, pipeline.nsg, 1);
 
     return n_fuse;
 }
