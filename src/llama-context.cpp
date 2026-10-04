@@ -3584,7 +3584,8 @@ class llama_io_read_device : public llama_io_read_i {
         for (const auto & rinfo : rinfos) {
             auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
 
-            const int64_t n = rinfo.size / ggml_element_size(rinfo.tensor);
+            // size / element size counts blocks for a block-quantized type: scale to elements, as the writer does
+            const int64_t n = rinfo.size/ggml_element_size(rinfo.tensor)*ggml_blck_size(rinfo.tensor->type);
 
             auto & mbuf = mbufs_new[buft];
 
