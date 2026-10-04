@@ -154,6 +154,11 @@ extern "C" {
 
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph, struct ggml_backend_graph_optimize_params * params);
+
+        // (optional) queue a write of host data to a tensor, ordered after the work already queued on the backend
+        // unlike set_tensor_async, the data is copied before the call returns, so the caller may reuse it at once
+        // returns false if the backend cannot do this for the tensor; the caller then writes it synchronously
+        bool (*set_tensor_async_staged)(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
     };
 
     struct ggml_backend {

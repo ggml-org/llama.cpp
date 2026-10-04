@@ -896,6 +896,7 @@ static const ggml_backend_i ggml_backend_openvino_interface = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .graph_optimize          = */ NULL,
+    /* .set_tensor_async_staged = */ NULL,
 };
 
 int ggml_backend_openvino_get_device_count() {

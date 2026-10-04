@@ -12849,6 +12849,11 @@ void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ggml_vk_destroy_buffer(ctx->prealloc_split_k);
     ggml_vk_destroy_buffer(ctx->prealloc_add_rms_partials);
     ggml_vk_destroy_buffer(ctx->sync_staging);
+    for (auto & buf : ctx->input_staging) {
+        ggml_vk_destroy_buffer(buf);
+    }
+    ctx->input_staging.clear();
+    ctx->input_staging_used = 0;
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
     ctx->prealloc_y_last_tensor_used = nullptr;
@@ -13158,6 +13163,44 @@ static ggml_backend_buffer_type_t ggml_backend_vk_get_default_buffer_type(ggml_b
     return &ctx->device->buffer_type;
 }
 
+// Space for @size bytes in the context's input staging memory, until the next ggml_vk_input_staging_reset.
+static void ggml_vk_input_staging_alloc(ggml_backend_vk_context * ctx, size_t size, vk_buffer & buf, size_t & offset) {
+    constexpr size_t align = 64;
+    if (!ctx->input_staging.empty()) {
+        const size_t at = ggml_vk_align_size(ctx->input_staging_used, align);
+        if (at + size <= ctx->input_staging.back()->size) {
+            buf = ctx->input_staging.back();
+            offset = at;
+            ctx->input_staging_used = at + size;
+            return;
+        }
+    }
+    // the buffers in use stay until the reset: add a larger one
+    const size_t prev = ctx->input_staging.empty() ? 0 : ctx->input_staging.back()->size;
+    const size_t new_size = std::max({ size, 2 * prev, (size_t) 1024 * 1024 });
+    VK_LOG_MEMORY("ggml_vk_input_staging_alloc(" << new_size << ")");
+    buf = ggml_vk_create_buffer_check(ctx->device, new_size,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    ctx->input_staging.push_back(buf);
+    offset = 0;
+    ctx->input_staging_used = size;
+}
+
+// The backend's queued work has completed: the input staging memory is free again (the largest buffer is kept).
+static void ggml_vk_input_staging_reset(ggml_backend_vk_context * ctx) {
+    if (ctx->input_staging.size() > 1) {
+        vk_buffer keep = ctx->input_staging.back();
+        ctx->input_staging.pop_back();
+        for (auto & buf : ctx->input_staging) {
+            ggml_vk_destroy_buffer(buf);
+        }
+        ctx->input_staging.clear();
+        ctx->input_staging.push_back(keep);
+    }
+    ctx->input_staging_used = 0;
+}
+
 static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset,
                                                 size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     VK_LOG_DEBUG("ggml_backend_vk_set_tensor_2d_async(" << size << ", " << n_copies << ")");
@@ -13221,6 +13264,34 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
     ggml_backend_vk_set_tensor_2d_async(backend, tensor, data, offset, size, 1, size, size);
 }
 
+// The data goes into the context's input staging memory now and is copied to the tensor in the
+// compute stream: the caller may reuse it at once, and the write needs no queue submission of its own.
+static bool ggml_backend_vk_set_tensor_async_staged(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    VK_LOG_DEBUG("ggml_backend_vk_set_tensor_async_staged(" << size << ")");
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+
+    if (tensor->buffer->buft != ggml_backend_vk_get_default_buffer_type(backend)) {
+        return false;
+    }
+    if (size == 0) {
+        return true;
+    }
+
+    ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
+    vk_buffer staging;
+    size_t staging_offset;
+    ggml_vk_input_staging_alloc(ctx, size, staging, staging_offset);
+    memcpy((uint8_t *)staging->ptr + staging_offset, data, size);
+
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+    const vk::BufferCopy copy{ staging_offset, vk_tensor_offset(tensor) + tensor->view_offs + offset, size };
+    // after earlier work that uses the tensor, and before later work that reads it
+    ggml_vk_sync_buffers(ctx, compute_ctx);
+    compute_ctx->s->buffer->buf.copyBuffer(staging->buffer, buf_ctx->dev_buffer->buffer, { copy });
+    ggml_vk_sync_buffers(ctx, compute_ctx);
+    return true;
+}
+
 static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset,
                                                 size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     VK_LOG_DEBUG("ggml_backend_vk_get_tensor_2d_async(" << size << ", " << n_copies << ")");
@@ -13275,6 +13346,127 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
 static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_get_tensor_async(" << size << ")");
     ggml_backend_vk_get_tensor_2d_async(backend, tensor, data, offset, size, 1, size, size);
+}
+
+// A host-to-device copy on the transfer queue overlaps with compute, but costs a submission of its own
+// and a semaphore wait on the compute queue. It pays off when the copy takes longer than that overhead:
+// the crossover is the overhead times the host-to-device bandwidth, both measured once per device,
+// the overhead with the host clock and the bandwidth with GPU timestamps around a staged copy.
+// GGML_VK_COMPUTE_STREAM_COPY_MAX (bytes) sets it instead.
+static size_t ggml_vk_compute_stream_copy_max(vk_device & device) {
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    if (device->compute_stream_copy_max_known) {
+        return device->compute_stream_copy_max;
+    }
+    if (const char * env = getenv("GGML_VK_COMPUTE_STREAM_COPY_MAX")) {
+        device->compute_stream_copy_max = std::strtoull(env, nullptr, 0);
+        device->compute_stream_copy_max_known = true;
+        return device->compute_stream_copy_max;
+    }
+
+    const std::vector<vk::QueueFamilyProperties> families = device->physical_device.getQueueFamilyProperties();
+    for (vk_queue * q : { device->compute_queue.get(), device->transfer_queue.get() }) {
+        if (families[q->queue_family_index].timestampValidBits == 0) {
+            GGML_ABORT("ggml_vulkan: %s: queue family %u has no timestamps, so the host-to-device copy bandwidth "
+                       "cannot be measured; set GGML_VK_COMPUTE_STREAM_COPY_MAX", device->name.c_str(), q->queue_family_index);
+        }
+    }
+
+    constexpr size_t probe_size = 16 * 1024 * 1024;
+    constexpr int    iterations = 5;
+    vk_buffer dev_buf, host_buf;
+    vk::Semaphore sem;
+    vk::QueryPool pool;
+    try {
+        dev_buf  = ggml_vk_create_buffer_device(device, probe_size);
+        host_buf = ggml_vk_create_buffer_check(device, probe_size,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
+        vk::SemaphoreCreateInfo sci{};
+        sci.setPNext(&tci);
+        sem = device->device.createSemaphore(sci);
+        vk_semaphore tl{ sem, 0 };
+        vk::QueryPoolCreateInfo qci{};
+        qci.queryType = vk::QueryType::eTimestamp;
+        qci.queryCount = 2;
+        pool = device->device.createQueryPool(qci);
+
+        // start from idle queues, so earlier work does not count
+        for (vk_queue * q : { device->compute_queue.get(), device->transfer_queue.get() }) {
+            q->handle->lock();
+            q->handle->queue.waitIdle();
+            q->handle->unlock();
+        }
+
+        // Host time of one compute submission, after a transfer submission it waits for when
+        // with_transfer; with copy, GPU time of a staged copy of probe_size bytes in it.
+        auto run = [&](bool with_transfer, bool copy) {
+            vk_context c = ggml_vk_create_temporary_context(device->compute_queue->cmd_pool);
+            ggml_vk_ctx_begin(device, c);
+            if (copy) {
+                c->s->buffer->buf.resetQueryPool(pool, 0, 2);
+                c->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, pool, 0);
+                c->s->buffer->buf.copyBuffer(host_buf->buffer, dev_buf->buffer, { vk::BufferCopy{ 0, 0, probe_size } });
+                c->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, pool, 1);
+            }
+            ggml_vk_ctx_end(c);
+            vk_context t;
+            if (with_transfer) {
+                t = ggml_vk_create_temporary_context(device->transfer_queue->cmd_pool);
+                ggml_vk_ctx_begin(device, t);
+                t->s->buffer->buf.copyBuffer(host_buf->buffer, dev_buf->buffer, { vk::BufferCopy{ 0, 0, 256 } });
+                ggml_vk_ctx_end(t);
+                tl.value++;
+                t->seqs.back().back().signal_semaphores.push_back(tl);
+                c->seqs.back().back().wait_semaphores.push_back(tl);
+            }
+            const auto start = std::chrono::steady_clock::now();
+            if (t) {
+                ggml_vk_submit(t, {});
+            }
+            ggml_vk_submit(c, device->fence);
+            VK_CHECK(device->device.waitForFences({ device->fence }, true, UINT64_MAX), "compute stream copy probe", device);
+            const auto end = std::chrono::steady_clock::now();
+            device->device.resetFences({ device->fence });
+            if (copy) {
+                uint64_t ts[2];
+                VK_CHECK(device->device.getQueryPoolResults(pool, 0, 2, sizeof(ts), ts, sizeof(uint64_t),
+                                                            vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait),
+                         "compute stream copy timestamps", device);
+                return (double) (ts[1] - ts[0]) * device->properties.limits.timestampPeriod;
+            }
+            return (double) std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        };
+        auto fastest = [&](bool with_transfer, bool copy) {
+            double best = run(with_transfer, copy);
+            for (int i = 1; i < iterations; i++) {
+                best = std::min(best, run(with_transfer, copy));
+            }
+            return best;
+        };
+
+        const double transfer_ns = fastest(true, false) - fastest(false, false);
+        const double copy_ns     = fastest(false, true);
+        ggml_vk_queue_command_pools_cleanup(device);
+        if (copy_ns <= 0) {
+            GGML_ABORT("ggml_vulkan: %s: the timestamps around a %zu byte host-to-device copy measured no time",
+                       device->name.c_str(), probe_size);
+        }
+        const double bytes_per_ns = probe_size / copy_ns;
+        device->compute_stream_copy_max = transfer_ns > 0 ? (size_t) (transfer_ns * bytes_per_ns) : 0;
+        device->compute_stream_copy_max_known = true;
+        GGML_LOG_INFO("ggml_vulkan: %s: a transfer queue submission costs %.1f us, host-to-device copies run at %.1f GB/s: "
+                      "copies up to %zu bytes go in the compute stream\n", device->name.c_str(), transfer_ns / 1e3,
+                      bytes_per_ns, device->compute_stream_copy_max);
+    } catch (const vk::SystemError & e) {
+        GGML_ABORT("ggml_vulkan: %s: measuring host-to-device copy costs failed: %s", device->name.c_str(), e.what());
+    }
+    device->device.destroyQueryPool(pool);
+    device->device.destroySemaphore(sem);
+    ggml_vk_destroy_buffer(host_buf);
+    ggml_vk_destroy_buffer(dev_buf);
+    return device->compute_stream_copy_max;
 }
 
 static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
@@ -13333,16 +13525,24 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
             return true;
         }
 
+        const bool use_transfer_queue = ctx->device->async_use_transfer_queue &&
+                                        ggml_nbytes(src) > ggml_vk_compute_stream_copy_max(ctx->device);
+
         vk_context cpy_ctx;
-        if (ctx->device->async_use_transfer_queue) {
+        if (use_transfer_queue) {
             cpy_ctx = ggml_vk_get_transfer_ctx(ctx);
         } else {
             cpy_ctx = ggml_vk_get_compute_ctx(ctx);
         }
 
-        return ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
-                                          vk_tensor_offset(dst) + dst->view_offs,
-                                          src->data, ggml_nbytes(src));
+        const bool ret = ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
+                                                    vk_tensor_offset(dst) + dst->view_offs,
+                                                    src->data, ggml_nbytes(src));
+        if (ret && !use_transfer_queue) {
+            // before later work in the stream reads it
+            ggml_vk_sync_buffers(ctx, cpy_ctx);
+        }
+        return ret;
     }
 
     return false;
@@ -13352,10 +13552,15 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_synchronize()");
 
     bool do_transfer = !ctx->compute_ctx.expired();
+    const bool compute_pending = ctx->submit_pending;
 
     if (ggml_vk_submit_transfer_ctx(ctx)) {
         ctx->submit_pending = true;
     }
+    // transfers the compute queue has not been made to wait for yet
+    const bool transfer_wait = ctx->device->async_use_transfer_queue &&
+                               ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value;
+    bool fence_submitted = false;
 
     vk_context compute_ctx;
     vk_command_buffer* cmd_buf = nullptr;
@@ -13375,16 +13580,32 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
             ggml_vk_submit(compute_ctx, ctx->fence);
             VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "synchronize waitForFences", ctx->device);
             ctx->device->device.resetFences({ ctx->fence });
-        } else {
-            ggml_vk_submit(compute_ctx, {});
+            ctx->submit_pending = true;
+        } else if (!compute_ctx->seqs.empty()) {
+            // the last submission waits for the transfers and carries the fence: no empty submission follows it
+            if (transfer_wait) {
+                compute_ctx->seqs.back().back().wait_semaphores.push_back(ctx->transfer_semaphore);
+                ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
+            }
+            ggml_vk_submit(compute_ctx, ctx->fence);
+            fence_submitted = true;
+            ctx->submit_pending = true;
         }
-        ctx->submit_pending = true;
     }
 
     if (ctx->submit_pending) {
+        bool wait_fence = !ctx->device->serialize_submissions;
         if (ctx->device->serialize_submissions) {
             ctx->submit_pending = false;
-        } else if (ctx->device->async_use_transfer_queue && ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
+        } else if (fence_submitted) {
+            // the fence went with the compute submission
+        } else if (transfer_wait && !compute_pending) {
+            // only transfers are outstanding: wait for them on the host
+            vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, ctx->transfer_semaphore.s, ctx->transfer_semaphore.value};
+            VK_CHECK(ctx->device->device.waitSemaphores(swi, UINT64_MAX), "synchronize waitSemaphores", ctx->device);
+            ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
+            wait_fence = false;
+        } else if (transfer_wait) {
             vk::TimelineSemaphoreSubmitInfo tl_info{
                 1, &ctx->transfer_semaphore.value,
                 0, nullptr,
@@ -13401,7 +13622,7 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
         } else {
             ctx->device->compute_queue->handle->submit({}, ctx->fence);
         }
-        if (!ctx->device->serialize_submissions) {
+        if (wait_fence) {
             ggml_vk_wait_for_fence(ctx);
         }
         ctx->submit_pending = false;
@@ -13416,6 +13637,10 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
         ctx->compute_ctx.reset();
+    }
+
+    if (ctx->compute_ctx.expired() && !ctx->submit_pending) {
+        ggml_vk_input_staging_reset(ctx);
     }
 }
 
@@ -15133,6 +15358,7 @@ static ggml_backend_i ggml_backend_vk_interface = {
     /* .event_record            = */ ggml_backend_vk_event_record,
     /* .event_wait              = */ ggml_backend_vk_event_wait,
     /* .graph_optimize          = */ ggml_vk_graph_optimize,
+    /* .set_tensor_async_staged = */ ggml_backend_vk_set_tensor_async_staged,
 };
 
 static ggml_guid_t ggml_backend_vk_guid() {

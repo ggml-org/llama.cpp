@@ -712,6 +712,9 @@ struct vk_device_struct {
     bool single_queue;
     bool support_async;
     bool async_use_transfer_queue;
+    // largest host-to-device copy that goes into the compute stream, measured on first use
+    size_t compute_stream_copy_max;
+    bool compute_stream_copy_max_known {};
     bool has_internally_synchronized_queues = false;
     uint32_t subgroup_size;
     uint32_t subgroup_size_log2;
@@ -1250,6 +1253,8 @@ struct ggml_backend_vk_context {
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
+    std::vector<vk_buffer> input_staging;
+    size_t input_staging_used {};
     vk::Fence fence, almost_ready_fence;
     bool submit_pending {};
     bool almost_ready_fence_pending {};
