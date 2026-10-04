@@ -622,6 +622,54 @@ static inline float vec_dot_q4_K_q8_1_common(const int * __restrict__ q4, const 
     return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, dm, d8);
 }
 
+// Byte-wide masks (0x00 / 0xFF) for the 4 sign bits in b4.
+static __dpct_inline__ uint32_t iq_sign_mask4(const uint32_t b4) {
+    return ((b4 * 0x00204081u) & 0x01010101u) * 0xFFu;
+}
+
+// Negates the bytes of g selected by the byte masks m. The grid bytes of the IQ2/IQ3 codebooks are
+// never zero, so ~g + 1 cannot carry into the next byte.
+static __dpct_inline__ int iq_negate_bytes(const uint32_t g, const uint32_t m) {
+    return (int) ((g ^ m) + (m & 0x01010101u));
+}
+
+// Dot product of one 32-element IQ3_XXS sub-block, given its 8 grid indices (q3 low and high
+// words), its packed scale and signs word, the block scale d and the q8_1 sub-block. The eighth
+// sign of each group of 8 is the parity of the other 7, so the signs come from bit arithmetic
+// instead of the ksigns64 table.
+static __dpct_inline__ float vec_dot_iq3_xxs_q8_1_impl(const uint32_t q3_lo, const uint32_t q3_hi, uint32_t aux32,
+                                                       const float d, const int * __restrict__ q8, const float d8) {
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < 4; ++l) {
+        const uint32_t idx = ((l < 2 ? q3_lo : q3_hi) >> (16 * (l % 2))) & 0xFFFF;
+        const uint32_t s7  = aux32 & 127;
+        const uint32_t s8  = s7 | ((sycl::popcount(s7) & 1) << 7);
+        const int grid_l   = iq_negate_bytes(iq3xxs_grid[idx & 0xFF], iq_sign_mask4(s8 & 0xF));
+        const int grid_h   = iq_negate_bytes(iq3xxs_grid[idx >> 8], iq_sign_mask4(s8 >> 4));
+        sumi = dpct::dp4a(grid_l, q8[2 * l + 0], sumi);
+        sumi = dpct::dp4a(grid_h, q8[2 * l + 1], sumi);
+        aux32 >>= 7;
+    }
+    return d * (0.5f + aux32) * d8 * 0.5f * sumi;
+}
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ3_XXS> {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ3_XXS;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *  base  = static_cast<const uint8_t *>(vbq);
+        const uint32_t * q3    = reinterpret_cast<const uint32_t *>(base + ibx_offset.first + 8 * iqs);
+        const uint32_t   aux32 = *reinterpret_cast<const uint32_t *>(base + ibx_offset.second + 4 * iqs);
+        const float      d     = *reinterpret_cast<const ggml_half *>(base + d_offset.first);
+        const int *      q8    = reinterpret_cast<const int *>(q8_1_quant_ptr + iqs * QK8_1);
+
+        return vec_dot_iq3_xxs_q8_1_impl(q3[0], q3[1], aux32, d, q8, q8_1_ds[iqs][0]);
+    }
+};
+
 template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K> {
     static constexpr ggml_type gtype = GGML_TYPE_Q4_K;
 
@@ -1603,36 +1651,17 @@ static __dpct_inline__ float
 vec_dot_iq3_xxs_q8_1(const void *__restrict__ vbq,
                      const block_q8_1 *__restrict__ bq8_1, const int &iqs,
                      const uint32_t *iq3xxs_grid, const uint64_t *ksigns64) {
-#if DPCT_COMPATIBILITY_TEMP >=                                                 \
-    MIN_CC_DP4A // lowest compute capability for integer intrinsics
 #if QK_K == 256
+    GGML_UNUSED(iq3xxs_grid);
+    GGML_UNUSED(ksigns64);
     const block_iq3_xxs * bq2 = (const block_iq3_xxs *) vbq;
 
     const int ib32 = iqs;
-    const uint8_t  * q3 = bq2->qs + 8*ib32;
+    const uint16_t * q3  = (const uint16_t *)(bq2->qs + 8*ib32);
     const uint16_t * gas = (const uint16_t *)(bq2->qs + QK_K/4) + 2*ib32;
-    const int8_t   * q8 = bq8_1[ib32].qs;
-    uint32_t aux32 = gas[0] | (gas[1] << 16);
-    int sumi = 0;
-    for (int l = 0; l < 4; ++l) {
-        const uint32_t * grid1 = iq3xxs_grid + q3[2*l+0];
-        const uint32_t * grid2 = iq3xxs_grid + q3[2*l+1];
-        const uint32_t * signs = (const uint32_t *)(ksigns64 + (aux32 & 127));
-        const int grid_l = dpct::vectorized_binary<sycl::uchar4>(
-            grid1[0] ^ signs[0], signs[0], std::minus<>());
-        const int grid_h = dpct::vectorized_binary<sycl::uchar4>(
-            grid2[0] ^ signs[1], signs[1], std::minus<>());
-        sumi = dpct::dp4a(grid_l, *((const int *)q8 + 0), sumi);
-        sumi = dpct::dp4a(grid_h, *((const int *)q8 + 1), sumi);
-        q8 += 8;
-        aux32 >>= 7;
-    }
-    const float d = (float)bq2->d * (0.5f + aux32) * bq8_1[ib32].ds[0] * 0.5f;
-    return d * sumi;
-#else
-    assert(false);
-    return 0.f;
-#endif
+    const uint32_t aux32 = gas[0] | (gas[1] << 16);
+    return vec_dot_iq3_xxs_q8_1_impl(q3[0] | (q3[1] << 16), q3[2] | (q3[3] << 16), aux32, (float)bq2->d,
+                                     (const int *)bq8_1[ib32].qs, bq8_1[ib32].ds[0]);
 #else
     assert(false);
     return 0.f;

@@ -435,6 +435,20 @@ static void dequantize_row_iq2_s_sycl(const void *vx, dst_t *y, const int64_t k,
 
 
 template <typename dst_t>
+static void dequantize_row_iq3_xxs_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
+                                                dpct::queue_ptr stream) {
+    dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
+
+    constexpr int wg_size = 256;
+    const int64_t n_lanes = k / 8;
+    const int64_t n_wg    = (n_lanes + wg_size - 1) / wg_size;
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_wg * wg_size), sycl::range<3>(1, 1, wg_size)),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            dequantize_block_iq3_xxs_reorder(vx, y, k, item_ct1);
+        });
+}
+
+template <typename dst_t>
 static void dequantize_row_iq3_xxs_sycl(const void *vx, dst_t *y, const int64_t k,
                                         dpct::queue_ptr stream) {
     const int64_t nb = k / QK_K;
@@ -710,6 +724,9 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
         case GGML_TYPE_IQ2_S:
             return dequantize_row_iq2_s_sycl;
         case GGML_TYPE_IQ3_XXS:
+            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                return dequantize_row_iq3_xxs_sycl_reorder;
+            }
             return dequantize_row_iq3_xxs_sycl;
         case GGML_TYPE_IQ3_S:
             return dequantize_row_iq3_s_sycl;
@@ -801,6 +818,9 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
         case GGML_TYPE_IQ2_S:
             return dequantize_row_iq2_s_sycl;
         case GGML_TYPE_IQ3_XXS:
+            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                return dequantize_row_iq3_xxs_sycl_reorder;
+            }
             return dequantize_row_iq3_xxs_sycl;
         case GGML_TYPE_IQ3_S:
             return dequantize_row_iq3_s_sycl;
