@@ -21,30 +21,35 @@ no-op where they do not:
   at all was 2% to 5%. No campaign was run there; it could not resolve an effect
   of this size.
 
-The change is applied in the working tree and matches upstream PR
-ggml-org/llama.cpp#28104 at these six lines. Upstream pairs it with dropping
-`DRAFT_MTP` from `need_n_rs_seq()`, which this fork does not do (it keeps the
-snapshot rollback from #28123, commit `0eadefebd`).
+The flag is applied at the same six sites as upstream PR
+ggml-org/llama.cpp#28104. Upstream pairs it with dropping `DRAFT_MTP` from
+`need_n_rs_seq()`, which this fork does not do (it keeps the snapshot rollback
+from #28123, commit `0eadefebd`). Since review the fork also differs in that
+the flag is conditional: a checkpoint stays on the host when the device copy
+would eat into the `--fit-target` margin (see "Device-margin guard"). Both
+measured arms predate the guard; the on-device arm passed the flag at every
+site.
 
 ## The change and which sites execute
 
 `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY` became
 `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE` at six
-calls on `slot.spec_ckpt`. The prompt-cache checkpoints (`:450-474`, `:2679-2680`,
-`:3733-3734`) stay host-resident. `slot.spec_ckpt` is used nowhere else, so a
+calls on `slot.spec_ckpt` (line numbers below are those after the guard was
+added). The prompt-cache checkpoints (`:453-477`, `:2681-2682`,
+`:3745-3746`) stay host-resident. `slot.spec_ckpt` is used nowhere else, so a
 device handle never reaches a host reader.
 
 | site | call | executes when |
 |---|---|---|
-| `:3387` | `update_dft` before drafting | draft context is full-removal only |
-| `:3426` | `load_dft` after drafting | draft context is full-removal only |
-| `:3445` | `update_tgt` before verify | target is full-removal only, or bounded rollback with a draft longer than `n_rs_seq` |
-| `:3457` | `update_dft` before verify | draft context is bounded rollback: unreachable, the draft context is always built with `n_rs_seq = 0` (`common/common.cpp:1311`, `common/speculative.cpp:3300`) |
-| `:4314` | `load_tgt` on partial acceptance | as `:3445`, and a draft token was rejected |
-| `:4317` | `load_dft` on partial acceptance | as `:4314`, with a draft context |
+| `:3399` | `update_dft` before drafting | draft context is full-removal only |
+| `:3438` | `load_dft` after drafting | draft context is full-removal only |
+| `:3457` | `update_tgt` before verify | target is full-removal only, or bounded rollback with a draft longer than `n_rs_seq` |
+| `:3469` | `update_dft` before verify | draft context is bounded rollback: unreachable, the draft context is always built with `n_rs_seq = 0` (`common/common.cpp:1308`, `common/speculative.cpp:3335`) |
+| `:4326` | `load_tgt` on partial acceptance | as `:3457`, and a draft token was rejected |
+| `:4329` | `load_dft` on partial acceptance | as `:4326`, with a draft context |
 
 The removal type comes from `common_context_can_seq_rm`. `need_n_rs_seq()`
-(`common/common.h:407`) returns `draft.n_max` for the MTP, EAGLE3, DFlash and
+(`common/common.h:414`) returns `draft.n_max` for the MTP, EAGLE3, DFlash and
 DSpark types and 0 otherwise, so a hybrid target is full-removal only under
 `draft-simple` and the ngram types.
 
@@ -73,8 +78,10 @@ DSpark types and 0 otherwise, so a hybrid target is full-removal only under
 Qwen3.5-9B Q4_K_M (arch `qwen35`) as target and as its own `draft-simple` draft,
 `--spec-draft-n-max 8`, ctx 8192, 4 launches per arm, 2 repeats. Both contexts
 report "does not support partial sequence removal", so every draft round takes
-a 100.5 MiB target checkpoint and a 50.25 MiB draft checkpoint (sizes from the
-debug-verbosity probe).
+a 50.25 MiB target checkpoint and a 50.25 MiB draft checkpoint. The
+debug-verbosity probe prints the pair as `size = 100.5 MiB, draft = 50.25 MiB`,
+where the first figure is the sum; an earlier revision of this report read it
+as the target alone.
 
 | prompt | host t/s | on-device t/s | delta | 95% CI half-width |
 |---|---|---|---|---|
@@ -99,8 +106,8 @@ prompt (a post-hoc cut, chosen after seeing the data):
 | free_prose | 7 | 15.816 (15.428-16.233) | 7 | 16.464 (16.151-16.913) | +4.10% |
 
 Derived, not measured directly: 0.61 s saved per 256-token run over about 29
-draft rounds, about 21 ms per round for roughly 200 MiB of state that the host
-arm moves across PCIe (two reads and one write).
+draft rounds, about 21 ms per round for roughly 150 MiB of state that the host
+arm moves across PCIe (two 50.25 MiB reads and one 50.25 MiB write).
 
 ### Qwen4Exp trunk with the MTP head (`draft-mtp`)
 
@@ -158,14 +165,46 @@ VRAM exhaustion in the unmodified code path and is independent of the flag.
 ## Cost and risk
 
 - The on-device arm keeps one extra copy of the checkpointed state per context
-  and sequence in VRAM (about 100 MiB target plus 50 MiB draft in the 9B run;
-  an estimated 113 MiB for the Qwen4Exp trunk). It is allocated on the first
-  checkpoint, so `--fit` does not budget for it. The baseline abort above shows
+  and sequence in VRAM (50.2 MiB per context in the 9B run, target and draft
+  alike; an estimated 113 MiB for the Qwen4Exp trunk). It is allocated on the
+  first checkpoint, so `--fit` does not budget for it, and it is never freed.
+  The guard below keeps it from eating into the fit margin. The baseline abort above shows
   that a 1024 MiB fit margin is already too small for batched ngram verifies on
   this trunk.
 - The flag invalidates earlier on-device states for the same sequence. The
   server keeps exactly one speculative checkpoint per slot and context, so this
   holds today; a second on-device user of the same sequence would break it.
+
+## Device-margin guard
+
+Added in review, after the measurements above. The six sites no longer pass the
+flag unconditionally. Each slot picks the flags for its target and for its
+draft context at that context's first checkpoint and keeps them
+(`spec_ckpt_flags()` in `tools/server/server-context.cpp`, decision in
+`common_speculative_checkpoint_flags()` in `common/speculative.cpp`):
+
+- the device copy would hold `size(PARTIAL_ONLY) - size(PARTIAL_ONLY | ON_DEVICE)`
+  bytes, the tensor data the host form carries;
+- it stays on the device only if every device of the context's model reports at
+  least that much free memory plus the `--fit-target` margin the user gave
+  (default 1024 MiB, taken before the server adds an mmproj to it);
+- otherwise the checkpoint stays on the host, as before this change. A GPU that
+  reports no memory figures counts as full.
+
+The decision is logged once per slot and context. Two one-launch runs of the 9B
+self-draft configuration on the A770, `guarded` being the build with the guard
+(`summary_ab-review-guard-room.json`, `summary_ab-review-guard-tight.json`):
+
+| run | margin | log line of the guarded arm (draft and target context) | restores | exit |
+|---|---|---|---|---|
+| room | default 1024 MiB | `seq 0 checkpoint stays on the device (50.2 MiB)`, twice | 2 | 0 |
+| tight | `--fit off --fit-target 15000` | `seq 0 checkpoint stays on the host: SYCL0 has 5665.7 MiB free, the device copy needs 50.2 MiB on top of the 15000.0 MiB margin`, twice (5665.4 MiB the second time) | 3 | 0 |
+
+Both runs completed all requests with 0 new i915/xe fault lines. The guard is a
+check at one moment: it does not reserve the memory, so a compute buffer that
+grows later can still take the space, and a backend that over-reports free
+memory defeats it. It also only decides where the copy goes; a failed device
+allocation inside the state writer still aborts.
 
 ## Related findings from the same session
 
@@ -199,10 +238,16 @@ VRAM exhaustion in the unmodified code path and is independent of the flag.
   sizes or acceptance rates.
 - The stream-matched table is post-hoc. The pre-planned statistic is the
   launch-paired one, whose interval includes zero.
-- Site `:3457` was not executed and cannot be in this fork. Sites `:4314` and
-  `:4317` executed only on the 18 to 26 rejections per arm.
+- Site `:3469` was not executed and cannot be in this fork. Sites `:4326` and
+  `:4329` executed only on the 18 to 26 rejections per arm.
 - VRAM figures for the extra device copy are derived from checkpoint sizes, not
   read from the device.
+- The guard was exercised on one model and one device, one launch per case. Its
+  two outcomes were forced with `--fit-target`, not reached by a model that
+  fills the card through `--fit`. Multi-device placement, a draft on another
+  device than its target, and more than one slot were not run.
+- The two guard runs are single launches: their throughput columns are not a
+  measurement of the guard.
 - `PARTIAL_ONLY | ON_DEVICE` restore exactness was not tested in isolation; the
   byte-exact evidence is for the full-state on-device path.
 - JIT build only, eager submission only. SYCL graph replay

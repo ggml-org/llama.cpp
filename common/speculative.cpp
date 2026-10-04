@@ -3196,6 +3196,46 @@ const std::vector<double> & common_speculative_get_synth_probs(const common_spec
     return spec->synth_probs;
 }
 
+llama_state_seq_flags common_speculative_checkpoint_flags(
+        llama_context * ctx, llama_seq_id seq_id, const std::vector<size_t> & margins) {
+    const llama_state_seq_flags flags_host   = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    const llama_state_seq_flags flags_device = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
+
+    // the host size counts the tensor data, the device size leaves it out
+    const size_t size_host   = llama_state_seq_get_size_ext(ctx, seq_id, flags_host);
+    const size_t size_device = llama_state_seq_get_size_ext(ctx, seq_id, flags_device);
+    const size_t size_copy   = size_host > size_device ? size_host - size_device : 0;
+    if (size_copy == 0) {
+        return flags_device;
+    }
+
+    const double mib = 1024.0 * 1024.0;
+    const llama_model * model = llama_get_model(ctx);
+    for (int i = 0; i < llama_model_n_devices(model); i++) {
+        ggml_backend_dev_t dev = llama_model_get_device(model, i);
+
+        size_t free  = 0;
+        size_t total = 0;
+        ggml_backend_dev_memory(dev, &free, &total);
+        if (free == 0 && total == 0) {
+            const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+            if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                continue; // tensors of such a device live in host memory, as --fit assumes
+            }
+        }
+
+        const size_t margin = margins.empty() ? 0 : margins[std::min((size_t) i, margins.size() - 1)];
+        if (free < size_copy + margin) {
+            LOG_INF("%s: seq %d checkpoint stays on the host: %s has %.1f MiB free, the device copy needs %.1f MiB on top of the %.1f MiB margin\n",
+                    __func__, seq_id, ggml_backend_dev_name(dev), free / mib, size_copy / mib, margin / mib);
+            return flags_host;
+        }
+    }
+
+    LOG_INF("%s: seq %d checkpoint stays on the device (%.1f MiB)\n", __func__, seq_id, size_copy / mib);
+    return flags_device;
+}
+
 common_params common_base_params_to_speculative(const common_params & params) {
     const bool has_draft = params.speculative.has_dft();
 
