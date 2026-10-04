@@ -7,6 +7,8 @@
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
 #include "../src/llama-model-saver.h"
+#include "../src/llama-context.h"
+#include "../src/llama-model.h"
 
 #include <algorithm>
 #include <cmath>
@@ -344,6 +346,40 @@ static void test_ordinary_context(llama_model * head, llama_model * combined) {
     fprintf(stderr, "PASS ordinary context rejects MTP-only head\n");
 }
 
+static void test_chain_metadata(llama_model * model) {
+    for (uint32_t ubatch : {32u, 512u}) {
+        auto params = llama_context_default_params();
+        params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        params.n_ctx = 1024;
+        params.n_batch = params.n_ubatch = ubatch;
+        params.n_threads = params.n_threads_batch = 1;
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        llama_context_ptr ctx(llama_init_from_model(model, params));
+        require(bool(ctx), "metadata test context");
+        const uint32_t base_nodes = std::max<uint32_t>(40 * ubatch, 32 * model->n_tensors());
+        auto * reserve = ctx->get_gf_res_reserve();
+        require(reserve->get_max_nodes() == base_nodes, "sequential-only MTP retains original node budget");
+        const size_t initial_bytes = reserve->buf_compute_meta.size();
+        const uint32_t eager_nodes = std::max<uint32_t>(512 * ubatch, 32 * model->n_tensors());
+        const size_t eager_bytes = ggml_tensor_overhead() * eager_nodes + ggml_graph_overhead_custom(eager_nodes, false);
+        fprintf(stderr, "METADATA ubatch=%u initial=%zu prior_eager=%zu bytes_per_arena\n", ubatch, initial_bytes, eager_bytes);
+
+        const int depth = ubatch == 32 ? 32 : 64;
+        decode(ctx.get(), std::vector<llama_token>(depth, 5), initial_hidden(depth), 0, true);
+        reserve = ctx->get_gf_res_reserve();
+        const uint32_t grown_nodes = std::max<uint32_t>(base_nodes, 512 * depth);
+        require(reserve->get_max_nodes() == grown_nodes, "metadata grows with actual chain rows");
+        const size_t grown_bytes = reserve->buf_compute_meta.size();
+        fprintf(stderr, "METADATA ubatch=%u depth=%d grown=%zu bytes_per_arena\n", ubatch, depth, grown_bytes);
+
+        // Toggle through both graph types. A shorter chain must reuse the reservation.
+        decode(ctx.get(), {5}, initial_hidden(), depth);
+        decode(ctx.get(), {5}, initial_hidden(), depth + 1, true);
+        require(ctx->get_gf_res_reserve() == reserve && reserve->buf_compute_meta.size() == grown_bytes,
+                "chain toggles and shorter drafts retain the existing reservation");
+    }
+}
+
 #include "test-qwen4exp-mtp-driver.h"
 
 struct fit_log_capture {
@@ -497,6 +533,7 @@ int main(int argc, char ** argv) {
         test_chain(head.get(), flash, 32, 0, true);
     }
     test_driver(target.get(), head.get());
+    test_chain_metadata(head.get());
     test_fit(target_path, head_path);
     head.reset(); target.reset(); changed.reset();
     std::filesystem::remove_all(dir);

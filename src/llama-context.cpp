@@ -2343,6 +2343,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) &&
                 "non-causal attention requires n_ubatch >= n_tokens");
 
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+            cparams.mtp_chain && n_tokens_all > mtp_chain_rows) {
+        mtp_chain_rows = n_tokens_all;
+        const uint32_t reserve_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+        if (graph_max_nodes(reserve_tokens) > gf_res_reserve->get_max_nodes()) {
+            sched_need_reserve = true;
+        }
+    }
+
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
     if (!embd_seq.empty()) {
@@ -2947,15 +2956,7 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
-        // Chaining can be enabled after reservation. Each row can unroll a full
-        // projection, block, head and sampler, including their tensor views.
-        uint32_t nodes_per_step = 512;
-        for (const auto & lora : model.loras) {
-            nodes_per_step += lora->get_n_nodes();
-        }
-        res = std::max<uint32_t>(n_tokens * nodes_per_step, 32u * model.n_tensors());
-    } else if (model.arch == LLM_ARCH_KIMI_K3) {
+    if (model.arch == LLM_ARCH_KIMI_K3) {
         // the n_tokens*40 budget below is exhausted at ubatch 3840
         res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_HRM_TEXT) {
@@ -2983,6 +2984,16 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         for (const auto & lora : model.loras) {
             res += lora->get_n_nodes();
         }
+    }
+
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        // Only actual chain rows unroll a projection, block, head and sampler.
+        // Retain the high watermark across sequential/chain mode switches.
+        uint32_t nodes_per_step = 512;
+        for (const auto & lora : model.loras) {
+            nodes_per_step += lora->get_n_nodes();
+        }
+        res = std::max(res, mtp_chain_rows * nodes_per_step);
     }
 
     uint32_t n_sampling_nodes = 0;
@@ -3109,7 +3120,12 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        // Dummy reservation batches can contain multiple sequences and arbitrary
+        // output masks. Reserve the ordinary graph; actual chains allocate on use.
+        gparams.cparams.mtp_chain = false;
+    }
 
     res->reset();
 
