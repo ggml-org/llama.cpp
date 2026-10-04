@@ -90,8 +90,8 @@ benchmark prompts exactly.
 Two public-API failures were reproduced against the initial PR library on CPU:
 
 - A depth-32 chain exhausted graph tensor metadata and aborted. Qwen4Exp MTP
-  contexts now reserve metadata for each unrolled projection/block/head/sampler
-  step, including contexts that enable chaining after initialization.
+  contexts initially reserved metadata for every possible unrolled step. The
+  allocation follow-up below replaces that eager reservation with growth on use.
 - An output mask `[1, 0]` reached the graph's output-suffix assertion and aborted.
   Decode now rejects unsupported output masks, multiple sequences, missing token
   IDs, and total rows exceeding batch/microbatch capacity before cache updates.
@@ -131,6 +131,64 @@ and successful retry on the same context. Both targeted CPU CTest tests and the
 CPU q8_0 variant passed. This additional guard was not rebuilt or run on SYCL;
 the successful SYCL build above predates it.
 
+## Allocation and regression follow-up
+
+Ordinary context creation now rejects MTP-only Qwen4Exp heads before graph
+construction reaches absent trunk tensors. The new regression reproduced exit
+139 with the saved `4a9092768` libraries, then passed with the guard. It tests
+heads loaded with MTP both enabled and disabled, and verifies that a combined
+model still accepts an ordinary context.
+
+Invalid-chain coverage now includes `LLAMA_TOKEN_NULL`, with unchanged serialized
+sequence caches and a successful retry. The driver capacity tests observe actual
+backend evaluation callbacks: ubatch 6 must execute exactly one packed four-token
+chain graph with six input rows, including the two catch-up rows. Disabling chain
+selection only for ubatch 6 preserved token parity but failed this new assertion.
+
+Sequential-only MTP contexts retain the original graph-node budget. A validated
+chain grows it using actual batch rows, retaining the high watermark across mode
+switches. Dummy reservation graphs remain sequential. The regression executes
+32- and 64-row chains and checks that shorter chains and mode toggles reuse the
+reservation.
+
+Measured synthetic-fixture metadata sizes (bytes per arena):
+
+| Microbatch | Initial allocation | Prior eager policy, calculated | After chain execution |
+| --- | ---: | ---: | ---: |
+| 32 | 541,360 | 6,688,944 | 6,688,944 (32 rows) |
+| 512 | 8,659,104 | 107,020,688 | 13,377,696 (64 rows) |
+
+Initial and grown sizes are observed vector sizes. Prior sizes use the same ggml
+allocator formula with the previous node budget. These are not total process RSS:
+reservation and cached graphs have separate arenas, scheduler buffers are extra,
+and a real model's tensor-count floor can change the result. `--fit` does not
+establish peak compute memory for runtime chains.
+
+The complete updated CPU suite passed both targeted CTest entries and the q8_0
+variant. The rebuilt SYCL suite passed both registered A770 entries,
+`test-qwen4exp-mtp-sycl-f16` and `test-qwen4exp-mtp-sycl-q8`, with
+`ONEAPI_DEVICE_SELECTOR=level_zero:0`, `SYCL_CACHE_PERSISTENT=1`, and
+`GGML_SYCL_ENABLE_GRAPH=0`. These correctness runs supersede the earlier
+follow-up's build-only SYCL evidence; their durations are not benchmarks.
+
+## User-reported real-head evidence
+
+The user independently tested `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` on CPU at
+`4a9092768`, using synthetic hidden state and three tokens. These results were
+reported by the user and were not reproduced in this follow-up:
+
+- The unmodified head aborted with pre-PR libraries (exit 134), but loaded and
+  decoded with PR libraries using flash attention and q8_0 KV.
+- All 744,960 PR logits matched the pre-PR head-mixer workaround bit for bit.
+  A trunk-mixer substitute differed by up to 4.11 under pre-PR libraries and
+  changed argmax in two of three rows; PR libraries gave the canonical result.
+- Reverting only the adaptive-fit predicate reproduced SIGSEGV in `build_hc_mix`;
+  the full PR measured both contexts successfully.
+
+This supports the original three bug fixes on a real head. It does not validate
+chaining on real weights or an end-to-end run with the 54 GiB trunk. The original
+79-84% code acceptance remains an earlier workaround measurement, not a PR result.
+
 ## Not claimed
 
 - No improvement to target-model multi-token verification cost or a speedup target.
@@ -141,6 +199,6 @@ the successful SYCL build above predates it.
   or performance on the 55 GiB checkpoint.
 - No new production dependency or installed-binary replacement. Tests create
   temporary synthetic GGUF files; build and diagnostic artifacts are under `/tmp`.
-- Qwen4Exp MTP reserves more host graph metadata even when chaining is initially
-  off, so enabling it later fits the reservation. Real-checkpoint memory impact
-  and LoRA execution were not measured by the follow-up tests.
+- Chain use retains additional graph metadata until context destruction. Total
+  host RSS, peak chained compute memory, real-checkpoint memory impact, and LoRA
+  execution were not measured by the follow-up tests.
