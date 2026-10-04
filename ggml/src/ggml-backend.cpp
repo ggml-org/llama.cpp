@@ -994,6 +994,13 @@ static bool ggml_backend_sched_is_user_input(const struct ggml_tensor * t) {
     return (t->flags & GGML_TENSOR_FLAG_INPUT) || (t->view_src != NULL && (t->view_src->flags & GGML_TENSOR_FLAG_INPUT));
 }
 
+// weights in host memory, uploaded to the backend of the split that uses them (op offload)
+static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
+    return t->buffer != NULL &&
+        ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+        ggml_backend_buffer_is_host(t->buffer);
+}
+
 static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split * split) {
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
     if (split->inputs_capacity > 0) {
@@ -1525,8 +1532,10 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
-                        // user inputs are uploaded in order on the stream of the split backend, so one copy is enough
-                        const bool single_copy = ggml_backend_sched_is_user_input(src);
+                        // user inputs and host weights are uploaded in order on the stream of the split backend, so one copy is enough
+                        // the copy of a host weight is not kept for the whole graph, so the allocator can reuse its memory
+                        const bool host_weight = ggml_backend_sched_is_host_weight(src);
+                        const bool single_copy = host_weight || ggml_backend_sched_is_user_input(src);
                         for (int c = 0; c < sched->n_copies; c++) {
                             if (single_copy && c > 0) {
                                 tensor_id_copy(src_id, cur_backend_id, c) = tensor_id_copy(src_id, cur_backend_id, 0);
@@ -1534,7 +1543,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             }
                             struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
                             ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
-                            if (sched->n_copies > 1) {
+                            if (sched->n_copies > 1 && !host_weight) {
                                 ggml_set_input(tensor_copy);
                                 ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
                             }
@@ -1734,6 +1743,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             int backend_id = split->backend_id;
             for (int j = 0; j < split->n_inputs; j++) {
                 struct ggml_tensor * input = split->inputs[j];
+                if (ggml_backend_sched_is_host_weight(input)) {
+                    continue; // not kept for the whole graph, the allocator reuses its memory after the split
+                }
                 size_t id = hash_id(input);
                 for (int c = 0; c < sched->n_copies; c++) {
                     struct ggml_tensor * input_cpy = tensor_id_copy(id, backend_id, c);
@@ -1817,12 +1829,6 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
-static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
-    return t->buffer != NULL &&
-        ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
-        ggml_backend_buffer_is_host(t->buffer);
-}
-
 static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
     if (sched->n_copies > 1 && ggml_backend_sched_is_user_input(input)) {
         return; // already uploaded
@@ -1853,6 +1859,12 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
 
     if (sched->callback_copy != NULL && ggml_backend_sched_is_host_weight(input) &&
         sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
+        return;
+    }
+
+    if (sched->n_copies > 1 && ggml_backend_sched_is_host_weight(input)) {
+        // the single copy is reused by the allocator, so write it in order with the work of the split backend
+        ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, ggml_nbytes(input));
         return;
     }
 
@@ -2106,13 +2118,13 @@ void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgr
     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
     GGML_ASSERT(sizes);
 
-    ggml_backend_sched_reset(sched);
-
     ggml_backend_sched_synchronize(sched);
 
     ggml_backend_sched_split_graph(sched, measure_graph);
 
     ggml_gallocr_reserve_n_size(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids, sizes);
+
+    ggml_backend_sched_reset(sched);
 }
 
 bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {

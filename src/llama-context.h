@@ -368,10 +368,18 @@ private:
         std::vector<int32_t> ids_data;
         std::vector<bool>    used;
 
+        // with pipeline parallelism, upload all the experts of the next MoE ops of the graph
+        bool upload_all = false;
+
+        // not reset: a graph was computed since the last synchronization of the scheduler, before and with this graph
+        bool prev_in_flight = false;
+        bool in_flight      = false;
+
         void reset() {
             ids = nullptr;
             ids_data.clear();
             used.clear();
+            upload_all = false;
         }
     };
 
