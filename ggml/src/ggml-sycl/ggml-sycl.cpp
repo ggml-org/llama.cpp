@@ -4140,8 +4140,8 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 // layout (unitrace on Arc Pro B70, 4096 x 14336 at n = 512, us per call reorder / standard: Q4_0
 // 267 / 656, Q8_0 324 / 356, Q2_K 244 / 483, Q3_K 366 / 1247, Q4_K 303 / 549, Q6_K 304 / 374, IQ2_XS
 // 243 / 1582, IQ2_S 255 / 1589, IQ4_NL 269 / 2272, IQ2_XXS 239 / 2146, IQ1_S 231 / 1584, IQ1_M 251 /
-// 1580), so their weights move to the reorder layout on the first prefill matmul instead of the first
-// decode.
+// 1580, IQ3_XXS 255 / 2169, IQ3_S 313 / 1637), so their weights move to the reorder layout on the
+// first prefill matmul instead of the first decode.
 // Q5_K stays out (316 / 294).
 inline bool ggml_sycl_reorder_on_prefill(enum ggml_type type) {
     switch (type) {
@@ -4152,6 +4152,8 @@ inline bool ggml_sycl_reorder_on_prefill(enum ggml_type type) {
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ4_NL:
             return true;
         case GGML_TYPE_Q2_K:
@@ -4174,6 +4176,8 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ4_NL:
             return true;
         case GGML_TYPE_Q2_K:
