@@ -332,6 +332,18 @@ static void test_masked_catchup(llama_model * model, bool flash) {
             "masked catchup hidden state matches reference row");
 }
 
+static void test_ordinary_context(llama_model * head, llama_model * combined) {
+    auto params = llama_context_default_params();
+    params.n_ctx = 128;
+    params.n_batch = params.n_ubatch = 4;
+    params.n_threads = params.n_threads_batch = 1;
+    llama_context_ptr invalid(llama_init_from_model(head, params));
+    require(!invalid, "ordinary context rejects MTP-only head without crashing");
+    llama_context_ptr valid(llama_init_from_model(combined, params));
+    require(bool(valid), "ordinary context still accepts a combined model");
+    fprintf(stderr, "PASS ordinary context rejects MTP-only head\n");
+}
+
 #include "test-qwen4exp-mtp-driver.h"
 
 struct fit_log_capture {
@@ -423,6 +435,10 @@ int main(int argc, char ** argv) {
     auto target = load_model(target_path);
     auto changed = load_model(changed_path);
     require(head && target && changed, "canonical head and combined models load");
+    if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
+        test_ordinary_context(head.get(), target.get());
+        return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--invalid-chain-only") {
         test_invalid_chain(head.get(), true);
         head.reset(); target.reset(); changed.reset();
@@ -456,6 +472,11 @@ int main(int argc, char ** argv) {
     require(!load_model(output_only), "trunk mixer does not substitute for missing draft mixer");
     require(bool(load_model(output_only, false)), "ordinary loading does not require unused draft mixers");
     require(llama_model_supports_mtp_chain(head.get()), "Qwen4Exp advertises implemented chain support");
+    test_ordinary_context(head.get(), target.get());
+    auto head_without_mtp = load_model(head_path, false);
+    require(bool(head_without_mtp), "MTP-only file loads with MTP weights disabled");
+    test_ordinary_context(head_without_mtp.get(), target.get());
+    head_without_mtp.reset();
     for (bool flash : {false, true}) {
         if (q8_kv && !flash) { continue; }
         auto a = make_context(head.get(), flash);

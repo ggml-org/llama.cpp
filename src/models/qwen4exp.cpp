@@ -302,6 +302,9 @@ std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const 
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         return std::make_unique<graph_mtp>(*this, params);
     }
+    if (layers.empty() || !layers.front().hc_attn_norm) {
+        throw std::runtime_error("QWEN4EXP MTP-only model requires an MTP context; trunk tensors are missing");
+    }
     return std::make_unique<graph>(*this, params);
 }
 
