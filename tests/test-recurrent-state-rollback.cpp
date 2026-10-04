@@ -478,10 +478,7 @@ static test_status test_rollback(const common_params & params, llama_model * mod
 }
 
 // Decode a prompt into seq 0, share its cells with a second sequence, then keep
-// decoding both. Sharing clears cache_safe on the k-pool memory, which changes
-// the graph topology, while the pools keep growing with every decoded token:
-// a scheduler that re-reserves with the current state instead of the worst-case
-// one aborts under GGML_SCHED_DEBUG_REALLOC=1 (set by the test registration).
+// decoding both.
 static test_status test_shared_seq_reserve(const common_params & params, llama_model * model, uint8_t fill) {
     const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
 
