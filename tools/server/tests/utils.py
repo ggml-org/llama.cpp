@@ -80,6 +80,7 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
+    ctkd: str | None = None
     fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
@@ -221,6 +222,8 @@ class ServerProcess:
             server_args.extend(["-ctk", self.ctk])
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
+        if self.ctkd:
+            server_args.extend(["-ctkd", self.ctkd])
         if self.fa is not None:
             server_args.extend(["-fa", self.fa])
         if self.n_predict:

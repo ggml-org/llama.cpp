@@ -623,3 +623,63 @@ def test_slot_restore_preserves_context_checkpoints(swa_server):
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == n_live
+
+
+# the draft blobs of the checkpoint appendix are not covered by the main payload checks,
+# so restoring into a server with another draft KV cache type must not abort
+@pytest.mark.parametrize("ctkd_restore", ["f16", "q8_0"])
+def test_slot_restore_checkpoints_draft_kv_type_change(swa_server, ctkd_restore):
+    server = swa_server
+    server.model_draft = download_file("https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/tinygemma3-Q8_0.gguf")
+    server.spec_type = "draft-simple"
+    server.ctkd = "f16"
+    server.start()
+
+    base = "The quick brown fox jumps over the lazy dog. " * 20
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_live = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "ckpt_draft_slot1.bin",
+    })
+    assert res.status_code == 200
+
+    server.stop()
+    server.ctkd = ctkd_restore
+    server.start()
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "ckpt_draft_slot1.bin",
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["prompt_n"] == n_live

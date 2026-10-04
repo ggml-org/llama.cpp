@@ -2689,6 +2689,18 @@ private:
         while (checkpoints.size() > (size_t) params_base.n_ctx_checkpoints) {
             checkpoints.pop_front();
         }
+        // the slot file does not check the draft context - test-load one draft checkpoint, drop the draft data if it does not fit
+        if (ctx_dft != nullptr && !checkpoints.empty() && !checkpoints.back().data_dft.empty()) {
+            const auto & data = checkpoints.back().data_dft;
+            const bool ok = llama_state_seq_set_data_ext(ctx_dft, data.data(), data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == data.size();
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+            if (!ok) {
+                SRV_WRN("draft context checkpoint data in '%s' does not match the draft context - dropped\n", filepath.c_str());
+                for (auto & cur : checkpoints) {
+                    cur.clear_dft();
+                }
+            }
+        }
         slot.prompt.checkpoints = std::move(checkpoints);
         SRV_INF("restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
         return n_read;
