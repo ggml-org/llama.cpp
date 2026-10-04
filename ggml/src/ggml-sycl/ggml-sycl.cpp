@@ -4787,18 +4787,18 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     }
 }
 
-static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
+static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst, bool any_ncols = false) {
     return g_ggml_sycl_enable_optimize && //allow optimize, controlled by $GGML_SYCL_ENABLE_OPT
            ctx.opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
            dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
            // ne[1] <= 8 so multi-column decode (spec / MTP verify) also bootstraps the reorder;
            // all reorderable types have a _switch_ncols kernel.
-           dst->src[1]->ne[1] <= 8 && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
+           (any_ncols || dst->src[1]->ne[1] <= 8) && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
 }
 
 static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * /* src1 */,
                             ggml_tensor * dst, mul_mat_algo mm_algorithm) {
-    if (!should_reorder_tensor(*ctx, dst)) {
+    if (!should_reorder_tensor(*ctx, dst, mm_algorithm == mul_mat_algo::MUL_MAT_SYCL)) {
         return;
     }
 
@@ -4970,6 +4970,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     } else if (use_mul_mat_q) {
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
     } else {
+        if (!split && src0->type == GGML_TYPE_Q4_0 && !src0->view_src && ggml_is_contiguous(src0)) {
+            opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::MUL_MAT_SYCL);
+        }
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
     }
 }

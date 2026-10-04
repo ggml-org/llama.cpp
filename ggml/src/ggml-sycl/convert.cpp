@@ -493,15 +493,13 @@ static void dequantize_row_iq4_xs_sycl(const void *vx, dst_t *y, const int64_t k
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                  cgh.parallel_for(
-                      sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
-                                            sycl::range<3>(1, 1, 32),
-                                        sycl::range<3>(1, 1, 32)),
-                      [=](sycl::nd_item<3> item_ct1) {
-                            dequantize_block_iq4_xs(vx, y, item_ct1);
-                      });
-            });
+            constexpr int wg_size = 256;
+            const int64_t n_lanes = nb * (QK_K / 8);
+            const int64_t n_wg    = (n_lanes + wg_size - 1) / wg_size;
+            stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_wg * wg_size), sycl::range<3>(1, 1, wg_size)),
+                [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    dequantize_block_iq4_xs(vx, y, nb * QK_K, item_ct1);
+                });
       }
 #endif
 }

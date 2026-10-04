@@ -819,34 +819,33 @@ static void dequantize_block_q4_0(const void * __restrict__ vx, dst_t * __restri
 }
 
 // Dequantize Q4_0 from reorder layout: [all qs (k / 2 bytes)][all d values].
-// Each work-item handles one dword of qs (8 elements), so a subgroup loads and stores contiguously.
+// Lane l writes outputs [8l, 8l + 8), so the lanes of a subgroup store one contiguous run.
 template<typename dst_t>
 static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
                                           const sycl::nd_item<3> & item_ct1) {
-    const int64_t i      = item_ct1.get_global_id(2);
-    const int64_t nbytes = k / 2;
+    const int64_t l = item_ct1.get_global_id(2);
 
-    if (4 * i >= nbytes) {
+    if (8 * l >= k) {
         return;
     }
 
-    const int64_t ib = (4 * i) / (QK4_0 / 2);
-    const int     il = (4 * i) % (QK4_0 / 2);
+    const int64_t ib    = l / 4;
+    const int     j     = 8 * (l % 4);
+    const int     shift = j < QK4_0 / 2 ? 0 : 4;
 
-    const uint32_t q = *((const uint32_t *) vx + i);
-    const float    d = *((const sycl::half *) ((const uint8_t *) vx + nbytes) + ib);
+    const uint32_t * q = (const uint32_t *) ((const uint8_t *) vx + ib * (QK4_0 / 2) + j % (QK4_0 / 2));
+    const float      d = *((const sycl::half *) ((const uint8_t *) vx + k / 2) + ib);
 
-    sycl::vec<dst_t, 4> lo;
-    sycl::vec<dst_t, 4> hi;
+    const uint32_t q0 = q[0] >> shift;
+    const uint32_t q1 = q[1] >> shift;
+
+    sycl::vec<dst_t, 8> v;
 #pragma unroll
-    for (int j = 0; j < 4; ++j) {
-        lo[j] = d * ((int) ((q >> (8 * j + 0)) & 0xF) - 8);
-        hi[j] = d * ((int) ((q >> (8 * j + 4)) & 0xF) - 8);
+    for (int m = 0; m < 4; ++m) {
+        v[m + 0] = d * ((int) ((q0 >> (8 * m)) & 0xF) - 8);
+        v[m + 4] = d * ((int) ((q1 >> (8 * m)) & 0xF) - 8);
     }
-
-    dst_t * y = yy + ib * QK4_0 + il;
-    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + 0)         = lo;
-    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + QK4_0 / 2) = hi;
+    *reinterpret_cast<sycl::vec<dst_t, 8> *>(yy + 8 * l) = v;
 }
 
 // Dequantize Q8_0 from reorder layout: [all qs (k bytes)][all d values]
@@ -1611,28 +1610,32 @@ dequantize_block_iq4_nl(const void *__restrict__ vx, dst_t *__restrict__ yy,
 
 template <typename dst_t>
 __dpct_inline__ static void
-dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
+dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy, const int64_t k,
                         const sycl::nd_item<3> &item_ct1) {
-    const int64_t i = item_ct1.get_group(2);
-    const block_iq4_xs * x = (const block_iq4_xs *)vx;
+    const int64_t l = item_ct1.get_global_id(2);
 
-    const int64_t tid = item_ct1.get_local_id(2);
-    const int64_t il = tid%4; // 0...3
-    const int64_t ib = tid/4; // 0...7
-    dst_t * y = yy + i*QK_K + 32*ib + 4*il;
-    const uint32_t q4 = *(const uint32_t *)(x[i].qs + 16*ib + 4*il);
-    const float d = (float)x[i].d * ((((x[i].scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((x[i].scales_h >> 2*ib) & 3) << 4)) - 32);
-    const uint32_t lo = iq4nl_lookup4(q4 & 0x0F0F0F0F);
-    const uint32_t hi = iq4nl_lookup4((q4 >> 4) & 0x0F0F0F0F);
-    sycl::vec<dst_t, 4> vlo;
-    sycl::vec<dst_t, 4> vhi;
-#pragma unroll
-    for (int j = 0; j < 4; ++j) {
-        vlo[j] = d * (int8_t) (lo >> (8*j));
-        vhi[j] = d * (int8_t) (hi >> (8*j));
+    if (8 * l >= k) {
+        return;
     }
-    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y +  0) = vlo;
-    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + 16) = vhi;
+
+    const int64_t i     = l / (QK_K / 8);
+    const int     ib    = (l % (QK_K / 8)) / 4; // 0...7
+    const int     j     = 8 * (l % 4);
+    const int     shift = j < 16 ? 0 : 4;
+
+    const block_iq4_xs * x = (const block_iq4_xs *)vx + i;
+    const float d = (float)x->d * ((((x->scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((x->scales_h >> 2*ib) & 3) << 4)) - 32);
+    const uint32_t * q = (const uint32_t *)(x->qs + 16*ib + j%16);
+    const uint32_t lo = iq4nl_lookup4((q[0] >> shift) & 0x0F0F0F0F);
+    const uint32_t hi = iq4nl_lookup4((q[1] >> shift) & 0x0F0F0F0F);
+
+    sycl::vec<dst_t, 8> v;
+#pragma unroll
+    for (int m = 0; m < 4; ++m) {
+        v[m + 0] = d * (int8_t) (lo >> (8*m));
+        v[m + 4] = d * (int8_t) (hi >> (8*m));
+    }
+    *reinterpret_cast<sycl::vec<dst_t, 8> *>(yy + 8 * l) = v;
 }
 
 template<typename dst_t>
