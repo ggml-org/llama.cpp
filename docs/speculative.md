@@ -106,7 +106,9 @@ top-10 confidence normalization. Chaining reduces host round trips; it does not
 make target-model verification constant-cost as draft depth increases.
 Direct Qwen4Exp MTP API calls with chaining enabled must fit the complete batch
 in one microbatch and use one sequence with a nonempty output suffix after any
-catch-up rows. Invalid batches return a decode error before changing the KV cache.
+catch-up rows. Every row must carry both a token ID and a hidden-state embedding;
+later generated rows may use zero placeholders. Invalid batches return a decode
+error before changing the KV cache.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)

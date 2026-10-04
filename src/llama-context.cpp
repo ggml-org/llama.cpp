@@ -2264,6 +2264,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires token IDs\n", __func__);
                 return -1;
             }
+            if (!tok.has_embd) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires hidden states on every row\n", __func__);
+                return -1;
+            }
             const bool output = output_all || tok.output;
             if (seen_output && !output) {
                 LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain outputs must form a contiguous suffix\n", __func__);

@@ -268,8 +268,8 @@ static std::vector<uint8_t> sequence_state(llama_context * ctx, llama_seq_id seq
 }
 
 static void test_invalid_chain(llama_model * model, bool flash) {
-    enum invalid_case { NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES };
-    for (auto kind : {NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES}) {
+    enum invalid_case { NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE };
+    for (auto kind : {NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE}) {
         auto ctx = make_context(model, flash, 2, 2);
         auto reference = make_context(model, flash, 2, 2);
         const auto seed = decode(ctx.get(), {3}, initial_hidden(), 0);
@@ -288,7 +288,7 @@ static void test_invalid_chain(llama_model * model, bool flash) {
                     kind == OVER_UBATCH ? i >= 2 : true;
             common_batch_add(bad, 5, pos, {seq}, output);
         }
-        bad.embd = inputs.data();
+        bad.embd = kind == NO_HIDDEN_STATE ? nullptr : inputs.data();
         llama_set_mtp_chain(ctx.get(), true);
         const int rc = llama_decode(ctx.get(), bad);
         bad.embd = nullptr;

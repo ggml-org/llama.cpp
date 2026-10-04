@@ -121,6 +121,16 @@ test target rebuilt successfully with the configuration above, and `ctest -N`
 lists both backend-specific entries. No GPU execution of the expanded follow-up
 suite is claimed here.
 
+### Hidden-state validation follow-up
+
+A token-only public chain was accepted at `21cab0124`, leaving the hidden-state
+graph input unset. Decode now requires a hidden-state embedding on every chain
+row, including zero placeholders for later generated rows. The regression failed
+before the fix and now verifies rejection, unchanged serialized sequence caches,
+and successful retry on the same context. Both targeted CPU CTest tests and the
+CPU q8_0 variant passed. This additional guard was not rebuilt or run on SYCL;
+the successful SYCL build above predates it.
+
 ## Not claimed
 
 - No improvement to target-model multi-token verification cost or a speedup target.
