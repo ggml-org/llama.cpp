@@ -91,7 +91,6 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int llama_server(int argc, char ** argv) {
-    // first, so that in a child nothing is written to stdout before it is kept for the router
     server_child child;
 
     std::setlocale(LC_NUMERIC, "C");
