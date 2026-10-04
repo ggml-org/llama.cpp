@@ -8,13 +8,14 @@ on:
         required: false
         type: string
 
+cache-mode: none
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-slim
-
-    permissions:
-      actions: write
-      contents: read
 
     steps:
       - name: Checkout code

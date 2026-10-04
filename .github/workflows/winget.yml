@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '28 5 * * *' # Update every day at 5:28 UTC
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   update:
     name: Update Winget Package

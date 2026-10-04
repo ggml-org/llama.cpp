@@ -15,14 +15,15 @@ on:
         description: 'Hugging Face token with write access'
         required: true
 
+cache-mode: none
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   publish:
     name: Publish UI Static Output
     runs-on: ubuntu-slim
-
-    permissions:
-      actions: read
-      contents: read
 
     env:
       HF_BUCKET_NAME: ${{ vars.HF_BUCKET_UI_STATIC_OUTPUT }}
