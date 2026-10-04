@@ -2130,16 +2130,20 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
 
             if (n_seq_drafting == 1) {
-                auto & dp = dparams[seq_one];
-                auto * smpl = smpls[seq_one].get();
-                common_sampler_reset(smpl);
-
-                // effective draft cap: adaptive depth (or n_max), then clamped by the
-                // per-call context bound from the server (same as the sequential path)
+                const auto & dp = dparams[seq_one];
                 n_cap[seq_one] = adaptive ? adaptive_ctrl[seq_one].n_cur : params.n_max;
                 if (dp.n_max > 0 && dp.n_max < n_cap[seq_one]) {
                     n_cap[seq_one] = dp.n_max;
                 }
+            }
+
+            // A chain must stay in one microbatch: later rows have placeholder inputs.
+            // Larger requests use the ordinary sequential path below.
+            if (n_seq_drafting == 1 && n_cap[seq_one] <= std::min(batch_capacity, ubatch_capacity)) {
+                auto & dp = dparams[seq_one];
+                auto * smpl = smpls[seq_one].get();
+                common_sampler_reset(smpl);
+
                 const int n_chain = n_cap[seq_one];
 
                 // deferred rows at or past pos0 hold candidates the verify

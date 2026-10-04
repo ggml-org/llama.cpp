@@ -80,7 +80,25 @@ See:
 
 ### Chained MTP (`--spec-chain N`)
 
-Chained MTP drafts N tokens in one decode. It currently supports dense Qwen3.5-family models and requires flash attention. For recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2.
+Chained MTP drafts N tokens in one decode. It supports dense Qwen3.5-family models and
+Qwen4Exp (Qwen3.8-Flash-Next), including its full hyper-connection hidden state. For
+recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2. Drafts that
+exceed the draft context's batch or microbatch capacity, and rounds with multiple
+drafting sequences, use sequential MTP.
+
+Qwen4Exp MTP heads must contain all three `blk.N.nextn.hc_head_*` mixer tensors.
+The trunk's `output_hc_*` tensors are independently trained and cannot replace them.
+Use the original head GGUF; output-only renamed workaround files are rejected.
+Both fixed and adaptive MTP support a separate head with `--fit on`:
+
+```bash
+llama-server -m target.gguf --spec-draft-model mtp-head.gguf \
+    --spec-type draft-mtp-adaptive --spec-chain 4 --fit on
+```
+
+Qwen4Exp chained drafts use the full vocabulary and the sequential draft sampler's
+top-10 confidence normalization. Chaining reduces host round trips; it does not
+make target-model verification constant-cost as draft depth increases.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)

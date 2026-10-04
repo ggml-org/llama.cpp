@@ -4622,7 +4622,7 @@ void llama_set_nextn_layer_offset(llama_context * ctx, int32_t offset) {
 }
 
 bool llama_model_supports_mtp_chain(const llama_model * model) {
-    return model != nullptr && model->arch == LLM_ARCH_QWEN35;
+    return model != nullptr && (model->arch == LLM_ARCH_QWEN35 || model->arch == LLM_ARCH_QWEN4EXP);
 }
 
 bool llama_model_uses_shared_position_draft(const llama_model * model) {
