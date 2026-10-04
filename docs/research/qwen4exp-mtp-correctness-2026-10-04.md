@@ -315,6 +315,60 @@ the same way and has no such preflight; that path predates this branch and was
 not changed. The A770 acceptance figures come from a decode that is not
 reproducible run to run, so differences of a few points are within noise.
 
+## Second review follow-up
+
+Two review passes on the PR head `9d6b9b790` led to the changes below. Each has
+a regression test that failed before its fix, except where noted.
+
+| change | failure before | test |
+|---|---|---|
+| On-device sequence state restores block-quantized K/V: the reader sized its views in blocks, the writer in elements (`llama_io_read_device`). | abort at `GGML_ASSERT(n_copy > 0 && n_copy % el == 0)` on the first restore with q8_0 KV | `test_on_device_state` under `--q8-kv` |
+| A failed chain decode keeps its catch-up rows: they were cleared before `llama_process`. | the next draft decoded with a hole below its position and differed from the reference | `test_driver_failed_draft` |
+| A target with a separate draft head skips its own MTP block (`common_model_params_to_llama`). | a combined target without the draft mixer failed to load although the block is never used | `test_separate_head_target` |
+| Borrowed tables are checked against the head's embedding width and vocabulary size. | context creation succeeded with tables of another vocabulary | `test_borrowed_tables`, "mismatched target tables rejected" |
+| Embeddings are exported `n_embd_out` wide, for the trunkless head and the full trunk. | abort, "tensor read out of bounds", on any embeddings-enabled context; the full-trunk case predates this PR | `test_ordinary_context`, "embeddings width" |
+| Switching the hidden export on plans the compute buffers again (`set_embeddings_nextn`). | the export read back the per-stream RMS-normalized residual: the allocator let the mixer's norm overwrite it in place | `test_ordinary_context`, "hidden export survives the graph" |
+| The chain row high-water mark doubles instead of growing by one. | 31 scheduler reservations for chains of 1 to 32 rows, 5 after | `test_chain_reserve_growth` |
+| A chain runs inside the compute buffers of the ordinary graph. | none: added as a guard for the claim that `--fit` covers chaining | assertion in `test_chain` |
+| The fit logs why an extra model is measured next to its parent and does not repeat the failed attempt. | not tested: logging and control flow only | none |
+
+The hidden-export finding was not in either review. It surfaced while testing
+the embeddings width. The Qwen4Exp head applies the same per-stream RMSNorm to
+its hidden input, which is why drafting was not visibly affected: normalizing an
+already normalized residual changes it only through the epsilon term. Drafts
+therefore are not expected to be bit-identical to earlier builds.
+
+Results on the final source: CPU `test-qwen4exp-mtp` 70 PASS (f16) and 47 PASS
+(`--q8-kv`); Arc A770 `--backend SYCL0` 70 PASS and 47 PASS, 0 new i915/xe fault
+lines. Real head on CPU, chain depth 6, 16 and 64 at microbatch sizes from the
+chain length up to 512: the compute buffers stayed at their reserved size
+(6.6 MiB to 566.0 MiB depending on the configuration).
+
+Real trunk with its Q8_0 head on the A770, final build, `--fit on --fit-target
+1024`, ctx 16384, q8_0 K/V, one launch per case with six requests of 192
+tokens: sequential drafting at depth 6 accepted 850 of 1750 drafted tokens,
+chained drafting at depth 4 accepted 818 of 1292. Neither log holds an
+allocation failure, an assertion or a failed chain decode, and the kernel log
+gained no i915/xe fault line. Both were observed once and are not a benchmark.
+
+Limits of this follow-up:
+
+- The on-device restore fix was exercised through the full-state path on a plain
+  K/V cache. No model whose `PARTIAL_ONLY` state carries quantized K/V (the
+  server's speculative checkpoint path) was run.
+- The failed-chain test injects the failure with a backend sampler, which makes
+  the decode return -1 before it touches the cache. Allocation and compute
+  failures rely on `llama_context::decode` removing the failed batch's cells,
+  which was read from source, not triggered.
+- Borrowed tables of the right shape from an unrelated model are not detected.
+- Embeddings on Qwen4Exp now return the wide residual in front of the output
+  mixer, `hc * n_embd` values per token. Pooled embeddings were not tested.
+- Every `draft-mtp` launch of the real trunk on the A770 ends with one context
+  at a 152.0 MiB compute buffer against a 141.0 MiB expectation, with and
+  without chaining (seen in another session's logs). Fit-time contexts are
+  measured before the hidden export is switched on; whether that accounts for
+  the 11 MiB was not established.
+
 ## User-reported real-head evidence
 
 The user independently tested `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` on CPU at

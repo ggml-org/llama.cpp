@@ -111,6 +111,12 @@ from the target model, so they are held once. The borrowed tables have the targe
 quantization, not the head's. `--fit` measures such a head next to the target's
 context; one "requires ctx_other" error line during fitting is expected. Outside an
 MTP context the head has nothing to run and context creation fails with an error.
+The target's tables must have the head's embedding width and vocabulary size, or
+context creation fails with an error that names both shapes.
+
+With a separate head the target does not load its own MTP block, if its file has
+one: that block would never run. A combined target whose block lacks the draft
+mixer therefore still works next to a complete head.
 
 Qwen4Exp chained drafts use the full vocabulary and the sequential draft sampler's
 top-10 confidence normalization. Chaining reduces host round trips; it does not
