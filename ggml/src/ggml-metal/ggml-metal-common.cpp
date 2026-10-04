@@ -141,10 +141,6 @@ bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op, bool has_s
         ggml_metal_mul_mv_mma_type_supported(op->src[0]->type) && op->src[1]->type == GGML_TYPE_F32;
 }
 
-bool ggml_metal_mul_mat_use_nc(const struct ggml_tensor * op) {
-    return op->src[0]->type == GGML_TYPE_Q4_0 && op->src[1]->ne[1] == N_NC_Q4_0;
-}
-
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
 // the type indicates whether it is a source range (i.e. ops read data from it) or a destination range (i.e. ops write data to it)
 struct ggml_mem_range {

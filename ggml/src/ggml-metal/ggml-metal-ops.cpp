@@ -2583,7 +2583,7 @@ static int ggml_metal_op_mul_mat_mma(ggml_metal_op_t ctx, int idx) {
 }
 
 // the generic mat-vec kernel, or its 2-row Q4_0 variant if nc
-static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx, bool nc) {
+static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
     ggml_metal_library_t lib = ctx->lib;
@@ -2598,7 +2598,7 @@ static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx, bool nc) {
     const int16_t r2 = ne12/ne02;
     const int16_t r3 = ne13/ne03;
 
-    auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op, nc);
+    auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);
 
     const int nr0 = pipeline.nr0;
     const int nr1 = pipeline.nr1;
@@ -2660,9 +2660,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         return ggml_metal_op_fwht(ctx, idx);
     }
 
-    // at two rows the 2-row Q4_0 variant of the mat-vec kernel beats the MMA kernels
     if (ggml_metal_op_mul_mat_use_mma(op, props_dev->has_simdgroup_mm, props_dev->max_theadgroup_memory_size)) {
-        return ggml_metal_mul_mat_use_nc(op) ? ggml_metal_op_mul_mat_mv(ctx, idx, true) : ggml_metal_op_mul_mat_mma(ctx, idx);
+        return ggml_metal_op_mul_mat_mma(ctx, idx);
     }
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
@@ -2829,7 +2828,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + nr1 - 1) / nr1), ((ne01 + nr0 - 1) / nr0), ne12 * ne13, 32, nsg, 1);
     } else {
-        return ggml_metal_op_mul_mat_mv(ctx, idx, false);
+        return ggml_metal_op_mul_mat_mv(ctx, idx);
     }
 
     return 1;

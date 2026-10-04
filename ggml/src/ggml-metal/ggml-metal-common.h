@@ -69,9 +69,6 @@ int ggml_metal_mul_mv_mma_rt(const struct ggml_tensor * op);
 // the weights of K per simdgroup step of the few-row MMA kernel for a src0 type and rt src1 tiles, 0 if none takes the type
 int64_t ggml_metal_mul_mv_mma_k_step(enum ggml_type type, int rt);
 
-// true if the 2-row Q4_0 kernel takes mat-mul op instead of the MMA kernels
-bool ggml_metal_mul_mat_use_nc(const struct ggml_tensor * op);
-
 #ifdef __cplusplus
 }
 #endif

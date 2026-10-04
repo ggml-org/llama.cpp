@@ -714,8 +714,7 @@ static bool ggml_metal_fusion_check_mul_mat_add(
 
     const ggml_tensor * res = ggml_metal_mul_mat_add_residual(mm, add);
 
-    if (res == nullptr || ggml_metal_mul_mat_use_nc(mm) ||
-        !ggml_metal_op_mul_mat_use_mma(mm, props->has_simdgroup_mm, props->max_theadgroup_memory_size)) {
+    if (res == nullptr || !ggml_metal_op_mul_mat_use_mma(mm, props->has_simdgroup_mm, props->max_theadgroup_memory_size)) {
         return false;
     }
 

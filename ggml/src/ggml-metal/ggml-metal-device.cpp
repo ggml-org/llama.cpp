@@ -910,7 +910,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_t lib, const ggml_tensor * op, bool nc) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_t lib, const ggml_tensor * op) {
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
 
@@ -920,9 +920,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
     int nsg = 0; // number of simdgroups
     int nr0 = 0; // number of src0 rows per simdgroup
     int nr1 = 1; // number of src1 rows per threadgroup
-
-    // only Q4_0 has a variant for more than one src1 row
-    GGML_ASSERT(!nc || op->src[0]->type == GGML_TYPE_Q4_0);
 
     size_t smem = 0; // shared memory
 
@@ -966,10 +963,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
             {
                 nsg = N_SG_Q4_0;
                 nr0 = N_R0_Q4_0;
-                if (nc) {
-                    nr1 = N_NC_Q4_0;
-                    suffix = "_nc";
-                }
             } break;
         case GGML_TYPE_Q4_1:
             {

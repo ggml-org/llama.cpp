@@ -31,7 +31,6 @@
 
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
-#define N_NC_Q4_0 2 // src1 rows of kernel_mul_mv_q4_0_f32_nc
 
 #define N_R0_Q4_1 4
 #define N_SG_Q4_1 2
