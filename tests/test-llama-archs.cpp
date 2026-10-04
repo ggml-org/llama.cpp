@@ -113,11 +113,10 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-// MoE archs that are also tested with the experts in host memory, one per expert layout
+// MoE archs that are also tested with the experts in host memory
 static bool host_experts_test(const llm_arch arch) {
     switch (arch) {
-        case LLM_ARCH_DEEPSEEK2:  // merged gate_up
-        case LLM_ARCH_OPENAI_MOE: // separate gate/up/down with expert biases
+        case LLM_ARCH_DEEPSEEK2:
             return true;
         default:
             return false;
