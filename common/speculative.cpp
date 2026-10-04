@@ -2164,9 +2164,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     SPC_ERR("%s", "chain decode: the draft batch rejected a row, no draft this round\n");
                     return;
                 }
-                // the batch now owns the catch-up rows
-                defer_clear();
-
                 // The chain batch starts at the deferred catch-up rows, which can sit
                 // below the draft KV max from an earlier/rejected draft (position
                 // rewind or a repeated decode). Drop the draft cells at/above the
@@ -2200,9 +2197,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_mtp_chain(ctx_dft, false);
 
                 if (ret != 0) {
+                    // nothing was decoded: the catch-up rows stay deferred for the next flush or draft
                     SPC_ERR("llama_process(chain) returned %d\n", ret);
                     return;
                 }
+                // the draft cache now holds the catch-up rows
+                defer_clear();
 
                 // the chain samples greedily in-graph and emits [token id, top prob]
                 // pairs as 2-float rows, packed from the start of the logits buffer;
