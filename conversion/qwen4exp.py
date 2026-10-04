@@ -43,7 +43,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     @classmethod
     def filter_tensors(cls, item):
-        # the head carries its own copy of the trunk's hc_head_* output mixer,
+        # the head carries an independently trained hyper-connection output mixer,
         # which qwen4exp has in place of a final norm; it is unindexed in the
         # checkpoint and per-block in the GGUF
         name, gen = item
