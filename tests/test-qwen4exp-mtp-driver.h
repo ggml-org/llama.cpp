@@ -2,10 +2,41 @@
 
 #include "speculative.h"
 
+struct driver_graph_observation {
+    struct execution {
+        int64_t input_rows;
+        int64_t output_width;
+        int64_t output_rows;
+    };
+
+    int64_t input_rows = 0;
+    std::vector<execution> executions;
+
+    static bool callback(ggml_tensor * tensor, bool ask, void * data) {
+        const std::string name(tensor->name);
+        const bool input = tensor->op == GGML_OP_GET_ROWS && name.find("mtp_tok_embd-") == 0;
+        const bool output = name == "result_output";
+        if (ask) {
+            return input || output;
+        }
+        auto & observed = *static_cast<driver_graph_observation *>(data);
+        if (input) {
+            observed.input_rows = tensor->ne[1];
+        }
+        if (output) {
+            // Post-evaluation callbacks exclude graph construction and reserve-only probes.
+            observed.executions.push_back({observed.input_rows, tensor->ne[0], tensor->ne[1]});
+            observed.input_rows = 0;
+        }
+        return true;
+    }
+};
+
 // Exercise the public driver against the synthetic models from test-qwen4exp-mtp.cpp.
 static std::vector<llama_tokens> driver_drafts(
         llama_model * target_model, llama_model * draft_model,
-        bool chained, int n_seq, int draft_ubatch, bool adaptive, int prompt_length = 1, bool at_limit = false) {
+        bool chained, int n_seq, int draft_ubatch, bool adaptive, int prompt_length = 1, bool at_limit = false,
+        driver_graph_observation * observed = nullptr) {
     auto cp = llama_context_default_params();
     cp.n_ctx = 128 * n_seq;
     cp.n_batch = cp.n_ubatch = 32;
@@ -16,6 +47,10 @@ static std::vector<llama_tokens> driver_drafts(
     llama_context_ptr target(llama_init_from_model(target_model, cp));
     require(bool(target), "driver target context");
     cp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    if (observed) {
+        cp.cb_eval = driver_graph_observation::callback;
+        cp.cb_eval_user_data = observed;
+    }
     cp.n_ubatch = draft_ubatch;
     llama_context_ptr draft(llama_init_from_model(draft_model, cp));
     require(bool(draft), "driver draft context");
@@ -71,6 +106,10 @@ static std::vector<llama_tokens> driver_drafts(
             dp.result = &results[seq];
             dp.n_max = at_limit ? 2 : adaptive && round + 1 == expected_lengths.size() ? 1 : -1;
         }
+        if (observed) {
+            observed->input_rows = 0;
+            observed->executions.clear();
+        }
         common_speculative_draft(spec.get());
         for (int seq = 0; seq < n_seq; ++seq) {
             require(results[seq].size() == size_t(expected_lengths[round]),
@@ -99,8 +138,21 @@ static void test_driver(llama_model * target, llama_model * head) {
     // ubatch 6 can merge it into one chain exactly at capacity.
     for (int ubatch : {4, 5, 6}) {
         const auto sequential = driver_drafts(target, head, false, 1, ubatch, false, 2);
-        const auto chained = driver_drafts(target, head, true, 1, ubatch, false, 2);
+        driver_graph_observation observed;
+        const auto chained = driver_drafts(target, head, true, 1, ubatch, false, 2, false, &observed);
         require(chained == sequential, "catch-up admission preserves full-capacity drafts");
+        int packed_graphs = 0;
+        for (const auto & execution : observed.executions) {
+            if (execution.output_width == 2 && execution.output_rows == 4) {
+                ++packed_graphs;
+                require(execution.input_rows == (ubatch == 6 ? 6 : 4),
+                        "executed chain includes catch-up only when the combined batch fits");
+            }
+        }
+        require(packed_graphs == 1, "full-capacity drafting executes one packed chain graph, without silent fallback");
+        if (ubatch == 6) {
+            require(observed.executions.size() == 1, "two catch-up rows and four draft rows execute in one merged graph");
+        }
         fprintf(stderr, "PASS driver catch-up capacity ubatch=%d\n", ubatch);
     }
     const auto sequential = driver_drafts(target, head, false, 1, 8, false, 1, true);
