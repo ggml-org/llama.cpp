@@ -531,6 +531,7 @@ static void common_params_fit_impl(
 
     dmds_t   dmds_extra;       // memory of the extra model, laid out on the devices of the main model
     uint32_t n_ctx_extra = 0;  // context that memory was measured at
+    bool     extra_needs_parent = false; // the extra model only builds next to a context of the main model
 
     // the extra model competes for the same memory as the main model, add it to every measurement
     // its memory is measured again whenever the context it follows changes
@@ -552,11 +553,18 @@ static void common_params_fit_impl(
 
             dmds_t measured;
             try {
-                try {
-                    measured = common_get_device_memory_data_impl(
-                        extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
-                } catch (const std::runtime_error &) {
-                    // a draft that borrows tensors from the main model only builds next to its context
+                if (!extra_needs_parent) {
+                    try {
+                        measured = common_get_device_memory_data_impl(
+                            extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
+                    } catch (const std::runtime_error & e) {
+                        // a draft that borrows tensors from the main model only builds next to its context
+                        LOG_INF("%s: the extra model does not measure on its own (%s), measuring it next to the main model\n",
+                                __func__, e.what());
+                        extra_needs_parent = true;
+                    }
+                }
+                if (extra_needs_parent) {
                     measured = common_get_device_memory_data_impl_with_parent(
                         extra->path_model, extra->mparams, extra->cparams, path_model, mparams, cparams,
                         devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
