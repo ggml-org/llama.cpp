@@ -1576,6 +1576,49 @@ dequantize_block_iq3_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
 
 }
 
+// Dequantize IQ3_S from reorder layout: [qs][qh][signs and scales][d]. Lane l writes outputs
+// [8l, 8l + 8), so the lanes of a subgroup store one contiguous run.
+template<typename dst_t>
+static void dequantize_block_iq3_s_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                           const sycl::nd_item<3> & item_ct1) {
+#if QK_K == 256
+    const int64_t l = item_ct1.get_global_id(2);
+
+    if (8 * l >= k) {
+        return;
+    }
+
+    constexpr int ss_size = QK_K / 8 + QK_K / 64;
+
+    const int64_t nb = k / QK_K;
+    const int64_t i  = l / (QK_K / 8);
+    const int     ib = (l % (QK_K / 8)) / 4;
+    const int     il = l % 4;
+
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+    const uint8_t * qs   = base + i * (QK_K / 4) + 8 * ib + 2 * il;
+    const uint8_t   qh   = base[nb * (QK_K / 4) + i * (QK_K / 32) + ib];
+    const uint8_t * ss   = base + nb * (QK_K / 4 + QK_K / 32) + i * ss_size;
+    const float     dall = *reinterpret_cast<const ggml_half *>(base + nb * (QK_K / 4 + QK_K / 32 + ss_size) + i * sizeof(ggml_half));
+
+    const uint8_t * grid1 = (const uint8_t *)(iq3s_grid + (qs[0] | ((qh << (8-2*il)) & 256)));
+    const uint8_t * grid2 = (const uint8_t *)(iq3s_grid + (qs[1] | ((qh << (7-2*il)) & 256)));
+    const float     d     = dall * (1 + 2*((ss[QK_K / 8 + ib/2] >> 4*(ib%2)) & 0xf));
+    const uint8_t   signs = ss[4*ib + il];
+
+    sycl::vec<dst_t, 8> v;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        v[j + 0] = d * grid1[j] * (signs & kmask_iq2xs[j + 0] ? -1.f : 1.f);
+        v[j + 4] = d * grid2[j] * (signs & kmask_iq2xs[j + 4] ? -1.f : 1.f);
+    }
+    *reinterpret_cast<sycl::vec<dst_t, 8> *>(yy + 8 * l) = v;
+#else
+    GGML_UNUSED(vx); GGML_UNUSED(yy); GGML_UNUSED(k); GGML_UNUSED(item_ct1);
+    GGML_ABORT("IQ3_S reorder dequantize not supported for QK_K != 256");
+#endif
+}
+
 template <typename dst_t>
 __dpct_inline__ static void
 dequantize_block_iq1_s(const void *__restrict__ vx, dst_t *__restrict__ yy,

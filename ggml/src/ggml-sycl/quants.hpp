@@ -200,6 +200,33 @@ template <> struct block_q_t<GGML_TYPE_IQ3_XXS> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+// [qs: nblocks * QK_K/4][qh: nblocks * QK_K/32][signs and scales: nblocks * (QK_K/8 + QK_K/64)]
+// [d: nblocks * half], one 32-element sub-block per work-item. Signs and scales share a region so
+// the layout stays the size of the block_iq3_s array it is reordered in place from.
+template <> struct block_q_t<GGML_TYPE_IQ3_S> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QK_K / 32;
+        static constexpr uint32_t qr       = 1;
+        static constexpr uint32_t vdr_mmvq = 1;
+    };
+
+    static constexpr int signs_scales_size = QK_K / 8 + QK_K / 64;
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int n_blocks) {
+        return { block_index * (QK_K / 4), n_blocks * (QK_K / 4) + block_index * (QK_K / 32) };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        auto nblocks = (nrows * (ncols / QK_K));
+        auto signs   = nblocks * (QK_K / 4 + QK_K / 32);
+        return { signs + block_index * signs_scales_size,
+                 signs + nblocks * signs_scales_size + block_index * (int) sizeof(ggml_half) };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
 template <> struct block_q_t<GGML_TYPE_Q8_0> {
     struct traits {
         static constexpr uint32_t qk       = QK8_0;      // 32
