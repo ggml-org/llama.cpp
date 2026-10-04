@@ -71,6 +71,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       - name: Determine tag name
         if: ${{ steps.check.outputs.should_release == 'true' }}
