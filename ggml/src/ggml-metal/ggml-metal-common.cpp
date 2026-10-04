@@ -145,35 +145,6 @@ bool ggml_metal_mul_mat_use_nc(const struct ggml_tensor * op) {
     return op->src[0]->type == GGML_TYPE_Q4_0 && op->src[1]->ne[1] == N_NC_Q4_0;
 }
 
-// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
-// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
-static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
-    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
-
-    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
-}
-
-const struct ggml_tensor * ggml_metal_mul_mat_add_operand(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
-    if (add->op != GGML_OP_ADD || (add->src[0] == mm) == (add->src[1] == mm)) {
-        return NULL;
-    }
-
-    const ggml_tensor * other = add->src[0] == mm ? add->src[1] : add->src[0];
-
-    const bool ok = other->type == GGML_TYPE_F32 && add->type == GGML_TYPE_F32 && !ggml_metal_tensor_is_weight(other);
-
-    return ok ? other : NULL;
-}
-
-const struct ggml_tensor * ggml_metal_mul_mat_add_residual(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
-    const ggml_tensor * res = ggml_metal_mul_mat_add_operand(mm, add);
-
-    const bool ok = res != NULL && ggml_are_same_shape(res, mm) &&
-        ggml_is_contiguous(res) && ggml_is_contiguous(mm) && ggml_is_contiguous(add);
-
-    return ok ? res : NULL;
-}
-
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
 // the type indicates whether it is a source range (i.e. ops read data from it) or a destination range (i.e. ops write data to it)
 struct ggml_mem_range {

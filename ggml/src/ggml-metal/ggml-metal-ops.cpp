@@ -2532,8 +2532,13 @@ static int ggml_metal_op_mul_mat_mma(ggml_metal_op_t ctx, int idx) {
     const int  n_fuse   = ggml_metal_op_try_fusion(ctx, idx, GGML_METAL_FUSION_MUL_MAT_ADD);
     const bool fuse_add = n_fuse > 1;
 
-    const ggml_tensor * dst = fuse_add ? ctx->node(idx + 1) : op;
-    const ggml_tensor * res = fuse_add ? ggml_metal_mul_mat_add_residual(op, dst) : dst;
+    const ggml_tensor * dst = op;
+    const ggml_tensor * res = dst;
+
+    if (fuse_add) {
+        dst = ctx->node(idx + n_fuse - 1);
+        res = dst->src[0]->op == GGML_OP_MUL_MAT ? dst->src[1] : dst->src[0];
+    }
 
     ggml_metal_mma_tiling tiling = ggml_metal_op_mul_mat_mma_tiling(op);
 

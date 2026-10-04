@@ -656,6 +656,35 @@ static bool ggml_metal_fusion_check_moe_reduce(
     return true;
 }
 
+// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
+// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
+static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
+    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
+
+    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+}
+
+static const struct ggml_tensor * ggml_metal_mul_mat_add_operand(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
+    if (add->op != GGML_OP_ADD || (add->src[0] == mm) == (add->src[1] == mm)) {
+        return NULL;
+    }
+
+    const ggml_tensor * other = add->src[0] == mm ? add->src[1] : add->src[0];
+
+    const bool ok = other->type == GGML_TYPE_F32 && add->type == GGML_TYPE_F32 && !ggml_metal_tensor_is_weight(other);
+
+    return ok ? other : NULL;
+}
+
+static const struct ggml_tensor * ggml_metal_mul_mat_add_residual(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
+    const ggml_tensor * res = ggml_metal_mul_mat_add_operand(mm, add);
+
+    const bool ok = res != NULL && ggml_are_same_shape(res, mm) &&
+        ggml_is_contiguous(res) && ggml_is_contiguous(mm) && ggml_is_contiguous(add);
+
+    return ok ? res : NULL;
+}
+
 // MUL_MAT + ADD of an f32 non-weight: the reorder packs it without reading row counts, so ubatch sizes share one order;
 // the encoder fuses only a same-shape residual in the few-row MMA store, which the sum may overlap only in place
 static bool ggml_metal_fusion_check_mul_mat_add(

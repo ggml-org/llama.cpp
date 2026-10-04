@@ -72,13 +72,6 @@ int64_t ggml_metal_mul_mv_mma_k_step(enum ggml_type type, int rt);
 // true if the 2-row Q4_0 kernel takes mat-mul op instead of the MMA kernels
 bool ggml_metal_mul_mat_use_nc(const struct ggml_tensor * op);
 
-// the f32 operand that f32 add sums with mat-mul mm, if mm is exactly one of its operands and the other one is not a
-// weight (a bias), else NULL. it reads no shapes, so it gives the same answer for every batch size
-const struct ggml_tensor * ggml_metal_mul_mat_add_operand(const struct ggml_tensor * mm, const struct ggml_tensor * add);
-
-// the operand of ggml_metal_mul_mat_add_operand if it is a same-shape contiguous residual of mm, else NULL
-const struct ggml_tensor * ggml_metal_mul_mat_add_residual(const struct ggml_tensor * mm, const struct ggml_tensor * add);
-
 #ifdef __cplusplus
 }
 #endif
