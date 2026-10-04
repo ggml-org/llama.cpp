@@ -429,7 +429,7 @@ static __host__ int ggml_cuda_mmq_get_nbytes_shared_x(const ggml_cuda_mmq_config
 
 // ------------------------------------------------------------
 
-// Weight types with a fused gate/up/GLU path (see ggml_cuda_mmq_get_load_tiles); the other types run unfused.
+// Weight types with a fused gate/up/GLU path (see ggml_cuda_mmq_get_load_tiles).
 static constexpr __host__ __device__ bool ggml_cuda_mmq_fusion_supported(const ggml_type type) {
     return type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_IQ4_XS;
 }
@@ -1054,7 +1054,6 @@ static __global__ void mul_mat_q(
         const uint3 sample_ratio, const uint3 nsamples_y, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const uint3 ntx) {
 
-    // The fused gate/up/GLU write-back is implemented for the NVIDIA MMA accumulator layout.
 #ifdef TURING_MMA_AVAILABLE
     constexpr bool fusion_available = true;
 #else
