@@ -55,7 +55,7 @@ static __global__ void pool2d_nchw_kernel_warp(
         const int ih, const int iw, const int oh, const int ow,
         const int kh, const int kw, const int sh, const int sw,
         const int ph, const int pw, const int parallel_elements,
-        const Ti* src, To* dst, const enum ggml_op_pool op) {
+        const Ti * __restrict__ src, To * __restrict__ dst, const enum ggml_op_pool op) {
     const int warp_id = (threadIdx.x + blockIdx.x * blockDim.x) / WARP_SIZE;
     const int lane     = threadIdx.x % WARP_SIZE;
     if (warp_id >= parallel_elements) {
@@ -90,7 +90,7 @@ static __global__ void pool2d_nchw_kernel_warp(
     for (int t = lane; t < win_elems; t += WARP_SIZE) {
         const int i = bh + t / win_w;
         const int j = bw + t % win_w;
-        const Ti cur = __ldg(i_ptr + i * iw + j);
+        const Ti cur = i_ptr[i * iw + j];
         switch (op) {
             case GGML_OP_POOL_AVG: res += cur * scale; break;
             case GGML_OP_POOL_MAX: res = max(res, (To)cur); break;
