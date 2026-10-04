@@ -817,34 +817,35 @@ static void dequantize_block_q4_0(const void * __restrict__ vx, dst_t * __restri
     }
 }
 
+// Dequantize Q4_0 from reorder layout: [all qs (k / 2 bytes)][all d values].
+// Each work-item handles one dword of qs (8 elements), so a subgroup loads and stores contiguously.
 template<typename dst_t>
-static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
-                                  const sycl::nd_item<3> &item_ct1) {
+static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                          const sycl::nd_item<3> & item_ct1) {
+    const int64_t i      = item_ct1.get_global_id(2);
+    const int64_t nbytes = k / 2;
 
-    const int64_t i = item_ct1.get_group(2);
-    auto k=nb32;
-    // assume 32 threads
-    const int64_t tid = item_ct1.get_local_id(2);
-    const int lane_ib = i * WARP_SIZE + tid;
-
-    if (lane_ib >= k / QK4_0) {
+    if (4 * i >= nbytes) {
         return;
     }
 
-    dst_t * y_ptr = yy + lane_ib * QK4_0;
+    const int64_t ib = (4 * i) / (QK4_0 / 2);
+    const int     il = (4 * i) % (QK4_0 / 2);
 
-    auto qs = (const uint8_t*)vx + lane_ib * QK4_0 / 2;
-    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k / 2) + lane_ib;
+    const uint32_t q = *((const uint32_t *) vx + i);
+    const float    d = *((const sycl::half *) ((const uint8_t *) vx + nbytes) + ib);
 
-    const float d = float(*s_ptr);
-
+    sycl::vec<dst_t, 4> lo;
+    sycl::vec<dst_t, 4> hi;
 #pragma unroll
-    for (int l = 0; l < QK4_0 / 2; ++l) {
-        int vq = qs[l];
-        y_ptr[l + 0] = d * ((vq & 0xF) - 8);
-        y_ptr[l + 16] = d * ((vq >> 4) - 8);
+    for (int j = 0; j < 4; ++j) {
+        lo[j] = d * ((int) ((q >> (8 * j + 0)) & 0xF) - 8);
+        hi[j] = d * ((int) ((q >> (8 * j + 4)) & 0xF) - 8);
     }
 
+    dst_t * y = yy + ib * QK4_0 + il;
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + 0)         = lo;
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + QK4_0 / 2) = hi;
 }
 
 // Dequantize Q8_0 from reorder layout: [all qs (k bytes)][all d values]

@@ -158,12 +158,11 @@ static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int
     dpct::has_capability_or_fail(stream->get_device(),
                                     {sycl::aspect::fp16});
 
-    int constexpr WARP_K = WARP_SIZE * QK4_0;
-    const int n_warp = (k + WARP_K - 1) / WARP_K;
-    GGML_ASSERT(k % 2 == 0);
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
-        sycl::range<3>(1, 1, WARP_SIZE),
-        sycl::range<3>(1, 1, WARP_SIZE)),
+    GGML_ASSERT(k % QK4_0 == 0);
+    constexpr int wg_size  = 256;
+    const int64_t n_dwords = k / 8;
+    const int64_t n_wg     = (n_dwords + wg_size - 1) / wg_size;
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_wg * wg_size), sycl::range<3>(1, 1, wg_size)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
             dequantize_block_q4_0_reorder(vx, y, k, item_ct1);
         });
