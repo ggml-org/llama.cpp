@@ -95,6 +95,7 @@ int g_ggml_sycl_dev_debug = 0;
 int g_ggml_sycl_enable_optimize = 1;
 int g_ggml_sycl_enable_graph = 0;
 int g_ggml_sycl_enable_dnn = 1;
+int g_ggml_sycl_dnnl_wdecomp = 1;
 int g_ggml_sycl_fa_onednn = 1;
 int g_ggml_sycl_fa_onednn_max_kv = 0;
 int g_ggml_sycl_enable_mkl_fa = 1;
@@ -401,6 +402,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_optimize = ggml_sycl_get_env("GGML_SYCL_ENABLE_OPT", 1);
         g_ggml_sycl_enable_graph = ggml_sycl_get_env("GGML_SYCL_ENABLE_GRAPH", 0);
         g_ggml_sycl_enable_dnn = ggml_sycl_get_env("GGML_SYCL_ENABLE_DNN", 1);
+        g_ggml_sycl_dnnl_wdecomp = ggml_sycl_get_env("GGML_SYCL_DNNL_WDECOMP", 1);
         g_ggml_sycl_fa_onednn = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN", 1);
         g_ggml_sycl_fa_onednn_max_kv = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN_MAX_KV", 0);
         g_ggml_sycl_enable_mkl_fa = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
@@ -509,6 +511,7 @@ static void ggml_check_sycl() try {
 
 #if defined(GGML_SYCL_DNNL)
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: %d\n", g_ggml_sycl_enable_dnn);
+        GGML_LOG_INFO("  GGML_SYCL_DNNL_WDECOMP: %d\n", g_ggml_sycl_dnnl_wdecomp);
         GGML_LOG_INFO("  GGML_SYCL_FA_ONEDNN: %d\n", g_ggml_sycl_fa_onednn);
 #else
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: DNN disabled by compile flag\n");
@@ -3070,6 +3073,37 @@ inline void ggml_sycl_op_mul_mat_sycl(
                                   src1_as_bf16.get(), DnnlGemmWrapper::to_dt<bf16_t>(),
                                   dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
         GGML_UNUSED(dst);
+        GGML_UNUSED(src1_ddq_i);
+        GGML_UNUSED(src1_padded_row_size);
+        return;
+    }
+#endif
+
+#if GGML_SYCL_DNNL
+    const ggml_tensor_extra_gpu * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0) && src0_extra &&
+        src0_extra->optimized_feature.reorder && src1->type == GGML_TYPE_F32 && use_fp16 && ggml_is_contiguous(src0) &&
+        row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT &&
+        ggml_sycl_src1_prec_allows(dst, GGML_PREC_F16) && g_ggml_sycl_enable_dnn && g_ggml_sycl_dnnl_wdecomp &&
+        ggml_sycl_dnnl_has_optimized_gemm(ggml_sycl_get_device())) {
+        const bool    is_q4_0  = src0->type == GGML_TYPE_Q4_0;
+        const int64_t nblocks  = ne00 / QK4_0;
+        const size_t  qs_bytes = is_q4_0 ? row_diff * ne00 / 2 : row_diff * ne00;
+
+        ggml_sycl_pool_alloc<sycl::half> scales(ctx.pool(), row_diff * nblocks);
+        ggml_sycl_transpose_block_scales(reinterpret_cast<const sycl::half *>(src0_dd_i + qs_bytes), scales.get(),
+                                         row_diff, nblocks, stream);
+
+        ggml_sycl_pool_alloc<sycl::half> src1_as_f16(ctx.pool(), src1_ncols * ne10);
+        if (is_q4_0) {
+            ggml_sycl_f32_to_f16_q4_0_order(src1_ddf_i, src1_as_f16.get(), src1_ncols * ne10, stream);
+        } else {
+            ggml_sycl_f32_to_f16_blocks(src1_ddf_i, src1_as_f16.get(), src1_ncols * ne10, stream);
+        }
+
+        DnnlGemmWrapper::gemm_wdecomp(ctx, src1_ncols, row_diff, ne10, src1_as_f16.get(), src0_dd_i,
+                                      is_q4_0 ? DnnlGemmWrapper::dt::u4 : DnnlGemmWrapper::dt::s8, is_q4_0,
+                                      scales.get(), dst_dd_i, stream);
         GGML_UNUSED(src1_ddq_i);
         GGML_UNUSED(src1_padded_row_size);
         return;

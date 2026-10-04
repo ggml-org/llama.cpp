@@ -28,6 +28,19 @@ typedef to_t_sycl_t<sycl::ext::oneapi::bfloat16> to_bf16_sycl_t;
 to_bf16_sycl_t ggml_get_to_bf16_sycl(ggml_type type, ggml_tensor * dst);
 #endif
 
+// Converts k f32 values to fp16 and permutes each 32-element block so position 2j holds element j and
+// position 2j + 1 holds element j + 16. That is the element order of the Q4_0 reorder layout read as
+// packed u4 along K, so the result can feed a oneDNN u4 weight-decompression matmul.
+void ggml_sycl_f32_to_f16_q4_0_order(const float * x, sycl::half * y, int64_t k, dpct::queue_ptr stream);
+
+// Converts k f32 values to fp16, eight per work-item. k must be a multiple of 32.
+void ggml_sycl_f32_to_f16_blocks(const float * x, sycl::half * y, int64_t k, dpct::queue_ptr stream);
+
+// Transposes the [nrows][nblocks] fp16 block scales of a reorder-layout tensor into [nblocks][nrows],
+// the grouped-scale layout oneDNN weight decompression expects.
+void ggml_sycl_transpose_block_scales(const sycl::half * x, sycl::half * y, int64_t nrows, int64_t nblocks,
+                                      dpct::queue_ptr stream);
+
 // Nc = Non-contiguous
 template <typename T>
 using to_t_nc_sycl_t = void (*)(const void * x, T * y, int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,

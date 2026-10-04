@@ -1025,3 +1025,69 @@ to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type) {
             return nullptr;
     }
 }
+
+template <bool q4_0_order>
+static void f32_to_f16_blocks_sycl(const float * x, sycl::half * y, int64_t k, dpct::queue_ptr stream) {
+    GGML_ASSERT(k % QK4_0 == 0);
+    constexpr int wg_size = 256;
+    const int64_t n_lanes = k / 8;
+    const int64_t n_wg    = (n_lanes + wg_size - 1) / wg_size;
+    stream->parallel_for(sycl::nd_range<1>(n_wg * wg_size, wg_size), [=](sycl::nd_item<1> item) {
+        const int64_t l = item.get_global_id(0);
+        if (l >= n_lanes) {
+            return;
+        }
+        sycl::vec<sycl::half, 8> v;
+        if constexpr (q4_0_order) {
+            const int64_t      base = (l / 4) * QK4_0;
+            const int          j    = 4 * (l % 4);
+            const sycl::float4 lo   = *reinterpret_cast<const sycl::float4 *>(x + base + j);
+            const sycl::float4 hi   = *reinterpret_cast<const sycl::float4 *>(x + base + j + QK4_0 / 2);
+#pragma unroll
+            for (int m = 0; m < 4; ++m) {
+                v[2 * m + 0] = sycl::half(lo[m]);
+                v[2 * m + 1] = sycl::half(hi[m]);
+            }
+        } else {
+            v = reinterpret_cast<const sycl::vec<float, 8> *>(x)[l].convert<sycl::half, sycl::rounding_mode::rte>();
+        }
+        *reinterpret_cast<sycl::vec<sycl::half, 8> *>(y + 8 * l) = v;
+    });
+}
+
+void ggml_sycl_f32_to_f16_q4_0_order(const float * x, sycl::half * y, int64_t k, dpct::queue_ptr stream) {
+    f32_to_f16_blocks_sycl<true>(x, y, k, stream);
+}
+
+void ggml_sycl_f32_to_f16_blocks(const float * x, sycl::half * y, int64_t k, dpct::queue_ptr stream) {
+    f32_to_f16_blocks_sycl<false>(x, y, k, stream);
+}
+
+void ggml_sycl_transpose_block_scales(const sycl::half * x, sycl::half * y, int64_t nrows, int64_t nblocks,
+                                      dpct::queue_ptr stream) {
+    constexpr int tile = 32;
+    constexpr int rows = 8;
+    const sycl::range<2> global(ceil_div(nblocks, tile) * rows, ceil_div(nrows, tile) * tile);
+    stream->submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<sycl::half, 2> t(sycl::range<2>(tile, tile + 1), cgh);
+        cgh.parallel_for(sycl::nd_range<2>(global, sycl::range<2>(rows, tile)), [=](sycl::nd_item<2> item) {
+            const int64_t b0 = item.get_group(0) * tile;
+            const int64_t r0 = item.get_group(1) * tile;
+            const int     a  = item.get_local_id(0);
+            const int     c  = item.get_local_id(1);
+#pragma unroll
+            for (int i = a; i < tile; i += rows) {
+                if (r0 + i < nrows && b0 + c < nblocks) {
+                    t[i][c] = x[(r0 + i) * nblocks + b0 + c];
+                }
+            }
+            sycl::group_barrier(item.get_group());
+#pragma unroll
+            for (int i = a; i < tile; i += rows) {
+                if (b0 + i < nblocks && r0 + c < nrows) {
+                    y[(b0 + i) * nrows + r0 + c] = t[c][i];
+                }
+            }
+        });
+    });
+}
