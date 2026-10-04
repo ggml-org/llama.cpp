@@ -389,10 +389,20 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 const int64_t mat_id = (i3 % src0->ne[3]) * src0->ne[2] + (i2 % src0->ne[2]);
                 float *       acc    = e.values.data() + mat_id * ne0;
 
-                for (int64_t row = 0; row < src1->ne[1]; ++row) {
-                    const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
-                    for (int64_t j = 0; j < ne0; ++j) {
-                        acc[j] += x[j] * x[j];
+                constexpr int64_t tile_size = 256;
+                const int64_t n_tiles = (ne0 + tile_size - 1) / tile_size;
+#ifdef _OPENMP
+                const int n_threads = std::max(1, m_params.cpuparams_batch.n_threads);
+#pragma omp parallel for schedule(static) num_threads(n_threads)
+#endif
+                for (int64_t tile = 0; tile < n_tiles; ++tile) {
+                    const int64_t j0 = tile * tile_size;
+                    const int64_t j1 = std::min(j0 + tile_size, ne0);
+                    for (int64_t row = 0; row < src1->ne[1]; ++row) {
+                        const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
+                        for (int64_t j = j0; j < j1; ++j) {
+                            acc[j] += x[j] * x[j];
+                        }
                     }
                 }
             }
