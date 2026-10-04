@@ -1750,21 +1750,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
         }
 
-        if (adaptive) {
-            if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
-                GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
-                        __func__, this->params.n_min_adaptive, this->params.n_max);
-            }
-
-            adaptive_ctrl.assign(n_seq, common_speculative_adaptive());
-            for (uint32_t s = 0; s < n_seq; ++s) {
-                // start at the floor max(1, n_min_adaptive), bounded by n_max;
-                // the controller climbs from there once acceptance feedback arrives
-                adaptive_ctrl[s].reset(this->params.n_max, this->params.n_min_adaptive);
-            }
-            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
-        }
-
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
         i_last.assign(n_seq, -1);
