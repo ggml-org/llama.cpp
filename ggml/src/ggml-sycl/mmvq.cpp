@@ -3268,15 +3268,49 @@ bool ggml_sycl_mul_mat_vec_q_glu_plain(enum ggml_type gate_type, enum ggml_type 
     return false;
 }
 
+// Gate and up already double the weights each subgroup holds, and pairing rows on top measured no
+// faster on Intel Arc Pro B70 (Qwen3-0.6B Q4_0 decode at 1, 2, 4 and 8 sequences), so the fused
+// Q4_0 kernel keeps one row per subgroup.
+template <int ncols_dst>
+static void launch_mul_mat_vec_q4_0_reorder_glu(const void * vx, const void * vgate, const void * vy, float * dst,
+                                                const int ncols, const int nrows, const int stride_col_y_bytes,
+                                                const int stride_col_dst, const ggml_glu_op glu_op,
+                                                dpct::queue_ptr stream) {
+    launch_mul_mat_vec_q_reorder_glu_impl<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0>, ncols_dst, 1>(
+        vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
+}
+
+static bool reorder_mul_mat_vec_q4_0_q8_1_glu_switch_ncols(const void * vx, const void * vgate, const void * vy,
+                                                           float * dst, const int ncols, const int nrows,
+                                                           const int ncols_dst, const int stride_col_y_bytes,
+                                                           const int stride_col_dst, const ggml_glu_op glu_op,
+                                                           dpct::queue_ptr stream) {
+    switch (ncols_dst) {
+        case 1: launch_mul_mat_vec_q4_0_reorder_glu<1>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 2: launch_mul_mat_vec_q4_0_reorder_glu<2>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 3: launch_mul_mat_vec_q4_0_reorder_glu<3>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 4: launch_mul_mat_vec_q4_0_reorder_glu<4>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 5: launch_mul_mat_vec_q4_0_reorder_glu<5>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 6: launch_mul_mat_vec_q4_0_reorder_glu<6>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 7: launch_mul_mat_vec_q4_0_reorder_glu<7>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        case 8: launch_mul_mat_vec_q4_0_reorder_glu<8>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream); return true;
+        default: return false;
+    }
+}
+
 bool ggml_sycl_mul_mat_vec_q_glu_reorder(enum ggml_type src0_type, enum ggml_glu_op glu_op, const void * vx,
                                          const void * vgate, const void * vy, float * dst, int ncols, int nrows,
                                          int ncols_dst, int stride_col_y_bytes, int stride_col_dst,
                                          dpct::queue_ptr stream) {
-    if (src0_type != GGML_TYPE_Q4_K) {
+    if (src0_type != GGML_TYPE_Q4_K && src0_type != GGML_TYPE_Q4_0) {
         return false;
     }
     if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
         return false;
+    }
+    if (src0_type == GGML_TYPE_Q4_0) {
+        return reorder_mul_mat_vec_q4_0_q8_1_glu_switch_ncols(vx, vgate, vy, dst, ncols, nrows, ncols_dst,
+                                                              stride_col_y_bytes, stride_col_dst, glu_op, stream);
     }
 
     using vec_dot = reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K>;

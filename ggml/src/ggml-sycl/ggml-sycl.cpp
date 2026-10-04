@@ -5037,8 +5037,8 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
     }
 
     // quant pairs the reorder kernel cannot serve (mixed gate/up types) take the
-    // standard-layout fused path instead; q4_K keeps the reorder path below
-    if (wg->type != GGML_TYPE_Q4_K || wu->type != GGML_TYPE_Q4_K) {
+    // standard-layout fused path instead; q4_0 and q4_K keep the reorder path below
+    if (wg->type != wu->type || (wu->type != GGML_TYPE_Q4_0 && wu->type != GGML_TYPE_Q4_K)) {
         return ggml_sycl_mul_mat_glu_mmvq_plain(ctx, glu, gate, up, wu, wg, act);
     }
 
