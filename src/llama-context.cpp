@@ -2243,6 +2243,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const bool has_samplers = !sampling.samplers.empty();
 
     if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.mtp_chain) {
+        // A chain returns packed [token, probability] rows, not the vocabulary logits a backend sampler reads.
+        if (has_samplers) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain does not support backend samplers\n", __func__);
+            return -1;
+        }
         // Splitting a chain restarts later steps from placeholder token/hidden inputs.
         if (batch_inp.tokens.size() > std::min(cparams.n_batch, cparams.n_ubatch)) {
             LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain must fit in one batch and microbatch\n", __func__);

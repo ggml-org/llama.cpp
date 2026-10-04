@@ -275,8 +275,10 @@ static std::vector<uint8_t> sequence_state(llama_context * ctx, llama_seq_id seq
 }
 
 static void test_invalid_chain(llama_model * model, bool flash) {
-    enum invalid_case { NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE, NULL_TOKEN };
-    for (auto kind : {NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE, NULL_TOKEN}) {
+    enum invalid_case { NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE, NULL_TOKEN,
+                        BACKEND_SAMPLER };
+    for (auto kind : {NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE, NULL_TOKEN,
+                      BACKEND_SAMPLER}) {
         auto ctx = make_context(model, flash, 2, 2);
         auto reference = make_context(model, flash, 2, 2);
         const auto seed = decode(ctx.get(), {3}, initial_hidden(), 0);
@@ -291,15 +293,26 @@ static void test_invalid_chain(llama_model * model, bool flash) {
         for (int i = 0; i < n_bad; ++i) {
             const llama_seq_id seq = kind == MULTIPLE_SEQUENCES ? i : 0;
             const llama_pos pos = seq == 1 ? 0 : i + 1;
+            // One output row keeps the sampler case inside the generic per-sequence output limit.
             const bool output = kind == NO_OUTPUT ? false : kind == NON_PREFIX_MASK ? i == 0 :
-                    kind == OVER_UBATCH ? i >= 2 : true;
+                    kind == OVER_UBATCH ? i >= 2 : kind == BACKEND_SAMPLER ? i == 1 : true;
             common_batch_add(bad, kind == NULL_TOKEN && i == 1 ? LLAMA_TOKEN_NULL : 5, pos, {seq}, output);
         }
         bad.embd = kind == NO_HIDDEN_STATE ? nullptr : inputs.data();
+        // A chain packs [token, probability] rows where a backend sampler expects vocabulary logits.
+        llama_sampler_ptr sampler;
+        if (kind == BACKEND_SAMPLER) {
+            sampler.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+            llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
+            require(llama_set_sampler(ctx.get(), 0, sampler.get()), "backend sampler attaches to the draft context");
+        }
         llama_set_mtp_chain(ctx.get(), true);
         const int rc = llama_decode(ctx.get(), bad);
         bad.embd = nullptr;
         llama_batch_free(bad);
+        if (kind == BACKEND_SAMPLER) {
+            require(llama_set_sampler(ctx.get(), 0, nullptr), "backend sampler detaches");
+        }
         require(rc == -1, "invalid public chain input returns -1");
         require(llama_memory_seq_pos_max(llama_get_memory(ctx.get()), 0) == max_before &&
                 sequence_state(ctx.get(), 0) == before_0 && sequence_state(ctx.get(), 1) == before_1,
