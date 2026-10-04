@@ -46,6 +46,9 @@ struct common_speculative_output_limits {
 common_speculative_output_limits common_speculative_get_output_limits(
         int32_t n_batch, int32_t n_parallel, int32_t n_draft);
 
+// return true if the target and draft models have compatible vocabs
+bool common_speculative_are_compatible(const llama_model * model_tgt, const llama_model * model_dft);
+
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
 
 void common_speculative_free(common_speculative * spec);
