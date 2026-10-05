@@ -40,8 +40,8 @@ MODE=ab is a paired A/B of two server builds under one speculative config:
   NAME_A / NAME_B               arm labels (default a / b)
   SPEC_ARGS      speculative flags for both arms (default: ngram-mod)
   LAUNCHES       server launches per arm (default 4), run in ABBA order so
-                 drift cancels; an odd count leaves the order unbalanced, which
-                 the report flags. The first request of every launch is discarded
+                 drift cancels; it must be even and positive. The first request
+                 of every launch is discarded
   OUT_TAG        suffix for the summary and log file names
 It refuses to start (exit 70) while another process holds the render node,
 reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt.
@@ -716,8 +716,10 @@ def paired_stats(a: list[float], b: list[float]) -> dict[str, Any]:
 
 
 def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
-    if LAUNCHES < 1:
-        print(f"!! LAUNCHES={LAUNCHES}: MODE=ab needs at least one launch per arm", flush=True)
+    if LAUNCHES < 2 or LAUNCHES % 2:
+        # with an odd number of AB pairs no order gives both arms the same mean position
+        print(f"!! LAUNCHES={LAUNCHES}: MODE=ab needs an even, positive launch count per arm, "
+              "so that the ABBA order balances drift", flush=True)
         return EXIT_USAGE
     prompt_ids = [p["id"] for p in prompts]
     suffix = f"-{OUT_TAG}" if OUT_TAG else ""
@@ -744,18 +746,12 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     kernel_driver = render_driver(RENDER_NODE)
     print(f"kernel driver of {RENDER_NODE}: {kernel_driver or 'unknown'}")
 
-    order_balanced = LAUNCHES % 2 == 0
-    unbalanced = (f"!! LAUNCHES={LAUNCHES} is odd: {a['name']} runs first more often than {b['name']}, "
-                  "so a drift over the run biases the paired delta")
-    if not order_balanced:
-        print(unbalanced, flush=True)
-
     kmsg_before = dmesg_lines()
     launches: dict[str, list[dict[str, Any]]] = {a["name"]: [], b["name"]: []}
     out: dict[str, Any] = {
         "mode": MODE, "model": MODEL, "draft_model": DRAFT_MODEL, "placement": PLACEMENT, "ctx": CTX,
         "threads": THREADS, "repeats": REPEATS, "launches_per_arm": LAUNCHES, "prompt_ids": prompt_ids,
-        "kernel_driver": kernel_driver, "arms": arms, "server_extra": SERVER_EXTRA, "order_balanced": order_balanced, "launches": launches,
+        "kernel_driver": kernel_driver, "arms": arms, "server_extra": SERVER_EXTRA, "launches": launches,
     }
     for i, pair in enumerate(launch_order(LAUNCHES)):
         for arm in (arms[pair[0]], arms[pair[1]]):
@@ -812,8 +808,6 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     for pid, st in stats.items():
         half = f"{st['ci95_half_pct']:.2f}" if st.get("ci95_half_pct") is not None else "n/a"
         print(f"| {pid} | {st['a_mean']:.2f} | {st['b_mean']:.2f} | {st['delta']:+.2f} | {st['delta_pct']:+.2f} | {half} |")
-    if not order_balanced:
-        print(unbalanced)
     if mismatched:
         print(f"!! {len(mismatched)} of {len(prompt_ids) * LAUNCHES} paired (launch, prompt) cells generated different "
               "token streams in the two arms: their delta mixes speed with a different workload")

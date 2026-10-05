@@ -76,8 +76,8 @@ of `master`; `git fetch origin pull/90/head` retrieves them.
   a kernel log that could not be compared, a `fuser` error, a response that
   fails the target-argmax verifier and a speculative arm without draft
   statistics now each make the run fail. Applied to the summaries kept here,
-  the last two exclude no launch. An odd `LAUNCHES` is flagged as an unbalanced
-  order, the hashes recorded per arm cover the configured binary and every
+  the last two exclude no launch. An odd `LAUNCHES` is refused (exit 2): no
+  order of an odd number of AB pairs balances the arms' mean positions. The hashes recorded per arm cover the configured binary and every
   shared library in its directory, the summary names the kernel driver bound
   to the render node, a fault line is one that names i915 or xe and a failure
   term in either order (so also `Timedout job`, i915's `Fence expiration time

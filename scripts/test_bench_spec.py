@@ -335,12 +335,15 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             self.assertIn(str(elsewhere / "libllama.so.0"), hashes)
             self.assertNotIn(str(elsewhere / "libsycl.so.8"), hashes)
 
-    def test_run_ab_refuses_a_launch_count_below_one(self) -> None:
+    def test_run_ab_refuses_a_launch_count_that_cannot_balance_the_order(self) -> None:
         arms = [{"name": "a", "server_bin": "/nonexistent/a/llama-server"},
                 {"name": "b", "server_bin": "/nonexistent/b/llama-server"}]
-        for launches in (0, -1):
-            with mock.patch.object(BENCH_SPEC, "LAUNCHES", launches):
-                self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE)
+        # an odd number of AB pairs leaves one arm earlier on average, so drift biases the delta
+        for launches in (0, -1, 1, 3):
+            with mock.patch.object(BENCH_SPEC, "LAUNCHES", launches), \
+                    mock.patch.object(BENCH_SPEC, "resolved_libraries",
+                                      side_effect=AssertionError("ran past the launch count check")):
+                self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE, launches)
 
     def test_launch_order_is_balanced_only_for_an_even_count(self) -> None:
         self.assertEqual(BENCH_SPEC.launch_order(4), [(0, 1), (1, 0), (0, 1), (1, 0)])
