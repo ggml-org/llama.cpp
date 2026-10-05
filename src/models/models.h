@@ -2784,15 +2784,12 @@ struct llama_model_glm5_next : public llama_model_base {
                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
                                       int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
 
-        // headless: keep only cache writes when no logits or hidden rows are needed
         ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, ggml_tensor * kq_mask, const llama_layer & layer,
-                                         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il,
-                                         bool headless = false);
+                                         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
 
         ggml_tensor * build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                       const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
-                                      llm_graph_input_kpool * inp_kpool, ggml_tensor ** prev_sel, int il,
-                                      bool headless = false);
+                                      llm_graph_input_kpool * inp_kpool, ggml_tensor ** prev_sel, int il);
 
     };
 
