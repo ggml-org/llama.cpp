@@ -262,13 +262,13 @@
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} relative group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
+		class="{MODEL_ROW_GRID_CLASS} relative group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40 max-md:px-3 max-md:py-2.5"
 		onclick={toggle}
 		onkeydown={(event) => handleFamilyKeydown(event, toggle)}
 		role="button"
 		tabindex="0"
 	>
-		<span class="flex min-w-0 items-center gap-3 max-md:pr-8">
+		<span class="flex min-w-0 items-center gap-3 max-md:pr-9">
 			<ModelAvatar
 				option={family.entries[0].base}
 				showBaseModelAvatar
@@ -314,7 +314,7 @@
 	onMore: () => void;
 	unit: GroupedListUnit;
 })}
-	<div class="px-2">
+	<div class="px-2 max-md:px-3">
 		<button
 			class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
 			onclick={onMore}
@@ -342,7 +342,7 @@
 	/>
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-y border-border/40 px-2 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
+		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-y border-border/40 px-2 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase max-md:px-3"
 	>
 		<span>{@render sortHeader(ModelsTableSortKey.NAME, 'Model')}</span>
 
@@ -382,6 +382,7 @@
 					label={group.label}
 					persistKey={group.key}
 					revealChevronOnHover
+					sectionHeaderClass="m-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none max-md:px-3"
 					sticky
 					stickyClass="sticky z-10 bg-muted/90 backdrop-blur-lg"
 				>
