@@ -858,6 +858,11 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
     if (rpc_get) {
         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
 
+        // the reported size must never be below ggml_nbytes: rpc_tensor stores nb[] as uint32_t,
+        // so a stride over 4 GiB is truncated on the wire and the remote size comes back too small
+        // TODO: change rpc_tensor nb to 64-bit int
+        const size_t min_size = ggml_nbytes(tensor);
+
         // Cache key for calls to read the alloc_size.
         // We deliberately exclude src tensor dimensions from the key because:
         // 1. For CPU backends, alloc_size = ggml_nbytes(output) regardless of src shapes
@@ -871,6 +876,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             uint32_t op;
             int32_t  op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
             uint32_t ne[GGML_MAX_DIMS];
+            uint64_t nb[GGML_MAX_DIMS];
         };
 
         alloc_size_cache_key key = {};
@@ -880,6 +886,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
         memcpy(key.op_params, tensor->op_params, sizeof(key.op_params));
         for (int i = 0; i < GGML_MAX_DIMS; i++) {
             key.ne[i] = (uint32_t)tensor->ne[i];
+            key.nb[i] = (uint64_t)tensor->nb[i];
         }
 
         uint64_t cache_hash = fnv_hash((const uint8_t *)&key, sizeof(key));
@@ -893,7 +900,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             std::lock_guard<std::mutex> lock(cache_mutex);
             auto it = cache.find(cache_hash);
             if (it != cache.end()) {
-                return it->second;
+                return std::max<size_t>(it->second, min_size);
             }
         }
 
@@ -915,19 +922,21 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             cache[cache_hash] = response.alloc_size;
         }
 
-        return response.alloc_size;
+        return std::max<size_t>(response.alloc_size, min_size);
     }
 
     return ggml_nbytes(tensor);
 }
 
 static ggml_backend_buffer_type_i ggml_backend_rpc_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_rpc_buffer_type_name,
-    /* .alloc_buffer     = */ ggml_backend_rpc_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_rpc_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_rpc_get_max_size,
-    /* .get_alloc_size   = */ ggml_backend_rpc_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .get_name            = */ ggml_backend_rpc_buffer_type_name,
+    /* .alloc_buffer        = */ ggml_backend_rpc_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ NULL,
+    /* .get_alignment       = */ ggml_backend_rpc_buffer_type_get_alignment,
+    /* .get_max_size        = */ ggml_backend_rpc_get_max_size,
+    /* .get_alloc_size      = */ ggml_backend_rpc_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ NULL,
 };
 
 static const char * ggml_backend_rpc_name(ggml_backend_t backend) {

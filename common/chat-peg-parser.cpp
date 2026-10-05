@@ -451,6 +451,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
                 result.tool_calls.push_back(pending_tool_call.value());
             }
             pending_tool_call.reset();
+            current_tool = nullptr;
         }
     }
 }

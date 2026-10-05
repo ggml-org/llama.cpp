@@ -65,19 +65,21 @@ class LFM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel")
-@ModelBase.example("LiquidAI/LFM2.5-ColBERT-350M", "LiquidAI/LFM2.5-Embedding-350M")
+@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")
+@ModelBase.example("LiquidAI/LFM2.5-ColBERT-350M", "LiquidAI/LFM2.5-Embedding-350M", "LiquidAI/LFM2.5-Encoder-350M", "LiquidAI/LFM2.5-Encoder-230M")
 class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        if self.hf_arch == "Lfm2BidirectionalModel":
+        if self.hf_arch in ("Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM"):
             self.gguf_writer.add_causal_attention(False)
         self._try_set_pooling_type()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # masked LM checkpoints use "lfm2." prefix
+        name = name.removeprefix("lfm2.")
         if not name.startswith(self.dense_tensor_name):
             name = "model." + name
 

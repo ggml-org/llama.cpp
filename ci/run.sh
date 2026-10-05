@@ -49,14 +49,6 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-# gpu-rocm self-hosted runner can't upload logs to blob; keep each run's logs in
-# their own dir keyed by the GitHub run id so an Actions run URL maps to its logs.
-if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
-    OUT="$OUT/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
-    mkdir -p "$OUT"
-    echo "ci results dir: $OUT"
-fi
-
 rm -f $OUT/*.log
 
 sd=`dirname $0`
@@ -80,8 +72,8 @@ else
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
-    # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DGGML_CUDA_CUB_3DOT2=ON"
+    # TODO: Drop GGML_CUDA_CCCL_VERSION when CUDA CI uses CTK >= 13.5, which bundles CCCL >= 3.5.
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DGGML_CUDA_CCCL_VERSION=v3.4.3"
 
     if command -v nvidia-smi >/dev/null 2>&1; then
         CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d '.')
@@ -158,8 +150,8 @@ if [ ! -z ${GG_BUILD_WEBGPU} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_MUSA} ]; then
-    # Use qy1 by default (MTT S80)
-    MUSA_ARCH=${MUSA_ARCH:-21}
+    # Use ph1 by default (MTT S5000)
+    MUSA_ARCH=${MUSA_ARCH:-31}
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
 
