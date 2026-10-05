@@ -1043,7 +1043,6 @@ ESIMD_INLINE void xmx_group(simd<float, NC * XMX_ROWS> & Cf,
                             simd<int8_t, 512> &          Bl,
                             simd<int8_t, 512> &          Bh,
                             const simd<int8_t, 512> &    Ol,
-                            const simd<int8_t, 512> &    Oh,
                             const int                    g,
                             const int                    part) {
     using namespace sycl::ext::intel::esimd;
@@ -1052,8 +1051,8 @@ ESIMD_INLINE void xmx_group(simd<float, NC * XMX_ROWS> & Cf,
     constexpr int  NT    = XMX_ROWS;
     constexpr int  RC    = NC < 8 ? NC : 8;
     constexpr int  NB    = NC / RC;
-    constexpr bool split = !T::has_min && !T::plain;  // two scales per group of 32
-    constexpr bool pair  = (RC * 32) % 64 == 0;       // a block of RC rows fills whole registers
+    constexpr bool split = !T::has_min && !T::plain && !T::min16;  // two scales per group of 32
+    constexpr bool pair  = (RC * 32) % 64 == 0;                    // a block of RC rows fills whole registers
 
     const int gi = 4 * part + g;
 
@@ -1068,17 +1067,35 @@ ESIMD_INLINE void xmx_group(simd<float, NC * XMX_ROWS> & Cf,
     simd<float, NT> rm;
     simd<float, NT> rs0;
     simd<float, NT> rs1;
-    simd<float, NT> rm1;
+
+    // Q2_K: scale and min of each 16 wide half are 4 bit codes, the weight is d * scl * q - dmin * mc. scl * q
+    // is at most 45, so a dword multiply keeps the bytes apart and the scaled weights go to DPAS as int8. The
+    // min term sums a * mc over K, the codes mc take the place of the weights in a second DPAS.
+    simd<int8_t, 512> Bs;
+    simd<int8_t, 512> Bm;
+    if constexpr (T::min16) {
+        const simd<uint8_t, NT> c0  = sc.byte(2 * gi);
+        const simd<uint8_t, NT> c1  = sc.byte(2 * gi + 1);
+        simd<uint32_t, NT>      sl0 = convert<uint32_t>(simd<uint8_t, NT>(c0 & (uint8_t) 15));
+        simd<uint32_t, NT>      sl1 = convert<uint32_t>(simd<uint8_t, NT>(c1 & (uint8_t) 15));
+        simd<uint32_t, NT>      mc0 = convert<uint32_t>(simd<uint8_t, NT>(c0 >> (uint8_t) 4)) * 0x01010101u;
+        simd<uint32_t, NT>      mc1 = convert<uint32_t>(simd<uint8_t, NT>(c1 >> (uint8_t) 4)) * 0x01010101u;
+        simd<uint32_t, 128>     ws;
+        simd<uint32_t, 128>     wm;
+        ws.template select<64, 1>(0)  = x.template select<64, 1>(0) * sl0.template replicate<4>();
+        ws.template select<64, 1>(64) = x.template select<64, 1>(64) * sl1.template replicate<4>();
+        wm.template select<64, 1>(0)  = mc0.template replicate<4>();
+        wm.template select<64, 1>(64) = mc1.template replicate<4>();
+        Bs                            = ws.template bit_cast_view<int8_t>();
+        Bm                            = wm.template bit_cast_view<int8_t>();
+    }
     if constexpr (T::plain) {
         rd = sc.get_d(gi);
     } else if constexpr (T::has_min) {
         rd = sc.get_d(gi);
         rm = sc.get_m(gi);
     } else if constexpr (T::min16) {
-        rs0 = sc.get_d(2 * gi);
-        rs1 = sc.get_d(2 * gi + 1);
-        rm  = sc.get_m(2 * gi);
-        rm1 = sc.get_m(2 * gi + 1);
+        // scales are applied through Bs and Bm
     } else {
         rs0 = sc.get(2 * gi);
         rs1 = sc.get(2 * gi + 1);
@@ -1103,14 +1120,10 @@ ESIMD_INLINE void xmx_group(simd<float, NC * XMX_ROWS> & Cf,
             z -= convert<float>(Cs) * rm.template replicate<RC>();
             Cb += z * d8r;
         } else if constexpr (T::min16) {
-            simd<int, RC * NT>   C0 = xmx::dpas<8, RC, int>(Bl, A);
-            simd<int, RC * NT>   C1 = xmx::dpas<8, RC, int>(Bh, A);
-            simd<int, RC * NT>   S0 = xmx::dpas<8, RC, int>(Ol, A);  // sums of the activations
-            simd<int, RC * NT>   S1 = xmx::dpas<8, RC, int>(Oh, A);
-            simd<float, RC * NT> z  = convert<float>(C0) * rs0.template replicate<RC>();
-            z += convert<float>(C1) * rs1.template replicate<RC>();
-            z -= convert<float>(S0) * rm.template replicate<RC>();
-            z -= convert<float>(S1) * rm1.template replicate<RC>();
+            simd<int, RC * NT>   Cs = xmx::dpas<8, RC, int>(Bs, A);
+            simd<int, RC * NT>   Cm = xmx::dpas<8, RC, int>(Bm, A);
+            simd<float, RC * NT> z  = convert<float>(Cs) * sc.d.template replicate<RC>();
+            z -= convert<float>(Cm) * sc.dmin.template replicate<RC>();
             Cb += z * d8r;
         } else {
             simd<int, RC * NT>   C0 = xmx::dpas<8, RC, int>(Bl, A);
@@ -1188,13 +1201,8 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
     simd<int8_t, 512>    Bl  = int8_t(0);
     simd<int8_t, 512>    Bh  = int8_t(0);
     simd<int8_t, 512>    Ol  = int8_t(0);
-    simd<int8_t, 512>    Oh  = int8_t(0);
     if constexpr (T::has_min) {
         Ol = int8_t(1);
-    }
-    if constexpr (T::min16) {
-        Ol.template select<256, 1>(0)   = int8_t(1);
-        Oh.template select<256, 1>(256) = int8_t(1);
     }
 
     for (int sb = lid; sb < bpr; sb += ks) {
@@ -1242,9 +1250,9 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
                     }
                 }
 
-                xmx_group<T, NC>(Cf, pd, sc, A2, d8f, Bl, Bh, Ol, Oh, g, part);
+                xmx_group<T, NC>(Cf, pd, sc, A2, d8f, Bl, Bh, Ol, g, part);
                 if constexpr (FUSED) {
-                    xmx_group<T, NC>(Cfg, pdg, scg, A2, d8f, Bl, Bh, Ol, Oh, g, part);
+                    xmx_group<T, NC>(Cfg, pdg, scg, A2, d8f, Bl, Bh, Ol, g, part);
                 }
             }
         }
