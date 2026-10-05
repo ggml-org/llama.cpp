@@ -144,7 +144,7 @@ struct server_batch {
         bool output;
         bool is_prompt; // for stats tracking
         int32_t decision_order = 0;
-        int32_t i_mtmd = -1; // row in mtmd_embd, see add_mtmd()
+        int32_t i_embd = -1; // row in embd, -1 if this is a token
     };
     std::vector<token> tokens;
     int32_t n_tokens_alloc = 0;
@@ -153,12 +153,9 @@ struct server_batch {
     // track if given slot can be batched with slots already in the batch
     server_slot * slot_batched = nullptr;
 
-    bool has_embd = false;
-    std::vector<float> embd;
-
-    // mtmd embeddings that are in the same batch as text tokens, see add_mtmd()
-    std::vector<float>     mtmd_embd;
-    std::vector<llama_pos> mtmd_pos; // GGML_MROPE_SECTIONS per row
+    // embedding entries, they can be mixed with tokens if the context supports it
+    std::vector<float>     embd;     // n_embd per row
+    std::vector<llama_pos> embd_pos; // GGML_MROPE_SECTIONS per row
 
     float  alora_scale       = -1.0f;
     size_t alora_disabled_id = 0;
@@ -171,7 +168,6 @@ struct server_batch {
     }
 
     bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output, bool is_prompt) {
-        GGML_ASSERT(!has_embd); // cannot mix tokens + embd in same batch
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
@@ -179,39 +175,30 @@ struct server_batch {
         return true;
     }
 
-    bool add(int32_t id_slot, const std::vector<float> & embd_in, llama_pos pos, bool output, bool is_prompt) {
+    // embd_in has n_embd values, pos has GGML_MROPE_SECTIONS values
+    bool add_embd(int32_t id_slot, const float * embd_in, const llama_pos * pos, bool output, bool is_prompt) {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });
-        has_embd = true;
-        embd.insert(embd.end(), embd_in.begin(), embd_in.end());
+        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos[0], output, is_prompt });
+        tokens.back().i_embd = (int32_t) (embd_pos.size() / GGML_MROPE_SECTIONS);
+        embd.insert(embd.end(), embd_in, embd_in + n_embd);
+        embd_pos.insert(embd_pos.end(), pos, pos + GGML_MROPE_SECTIONS);
         return true;
     }
 
-    // one row of a mtmd chunk, it can be mixed with text tokens if the context supports it
-    bool add_mtmd(int32_t id_slot, const float * embd_in, const llama_pos * pos, bool output) {
-        GGML_ASSERT(!has_embd);
-        if ((int32_t)tokens.size() >= n_tokens_alloc) {
-            return false;
-        }
-        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos[0], output, /* is_prompt */ true });
-        tokens.back().i_mtmd = (int32_t) (mtmd_pos.size() / GGML_MROPE_SECTIONS);
-        mtmd_embd.insert(mtmd_embd.end(), embd_in, embd_in + n_embd);
-        mtmd_pos.insert(mtmd_pos.end(), pos, pos + GGML_MROPE_SECTIONS);
-        return true;
+    bool has_embd() const {
+        return !embd_pos.empty();
     }
 
     void clear() {
         tokens.clear();
         embd.clear();
-        mtmd_embd.clear();
-        mtmd_pos.clear();
+        embd_pos.clear();
         view.clear();
         slot_batched      = nullptr;
         alora_scale       = -1.0f;
         alora_disabled_id = 0;
-        has_embd          = false;
     }
 
     int32_t size() const {
@@ -236,12 +223,8 @@ struct server_batch {
         view.clear();
         for (int32_t i = off; i < off + n_tokens; i++) {
             const auto & t = tokens[i];
-            if (t.i_mtmd >= 0) {
-                view.add_embd({ mtmd_embd.data() + (size_t) t.i_mtmd * n_embd, 1, (size_t) n_embd }, mtmd_pos.data() + (size_t) t.i_mtmd * GGML_MROPE_SECTIONS, t.id_slot, t.output);
-            } else if (has_embd) {
-                // text embeddings broadcast the same position across the M-RoPE sections
-                const llama_pos pos[GGML_MROPE_SECTIONS] = { t.pos, t.pos, t.pos, 0 };
-                view.add_embd({ embd.data() + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, t.id_slot, t.output);
+            if (t.i_embd >= 0) {
+                view.add_embd({ embd.data() + (size_t) t.i_embd * n_embd, 1, (size_t) n_embd }, embd_pos.data() + (size_t) t.i_embd * GGML_MROPE_SECTIONS, t.id_slot, t.output);
             } else {
                 view.add(t.token, t.pos, t.id_slot, t.output);
             }
@@ -551,7 +534,11 @@ struct server_slot {
             i_batch = batch.size();
 
             if (!inp_embd.empty()) {
-                add_ok &= batch.add(id, inp_embd, prompt.tokens.pos_next(), true, false);
+                // text embeddings broadcast the same position across the M-RoPE sections
+                const llama_pos p = prompt.tokens.pos_next();
+                const llama_pos pos[GGML_MROPE_SECTIONS] = { p, p, p, 0 };
+                GGML_ASSERT((int32_t) inp_embd.size() == batch.n_embd);
+                add_ok &= batch.add_embd(id, inp_embd.data(), pos, true, false);
             } else {
                 add_ok &= batch.add(id, sampled, prompt.tokens.pos_next(), true, false);
             }
@@ -933,7 +920,7 @@ static int process_mtmd_chunk_mixed(const server_slot & slot, mtmd::batch_ptr & 
             pos[2] = rel.x;
             pos[3] = rel.z;
         }
-        if (!batch.add_mtmd(slot.id, embd + i * n_embd, pos, slot.need_embd())) {
+        if (!batch.add_embd(slot.id, embd + i * n_embd, pos, slot.need_embd(), /* is_prompt */ true)) {
             return -1;
         }
     }
@@ -4003,7 +3990,7 @@ private:
 
         // TODO @ngxson : dft model may have different n_embd than the tgt model, so we check & reject if that's the case
         // this case is not currently used by any models, but may need to be supported in the future
-        if (spec && batch.has_embd) {
+        if (spec && batch.has_embd()) {
             if (llama_model_n_embd_inp(model_dft) != llama_model_n_embd_inp(model_tgt)) {
                 SRV_ERR("%s", "unsupported batch.has_embd + spec case\n");
                 throw std::runtime_error("unsupported batch.has_embd + spec case");
