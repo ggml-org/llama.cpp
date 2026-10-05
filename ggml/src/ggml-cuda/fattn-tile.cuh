@@ -1,5 +1,6 @@
 #include "common.cuh"
 #include "fattn-common.cuh"
+#include "fattn-tile-access.cuh"
 
 // nbatch_fa == number of KQ rows to process per iteration
 // nbatch_K == number of K columns to load in parallel for KQ calculation
@@ -374,9 +375,9 @@ static constexpr __device__ int ggml_cuda_fattn_tile_get_nbatch_K(const int DKQ,
 }
 
 // TODO: deduplicate with mma-f16
-template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
+template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check, typename Rows = ggml_cuda_fattn_tile_native_rows>
 static __device__ __forceinline__ void flash_attn_tile_load_tile(
-        const half2 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
+        const half2 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int stride_KV, const int i_sup, const Rows & rows = {}) {
     constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
     constexpr int cpy_ne = cpy_nb / 4;
 
@@ -404,10 +405,17 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                 for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
                     const int j = j0*cpy_ne + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*cpy_ne;
 
-                    const __align__(16) half2 zero[cpy_ne] = {{0.0f, 0.0f}};
-                    ggml_cuda_memcpy_1<cpy_nb>(
-                        tile_KV + i*(J/2 + J_padding) + j,
-                        !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    if constexpr (std::is_same<Rows,ggml_cuda_fattn_tile_native_rows>::value) {
+                        const __align__(16) half2 zero[cpy_ne] = {{0.0f, 0.0f}};
+                        ggml_cuda_memcpy_1<cpy_nb>(
+                            tile_KV + i*(J/2 + J_padding) + j,
+                            !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    } else {
+                        __align__(16) half2 zero[cpy_ne];
+#pragma unroll
+                        for (int l = 0; l < cpy_ne; ++l) zero[l] = make_half2(0.0f,0.0f);
+                        rows.template load<cpy_nb>(tile_KV + i*(J/2 + J_padding) + j,i,j,!oob_check || i < i_sup,zero);
+                    }
                 }
             }
         }
@@ -424,9 +432,9 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
     ggml_cuda_unroll<7>{}(load);
 }
 
-template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
+template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check, typename Rows = ggml_cuda_fattn_tile_native_rows>
 static __device__ __forceinline__ void flash_attn_tile_load_tile(
-        const half2 * const __restrict__ KV, float * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
+        const half2 * const __restrict__ KV, float * const __restrict__ tile_KV, const int stride_KV, const int i_sup, const Rows & rows = {}) {
     constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
     constexpr int cpy_ne = cpy_nb / 4;
 
@@ -454,10 +462,17 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                 for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
                     const int j = j0*(cpy_ne/2) + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*(cpy_ne/2);
 
-                    const half2 zero[cpy_ne/2] = {{0.0f, 0.0f}};
                     __align__(16) half2 tmp_h2[cpy_ne/2];
-                    ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
-                        tmp_h2, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    if constexpr (std::is_same<Rows,ggml_cuda_fattn_tile_native_rows>::value) {
+                        const half2 zero[cpy_ne/2] = {{0.0f, 0.0f}};
+                        ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
+                            tmp_h2, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    } else {
+                        half2 zero[cpy_ne/2];
+#pragma unroll
+                        for (int l = 0; l < cpy_ne/2; ++l) zero[l] = make_half2(0.0f,0.0f);
+                        rows.template load<sizeof(tmp_h2)>(tmp_h2,i,j,!oob_check || i < i_sup,zero);
+                    }
 
                     __align__(16) float2 tmp_f2[cpy_ne/2];
 #pragma unroll
@@ -477,6 +492,13 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
     static_assert(J % 8 == 0, "bad J");
     static_assert(J % cpy_ne == 0, "bad J");
     ggml_cuda_unroll<5>{}(load);
+}
+
+// Custom readers share the lane distribution and conversion, without replacing native affine loads.
+template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check, typename T, typename Rows>
+static __device__ __forceinline__ void flash_attn_tile_load_tile(
+        const Rows & rows, T * const __restrict__ tile_KV, const int i_sup) {
+    flash_attn_tile_load_tile<warp_size,nwarps,I,J,J_padding,oob_check>(nullptr,tile_KV,0,i_sup,rows);
 }
 
 // Function that performs a single iteration in for the KQ matrix multiplication:

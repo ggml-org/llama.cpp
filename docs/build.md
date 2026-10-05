@@ -321,6 +321,31 @@ cmake --build build-sm61-eager --target test-kv-stream-vector-spans -j
 
 These modes change only the test process's host CC metadata, restore it before teardown, and reject mixed-target binaries. They check all-resident and wrapped spans, one-slot refill waves, masks/tails, exact/short scratch, canaries and phase handoffs against the stock kernel in the same binary. TG2 also tests separate causal frontiers, stale TG1 plans, changed-tail visibility, suffix invalidation and catch-up/replay. Use `--cuda-tg2` for that same matrix on an ordinary, unmodified CUDA device. These are not actual Pascal performance results or full-model support guarantees. Actual Pascal validation and tile-based TG3/TG4/MTP remain follow-up work; do not advertise complete GTX 10-series support from these tests alone.
 
+#### Native tile-access development checks
+
+The tile-load seam shares stock lane distribution and half-to-float conversion with future encoded/span readers. Its compile-time contract is:
+
+```cpp
+template<int bytes>
+void load(half2 * destination, int row, int half2_column,
+          bool valid, const half2 * zero_source) const;
+```
+
+The default native tag retains the original affine pointer loads and restrict qualifiers. Custom readers use their own copy implementation and explicit zero initialization for invalid rows. This does not yet enable span-aware tile attention, accumulator resume or full Pascal MTP.
+
+`test-cuda-tile-access` validates exact intermediate bits, float conversion, read counts, zero fill and padding/canaries on a real CUDA device. `test-kv-stream-tile` records native stock-selected tile outputs and compares a later build against those same files:
+
+```bash
+cmake --build build-sm61-eager --target test-cuda-tile-access test-kv-stream-tile -j
+./build-sm61-eager/bin/test-cuda-tile-access
+mkdir -p /tmp/tile-native-reference
+./build-sm61-eager/bin/test-kv-stream-tile --record /tmp/tile-native-reference --pascal
+# Rebuild with the proposed change, keeping toolkit, architecture, GPU and options identical.
+./build-sm61-eager/bin/test-kv-stream-tile --compare /tmp/tile-native-reference --pascal
+```
+
+Omit `--pascal` for the ordinary-device native tile matrix. Recording a reference from an already modified build is not an upstream-equivalence check. The Pascal mode requires an SM61-only binary and changes only test-process CC metadata; forward-JIT checks on a newer card are not actual Pascal hardware or throughput qualification.
+
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 
 If you try to use an old CUDA version (e.g. v11.7) with a new glibc version you can get errors like this:
