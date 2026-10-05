@@ -106,6 +106,20 @@ std::string gen_tool_call_id();
 const char * get_media_marker();
 
 //
+// model output modalities
+//
+
+// output modalities for architecture.output_modalities in GET /models
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type);
+
+// architecture object of GET /models; shared by the direct server and the router
+json server_model_architecture_json(
+        bool inp_image,
+        bool inp_audio,
+        bool inp_video,
+        const std::vector<std::string> & output_modalities);
+
+//
 // lora utils
 //
 
