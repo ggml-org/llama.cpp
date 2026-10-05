@@ -979,6 +979,12 @@ static void test_separate_head_target(const std::string & mixerless_path, const 
         require(!common_model_params_to_llama(params).load_mtp, "a target with a separate draft head skips its own MTP block");
         common_params params_dft = common_base_params_to_speculative(params);
         require(common_model_params_to_llama(params_dft).load_mtp, "the separate draft head loads its MTP block");
+        // The same file named as target and as draft still loads twice, and only the draft runs its block.
+        params.speculative.draft.mparams.path = params.model.path;
+        require(!common_model_params_to_llama(params).load_mtp, "a target with a same-file draft skips its own MTP block");
+        common_params params_same = common_base_params_to_speculative(params);
+        require(common_model_params_to_llama(params_same).load_mtp, "the same-file draft loads its MTP block");
+        params.speculative.draft.mparams.path = head_path;
         const auto result = common_init_from_params(params, true);
         require(result && result->model(), "a target without the draft mixer loads next to a separate head");
     }

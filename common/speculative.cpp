@@ -3272,6 +3272,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
             result.devices           = params_spec.devices;
         }
         result.model                 = params_spec.mparams;
+        result.model_is_spec_draft   = true;
         result.n_gpu_layers          = params_spec.n_gpu_layers;
         result.tensor_buft_overrides = params_spec.tensor_buft_overrides;
 
