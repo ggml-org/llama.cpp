@@ -70,6 +70,7 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
     // check ubatch to see if we have input tokens (text)
     // or an input embedding vector (image)
     bool is_text;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         is_text = true;
     } else {

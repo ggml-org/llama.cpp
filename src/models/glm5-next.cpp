@@ -263,7 +263,6 @@ public:
         // The scatter mask shape follows n_kv.
         res &= n_kv              == idx->get_n_kv();
         res &= n_new             == std::max(mctx->get_n_kpool_new(), 1u);
-        res &= cache_safe        == mctx->get_kpool_cache_safe();
 
         return res;
     }
@@ -273,7 +272,7 @@ public:
     ggml_tensor * pool_idxs     = nullptr; // I32     [kpool, n_pool]  member cells per pool, n_kv sentinel for the padded pools
     ggml_tensor * pool_mask     = nullptr; // F32/F16 [n_pool, n_tokens]
     ggml_tensor * tail_idxs     = nullptr; // I32     [kpool - 1, n_tokens]
-    ggml_tensor * gather_mask   = nullptr; // F32     [n_sel, 1, 1, n_tokens]
+    ggml_tensor * gather_mask   = nullptr; // F32     [n_sel, 1, 1, n_tokens] 0 for live selection slots, -inf for dead ones
     // n_new is never below 1, see build_inp_kpool
     ggml_tensor * new_pool_idxs = nullptr; // I32     [kpool, n_new]   members of the pools completed this ubatch
     ggml_tensor * new_pool_rep  = nullptr; // I64     [n_new]          cell to write each new pooled key into
@@ -282,7 +281,6 @@ public:
     const uint32_t kpool;
     uint32_t n_new = 0;
     uint32_t n_sel = 0;
-    bool cache_safe = true;
     bool gather = false;
     uint32_t n_kv  = 0;
 };
@@ -296,8 +294,7 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
     const uint32_t n_kv   = mctx_idx->get_n_kv();
     // a ubatch that completes no pool still builds one dummy entry, so the graph does not
     // change shape every kpool tokens
-    const uint32_t n_new  = std::max(mctx_hyb->get_n_kpool_new(), 1u);
-    const bool cache_safe = mctx_hyb->get_kpool_cache_safe();
+    const uint32_t n_new = std::max(mctx_hyb->get_n_kpool_new(), 1u);
 
     // the fused lightning indexer wants an f16 mask
     const auto type_mask = cparams.fused_lid ? GGML_TYPE_F16 : GGML_TYPE_F32;
@@ -321,32 +318,33 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
 
     inp->n_kv = n_kv;
 
-    // Gather selected latents for small decode batches when n_kv exceeds n_sel.
+    // Gather selected latents for small batches when the context exceeds the selection width.
     {
         constexpr int64_t max_ub = 16;
 
         const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
         const int64_t n_sel      = kpool*n_top_pool + (hparams.indexer_kpool_select_tail ? kpool - 1 : 0);
         inp->n_sel = (uint32_t) n_sel;
-        inp->gather = (int64_t) n_tokens <= max_ub && (int64_t) n_kv > n_sel;
+        // both terms are context constants: n_ubatch bounds every ubatch and top_k + kpool - 1 bounds
+        // n_sel, so the graph shape follows neither n_tokens nor n_kv, which the reserve cannot predict
+        // TODO: remove "gather" logic and everything related. the backends now support sparse attension so this is obsolete
+        inp->gather = (int64_t) cparams.n_ubatch <= max_ub && (int64_t) cparams.n_ctx > hparams.indexer_top_k + kpool - 1;
 
-        if (inp->gather) {
-            inp->gather_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_sel, 1, 1, n_tokens);
-            ggml_set_input(inp->gather_mask);
-            // Keep the mask allocated even when no op reads it, because set_input_kpool always fills it.
-            ggml_build_forward_expand(gf, inp->gather_mask);
-        }
+        // Both paths read the slot mask: gather adds it to the scores, scatter maps its dead slots to dump rows.
+        inp->gather_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_sel, 1, 1, n_tokens);
+        ggml_set_input(inp->gather_mask);
+        // Keep the mask allocated even when no op reads it, because set_input_kpool always fills it.
+        ggml_build_forward_expand(gf, inp->gather_mask);
     }
 
     inp->n_new = n_new;
-    inp->cache_safe = cache_safe;
 
     inp->new_pool_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_new);
     ggml_set_input(inp->new_pool_idxs);
-    if (cache_safe) {
-        inp->new_pool_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_new);
-        ggml_set_input(inp->new_pool_rep);
-    }
+    // the scatter target is part of the graph shape: llama_context reserves the full-context graph,
+    // so this must not depend on cache_safe, which only the decode-time graph can know
+    inp->new_pool_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_new);
+    ggml_set_input(inp->new_pool_rep);
 
     return (llm_graph_input_kpool *) res->add_input(std::move(inp));
 }
@@ -815,20 +813,11 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     pooled_new = ggml_reshape_2d(ctx0, pooled_new, n_embd_indexer, n_new);
     cb(pooled_new, "indexer_pool_k_new", il);
 
-    if (inp_kpool->cache_safe) {
-        // Write before the pool gather.
-        ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
-    }
-
-    ggml_tensor * pooled = nullptr;
-    if (inp_kpool->cache_safe) {
-        pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
-    } else {
-        GGML_ASSERT(n_new <= n_pool);
-        ggml_tensor * pad = ggml_fill(ctx0,
-                ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_pool - n_new), 0.0f);
-        pooled = ggml_concat(ctx0, pooled_new, pad, 1);
-    }
+    // scatter the fresh pooled keys, then gather all n_pool of them by cell, in both cache modes:
+    // the reserved graph cannot branch on cache_safe, and without sharing every pool is re-pooled
+    // anyway (n_new == n_pool_real, layout order), so the gather returns exactly pooled_new
+    ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
+    ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
     pooled = ggml_reshape_3d(ctx0, pooled, n_embd_indexer, 1, n_pool);
     cb(pooled, "indexer_pool_k", il);
 
@@ -887,17 +876,26 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
         return sel_idx;
     }
 
-    // Tie scatter storage lifetime to this layer's selected indices.
-    ggml_tensor * seed = ggml_cast(ctx0, ggml_view_1d(ctx0, sel_idx, 1, 0), GGML_TYPE_F32);
+    ggml_build_forward_expand(gf, sel_idx);
 
-    ggml_tensor * mask_seed = kq_mask->type == GGML_TYPE_F32 ? seed : ggml_cast(ctx0, seed, kq_mask->type);
-    mask_seed = ggml_fill(ctx0, mask_seed, -INFINITY);
-    ggml_tensor * mask_all = ggml_repeat_4d(ctx0, mask_seed, 1, n_kv + 1, n_tokens, 1);
-    mask_all = ggml_reshape_3d(ctx0, mask_all, 1, n_kv + 1, n_tokens);
+    ggml_tensor * mask_all = ggml_new_tensor_4d(ctx0, kq_mask->type, n_kv + n_sel, 1, 1, 1);
+    mask_all = ggml_fill(ctx0, mask_all, -INFINITY);
+    mask_all = ggml_repeat_4d(ctx0, mask_all, n_kv + n_sel, n_tokens, 1, 1);
+    mask_all = ggml_reshape_3d(ctx0, mask_all, 1, n_kv + n_sel, n_tokens);
 
-    ggml_tensor * zero_seed = ggml_fill(ctx0, seed, 0.0f);
-    ggml_tensor * zeros = ggml_repeat_4d(ctx0, zero_seed, 1, n_sel, n_tokens, 1);
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, kq_mask->type, n_sel, 1, 1, 1);
+    zeros = ggml_fill(ctx0, zeros, 0.0f);
+    zeros = ggml_repeat_4d(ctx0, zeros, n_sel, n_tokens, 1, 1);
     zeros = ggml_reshape_3d(ctx0, zeros, 1, n_sel, n_tokens);
+
+    // Live slots (visible pools, real tail cells) address disjoint cells. Each dead slot writes its own dump row
+    // n_kv + slot, so the scatter indices of a token are unique: idx = dump + live*(idx - dump), live = exp(mask).
+    GGML_ASSERT(inp_kpool->gather_mask->ne[0] == n_sel && inp_kpool->gather_mask->ne[3] == n_tokens);
+    ggml_tensor * live  = ggml_exp(ctx0, ggml_reshape_2d(ctx0, inp_kpool->gather_mask, n_sel, n_tokens));
+    ggml_tensor * dump  = ggml_arange(ctx0, (float) n_kv, (float) (n_kv + n_sel), 1.0f);
+    ggml_tensor * idx_f = ggml_cast(ctx0, sel_idx, GGML_TYPE_F32);
+    idx_f   = ggml_add(ctx0, ggml_mul(ctx0, ggml_sub(ctx0, idx_f, dump), live), dump);
+    sel_idx = ggml_cast(ctx0, idx_f, GGML_TYPE_I32);
 
     ggml_tensor * sel = ggml_set_rows(ctx0, mask_all, zeros, ggml_reshape_3d(ctx0, sel_idx, n_sel, n_tokens, 1));
     sel = ggml_view_2d(ctx0, sel, n_kv, n_tokens, sel->nb[2], 0);

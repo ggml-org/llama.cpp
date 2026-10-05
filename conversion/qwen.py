@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import numpy as np
@@ -10,7 +11,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, logger
+from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, jinja_str_or_json, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
@@ -469,6 +470,21 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         shape = list(tensor.shape)
         if dim < 0:
             dim += len(shape)
+
+        # LoRA tensors (W ≈ B @ A) cannot reshape their row dimension.
+        # Instead, build a permutation index and apply it to A (column reorder) or B (row reorder) directly.
+        if hasattr(tensor, 'get_lora_A_B'):
+            n = shape[dim]
+            idx = torch.arange(n).reshape(num_k_heads, num_v_per_k, head_dim)
+            idx = idx.permute(1, 0, 2).contiguous().reshape(n)
+            lora_A, lora_B = tensor.get_lora_A_B()  # ty: ignore[call-non-callable]
+            if dim == len(shape) - 1:
+                return type(tensor)(lora_A[:, idx], lora_B)
+            elif dim == 0:
+                return type(tensor)(lora_A, lora_B[idx])
+            else:
+                raise NotImplementedError(f"_reorder_v_heads on dim={dim} not supported for LoRA tensors")
+
         new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
         tensor = tensor.reshape(*new_shape)
         perm = list(range(len(new_shape)))
@@ -640,6 +656,62 @@ class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
+def _is_openjev_checkpoint(dir_model: Path) -> bool:
+    return (dir_model / "helper" / "shim.py").is_file() and (dir_model / "config.json").is_file()
+
+
+@ModelBase.register_hparams_loader(_is_openjev_checkpoint)
+def _load_openjev_hparams(dir_model: Path) -> dict[str, Any]:
+    logger.info("gguf: detected OpenJev checkpoint")
+    hparams = ModelBase.load_hparams(dir_model, False, guess=False)
+    hparams["architectures"] = ["OpenJevModel"]
+    return hparams
+
+
+@ModelBase.register("OpenJevModel")
+@ModelBase.example("openjev/openjev")
+class OpenJevModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True  # the checkpoint has no MTP head
+
+    # prompt and calibration follow helper/shim.py of the model repo (text lane)
+    _LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    _TEMPERATURE = 0.85
+    _TEMPERATURE_NOUL = 1.829074  # applied on top of _TEMPERATURE
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        description = jinja_str_or_json("o.description")
+        option = (
+            "{% if type != 'noul' %}{{ o.key }}: {% if o.description %}" + description + "{% endif %}"
+            "{% elif o.key == 'true' %}yes: {% if o.description %}" + description + "{% else %}The statement is true.{% endif %}"
+            "{% else %}no: {% if o.description %}" + description + "{% else %}The statement is false.{% endif %}{% endif %}"
+        )
+        # TODO: only the layout with one image is known (image first), the one with several images is not verified
+        images = (
+            "{% for image in images %}{{ image }}{% endfor %}"
+            "{% if images %}{{ 'The screenshot shows the current screen.\\n' }}{% endif %}"
+        )
+        return (
+            "{% set letters = '" + self._LETTERS + "' %}"
+            "<|im_start|>user\n" + images + "State:\n" + jinja_str_or_json("state") + "\n\nQuestion: " + jinja_str_or_json("instructions")
+            + "{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}"
+            "{{ '\\nOptions:\\n' }}"
+            "{% for o in options %}[{{ letters[loop.index0] }}] " + option + "{{ '\\n' }}{% endfor %}"
+            "{{ '\\nAnswer with the letter of the best option only.<|im_end|>\\n<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n' }}"
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_decision_type(gguf.DecisionType.OPENJEV)
+        self.gguf_writer.add_decision_temperature("choice", self._TEMPERATURE)
+        self.gguf_writer.add_decision_temperature("score",  self._TEMPERATURE)
+        self.gguf_writer.add_decision_temperature("noul",   self._TEMPERATURE * self._TEMPERATURE_NOUL)
+
+
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 @ModelBase.example("Qwen/Qwen3.5-35B-A3B")
 class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
@@ -714,6 +786,12 @@ class DFlashModel(Qwen3Model):
         embedding_scale = dflash_config.get(
             "input_embedding_scale", self.hparams.get("input_embedding_scale")
         )
+        if embedding_scale is None and self.target_model_dir is not None:
+            # the draft shares the target's token embeddings, and Gemma scales them by sqrt(hidden_size) in the forward pass
+            target_hparams = ModelBase.load_hparams(self.target_model_dir, False)
+            if get_model_architecture(target_hparams, ModelType.TEXT).startswith("Gemma"):
+                target_hparams = {**target_hparams, **target_hparams.get("text_config", {})}
+                embedding_scale = target_hparams["hidden_size"] ** 0.5
         if embedding_scale is not None:
             self.gguf_writer.add_embedding_scale(float(embedding_scale))
 
