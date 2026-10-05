@@ -2451,7 +2451,6 @@ struct llama_model_clef : public llama_model_qwen35 {
     ggml_tensor * scorer_out_b         = nullptr;
 
     class input_decision;
-    class input_attn_causal;
 
     struct graph : public llm_build_delta_net_base {
         graph(const llama_model & model, const llm_graph_params & params);

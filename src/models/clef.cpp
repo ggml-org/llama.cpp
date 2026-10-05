@@ -315,7 +315,7 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
 }
 
 // causal mask by batch order: the tokens of an image share the same position
-class llama_model_clef::input_attn_causal : public llm_graph_input_attn_no_cache {
+class llm_graph_input_attn_clef : public llm_graph_input_attn_no_cache {
 public:
     using llm_graph_input_attn_no_cache::llm_graph_input_attn_no_cache;
 
@@ -342,7 +342,7 @@ public:
 
 // same as build_attn_inp_no_cache(), with a causal mask even if the batch is processed by the encoder path
 llm_graph_input_attn_no_cache * llama_model_clef::graph::build_attn_inp_causal() {
-    auto inp = std::make_unique<input_attn_causal>(hparams, cparams);
+    auto inp = std::make_unique<llm_graph_input_attn_clef>(hparams, cparams);
 
     const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
