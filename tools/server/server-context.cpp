@@ -1116,7 +1116,16 @@ private:
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
 
+#ifdef LLAMA_SERVER_TEXT_ONLY
+        // specialized text-only fork: refuse any multimodal projector
+        if (!params.mmproj.path.empty()) {
+            SRV_ERR("%s", "text-only server build: --mmproj is not supported\n");
+            return false;
+        }
+        const bool has_mmproj = false;
+#else
         const bool has_mmproj = !params.mmproj.path.empty();
+#endif
         const bool has_draft = params.speculative.has_dft();
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
