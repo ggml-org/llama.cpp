@@ -372,6 +372,7 @@ struct llama_memory_hybrid_idx::kpool_layout {
 // Which pools of the layout the current ubatch must re-pool, in the layout's pool order.
 struct llama_memory_hybrid_idx_context::kpool_state {
     std::vector<uint32_t> is_new;
+    std::vector<uint32_t> rep_gen; // per global cell, the generation that last marked a pool with that rep
     uint32_t generation = 0;
 
     uint32_t n_pool_real = 0;
@@ -686,6 +687,7 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
     st.n_new       = 0;
     if (++st.generation == 0) {
         std::fill(st.is_new.begin(), st.is_new.end(), 0);
+        std::fill(st.rep_gen.begin(), st.rep_gen.end(), 0);
         st.generation = 1;
     }
     st.is_new.resize(lay.n_pool_real, 0);
@@ -724,9 +726,25 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
     }
     GGML_ASSERT(ip == st.is_new.size());
 
+    // with shared cells every pool is re-pooled, once per rep: the copies a seq_cp shares between sequences
+    // read the same rep row through pool_cells, and a single entry per rep keeps the scatter rows unique
     if (!st.cache_safe) {
-        std::fill(st.is_new.begin(), st.is_new.end(), st.generation);
-        st.n_new   = st.n_pool_real;
+        const auto *   idx     = mem->get_mem_idx();
+        const uint32_t kv_size = idx->get_size();
+        st.rep_gen.resize((size_t) kv_size*idx->get_n_stream(), 0);
+
+        ip = 0;
+        for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
+            const auto & sq = lay.seqs[s];
+            for (const uint32_t j : sq.pools) {
+                const size_t rep = (size_t) sq.strm*kv_size + sq.cells[j + kpool - 1].second;
+                if (st.rep_gen[rep] != st.generation) {
+                    st.rep_gen[rep] = st.generation;
+                    mark(ip);
+                }
+                ++ip;
+            }
+        }
         st.n_new_g = std::max(st.n_new, 1u);
         return;
     }
