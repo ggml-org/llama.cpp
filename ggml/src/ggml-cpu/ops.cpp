@@ -1711,6 +1711,102 @@ void ggml_compute_forward_count_equal(
     }
 }
 
+// ggml_compute_forward_count_equal_masked
+
+static void ggml_compute_forward_count_equal_masked_i32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    GGML_ASSERT(src0->type == GGML_TYPE_I32);
+    GGML_ASSERT(src1->type == GGML_TYPE_I32);
+    GGML_ASSERT(src2->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src0, src1));
+    GGML_ASSERT(src2->ne[1] == src0->ne[0] || ggml_are_same_shape(src0, src2));
+    GGML_ASSERT(ggml_is_scalar(dst));
+    GGML_ASSERT(dst->type == GGML_TYPE_I64);
+
+    const int64_t nr = ggml_nrows(src0);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    int64_t * sums = (int64_t *) params->wdata;
+    int64_t sum_thread = 0;
+
+    const int64_t dr = (nr + nth - 1)/nth;
+
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    const bool mask_same_shape = ggml_are_same_shape(src0, src2);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 =  ir                       / (ne02*ne01);
+        const int64_t i02 = (ir - i03*ne02*ne01)      /       ne01;
+        const int64_t i01 =  ir - i03*ne02*ne01 - i02*ne01;
+
+        const char * data0 = (const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01;
+        const char * data1 = (const char *) src1->data + i03*nb13 + i02*nb12 + i01*nb11;
+        const char * data2 = (const char *) src2->data + i03*src2->nb[3] + i02*src2->nb[2] + i01*src2->nb[1];
+
+        for (int64_t i00 = 0; i00 < ne00; ++i00) {
+            const int32_t val0 = *((const int32_t *) (data0 + i00*nb00));
+            const int32_t val1 = *((const int32_t *) (data1 + i00*nb10));
+
+            float mask_val;
+            if (mask_same_shape) {
+                mask_val = *((const float *) (data2 + i00*src2->nb[0]));
+            } else {
+                const char * mask_ptr = (const char *) src2->data + i00*src2->nb[1];
+                mask_val = *((const float *) mask_ptr);
+            }
+
+            const bool mask = mask_val > 0.5f;
+
+            if (mask) {
+                sum_thread += val0 == val1;
+            }
+        }
+    }
+    if (ith != 0) {
+        sums[ith] = sum_thread;
+    }
+    ggml_barrier(params->threadpool);
+
+    if (ith != 0) {
+        return;
+    }
+
+    for (int ith_other = 1; ith_other < nth; ++ith_other) {
+        sum_thread += sums[ith_other];
+    }
+    *((int64_t *) dst->data) = sum_thread;
+}
+
+void ggml_compute_forward_count_equal_masked(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_I32:
+            {
+                ggml_compute_forward_count_equal_masked_i32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_repeat
 
 static void ggml_compute_forward_repeat_f32(
@@ -12272,6 +12368,196 @@ void ggml_compute_forward_cross_entropy_loss_back(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_cross_entropy_loss_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_cross_entropy_loss_masked_f32
+
+static void ggml_compute_forward_cross_entropy_loss_masked_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];  // logits
+    const ggml_tensor * src1 = dst->src[1];  // targets
+    const ggml_tensor * src2 = dst->src[2];  // mask (1 for assistant tokens, 0 for masked)
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src2->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->nb[0] == ggml_type_size(src0->type));
+    GGML_ASSERT(src1->nb[0] == ggml_type_size(src1->type));
+    GGML_ASSERT(src2->nb[0] == ggml_type_size(src2->type));
+    GGML_ASSERT(ggml_are_same_shape(src0, src1));
+    GGML_ASSERT(ggml_is_scalar(dst));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    const int64_t nc = src0->ne[0];
+    const int64_t nr = ggml_nrows(src0);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    float * sums = (float *) params->wdata;
+    float * st   = ((float *) params->wdata) + nth + ith*nc;
+    float sum_thread = 0.0f;
+    int64_t valid_tokens_thread = 0;
+
+    GGML_ASSERT(params->wsize >= sizeof(float) * (nth + nth * nc) + sizeof(int64_t) * nth);
+    int64_t * valid_counts = (int64_t *)(((float *) params->wdata) + nth + nth * nc);
+
+    const int64_t dr = (nr + nth - 1)/nth;
+
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    for (int64_t i1 = ir0; i1 < ir1; ++i1) {
+        const float * s0 = (const float *)((const char *) src0->data + i1*src0->nb[1]);
+        const float * s1 = (const float *)((const char *) src1->data + i1*src1->nb[1]);
+        const float * mask_row = (const float *)((const char *) src2->data + i1*src2->nb[1]);
+        const float mask_value = mask_row[0];
+
+        if (mask_value <= 0.5f) continue;
+
+        float max = -INFINITY;
+        ggml_vec_max_f32(nc, &max, s0);
+
+        const ggml_float sum_softmax = ggml_vec_log_soft_max_f32(nc, st, s0, max);
+        assert(sum_softmax >= 0.0);
+
+        ggml_vec_add1_f32(nc, st, st, -sum_softmax);
+
+        float sum_st = 0.0f;
+        for (int64_t i = 0; i < nc; i++) {
+            sum_st += st[i] * s1[i];
+        }
+
+        sum_thread += sum_st;
+        valid_tokens_thread++;
+    }
+
+    sums[ith] = sum_thread;
+    valid_counts[ith] = valid_tokens_thread;
+    ggml_barrier(params->threadpool);
+
+    if (ith == 0) {
+        float total_loss = 0.0f;
+        int64_t total_valid = 0;
+
+        for (int i = 0; i < nth; i++) {
+            total_loss += sums[i];
+            total_valid += valid_counts[i];
+        }
+
+        float * dp = (float *) dst->data;
+        if (total_valid > 0) {
+            float final_loss = -total_loss / (float)total_valid;
+            dp[0] = final_loss;
+        } else {
+            dp[0] = 0.0f;
+        }
+    }
+}
+
+// ggml_compute_forward_cross_entropy_loss_masked_back_f32
+
+static void ggml_compute_forward_cross_entropy_loss_masked_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * grad  = dst->src[0];
+    const ggml_tensor * src0f = dst->src[1];
+    const ggml_tensor * src1f = dst->src[2];
+    const ggml_tensor * src2f = dst->src[3];
+
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_is_contiguous(src0f));
+    GGML_ASSERT(ggml_is_contiguous(src1f));
+    GGML_ASSERT(ggml_is_contiguous(src2f));
+    GGML_ASSERT(ggml_is_contiguous(grad));
+    GGML_ASSERT(ggml_are_same_shape(src0f, src1f) && ggml_are_same_shape(src0f, dst));
+
+    const int64_t ith = params->ith;
+    const int64_t nth = params->nth;
+
+    const int64_t nc = src0f->ne[0];
+    const int64_t nr = ggml_nrows(src0f);
+
+    int64_t total_valid = 0;
+    for (int64_t i1 = 0; i1 < nr; i1++) {
+        const float * mask_row = (const float *)((const char *) src2f->data + i1*src2f->nb[1]);
+        const float mask_value = mask_row[0];
+        if (mask_value > 0.5f) {
+            total_valid++;
+        }
+    }
+
+    const int64_t dr = (nr + nth - 1)/nth;
+
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    const float upstream_grad = ((const float *) grad->data)[0];
+
+    float d_scale = 0.0f;
+    if (total_valid > 0) {
+        d_scale = upstream_grad / (float) total_valid;
+    }
+
+    for (int64_t i1 = ir0; i1 < ir1; i1++) {
+        float       * ds0 = (float       *)((char       *) dst->data   + i1*dst->nb[1]);
+        const float * s0  = (const float *)((const char *) src0f->data + i1*src0f->nb[1]);
+        const float * s1  = (const float *)((const char *) src1f->data + i1*src1f->nb[1]);
+        const float * mask_row = (const float *)((const char *) src2f->data + i1*src2f->nb[1]);
+        const float mask_value = mask_row[0];
+
+        if (mask_value > 0.5f) {
+            float max = -INFINITY;
+            ggml_vec_max_f32(nc, &max, s0);
+            const ggml_float sum = ggml_vec_soft_max_f32(nc, ds0, s0, max);
+            assert(sum > 0.0);
+            ggml_vec_scale_f32(nc, ds0, 1.0/sum);
+
+            ggml_vec_sub_f32(nc, ds0, ds0, s1);
+            ggml_vec_scale_f32(nc, ds0, d_scale);
+        } else {
+            ggml_vec_set_f32(nc, ds0, 0.0f);
+
+        }
+    }
+}
+
+void ggml_compute_forward_cross_entropy_loss_masked(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_cross_entropy_loss_masked_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+void ggml_compute_forward_cross_entropy_loss_masked_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_cross_entropy_loss_masked_back_f32(params, dst);
             } break;
         default:
             {
