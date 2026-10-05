@@ -1,12 +1,13 @@
 <script lang="ts">
+	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
 	import ModelsManagerModelConfigurationHeader from './ModelsManagerModelConfigurationHeader.svelte';
 	import ModelsManagerModelConfigurationInformation from './ModelsManagerModelConfigurationInformation.svelte';
 	import { Trash2 } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Button } from '$lib/components/ui/button';
-	import { ModelDownloadConfirmAction } from '$lib/enums';
+	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
+	import { deviceStore, modelsStore } from '$lib/stores';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
 	import { repoOf } from '$lib/utils';
@@ -86,6 +87,19 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- a phone keeps the actions at the bottom of its screen, in reach of the thumb -->
+	{#if deviceStore.isMobile}
+		<div class="shrink-0 border-t border-border/40 px-4 py-3">
+			<ModelsManagerModelConfigurationActions
+				{isLoaded}
+				isLoading={status === ServerModelStatus.LOADING}
+				{onToggleLoad}
+				{onUseInChat}
+				{onUseInNewChat}
+			/>
+		</div>
+	{/if}
 
 	<DialogConfirmDownload
 		action={ModelDownloadConfirmAction.DELETE}
