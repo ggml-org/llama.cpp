@@ -204,6 +204,9 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
 }
 
 void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    // only whole sequences are copied: the recurrent state ignores the range, and a shared cell holds a single pool grouping
+    GGML_ASSERT(p0 <= 0 && p1 < 0 && "partial seq_cp is not supported");
+
     llama_memory_hybrid::seq_cp(seq_id_src, seq_id_dst, p0, p1);
 
     if (mem_idx) {
