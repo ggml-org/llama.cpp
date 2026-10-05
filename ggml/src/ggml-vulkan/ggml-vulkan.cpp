@@ -3262,7 +3262,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_group_norm_f32, "group_norm_f32", group_norm_f32_len, group_norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
 
     const bool rms_subgroups = (device->vendor_id == VK_VENDOR_ID_INTEL || device->vendor_id == VK_VENDOR_ID_NVIDIA) && device->subgroup_arithmetic && device->subgroup_require_full_support;
-    const uint32_t rms_set_rows_block_size = 128;
+    const uint32_t rms_set_rows_block_size = rms_subgroups ? 128 : 512;
 #define RMS_SHADER(name) (rms_subgroups ? name##_subgroup_len : name##_len), (rms_subgroups ? name##_subgroup_data : name##_data)
     // Subgroup variants come in 128/256/512 block sizes, picked by row length.
     for (uint32_t i = rms_subgroups ? 0 : 2; i < 3; ++i) {

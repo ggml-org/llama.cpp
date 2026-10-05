@@ -7,12 +7,10 @@
 #if USE_SUBGROUP_ADD
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
-layout (constant_id = 3) const uint BLOCK_SIZE = 512;
-layout(local_size_x_id = 3, local_size_y = 1, local_size_z = 1) in;
-#else
-#define BLOCK_SIZE 512
-layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 #endif
+
+layout (constant_id = 3) const int BLOCK_SIZE = 512;
+layout(local_size_x_id = 3, local_size_y = 1, local_size_z = 1) in;
 
 #if RMS_NORM_ROPE_FUSION
 
