@@ -2619,16 +2619,17 @@ private:
         }
     }
 
-    size_t save_slot_checkpoints(const std::string & filepath, const server_slot & slot) const {
+    // returns false if the appendix could not be written completely
+    bool save_slot_checkpoints(const std::string & filepath, const server_slot & slot, size_t & n_written) const {
+        n_written = 0;
         if (slot.prompt.checkpoints.empty()) {
-            return 0;
+            return true;
         }
         std::ofstream ofs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::app);
         if (!ofs) {
             SRV_WRN("failed to append context checkpoints to '%s'\n", filepath.c_str());
-            return 0;
+            return false;
         }
-        size_t n_written = 0;
         const uint32_t magic   = SLOT_CKPT_MAGIC;
         const uint32_t version = SLOT_CKPT_VERSION;
         const uint32_t count   = (uint32_t) slot.prompt.checkpoints.size();
@@ -2646,11 +2647,11 @@ private:
         ofs.flush();
         if (!ofs) {
             SRV_WRN("failed to append context checkpoints to '%s' - the appendix is incomplete\n", filepath.c_str());
-            return 0;
+            return false;
         }
         SRV_INF("appended %u context checkpoint(s) (%.3f MiB) to '%s'\n",
                 count, (float) n_written / 1024 / 1024, filepath.c_str());
-        return n_written;
+        return true;
     }
 
     // returns the number of bytes consumed, 0 if there is no usable appendix
@@ -2917,7 +2918,11 @@ private:
                         break;
                     }
 
-                    const size_t nwrite_ckpt = save_slot_checkpoints(filepath, *slot);
+                    size_t nwrite_ckpt = 0;
+                    if (!save_slot_checkpoints(filepath, *slot, nwrite_ckpt)) {
+                        send_error(task, "Unable to save slot: incomplete context checkpoints", ERROR_TYPE_SERVER);
+                        break;
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;

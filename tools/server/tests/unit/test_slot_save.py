@@ -692,8 +692,8 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
     off, ckpts = parse_ckpt_appendix(data)
 
     if damage == "oversized_blob":
-        # the first target blob declares 64 MiB that are not in the file
-        data = data[:ckpts[0][0] + 16] + struct.pack("<Q", 64 << 20)
+        # the first target blob declares a size that cannot be allocated, it must be rejected before allocating
+        data = data[:ckpts[0][0] + 16] + struct.pack("<Q", 1 << 62)
     elif damage == "corrupt_state":
         # the sizes are intact, but the target states do not load
         for _, _, tgt in ckpts:
