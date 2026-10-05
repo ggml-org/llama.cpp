@@ -140,10 +140,11 @@ struct server_batch {
     struct token {
         int32_t id_slot;
         llama_token token;
-        llama_pos pos;
+        std::array<llama_pos, GGML_MROPE_SECTIONS> pos; // only pos[0] is used for text tokens
         bool output;
         bool is_prompt; // for stats tracking
         int32_t decision_order = 0;
+        int32_t i_embd = -1; // row in embd, -1 if this is a token
     };
     std::vector<token> tokens;
     int32_t n_tokens_alloc = 0;
@@ -152,8 +153,8 @@ struct server_batch {
     // track if given slot can be batched with slots already in the batch
     server_slot * slot_batched = nullptr;
 
-    bool has_embd = false;
-    std::vector<float> embd;
+    // embedding entries, they can be mixed with tokens if the context supports it
+    std::vector<float> embd; // n_embd per row
 
     float  alora_scale       = -1.0f;
     size_t alora_disabled_id = 0;
@@ -166,22 +167,26 @@ struct server_batch {
     }
 
     bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output, bool is_prompt) {
-        GGML_ASSERT(!has_embd); // cannot mix tokens + embd in same batch
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, token, pos, output, is_prompt });
+        tokens.push_back({ id_slot, token, { pos, 0, 0, 0 }, output, is_prompt });
         return true;
     }
 
-    bool add(int32_t id_slot, const std::vector<float> & embd_in, llama_pos pos, bool output, bool is_prompt) {
+    // embd_in has n_embd values, pos has GGML_MROPE_SECTIONS values
+    bool add_embd(int32_t id_slot, const float * embd_in, const llama_pos * pos, bool output, bool is_prompt) {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });
-        has_embd = true;
-        embd.insert(embd.end(), embd_in.begin(), embd_in.end());
+        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, { pos[0], pos[1], pos[2], pos[3] }, output, is_prompt });
+        tokens.back().i_embd = (int32_t) (embd.size() / n_embd);
+        embd.insert(embd.end(), embd_in, embd_in + n_embd);
         return true;
+    }
+
+    bool has_embd() const {
+        return !embd.empty();
     }
 
     void clear() {
@@ -191,11 +196,22 @@ struct server_batch {
         slot_batched      = nullptr;
         alora_scale       = -1.0f;
         alora_disabled_id = 0;
-        has_embd          = false;
     }
 
     int32_t size() const {
         return (int32_t)tokens.size();
+    }
+
+    // remove the entries after the first n
+    void truncate(int32_t n) {
+        GGML_ASSERT(n >= 0 && n <= size());
+        for (int32_t i = n; i < size(); i++) {
+            if (tokens[i].i_embd >= 0) {
+                embd.resize((size_t) tokens[i].i_embd * n_embd);
+                break;
+            }
+        }
+        tokens.resize(n);
     }
 
     void set_output(int32_t idx, bool output) {
@@ -216,12 +232,10 @@ struct server_batch {
         view.clear();
         for (int32_t i = off; i < off + n_tokens; i++) {
             const auto & t = tokens[i];
-            if (has_embd) {
-                // text embeddings broadcast the same position across the M-RoPE sections
-                const llama_pos pos[GGML_MROPE_SECTIONS] = { t.pos, t.pos, t.pos, 0 };
-                view.add_embd({ embd.data() + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, t.id_slot, t.output);
+            if (t.i_embd >= 0) {
+                view.add_embd({ embd.data() + (size_t) t.i_embd * n_embd, 1, (size_t) n_embd }, t.pos.data(), t.id_slot, t.output);
             } else {
-                view.add(t.token, t.pos, t.id_slot, t.output);
+                view.add(t.token, t.pos[0], t.id_slot, t.output);
             }
             view.tokens.back().decision_order = t.decision_order;
         }
@@ -529,7 +543,11 @@ struct server_slot {
             i_batch = batch.size();
 
             if (!inp_embd.empty()) {
-                add_ok &= batch.add(id, inp_embd, prompt.tokens.pos_next(), true, false);
+                // text embeddings broadcast the same position across the M-RoPE sections
+                const llama_pos p = prompt.tokens.pos_next();
+                const llama_pos pos[GGML_MROPE_SECTIONS] = { p, p, p, 0 };
+                GGML_ASSERT((int32_t) inp_embd.size() == batch.n_embd);
+                add_ok &= batch.add_embd(id, inp_embd.data(), pos, true, false);
             } else {
                 add_ok &= batch.add(id, sampled, prompt.tokens.pos_next(), true, false);
             }
@@ -762,6 +780,44 @@ struct server_slot {
     }
 };
 
+// encode the mtmd chunk at idx, batched with as many of the next chunks as possible
+// returns 0 on success
+static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx) {
+    const auto & mctx = slot.mctx;
+    const auto & input_tokens = slot.task->tokens;
+    const auto & chunk = input_tokens.find_chunk(idx);
+
+    mbatch.reset(mtmd_batch_init(mctx));
+    int32_t res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
+    GGML_ASSERT(res == 0); // we should never have an empty batch
+
+    // try batching as much as possible
+    int n_added = 1;
+    size_t idx_cur = idx;
+    while (res == 0) {
+        auto [next_chunk, next_idx] = input_tokens.find_next_media_chunk(idx_cur);
+        if (next_chunk == nullptr) {
+            break;
+        }
+        res = mtmd_batch_add_chunk(mbatch.get(), next_chunk->get());
+        n_added += (res == 0 ? 1 : 0);
+        idx_cur = next_idx;
+        SLT_DBG(slot, "try adding media chunk idx = %zu to batch, res = %d\n", next_idx, res);
+        // if res != 0, batch is full or chunk is not compatible -> this loop breaks
+    }
+
+    // TODO @ngxson : move this log line to debug when it become more stable
+    SLT_TRC(slot, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
+
+    res = mtmd_batch_encode(mbatch.get());
+    if (res != 0) {
+        SLT_ERR(slot, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
+        return -1;
+    }
+
+    return 0;
+}
+
 // returns 0 on success
 // caller need to update prompt.tokens after a successful call to keep track of the processing progress
 // note: this is not a member of server_slot because we want to run it inside yield_to_queue
@@ -834,35 +890,39 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
 
     // otherwise, the batch is either uninitialized or is used up
     // we need to create & encode a new batch
-    mbatch.reset(mtmd_batch_init(mctx));
-    res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
-    GGML_ASSERT(res == 0); // we should never have an empty batch
-
-    // try batching as much as possible
-    int n_added = 1;
-    size_t idx_cur = idx;
-    while (res == 0) {
-        auto [next_chunk, next_idx] = input_tokens.find_next_media_chunk(idx_cur);
-        if (next_chunk == nullptr) {
-            break;
-        }
-        res = mtmd_batch_add_chunk(mbatch.get(), next_chunk->get());
-        n_added += (res == 0 ? 1 : 0);
-        idx_cur = next_idx;
-        SLT_DBG(slot, "try adding media chunk idx = %zu to batch, res = %d\n", next_idx, res);
-        // if res != 0, batch is full or chunk is not compatible -> this loop breaks
-    }
-
-    // TODO @ngxson : move this log line to debug when it become more stable
-    SLT_TRC(slot, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
-
-    res = mtmd_batch_encode(mbatch.get());
-    if (res != 0) {
-        SLT_ERR(slot, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
+    if (encode_mtmd_chunk(slot, mbatch, idx) != 0) {
         return -1;
     }
 
     return try_decode();
+}
+
+// add an encoded mtmd chunk to the batch of the text tokens, instead of decoding it on its own like process_mtmd_chunk()
+// embd is the output of the encoder for this chunk
+// returns false if the batch is full
+static bool add_mtmd_chunk(const server_slot & slot, const mtmd_input_chunk * chunk, const float * embd, server_batch & batch) {
+    // positions are the ones of mtmd_helper_decode_image_chunk()
+    const auto * image    = mtmd_input_chunk_get_tokens_image(chunk);
+    const bool   is_mrope = mtmd_decode_use_mrope(slot.mctx);
+    const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+    const size_t n_embd   = batch.n_embd;
+    const llama_pos pos_0 = slot.prompt.tokens.pos_next();
+
+    for (size_t i = 0; i < n_tokens; i++) {
+        const llama_pos p = pos_0 + (llama_pos) i;
+        llama_pos pos[GGML_MROPE_SECTIONS] = { p, p, p, p };
+        if (is_mrope && image) {
+            const mtmd_decoder_pos rel = mtmd_image_tokens_get_decoder_pos(image, pos_0, i);
+            pos[0] = rel.t;
+            pos[1] = rel.y;
+            pos[2] = rel.x;
+            pos[3] = rel.z;
+        }
+        if (!batch.add_embd(slot.id, embd + i * n_embd, pos, slot.need_embd(), /* is_prompt */ true)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 //
@@ -1215,14 +1275,20 @@ private:
                 mtmd_helper_log_set(common_log_default_callback, nullptr);
             }
 
-            // non-causal models need the whole image in one ubatch
+            // the image must fit in one ubatch if the model needs non-causal attention on it
+            // a non-causal model also has the text of the prompt in that ubatch, leave half of it to the text
             {
                 const int n_ubatch = llama_n_ubatch(ctx_tgt);
-                if (mmproj_usage.use_non_causal && mmproj_usage.image_max_tokens > n_ubatch) {
-                    SRV_WRN("cap image_max_tokens (original=%d) to n_ubatch (%d) because model needs non-causal attention on image\n", mmproj_usage.image_max_tokens, n_ubatch);
-                    SRV_WRN("%s\n", "increase n_ubatch (-ub) to increase vision token budget");
-                    mparams.image_max_tokens = n_ubatch;
-                    mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_ubatch);
+                const bool is_mixed = use_mixed_batch();
+                if (is_mixed || mmproj_usage.use_non_causal) {
+                    const int n_max = is_mixed ? n_ubatch / 2 : n_ubatch;
+                    if (mmproj_usage.image_max_tokens > n_max) {
+                        SRV_WRN("cap image_max_tokens (original=%d) to %d (n_ubatch = %d) because %s\n", mmproj_usage.image_max_tokens, n_max, n_ubatch,
+                                is_mixed ? "the model processes the prompt in one ubatch" : "model needs non-causal attention on image");
+                        SRV_WRN("%s\n", "increase n_ubatch (-ub) to increase vision token budget");
+                        mparams.image_max_tokens = n_max;
+                        mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_max);
+                    }
                 }
             }
 
@@ -3654,6 +3720,13 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
 
+                    // TODO: do the same for all models, then remove process_mtmd_chunk()
+                    if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
+                        if (!add_prompt_mixed(slot)) {
+                            return;
+                        }
+                    }
+
                     bool has_mtmd = false;
 
                     // check if we should process the mtmd chunk
@@ -3839,6 +3912,64 @@ private:
         }
     }
 
+    // see https://github.com/ggml-org/llama.cpp/pull/29969
+    // TODO @ngxson : maybe remove this once we use "mixed" batch everywhere
+    bool use_mixed_batch() const {
+        return !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
+    }
+
+    // add the rest of the prompt to the batch, the mtmd chunks are added as embeddings next to the text tokens
+    // the caller makes sure that it fits in the batch
+    // returns false on error, the slot is then released
+    bool add_prompt_mixed(server_slot & slot) {
+        const auto & input_tokens = slot.task->tokens;
+        const auto n_tokens_prev = batch.size();
+
+        while (slot.prompt.n_tokens() < slot.task->n_tokens()) {
+            const auto cur_token_idx = slot.prompt.n_tokens();
+            const llama_token cur_tok = input_tokens[cur_token_idx];
+
+            if (cur_tok != LLAMA_TOKEN_NULL) {
+                const bool add_ok = batch.add(slot.id,
+                    cur_tok,
+                    /* pos       = */ slot.prompt.tokens.pos_next(),
+                    /* output    = */ slot.need_embd(),
+                    /* is_prompt = */ true);
+                GGML_ASSERT(add_ok);
+                if (!slot.task->decision.order.empty()) {
+                    batch.set_decision_order(batch.size() - 1, slot.task->decision.order[cur_token_idx]);
+                }
+                slot.prompt.tokens.push_back(cur_tok);
+                continue;
+            }
+
+            const auto & chunk = input_tokens.find_chunk(cur_token_idx);
+
+            float * embd = slot.mbatch ? mtmd_batch_get_output_embd(slot.mbatch.get(), chunk.get()) : nullptr;
+            if (!embd) {
+                // encode on the worker thread, so we can still handle metrics tasks
+                int32_t res = 0;
+                queue_tasks.yield_to_queue([&]() {
+                    res = encode_mtmd_chunk(slot, slot.mbatch, cur_token_idx);
+                });
+                embd = res == 0 ? mtmd_batch_get_output_embd(slot.mbatch.get(), chunk.get()) : nullptr;
+            }
+
+            if (!embd || !add_mtmd_chunk(slot, chunk.get(), embd, batch)) {
+                SLT_ERR(slot, "%s", "failed to process mtmd chunk\n");
+                // the batch must not keep the entries of a released slot
+                batch.truncate(n_tokens_prev);
+                send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
+                slot.release();
+                return false;
+            }
+
+            slot.prompt.tokens.push_back_placeholder(chunk.get());
+        }
+
+        return true;
+    }
+
     // returns true = success ; false = retry with smaller batch size
     // throw std::runtime_error on fatal error
     bool decode(int32_t & n_batch, int32_t off) {
@@ -3860,7 +3991,7 @@ private:
 
         // TODO @ngxson : dft model may have different n_embd than the tgt model, so we check & reject if that's the case
         // this case is not currently used by any models, but may need to be supported in the future
-        if (spec && batch.has_embd) {
+        if (spec && batch.has_embd()) {
             if (llama_model_n_embd_inp(model_dft) != llama_model_n_embd_inp(model_tgt)) {
                 SRV_ERR("%s", "unsupported batch.has_embd + spec case\n");
                 throw std::runtime_error("unsupported batch.has_embd + spec case");
@@ -5468,7 +5599,7 @@ void server_routes::init_routes() {
             if (decision.is_joint()) {
                 server_task task = server_task(SERVER_TASK_TYPE_DECISION);
                 task.id = rd.get_new_id();
-                decision.fill_task_joint(state, questions, task);
+                decision.fill_task_joint(state, questions, files, ctx_server.mctx, ctx_server.init_opt, task);
                 tasks.push_back(std::move(task));
             } else {
                 for (const auto & question : questions) {

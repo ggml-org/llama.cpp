@@ -1696,7 +1696,7 @@ For laya and clef, the whole prompt is evaluated in one batch: it must fit in `-
 
 *Image input:*
 
-Image input needs a model that supports it (for example: openjev) and its multimodal projector, see `--mmproj`. Image input is not supported yet for clef.
+Image input needs a model that supports it (for example: openjev, clef) and its multimodal projector, see `--mmproj`.
 
 Images can be given in two ways, and both can be used in the same request:
 
