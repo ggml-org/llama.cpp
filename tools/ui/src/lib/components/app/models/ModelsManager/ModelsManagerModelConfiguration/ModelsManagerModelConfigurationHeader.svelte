@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eject, Loader2, Power, SquarePen, X } from '@lucide/svelte';
+	import { Eject, Loader2, MessageSquare, Power, SquarePen, X } from '@lucide/svelte';
 	import { ModelAvatar, ModelId } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ServerModelStatus } from '$lib/enums';
@@ -10,14 +10,17 @@
 		isLoaded: boolean;
 		onClose: () => void;
 		onToggleLoad: () => void;
+		onUseInChat: () => void;
 		onUseInNewChat: () => void;
 		option: ModelOption;
 		/** Load state reported by the server, null when it does not report one. */
 		status: ServerModelStatus | null;
 	}
 
-	let { isLoaded, onClose, onToggleLoad, onUseInNewChat, option, status }: Props = $props();
+	let { isLoaded, onClose, onToggleLoad, onUseInChat, onUseInNewChat, option, status }: Props =
+		$props();
 
+	let isMobile = $derived(deviceStore.isMobile);
 	let isLoading = $derived(status === ServerModelStatus.LOADING);
 
 	let statusLabel = $derived.by(() => {
@@ -93,33 +96,45 @@
 		</Button>
 	</div>
 
-	<div class="flex gap-2">
-		<Button class="flex-1 gap-1.5" onclick={onUseInNewChat} size="sm" variant="outline">
-			<SquarePen class="h-3.5 w-3.5" />
+	<div class="flex flex-col gap-2">
+		<!-- on a phone the composer trigger leads to this pane, so switching the open chat
+		     belongs here: the model list of a dropdown is not reachable on a touch screen -->
+		{#if isMobile}
+			<Button class="w-full gap-1.5" onclick={onUseInChat} size="sm">
+				<MessageSquare class="h-3.5 w-3.5" />
 
-			Start a new chat
-		</Button>
+				Use in this chat
+			</Button>
+		{/if}
 
-		<Button
-			class="flex-1 gap-1.5"
-			disabled={isLoading}
-			onclick={onToggleLoad}
-			size="sm"
-			variant="outline"
-		>
-			{#if isLoading}
-				<Loader2 class="h-3.5 w-3.5 animate-spin" />
+		<div class="flex gap-2">
+			<Button class="flex-1 gap-1.5" onclick={onUseInNewChat} size="sm" variant="outline">
+				<SquarePen class="h-3.5 w-3.5" />
 
-				Loading...
-			{:else if isLoaded}
-				<Eject class="h-3.5 w-3.5" />
+				Start a new chat
+			</Button>
 
-				Unload model
-			{:else}
-				<Power class="h-3.5 w-3.5" />
+			<Button
+				class="flex-1 gap-1.5"
+				disabled={isLoading}
+				onclick={onToggleLoad}
+				size="sm"
+				variant="outline"
+			>
+				{#if isLoading}
+					<Loader2 class="h-3.5 w-3.5 animate-spin" />
 
-				Load model
-			{/if}
-		</Button>
+					Loading...
+				{:else if isLoaded}
+					<Eject class="h-3.5 w-3.5" />
+
+					Unload model
+				{:else}
+					<Power class="h-3.5 w-3.5" />
+
+					Load model
+				{/if}
+			</Button>
+		</div>
 	</div>
 </header>
