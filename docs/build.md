@@ -289,6 +289,24 @@ This stub is only for linking and GPU-independent tests. Do not install it as a 
 
 This is build qualification, not Pascal adaptive-streaming runtime qualification. The existing streamed admission checks remain in place until the vector and tile execution stages are validated on appropriate hardware. No Windows/MSVC build or GTX 10-series inference result is claimed by these Linux compile tests. Modern CUDA 13 builds retain their existing target selection and optimized kernels.
 
+#### Runtime prerequisites without optional acceleration
+
+Adaptive KV storage and DMA do not require VMM, Tensor Cores, PDL or native CUDA graph capture. Device-local arena parents use `cudaMalloc`; VMM is an optional stock temporary-pool implementation. If its capability or allocation-granularity query fails, the CUDA backend warns with the driver error and uses the existing `cudaMalloc` pool. HIP/MUSA probing is unchanged. This does not suppress an actual device-allocation failure or claim support for a missing attention kernel.
+
+For a separate reduced-feature validation build, use a new directory such as `build-sm61-eager`, add `-DGGML_CUDA_NO_VMM=ON -DGGML_CUDA_GRAPHS=OFF` to the appropriate toolkit/architecture configuration above, and run with `GGML_CUDA_PDL=0`. Do not change production defaults merely to qualify the fallback. Stock's below-Volta capture restriction remains unchanged. The common executor still drains queued work before invoking retirement hooks and releasing leased storage when there is no native graph to destroy. PDL is also gated by a loaded kernel's target; pre-Hopper code does not become PDL code merely because it was forward-JITed on a newer GPU.
+
+After building the corresponding test targets on a machine with a real driver and CUDA device:
+
+```bash
+cmake --build build-sm61-eager --target test-memory-executor-cuda test-kv-stream-copy -j
+GGML_CUDA_PDL=0 ./build-sm61-eager/bin/test-memory-executor-cuda --cuda --no-graphs
+GGML_CUDA_PDL=0 ./build-sm61-eager/bin/test-kv-stream-copy --cuda --queue-only
+```
+
+The `--queue-only` mode checks DMA boundaries, event ordering, final-consumer retirement, cancellation and retained backing without executing attention or requiring Tensor Cores. It does not qualify the attention kernels on that GPU. Tests also check the last live token, tail clearing and canaries outside an exact device/host view. The metadata-only `test-cuda-vmm-probe` runs without CUDA and simulates failed/absent optional queries before a pool is selected. `test-cuda-compiled-features` reports compiled VMM/graph/PDL options; compiled acceleration is not a promise that it is active on a particular device.
+
+Mutable KV backing still requires pinned, GPU-mapped host memory for publication and ordered DMA. Pinning/mapping failure, including `GGML_CUDA_NO_PINNED`, is a real storage-contract failure, not an absent optimization; strict KV allocation does not silently substitute pageable memory. These checks do not constitute complete startup arena-size verification. Linux SM61 code has been forward-JIT smoke-tested on an RTX 5070 Ti, but actual Pascal and Windows runtime qualification remain pending.
+
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 
 If you try to use an old CUDA version (e.g. v11.7) with a new glibc version you can get errors like this:

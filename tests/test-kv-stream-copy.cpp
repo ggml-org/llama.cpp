@@ -64,6 +64,7 @@ int main(int argc, char ** argv) {
     const bool fallback = argc > 1 && std::strcmp(argv[1],"--bench-fallback") == 0;
     const bool bench = wide || ordered || spans || fallback || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
     const bool cuda = bench || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
+    const bool queue_only = cuda && !bench && argc == 3 && std::strcmp(argv[2],"--queue-only") == 0;
     ggml_backend_ptr backend;
     if (cuda) {
         ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
@@ -156,7 +157,8 @@ int main(int argc, char ** argv) {
             t.assert_true(get()->probe_layer);
             t.assert_true(get()->release_span);
         });
-        t.test("wide_microbatches_share_uploads_and_preserve_final_tile_readers", [&](testing & t) {
+        // Queue-only qualification does not require an attention kernel or Tensor Cores.
+        if (!queue_only) t.test("wide_microbatches_share_uploads_and_preserve_final_tile_readers", [&](testing & t) {
             for (bool fallback : {false,true}) for (bool token_major : {false,true}) {
                 fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,2049,fallback);
                 ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
@@ -212,7 +214,7 @@ int main(int argc, char ** argv) {
                 }
             }
         });
-        t.test("late_query_failure_preserves_all_output_and_drains_sequence", [&](testing & t) {
+        if (!queue_only) t.test("late_query_failure_preserves_all_output_and_drains_sequence", [&](testing & t) {
             for (bool fallback : {false,true}) {
                 fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,1025,fallback);
                 ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
@@ -240,7 +242,7 @@ int main(int argc, char ** argv) {
                 t.assert_true(std::all_of(empty.begin(),empty.end(),[](float x) { return x == 0; }));
             }
         });
-        t.test("batched_spans_preserve_values_and_reduce_copy_calls", [&](testing & t) {
+        if (!queue_only) t.test("batched_spans_preserve_values_and_reduce_copy_calls", [&](testing & t) {
             for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}})
             for (size_t slots : {size_t(3),size_t(5)}) for (bool overlap : {false,true})
             for (size_t limit : {size_t(2),size_t(3),SIZE_MAX}) {
@@ -269,7 +271,7 @@ int main(int argc, char ** argv) {
                 t.assert_equal(size_t(2305)*(page.storage.k_token_bytes+page.storage.v_token_bytes),f.resident->last_upload_bytes());
             }
         });
-        t.test("overlap_matches_ordered_for_native_and_fallback_waves", [&](testing & t) {
+        if (!queue_only) t.test("overlap_matches_ordered_for_native_and_fallback_waves", [&](testing & t) {
             for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}})
             for (size_t slots : {size_t(1),size_t(2),size_t(3)}) for (size_t queries : {size_t(1),size_t(33),size_t(257)}) {
                 fixture f(backend.get(),true,pair.first,pair.second,2049);
@@ -290,7 +292,7 @@ int main(int argc, char ** argv) {
                 }
             }
         });
-        t.test("failed_attention_drains_prefetch_and_host_replacement_rebinds", [&](testing & t) {
+        if (!queue_only) t.test("failed_attention_drains_prefetch_and_host_replacement_rebinds", [&](testing & t) {
             fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2049);
             f.policy.pool_bytes = f.policy.pool_bytes/16*5; f.policy.initial_ring_slots = 3;
             if (!t.assert_true(f.attach())) return;
@@ -320,7 +322,7 @@ int main(int argc, char ** argv) {
             t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true));
             t.assert_true(expected == input.read());
         });
-        t.test("failed_subspan_drains_and_retries_without_publishing_partial_output", [&](testing & t) {
+        if (!queue_only) t.test("failed_subspan_drains_and_retries_without_publishing_partial_output", [&](testing & t) {
             for (auto value : {GGML_TYPE_F16,GGML_TYPE_F32}) {
                 fixture f(backend.get(),true,GGML_TYPE_F16,value,2049);
                 ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
@@ -351,7 +353,7 @@ int main(int argc, char ** argv) {
                 }
             }
         });
-        t.test("all_writable_pairs_match_with_two_slot_prefetch", [&](testing & t) {
+        if (!queue_only) t.test("all_writable_pairs_match_with_two_slot_prefetch", [&](testing & t) {
             const ggml_type types[] = {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q8_0,GGML_TYPE_F32,GGML_TYPE_IQ4_NL};
             for (auto key : types) for (auto value : types) {
                 fixture f(backend.get(),true,key,value,1025);
@@ -384,6 +386,16 @@ int main(int argc, char ** argv) {
             llama_kv_stream_host_layer host; f.host->layer(0,host);
             t.assert_true(!ops->feedback(queue.get()).available);
             t.assert_true(ops->measure(queue.get(),true));
+            // First-use instrumentation can synchronize a context; execute diagnostics before closing a consumer gate.
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_true(ops->enqueue_span(queue.get(),0,host.k,host.v,512,512));
+            t.assert_true(ops->enqueue(queue.get(),2,host.k,host.v,256,256));
+            t.assert_true(ops->acquire_span(queue.get(),0,2));
+            t.assert_true(ops->acquire_span(queue.get(),2,1));
+            ggml_backend_synchronize(backend.get());
+            for (size_t slot = 0; slot < 3; ++slot) t.assert_true(ops->release_completed(queue.get(),slot));
+            ops->drain(queue.get());
+            t.assert_true(ops->feedback(queue.get()).available);
             for (int epoch = 0; epoch < 2; ++epoch) {
                 t.assert_true(ops->begin(queue.get()));
                 t.assert_true(!ops->measure(queue.get(),false));
@@ -396,7 +408,7 @@ int main(int argc, char ** argv) {
                     while ((!ops->ready(queue.get(),1) || !ops->ready(queue.get(),2)) && std::chrono::steady_clock::now() < deadline)
                         std::this_thread::yield();
                     const bool ready = ops->ready(queue.get(),1) && ops->ready(queue.get(),2);
-                    t.assert_true(ready);
+                    t.assert_true("copy readiness reached before the five-second diagnostic deadline",ready);
                     t.assert_true(!ops->acquire_span(queue.get(),0,3)); // separate uploads have separate tickets
                     t.assert_true(!ops->acquire_span(queue.get(),0,0));
                     t.assert_true(ops->acquire_span(queue.get(),0,2));
@@ -415,7 +427,9 @@ int main(int argc, char ** argv) {
                 t.assert_true(ggml_kv_stream_layout_make(f.policy.shape,512,first_upload).status == ggml_kv_stream_status::success);
                 t.assert_equal(first_upload.bytes,measured.timed_bytes);
                 t.assert_equal(size_t(3),measured.peak_slots);
-                t.assert_true(measured.copy_ms >= 0 && measured.elapsed_ms > 0 && measured.instrumentation_bytes >= 5*sizeof(uint64_t));
+                t.assert_true("nonnegative GPU copy interval",measured.copy_ms >= 0);
+                t.assert_true("positive host measurement interval",measured.elapsed_ms > 0);
+                t.assert_true("diagnostic storage covers all counters",measured.instrumentation_bytes >= 5*sizeof(uint64_t));
                 ops->drain(queue.get());
                 t.assert_equal(measured.elapsed_ms,ops->feedback(queue.get()).elapsed_ms);
             }
@@ -763,6 +777,51 @@ int main(int argc, char ** argv) {
             ops->drain(q.get()); // cancel an acquired slot without issuing a final consumer
             t.assert_true(ops->begin(q.get()) && ops->enqueue(q.get(),0,host.k,host.v,256,256));
             ops->drain(q.get());
+            t.assert_true(cudaGetLastError() == cudaSuccess);
+        });
+        t.test("view_boundaries_and_last_token_copies_preserve_canaries", [&](testing & t) {
+            fixture f(backend.get(),true);
+            ggml_kv_stream_layout page;
+            if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape,256,page).status == ggml_kv_stream_status::success)) return;
+            const size_t guard = f.policy.shape.alignment, bytes = page.bytes+2*guard;
+            ggml_backend_buffer_ptr device(ggml_backend_buft_alloc_buffer(
+                llama_kv_stream_device_buffer_type(ggml_backend_get_device(backend.get())),bytes));
+            ggml_backend_buffer_ptr host(ggml_backend_buft_alloc_buffer(
+                llama_kv_stream_host_buffer_type(ggml_backend_get_device(backend.get())),bytes));
+            if (!t.assert_true(device && host)) return;
+            auto * base = static_cast<uint8_t *>(ggml_backend_buffer_get_base(device.get()));
+            ggml_backend_buffer_clear(device.get(),0xa5);
+            ggml_backend_buffer_ptr ring(ggml_backend_buffer_view(device.get(),guard,page.bytes));
+            ggml_backend_buffer_ptr pinned(ggml_backend_buffer_view(host.get(),guard,page.bytes));
+            if (!t.assert_true(ring && pinned)) return;
+            auto * k = static_cast<uint8_t *>(ggml_backend_buffer_get_base(pinned.get()));
+            auto * v = k+page.v_offset;
+            std::memset(k,0x31,page.k_bytes); std::memset(v,0x52,page.v_bytes);
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),ring.get(),pinned.get(),f.policy.shape,1),ops->free);
+            if (!t.assert_true(bool(queue))) return;
+            device.reset(); host.reset(); ring.reset(); pinned.reset();
+            t.assert_true(ops->begin(queue.get()));
+            // The parent has more bytes, but DMA must stay inside the retained host view.
+            t.assert_true(!ops->enqueue(queue.get(),0,k,v+1,256,256));
+            t.assert_true(ops->enqueue(queue.get(),0,k,v,256,256));
+            t.assert_true(ops->acquire(queue.get(),0) && ops->release(queue.get(),0));
+            ops->drain(queue.get());
+            std::vector<uint8_t> read(bytes);
+            if (!t.assert_true(cudaMemcpy(read.data(),base,bytes,cudaMemcpyDeviceToHost) == cudaSuccess)) return;
+            std::vector<uint8_t> expected(bytes,0xa5);
+            std::fill_n(expected.data()+guard,page.k_bytes,uint8_t(0x31));
+            std::fill_n(expected.data()+guard+page.v_offset,page.v_bytes,uint8_t(0x52));
+            t.assert_true(expected == read);
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_true(!ops->enqueue(queue.get(),0,k,v+page.v_bytes,1,256));
+            t.assert_true(ops->enqueue(queue.get(),0,k+page.k_bytes-page.k_token_bytes,v+page.v_bytes-page.v_token_bytes,1,256));
+            t.assert_true(ops->acquire(queue.get(),0) && ops->release(queue.get(),0));
+            ops->drain(queue.get());
+            if (!t.assert_true(cudaMemcpy(read.data(),base,bytes,cudaMemcpyDeviceToHost) == cudaSuccess)) return;
+            std::fill_n(expected.data()+guard,page.bytes,uint8_t(0));
+            std::fill_n(expected.data()+guard,page.k_token_bytes,uint8_t(0x31));
+            std::fill_n(expected.data()+guard+page.v_offset,page.v_token_bytes,uint8_t(0x52));
+            t.assert_true(expected == read);
             t.assert_true(cudaGetLastError() == cudaSuccess);
         });
         t.test("producer_and_final_consumer_events_prevent_early_copy_and_reuse", [&](testing & t) {

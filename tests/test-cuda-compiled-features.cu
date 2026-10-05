@@ -1,5 +1,9 @@
 #include "ggml-cuda/common.cuh"
 
+// Unused launch helpers can survive an unoptimized compile. Metadata tests must never enter them.
+int ggml_cuda_get_device() { std::abort(); }
+[[noreturn]] void ggml_cuda_error(const char *, const char *, const char *, int, const char *) { std::abort(); }
+
 // Compile these checks for every device target, without launching a kernel.
 #if defined(__CUDA_ARCH__)
 #if __CUDA_ARCH__ == 610
@@ -39,6 +43,21 @@ int main() {
         printf(" %d", arch);
     }
     printf("\n");
+#ifdef GGML_USE_VMM
+    printf("VMM pool: compiled (driver-gated)\n");
+#else
+    printf("VMM pool: disabled\n");
+#endif
+#ifdef GGML_CUDA_USE_GRAPHS
+    printf("CUDA graph cache: compiled (device-gated)\n");
+#else
+    printf("CUDA graph cache: disabled\n");
+#endif
+#ifdef GGML_CUDA_USE_PDL
+    printf("PDL launch wrapper: compiled (kernel/environment-gated)\n");
+#else
+    printf("PDL launch wrapper: unavailable\n");
+#endif
 #ifdef GGML_CUDA_NO_FA
     printf("Flash attention: disabled\n");
 #elif defined(GGML_CUDA_FA_ALL_QUANTS)

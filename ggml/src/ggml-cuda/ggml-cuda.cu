@@ -6,6 +6,7 @@
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/vmm-probe.h"
 #include "ggml-cuda/kv-stream-partial.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
@@ -284,6 +285,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #if defined(GGML_USE_VMM)
         CUdevice device;
         CU_CHECK(cuDeviceGet(&device, physical_id));
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
         CU_CHECK(cuDeviceGetAttribute(&device_vmm, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, device));
 
         if (device_vmm) {
@@ -293,6 +295,28 @@ static ggml_cuda_device_info ggml_cuda_init() {
             alloc_prop.location.id = physical_id;
             CU_CHECK(cuMemGetAllocationGranularity(&info.devices[id].vmm_granularity, &alloc_prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
         }
+#else
+        CUresult probe_error = CUDA_SUCCESS;
+        device_vmm = ggml_cuda_probe_vmm(
+            [&](int & supported) {
+                probe_error = cuDeviceGetAttribute(&supported, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, device);
+                return probe_error == CUDA_SUCCESS;
+            },
+            [&](size_t & granularity) {
+                CUmemAllocationProp alloc_prop = {};
+                alloc_prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+                alloc_prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+                alloc_prop.location.id = physical_id;
+                probe_error = cuMemGetAllocationGranularity(&granularity, &alloc_prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED);
+                return probe_error == CUDA_SUCCESS;
+            }, info.devices[id].vmm_granularity);
+        if (probe_error != CUDA_SUCCESS) {
+            const char * message = nullptr;
+            (void) cuGetErrorString(probe_error, &message);
+            GGML_LOG_WARN("%s: device %d VMM probe failed (%d: %s); using the cudaMalloc pool\n",
+                __func__, id, int(probe_error), message ? message : "unknown driver error");
+        }
+#endif
 #endif // defined(GGML_USE_VMM)
         info.devices[id].vmm = !!device_vmm;
 
