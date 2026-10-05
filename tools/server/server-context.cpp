@@ -3120,7 +3120,8 @@ private:
     // Every update picks them again, because the device copy can grow with the sequence.
     llama_state_seq_flags spec_ckpt_place(server_slot & slot, bool is_dft) {
         auto & place = is_dft ? slot.spec_ckpt_place_dft : slot.spec_ckpt_place_tgt;
-        return common_speculative_checkpoint_flags(place, is_dft ? slot.ctx_dft : slot.ctx_tgt, slot.id, spec_ckpt_margins);
+        return common_speculative_checkpoint_flags(place, is_dft ? slot.ctx_dft : slot.ctx_tgt, slot.id,
+                spec_ckpt_margins, model_tgt);
     }
 
     // State flags of the checkpoint the slot holds: a load has to use the flags of the update before it.

@@ -3198,7 +3198,8 @@ const std::vector<double> & common_speculative_get_synth_probs(const common_spec
 
 llama_state_seq_flags common_speculative_checkpoint_flags(
         common_speculative_checkpoint_place & place,
-        llama_context * ctx, llama_seq_id seq_id, const std::vector<size_t> & margins) {
+        llama_context * ctx, llama_seq_id seq_id,
+        const std::vector<size_t> & margins, const llama_model * model_margins) {
     const llama_state_seq_flags flags_host   = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
     const llama_state_seq_flags flags_device = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
 
@@ -3228,7 +3229,14 @@ llama_state_seq_flags common_speculative_checkpoint_flags(
             }
         }
 
-        const size_t margin = margins.empty() ? 0 : margins[std::min((size_t) i, margins.size() - 1)];
+        // the margins follow the device order of another model, which this one need not share
+        size_t margin = margins.empty() ? 0 : *std::max_element(margins.begin(), margins.end());
+        for (int j = 0; !margins.empty() && j < llama_model_n_devices(model_margins); j++) {
+            if (llama_model_get_device(model_margins, j) == dev) {
+                margin = margins[std::min((size_t) j, margins.size() - 1)];
+                break;
+            }
+        }
         if (free < size_new + margin) {
             if (place.flags != flags_host) {
                 LOG_INF("%s: seq %d checkpoint stays on the host: %s has %.1f MiB free, the device copy needs %.1f MiB on top of the %.1f MiB margin\n",

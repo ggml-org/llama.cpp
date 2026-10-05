@@ -47,11 +47,13 @@ struct common_speculative_checkpoint_place {
 // Call it before every checkpoint update; the load that follows has to use place.flags.
 // LLAMA_STATE_SEQ_FLAGS_ON_DEVICE keeps a device copy that --fit does not measure and that is allocated
 // again whenever its size changes. It is chosen only while every device of the model keeps its margin free
-// after the copy has grown to the new size (margins are indexed like --fit-target). Otherwise the
-// checkpoint stays on the host.
+// after the copy has grown to the new size. Otherwise the checkpoint stays on the host.
+// margins are indexed like --fit-target: by the device order of model_margins, the model they were given
+// for. A device that model does not use keeps the largest margin free.
 llama_state_seq_flags common_speculative_checkpoint_flags(
         common_speculative_checkpoint_place & place,
-        llama_context * ctx, llama_seq_id seq_id, const std::vector<size_t> & margins);
+        llama_context * ctx, llama_seq_id seq_id,
+        const std::vector<size_t> & margins, const llama_model * model_margins);
 
 struct common_speculative_output_limits {
     int32_t total;

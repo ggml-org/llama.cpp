@@ -310,7 +310,7 @@ static void test_on_device_state(llama_model * model, bool flash) {
 
 // A speculative checkpoint stays on the device only while the device keeps its margin, and that is
 // decided again whenever the checkpoint needs a larger device copy than the context holds.
-static void test_checkpoint_placement(llama_model * model, bool flash) {
+static void test_checkpoint_placement(llama_model * model, llama_model * model_host, bool flash) {
     const llama_state_seq_flags on_host   = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
     const llama_state_seq_flags on_device = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
     const std::vector<size_t> no_margin = {0};
@@ -320,17 +320,17 @@ static void test_checkpoint_placement(llama_model * model, bool flash) {
     decode(ctx.get(), {3, 4, 5}, initial_hidden(3), 0);
 
     common_speculative_checkpoint_place place;
-    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_margin) == on_device && place.flags == on_device,
+    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_margin, model) == on_device && place.flags == on_device,
             "a checkpoint with room stays on the device");
     const size_t size_first = place.size_copy;
     require(size_first > 0, "the checkpoint has tensor data to place");
 
-    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_room) == on_device && place.size_copy == size_first,
+    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_room, model) == on_device && place.size_copy == size_first,
             "a checkpoint of the same size keeps its device copy: nothing new is allocated");
 
     // this context saves its whole cache, so the checkpoint grows with the sequence
     decode(ctx.get(), {6, 7, 8}, initial_hidden(3), 3);
-    const llama_state_seq_flags grown = common_speculative_checkpoint_flags(place, ctx.get(), 0, no_room);
+    const llama_state_seq_flags grown = common_speculative_checkpoint_flags(place, ctx.get(), 0, no_room, model);
     if (test_device != nullptr) {
         require(grown == on_host && place.flags == on_host,
                 "a checkpoint that outgrew its device copy is checked against the margin again");
@@ -340,8 +340,19 @@ static void test_checkpoint_placement(llama_model * model, bool flash) {
         require(grown == on_device && place.size_copy > size_first, "a host-only model has no device to check");
     }
 
-    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_margin) == on_device && place.size_copy > size_first,
+    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_margin, model) == on_device && place.size_copy > size_first,
             "a grown checkpoint with room goes to the device");
+
+    // The margins follow the device order of the model --fit-target was given for. This model's device is
+    // the first of its own list, and no device of a host-only model.
+    const std::vector<size_t> first_only = {0, (size_t) 1 << 50};
+    common_speculative_checkpoint_place own, other;
+    require(common_speculative_checkpoint_flags(own, ctx.get(), 0, first_only, model) == on_device,
+            "a device takes the margin of its position in the reference model");
+    if (test_device != nullptr) {
+        require(common_speculative_checkpoint_flags(other, ctx.get(), 0, first_only, model_host) == on_host,
+                "a device the margins were not given for keeps the largest one");
+    }
     fprintf(stderr, "PASS speculative checkpoint placement flash=%d\n", flash);
 }
 
@@ -940,9 +951,14 @@ int main(int argc, char ** argv) {
         return 0;
     }
     auto head = load_model(head_path);
+    // the same head without a device, as the reference of a model on other devices
+    ggml_backend_dev_t device_saved = test_device;
+    test_device = nullptr;
+    auto head_host = load_model(head_path);
+    test_device = device_saved;
     auto target = load_model(target_path);
     auto changed = load_model(changed_path);
-    require(head && target && changed, "canonical head and combined models load");
+    require(head && head_host && target && changed, "canonical head and combined models load");
     if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
         test_ordinary_context(head.get(), target.get());
         test_ordinary_draft_driver(target.get(), head.get());
@@ -1029,7 +1045,7 @@ int main(int argc, char ** argv) {
         require(close(ah.logits, bh.logits) && close(bh.logits, ch.logits), "MTP logits independent of trunk mixer");
         test_invalid_chain(head.get(), flash);
         test_on_device_state(head.get(), flash);
-        test_checkpoint_placement(head.get(), flash);
+        test_checkpoint_placement(head.get(), head_host.get(), flash);
         test_masked_catchup(head.get(), flash);
         for (int depth : {1, 3, 4}) {
             for (int catchup : {0, 2}) {
