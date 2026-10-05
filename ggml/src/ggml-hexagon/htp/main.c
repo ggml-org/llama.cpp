@@ -931,6 +931,12 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ROLL:
             return op_roll(octx);
 
+        case HTP_OP_POOL_2D:
+            return op_pool_2d(octx);
+
+        case HTP_OP_POOL_1D:
+            return op_pool_1d(octx);
+
         case HTP_OP_CONCAT:
             return op_concat(octx);
 

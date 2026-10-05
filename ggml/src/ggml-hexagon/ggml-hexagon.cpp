@@ -66,6 +66,7 @@
 #include "htp/get-rows-ops.h"
 #include "htp/set-rows-ops.h"
 #include "htp/softmax-ops.h"
+#include "htp/pool-ops.h"
 #include "htp/rope-ops.h"
 #include "htp/ssm-conv.h"
 #include "htp/gated-delta-net-ops.h"
@@ -389,6 +390,14 @@ static void ggml_hexagon_precompute_sort_params(
     const struct ggml_tensor * op,
     bool is_top_k,
     struct htp_sort_kernel_params * kparams
+);
+
+static void ggml_hexagon_precompute_pool_2d_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    struct htp_pool_2d_kernel_params * kparams,
+    bool is_pool_1d
 );
 
 static void ggml_hexagon_precompute_fused_mmnx_params(
@@ -6256,6 +6265,96 @@ static void ggml_hexagon_precompute_sort_params(
     kparams->n_slots           = (int32_t) layout.n_slots;
 }
 
+static void ggml_hexagon_pool_interior_range(
+    uint32_t src_x, uint32_t dst_x, uint32_t kernel_x, uint32_t stride_x, int32_t pad_x,
+    uint32_t * ox_lo, uint32_t * ox_hi) {
+    const uint32_t lo_raw = ((uint32_t) pad_x + stride_x - 1) / stride_x;
+    *ox_lo = (lo_raw < dst_x) ? lo_raw : dst_x;
+
+    const int32_t numer_hi = (int32_t) src_x - (int32_t) kernel_x + pad_x;
+    if (numer_hi < 0) {
+        *ox_hi = 0;
+    } else {
+        const uint32_t hi_raw = (uint32_t) numer_hi / stride_x + 1;
+        *ox_hi = (hi_raw < dst_x) ? hi_raw : dst_x;
+    }
+    if (*ox_hi < *ox_lo) {
+        *ox_hi = *ox_lo;
+    }
+}
+
+static bool ggml_hexagon_pool_shape_fits(
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst
+) {
+    return ggml_nbytes(src0) <= UINT32_MAX - 256 && ggml_nbytes(dst) <= UINT32_MAX - 256;
+}
+
+static void ggml_hexagon_precompute_pool_2d_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    struct htp_pool_2d_kernel_params * kparams,
+    bool is_pool_1d
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const uint32_t src_x = (uint32_t) src0->ne[0];
+    const uint32_t src_y = is_pool_1d ? 1 : (uint32_t) src0->ne[1];
+    const uint32_t dst_x = (uint32_t) dst->ne[0];
+    const uint32_t dst_y = is_pool_1d ? 1 : (uint32_t) dst->ne[1];
+    const uint32_t src_plane_bytes = src_x * src_y * sizeof(float);
+    const uint32_t dst_plane_bytes = dst_x * dst_y * sizeof(float);
+    const uint32_t planes = (uint32_t) (is_pool_1d
+        ? (uint64_t) src0->ne[1] * (uint64_t) src0->ne[2] * (uint64_t) src0->ne[3]
+        : (uint64_t) src0->ne[2] * (uint64_t) src0->ne[3]);
+    const uint32_t n_threads = (std::min)((uint32_t) sess->n_threads, planes > 0 ? planes : 1);
+
+    struct htp_pool_vtcm_layout layout;
+    const bool ok = htp_pool_solve_layout(&layout, src_x, src_y, dst_x, dst_y, n_threads, sess->vtcm_size);
+    GGML_ASSERT(ok);
+
+    kparams->src_x = src_x;
+    kparams->src_y = src_y;
+    kparams->dst_x = dst_x;
+    kparams->dst_y = dst_y;
+    kparams->kernel_x = (uint32_t) ggml_get_op_params_i32(dst, 1);
+    kparams->kernel_y = is_pool_1d ? 1 : (uint32_t) ggml_get_op_params_i32(dst, 2);
+    kparams->stride_x = (uint32_t) ggml_get_op_params_i32(dst, is_pool_1d ? 2 : 3);
+    kparams->stride_y = is_pool_1d ? 1 : (uint32_t) ggml_get_op_params_i32(dst, 4);
+    kparams->pad_x = ggml_get_op_params_i32(dst, is_pool_1d ? 3 : 5);
+    kparams->pad_y = is_pool_1d ? 0 : ggml_get_op_params_i32(dst, 6);
+    kparams->src_plane_bytes = src_plane_bytes;
+    kparams->dst_plane_bytes = dst_plane_bytes;
+    kparams->src_plane_bytes_aligned = (uint32_t) layout.src_spad_half_size;
+    kparams->dst_plane_bytes_aligned = (uint32_t) layout.dst_spad_half_size;
+    kparams->n_threads = n_threads;
+    kparams->planes = planes;
+    kparams->pool_op = (uint32_t) ggml_get_op_params_i32(dst, 0);
+    // Fast HVX path requires exact tiling and a supported kernel width.
+    kparams->fast_path = (kparams->pad_x == 0 && kparams->pad_y == 0 &&
+                           kparams->stride_x == kparams->kernel_x && kparams->stride_y == kparams->kernel_y &&
+                           (kparams->kernel_x == 1 || kparams->kernel_x == 2)) ? 1 : 0;
+    kparams->global_path = (kparams->pad_x == 0 && kparams->pad_y == 0 &&
+                            kparams->stride_x == kparams->kernel_x &&
+                            kparams->stride_y == kparams->kernel_y &&
+                            kparams->kernel_x == kparams->src_x &&
+                            kparams->kernel_y == kparams->src_y &&
+                            kparams->dst_x == 1 && kparams->dst_y == 1) ? 1 : 0;
+    kparams->block_path = (kparams->pad_x == 0 && kparams->pad_y == 0 &&
+                           kparams->kernel_y == 1 && kparams->stride_y == 1 &&
+                           kparams->stride_x == kparams->kernel_x &&
+                           kparams->kernel_x >= 32) ? 1 : 0;
+    kparams->avg_divide_count = (is_pool_1d && kparams->pool_op == GGML_OP_POOL_AVG) ? 1 : 0;
+    ggml_hexagon_pool_interior_range(kparams->src_x, kparams->dst_x, kparams->kernel_x,
+                                     kparams->stride_x, kparams->pad_x,
+                                     &kparams->ox_lo, &kparams->ox_hi);
+
+    const bool narrow_ok = (uint64_t) kparams->dst_x * kparams->kernel_x <= 32;
+    kparams->narrow_path = (kparams->fast_path && narrow_ok) ? 1 : 0;
+    kparams->inv_kernel_area = 1.0f / (float) (kparams->kernel_x * kparams->kernel_y);
+}
+
 static void ggml_hexagon_precompute_fused_mmnx_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0, // W0
@@ -6699,6 +6798,76 @@ static bool ggml_hexagon_supported_argmax(const struct ggml_hexagon_session * se
     return true;
 
     GGML_UNUSED(sess);
+}
+
+static bool ggml_hexagon_supported_pool_2d(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const int32_t * params = op->op_params;
+
+    if (params[0] != GGML_OP_POOL_AVG && params[0] != GGML_OP_POOL_MAX) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(op)) {
+        return false;
+    }
+    if (!ggml_hexagon_pool_shape_fits(src0, op)) {
+        return false;
+    }
+
+    const int32_t kernel_x = params[1];
+    const int32_t kernel_y = params[2];
+    const int32_t stride_x = params[3];
+    const int32_t stride_y = params[4];
+    const int32_t pad_x    = params[5];
+    const int32_t pad_y    = params[6];
+
+    // Keep invalid parameters on CPU, avoiding unsafe unsigned values in HTP.
+    if (kernel_x <= 0 || kernel_y <= 0 || stride_x <= 0 || stride_y <= 0 ||
+        pad_x < 0 || pad_y < 0) {
+        return false;
+    }
+
+    const uint32_t planes = (uint32_t) (src0->ne[2] * src0->ne[3]);
+    const uint32_t n_threads = (std::min)((uint32_t) sess->n_threads, planes > 0 ? planes : 1);
+
+    struct htp_pool_vtcm_layout layout;
+    return htp_pool_solve_layout(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
+                                 (uint32_t) op->ne[0], (uint32_t) op->ne[1],
+                                 n_threads, sess->vtcm_size);
+}
+
+static bool ggml_hexagon_supported_pool_1d(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const int32_t * params = op->op_params;
+
+    if (params[0] != GGML_OP_POOL_AVG && params[0] != GGML_OP_POOL_MAX) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(op)) {
+        return false;
+    }
+    if (!ggml_hexagon_pool_shape_fits(src0, op)) {
+        return false;
+    }
+
+    const int32_t kernel = params[1];
+    const int32_t stride = params[2];
+    const int32_t pad    = params[3];
+    if (kernel <= 0 || stride <= 0 || pad < 0) {
+        return false;
+    }
+
+    const uint32_t planes = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
+    const uint32_t n_threads = (std::min)((uint32_t) sess->n_threads, planes > 0 ? planes : 1);
+
+    struct htp_pool_vtcm_layout layout;
+    return htp_pool_solve_layout(&layout, (uint32_t) src0->ne[0], 1, (uint32_t) op->ne[0], 1, n_threads, sess->vtcm_size);
 }
 
 static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -7258,6 +7427,8 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_SET_ROWS:        return HTP_OP_SET_ROWS;
         case GGML_OP_SUM:             return HTP_OP_SUM;
         case GGML_OP_SUM_ROWS:        return HTP_OP_SUM_ROWS;
+        case GGML_OP_POOL_2D:         return HTP_OP_POOL_2D;
+        case GGML_OP_POOL_1D:         return HTP_OP_POOL_1D;
         case GGML_OP_ARGSORT:         return HTP_OP_ARGSORT;
         case GGML_OP_TOP_K:           return HTP_OP_TOP_K;
         case GGML_OP_ARGMAX:          return HTP_OP_ARGMAX;
@@ -7545,6 +7716,12 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                     node.node,
                     node.opcode == HTP_OP_TOP_K,
                     (struct htp_sort_kernel_params *) node.kernel_params
+                );
+            } else if (node.opcode == HTP_OP_POOL_2D || node.opcode == HTP_OP_POOL_1D) {
+                ggml_hexagon_precompute_pool_2d_params(
+                    sess, node.node->src[0], node.dst(),
+                    (struct htp_pool_2d_kernel_params *)node.kernel_params,
+                    node.opcode == HTP_OP_POOL_1D
                 );
             }
             computed_nodes.push_back(std::move(node));
@@ -8361,6 +8538,14 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_ARGMAX:
             supp = ggml_hexagon_supported_argmax(sess, op);
+            break;
+
+        case GGML_OP_POOL_2D:
+            supp = ggml_hexagon_supported_pool_2d(sess, op);
+            break;
+
+        case GGML_OP_POOL_1D:
+            supp = ggml_hexagon_supported_pool_1d(sess, op);
             break;
 
         case GGML_OP_SOFT_MAX:
