@@ -287,7 +287,7 @@ This stub is only for linking and GPU-independent tests. Do not install it as a 
 
 `test-cuda-compiled-features` uses the CUDA backend's actual architecture list and build definitions, but does not initialize a GPU. An SM61-only build reports compiled target `610`, slow FP16 and no Tensor Core / `cp.async` support, even when queried for a newer hypothetical GPU. The normal CUDA source guards keep newer instructions out of this target. For mixed Q8_0 K / Q4_0 V, keep `GGML_CUDA_FA_ALL_QUANTS=ON`; the default vector build compiles only matching F16/F16, BF16/BF16, Q4_0/Q4_0 and Q8_0/Q8_0 pairs. Other stock attention paths may use bounded conversion; a missing direct pair is not proof that the hardware is unsupported.
 
-This compile profile alone is not Pascal adaptive-streaming runtime qualification. The development branch admits stock-selected quantized TG1 from the SM61 baseline, but legacy TG2-TG4 and stock tile-selected shapes require later stages. No Windows/MSVC build or GTX 10-series inference result is claimed by these Linux compile tests. Modern CUDA 13 builds retain their existing target selection and optimized kernels.
+This compile profile alone is not Pascal adaptive-streaming runtime qualification. The development branch admits stock-selected quantized TG1/TG2 from the SM61 baseline, but legacy TG3/TG4 and stock tile-selected shapes require later stages. No Windows/MSVC build or GTX 10-series inference result is claimed by these Linux compile tests. Modern CUDA 13 builds retain their existing target selection and optimized kernels.
 
 #### Runtime prerequisites without optional acceleration
 
@@ -307,18 +307,19 @@ The `--queue-only` mode checks DMA boundaries, event ordering, final-consumer re
 
 Mutable KV backing still requires pinned, GPU-mapped host memory for publication and ordered DMA. Pinning/mapping failure, including `GGML_CUDA_NO_PINNED`, is a real storage-contract failure, not an absent optimization; strict KV allocation does not silently substitute pageable memory. These checks do not constitute complete startup arena-size verification. Linux SM61 code has been forward-JIT smoke-tested on an RTX 5070 Ti, but actual Pascal and Windows runtime qualification remain pending.
 
-#### Quantized TG1 development check
+#### Quantized TG1/TG2 development checks
 
-The wrapper accepts quantized TG1 only when stock selects vector and the required pair and resume code are compiled. It does not force unquantized or tile-selected requests onto vector. Legacy F16/BF16 values use the stock 8-byte copy grouping and 16 saved floats per thread; newer compiled targets use 32. Quantized values use 8. Scratch reporting and validation follow that compiled body even during forward-JIT on a newer GPU. The model and session both permit a TG1-only workspace plan without requiring TG2 support.
+The legacy wrapper accepts quantized TG1/TG2 only when stock selects vector and the required pair and resume code are compiled. It does not force unquantized or tile-selected requests onto vector, or change modern TG2 vector/MMA choices. Legacy F16/BF16 values use the stock 8-byte copy grouping and 16 saved floats per thread; newer compiled targets use 32. Quantized values use 8. Scratch reporting and validation follow that compiled body even during forward-JIT on a newer GPU. TG2 saves independent state for both queries, so its scratch is twice TG1's for equal split counts; it is not implemented as two separate TG1 evaluations. The model and session still permit a TG1-only workspace plan when TG2 is unavailable.
 
 After building an SM61-only test binary with all FA quants, a focused forward-JIT check on a newer CUDA GPU is:
 
 ```bash
 cmake --build build-sm61-eager --target test-kv-stream-vector-spans -j
 ./build-sm61-eager/bin/test-kv-stream-vector-spans --cuda-pascal-tg1
+./build-sm61-eager/bin/test-kv-stream-vector-spans --cuda-pascal-tg2
 ```
 
-This mode changes only the test process's host CC metadata, restores it before teardown, and rejects mixed-target binaries. It checks all-resident and wrapped spans, one-slot refill waves, masks/tails, exact/short scratch, canaries and TG1-only phase handoffs against the stock kernel in the same binary. It is not an actual Pascal performance result or full-model support guarantee. Actual Pascal validation, legacy TG2 and tile-based TG3/TG4/MTP remain follow-up work; do not advertise complete GTX 10-series support from this test alone.
+These modes change only the test process's host CC metadata, restore it before teardown, and reject mixed-target binaries. They check all-resident and wrapped spans, one-slot refill waves, masks/tails, exact/short scratch, canaries and phase handoffs against the stock kernel in the same binary. TG2 also tests separate causal frontiers, stale TG1 plans, changed-tail visibility, suffix invalidation and catch-up/replay. Use `--cuda-tg2` for that same matrix on an ordinary, unmodified CUDA device. These are not actual Pascal performance results or full-model support guarantees. Actual Pascal validation and tile-based TG3/TG4/MTP remain follow-up work; do not advertise complete GTX 10-series support from these tests alone.
 
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 

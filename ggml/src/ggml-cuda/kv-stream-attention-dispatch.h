@@ -10,7 +10,7 @@ static inline ggml_cuda_kv_stream_attention_path ggml_cuda_kv_stream_attention_s
         int cc, uint32_t queries, ggml_type key, ggml_type value) {
     if (queries < 1 || queries > 2) return ggml_cuda_kv_stream_attention_path::none;
     if (cc >= 890) return ggml_cuda_kv_stream_attention_path::vector;
-    if (cc >= 610 && queries == 1 && (ggml_is_quantized(key) || ggml_is_quantized(value))) {
+    if (cc >= 610 && (queries == 1 || cc < 700) && (ggml_is_quantized(key) || ggml_is_quantized(value))) {
         return ggml_cuda_kv_stream_attention_path::vector;
     }
     if (cc >= 800 && queries == 2 && key == GGML_TYPE_Q8_0 && value == GGML_TYPE_Q4_0) {
