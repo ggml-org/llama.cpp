@@ -41,6 +41,7 @@ int llama_server(int argc, char ** argv);
 
 // to be used via CLI (argc / argv are used by router mode only)
 int llama_server(common_params & params, int argc, char ** argv);
+int llama_server(common_params & params, int argc, char ** argv, server_child & child);
 void llama_server_terminate();
 void llama_server_terminate() {
     if (shutdown_handler) {
@@ -59,6 +60,10 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
             return func(req);
         } catch (const std::invalid_argument & e) {
             // treat invalid_argument as invalid request (400)
+            error = ERROR_TYPE_INVALID_REQUEST;
+            message = e.what();
+        } catch (const common_json_error & e) {
+            // JSON parse and type errors are invalid requests (400)
             error = ERROR_TYPE_INVALID_REQUEST;
             message = e.what();
         } catch (const std::exception & e) {
@@ -86,6 +91,8 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int llama_server(int argc, char ** argv) {
+    server_child child;
+
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
@@ -102,21 +109,26 @@ int llama_server(int argc, char ** argv) {
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
     server_stream_session_manager_start();
 
-    SRV_INF("%s", "initializing ...\n");
-
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
 
+    SRV_INF("%s", "initializing ...\n");
+
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    const int result = llama_server(params, argc, argv);
+    const int result = llama_server(params, argc, argv, child);
     common_log_flush(common_log_main());
     return result;
 }
 
 int llama_server(common_params & params, int argc, char ** argv) {
+    server_child child;
+    return llama_server(params, argc, argv, child);
+}
+
+int llama_server(common_params & params, int argc, char ** argv, server_child & child) {
     bool is_run_by_cli = (argv == nullptr);
 
     common_models_handler models_handler;
@@ -190,7 +202,6 @@ int llama_server(common_params & params, int argc, char ** argv) {
     //
 
     // register API routes
-    server_child child; // only used in non-router mode
     server_routes routes(params, ctx_server);
     server_tools tools;
 
@@ -227,6 +238,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         routes.post_embeddings             = models_routes->proxy_post;
         routes.post_embeddings_oai         = models_routes->proxy_post;
         routes.post_rerank                 = models_routes->proxy_post;
+        routes.post_systemone              = models_routes->proxy_post;
         routes.post_tokenize               = models_routes->proxy_post;
         routes.post_detokenize             = models_routes->proxy_post;
         routes.post_apply_template         = models_routes->proxy_post;
@@ -274,6 +286,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/reranking",                ex_wrapper(routes.post_rerank));
     ctx_http.post("/v1/rerank",                ex_wrapper(routes.post_rerank));
     ctx_http.post("/v1/reranking",             ex_wrapper(routes.post_rerank));
+    ctx_http.post("/v1/systemone",             ex_wrapper(routes.post_systemone));
     ctx_http.post("/tokenize",                 ex_wrapper(routes.post_tokenize));
     ctx_http.post("/detokenize",               ex_wrapper(routes.post_detokenize));
     ctx_http.post("/apply-template",           ex_wrapper(routes.post_apply_template));

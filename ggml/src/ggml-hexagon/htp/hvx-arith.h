@@ -164,6 +164,37 @@ static inline void hvx_mul_mul_f32_aa(uint8_t * restrict dst, const uint8_t * re
     }
 }
 
+static inline void hvx_mul_mul_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint8_t * restrict src2, const uint32_t num_elems) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src0 % 128 == 0);
+    assert((unsigned long) src1 % 128 == 0);
+    assert((unsigned long) src2 % 128 == 0);
+
+    HVX_Vector * restrict vdst  = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc0 = (HVX_Vector *) src0;
+    HVX_Vector * restrict vsrc1 = (HVX_Vector *) src1;
+    HVX_Vector * restrict vsrc2 = (HVX_Vector *) src2;
+
+    const uint32_t elem_size = sizeof(_Float16);
+    const uint32_t epv  = 128 / elem_size;
+    const uint32_t nvec = num_elems / epv;
+    const uint32_t nloe = num_elems % epv;
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        HVX_Vector v1 = HVX_OP_MUL_F16(vsrc0[i], vsrc1[i]);
+        vdst[i] = HVX_OP_MUL_F16(v1, vsrc2[i]);
+    }
+
+    if (nloe) {
+        HVX_Vector v1 = HVX_OP_MUL_F16(vsrc0[i], vsrc1[i]);
+        HVX_Vector v2 = HVX_OP_MUL_F16(v1, vsrc2[i]);
+        hvx_vec_store_a((void *) &vdst[i], nloe * elem_size, v2);
+    }
+}
+
 // Scalar Operations
 
 #define hvx_scalar_loop_body(dst_type, src_type, elem_size, vec_store, scalar_op_macro) \
@@ -345,6 +376,44 @@ static inline void hvx_max_scalar_f32(uint8_t * restrict dst, const uint8_t * re
         hvx_max_scalar_f32_ua(dst, src, val, num_elems);
     } else {
         hvx_max_scalar_f32_uu(dst, src, val, num_elems);
+    }
+}
+
+#define HVX_OP_MIN_SCALAR_F16(v) Q6_Vhf_vmin_VhfVhf(val_vec, v)
+
+static inline void hvx_min_scalar_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_f16(val);
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_Vector, sizeof(_Float16), hvx_vec_store_a, HVX_OP_MIN_SCALAR_F16);
+}
+
+static inline void hvx_min_scalar_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_f16(val);
+    assert((unsigned long) dst % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_UVector, sizeof(_Float16), hvx_vec_store_a, HVX_OP_MIN_SCALAR_F16);
+}
+
+static inline void hvx_min_scalar_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_f16(val);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_UVector, HVX_Vector, sizeof(_Float16), hvx_vec_store_u, HVX_OP_MIN_SCALAR_F16);
+}
+
+static inline void hvx_min_scalar_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_f16(val);
+    hvx_scalar_loop_body(HVX_UVector, HVX_UVector, sizeof(_Float16), hvx_vec_store_u, HVX_OP_MIN_SCALAR_F16);
+}
+
+static inline void hvx_min_scalar_f16(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 val, const int num_elems) {
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) {
+        hvx_min_scalar_f16_aa(dst, src, val, num_elems);
+    } else if (hex_is_aligned((void *) dst, 128)) {
+        hvx_min_scalar_f16_au(dst, src, val, num_elems);
+    } else if (hex_is_aligned((void *) src, 128)) {
+        hvx_min_scalar_f16_ua(dst, src, val, num_elems);
+    } else {
+        hvx_min_scalar_f16_uu(dst, src, val, num_elems);
     }
 }
 
@@ -580,6 +649,58 @@ static inline void hvx_abs_f16(uint8_t * restrict dst, const uint8_t * restrict 
 }
 
 //
+// Step
+//
+
+static inline void hvx_step_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t elem_size = sizeof(float);
+    const uint32_t epv       = 128 / elem_size;
+    const uint32_t nvec      = n / epv;
+    const uint32_t nloe      = n % epv;
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        vdst[i] = hvx_vec_step_f32(vsrc[i]);
+    }
+    if (nloe) {
+        HVX_Vector v = hvx_vec_step_f32(vsrc[i]);
+        hvx_vec_store_a((void *) &vdst[i], nloe * elem_size, v);
+    }
+}
+
+static inline void hvx_step_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t elem_size = sizeof(_Float16);
+    const uint32_t epv       = 128 / elem_size;
+    const uint32_t nvec      = n / epv;
+    const uint32_t nloe      = n % epv;
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        vdst[i] = hvx_vec_step_f16(vsrc[i]);
+    }
+    if (nloe) {
+        HVX_Vector v = hvx_vec_step_f16(vsrc[i]);
+        hvx_vec_store_a((void *) &vdst[i], nloe * elem_size, v);
+    }
+}
+
+//
 // Square
 //
 
@@ -715,10 +836,12 @@ static inline void hvx_sqr_f16(uint8_t * restrict dst, const uint8_t * restrict 
 #undef hvx_scalar_loop_body
 #undef HVX_OP_MIN_SCALAR
 #undef HVX_OP_MAX_SCALAR
+#undef HVX_OP_MIN_SCALAR_F16
 #undef HVX_OP_CLAMP_SCALAR
 #undef HVX_OP_CLAMP_SCALAR_F16
 #undef HVX_OP_LEAKY_RELU_SCALAR
 #undef DEFINE_HVX_BINARY_OP_VARIANTS
+#undef DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS
 #undef HVX_BINARY_DISPATCHER
 #undef UNUSED
 
