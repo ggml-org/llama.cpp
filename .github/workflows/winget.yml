@@ -39,13 +39,14 @@ jobs:
             const { browser_download_url: asset_url_arm64 } = assets.find(asset => asset.name.includes('win-vulkan-arm64'));
             console.log("Latest release:", version);
             core.setOutput('VERSION', version);
-            core.setOutput('ASSETURL', `${asset_url_x64} ${asset_url_arm64}`);
+            core.setOutput('ASSETURL_X64', asset_url_x64);
+            core.setOutput('ASSETURL_ARM64', asset_url_arm64);
 
       - name: Update manifest
         run: |
           echo "Updating manifest..."
           komac update --version ${{ steps.find_latest_release.outputs.VERSION }} \
-            --urls "${{ steps.find_latest_release.outputs.ASSETURL }}" \
+            --urls "${{ steps.find_latest_release.outputs.ASSETURL_X64 }}" "${{ steps.find_latest_release.outputs.ASSETURL_ARM64 }}" \
             --token ${{ secrets.WINGET_GITHUB_TOKEN }} \
             --submit \
             ggml.llamacpp
