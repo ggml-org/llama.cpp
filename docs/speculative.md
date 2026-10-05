@@ -126,7 +126,9 @@ in one microbatch and use one sequence with a nonempty output suffix after any
 catch-up rows. Every row must carry both a token ID and a hidden-state embedding;
 later generated rows may use zero placeholders. A context with a backend sampler
 attached cannot chain: a chain returns packed token and probability rows instead of
-vocabulary logits. Invalid batches return a decode error before changing the KV cache.
+vocabulary logits. A context with embeddings enabled cannot chain either: the chain
+graph has no embedding output. Invalid batches return a decode error before changing
+the KV cache.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)

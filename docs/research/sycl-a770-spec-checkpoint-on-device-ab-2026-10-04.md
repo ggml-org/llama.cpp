@@ -67,6 +67,11 @@ DSpark types and 0 otherwise, so a hybrid target is full-removal only under
   refuses to start while another process holds `/dev/dri/renderD128` (exit 70)
   and reports new `xe` fault lines from `dmesg`. Both arms run with
   `LLAMA_TRACE=1`, which logs one line per verified draft and marks restores.
+  Review tightened the gates after these runs: i915 as well as xe fault lines,
+  a kernel log that could not be compared, a `fuser` error, a response that
+  fails the target-argmax verifier and a speculative arm without draft
+  statistics now each make the run fail. Applied to the summaries kept here,
+  the last two exclude no launch.
 - Requests: `prompts.jsonl`, `n_predict` 256, temperature 0, `cache_prompt`
   false, `--parallel 1`, q8_0 KV, flash attention on.
 - No persistent SYCL cache and no SYCL graph (`GGML_SYCL_ENABLE_GRAPH` unset).

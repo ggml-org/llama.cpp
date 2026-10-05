@@ -331,6 +331,8 @@ a regression test that failed before its fix, except where noted.
 | The chain row high-water mark doubles instead of growing by one. | 31 scheduler reservations for chains of 1 to 32 rows, 5 after | `test_chain_reserve_growth` |
 | A chain runs inside the compute buffers of the ordinary graph. | none: added as a guard for the claim that `--fit` covers chaining | assertion in `test_chain` |
 | The fit logs why an extra model is measured next to its parent and does not repeat the failed attempt. | not tested: logging and control flow only | none |
+| A file with some trunk block tensors is a trunk: one that lacks others fails to load. The loader used to take a missing `blk.0.hc_attn_norm.weight` alone as the mark of a head-only file. Third review pass. | a combined file without that one tensor loaded and ran as a head, embedding straight into the LM head | "a trunk that lacks a tensor is rejected, not run as a head" |
+| A chained decode on a context with embeddings enabled returns -1. Third review pass. | abort at `llama-graph.cpp:3887`, `missing result_norm/result_embd tensor` | `test_invalid_chain`, case 7 |
 | The server's checkpoint guard decides before every checkpoint update instead of once (`common_speculative_checkpoint_flags`). Added after a third review pass, on `f5b0150d4`. | the first decision was kept while a checkpoint outgrew its device copy | `test_checkpoint_placement`; its host branch needs a device that reports memory, so it only runs under `--backend SYCL0` |
 
 The hidden-export finding was not in either review. It surfaced while testing
@@ -339,9 +341,17 @@ its hidden input, which is why drafting was not visibly affected: normalizing an
 already normalized residual changes it only through the epsilon term. Drafts
 therefore are not expected to be bit-identical to earlier builds.
 
-Results on the final source: CPU `test-qwen4exp-mtp` 72 PASS (f16) and 48 PASS
-(`--q8-kv`); Arc A770 `--backend SYCL0` 72 PASS and 48 PASS, 0 new i915/xe fault
-lines. Real head on CPU, chain depth 6, 16 and 64 at microbatch sizes from the
+Results on the final source: CPU `test-qwen4exp-mtp` 74 PASS (f16) and 49 PASS
+(`--q8-kv`); Arc A770 `--backend SYCL0` 74 PASS and 49 PASS, 0 new i915/xe fault
+lines. Both real head files on disk hold only block 48, the head block, besides
+their shared tensors, so the new head-only rule classifies them as before; the
+Q8_0 head still loads and generates on CPU with the head-only warning.
+
+The two SYCL test cases have a 180 s timeout. A cold run, with an empty NEO
+compiler cache directory, took 5.4 s for either case on the A770 (55 kernels
+compiled), against 1.1 s to 1.7 s warm; with the cache switched off it took
+5.2 s. The 200 s cold start quoted in `AGENTS.md` does not apply to this
+fixture. Real head on CPU, chain depth 6, 16 and 64 at microbatch sizes from the
 chain length up to 512: the compute buffers stayed at their reserved size
 (6.6 MiB to 566.0 MiB depending on the configuration).
 
