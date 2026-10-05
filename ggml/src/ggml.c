@@ -1023,6 +1023,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "REPEAT_BACK",
     "CONCAT",
     "SILU_BACK",
+    "GELU_BACK",
+    "GEGLU_BACK",
     "NORM",
     "RMS_NORM",
     "RMS_NORM_BACK",
@@ -1113,7 +1115,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1142,6 +1144,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "repeat_back(x)",
     "concat(x, y)",
     "silu_back(x)",
+    "gelu_back(x)",
+    "geglu_back(x)",
     "norm(x)",
     "rms_norm(x)",
     "rms_norm_back(x)",
@@ -1232,7 +1236,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2913,6 +2917,35 @@ struct ggml_tensor * ggml_silu_back(
     result->op     = GGML_OP_SILU_BACK;
     result->src[0] = a;
     result->src[1] = b;
+
+    return result;
+}
+
+// ggml_gelu_back
+
+struct ggml_tensor * ggml_gelu_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op     = GGML_OP_GELU_BACK;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+// ggml_geglu_back
+struct ggml_tensor * ggml_geglu_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * grad,
+        struct ggml_tensor  * g) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, g);
+
+    result->op     = GGML_OP_GEGLU_BACK;
+    result->src[0] = grad;
+    result->src[1] = g;
 
     return result;
 }
@@ -7342,6 +7375,11 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_silu_back(ctx, grad, src0));
                     }
                 } break;
+                case GGML_UNARY_OP_GELU: {
+                    if (src0_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_gelu_back(ctx, grad, src0));
+                    }
+                } break;
                 case GGML_UNARY_OP_EXP: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, tensor, grad));
@@ -7386,6 +7424,27 @@ static void ggml_compute_backward(
                     }
                     if (src1_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, ggml_silu(ctx, src0), grad));
+                    }
+                } break;
+                case GGML_GLU_OP_GEGLU: {
+                    if (src0_needs_grads) {
+                        GGML_ASSERT(src1 && "backward pass only implemented for split geglu");
+                        struct ggml_tensor * grad_mul_src1 = ggml_mul(ctx, grad, src1);
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_geglu_back(ctx, grad_mul_src1, src0));
+                    }
+                    if (src1_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, grad, ggml_gelu(ctx, src0)));
+                    }
+                } break;
+                case GGML_GLU_OP_REGLU: {
+                    // y = relu(a)*b, so da = step(a)*b*dy and db = relu(a)*dy
+                    if (src0_needs_grads) {
+                        GGML_ASSERT(src1 && "backward pass only implemented for split reglu");
+                        struct ggml_tensor * grad_mul_src1 = ggml_mul(ctx, grad, src1);
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad_mul_src1, ggml_step(ctx, src0)));
+                    }
+                    if (src1_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, grad, ggml_relu(ctx, src0)));
                     }
                 } break;
                 default: {

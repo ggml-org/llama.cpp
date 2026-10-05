@@ -3081,6 +3081,143 @@ void ggml_compute_forward_silu_back(
     }
 }
 
+// ggml_compute_forward_gelu_back
+
+static void ggml_compute_forward_gelu_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * grad = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    assert(ggml_is_contiguous_1(grad));
+    assert(ggml_is_contiguous_1(src1));
+    assert(ggml_is_contiguous_1(dst));
+    assert(ggml_are_same_shape(src1, dst));
+    assert(ggml_are_same_shape(src1, grad));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src1->ne[0];
+    const int nr = ggml_nrows(src1);
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        ggml_vec_gelu_backward_f32(nc,
+                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
+                (float *) ((char *) src1->data + i1*(src1->nb[1])),
+                (float *) ((char *) grad->data + i1*(grad->nb[1])));
+    }
+}
+
+static void ggml_compute_forward_gelu_back_f16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * grad = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    assert(ggml_is_contiguous_1(grad));
+    assert(ggml_is_contiguous_1(src1));
+    assert(ggml_is_contiguous_1(dst));
+    assert(ggml_are_same_shape(src1, dst));
+    assert(ggml_are_same_shape(src1, grad));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src1->ne[0];
+    const int nr = ggml_nrows(src1);
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        ggml_vec_gelu_backward_f16(nc,
+                (ggml_fp16_t *) ((char *) dst->data  + i1*( dst->nb[1])),
+                (ggml_fp16_t *) ((char *) src1->data + i1*(src1->nb[1])),
+                (ggml_fp16_t *) ((char *) grad->data + i1*(grad->nb[1])));
+    }
+}
+
+void ggml_compute_forward_gelu_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_gelu_back_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_gelu_back_f16(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+static void ggml_compute_forward_geglu_back_f32(
+        const ggml_compute_params * params,
+        const struct ggml_tensor * grad,
+        const struct ggml_tensor * g,
+        struct ggml_tensor * dst) {
+
+    GGML_ASSERT(ggml_are_same_shape(grad, dst));
+    GGML_ASSERT(ggml_are_same_shape(g, dst));
+    GGML_ASSERT(grad->type == GGML_TYPE_F32);
+    GGML_ASSERT(g->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = dst->ne[0];
+
+    const size_t nb1 = dst->nb[1];
+    const size_t nb2 = dst->nb[2];
+    const size_t nb3 = dst->nb[3];
+
+    for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+        for (int i2 = 0; i2 < dst->ne[2]; i2++) {
+            for (int i1 = ith; i1 < dst->ne[1]; i1 += nth) {
+                float * dst_ptr = (float *)((char *) dst->data + i3*nb3 + i2*nb2 + i1*nb1);
+                const float * grad_ptr = (const float *)((char *) grad->data + i3*grad->nb[3] + i2*grad->nb[2] + i1*grad->nb[1]);
+                const float * g_ptr = (const float *)((char *) g->data + i3*g->nb[3] + i2*g->nb[2] + i1*g->nb[1]);
+                ggml_vec_gelu_backward_f32(nc, dst_ptr, g_ptr, grad_ptr);
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_geglu_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const struct ggml_tensor * grad = dst->src[0];
+    const struct ggml_tensor * g = dst->src[1];
+
+    switch (dst->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_geglu_back_f32(params, grad, g, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
 // ggml_compute_forward_reglu
 
 // row loop shared by the BF16 GLU ops

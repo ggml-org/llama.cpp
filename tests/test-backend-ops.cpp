@@ -2117,7 +2117,7 @@ struct test_unary : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const bool grad_supported = op == GGML_UNARY_OP_ABS || op == GGML_UNARY_OP_SGN || op == GGML_UNARY_OP_NEG ||
             op == GGML_UNARY_OP_STEP || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU ||
-            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS;
+            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS || op == GGML_UNARY_OP_GELU;
 
         ggml_tensor * a;
         if (v & 1) {
@@ -2266,30 +2266,40 @@ struct test_glu_split : public test_case {
         : op(op), type(type), ne_a(ne_a), v(v) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        const bool grad_supported = op == GGML_GLU_OP_REGLU || op == GGML_GLU_OP_GEGLU || op == GGML_GLU_OP_SWIGLU;
+
         ggml_tensor * a;
         ggml_tensor * b;
         if (v & 1) {
             auto ne = ne_a; ne[0] *= 3;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
-            ggml_set_param(a);
+            if (grad_supported) {
+                ggml_set_param(a);
+            }
             ggml_set_name(a, "a");
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
 
             b = ggml_new_tensor(ctx, type, 4, ne.data());
-            ggml_set_param(b);
+            if (grad_supported) {
+                ggml_set_param(b);
+            }
             ggml_set_name(b, "b");
 
             b = ggml_view_4d(ctx, b, ne_a[0], ne_a[1], ne_a[2], ne_a[3], b->nb[1], b->nb[2], b->nb[3], 0);
             ggml_set_name(a, "view_of_b");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
-            ggml_set_param(a);
+            if (grad_supported) {
+                ggml_set_param(a);
+            }
             ggml_set_name(a, "a");
 
             b = ggml_new_tensor(ctx, type, 4, ne_a.data());
-            ggml_set_param(b);
+            if (grad_supported) {
+                ggml_set_param(b);
+            }
             ggml_set_name(b, "b");
         }
 
@@ -2433,6 +2443,39 @@ struct test_swiglu_clamp : public test_case {
         // F16 epsilon ~ 9.7e-4: relax tolerance vs the F32 default to absorb the
         // natural roundoff drift from the sigmoid()/clamp() chain computed in F16.
         return type == GGML_TYPE_F16 ? 5e-6 : 1e-7;
+    }
+};
+
+// GGML_OP_GEGLU_BACK
+struct test_geglu_back : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    float eps;
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, eps);
+    }
+
+    test_geglu_back(ggml_type type = GGML_TYPE_F32,
+                    std::array<int64_t, 4> ne = {64, 5, 4, 3},
+                    float eps = 1e-6f)
+        : type(type), ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * gate = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(gate, "gate");
+
+        ggml_tensor * grad = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(grad, "grad");
+
+        ggml_tensor * out = ggml_geglu_back(ctx, grad, gate);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    bool grad_precise() override {
+        return true;
     }
 };
 
@@ -3839,6 +3882,37 @@ struct test_silu_back : public test_case {
         ggml_set_name(grad, "grad");
 
         ggml_tensor * out = ggml_silu_back(ctx, a, grad);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_GELU_BACK
+struct test_gelu_back : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_gelu_back(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * grad = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(grad, "grad");
+
+        ggml_tensor * out = ggml_gelu_back(ctx, a, grad);
         ggml_set_name(out, "out");
 
         return out;
@@ -10349,6 +10423,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    test_cases.emplace_back(new test_geglu_back());
+
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_Q4_0}) {
         test_cases.emplace_back(new test_get_rows(type, 300*256,   5,         4,   1,   2, false));
         test_cases.emplace_back(new test_get_rows(type,     256,   80000, 70000,   2,   1, false));
@@ -11050,6 +11126,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {100, 10, 10, 10}, 0.5f, 0.0f));
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
+    test_cases.emplace_back(new test_gelu_back());
 
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 10.f }) {
         for (uint32_t n : { 64, 1025 }) {
