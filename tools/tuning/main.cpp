@@ -1,4 +1,5 @@
 #include "fa-vec.h"
+#include "mul-mm.h"
 #include "ggml-backend.h"
 #include "ggml.h"
 
@@ -13,6 +14,7 @@ struct tuner_def {
 
 static const tuner_def k_tuners[] = {
     { "fa-vec", tuner_fa_vec_run },
+    { "mul-mm", tuner_mul_mm_run },
 };
 
 static void usage(const char * argv0) {
@@ -23,6 +25,7 @@ static void usage(const char * argv0) {
     printf("\n");
     printf("  tuners:\n");
     printf("    fa-vec            flash-attn vec (Q,NE) for ggml-metal-tuning.cpp\n");
+    printf("    mul-mm            mul_mm tile (nr0,nr1) for ggml-metal-tuning.cpp\n");
     printf("\n");
     printf("  options:\n");
     printf("    -b <name>         backend device (default: first Metal device)\n");

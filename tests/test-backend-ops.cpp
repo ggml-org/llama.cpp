@@ -12095,6 +12095,130 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     return n_fail == 0;
 }
 
+// ---- mul_mm tile: forced-config numerical slice + pick-lattice self-test (Metal only) ----
+using set_mm_tile_override_t     = void (*)(int, int);
+using clear_mm_tile_override_t   = void (*)(void);
+using mm_tile_lattice_selftest_t = int  (*)(void);
+
+struct mm_tile_t { int nr0, nr1; };
+
+// Copy of mm_tile_cfg_is_legal (ggml/src/ggml-metal/ggml-metal-tuning.h); the test cannot
+// include a backend-internal header. If the two drift apart, a geometry the runtime can
+// serve silently loses its numerical coverage here, and one it cannot serve shows up as a
+// nil pipeline rather than a wrong result.
+static bool mm_tile_cfg_is_legal_ref(int nr0, int nr1) {
+    if (nr1 != 8 && nr1 != 16 && nr1 != 32) { return false; }
+    if (nr0 % 16 != 0)                      { return false; }
+
+    const int sg_n = (nr1 == 32) ? 2 : 1;
+    if ((nr0 / 16) % sg_n != 0)             { return false; }
+
+    const int sg_m = (nr0 / 16) / sg_n;
+    const int tn   = nr1 / (sg_n * 8);
+    if (sg_m < tn)                          { return false; }
+
+    if (32 * (nr0 / 16) > 1024)             { return false; }
+
+    const int ab = (nr0 + nr1) * 32 * 2;
+    const int bc = nr0 * nr1 * 4;
+    return (ab > bc ? ab : bc) <= 32768;
+}
+
+// nr1 is what picks the instantiation, so every instantiated nr1 has to appear. nr0 is a
+// function constant feeding address arithmetic, so the sample spans the range the runtime
+// may serve: the nr0 = 2*nr1 legality edge, the swept geometries, and the widest tile.
+static std::vector<mm_tile_t> mm_tile_legal_configs() {
+    std::vector<mm_tile_t> r;
+    for (int nr1 : { 8, 16, 32 }) {
+        for (int nr0 : { 16, 32, 64, 128 }) {
+            if (mm_tile_cfg_is_legal_ref(nr0, nr1)) {
+                r.push_back({ nr0, nr1 });
+            }
+        }
+    }
+    return r;
+}
+
+// Forces each tile geometry the runtime can serve and checks Metal against the CPU
+// reference for every src0 type, then runs the pick-lattice self-test. The override is
+// backend-global, so this runs after all parallel workers have joined.
+static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter) {
+    const char * LLAMA_TEST_MUL_MM_TILE_DISABLE = getenv("LLAMA_TEST_MUL_MM_TILE_DISABLE");
+    if (LLAMA_TEST_MUL_MM_TILE_DISABLE) {
+        return true;
+    }
+
+    if (!op_names_filter_selects(op_names_filter, "MUL_MAT")) {
+        return true;
+    }
+
+    printf("Running mul_mm tile slice tests (env LLAMA_TEST_MUL_MM_TILE_DISABLE=1 to skip)\n");
+
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+
+    auto set_ov   = (set_mm_tile_override_t)     ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_mm_tile_override");
+    auto clear_ov = (clear_mm_tile_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_mm_tile_override");
+    auto selftest = (mm_tile_lattice_selftest_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_mm_tile_lattice_selftest");
+    if (!set_ov || !clear_ov || !selftest) {
+        return true;  // not the Metal backend: nothing to force
+    }
+
+    const auto tiles = mm_tile_legal_configs();
+
+    // 4096 is a whole number of blocks for every type; 4096 + 16 is not a multiple of 32,
+    // which is what selects the kernel's bc_inp input path, and only fits a block size of 1.
+    const int64_t k_aligned = 4096;
+    const int64_t k_bc_inp  = 4096 + 16;
+
+    int n_run = 0, n_fail = 0, n_unsup = 0;
+    for (auto t : tiles) {
+        for (ggml_type type_a : all_types) {
+            // n (tokens) > 8 routes to the mm branch. The shapes exercise the aligned path,
+            // the bc_out writeback path (N_out % nr0 != 0 || tokens % nr1 != 0), and where
+            // the block size allows it the bc_inp path.
+            struct shape_t { int64_t m, n, k; };
+            std::vector<shape_t> shapes = {
+                { t.nr0 * 3,     t.nr1 * 3,     k_aligned },
+                { t.nr0 * 3 + 7, t.nr1 * 3 + 5, k_aligned },
+            };
+            if (ggml_blck_size(type_a) == 1) {
+                shapes.push_back({ t.nr0 * 3, t.nr1 * 3, k_bc_inp });
+            }
+
+            for (auto s : shapes) {
+                set_ov(t.nr0, t.nr1);
+                test_mul_mat tc(type_a, GGML_TYPE_F32, s.m, s.n, s.k, { 1, 1 }, { 1, 1 });
+                auto st = tc.eval(backend, backend_cpu, "MUL_MAT", nullptr);
+                clear_ov();
+
+                if (st == test_status_t::NOT_SUPPORTED) {
+                    n_unsup++;  // e.g. bf16 on a device without it
+                    continue;
+                }
+
+                if (st == test_status_t::FAIL) {
+                    printf("  FAIL mul_mm tile slice: tile=%dx%d type=%s m=%lld n=%lld k=%lld\n",
+                           t.nr0, t.nr1, ggml_type_name(type_a),
+                           (long long) s.m, (long long) s.n, (long long) s.k);
+                    n_fail++;
+                }
+                n_run++;
+            }
+        }
+    }
+
+    const int selftest_fails = selftest();
+    if (selftest_fails != 0) {
+        printf("  FAIL mul_mm pick-lattice self-test: %d assertion(s)\n", selftest_fails);
+    }
+
+    // cases = legal tile geometries x src0 types x shapes.
+    printf("  mul_mm tile slice: %d cases run, %d failed, %d unsupported; pick-lattice self-test %s\n",
+           n_run, n_fail, n_unsup, selftest_fails == 0 ? "ok" : "FAILED");
+
+    return n_fail == 0 && selftest_fails == 0;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
@@ -12232,9 +12356,10 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool slice_ok    = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool mm_slice_ok = run_mul_mm_slice(backend, backend_cpu.get(), op_names_filter);
 
-        return n_ok == tests_run && slice_ok;
+        return n_ok == tests_run && slice_ok && mm_slice_ok;
     }
 
     if (mode == MODE_GRAD) {
