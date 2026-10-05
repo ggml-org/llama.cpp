@@ -267,8 +267,13 @@ the production SYCL server resident but idle, default perf shapes, pre-PR binary
 | ggml-org#29476 vulkan GDN Intel tuning | subgroup-16 GDN pipeline on Intel | GDN 32 heads S=128: 24.9 -> 6.2 us decode, 6986 -> 1500 us at 512 tokens; 40/40 correct |
 | ggml-org#29186 Q8_0 ESIMD DMMV + wide MMVQ | `GGML_SYCL_MMVQ_WIDE` (default 1) | q8_0 n=1 matvec 177 -> 157 us, 187 -> 172 us (+9-13%); the gain is the ESIMD DMMV, wide MMVQ alone is neutral to -7% |
 | ggml-org#29375 Q5_K reorder MMVQ + fused GLU | Q5_K vec_dot restructure, row pairing at 3..5 cols | as-is: pairing halves throughput at n=3..5 (275 -> 529, 298 -> 676, 335 -> 823 us); unpaired the restructured vec_dot is slow at n=8 (2109 us). Fork pairs Q5_K only from 6 columns: n=1..5 at 1.00-1.05x of pre-PR, n=8 0.93x (1261 vs 1167 us), n=512 1.00x |
-| ggml-org#29245 grouped MoE XMX GEMM | `GGML_SYCL_XMX_GATHER_TYPES`, IQ4_NL / IQ3_S only | correct (joint_matrix at SG16 JIT-compiles and passes here); no measurable gain at MoE shapes with 256 experts x 512 tokens; dense fused dequant GEMM 0.99x |
+| ggml-org#29245 grouped MoE XMX GEMM | `GGML_SYCL_XMX_GATHER_TYPES`, IQ4_NL / IQ3_S only | Attribution corrected 2026-10-05: the A770 capability gate rejects these SG16 8x16x16 kernels. The passing probes and dense 0.99x comparison exercised fallback library GEMM; they establish no fused-kernel correctness or performance result. |
 | ggml-org#29506 ExternalProject SYCL build | `GGML_SYCL_SEPARATE_BUILD` (default OFF) | build-system only; its `#if GGML_SYCL_DNNL` fix was already in the fork |
+
+The XMX attribution correction follows the matrix-capability investigation in
+[the AOT note](../sycl-xmx-gather-dg2-aot-2026-09-28.md). The earlier claim that
+SG16 gather kernels JIT-compiled and ran on this A770 was unsupported; successful
+operator output alone did not establish which implementation ran.
 
 Correctness: q5_K / q8_0 / iq4_nl / iq3_s `MUL_MAT`, `MUL_MAT_VEC_FUSION` (1265 cases) and
 `MUL_MAT_ID` all pass against CPU; `test-sycl-turbo-correctness` default sweep 0 GATE-FAIL. The

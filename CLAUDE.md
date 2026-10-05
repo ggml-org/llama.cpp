@@ -86,9 +86,9 @@ Hard rules:
 - **`GGML_SYCL_DNN=ON` is only a request.** The effective `GGML_SYCL_DNNL` compile definition and
   the runtime `GGML_SYCL_DNNL:` line are authoritative; a CPU-only oneDNN package yields
   `GGML_SYCL_DNNL=0` and disables the oneDNN FA/GEMM paths entirely.
-- Fork-added CMake knobs: `GGML_SYCL_DEVICE_CODE_SPLIT` (default ON, `-fsycl-device-code-split=per_kernel`),
-  build provenance JSON written when `GGML_SYCL_DEVICE_ARCH` is set. `GGML_SYCL_FA_ALL_QUANTS` is a
-  compile define (not a CMake option) that widens FA type coverage.
+- Fork-added CMake knobs: `GGML_SYCL_DEVICE_CODE_SPLIT` (default ON),
+  `GGML_SYCL_XMX_GATHER` (AUTO/ON/OFF), and build provenance are documented in
+  `docs/backend/SYCL.md`. `GGML_SYCL_FA_ALL_QUANTS` is a compile define, not a CMake option.
 - Vulkan/CPU-only builds are the quick way to smoke-test non-SYCL changes (`cmake -B build && cmake --build build -j`).
 
 ## Tests

@@ -197,9 +197,10 @@ labelled as a paired campaign as order-of-magnitude.
   unmeasured until a paired run crosses both settings. Neither is on by default in the fork or the runtime.
 - **MoE prefill is bounded by the per-expert loop.** SYCL `mul_mat_id` is fused only for single-token decode; any batch
   larger than one runs one small GEMM per *touched* expert (the loop skips experts nothing routed to). The exception
-  is the IQ weight types, which take one grouped XMX GEMM launch while each expert's row slice stays narrow
-  (`GGML_SYCL_XMX_GATHER_TYPES`; measured for IQ4_NL / IQ3_S only, no gain at 256 experts x 512 tokens, ornith research
-  section 8); Ornith's Q4_K / Q6_K experts take the loop. A large
+  is the IQ grouped XMX path on devices with the required matrix shape, while each expert's row slice stays narrow
+  (`GGML_SYCL_XMX_GATHER_TYPES`). The A770 rejects this path; its IQ4_NL / IQ3_S measurements exercised library
+  fallback, leaving fused-kernel correctness and performance unmeasured (ornith research section 8).
+  Ornith's Q4_K / Q6_K experts take the loop. A large
   prefill ubatch is likely to touch every expert at least once, so at ub=512-2048 that's close to the 256 x 3
   launches per layer upper bound; a small speculative-decoding verify batch of `n` tokens touches at most `8*n`
   (8 experts/token), far fewer. Per-matrix cost is nearly flat from 512 to 2048 tokens, so a larger `--ubatch-size`

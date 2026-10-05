@@ -643,7 +643,13 @@ static void ggml_check_sycl() try {
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_OPT: %d\n", g_ggml_sycl_enable_optimize);
+        GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_REQUESTED: %s\n", GGML_SYCL_XMX_GATHER_REQUESTED);
+        GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_EFFECTIVE: %s\n", GGML_SYCL_XMX_GATHER_EFFECTIVE);
+#ifndef GGML_SYCL_NO_XMX_GATHER
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: %d\n", g_ggml_sycl_xmx_gather_types);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: XMX gather GEMMs disabled by compile flag\n");
+#endif
 
 #if defined(GGML_SYCL_SUPPORT_VMM)
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: %d\n", g_ggml_sycl_enable_vmm);

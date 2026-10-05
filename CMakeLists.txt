@@ -216,11 +216,6 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
 
-if (GGML_SYCL_DEVICE_ARCH)
-    set(LLAMA_SYCL_BUILD_MODE "AOT")
-else()
-    set(LLAMA_SYCL_BUILD_MODE "JIT")
-endif()
 set(LLAMA_BUILD_COMMIT_FULL_RESULT 1)
 if (Git_FOUND)
     execute_process(
@@ -281,16 +276,26 @@ endif()
 if (NOT LLAMA_BUILD_COMMIT_FULL_RESULT EQUAL 0)
     set(LLAMA_BUILD_COMMIT_FULL "unknown")
 endif()
-file(GENERATE
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-metadata.json"
-    CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\"\n}\n"
-)
 
 #
 # build the library
 #
 
 add_subdirectory(src)
+
+set(LLAMA_SYCL_DEVICE_ARCH "${GGML_SYCL_DEVICE_ARCH}")
+if (DEFINED GGML_SYCL_DEVICE_ARCH_NORMALIZED)
+    set(LLAMA_SYCL_DEVICE_ARCH "${GGML_SYCL_DEVICE_ARCH_NORMALIZED}")
+endif()
+if (NOT "${LLAMA_SYCL_DEVICE_ARCH}" STREQUAL "")
+    set(LLAMA_SYCL_BUILD_MODE "AOT")
+else()
+    set(LLAMA_SYCL_BUILD_MODE "JIT")
+endif()
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-metadata.json"
+    CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\",\n  \"sycl_xmx_gather_requested\": \"${GGML_SYCL_XMX_GATHER}\",\n  \"sycl_xmx_gather_effective\": \"${GGML_SYCL_XMX_GATHER_EFFECTIVE}\"\n}\n"
+)
 
 #
 # utils, programs, examples and tests

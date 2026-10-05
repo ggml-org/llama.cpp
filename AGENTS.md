@@ -151,6 +151,7 @@ ninja -C build-aot   # ~14 min
 | `GGML_SYCL_DEVICE_ARCH` | "" (JIT) | AOT target (`acm-g10`) |
 | `GGML_SYCL_GRAPH` | ON | SYCL graph capture |
 | `GGML_SYCL_DEVICE_CODE_SPLIT` | ON | Per-kernel device code split |
+| `GGML_SYCL_XMX_GATHER` | AUTO | XMX gather build policy; see docs/backend/SYCL.md, "XMX gather GEMMs and DG2 AOT builds" |
 | `GGML_SYCL_SUPPORT_LEVEL_ZERO_API` | ON | Level Zero direct allocation |
 
 `GGML_SYCL_WARP_SIZE=16` hardcoded for INTEL (`ggml-sycl/CMakeLists.txt:209`). Beware: some headers define `QK_WARP_SIZE`/`WARP_32_SIZE` as 32.
