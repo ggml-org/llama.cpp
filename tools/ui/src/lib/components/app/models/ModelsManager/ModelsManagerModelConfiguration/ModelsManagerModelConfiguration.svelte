@@ -156,20 +156,20 @@
 					onSave={() => onSave(draft)}
 				/>
 			</Tabs.Content>
+
+			<div class="mt-4 border-t border-border/30 pt-3 pb-2">
+				<Button
+					class="w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20"
+					onclick={() => (deleteOpen = true)}
+					size="sm"
+					variant="ghost"
+				>
+					<Trash2 class="h-4 w-4" />
+					Delete this model from disk
+				</Button>
+			</div>
 		</div>
 	</Tabs.Root>
-
-	<div class="border-t border-border/30 px-4 pt-3 pb-4">
-		<Button
-			class="w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20"
-			onclick={() => (deleteOpen = true)}
-			size="sm"
-			variant="ghost"
-		>
-			<Trash2 class="h-4 w-4" />
-			Delete this model from disk
-		</Button>
-	</div>
 
 	<!-- a phone keeps the actions at the bottom of its screen, in reach of the thumb -->
 	{#if deviceStore.isMobile}
