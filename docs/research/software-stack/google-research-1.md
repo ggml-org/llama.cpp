@@ -1,6 +1,6 @@
 # **Architectural Optimization and Package Dependency Dynamics for Llama.cpp Acceleration on Intel Arc GPUs under Arch Linux**
 
-In modern high-performance local large language model (LLM) inference, software execution stack interactions frequently dictate real-world performance ceilings. When deploying llama.cpp on an Arch Linux distribution utilizing a heterogeneous dual-GPU topology—where desktop display rendering and composition are driven by an integrated AMD Ryzen 9 7900X3D GPU via the amdgpu driver, while a discrete Intel Arc GPU operates headlessly strictly as a GPGPU compute accelerator—the operational boundaries between user-space graphics drivers, compute runtimes, and low-level kernel modules become vital1.  
+In modern high-performance local large language model (LLM) inference, software execution stack interactions frequently dictate real-world performance ceilings. When deploying llama.cpp on an Arch Linux distribution utilizing a heterogeneous dual-GPU topology - where desktop display rendering and composition are driven by an integrated AMD Ryzen 9 7900X3D GPU via the amdgpu driver, while a discrete Intel Arc GPU operates headlessly strictly as a GPGPU compute accelerator - the operational boundaries between user-space graphics drivers, compute runtimes, and low-level kernel modules become vital1.  
 A primary area of configuration ambiguity is whether user-space display driver frameworks, such as Mesa, exert any influence over a discrete graphics adapter that is completely decoupled from display output. Evaluating this requires analyzing the software dependency graph across distinct execution backends (GGML\_VULKAN versus GGML\_SYCL), mapping user-space driver interfaces to kernel Direct Rendering Manager (DRM) modules, and examining empirical performance data across software revisions1.
 
 ## **Direct Impact of Mesa on Headless Intel Arc Compute Performance**
@@ -41,9 +41,9 @@ The xe driver eliminates decades of legacy platform debt accumulated in i915, in
 ## **Architectural Comparison: SYCL versus Vulkan Backends**
 
 Selecting between the GGML\_SYCL and GGML\_VULKAN compilation backends on Arch Linux involves evaluating distinct trade-offs across prompt processing (prefill) latency, multi-tenant concurrent scaling, and runtime driver stability1.  
-The SYCL backend demonstrates clear performance advantages during prompt processing (PP) or prefill phases1. By leveraging Intel’s specialized oneDNN math libraries and native XMX instruction pipelines, GGML\_SYCL achieves exceptionally high matrix processing throughput during initial context ingestion, consistently outperforming Vulkan in single-stream prefill evaluations1.  
+The SYCL backend demonstrates clear performance advantages during prompt processing (PP) or prefill phases1. By leveraging Intel's specialized oneDNN math libraries and native XMX instruction pipelines, GGML\_SYCL achieves exceptionally high matrix processing throughput during initial context ingestion, consistently outperforming Vulkan in single-stream prefill evaluations1.  
 Conversely, during single-token generation (TG) or decode phases, recent Mesa developments have shifted the advantage toward Vulkan1. With Mesa 26.1+ exposing NV\_coopmat2 support, Vulkan matches or slightly exceeds single-stream SYCL generation speeds while operating with reduced user-space driver overhead1.  
-Under concurrent multi-slot workloads—such as serving parallel client queries through llama-server—the execution models of the two backends diverge dramatically1. Vulkan exhibits near-linear performance scaling as additional context slots are allocated1. As parallel execution slots scale from one to eight, Vulkan utilizes internal queue submission parallelism, enabling aggregate decode throughput on high-end Arc GPUs to reach 176 tokens/second1. In contrast, SYCL’s batched-decode kernels encounter kernel-launch queue bottlenecks on discrete Intel hardware, causing multi-slot decode performance to plateau near 100 tokens/second aggregate1. This architectural gap allows Vulkan to deliver up to a 70% throughput advantage under heavily concurrent server loads1.  
+Under concurrent multi-slot workloads - such as serving parallel client queries through llama-server - the execution models of the two backends diverge dramatically1. Vulkan exhibits near-linear performance scaling as additional context slots are allocated1. As parallel execution slots scale from one to eight, Vulkan utilizes internal queue submission parallelism, enabling aggregate decode throughput on high-end Arc GPUs to reach 176 tokens/second1. In contrast, SYCL's batched-decode kernels encounter kernel-launch queue bottlenecks on discrete Intel hardware, causing multi-slot decode performance to plateau near 100 tokens/second aggregate1. This architectural gap allows Vulkan to deliver up to a 70% throughput advantage under heavily concurrent server loads1.  
 The following empirical performance summary highlights cross-backend throughput metrics gathered on an Intel Arc GPU executing Qwen3.6-35B model variants1:
 
 | Inference Metric / Workload Phase | Vulkan (Mesa 26.0) | Vulkan (Mesa 26.1+) | Vulkan (Mesa 26.1 \+ \--ubatch 2048\) | SYCL (Compute Runtime 26.x) |
@@ -52,8 +52,8 @@ The following empirical performance summary highlights cross-backend throughput 
 | **Prefill pp2048** (tokens/second) | 1,098 t/s | 1,172 t/s | **1,824 t/s** | 1,210 t/s |
 | **Single-Stream Decode tg128** | 37.8 t/s | 76.0 t/s | **76.0 t/s** | 77.3 t/s |
 | **4-Slot Aggregate Decode** | \~240 t/s | 128 t/s | **132 t/s** | 92 t/s |
-| **8-Slot Aggregate Decode** | — | 170 t/s | **176 t/s** | 100 t/s |
-| **8-Slot Total System Throughput** | — | 526 t/s | **624 t/s** | 350 t/s |
+| **8-Slot Aggregate Decode** | - | 170 t/s | **176 t/s** | 100 t/s |
+| **8-Slot Total System Throughput** | - | 526 t/s | **624 t/s** | 350 t/s |
 
 ## **System Configuration, Runtime Tuning, and Bug Mitigations**
 
