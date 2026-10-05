@@ -5,10 +5,10 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
-#include "pass/fuse_argsort_topk.h"
-#include "pass/fuse_moe_router.h"
 #include "pass/align_eltwise_ranks.h"
+#include "pass/fuse_argsort_topk.h"
 #include "pass/fuse_moe_compressed.h"
+#include "pass/fuse_moe_router.h"
 #include "pass/fuse_to_conv.h"
 #include "pass/kv_state_seq_axis.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -44,6 +45,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/result.hpp>
 #include <openvino/op/select.hpp>
+#include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
@@ -53,7 +55,6 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <limits>
 #include <sstream>
 
 namespace ov {
@@ -291,6 +292,15 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     }
 
     for (const auto & it : ggml_model_decoder->get_model_extra_inputs()) {
+        auto source = tensor_map->find(it.second.shape_source);
+        if (!it.second.shape_source.empty() && source != tensor_map->end()) {
+            auto dim = std::make_shared<v8::Gather>(std::make_shared<v3::ShapeOf>(source->second, it.second.type),
+                                                    v0::Constant::create(element::i64, {1}, {it.second.shape_axis}),
+                                                    v0::Constant::create(element::i64, {}, {0}));
+            dim->set_friendly_name(it.first);
+            (*tensor_map)[it.first] = dim;
+            continue;
+        }
         auto input_node = create_extra_input(it.first, it.second);
         if (it.second.is_parameter) {
             params.push_back(ov::as_type_ptr<ov::op::v0::Parameter>(input_node));

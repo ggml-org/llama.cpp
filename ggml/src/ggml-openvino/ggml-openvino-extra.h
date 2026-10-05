@@ -120,6 +120,9 @@ bool ggml_openvino_is_npu();
 // Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
 bool ggml_openvino_is_gpu();
 
+// Read n_seq_active and attention_size(_swa) from the KQ mask shape (off with GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK=1)
+bool ggml_openvino_shape_from_mask_enabled();
+
 // Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
 size_t ggml_openvino_max_alloc_size();
 

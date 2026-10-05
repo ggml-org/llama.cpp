@@ -68,11 +68,18 @@ OutputVector translate_set_rows(const NodeContext & context) {
         auto row_size = context.get_input_shape(2)[3].get_length();
         auto ind_squeezed = std::make_shared<ov::op::v0::Squeeze>(
             indices, ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 1, 2}));
-        auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
-            data,
-            ov::op::v0::Constant::create(ov::element::i64, {4},
-                                         {(int64_t) 1, (int64_t) 1, (int64_t) -1, (int64_t) row_size}),
-            false);
+        // skip the reshape when the rows already have that shape: it costs a GPU primitive per cache write
+        const auto & data_shape = data.get_partial_shape();
+        const bool data_is_rows = data_shape.rank().is_static() && data_shape.rank().get_length() == 4 &&
+                                  data_shape[0] == 1 && data_shape[1] == 1 && data_shape[3] == row_size;
+        ov::Output<ov::Node> data_reshaped = data;
+        if (!data_is_rows) {
+            data_reshaped = std::make_shared<ov::op::v1::Reshape>(
+                data,
+                ov::op::v0::Constant::create(ov::element::i64, {4},
+                                             {(int64_t) 1, (int64_t) 1, (int64_t) -1, (int64_t) row_size}),
+                false);
+        }
         res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
     }
 

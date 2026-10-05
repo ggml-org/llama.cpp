@@ -120,6 +120,7 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_SLICE") ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (manual_gqa_enabled ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1u : 0u);
+    extra_cfg = extra_cfg * 131 + (ggml_openvino_shape_from_mask_enabled() ? 1u : 0u);
     return extra_cfg;
 }
 
@@ -205,6 +206,8 @@ static std::string compiled_graph_key(const ggml_cgraph * graph,
         if (!input.second.is_parameter) {
             append(input.second.value);
         }
+        append_string(input.second.shape_source);
+        append(input.second.shape_axis);
     }
     // Without an allocation generation, pointer reuse could select stale weights.
     // Such graphs still get private requests; they simply do not share compilation.
@@ -256,6 +259,8 @@ static std::string dynamic_graph_signature(const ggml_cgraph * graph,
         if (!input.is_parameter) {
             append(input.value);
         }
+        append_string(input.shape_source);
+        append(input.shape_axis);
     }
     return key;
 }

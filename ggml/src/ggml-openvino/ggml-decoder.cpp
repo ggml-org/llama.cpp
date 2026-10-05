@@ -974,11 +974,17 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
             compute_params.seq_active_start = offset / seq_size;
 
+            // a mask that is itself a graph input has the shape of its OV parameter
+            const std::string mask_name = mask->op != GGML_OP_NONE      ? std::string() :
+                                          mask == model_params.swa_mask ? get_tensor_ov_name(cgraph, mask) + "_swa" :
+                                                                          get_tensor_ov_name(cgraph, mask);
             if (layer_is_swa) {
                 compute_params.attention_size_swa = mask->ne[0];
                 compute_params.swa_window = get_swa_window_from_mask(mask);
+                compute_params.mask_swa_name = mask_name;
             } else {
                 compute_params.attention_size = mask->ne[0];
+                compute_params.mask_name = mask_name;
             }
             if (is_static) {
                 compute_params.attention_size = model_params.ctx_per_seq;
@@ -992,6 +998,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             if (node->src[1]->op == GGML_OP_PERMUTE && node->src[1]->src[0]->op == GGML_OP_VIEW &&
                 node->src[1]->src[0]->src[0]->op == GGML_OP_ROPE) {
                 compute_params.attention_size = node->ne[0];
+                compute_params.mask_name.clear();
             }
         }
 
@@ -999,6 +1006,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         if (node->op == GGML_OP_TRANSPOSE && node->src[0]->op == GGML_OP_PERMUTE &&
             node->src[0]->src[0]->op == GGML_OP_VIEW) {
             compute_params.attention_size = node->ne[0];
+            compute_params.mask_name.clear();
             if (is_static) {
                 compute_params.attention_size = model_params.ctx_per_seq;
             }
@@ -1281,6 +1289,24 @@ void GgmlOvDecoder::add_extra_inputs() {
         create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
     }
     // create_1d_input("token_len", m_compute_params.token_len_per_seq * m_compute_params.n_seq_active);
+
+    // n_seq_active and attention_size(_swa) are dimensions of the KQ masks. Read them from the mask shape inside the
+    // model: the GPU plugin then gets the Q Reshape and KV Slice shapes from shape inference instead of waiting for
+    // the input values on the device
+    if (!m_is_static && !m_is_stateful && ggml_openvino_shape_from_mask_enabled()) {
+        auto from_mask = [this](const std::string & name, const std::string & mask, int64_t axis) {
+            auto it = m_model_extra_inputs.find(name);
+            if (it != m_model_extra_inputs.end() && !mask.empty() && m_model_inputs.count(mask) != 0) {
+                it->second.shape_source = mask;
+                it->second.shape_axis = axis;
+            }
+        };
+        const auto & full = m_compute_params.mask_name;
+        const auto & swa = m_compute_params.mask_swa_name;
+        from_mask("attention_size", full, 3);
+        from_mask("attention_size_swa", swa, 3);
+        from_mask("n_seq_active", full.empty() ? swa : full, 0);
+    }
 
     if (m_compute_params.cache_rs_reset_idx != -1 && m_model_params.n_rs_slots != 1) {
         // Whether/which cache slot to reset varies per compute call (e.g. a new sequence starting
