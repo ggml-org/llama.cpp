@@ -1286,25 +1286,20 @@ private:
                 mtmd_helper_log_set(common_log_default_callback, nullptr);
             }
 
-            // non-causal models process the images and the text of a prompt in one ubatch, leave half of it to the text
-            {
-                const int n_max = llama_n_ubatch(ctx_tgt) / 2;
-                if (use_mixed_batch() && mmproj_usage.image_max_tokens > n_max) {
-                    SRV_WRN("cap image_max_tokens (original=%d) to half of n_ubatch (%d) because the model processes the prompt in one ubatch\n", mmproj_usage.image_max_tokens, n_max);
-                    SRV_WRN("%s\n", "increase n_ubatch (-ub) to increase vision token budget");
-                    mparams.image_max_tokens = n_max;
-                    mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_max);
-                }
-            }
-
-            // non-causal models need the whole image in one ubatch
+            // the image must fit in one ubatch if the model needs non-causal attention on it
+            // a non-causal model also has the text of the prompt in that ubatch, leave half of it to the text
             {
                 const int n_ubatch = llama_n_ubatch(ctx_tgt);
-                if (mmproj_usage.use_non_causal && mmproj_usage.image_max_tokens > n_ubatch) {
-                    SRV_WRN("cap image_max_tokens (original=%d) to n_ubatch (%d) because model needs non-causal attention on image\n", mmproj_usage.image_max_tokens, n_ubatch);
-                    SRV_WRN("%s\n", "increase n_ubatch (-ub) to increase vision token budget");
-                    mparams.image_max_tokens = n_ubatch;
-                    mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_ubatch);
+                const bool is_mixed = use_mixed_batch();
+                if (is_mixed || mmproj_usage.use_non_causal) {
+                    const int n_max = is_mixed ? n_ubatch / 2 : n_ubatch;
+                    if (mmproj_usage.image_max_tokens > n_max) {
+                        SRV_WRN("cap image_max_tokens (original=%d) to %d (n_ubatch = %d) because %s\n", mmproj_usage.image_max_tokens, n_max, n_ubatch,
+                                is_mixed ? "the model processes the prompt in one ubatch" : "model needs non-causal attention on image");
+                        SRV_WRN("%s\n", "increase n_ubatch (-ub) to increase vision token budget");
+                        mparams.image_max_tokens = n_max;
+                        mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_max);
+                    }
                 }
             }
 
