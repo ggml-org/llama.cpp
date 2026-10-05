@@ -202,6 +202,18 @@ struct server_batch {
         return (int32_t)tokens.size();
     }
 
+    // remove the entries after the first n
+    void truncate(int32_t n) {
+        GGML_ASSERT(n >= 0 && n <= size());
+        for (int32_t i = n; i < size(); i++) {
+            if (tokens[i].i_embd >= 0) {
+                embd.resize((size_t) tokens[i].i_embd * n_embd);
+                break;
+            }
+        }
+        tokens.resize(n);
+    }
+
     void set_output(int32_t idx, bool output) {
         GGML_ASSERT(idx >= 0 && idx < (int32_t)tokens.size());
         tokens[idx].output = output;
@@ -3927,6 +3939,7 @@ private:
     // returns false on error, the slot is then released
     bool add_prompt_mixed(server_slot & slot) {
         const auto & input_tokens = slot.task->tokens;
+        const auto n_tokens_prev = batch.size();
 
         while (slot.prompt.n_tokens() < slot.task->n_tokens()) {
             const auto cur_token_idx = slot.prompt.n_tokens();
@@ -3954,6 +3967,8 @@ private:
 
             if (res != 0) {
                 SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
+                // the batch must not keep the entries of a released slot
+                batch.truncate(n_tokens_prev);
                 send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
                 slot.release();
                 return false;
