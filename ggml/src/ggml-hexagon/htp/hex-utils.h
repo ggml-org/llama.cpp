@@ -39,6 +39,7 @@ static inline void hex_l2fetch_block(const void * addr, size_t size) {
 
 #define HEX_L2_LINE_SIZE           128
 #define HEX_L2_BLOCK_SIZE          (HEX_L2_LINE_SIZE * 4) // flush granularity (lines per loop iteration)
+#define HEX_DCACHE_OP_SIZE         64                     // bytes maintained by one dccleaninva
 #define HEX_L2_FLUSH_WQ_THRESHOLD  (4 * 1024)
 #define HEX_L2_FLUSH_ALL_THRESHOLD (4 * 1024 * 1024)
 
@@ -47,12 +48,11 @@ static inline void hex_l2flush(void * addr, size_t size) {
     const uint32_t e = (((uint32_t) addr) + size + HEX_L2_LINE_SIZE - 1) & ~(HEX_L2_LINE_SIZE - 1);
     const uint32_t eb = s + ((e - s) & ~(HEX_L2_BLOCK_SIZE - 1));
     for (uint32_t i = s; i < eb; i += HEX_L2_BLOCK_SIZE) {
-        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 0));
-        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 1));
-        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 2));
-        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 3));
+        for (uint32_t j = 0; j < HEX_L2_BLOCK_SIZE; j += HEX_DCACHE_OP_SIZE) {
+            Q6_dccleaninva_A((void *) (i + j));
+        }
     }
-    for (uint32_t i = eb; i < e; i += HEX_L2_LINE_SIZE) {
+    for (uint32_t i = eb; i < e; i += HEX_DCACHE_OP_SIZE) {
         Q6_dccleaninva_A((void *) i);
     }
 }

@@ -359,14 +359,6 @@ static void cpy_thread_f32_i32_sameshape(unsigned int nth, unsigned int ith, voi
     }
 }
 
-// A source that an earlier op wrote by DMA can still have stale lines in the data cache, and hex_l2flush
-// (dccleaninva) does not remove them. Clean + invalidate the source with QuRT before a cache read.
-static void cpy_invalidate_src(const struct htp_tensor * src0) {
-    if (src0->size && !htp_tensor_is_extended(src0)) {
-        qurt_mem_cache_clean((qurt_addr_t) src0->data, src0->size, QURT_MEM_CACHE_FLUSH_INVALIDATE, QURT_MEM_DCACHE);
-    }
-}
-
 static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
     cpy_preamble;
     *use_dma = false;
@@ -499,7 +491,6 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
             } else {
                 return HTP_STATUS_NO_SUPPORT;
             }
-            cpy_invalidate_src(src0);
             work_queue_run(octx->ctx->work_queue, copy_fun, &ct, n_threads);
         }
     } else if (sametype) {
@@ -546,7 +537,6 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
             case HTP_TYPE_I32: copy_fun = cpy_thread_i32_reshape; break;
             default: return HTP_STATUS_NO_SUPPORT;
         }
-        cpy_invalidate_src(src0);
         work_queue_run(octx->ctx->work_queue, copy_fun, &ct, n_threads);
     } else {
         return HTP_STATUS_NO_SUPPORT;
