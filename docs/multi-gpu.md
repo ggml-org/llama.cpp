@@ -352,6 +352,7 @@ address>:<port>` on every rank.
 | `nd_all_directions.ps1` | `nd_pair.ps1` for both directions of every cable |
 | `fix_p2p_legs.ps1` | address a node's USB4 legs by probing the far ends (called by prep) |
 | `link_throughput.ps1` | steady-state bulk TCP throughput over one cable |
+| `postmortem_fabric.ps1` | after a failed run, before any reboot: USB4 adapter state and counters, TCP and full-size pings on every leg, ND on every cable |
 
 #### 8. Pitfalls
 
@@ -369,6 +370,11 @@ address>:<port>` on every rank.
 - **`--dist-master` must be rank 0's own address**, or every rank waits forever at the rendezvous.
 - **A USB4 link can degrade under sustained load** while still reporting Up. Check each cable with
   `link_throughput.ps1` before and after a session; a reboot or re-plug restores it.
+- **A run that aborts or stalls does not say which cable failed.** A NetworkDirect receive abort
+  (0xC0000241) names only the rank that saw it. Run `postmortem_fabric.ps1 -RankNodes ...` before
+  rebooting anything. If pings or TCP fail on a leg, that cable stopped carrying traffic (often only
+  full-size frames). If every leg passes them but ND fails on every cable of one node, that node's
+  RDMA stack is stuck while its links are up. Rebooting the node clears either case.
 - **gpt-oss needs `--no-jinja`.** With the model's own chat template, a reply cut off by `-n` makes
   the chat parser throw, and llama-cli exits with 0xC0000409 before it prints its timings.
   `--no-jinja` uses the built-in template, which does not parse the reply.
