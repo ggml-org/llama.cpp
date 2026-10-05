@@ -184,7 +184,7 @@ edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
 ```bash
 sudo systemctl stop llama-sycl.cpp.service
 fuser -v /dev/dri/renderD128               # verify sole tenancy
-dmesg | grep -iE '\b(i915|xe)\b.*(reset|hang|hung|timed? ?out|GuC|wedged|device.?lost)'
+dmesg | grep -iE '\b(i915|xe)\b' | grep -iE 'reset|hang|hung|timed?[ _-]?out|GuC|wedged|banned|CAT error|\b(page.?)?fault|device.?lost'
 # ... run benchmark wrapped in timeout ...
 sudo systemctl start llama-sycl.cpp.service
 ```
@@ -363,11 +363,11 @@ yet**: `ccs_mode` reads 1 (live), so compute still runs on one engine. See "Open
 3. A stall on xe can be silent. LR-mode queues have no job watchdog, and the reset line appears
    only when something later asks the engine to preempt. Keep every GPU run in `timeout` and do
    not read a clean dmesg as proof that a run was healthy.
-4. Fault gates must match both drivers and every spelling of a timeout (`timeout`, xe's
-   `Timedout job`, i915's `time out`):
-   `\b(i915|xe)\b.*(reset|hang|hung|timed? ?out|GuC|wedged|device.?lost)`.
-   `scripts/perf/bench_spec.py` uses this pattern; the older harnesses in `scripts/` miss at least
-   the spaced and past-tense forms.
+4. A fault gate must match a line that names either driver and a failure term, in either order:
+   i915 logs `Fence expiration time out i915-<bdf>:...` with the driver after the event, xe logs
+   `Timedout job` and `Fault response: Unsuccessful`. The runbook command above does that with two
+   greps; `scripts/perf/bench_spec.py` (`is_gpu_fault`) does the same. The older harnesses in
+   `scripts/` miss at least the spaced and past-tense timeouts and page faults.
 5. Do not design for concurrent compute queues. With one CCS enabled, two SYCL queues run
    their kernels one after another (i915: from source, doc 09-28; xe: expected with
    `ccs_mode` = 1, not measured).

@@ -10,7 +10,8 @@ no-op where they do not:
   draft, `draft-simple`): +3.5% decode, 95% CI +/-3.6% over 4 paired launches,
   so the launch-paired interval still touches zero. On runs where both arms
   produced the same token stream with no rejected draft the gap is +4.0% to
-  +4.2% with non-overlapping ranges.
+  +4.2%; the ranges do not overlap for two of the three prompts (free_prose
+  overlaps at 16.151-16.233 t/s).
 - Under `--spec-type draft-mtp` on Qwen4Exp (the PR #90 configuration) none of
   the six sites execute: the target rolls back through recurrent-state
   snapshots (`n_rs_seq = 6` in the live log) and the MTP draft context supports
@@ -78,9 +79,16 @@ of `master`; `git fetch origin pull/90/head` retrieves them.
   the last two exclude no launch. An odd `LAUNCHES` is flagged as an unbalanced
   order, the hashes recorded per arm cover the configured binary and every
   shared library in its directory, the summary names the kernel driver bound
-  to the render node, the fault gate also matches `Timedout job`, `time out`
-  and `wedged`, and each response records how many of its rows carried argmax
-  evidence (see "Correctness evidence").
+  to the render node, a fault line is one that names i915 or xe and a failure
+  term in either order (so also `Timedout job`, i915's `Fence expiration time
+  out i915-...`, page faults, CAT errors, `wedged` and `banned`), the report
+  counts the paired cells whose arms generated different token streams and
+  sums per arm the response rows that carried argmax evidence (see
+  "Correctness evidence"). Equal arm names and empty `LD_LIBRARY_PATH`
+  entries are refused or dropped, each arm records the libraries `ldd`
+  resolves for it, and flash-attention evidence is taken from runtime lines
+  only; the `ngram-mod` probe summary had recorded the model path
+  (`Qwen3.8-Flash-Next`) as such evidence and was rescanned from its logs.
 - Requests: `prompts.jsonl`, `n_predict` 256, temperature 0, `cache_prompt`
   false, `--parallel 1`, q8_0 KV, flash attention on.
 - No persistent SYCL cache and no SYCL graph (`GGML_SYCL_ENABLE_GRAPH` unset).
@@ -110,7 +118,11 @@ in `dmesg`: 0.
 
 The interval is wide because temperature-0 output is not reproducible run to
 run in either arm (see below): a run that happens to reject a draft is 4% to 12%
-slower. Restricting to runs that produced the most common token stream for the
+slower. In 9 of the 12 paired (launch, prompt) cells the two arms generated
+different token streams, so most pairs compare different workloads as well as
+different arms; the launch-paired delta is therefore not an isolated effect of
+the flag. The harness now reports such cells (`paired_workload_mismatches`) and
+labels the paired table exploratory when there are any. Restricting to runs that produced the most common token stream for the
 prompt (a post-hoc cut, chosen after seeing the data):
 
 | prompt | host runs | host t/s (min-max) | on-device runs | on-device t/s (min-max) | delta |

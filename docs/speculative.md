@@ -80,8 +80,9 @@ See:
 
 ### Chained MTP (`--spec-chain N`)
 
-Chained MTP drafts N tokens in one decode. It supports dense Qwen3.5-family models and
-Qwen4Exp (Qwen3.8-Flash-Next), including its full hyper-connection hidden state.
+Chained MTP drafts N tokens in one decode. It supports dense Qwen3.5-family models,
+which require flash attention, and Qwen4Exp (Qwen3.8-Flash-Next) with or without flash
+attention, including its full hyper-connection hidden state.
 Chaining is opt-in; use `--spec-chain N` to enable it. For
 recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2. Drafts that
 exceed the draft context's batch or microbatch capacity, and rounds with multiple
