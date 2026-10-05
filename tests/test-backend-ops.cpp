@@ -8140,7 +8140,7 @@ struct test_sleep : public test_case {
 
     std::string vars() override { return VARS_TO_STR3(type, ne, us); }
 
-    // the op is a plain copy, any deviation at all is a bug
+    // the op only delays, the output aliases the input and must match it exactly
     double max_nmse_err() override { return 0.0; }
 
     test_sleep(int32_t us = 100, ggml_type type = GGML_TYPE_F32,

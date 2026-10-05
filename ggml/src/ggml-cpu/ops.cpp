@@ -2288,20 +2288,11 @@ void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor *
 // ggml_compute_forward_sleep
 
 void ggml_compute_forward_sleep(const ggml_compute_params * params, ggml_tensor * dst) {
-    const ggml_tensor * src0 = dst->src[0];
-
     if (params->ith != 0) {
         return;
     }
 
-    GGML_ASSERT(src0->type == dst->type);
-    GGML_ASSERT(ggml_are_same_shape(src0, dst));
-    GGML_ASSERT(ggml_is_contiguous(src0));
-    GGML_ASSERT(ggml_is_contiguous(dst));
-
     const auto t_end = std::chrono::steady_clock::now() + std::chrono::microseconds(ggml_get_op_params_i32(dst, 0));
-
-    memcpy(dst->data, src0->data, ggml_nbytes(dst));
 
     while (std::chrono::steady_clock::now() < t_end) {}
 }

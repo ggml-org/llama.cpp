@@ -6246,14 +6246,15 @@ struct ggml_tensor * ggml_custom_inplace(
 
 // ggml_sleep
 
+// the result aliases a, the op only delays and never touches the data
 struct ggml_tensor * ggml_sleep(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         int32_t               us) {
     GGML_ASSERT(us >= 0);
-    GGML_ASSERT(ggml_is_contiguous(a));
 
-    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+    ggml_format_name(result, "%s (sleep)", a->name);
 
     ggml_set_op_params_i32(result, 0, us);
 

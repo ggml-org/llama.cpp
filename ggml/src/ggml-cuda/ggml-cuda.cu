@@ -5521,9 +5521,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
             return false;
 #else
-            return op->type == op->src[0]->type && ggml_are_same_shape(op, op->src[0]) &&
-                   ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op);
-#endif
+            return true;
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 
         default:
             return false;

@@ -3226,7 +3226,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
 #if defined(GGML_VULKAN_SHADER_CLOCK_GLSLC_SUPPORT)
     if (device->shader_clock) {
-        ggml_vk_create_pipeline(device, device->pipeline_sleep, "sleep", sleep_len, sleep_data, "main", 2, sizeof(vk_op_sleep_push_constants), {512, 1, 1}, {}, 1);
+        ggml_vk_create_pipeline(device, device->pipeline_sleep, "sleep", sleep_len, sleep_data, "main", 1, sizeof(vk_op_sleep_push_constants), {1, 1, 1}, {}, 1);
     }
 #endif
 
@@ -10154,7 +10154,7 @@ void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);
 }
 
-static void ggml_vk_sleep(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+static void ggml_vk_sleep(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_sleep(dst=" << dst << ", us=" << ggml_get_op_params_i32(dst, 0) << ")");
 
     // Vulkan does not specify the period of the shader realtime clock this assumes it matches the timestamp counter.
@@ -10164,21 +10164,19 @@ static void ggml_vk_sleep(ggml_backend_vk_context * ctx, vk_context& subctx, con
     const uint64_t ticks       = std::min<uint64_t>(ns_per_tick > 0.0f ? (uint64_t)(ns / ns_per_tick) : ns, std::numeric_limits<uint32_t>::max());
 
     vk_op_sleep_push_constants pc = {
-        (uint32_t)(ggml_nbytes(dst) / sizeof(uint32_t)),
         (uint32_t) ticks,
     };
 
-    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, nullptr, nullptr, dst, GGML_OP_SLEEP);
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_SLEEP);
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-    vk_subbuffer src_buf = ggml_vk_tensor_subbuffer(ctx, src0);
     vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
 
-    // dispatch a single workgroup, all of its invocations spin concurrently so the delay does not accumulate
-    std::array<uint32_t, 3> elements = { pipeline->wg_denoms[0], 1, 1 };
+    // a single invocation spins, the buffer is bound only to keep the spin from being optimized out
+    std::array<uint32_t, 3> elements = { 1, 1, 1 };
 
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src_buf, dst_buf }, pc, elements);
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);
 }
 
 void ggml_vk_sin(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -12029,7 +12027,7 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
 
         break;
     case GGML_OP_SLEEP:
-        ggml_vk_sleep(ctx, compute_ctx, src0, node);
+        ggml_vk_sleep(ctx, compute_ctx, node);
 
         break;
     case GGML_OP_SCALE:
@@ -15342,10 +15340,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
         case GGML_OP_SLEEP:
-            // the shader copies 4-byte units, the delay comes from the device clock
-            return device->shader_clock && op->type == op->src[0]->type &&
-                   ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
-                   (ggml_nbytes(op) % sizeof(uint32_t)) == 0;
+            return device->shader_clock;
         case GGML_OP_SCALE:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_PAD:

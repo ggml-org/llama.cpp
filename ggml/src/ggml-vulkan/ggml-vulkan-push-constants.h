@@ -134,7 +134,6 @@ struct vk_op_push_constants {
 };
 
 struct vk_op_sleep_push_constants {
-    uint32_t ne;
     uint32_t ticks;
 };
 
