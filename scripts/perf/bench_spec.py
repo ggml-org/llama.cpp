@@ -44,8 +44,10 @@ MODE=ab is a paired A/B of two server builds under one speculative config:
   OUT_TAG        suffix for the summary and log file names
 It refuses to start (exit 70) while another process holds the render node,
 reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt.
-It exits non-zero when a launch failed, a fault line appeared, or the kernel log
-could not be compared (unreadable, wrapped or cleared during the run).
+It exits non-zero when a launch failed, a response failed the target-argmax
+verifier, a speculative arm reported no draft statistics, a fault line appeared,
+or the kernel log could not be compared (unreadable, wrapped or cleared during
+the run).
 Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
 verified and how many restored a speculative checkpoint.
 Worked run and how to read the output:
@@ -537,6 +539,19 @@ def new_gpu_faults(before: list[str] | None, after: list[str] | None) -> list[st
     return [line for line in gained if GPU_FAULT_RE.search(line)]
 
 
+def launch_problems(launch: dict[str, Any]) -> list[str]:
+    """Why a launch cannot enter the paired statistics; empty for a usable one."""
+    if launch.get("error"):
+        return [str(launch["error"])]
+    problems = ["no draft statistics"] if launch.get("spec_stats_missing") else []
+    for prompt in launch["prompts"]:
+        if not isinstance(prompt.get("tg_median"), (int, float)):
+            problems.append(f"{prompt['id']}: no timings")
+        if not prompt.get("all_verifier_invariants_ok", False):
+            problems.append(f"{prompt['id']}: response failed the target-argmax verifier")
+    return problems
+
+
 def ab_exit_code(ok: bool, new_faults: list[str] | None) -> int:
     """0 only for complete launches and an evaluated, empty fault gate."""
     return 0 if ok and new_faults == [] else 1
@@ -606,7 +621,7 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
         vals = []
         for launch in launches[name]:
             per_prompt = [tg_of(launch, p) for p in ([pid] if pid else prompt_ids)]
-            if launch.get("error") or any(v is None for v in per_prompt):
+            if launch_problems(launch) or any(v is None for v in per_prompt):
                 continue
             vals.append(statistics.fmean(per_prompt))
         return vals
@@ -637,7 +652,11 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
         half = f"{st['ci95_half_pct']:.2f}" if st.get("ci95_half_pct") is not None else "n/a"
         print(f"| {pid} | {st['a_mean']:.2f} | {st['b_mean']:.2f} | {st['delta']:+.2f} | {st['delta_pct']:+.2f} | {half} |")
     if not ok:
-        print("!! at least one launch failed or lacked timings; no paired statistics")
+        print("!! at least one launch is unusable; no paired statistics")
+        for arm in arms:
+            for i, launch in enumerate(launches[arm["name"]]):
+                for problem in launch_problems(launch):
+                    print(f"   {arm['name']} launch {i}: {problem}")
     print("\n## Checkpoint activity (summed over launches)\n")
     for name, ev in events.items():
         print(f"  {name}: draft rounds {ev['draft_rounds']}, checkpoint restores {ev['checkpoint_restores']}, "

@@ -167,6 +167,20 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         with mock.patch.object(BENCH_SPEC.subprocess, "run", side_effect=OSError("no fuser")):
             self.assertTrue(BENCH_SPEC.gpu_holders())
 
+    def test_launch_problems_names_what_makes_a_launch_unusable(self) -> None:
+        good = {"error": None, "spec_stats_missing": False,
+                "prompts": [{"id": "p", "tg_median": 12.0, "all_verifier_invariants_ok": True}]}
+        self.assertEqual(BENCH_SPEC.launch_problems(good), [])
+
+        self.assertEqual(BENCH_SPEC.launch_problems({"error": "health_timeout", "prompts": []}), ["health_timeout"])
+        # a speculative arm that never drafted measures something else than it claims
+        self.assertEqual(BENCH_SPEC.launch_problems({**good, "spec_stats_missing": True}), ["no draft statistics"])
+        # a generated token that is not the target's argmax, or a non-finite log-probability
+        bad_tokens = {**good, "prompts": [{"id": "p", "tg_median": 12.0, "all_verifier_invariants_ok": False}]}
+        self.assertEqual(BENCH_SPEC.launch_problems(bad_tokens), ["p: response failed the target-argmax verifier"])
+        no_timing = {**good, "prompts": [{"id": "p", "tg_median": None, "all_verifier_invariants_ok": True}]}
+        self.assertEqual(BENCH_SPEC.launch_problems(no_timing), ["p: no timings"])
+
     def test_ab_exit_code_fails_closed_on_an_unevaluated_fault_gate(self) -> None:
         self.assertEqual(BENCH_SPEC.ab_exit_code(True, []), 0)
         self.assertEqual(BENCH_SPEC.ab_exit_code(True, ["xe 0000:03:00.0: [drm] GT0: Engine reset"]), 1)
