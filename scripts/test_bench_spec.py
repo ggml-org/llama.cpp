@@ -117,20 +117,29 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             "[  812.105] xe 0000:03:00.0: [drm] device lost",
             # matched by no other word of the pattern: spaced and past-tense timeouts, a wedged device
             "[  812.109] xe 0000:03:00.0: [drm] Tile0: GT0: Timedout job: seqno=7811, lrc_seqno=7811, flags=0x20",
-            "[  812.110] i915 0000:03:00.0: Fence expiration time out i915-0000:03:00.0:test-backend-op[3758008]",
+            # pr_notice without a device prefix: the driver name comes after the event
+            "[  812.110] Fence expiration time out i915-0000:03:00.0:test-backend-op[3758008]:1a!",
             "[  812.111] xe 0000:03:00.0: [drm] Tile0: GT0: timed out waiting for the engine to idle",
             "[  812.112] xe 0000:03:00.0: [drm] device wedged, needs recovery",
+            # formats from the xe and i915 modules of kernel 7.3 with values filled in
+            "[  812.113] xe 0000:03:00.0: [drm] Tile0: GT0: Fault response: Unsuccessful -EACCES",
+            "[  812.114] xe 0000:03:00.0: [drm] PageFault Queue (0) full, shouldn't be possible",
+            "[  812.115] xe 0000:03:00.0: [drm] *ERROR* [CRTC:88:pipe A] DSB 0 GTT fault",
+            "[  812.116] i915 0000:03:00.0: [drm] context llama-server[4242]: guilty 1, banned",
+            "[  812.117] xe 0000:03:00.0: [drm] *ERROR* Tile0: GT0: GSC ER timed-out",
         ]
         clean = [
             "[  812.106] pci 0000:03:00.0: reset complete",
             "[  812.107] usb 1-2: reset high-speed USB device number 3 using xhci_hcd",
             "[  812.108] xe 0000:03:00.0: [drm] Found dg2/g10 (device ID 56a0) display version 13.00",
+            # "fault" inside another word is no fault
+            "[  812.118] xe 0000:03:00.0: [drm] Using default_page_size: 64KiB",
         ]
 
         for line in faults:
-            self.assertIsNotNone(BENCH_SPEC.GPU_FAULT_RE.search(line), line)
+            self.assertTrue(BENCH_SPEC.is_gpu_fault(line), line)
         for line in clean:
-            self.assertIsNone(BENCH_SPEC.GPU_FAULT_RE.search(line), line)
+            self.assertFalse(BENCH_SPEC.is_gpu_fault(line), line)
 
     def test_render_driver_names_the_bound_kernel_driver(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -162,6 +171,30 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             changed = BENCH_SPEC.build_hashes(exe)
             self.assertEqual(changed["llama-server"], hashes["llama-server"])
             self.assertNotEqual(changed["libllama.so.0.5.0"], hashes["libllama.so.0.5.0"])
+
+    def test_workload_mismatches_name_pairs_that_generated_different_tokens(self) -> None:
+        def launch(*prompts: tuple[str, list[str]]) -> dict:
+            return {"prompts": [{"id": pid, "runs": [{"token_sha256": h} for h in hashes]} for pid, hashes in prompts]}
+
+        a = [launch(("p1", ["x", "x"]), ("p2", ["y"])), launch(("p1", ["x", "x"]), ("p2", ["y"]))]
+        same = [launch(("p2", ["y"]), ("p1", ["x", "x"])), launch(("p1", ["x", "x"]), ("p2", ["y"]))]
+        self.assertEqual(BENCH_SPEC.workload_mismatches(a, same, ["p1", "p2"]), [])
+
+        # the second pair generated another stream for p1, so its delta mixes speed with workload
+        other = [launch(("p1", ["x", "x"]), ("p2", ["y"])), launch(("p1", ["x", "z"]), ("p2", ["y"]))]
+        self.assertEqual(BENCH_SPEC.workload_mismatches(a, other, ["p1", "p2"]), [{"launch": 1, "prompt": "p1"}])
+        # a prompt missing on one side does not count as matched
+        self.assertEqual(BENCH_SPEC.workload_mismatches(a, [launch(("p1", ["x", "x"])), a[1]], ["p1", "p2"]),
+                         [{"launch": 0, "prompt": "p2"}])
+
+    def test_argmax_evidence_counts_rows_over_every_run(self) -> None:
+        launches = [{"prompts": [{"id": "p1", "runs": [{"verifier_rows": 4, "verifier_rows_with_argmax": 1},
+                                                       {"verifier_rows": 4, "verifier_rows_with_argmax": 4}]}]},
+                    {"prompts": [{"id": "p1", "runs": [{"verifier_rows": 2, "verifier_rows_with_argmax": 0}]}]}]
+        self.assertEqual(BENCH_SPEC.argmax_evidence(launches), {"rows": 10, "rows_with_argmax": 5})
+        # a summary from before the count has no count: unknown, not zero rows with evidence
+        launches[1]["prompts"][0]["runs"][0].pop("verifier_rows_with_argmax")
+        self.assertEqual(BENCH_SPEC.argmax_evidence(launches), {"rows": 10, "rows_with_argmax": None})
 
     def test_kmsg_lines_since_returns_only_appended_lines(self) -> None:
         self.assertEqual(BENCH_SPEC.kmsg_lines_since(["a", "b"], ["a", "b", "c"]), ["c"])
@@ -222,8 +255,51 @@ class BenchSpecEvidenceTests(unittest.TestCase):
 
     def test_library_path_has_no_empty_entry(self) -> None:
         self.assertEqual(BENCH_SPEC.library_path("/build/bin", "/opt/lib:/usr/lib"), "/build/bin:/opt/lib:/usr/lib")
-        # a trailing ":" would make the loader search the current directory
+        # an empty entry anywhere would make the loader search the current directory
         self.assertEqual(BENCH_SPEC.library_path("/build/bin", ""), "/build/bin")
+        for inherited in ("/opt/lib:", ":/opt/lib", "/opt/lib::"):
+            self.assertEqual(BENCH_SPEC.library_path("/build/bin", inherited), "/build/bin:/opt/lib", inherited)
+        self.assertEqual(BENCH_SPEC.library_path("/build/bin", "/opt/lib::/other"), "/build/bin:/opt/lib:/other")
+
+    def test_run_ab_refuses_equal_arm_names(self) -> None:
+        # both arms would share one launch list, and one arm's launches could stand in for the other's
+        arms = [{"name": "x", "server_bin": "/nonexistent/a/llama-server"},
+                {"name": "x", "server_bin": "/nonexistent/b/llama-server"}]
+        self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE)
+
+    def test_scan_log_takes_flash_attention_evidence_from_runtime_lines_only(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            log = Path(root) / "server.log"
+            log.write_text("load_model: loading model '/models/Qwen3.8-Flash-Next-IQ1_M.gguf'\n"
+                           "llama_context: flash_attn    = enabled\n", encoding="utf-8")
+            self.assertEqual(BENCH_SPEC.scan_log(log)["fa_lines"], ["llama_context: flash_attn    = enabled"])
+
+    def test_resolved_libraries_parse_ldd(self) -> None:
+        ldd = ("\tlinux-vdso.so.1 (0x00007ffd)\n"
+               "\tlibllama.so.0 => /build/bin/libllama.so.0 (0x00007f00)\n"
+               "\tlibggml-sycl.so.0 => not found\n"
+               "\t/lib64/ld-linux-x86-64.so.2 (0x00007f01)\n")
+        with mock.patch.object(BENCH_SPEC.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=ldd)):
+            self.assertEqual(BENCH_SPEC.resolved_libraries(Path("/build/bin/llama-server"), "/build/bin"),
+                             {"libllama.so.0": "/build/bin/libllama.so.0", "libggml-sycl.so.0": "not found"})
+        with mock.patch.object(BENCH_SPEC.subprocess, "run", side_effect=OSError("no ldd")):
+            self.assertIsNone(BENCH_SPEC.resolved_libraries(Path("/build/bin/llama-server"), "/build/bin"))
+
+    def test_build_hashes_follow_core_libraries_resolved_elsewhere(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            bin_dir, elsewhere = Path(root) / "bin", Path(root) / "lib"
+            bin_dir.mkdir()
+            elsewhere.mkdir()
+            exe = bin_dir / "llama-server"
+            exe.write_bytes(b"server")
+            (elsewhere / "libllama.so.0").write_bytes(b"llama")
+            (elsewhere / "libsycl.so.8").write_bytes(b"runtime")
+            resolved = {"libllama.so.0": str(elsewhere / "libllama.so.0"), "libsycl.so.8": str(elsewhere / "libsycl.so.8")}
+
+            hashes = BENCH_SPEC.build_hashes(exe, resolved)
+            # llama and ggml code loaded from outside the build is hashed under its path, the runtime is not
+            self.assertIn(str(elsewhere / "libllama.so.0"), hashes)
+            self.assertNotIn(str(elsewhere / "libsycl.so.8"), hashes)
 
     def test_run_ab_refuses_a_launch_count_below_one(self) -> None:
         arms = [{"name": "a", "server_bin": "/nonexistent/a/llama-server"},

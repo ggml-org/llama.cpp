@@ -107,10 +107,15 @@ OUT_TAG = os.environ.get("OUT_TAG", "")
 RENDER_NODE = os.environ.get("RENDER_NODE", "/dev/dri/renderD128")
 EXIT_GPU_BUSY = 70
 EXIT_USAGE = 2
-# both Arc kernel drivers: i915 and xe ("hang" also covers i915's "GPU HANG"; "timed? ?out" covers
-# timeout, xe's "Timedout job" and i915's "time out")
-GPU_FAULT_RE = re.compile(r"\b(?:i915|xe)\b.*(?:reset|hang|hung|timed? ?out|GuC|wedged|device.?lost)",
-                          re.IGNORECASE)
+# A kernel log line is an Arc fault when it names one of the two drivers and a failure term, in either
+# order: i915 prints its fence timeout as "Fence expiration time out i915-<bdf>:...". "hang" also
+# covers i915's "GPU HANG"; "timed?[ _-]?out" covers timeout, xe's "Timedout job", "timed out",
+# "timed-out" and "time out"; "fault" counts only as a word of its own or after "page" (xe's "Fault
+# response: Unsuccessful", "PageFault", "GTT fault"), so "default" does not match; "banned" is i915's
+# verdict on a guilty context.
+GPU_DRIVER_RE = re.compile(r"\b(?:i915|xe)\b", re.IGNORECASE)
+GPU_FAULT_TERM_RE = re.compile(r"reset|hang|hung|timed?[ _-]?out|GuC|wedged|banned|CAT error|"
+                               r"\b(?:page.?)?fault|device.?lost", re.IGNORECASE)
 # two-sided 95% Student t quantiles, index = degrees of freedom (capped at 15)
 T95 = [float("nan"), 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365,
        2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131]
@@ -379,7 +384,8 @@ def scan_log(logpath: Path) -> dict[str, Any]:
             draft_rounds += 1
             if "(restore checkpoint)" in low:
                 checkpoint_restores += 1
-        if ("flash" in low or "fattn" in low or "flash_attn" in low) and "warn" not in low:
+        # runtime diagnostics only: "flash" alone also matches model paths such as Qwen3.8-Flash-Next
+        if ("flash_attn" in low or "fattn" in low or "flash attention" in low) and "warn" not in low:
             fa_lines.append(line.strip())
         if "draft acceptance" in low or "statistics" in low:
             acc_lines.append(line.strip())
@@ -399,7 +405,12 @@ def scan_log(logpath: Path) -> dict[str, Any]:
 
 def library_path(bin_dir: str, inherited: str) -> str:
     """LD_LIBRARY_PATH with bin_dir first. No empty entry: the loader reads one as the current directory."""
-    return os.pathsep.join(part for part in (bin_dir, inherited) if part)
+    return os.pathsep.join(part for part in [bin_dir, *inherited.split(os.pathsep)] if part)
+
+
+def arm_library_path(exe: Path) -> str:
+    """The LD_LIBRARY_PATH an arm's server runs with: its own build directory first."""
+    return library_path(str(exe.parent), os.environ.get("LD_LIBRARY_PATH", ""))
 
 
 def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
@@ -408,8 +419,7 @@ def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
     env["UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS"] = "1"
     if "server_bin" in arm:
         # the build-tree RUNPATH points at one build dir; make each arm load its own libraries
-        bin_dir = str(Path(arm["server_bin"]).resolve().parent)
-        env["LD_LIBRARY_PATH"] = library_path(bin_dir, env.get("LD_LIBRARY_PATH", ""))
+        env["LD_LIBRARY_PATH"] = arm_library_path(Path(arm["server_bin"]).resolve())
         env.setdefault("LLAMA_TRACE", "1")
     with logpath.open("w", encoding="utf-8") as logf:
         return subprocess.Popen(
@@ -531,6 +541,10 @@ def dmesg_lines() -> list[str] | None:
     return None
 
 
+def is_gpu_fault(line: str) -> bool:
+    return bool(GPU_DRIVER_RE.search(line) and GPU_FAULT_TERM_RE.search(line))
+
+
 def kmsg_lines_since(before: list[str], after: list[str]) -> list[str] | None:
     """Lines the kernel log gained between two reads.
 
@@ -552,7 +566,39 @@ def new_gpu_faults(before: list[str] | None, after: list[str] | None) -> list[st
     gained = kmsg_lines_since(before, after)
     if gained is None:
         return None
-    return [line for line in gained if GPU_FAULT_RE.search(line)]
+    return [line for line in gained if is_gpu_fault(line)]
+
+
+def workload_mismatches(launches_a: list[dict[str, Any]], launches_b: list[dict[str, Any]],
+                        prompt_ids: list[str]) -> list[dict[str, Any]]:
+    """Launch pairs and prompts whose two arms did not generate the same ordered token streams.
+
+    The paired delta compares launch i of one arm with launch i of the other. It measures speed only
+    where both generated the same tokens; elsewhere it also carries the workload difference (other
+    lengths, other acceptance). Not a gate: temperature-0 output is not reproducible on SYCL.
+    """
+    def streams(launch: dict[str, Any], pid: str) -> list[str] | None:
+        for prompt in launch.get("prompts", []):
+            if prompt.get("id") == pid:
+                return [run.get("token_sha256") for run in prompt.get("runs", [])]
+        return None
+
+    mismatches = []
+    for i, (la, lb) in enumerate(zip(launches_a, launches_b)):
+        for pid in prompt_ids:
+            sa, sb = streams(la, pid), streams(lb, pid)
+            if sa is None or sb is None or sa != sb:
+                mismatches.append({"launch": i, "prompt": pid})
+    return mismatches
+
+
+def argmax_evidence(launches: list[dict[str, Any]]) -> dict[str, int]:
+    """Response rows over all launches, and how many carried a top list the verifier could check."""
+    runs = [run for launch in launches for prompt in launch.get("prompts", []) for run in prompt.get("runs", [])]
+    counted = all("verifier_rows_with_argmax" in run for run in runs)
+    # summaries written before the harness counted the rows carry no count: unknown, not zero
+    return {"rows": sum(run.get("verifier_rows", 0) for run in runs),
+            "rows_with_argmax": sum(run["verifier_rows_with_argmax"] for run in runs) if counted else None}
 
 
 def launch_problems(launch: dict[str, Any]) -> list[str]:
@@ -580,19 +626,49 @@ def file_sha256(path: Path) -> str | None:
         return None
 
 
-def build_hashes(exe: Path) -> dict[str, str | None]:
+CORE_LIBRARY_PREFIXES = ("libllama", "libggml", "libmtmd")
+
+
+def build_hashes(exe: Path, resolved: dict[str, str] | None = None) -> dict[str, str | None]:
     """sha256 of the server binary and of every shared library in its directory, keyed by file name.
 
     A shared build keeps core code (libllama, the ggml backends) in libraries the server loads from
     its own directory (library_path puts it first), so the binary alone can be byte-identical across
     builds that differ. Symlinks are skipped: they name a library that is hashed under its own name.
-    Libraries resolved outside that directory (oneAPI, the system) are not hashed.
+    Backends loaded with dlopen sit in that directory too. A llama or ggml library the loader resolves
+    elsewhere (resolved, from resolved_libraries) is hashed under its path; runtimes such as oneAPI
+    and the system libraries are not hashed.
     """
     hashes = {exe.name: file_sha256(exe)}
     for lib in sorted(exe.parent.glob("lib*.so*")):
         if lib.is_file() and not lib.is_symlink():
             hashes[lib.name] = file_sha256(lib)
+    for soname, path in sorted((resolved or {}).items()):
+        lib = Path(path)
+        if soname.startswith(CORE_LIBRARY_PREFIXES) and lib.is_absolute() and lib.resolve().parent != exe.parent.resolve():
+            hashes[str(lib)] = file_sha256(lib)
     return hashes
+
+
+LDD_LINE_RE = re.compile(r"^\s*(\S+) => (.+?)(?: \(0x[0-9a-f]+\))?$")
+
+
+def resolved_libraries(exe: Path, ld_library_path: str) -> dict[str, str] | None:
+    """Shared library -> path as the dynamic loader resolves them for exe (ldd), None when ldd fails."""
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = ld_library_path
+    try:
+        proc = subprocess.run(["ldd", str(exe)], check=False, capture_output=True, text=True, timeout=60, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    libraries = {}
+    for line in proc.stdout.splitlines():
+        match = LDD_LINE_RE.match(line)
+        if match:
+            libraries[match.group(1)] = match.group(2).strip()
+    return libraries
 
 
 def render_driver(render_node: str, drm_sysfs_root: str = "/sys/class/drm") -> str | None:
@@ -638,10 +714,23 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     suffix = f"-{OUT_TAG}" if OUT_TAG else ""
     out_path = RESULTS / f"summary_ab{suffix}.json"
     a, b = arms
+    if a["name"] == b["name"]:
+        # launches are kept per name: one arm's launches would stand in for the other's
+        print(f"!! both arms are named {a['name']!r}; set NAME_A and NAME_B to different labels", flush=True)
+        return EXIT_USAGE
     for arm in arms:
         exe = Path(arm["server_bin"]).resolve()
-        arm["sha256"] = build_hashes(exe)
+        arm["libraries"] = resolved_libraries(exe, arm_library_path(exe))
+        arm["sha256"] = build_hashes(exe, arm["libraries"])
         print(f"arm {arm['name']}: {arm['server_bin']} ({len(arm['sha256'])} files hashed)")
+        if arm["libraries"] is None:
+            print(f"!! ldd failed for {exe}: the libraries this arm loads are not recorded", flush=True)
+        else:
+            for soname, path in sorted(arm["libraries"].items()):
+                if path == "not found":
+                    print(f"!! arm {arm['name']}: the loader finds no {soname}", flush=True)
+                elif soname.startswith(CORE_LIBRARY_PREFIXES) and not path.startswith(str(exe.parent) + os.sep):
+                    print(f"!! arm {arm['name']} loads {soname} from {path}, outside its build directory", flush=True)
     # numbers from one kernel driver are no baseline for the other (AGENTS.md, "Kernel Driver")
     kernel_driver = render_driver(RENDER_NODE)
     print(f"kernel driver of {RENDER_NODE}: {kernel_driver or 'unknown'}")
@@ -697,12 +786,18 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     events = {arm["name"]: {key: sum(launch.get("log_scan", {}).get(key, 0) for launch in launches[arm["name"]])
                             for key in ("draft_rounds", "checkpoint_restores", "checkpoint_creates_dbg")}
               for arm in arms}
+    mismatched = workload_mismatches(launches[a["name"]], launches[b["name"]], prompt_ids)
+    evidence = {arm["name"]: argmax_evidence(launches[arm["name"]]) for arm in arms}
     new_faults = new_gpu_faults(kmsg_before, dmesg_lines())
     out.update({"paired_tg": stats, "token_identity": tokens, "checkpoint_events": events,
+                "paired_workload_mismatches": mismatched, "paired_tg_isolates_arms": ok and not mismatched,
+                "argmax_evidence": evidence,
                 "dmesg_new_gpu_faults": new_faults})
     out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
 
-    print(f"\n\n## Paired tg, {b['name']} minus {a['name']} ({LAUNCHES} launches per arm, ABBA order)\n")
+    # a delta over pairs that generated different tokens also measures the workload difference
+    kind = "exploratory: arms generated different tokens" if mismatched else "same token streams in every pair"
+    print(f"\n\n## Paired tg, {b['name']} minus {a['name']} ({LAUNCHES} launches per arm, ABBA order; {kind})\n")
     print(f"| prompt | {a['name']} t/s | {b['name']} t/s | delta t/s | delta % | 95% CI half-width % |")
     print("|---|---|---|---|---|---|")
     for pid, st in stats.items():
@@ -710,6 +805,9 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
         print(f"| {pid} | {st['a_mean']:.2f} | {st['b_mean']:.2f} | {st['delta']:+.2f} | {st['delta_pct']:+.2f} | {half} |")
     if not order_balanced:
         print(unbalanced)
+    if mismatched:
+        print(f"!! {len(mismatched)} of {len(prompt_ids) * LAUNCHES} paired (launch, prompt) cells generated different "
+              "token streams in the two arms: their delta mixes speed with a different workload")
     if not ok:
         print("!! at least one launch is unusable; no paired statistics")
         for arm in arms:
@@ -724,6 +822,10 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     for pid, t in tokens.items():
         print(f"  {pid}: distinct streams {a['name']}={t['a_distinct']} {b['name']}={t['b_distinct']}, "
               f"identical across arms: {t['identical_across_arms']}")
+    print("\n## Verifier evidence\n")
+    for name, ev in evidence.items():
+        print(f"  {name}: {ev['rows_with_argmax']} of {ev['rows']} response rows carried a top list, so only those "
+              "were checked against the target argmax; the rest passed on token id and a finite log-probability")
     if new_faults is None:
         print("\n!! dmesg unreadable, wrapped or cleared during the run: GPU fault gate NOT evaluated")
     else:

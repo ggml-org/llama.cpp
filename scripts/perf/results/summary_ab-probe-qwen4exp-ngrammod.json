@@ -943,9 +943,7 @@
           }
         ],
         "log_scan": {
-          "fa_lines": [
-            "0.00.337.994 I srv    load_model: loading model '/mnt/ssd1/gguf/Qwen3.8-Flash-Next-GSQ-RCO-Coder-IQ1_M/IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf'"
-          ],
+          "fa_lines": [],
           "acceptance_lines": [
             "1.23.400.130 I slot print_timing: id  0 | task 0 | draft acceptance = 0.73034 (   65 accepted /    89 generated), mean len = 33.50",
             "1.46.598.051 I slot print_timing: id  0 | task 193 | draft acceptance = 0.53125 (   34 accepted /    64 generated), mean len = 35.00"
@@ -1859,9 +1857,7 @@
           }
         ],
         "log_scan": {
-          "fa_lines": [
-            "0.00.171.530 I srv    load_model: loading model '/mnt/ssd1/gguf/Qwen3.8-Flash-Next-GSQ-RCO-Coder-IQ1_M/IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf'"
-          ],
+          "fa_lines": [],
           "acceptance_lines": [
             "1.32.811.926 I slot print_timing: id  0 | task 0 | draft acceptance = 1.00000 (   35 accepted /    35 generated), mean len = 36.00",
             "1.45.037.704 I slot print_timing: id  0 | task 223 | draft acceptance = 1.00000 (  227 accepted /   227 generated), mean len = 57.75"
