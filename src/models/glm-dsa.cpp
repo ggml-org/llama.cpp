@@ -446,7 +446,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
         }
         // when unmasked nextn embeddings are requested, t_h_nextn must keep all rows,
         // so the early output masking has to be skipped (it is applied after the final norm instead)
-        if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -513,7 +513,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 

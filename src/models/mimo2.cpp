@@ -102,7 +102,6 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
 
     const float v_scale = hparams.f_attn_value_scale;
     const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
-    const bool crop_last_layer = inp_out_ids && cparams.embeddings_nextn_masked && !extract_final_inp;
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
@@ -184,7 +183,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
             }
         }
 
-        if (il == n_layer - 1 && crop_last_layer) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids) && !extract_final_inp) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -235,16 +234,16 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
     cur = inpL;
     if (extract_final_inp) {
         res->t_layer_inp[n_layer] = cur;
-        if (inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (crop_before_nextn(inp_out_ids)) {
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
         }
     }
 
-    // pre-norm state for MTP; set even when nextn extraction is off so the topology does not depend on it
+    // pre-norm state for MTP; set even when extraction is off
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
