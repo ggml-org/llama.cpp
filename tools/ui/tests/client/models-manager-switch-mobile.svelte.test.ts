@@ -3,6 +3,7 @@
 
 import ModelsManagerWrapper from './components/ModelsManagerWrapper.svelte';
 import { ServerRole } from '$lib/enums';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { uiStore } from '$lib/stores/ui.svelte';
@@ -40,6 +41,13 @@ describe('models manager on a phone', () => {
 				status: { value: 'loaded' }
 			}
 		];
+		// the pane offers "Use in this chat" only when a chat is open
+		conversationsStore.activeConversation = {
+			currNode: null,
+			id: 'c1',
+			lastModified: 100,
+			name: 'Chat c1'
+		};
 		uiStore.manageModelsOpen = true;
 		uiStore.manageModelFocus = null;
 		await page.viewport(PHONE.width, PHONE.height);
@@ -47,6 +55,7 @@ describe('models manager on a phone', () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		conversationsStore.activeConversation = null;
 		uiStore.manageModelsOpen = false;
 		uiStore.manageModelFocus = null;
 		await page.viewport(DESKTOP.width, DESKTOP.height);
