@@ -682,7 +682,10 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
             params.models_preset_hf = params.model.hf_repo; // only for showing a warning
             params.models_preset    = hf_cache::finalize_file(plan.preset);
-            params.model = common_params_model{}; // make sure to clear model, so server starts in router mode
+            // clear the model so the server starts in router mode
+            params.model.path.clear();
+            params.model.hf_repo.clear();
+            params.model.docker_repo.clear();
         });
     }
 

@@ -1248,6 +1248,30 @@ Returns information about the loaded model. See [OpenAI Models API documentation
 
 The returned list always has one single element. The `meta` field can be `null` (for example, while the model is still loading).
 
+Each object in `data` has an `architecture` object. It has two string arrays:
+
+- `input_modalities` lists what the model can read. It always has `text`, plus each media type that the model supports.
+- `output_modalities` lists what the model can produce.
+
+One output value is special:
+
+| Value | Meaning |
+|---|---|
+| `decisions` | The model is a native decision model. Serve it with [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api). |
+
+A language model that classifies with prompts does not get `decisions`. Only native decision models do.
+
+Check for membership. Tolerate values that you do not know:
+
+```js
+const useSystemOne =
+    model.architecture?.output_modalities?.includes("decisions") === true;
+```
+
+Without decision metadata, `output_modalities` is `["text"]`. This default is for compatibility only. It does not mean that the model can generate text. Values can change. New combinations such as `["text", "decisions"]` use the same shape.
+
+The router returns the same `architecture` object in [`GET /models`](#get-models-list-available-models). You can find a native decision model without a probe or a model load. This works for unloaded and sleeping models too. Older servers can omit `architecture`. If it is absent, use the legacy behavior of your client.
+
 By default, model `id` field is the path to model file, specified via `-m`. You can set a custom value for model `id` field via `--alias` argument. For example, `--alias gpt-4o-mini`.
 
 Example:
@@ -1259,6 +1283,10 @@ Example:
         {
             "id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             "object": "model",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            },
             "created": 1735142223,
             "owned_by": "llamacpp",
             "meta": {
@@ -1696,7 +1724,7 @@ For laya and clef, the whole prompt is evaluated in one batch: it must fit in `-
 
 *Image input:*
 
-Image input needs a model that supports it (for example: openjev) and its multimodal projector, see `--mmproj`. Image input is not supported yet for clef.
+Image input needs a model that supports it (for example: openjev, clef) and its multimodal projector, see `--mmproj`.
 
 Images can be given in two ways, and both can be used in the same request:
 
@@ -1989,6 +2017,37 @@ Note:
     - If a model is running but updated or removed from the source, it will be unloaded
     - If a model is not running, it will be added or updated according to the source
 2. When the model is loaded, the info from `/v1/models` is forwarded to router's `/v1/models`. This includes metadata about the model and the runtime instance.
+
+Each object in `data` has the same `architecture` object as [`GET /v1/models`](#get-v1models-openai-compatible-model-info-api) of a direct server. The server computes both arrays offline. It does not load the model, download files, or run inference. `output_modalities` comes from the GGUF metadata. `input_modalities` comes from the projector file. A native decision model shows `decisions` before its first load, after unload, and while it sleeps:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "my-decision-model",
+      "object": "model",
+      "tags": ["local"],
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["decisions"]
+      },
+      "status": {
+        "value": "unloaded"
+      }
+    }
+  ]
+}
+```
+
+The values work like this:
+
+- A loaded model reports both arrays. Its values replace the cached values in full.
+- The cache keeps the values across sleep and unload. A known decision model stays advertised.
+- Before the first report, the values come from the offline computation.
+- Offline computation cannot see video. Only a loaded model reports `video` in `input_modalities`.
+- If the metadata or the model file is not available, both arrays are `["text"]`.
+- A source or preset refresh computes both arrays again. A replaced model does not keep old values.
 
 The `status` object can be:
 

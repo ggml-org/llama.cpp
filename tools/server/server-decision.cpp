@@ -223,6 +223,9 @@ static void decision_load_image(const json & url, std::vector<raw_buffer> & file
 }
 
 json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+    if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
+        throw std::invalid_argument("\"videos\" is not supported");
+    }
     if (body.contains("images") && !body.at("images").is_null()) {
         if (!body.at("images").is_array()) {
             throw std::invalid_argument("\"images\" must be an array");
@@ -563,7 +566,13 @@ static const std::string CLEF_SEP           = "<<clef:sep>>";
 static const std::string CLEF_MARK_QUESTION = "<<clef:question>>";
 static const std::string CLEF_MARK_OPTION   = "<<clef:option>>";
 
-void server_decision_context::fill_task_joint(const json & state, const std::vector<server_decision_question> & questions, server_task & task) const {
+void server_decision_context::fill_task_joint(
+        const json & state,
+        const std::vector<server_decision_question> & questions,
+        const std::vector<raw_buffer> & files,
+        mtmd_context * mctx,
+        const mtmd_helper_init_opt & init_opt,
+        server_task & task) const {
     json inp_questions = json::array();
     for (const auto & question : questions) {
         json options = json::array();
@@ -587,6 +596,16 @@ void server_decision_context::fill_task_joint(const json & state, const std::vec
         {"questions", inp_questions},
     };
     inp = decision_replace_text(decision_sort_keys(inp), CLEF_MARKER, "<<clef ");
+
+    // the template puts one media marker per image
+    json images = json::array();
+    if (!files.empty()) {
+        inp = decision_replace_text(inp, get_media_marker(), " ");
+        for (size_t i = 0; i < files.size(); i++) {
+            images.push_back(get_media_marker());
+        }
+    }
+    inp["images"]        = images;
     inp["sep"]           = CLEF_SEP;
     inp["mark_question"] = CLEF_MARK_QUESTION;
     inp["mark_option"]   = CLEF_MARK_OPTION;
@@ -597,15 +616,34 @@ void server_decision_context::fill_task_joint(const json & state, const std::vec
     const jinja::value results = runtime.execute(tmpl->prog);
     const std::string prompt   = jinja::runtime::gather_string_parts(results)->as_string().str();
 
+    const auto invalid = std::runtime_error("unexpected layout of the decision prompt");
+
     // the model was trained with the pieces tokenized one by one
-    llama_tokens tokens;
+    const std::vector<std::string> pieces = string_split(prompt, CLEF_SEP);
+    size_t i_piece = 0;
+
+    task.tokens = server_tokens(llama_tokens(), false);
+    if (!files.empty()) {
+        // the text before the images is tokenized with them, a vision token separates the pieces anyway
+        std::string head;
+        while (i_piece < pieces.size() && head.find(get_media_marker()) == std::string::npos) {
+            head += pieces[i_piece++];
+        }
+        if (head.find(get_media_marker()) == std::string::npos || head.find(CLEF_MARKER) != std::string::npos) {
+            throw invalid;
+        }
+        task.tokens = process_mtmd_prompt(mctx, head, files, init_opt);
+        task.decision.order.resize(task.tokens.size(), LLAMA_DECISION_ORDER_NONE);
+    }
+
     size_t i_question = 0;
-    for (std::string piece : string_split(prompt, CLEF_SEP)) {
+    for (; i_piece < pieces.size(); i_piece++) {
+        std::string piece = pieces[i_piece];
         int32_t order = LLAMA_DECISION_ORDER_NONE;
         if (string_starts_with(piece, CLEF_MARK_QUESTION)) {
             piece = piece.substr(CLEF_MARK_QUESTION.size());
             if (i_question >= questions.size()) {
-                throw std::runtime_error("unexpected layout of the decision prompt");
+                throw invalid;
             }
             switch (questions[i_question++].type) {
                 case SERVER_DECISION_QUESTION_NOUL:   order = LLAMA_DECISION_ORDER_QUESTION_NOUL;   break;
@@ -622,8 +660,10 @@ void server_decision_context::fill_task_joint(const json & state, const std::vec
         if (order != LLAMA_DECISION_ORDER_NONE && piece_tokens.empty()) {
             throw std::invalid_argument("the instructions and the options of a question must not be empty");
         }
-        tokens.insert(tokens.end(), piece_tokens.begin(), piece_tokens.end());
-        task.decision.order.resize(tokens.size(), order);
+        for (const llama_token token : piece_tokens) {
+            task.tokens.push_back(token);
+        }
+        task.decision.order.resize(task.tokens.size(), order);
     }
 
     size_t n_options = 0;
@@ -631,10 +671,8 @@ void server_decision_context::fill_task_joint(const json & state, const std::vec
         n_options += question.options.size();
     }
     if (i_question != questions.size() || (size_t) task.decision.n_scores != n_options) {
-        throw std::runtime_error("unexpected layout of the decision prompt");
+        throw invalid;
     }
-
-    task.tokens = server_tokens(tokens, false);
 }
 
 //

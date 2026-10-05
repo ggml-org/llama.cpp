@@ -134,8 +134,14 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
-    ggml_tensor * tokens = nullptr; // I32 [n_batch]
-    ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
+    ggml_tensor * tokens       = nullptr; // I32 [n_batch]
+    ggml_tensor * embd         = nullptr; // F32 [n_embd, n_batch]
+    ggml_tensor * mixed_tokens = nullptr; // I32 [n_tok_rows], mixed path: ids of the token rows
+    ggml_tensor * mixed_slots  = nullptr; // I64 [n_tok_rows], mixed path: batch index of the token rows
+    ggml_tensor * mixed_embd   = nullptr; // F32 [n_embd, n_batch], mixed path: embd rows, token rows are overwritten
+    ggml_tensor * scale_rows   = nullptr; // F32 [1, n_batch], per-row scale: scale_tok for token rows, 1 for embd rows
+
+    float scale_tok = 1.0f;
 
     const int64_t n_embd = 0;
 };
@@ -823,6 +829,7 @@ struct llm_graph_params {
             ubatch.n_seq_tokens == other.ubatch.n_seq_tokens &&
             ubatch.n_seqs       == other.ubatch.n_seqs &&
             ubatch.n_seqs_unq   == other.ubatch.n_seqs_unq &&
+            ubatch.is_mixed()   == other.ubatch.is_mixed() &&
             (
                 (!ubatch.token && !other.ubatch.token) ||
                 (!ubatch.embd  && !other.ubatch.embd)  ||
@@ -1166,7 +1173,8 @@ struct llm_graph_context {
     // inputs
     //
 
-    ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
+    // tok_scale: applied to token rows only
+    ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, float tok_scale = 1.0f) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;

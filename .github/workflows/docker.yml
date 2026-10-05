@@ -23,7 +23,6 @@ on:
 cache-mode: none
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -62,6 +61,9 @@ jobs:
   build_ui:
     name: Build UI
     needs: create_tag
+    permissions:
+      actions: write
+      contents: read
     uses: ./.github/workflows/ui-build.yml
     with:
       ui_version: ${{ needs.create_tag.outputs.source_tag }}
@@ -146,6 +148,11 @@ jobs:
     needs: [prepare_matrices, create_tag, build_ui]
 
     runs-on: ${{ matrix.config.runs_on }}
+    # cache-mode: write # for QEMU
+    permissions:
+      actions: write
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -165,11 +172,11 @@ jobs:
           name: llama-ui.zip
           path: tools/ui/dist
 
-      - name: Set up QEMU
-        if: ${{ contains(matrix.config.platforms, 'linux/amd64') }}
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
-        with:
-          image: tonistiigi/binfmt:qemu-v10.2.1
+      # - name: Set up QEMU
+      #   if: ${{ contains(matrix.config.platforms, 'linux/amd64') }}
+      #   uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
+      #   with:
+      #     image: tonistiigi/binfmt:qemu-v10.2.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4

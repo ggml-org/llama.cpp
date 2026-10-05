@@ -1778,8 +1778,9 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
         (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
         src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
-    const int cc      = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
+    const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0->type, cc, warp_size, src0->ne, src0->nb, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
 
     //we only support fusion for ncols_dst = 1
     if (tensor->op == GGML_OP_MUL_MAT && dst->ne[1] != 1) {
@@ -1845,11 +1846,14 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
         return (a == graph->nodes[idx] && b == graph->nodes[idx + 1]) ||
                (b == graph->nodes[idx] && a == graph->nodes[idx + 1]);
     };
+    // only batch-size independent checks here: graph_optimize must produce the same graph topology for every ubatch
+    // size, otherwise ggml-alloc has to re-reserve (and the scheduler to synchronize) at runtime.
+    // the MMVQ batch size check is done in ggml_cuda_try_fuse
     if (!is_pair(gate, up, routed_idx) || !is_pair(shared_gate, shared_up, shared_idx) ||
             !ggml_cuda_should_fuse_mul_mat(up, gate, routed) ||
             !ggml_cuda_should_fuse_mul_mat(shared_up, shared_gate, shared) ||
             !up->src[0]->buffer ||
-            !ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
+            !ggml_is_quantized(up->src[0]->type)) {
         return false;
     }
     const ggml_tensor * input = up->src[1];
@@ -1892,7 +1896,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
-    if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
+    if (ggml_cuda_should_use_mmvf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -1902,7 +1906,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
             && src0->type == GGML_TYPE_F32
             && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
-            && ggml_cuda_should_use_mmvf(src1->type, cc, src1->ne, src1->nb, /*ne11 =*/ 1)) {
+            && ggml_cuda_should_use_mmvf(src1->type, cc, warp_size, src1->ne, src1->nb, /*ne11 =*/ 1)) {
         ggml_tensor dst_vec = *dst;
         dst_vec.ne[0] = ne11;
         dst_vec.ne[1] = 1;
@@ -3163,7 +3167,7 @@ static bool ggml_cuda_match_moe_weighted_reduction(
 
     const int     n_expert_used = (int) weighted->ne[1];
     const int64_t n_tokens      = weighted->ne[2] * weighted->ne[3];
-    if (n_expert_used < 2 || n_expert_used > MOE_WEIGHTED_REDUCTION_MAX_EXPERTS || n_tokens <= 0) {
+    if (n_expert_used < 2 || n_expert_used > MOE_WEIGHTED_REDUCTION_MAX_EXPERTS) {
         return false;
     }
 
@@ -3509,7 +3513,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     ggml_tensor * node = cgraph->nodes[i];
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
-            ggml_cuda_match_shared_expert(cgraph, i, i + 3)) {
+            ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
+            ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {
         const int outputs[] = { i + 2, i + 5 };
         if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 6, outputs, 2)) {
             ggml_tensor * routed = cgraph->nodes[i + 2];

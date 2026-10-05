@@ -1,3 +1,6 @@
+// TODO: merge with test-save-load-state.cpp
+// TODO: merge with test-state-restore-fragmented.cpp
+
 #include "arg.h"
 #include "common.h"
 #include "ggml-backend.h"
@@ -474,6 +477,87 @@ static test_status test_rollback(const common_params & params, llama_model * mod
     return test_status::PASS;
 }
 
+// Decode a prompt into seq 0, share its cells with a second sequence, then keep
+// decoding both.
+static test_status test_shared_seq_reserve(const common_params & params, llama_model * model, uint8_t fill) {
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
+    // these archs reserve the final pp graph with n_seqs = 1, so every multi-seq
+    // graph has a different layout and re-reserves by design
+    // see [TAG_RESERVE_DIAG_DECAY] in llama-context.cpp
+    char arch_str[64] = {};
+    llama_model_meta_val_str(model, "general.architecture", arch_str, sizeof(arch_str));
+    if (strcmp(arch_str, "kimi-linear") == 0 || strcmp(arch_str, "minimax-01") == 0) {
+        LOG_INF("%s: skipping %s, its reserve uses n_seqs = 1\n", __func__, arch_str);
+        return test_status::SKIP;
+    }
+
+    constexpr uint32_t n_seqs     = 2;
+    constexpr uint32_t n_prompt   = 128;
+    constexpr uint32_t n_continue = 32;
+
+    auto cparams = common_context_params_to_llama(params);
+    cparams.n_seq_max  = n_seqs;
+    cparams.n_ctx      = 512;
+    cparams.n_batch    = 256;
+    cparams.n_ubatch   = 64;
+    cparams.kv_unified = true; // only a unified cache shares cells on seq_cp
+
+    llama_context_ptr ctx = init_ctx(model, cparams, fill);
+    if (!ctx) {
+        LOG_ERR("%s: failed to init context\n", __func__);
+        return test_status::FAIL;
+    }
+
+    const auto tok = [&](uint32_t seq, llama_pos pos) {
+        return (llama_token) ((7*(uint32_t) pos + 31*seq + 1) % (uint32_t) n_vocab);
+    };
+
+    {
+        common_batch batch(ctx.get());
+        for (llama_pos pos = 0; pos < (llama_pos) n_prompt; ++pos) {
+            batch.add(tok(0, pos), pos, 0, false);
+        }
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+            LOG_ERR("%s: prompt decode failed\n", __func__);
+            return test_status::FAIL;
+        }
+    }
+
+    // this is what llama-batched-bench does for -pps
+    llama_memory_seq_cp(llama_get_memory(ctx.get()), 0, 1, -1, -1);
+
+    for (uint32_t i = 0; i < n_continue; ++i) {
+        const llama_pos pos = (llama_pos) (n_prompt + i);
+
+        common_batch batch(ctx.get());
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            batch.add(tok(s, pos), pos, (llama_seq_id) s, true);
+        }
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+            LOG_ERR("%s: shared-seq decode failed at step %u\n", __func__, i);
+            return test_status::FAIL;
+        }
+
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            const float * logits = llama_get_logits_ith(ctx.get(), (int) s);
+            if (logits == nullptr) {
+                LOG_ERR("%s: missing shared-seq logits at index %u\n", __func__, s);
+                return test_status::FAIL;
+            }
+            for (int t = 0; t < n_vocab; ++t) {
+                if (!std::isfinite(logits[t])) {
+                    LOG_ERR("%s: non-finite shared-seq logit at step %u, seq %u, index %d\n", __func__, i, s, t);
+                    return test_status::FAIL;
+                }
+            }
+        }
+    }
+
+    LOG_INF("%s: shared-seq decode succeeded (%u tokens after seq_cp)\n", __func__, n_continue*n_seqs);
+    return test_status::PASS;
+}
+
 static test_status merge_status(test_status a, test_status b) {
     if (a == test_status::FAIL || b == test_status::FAIL) {
         return test_status::FAIL;
@@ -487,6 +571,7 @@ static test_status merge_status(test_status a, test_status b) {
 struct test_results {
     test_status rollback = test_status::SKIP;
     test_status replay   = test_status::SKIP;
+    test_status shared   = test_status::SKIP;
 };
 
 // Run every test for an initialized model over both cache fills.
@@ -496,9 +581,11 @@ static test_results run_tests(const common_params & params, llama_model * model)
         LOG_INF("%s: testing with cache fill 0x%02x\n", __func__, fill);
         const test_status rb = test_rollback(params, model, fill);
         const test_status rp = test_multi_seq_split_replay(params, model, fill);
+        const test_status ss = test_shared_seq_reserve(params, model, fill);
         res.rollback = merge_status(res.rollback, rb);
         res.replay   = merge_status(res.replay,   rp);
-        if (rb == test_status::FAIL || rp == test_status::FAIL) {
+        res.shared   = merge_status(res.shared,   ss);
+        if (rb == test_status::FAIL || rp == test_status::FAIL || ss == test_status::FAIL) {
             break;
         }
     }
@@ -517,7 +604,7 @@ static test_results run_tests_for_model(const std::string & model_path, const st
     if (model == nullptr) {
         LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
         // a model that cannot be loaded is a failure, not a skip
-        return { test_status::FAIL, test_status::FAIL };
+        return { test_status::FAIL, test_status::FAIL, test_status::FAIL };
     }
 
     if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
@@ -603,12 +690,12 @@ int main(int argc, char ** argv) {
         // silence everything but the table itself (LOG has verbosity LOG_LEVEL_OUTPUT = 0)
         common_log_set_verbosity_thold(0);
 
-        LOG("%-*s  %-8s  %s\n", (int) name_width, "Model", "rollback", "split replay");
+        LOG("%-*s  %-8s  %-11s  %s\n", (int) name_width, "Model", "rollback", "split replay", "shared seq");
         common_log_flush(common_log_main());
 
-        size_t n_pass[2] = { 0, 0 };
-        size_t n_skip[2] = { 0, 0 };
-        size_t n_fail[2] = { 0, 0 };
+        size_t n_pass[3] = { 0, 0, 0 };
+        size_t n_skip[3] = { 0, 0, 0 };
+        size_t n_fail[3] = { 0, 0, 0 };
         for (const auto & model_path : models) {
             const auto name = std::filesystem::path(model_path).filename().string();
 
@@ -618,12 +705,12 @@ int main(int argc, char ** argv) {
 
             // all status strings have the same raw length, so the columns line up;
             // pad the first status to the width of the "rollback" header + separator
-            LOG("  %s      %s", test_status_str(res.rollback), test_status_str(res.replay));
+            LOG("  %s      %s         %s", test_status_str(res.rollback), test_status_str(res.replay), test_status_str(res.shared));
             LOG("\n");
             common_log_flush(common_log_main());
 
-            const test_status all[2] = { res.rollback, res.replay };
-            for (int t = 0; t < 2; ++t) {
+            const test_status all[3] = { res.rollback, res.replay, res.shared };
+            for (int t = 0; t < 3; ++t) {
                 switch (all[t]) {
                     case test_status::PASS: n_pass[t]++; break;
                     case test_status::FAIL: n_fail[t]++; break;
@@ -639,12 +726,14 @@ int main(int argc, char ** argv) {
                 __func__, n_pass[0], n_skip[0], n_fail[0], models.size());
         LOG_INF("%s: split replay: %zu passed, %zu skipped, %zu failed (of %zu)\n",
                 __func__, n_pass[1], n_skip[1], n_fail[1], models.size());
+        LOG_INF("%s: shared seq:   %zu passed, %zu skipped, %zu failed (of %zu)\n",
+                __func__, n_pass[2], n_skip[2], n_fail[2], models.size());
 
-        return (n_fail[0] + n_fail[1]) == 0 ? 0 : 1;
+        return (n_fail[0] + n_fail[1] + n_fail[2]) == 0 ? 0 : 1;
     }
 
     // single-model mode
     const test_results res = run_tests_for_model(params.model.path, params);
 
-    return (res.rollback == test_status::FAIL || res.replay == test_status::FAIL) ? 1 : 0;
+    return (res.rollback == test_status::FAIL || res.replay == test_status::FAIL || res.shared == test_status::FAIL) ? 1 : 0;
 }
