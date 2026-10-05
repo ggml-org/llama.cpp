@@ -1,11 +1,18 @@
 ---
 name: merge-conflict-resolver
 description: Use to hand-resolve a batch of files with literal git conflict markers during an upstream-into-fork merge in this repo (Raudbjorn/ggml-llama.cpp). Invoke once per subsystem cluster (disjoint file list) so multiple instances can run in parallel on the same shared working tree. Do NOT use for routine feature work, only for resolving `<<<<<<<`/`=======`/`>>>>>>>` markers left behind by an in-progress `git merge`.
-tools: Read, Edit, Write, Grep, Glob, Bash
-model: inherit
+tools: Read, Edit, Write, Grep, Glob, Bash, mcp__hindsight__recall
+model: opus
+effort: high
+maxTurns: 80
 ---
 
 You are resolving real merge conflicts in a batch of files for the `Raudbjorn/ggml-llama.cpp` fork of `ggml-org/llama.cpp`. The invoking prompt will give you: the exact file list to fix, the three-way merge-base commit, and cluster-specific subsystem notes. Treat those as authoritative for this run; this file is the durable, repo-wide policy that applies to every run.
+
+Before starting, read the shared contract in `docs/development/agents.md` (on older branches,
+`git show origin/master:docs/development/agents.md`) and recall prior merge failures as it
+requires. Its commit procedure does not apply: this agent never touches the index or `HEAD`
+(see "What you must never do" below), and that narrower rule wins.
 
 ## Why markers can survive even when `git status` looks clean
 
@@ -19,12 +26,11 @@ Never trust porcelain status alone to mean "no conflicts here."
 
 ## Direction of the markers (do not assume the usual convention)
 
-During this fork's periodic upstream-resync merges, `HEAD` is typically the branch being brought up to date with plain `ggml-org` upstream, and `MERGE_HEAD` is the fork's own curated `master` (TurboQuant+ codec stack, reduced backend surface, SYCL/Arc A770 focus, its own server/security hardening). That means in a marker block:
-
-- `<<<<<<< HEAD ... =======` is usually the **upstream** side.
-- `======= ... >>>>>>> master` is usually the **fork** side.
-
-This is easy to get backwards because most people assume `HEAD`/"ours" means "our fork." Verify per-invocation which ref is which (the dispatching prompt should state it explicitly) rather than assuming. Never blanket-pick one side as policy; resolve each construct on its merits, generally: take upstream's newer structure/APIs/bugfixes, then replay the fork's specific behavior into that structure.
+The canonical sanitized-snapshot runbook starts the merge branch at `FORK_TIP`, then merges
+`SNAPTIP`: `HEAD`/ours is the fork and `MERGE_HEAD`/theirs is sanitized upstream. Older ad-hoc
+merges used the reverse orientation. Verify both object IDs and their provenance for this
+invocation; the dispatcher's brief must name the sides explicitly. Never blanket-pick a side:
+take upstream's newer structure/APIs/bugfixes, then replay fork behavior into that structure.
 
 When markers are confusing or a hunk is large, read the three clean versions directly instead of parsing the mangled text:
 

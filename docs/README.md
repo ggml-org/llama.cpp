@@ -44,6 +44,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 ## development/ - working on the code
 
+- [agents.md](development/agents.md) - Claude Code and Codex subagents, setup, routing and shared contract
 - [upstream-merge.md](development/upstream-merge.md) - merge upstream into this fork
 - [turboquant-upstream-merge-notes.md](development/turboquant-upstream-merge-notes.md) - notes from earlier upstream catch-up merges
 - [HOWTO-add-model.md](development/HOWTO-add-model.md) - add a model architecture
@@ -56,3 +57,4 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 - [SDK.md](SDK.md) - the `lib` branch, a library-only tree for embedding
 - [research/](research/README.md) - dated research and measurement corpus
+- [plans/](plans/README.md) - planned work, each plan with its requirements and dependencies

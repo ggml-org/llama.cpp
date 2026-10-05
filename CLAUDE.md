@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 IMPORTANT: Ensure you've thoroughly reviewed the [AGENTS.md](AGENTS.md) file before beginning any work.
 
+Project roles in `.claude/agents/` and their Codex counterparts in `.codex/agents/` share the
+[subagent roster and contract](docs/development/agents.md). Their Markdown bodies are shared
+domain runbooks; keep the corresponding Codex description in sync when changing routing.
+
 ## What this repo is
 
 Single-maintainer fork of `ggml-org/llama.cpp` carrying the **TurboQuant+** codec stack
