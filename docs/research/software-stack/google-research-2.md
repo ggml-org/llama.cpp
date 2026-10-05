@@ -7,8 +7,8 @@ Because the system display server binds to the AMD Raphael iGPU via the amdgpu k
 
 The execution path for neural network tensors splits into two distinct driver architectures within user space. Understanding this divergence clarifies why Mesa is critically important in one deployment path and completely irrelevant in the other.  
 When llama.cpp is built with the Vulkan backend enabled (-DGGML\_VULKAN=ON), Mesa directly controls compute performance1. On Arch Linux, Mesa packages the vulkan-intel driver (internally designated as ANV), which implements the user-space Vulkan API, memory allocation interfaces, and the hardware shader compiler for Intel GPUs4. Under this execution path, GGML compute shaders are parsed into intermediate SPIR-V representations, translated into Mesa's internal NIR (New Intermediate Representation), and compiled into native Intel GPU machine instructions1.  
-The version of Mesa governs inference performance because modern LLM matrix-multiplication kernels require dedicated hardware tensor extensions4. Prior to Mesa 26.1, ANV primarily exposed the basic VK\_KHR\_cooperative\_matrix extension4. Beginning with Mesa 26.1, ANV introduced mature implementations of VK\_NV\_cooperative\_matrix2 alongside architectural updates to VK\_KHR\_cooperative\_matrix1.  
-These extensions allow the Vulkan shader compiler to route general matrix-matrix multiplication (GEMM) operations directly to Intel’s hardware-level Xe Matrix Extensions (XMX) systolic tensor arrays rather than falling back to standard Xe Vector Engines (XVEs)4. Empirical benchmarks demonstrate that updating Mesa to version 26.1 or newer can double token generation speeds (for example, improving single-stream decode throughput from approximately ![][image1] to ![][image2] on 35B parameter models) without altering the model weights or the llama.cpp binary4. Furthermore, newer Mesa builds resolve workgroup scheduling bottlenecks, enabling Vulkan to maintain superior scaling when processing parallel batch slots4. Under the Vulkan backend, Mesa is therefore a primary performance-defining variable.  
+Mesa 26.1 added cooperative-matrix work that can affect Vulkan inference, but the cited throughput result was measured on a Battlemage B70.
+Do not generalize that result to Alchemist/A770 without a same-hardware A/B; the effect of a Mesa update depends on the GPU, model, and llama.cpp backend revision.
 Conversely, when llama.cpp is built with the SYCL backend (-DGGML\_SYCL=ON), the version of Mesa installed on Arch Linux has zero impact on inference performance3. The SYCL backend relies on Intel’s oneAPI runtime architecture, which communicates with the hardware through Intel Level Zero (libze\_loader.so) rather than the Vulkan or OpenGL Direct Rendering Infrastructure (DRI)2. Level Zero bypasses the entire Mesa user-space stack, interfacing directly with the Linux kernel's Direct Rendering Manager (DRM) subsystem via the open-source Intel Compute Runtime (NEO)3.  
 Because Mesa is never loaded into the process memory space during SYCL inference, updating, downgrading, or rebuilding Mesa will not produce any variation in prompt processing prefill latency or autoregressive token generation rates3. Under this configuration, Mesa functions solely as the display driver for the host system's AMD Ryzen iGPU via RADV and RadeonSI.
 
@@ -102,16 +102,9 @@ echo on \> /sys/bus/pci/devices/0000:XX:XX.X/power/control
 
 *(Where 0000:XX:XX.X represents the PCI bus address of the Intel Arc GPU).*
 
-### **SYCL Persistent Kernel Caching Mitigation**
+### **SYCL Persistent Kernel Cache**
 
-When deploying llama.cpp using the SYCL backend on Linux systems running modern kernel and runtime revisions, a known bug in the Intel SYCL runtime (intel/llvm) can trigger severe runtime failures15. The runtime's persistent device code cache exhibits a null-pointer dereference inside its internal image-sorting comparator when loading dynamically linked libraries that register external SYCL kernels (such as libggml-sycl.so)15.  
-This fault manifests during model loading as unexpected segmentation faults (SIGSEGV) or engine reset messages (xe bcs engine reset) in the kernel ring buffer, even when zero layers are assigned to the GPU (-ngl 0\)15.  
-The definitive resolution in headless production environments is to disable the on-disk persistent kernel cache by setting an explicit environment variable prior to starting llama.cpp15:
-
-Bash  
-export SYCL\_CACHE\_PERSISTENT=0
-
-Disabling persistent caching bypasses the flawed cache comparator, ensuring stable model loading and execution while incurring only a minor, one-time JIT compilation overhead when the server first initializes15.
+Persistent-cache behavior is runtime-version-specific and must be verified on the installed stack. This repository's known-good A770 setup uses `SYCL_CACHE_PERSISTENT=1`; its documented xe `engine_class=bcs` resets are attributed to copy-engine handling, not the persistent cache. Do not disable the cache as a general stability workaround without reproducing a cache-specific failure on the same runtime and driver.
 
 ## **Empirical Performance Synthesis and Recommendations**
 

@@ -10,8 +10,8 @@ Although traditional mental models treat Mesa solely as a desktop graphics drive
 
 ### **The Vulkan Driver Execution Mechanism and Mesa 26.1 Acceleration**
 
-In Vulkan-based LLM inference, matrix operations rely heavily on hardware-accelerated cooperative matrix extensions1. Up through Mesa version 26.0, the Intel ANV Vulkan driver exposed matrix math hardware capabilities to user-space applications through the older KHR\_coopmat extension1. Under this specification, discrete Arc architectures (including Alchemist A-Series and Battlemage B-Series GPUs) suffered from suboptimal General Matrix Multiply (GEMM) execution routines and instruction scheduling inefficiencies within the Mesa shader compiler pipeline1.  
-Beginning in Mesa 26.1+, Intel integrated support for the richer NV\_coopmat2 cooperative matrix specification into the vulkan-intel driver1. This driver update fundamentally restructured how SPIR-V matrix instructions are lowered into native Intel Execution Unit (EU) or Xe Matrix Extensions (XMX) assembly instructions1. Consequently, upgrading Mesa on Arch Linux yields an immediate doubling of single-stream decode throughput (![][image2]) on identical llama.cpp binary builds and identical GGUF model files without altering any underlying hardware parameters1.
+In Vulkan-based LLM inference, matrix operations can use cooperative-matrix extensions when the backend and GPU expose them.
+The cited Mesa 26.1 throughput gain was measured on a Battlemage B70. It must not be generalized to Alchemist/A770 without a same-hardware A/B; Mesa changes can improve or regress throughput depending on the GPU and workload.
 
 ### **SYCL Backend Execution Isolation from Mesa**
 
@@ -112,7 +112,7 @@ Expanding physical batching from 512 to 2048 increases prefill processing speed 
 Deploying llama.cpp on an Arch Linux system utilizing an Intel Arc GPU for headless compute alongside an AMD Ryzen iGPU yields several clear architectural conclusions1.  
 First, Mesa is a vital performance determinant whenever llama.cpp is built with the Vulkan backend1. Because Mesa delivers the vulkan-intel ANV driver, upgrading Mesa to version 26.1+ provides an immediate double in single-stream token generation performance due to native NV\_coopmat2 cooperative matrix support1.  
 Second, selecting the optimal compilation backend depends on the primary execution pattern1. For multi-tenant API serving, parallel agent tasks, or workloads requiring maximum single-token generation speed, the Vulkan backend paired with Mesa 26.1+ represents the optimal technical path1. For single-tenant workloads characterized by massive prompt prefill phases or model quantization tasks, the SYCL backend leveraging oneDNN and oneMKL remains highly competitive1.  
-Finally, system stability requires enabling the modern xe kernel DRM driver on Linux 6.12+ and setting SYCL\_CACHE\_PERSISTENT=0 when running SYCL builds to prevent memory dereference segfaults during model loading3. Combining these driver settings with a physical micro-batch size (--ubatch-size) of 2048 allows the Intel Arc GPU to achieve maximum throughput on Arch Linux1.
+Finally, neither the xe KMD nor `SYCL_CACHE_PERSISTENT=0` is a universal stability requirement for Alchemist. This repository's current known-good A770 setup uses xe with copy-engine off and `SYCL_CACHE_PERSISTENT=1`; choose i915/xe and cache policy from same-stack measurements rather than the B70-derived recommendation.
 
 #### **Works cited**
 
