@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Eject, Loader2, MessageSquare, Power, SquarePen, X } from '@lucide/svelte';
+	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
+	import { X } from '@lucide/svelte';
 	import { ModelAvatar, ModelId } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ServerModelStatus } from '$lib/enums';
@@ -96,45 +97,14 @@
 		</Button>
 	</div>
 
-	<div class="flex flex-col gap-2">
-		<!-- on a phone the composer trigger leads to this pane, so switching the open chat
-		     belongs here: the model list of a dropdown is not reachable on a touch screen -->
-		{#if isMobile}
-			<Button class="w-full gap-1.5" onclick={onUseInChat} size="sm">
-				<MessageSquare class="h-3.5 w-3.5" />
-
-				Use in this chat
-			</Button>
-		{/if}
-
-		<div class="flex gap-2">
-			<Button class="flex-1 gap-1.5" onclick={onUseInNewChat} size="sm" variant="outline">
-				<SquarePen class="h-3.5 w-3.5" />
-
-				Start a new chat
-			</Button>
-
-			<Button
-				class="flex-1 gap-1.5"
-				disabled={isLoading}
-				onclick={onToggleLoad}
-				size="sm"
-				variant="outline"
-			>
-				{#if isLoading}
-					<Loader2 class="h-3.5 w-3.5 animate-spin" />
-
-					Loading...
-				{:else if isLoaded}
-					<Eject class="h-3.5 w-3.5" />
-
-					Unload model
-				{:else}
-					<Power class="h-3.5 w-3.5" />
-
-					Load model
-				{/if}
-			</Button>
-		</div>
-	</div>
+	<!-- a phone floats the actions at the bottom of the pane, where the thumb is -->
+	{#if !isMobile}
+		<ModelsManagerModelConfigurationActions
+			{isLoaded}
+			{isLoading}
+			{onToggleLoad}
+			{onUseInChat}
+			{onUseInNewChat}
+		/>
+	{/if}
 </header>
