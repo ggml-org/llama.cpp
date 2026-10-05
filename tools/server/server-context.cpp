@@ -3916,8 +3916,8 @@ private:
         }
     }
 
-    // non-causal models need the mtmd chunks of a prompt in the same batch as its text
-    // limited to them for now, the other models decode each chunk on its own
+    // see https://github.com/ggml-org/llama.cpp/pull/29969
+    // TODO @ngxson : maybe remove this once we use "mixed" batch everywhere
     bool use_mixed_batch() const {
         return !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
     }
