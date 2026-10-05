@@ -640,7 +640,13 @@ void llama_context::sched_reserve() {
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
     gf_res_prev_active = nullptr;
 
-    sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+    // a re-reserve (e.g. llama_set_sampler(), which llama-server calls for every request) used to recreate the
+    // scheduler, freeing and reallocating every compute buffer and the pinned host input buffer (0.6-0.9 s per
+    // request with n_ubatch 1024 at 262K ctx, then page faults on the fresh buffers during the first decode steps).
+    // keep the existing scheduler: ggml_backend_sched_reserve re-plans and only grows the buffers
+    if (!sched) {
+        sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
