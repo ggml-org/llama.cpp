@@ -58,7 +58,7 @@ export const MODEL_ROW_GRID_CLASS =
 /** Last cell of a row: its actions menu, or its fold control. A phone floats it at the
  *  row's end, inside the clearance the first cell leaves in front of it. */
 export const MODEL_ROW_TRAILING_CELL_CLASS =
-	'max-md:absolute max-md:top-1/2 max-md:right-2 max-md:-translate-y-1/2';
+	'max-md:absolute max-md:top-1/2 max-md:right-3 max-md:-translate-y-1/2';
 
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =

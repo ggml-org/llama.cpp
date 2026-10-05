@@ -51,7 +51,7 @@
 </script>
 
 <!-- Below md the search takes a row of its own and the filters follow it. -->
-<div class="flex shrink-0 flex-wrap items-center gap-2 pb-4 md:flex-nowrap">
+<div class="flex shrink-0 flex-wrap items-center gap-2 pb-4 max-md:gap-3 md:flex-nowrap">
 	<SearchInput
 		bind:ref={filterInput}
 		bind:value={filter}
