@@ -6,7 +6,11 @@ llama_add_compile_flags()
 
 # llama
 
-file(GLOB LLAMA_MODELS_SOURCES "models/*.cpp")
+# specialized fork: only the qwen35 model and its delta-net base are built
+set(LLAMA_MODELS_SOURCES
+    models/qwen35.cpp
+    models/delta-net-base.cpp
+)
 
 set(LLAMA_CORE_SOURCES
     llama.cpp

@@ -31,6 +31,12 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
+# specialized text-only fork: refuse multimodal projector loading
+option(LLAMA_SERVER_TEXT_ONLY "llama-server: text-only build, reject multimodal projector" ON)
+if (LLAMA_SERVER_TEXT_ONLY)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_SERVER_TEXT_ONLY)
+endif()
+
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})

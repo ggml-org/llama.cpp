@@ -1,0 +1,92 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "qwen38-common",
+      "hidden": true,
+      "generator": "Ninja",
+      "environment": {
+        "PATH": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.5\\bin;$penv{PATH}",
+        "INCLUDE": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\um;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\winrt",
+        "LIB": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.26100.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.26100.0\\um\\x64"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/bin/nvcc.exe",
+        "CUDAToolkit_ROOT": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5",
+        "CMAKE_CUDA_ARCHITECTURES": "86-real",
+        "BUILD_SHARED_LIBS": "OFF",
+        "GGML_BACKEND_DL": "OFF",
+        "GGML_CPU": "ON",
+        "GGML_CUDA": "ON",
+        "GGML_NATIVE": "OFF",
+        "GGML_SSE42": "ON",
+        "GGML_AVX": "ON",
+        "GGML_AVX2": "ON",
+        "GGML_BMI2": "ON",
+        "GGML_AVX_VNNI": "OFF",
+        "GGML_AVX512": "OFF",
+        "GGML_CPU_ALL_VARIANTS": "OFF",
+        "GGML_OPENMP": "ON",
+        "GGML_CUDA_FA": "ON",
+        "GGML_CUDA_GRAPHS": "ON",
+        "GGML_CUDA_NCCL": "OFF",
+        "GGML_CUDA_FA_QUANTS": "q8_0-q8_0",
+        "GGML_CUDA_FORCE_MMQ": "OFF",
+        "GGML_CUDA_FORCE_CUBLAS": "OFF",
+        "GGML_LTO": "OFF",
+        "LLAMA_BUILD_COMMON": "ON",
+        "LLAMA_BUILD_SERVER": "ON",
+        "LLAMA_BUILD_TOOLS": "ON",
+        "LLAMA_BUILD_APP": "OFF",
+        "LLAMA_BUILD_EXAMPLES": "OFF",
+        "LLAMA_BUILD_UI": "OFF",
+        "LLAMA_USE_PREBUILT_UI": "OFF",
+        "LLAMA_OPENSSL": "OFF",
+        "LLAMA_SUBPROCESS": "OFF",
+        "LLAMA_SERVER_TEXT_ONLY": "ON",
+        "MTMD_VIDEO": "OFF",
+        "LLAMA_LLGUIDANCE": "OFF"
+      }
+    },
+    {
+      "name": "qwen38-baseline",
+      "displayName": "Qwen3.8 RTX 3090 baseline (with tests/bench)",
+      "inherits": "qwen38-common",
+      "binaryDir": "${sourceDir}/build-qwen38-baseline",
+      "cacheVariables": {
+        "LLAMA_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "qwen38-prod",
+      "displayName": "Qwen3.8 RTX 3090 production (server only)",
+      "inherits": "qwen38-common",
+      "binaryDir": "${sourceDir}/build-qwen38-prod",
+      "cacheVariables": {
+        "LLAMA_BUILD_TESTS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "qwen38-baseline",
+      "configurePreset": "qwen38-baseline",
+      "targets": [
+        "llama-server",
+        "llama-bench"
+      ],
+      "jobs": 8
+    },
+    {
+      "name": "qwen38-prod",
+      "configurePreset": "qwen38-prod",
+      "targets": [
+        "llama-server"
+      ],
+      "jobs": 8
+    }
+  ]
+}

@@ -28,51 +28,6 @@ add_library(mtmd
             clip-model.h
             clip-graph.h
             models/models.h
-            models/cogvlm.cpp
-            models/conformer.cpp
-            models/deepseek4v.cpp
-            models/dots3note.cpp
-            models/dotsocr.cpp
-            models/exaone4_5.cpp
-            models/gemma4a.cpp
-            models/gemma4v.cpp
-            models/gemma4ua.cpp
-            models/gemma4uv.cpp
-            models/glm4v.cpp
-            models/granite-speech.cpp
-            models/granite4-vision.cpp
-            models/hunyuanvl.cpp
-            models/internvl.cpp
-            models/kimivl.cpp
-            models/kimik25.cpp
-            models/nemotron-v2-vl.cpp
-            models/muse-glimmer.cpp
-            models/llama4.cpp
-            models/llava.cpp
-            models/minicpmv.cpp
-            models/paddleocr.cpp
-            models/pixtral.cpp
-            models/qwen2vl.cpp
-            models/minimax-m3.cpp
-            models/qwen3vl.cpp
-            models/ling3vl.cpp
-            models/mimovl.cpp
-            models/qwen3a.cpp
-            models/mimo-audio.cpp
-            models/qwen3tts-spkenc.cpp
-            models/qwen3tts-gen.cpp
-            models/pockettts-seanet.cpp
-            models/pockettts-spkenc.cpp
-            models/pockettts-gen.cpp
-            models/step3vl.cpp
-            models/siglip.cpp
-            models/whisper-enc.cpp
-            models/deepseekocr.cpp
-            models/deepseekocr2.cpp
-            models/mobilenetv5.cpp
-            models/youtuvl.cpp
-            models/yasa2.cpp
-            models/parakeet.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
