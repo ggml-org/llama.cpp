@@ -47,7 +47,7 @@ struct ModelParams {
                memcmp(rope_params, other.rope_params, sizeof(int32_t) * 16) == 0;
     }
 
-    // swa_layers: the classification can change once the sliding window shows in the mask
+    // swa_layers: the masks and KV write indices of these layers are separate graph inputs
     bool can_reuse_dynamically(const ModelParams & other) const {
         return same_rope_params(other) && n_rs_slots == other.n_rs_slots && has_rs_rollback == other.has_rs_rollback &&
                swa_layers == other.swa_layers;
