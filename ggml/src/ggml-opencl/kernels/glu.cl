@@ -244,6 +244,71 @@ kernel void kernel_swiglu_oai(
 }
 
 //------------------------------------------------------------------------------
+// swiglu_clamp
+//------------------------------------------------------------------------------
+kernel void kernel_swiglu_clamp(
+    global char * src0,
+    ulong         offset0,
+    global char * src1,
+    ulong         offset1,
+    global char * dst,
+    ulong         offsetd,
+    ulong         nb01,
+    ulong         nb11,
+    int           ne0,
+    ulong         nb1,
+    int           ne00_off,
+    int           ne10_off,
+    float         limit
+) {
+    src0 = (global char*)((global char*)src0 + offset0);
+    src1 = (global char*)((global char*)src1 + offset1);
+    dst  = (global char*)((global char*)dst  + offsetd);
+
+    global float * src0_row = (global float *) ((global char *) src0 + get_group_id(0)*nb01) + ne00_off;
+    global float * src1_row = (global float *) ((global char *) src1 + get_group_id(0)*nb11) + ne10_off;
+    global float * dst_row  = (global float *) ((global char *) dst  + get_group_id(0)*nb1);
+
+    for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
+        const float gate = min(src0_row[i0], limit);
+        const float up = clamp(src1_row[i0], -limit, limit);
+
+        dst_row[i0] = gate / (1.0f + exp(-gate)) * up;
+    }
+}
+
+kernel void kernel_swiglu_clamp_f16(
+    global char * src0,
+    ulong         offset0,
+    global char * src1,
+    ulong         offset1,
+    global char * dst,
+    ulong         offsetd,
+    ulong         nb01,
+    ulong         nb11,
+    int           ne0,
+    ulong         nb1,
+    int           ne00_off,
+    int           ne10_off,
+    float         limit
+) {
+    src0 = (global char*)((global char*)src0 + offset0);
+    src1 = (global char*)((global char*)src1 + offset1);
+    dst  = (global char*)((global char*)dst  + offsetd);
+
+    global half * src0_row = (global half *) ((global char *) src0 + get_group_id(0)*nb01) + ne00_off;
+    global half * src1_row = (global half *) ((global char *) src1 + get_group_id(0)*nb11) + ne10_off;
+    global half * dst_row  = (global half *) ((global char *) dst  + get_group_id(0)*nb1);
+
+    for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
+        const float gate = min((float) src0_row[i0], limit);
+        const float up = clamp((float) src1_row[i0], -limit, limit);
+
+        dst_row[i0] = (half) (gate / (1.0f + exp(-gate)) * up);
+    }
+}
+
+//------------------------------------------------------------------------------
 // geglu_erf
 //------------------------------------------------------------------------------
 kernel void kernel_geglu_erf(

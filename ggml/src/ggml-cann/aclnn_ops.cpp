@@ -211,6 +211,50 @@ void ggml_cann_swiglu(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, SwiGlu, acl_src.get(), (int64_t)2, acl_dst.get());
 }
 
+void ggml_cann_swiglu_clamp(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+    ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+
+    const int32_t  swapped = ggml_get_op_params_i32(dst, 1);
+    acl_tensor_ptr acl_gate;
+    acl_tensor_ptr acl_up;
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+        acl_gate = ggml_cann_create_tensor(src0);
+        acl_up   = ggml_cann_create_tensor(src1);
+    } else {
+        int64_t ne[] = { src0->ne[0] / 2, src0->ne[1], src0->ne[2], src0->ne[3] };
+        size_t  nb[] = { src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3] };
+        acl_gate     = ggml_cann_create_tensor(src0, ne, nb, GGML_MAX_DIMS, ACL_FORMAT_ND, 0);
+        acl_up = ggml_cann_create_tensor(src0, ne, nb, GGML_MAX_DIMS, ACL_FORMAT_ND, ne[0] * ggml_element_size(src0));
+        if (swapped) {
+            std::swap(acl_gate, acl_up);
+        }
+    }
+
+    ggml_cann_pool_alloc temp_alloc(ctx.pool(), ggml_nbytes(dst));
+    acl_tensor_ptr       acl_temp = ggml_cann_create_tensor(temp_alloc.get(), ggml_cann_type_mapping(dst->type),
+                                                            ggml_element_size(dst), dst->ne, dst->nb, GGML_MAX_DIMS);
+    acl_tensor_ptr       acl_dst  = ggml_cann_create_tensor(dst);
+
+    const float    limit        = ggml_get_op_params_f32(dst, 3);
+    float          min_gate     = -INFINITY;
+    float          min_up       = -limit;
+    float          max_value    = limit;
+    acl_scalar_ptr acl_min_gate = ggml_cann_create_scalar(&min_gate, ACL_FLOAT);
+    acl_scalar_ptr acl_min_up   = ggml_cann_create_scalar(&min_up, ACL_FLOAT);
+    acl_scalar_ptr acl_limit    = ggml_cann_create_scalar(&max_value, ACL_FLOAT);
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, Clamp, acl_gate.get(), acl_min_gate.get(), acl_limit.get(), acl_temp.get());
+    GGML_CANN_CALL_ACLNN_OP(ctx, Silu, acl_temp.get(), acl_dst.get());
+    GGML_CANN_CALL_ACLNN_OP(ctx, Clamp, acl_up.get(), acl_min_up.get(), acl_limit.get(), acl_temp.get());
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, acl_dst.get(), acl_temp.get());
+}
+
 // Fused GeGLU using aclnnGeGluV3: splits input along ne[0] (CANN last dim),
 // activates the LEFT half with GELU, multiplies by right half.
 // approximate: 0=tanh, 1=none(erf). activateLeft=true matches GGML convention.
@@ -4433,4 +4477,3 @@ void ggml_cann_gated_linear_attn(ggml_backend_cann_context & ctx, ggml_tensor * 
         }
     }
 }
-

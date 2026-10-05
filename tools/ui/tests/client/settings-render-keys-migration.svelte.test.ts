@@ -6,7 +6,7 @@
 
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { MigrationService } from '$lib/services/migration.service';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const RENDER_KEYS_MIGRATION_ID = 'render-keys-unfold-v1';

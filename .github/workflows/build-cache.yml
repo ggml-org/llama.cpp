@@ -5,38 +5,15 @@ on:
   schedule:
     - cron: '0 * * * *'
 
+cache-mode: write
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  ubuntu-24-vulkan-cache:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Get latest Vulkan SDK version
-        id: vulkan_sdk_version
-        run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
-
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
-      - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
-        with:
-          path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
-
   #ubuntu-24-spacemit-cache:
   #  runs-on: ubuntu-24.04
 
@@ -67,9 +44,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Clone
@@ -96,8 +73,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Clone

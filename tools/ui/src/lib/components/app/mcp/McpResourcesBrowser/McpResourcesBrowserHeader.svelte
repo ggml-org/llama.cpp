@@ -17,18 +17,18 @@
 <div class="flex flex-col gap-2">
 	<div class="mb-2 flex items-center gap-4">
 		<SearchInput
+			onInput={(value) => onSearch?.(value)}
 			placeholder="Search resources..."
 			value={searchQuery}
-			onInput={(value) => onSearch?.(value)}
 		/>
 
 		<Button
-			variant="ghost"
-			size="sm"
 			class="h-8 w-8 p-0"
-			onclick={onRefresh}
 			disabled={isLoading}
+			onclick={onRefresh}
+			size="sm"
 			title="Refresh resources"
+			variant="ghost"
 		>
 			{#if isLoading}
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />

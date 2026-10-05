@@ -12,6 +12,7 @@
 		<!-- Server label skeleton -->
 		<div class="mb-2 flex items-center gap-1.5">
 			<div class="h-3 w-3 shrink-0 animate-pulse rounded-sm bg-muted"></div>
+
 			<div class="h-3 w-24 animate-pulse rounded bg-muted"></div>
 		</div>
 

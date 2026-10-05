@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { File, FolderOpen, MessageSquare, Plus, Zap } from '@lucide/svelte';
+	import { File, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
 	import {
-		ChatFormActionAddMcpServersSubmenu,
 		ChatFormActionAddReasoningSubmenu,
-		ChatFormActionAddToolsSubmenu
+		ChatFormActionAddToolsSubmenu,
+		McpLogo
 	} from '$lib/components/app';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -12,11 +12,12 @@
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_TOOLTIP_TEXT,
-		ICON_CLASS_DEFAULT,
-		TOOLTIP_DELAY_DURATION
+		ICON_CLASS_DEFAULT
 	} from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
+	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -31,28 +32,31 @@
 	// must not restore focus to the trigger on close
 	let suppressCloseAutoFocus = false;
 
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		chatFormActions.onMcpSettingsClick?.();
-	}
-
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
 			hasAudioModality: chatFormActions.hasAudioModality,
-			hasMcpPromptsSupport: chatFormActions.hasMcpPromptsSupport,
-			hasMcpResourcesSupport: chatFormActions.hasMcpResourcesSupport,
 			hasVideoModality: chatFormActions.hasVideoModality,
 			hasVisionModality: chatFormActions.hasVisionModality
 		}),
 		() => ({
 			onFileUpload: chatFormActions.onFileUpload,
-			onMcpPromptClick: chatFormActions.onMcpPromptClick,
-			onMcpResourcesClick: chatFormActions.onMcpResourcesClick,
 			onSystemPromptClick: chatFormActions.onSystemPromptClick
 		}),
 		() => {
 			dropdownOpen = false;
 		}
+	);
+
+	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
+		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: { icon: Mic, label: 'Audio' },
+		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: { icon: Video, label: 'Video' },
+		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: { icon: Image, label: 'Vision' }
+	};
+
+	const supportedModalities = $derived.by(() =>
+		ATTACHMENT_FILE_ITEMS.filter((item) => attachmentMenu.isItemEnabled(item.enabledWhen))
+			.map((item) => FILE_MODALITY_ICONS[item.enabledWhen ?? ''])
+			.filter((modality) => modality !== undefined)
 	);
 </script>
 
@@ -93,54 +97,39 @@
 				}
 			}}
 		>
-			<ChatFormActionAddReasoningSubmenu />
+			<!-- in router mode the models selector owns the reasoning submenu -->
+			{#if !serverStore.isRouterMode}
+				<ChatFormActionAddReasoningSubmenu />
 
-			<DropdownMenu.Separator />
+				<DropdownMenu.Separator />
+			{/if}
 
-			<DropdownMenu.Sub>
-				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-					<File class={ICON_CLASS_DEFAULT} />
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={() => attachmentMenu.callbacks[AttachmentAction.FILE_UPLOAD]()}
+			>
+				<File class={ICON_CLASS_DEFAULT} />
 
+				<span class="flex min-w-0 items-center gap-2">
 					<span>Add files</span>
-				</DropdownMenu.SubTrigger>
 
-				<DropdownMenu.SubContent class="w-48">
-					{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
-						{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
-						{#if enabled}
-							<DropdownMenu.Item
-								class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
-								onclick={() => attachmentMenu.callbacks[item.action]()}
-							>
-								<item.icon class={ICON_CLASS_DEFAULT} />
+					{#if supportedModalities.length > 0}
+						<span class="flex items-center gap-0.75 text-muted-foreground">
+							{#each supportedModalities as modality (modality.label)}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<modality.icon class="size-2.75" />
+									</Tooltip.Trigger>
 
-								<span>{item.label}</span>
-							</DropdownMenu.Item>
-						{:else if item.disabledTooltip}
-							<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-								<Tooltip.Trigger tabindex={-1}>
-									{#snippet child({ props })}
-										<div {...props} class="cursor-default">
-											<DropdownMenu.Item
-												class="{item.class ?? ''} flex items-center gap-2"
-												disabled
-											>
-												<item.icon class={ICON_CLASS_DEFAULT} />
-
-												<span>{item.label}</span>
-											</DropdownMenu.Item>
-										</div>
-									{/snippet}
-								</Tooltip.Trigger>
-
-								<Tooltip.Content side="right">
-									<p>{item.disabledTooltip}</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						{/if}
-					{/each}
-				</DropdownMenu.SubContent>
-			</DropdownMenu.Sub>
+									<Tooltip.Content>
+										<p>{modality.label}</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{/each}
+						</span>
+					{/if}
+				</span>
+			</DropdownMenu.Item>
 
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-center gap-2"
@@ -156,31 +145,14 @@
 
 			<ChatFormActionAddToolsSubmenu />
 
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={chatFormActions.onMcpSettingsClick}
+			>
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 
-			{#if chatFormActions.hasMcpPromptsSupport}
-				<DropdownMenu.Separator />
-
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpPromptClick}
-				>
-					<Zap class={ICON_CLASS_DEFAULT} />
-
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
-
-			{#if chatFormActions.hasMcpResourcesSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpResourcesClick}
-				>
-					<FolderOpen class={ICON_CLASS_DEFAULT} />
-
-					<span>MCP Resources</span>
-				</DropdownMenu.Item>
-			{/if}
+				<span>MCP Servers</span>
+			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

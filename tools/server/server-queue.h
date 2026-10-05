@@ -44,7 +44,7 @@ private:
     // callback functions
     std::function<bool(server_task &&, bool)> callback_new_task;
     std::function<void(void)>                 callback_update_slots;
-    std::function<void(bool)>                 callback_sleeping_state;
+    std::vector<std::function<void(bool)>>    callback_sleeping_state;
 
 public:
     ~server_queue() { worker_stop(); }
@@ -86,6 +86,7 @@ public:
      *
      * Sleeping procedure (disabled if idle_sleep_ms < 0):
      * - If there is no task after idle_sleep_ms, enter sleeping state
+     *   note: metrics tasks are processed as usual, but do not reset the idle timer
      * - Call callback_sleeping_state(true)
      * - Wait until req_stop_sleeping is set to true
      * - Call callback_sleeping_state(false)
@@ -127,18 +128,12 @@ public:
     }
 
     // Register callback for sleeping state change; multiple callbacks are allowed
-    // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
-    //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
+    // for example: register order cb0, cb1, cb2
+    // entering sleep: queue.sleeping = true --> cb0(true) --> cb1(true) --> cb2(true)
+    // leaving sleep: cb2(false) --> cb1(false) --> cb0(false) --> queue.sleeping = false
+    // note: caller will hold mutex_tasks while calling the callbacks
     void on_sleeping_state(std::function<void(bool)> callback) {
-        if (callback_sleeping_state) {
-            auto prev_callback = std::move(callback_sleeping_state);
-            callback_sleeping_state = [prev_callback, callback](bool sleeping) {
-                prev_callback(sleeping);
-                callback(sleeping);
-            };
-        } else {
-            callback_sleeping_state = std::move(callback);
-        }
+        callback_sleeping_state.push_back(std::move(callback));
     }
 
 private:

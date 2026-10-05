@@ -48,6 +48,7 @@ enum clip_flash_attn_type {
 
 struct clip_context_params {
     bool use_gpu;
+    ggml_backend_dev_t device;
     enum clip_flash_attn_type flash_attn_type;
     int image_min_tokens;
     int image_max_tokens;
@@ -66,6 +67,9 @@ struct clip_init_result {
 };
 
 struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params);
+
+// max number of output tokens per image, -1 if not dynamic size
+int clip_get_image_max_tokens(const struct clip_ctx * ctx);
 
 void clip_free(struct clip_ctx * ctx);
 

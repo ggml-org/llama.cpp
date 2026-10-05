@@ -2035,7 +2035,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
         }
     }
 
-    // append MCP tools, skipping any that collide with a built-in or another MCP tool of the same "<server>_<tool>" name
+    // append MCP tools, skipping any that collide with a server tool or another MCP tool of the same "<server>_<tool>" name
     if (!mcp_mgr.empty()) {
         std::unordered_set<std::string> seen_names;
         for (auto & t : tools) {
@@ -2156,7 +2156,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 res->status = 200;
                 res->data   = safe_json_to_str(result);
             }
-        } catch (const json::exception & e) {
+        } catch (const common_json_error & e) {
             res->status = 400;
             res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         } catch (const std::invalid_argument & e) {

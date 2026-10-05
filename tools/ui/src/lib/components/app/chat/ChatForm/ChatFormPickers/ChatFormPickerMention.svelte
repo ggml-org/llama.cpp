@@ -5,10 +5,16 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '$lib/constants';
-	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
+	import {
+		BuiltInTool,
+		FileMentionEntryType,
+		GlobSearchType,
+		KeyboardKey,
+		ToolSource
+	} from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { isMobile, settingsStore, toolsStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
 	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
 	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
@@ -51,9 +57,12 @@
 	// When the server does not expose file_glob_search (started without
 	// --tools) or the user disabled it, the picker still opens but explains
 	// why instead of firing searches that would only fail.
-	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.SERVER_FILE_GLOB_SEARCH));
+	// effective policy: the active conversation's tool policy, or global defaults
 	const fileSearchEnabled = $derived(
-		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
+		fileSearchKey !== null &&
+			conversationsStore.preferences.isToolEnabled(fileSearchKey) &&
+			conversationsStore.preferences.isCategoryEnabled(ToolSource.SERVER)
 	);
 
 	let searchResults = $state<FileMentionEntry[]>([]);
@@ -130,7 +139,7 @@
 		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';
 	});
 
-	const showTooltip = $derived(!isMobile.current);
+	const showTooltip = $derived(!deviceStore.isMobile);
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
@@ -187,10 +196,10 @@
 </script>
 
 <Popover.Root
-	open={isOpen}
 	onOpenChange={(open) => {
 		if (!open) onClose();
 	}}
+	open={isOpen}
 >
 	<!-- Invisible form-wide trigger: stops bits-ui's outside-click detector
 	     from closing the picker when the user clicks inside the textarea.
@@ -198,36 +207,36 @@
 	     (tabindex=-1 + pointer-events-none + opacity-0 + aria-hidden).
 	     Positioning comes from `customAnchor` at the form's top edge. -->
 	<Popover.Trigger
+		aria-hidden="true"
 		class="pointer-events-none absolute inset-0 opacity-0"
 		tabindex={-1}
-		aria-hidden="true"
 	>
 		<span class="sr-only">Open file mention picker</span>
 	</Popover.Trigger>
 
 	<Popover.Content
 		align="start"
-		side="top"
-		sideOffset={12}
-		{customAnchor}
-		preventScroll={false}
-		onkeydown={handleKeydown}
-		onOpenAutoFocus={(event) => event.preventDefault()}
-		onCloseAutoFocus={(event) => event.preventDefault()}
 		class={[
 			'w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl',
 			className
 		]}
+		{customAnchor}
+		onCloseAutoFocus={(event) => event.preventDefault()}
+		onOpenAutoFocus={(event) => event.preventDefault()}
+		onkeydown={handleKeydown}
+		preventScroll={false}
+		side="top"
+		sideOffset={12}
 	>
 		<ChatFormPickerList
-			items={displayedItems}
+			{emptyMessage}
 			isLoading={search.isSearching}
+			itemKey={(entry) => entry.type + ':' + entry.path}
+			items={displayedItems}
+			scrollTrigger={nav.scrollTrigger}
+			searchQuery={query ?? ''}
 			selectedIndex={nav.hoveredIndex}
 			showSearchInput={false}
-			searchQuery={query ?? ''}
-			{emptyMessage}
-			itemKey={(entry) => entry.type + ':' + entry.path}
-			scrollTrigger={nav.scrollTrigger}
 		>
 			{#snippet item(entry, index, isSelected)}
 				<ChatFormPickerListItem
@@ -245,6 +254,7 @@
 								: 'text-muted-foreground'
 						]}
 					/>
+
 					<div class="flex min-w-0 flex-1 flex-col">
 						<div class="flex min-w-0 items-center gap-2">
 							{#if showTooltip}
@@ -254,6 +264,7 @@
 											<span {...props} class="truncate text-sm font-medium">{entry.name}</span>
 										{/snippet}
 									</Tooltip.Trigger>
+
 									<Tooltip.Content>
 										<p>{entry.path}</p>
 									</Tooltip.Content>
@@ -261,14 +272,16 @@
 							{:else}
 								<span class="truncate text-sm font-medium">{entry.name}</span>
 							{/if}
+
 							<span
 								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
 							>
 								{entry.type}
 							</span>
 						</div>
+
 						<span class="min-w-0 flex-1 truncate font-mono text-left text-xs">
-							<HighlightedMatch text={abbreviateHome(entry.path, home)} query={trimmedQuery} />
+							<HighlightedMatch query={trimmedQuery} text={abbreviateHome(entry.path, home)} />
 						</span>
 					</div>
 				</ChatFormPickerListItem>

@@ -1,4 +1,4 @@
-<script module lang="ts">
+<script lang="ts" module>
 	import { AI_TUTORIAL_MD } from './fixtures/ai-tutorial.js';
 	import { API_DOCS_MD } from './fixtures/api-docs.js';
 	import { BLOG_POST_MD } from './fixtures/blog-post.js';
@@ -19,40 +19,39 @@
 	});
 </script>
 
-<Story name="Empty" args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: EMPTY_MD }} />
+<Story args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: EMPTY_MD }} name="Empty" />
 
 <Story
-	name="AI Tutorial"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: AI_TUTORIAL_MD }}
+	name="AI Tutorial"
 />
 
 <Story
-	name="API Documentation"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: API_DOCS_MD }}
+	name="API Documentation"
 />
 
 <Story
-	name="Technical Blog"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: BLOG_POST_MD }}
+	name="Technical Blog"
 />
 
 <Story
-	name="Data Analysis"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: DATA_ANALYSIS_MD }}
+	name="Data Analysis"
 />
 
 <Story
-	name="README file"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: README_MD }}
+	name="README file"
 />
 
 <Story
-	name="Math Formulas"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: MATH_FORMULAS_MD }}
+	name="Math Formulas"
 />
 
 <Story
-	name="URL Links"
 	args={{
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		content: `# URL Links Test
@@ -68,6 +67,7 @@ You can also test inline links like https://example.com or https://docs.python.o
 
 All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attributes for security.`
 	}}
+	name="URL Links"
 	play={async (context) => {
 		const { canvasElement } = context;
 

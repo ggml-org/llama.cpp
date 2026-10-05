@@ -26,6 +26,15 @@ std::string common_speculative_type_to_str(enum common_speculative_type type);
 // return the max number of draft tokens based on the speculative parameters
 int32_t common_speculative_n_max(const common_params_speculative * spec);
 
+// return the max number of draft tokens from the initialized implementations
+int32_t common_speculative_n_max(const common_speculative * spec);
+
+// validate and resolve the unconditional synthetic acceptance rates
+std::vector<double> common_speculative_synth_rates_resolve(const common_params_speculative * spec, int32_t n_max);
+
+// return the conditional synthetic acceptance probabilities
+const std::vector<double> & common_speculative_get_synth_probs(const common_speculative * spec);
+
 common_params common_base_params_to_speculative(const common_params & params);
 
 struct common_speculative_output_limits {
@@ -36,6 +45,9 @@ struct common_speculative_output_limits {
 // return the output limits needed for speculative decoding
 common_speculative_output_limits common_speculative_get_output_limits(
         int32_t n_batch, int32_t n_parallel, int32_t n_draft);
+
+// return true if the target and draft models have compatible vocabs
+bool common_speculative_are_compatible(const llama_model * model_tgt, const llama_model * model_dft);
 
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
 
@@ -52,7 +64,7 @@ struct common_speculative_draft_params {
     // can be used to constraint the max draft based on the remaining context size
     int32_t n_max = -1;
 
-    llama_pos   n_past;
+    llama_pos   pos0;
     llama_token id_last;
 
     // TODO: remove in the future by keeping track of the prompt from the _begin() call and the consecutive accept calls
@@ -60,6 +72,13 @@ struct common_speculative_draft_params {
 
     // the generated draft from the last _draft() call
     llama_tokens * result;
+
+    // candidate distribution per drafted token; set it to make draft-simple and draft-mtp sample
+    std::vector<std::vector<llama_token_data>> * result_q = nullptr;
+
+    // the target's temp and seed, read only when the drafter samples probabilistically
+    float    temp = 1.0f;
+    uint32_t seed = LLAMA_DEFAULT_SEED;
 };
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
@@ -68,7 +87,7 @@ common_speculative_draft_params & common_speculative_get_draft_params(common_spe
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
 
 // process the batch and update the internal state of the speculative context
-bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
+bool common_speculative_process(common_speculative * spec, const common_batch & batch);
 
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
 void common_speculative_draft(common_speculative * spec);

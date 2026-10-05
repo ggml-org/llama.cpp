@@ -1,4 +1,7 @@
 export const API_MODELS = {
+	/** Download a model from HuggingFace (ROUTER mode, POST) or cancel/remove it (DELETE) */
+	DELETE: '/models',
+	DOWNLOAD: '/models',
 	LIST: '/v1/models',
 	LOAD: '/models/load',
 	SSE: '/models/sse',
@@ -30,6 +33,12 @@ export const API_STREAM = {
 	BASE: './v1/stream',
 	LOOKUP: './v1/streams/lookup'
 };
+
+// query params for the resumable stream routes
+export const STREAM_QUERY_PARAMS = {
+	CONV_ID: 'conv_id',
+	FROM: 'from'
+} as const;
 
 /** CORS proxy endpoint path */
 export const CORS_PROXY_ENDPOINT = '/cors-proxy';

@@ -29,13 +29,15 @@ extern "C" {
 // FP16 to FP32 conversion
 
 // 16-bit float
-// on Arm, we use __fp16
+// on Arm, we use __fp16, which requires the IEEE fp16 format: implied on
+// AArch64, selected by -mfp16-format=ieee on 32 bit Arm, where the compiler
+// may otherwise reject the type
 // on x86, we use uint16_t
 //
 // for old CUDA compilers (<= 11), we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/10616
 // for     MUSA compilers        , we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/11843
 //
-#if defined(__ARM_NEON) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
+#if defined(__ARM_NEON) && defined(__ARM_FP16_FORMAT_IEEE) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
     #define GGML_CPU_COMPUTE_FP16_TO_FP32(x) neon_compute_fp16_to_fp32(x)
     #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) neon_compute_fp32_to_fp16(x)
 
@@ -326,7 +328,7 @@ inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
     #define GGML_F16_VEC_REDUCE         GGML_F32Cx4_REDUCE
 #endif
 
-#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA)
+#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA) && defined(__ARM_FP16_FORMAT_IEEE)
 
 #define GGML_SIMD
 
@@ -1311,6 +1313,33 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_F32_ARR (GGML_F32_STEP/GGML_F32_EPR)
 #define GGML_F16_ARR (GGML_F16_STEP/GGML_F16_EPR)
 #endif
+
+// GGML_F16_DOT_*
+// like GGML_F16_* but for dot products which need F32 accumulation on AVX512-FP16
+
+#if defined(__AVX512FP16__)
+
+#define GGML_F16_DOT_STEP           GGML_F32_STEP
+#define GGML_F16_DOT_EPR            GGML_F32_EPR
+#define GGML_F16_DOT_ARR            GGML_F32_ARR
+#define GGML_F16_DOT_VEC            GGML_F32x16
+#define GGML_F16_DOT_VEC_ZERO       GGML_F32x16_ZERO
+#define GGML_F16_DOT_VEC_LOAD(p, i) _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(p)))
+#define GGML_F16_DOT_VEC_FMA        GGML_F32x16_FMA
+#define GGML_F16_DOT_VEC_REDUCE     GGML_F32x16_REDUCE
+
+#else
+
+#define GGML_F16_DOT_STEP           GGML_F16_STEP
+#define GGML_F16_DOT_EPR            GGML_F16_EPR
+#define GGML_F16_DOT_ARR            GGML_F16_ARR
+#define GGML_F16_DOT_VEC            GGML_F16_VEC
+#define GGML_F16_DOT_VEC_ZERO       GGML_F16_VEC_ZERO
+#define GGML_F16_DOT_VEC_LOAD       GGML_F16_VEC_LOAD
+#define GGML_F16_DOT_VEC_FMA        GGML_F16_VEC_FMA
+#define GGML_F16_DOT_VEC_REDUCE     GGML_F16_VEC_REDUCE
+
+#endif // defined(__AVX512FP16__)
 
 #ifdef __cplusplus
 }

@@ -5,12 +5,12 @@
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Popover from '$lib/components/ui/popover';
 	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
-	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
+	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { ToolsService } from '$lib/services/tools.service';
-	import { toolsStore } from '$lib/stores';
+	import { conversationsStore, toolsStore } from '$lib/stores';
 	import type { GlobEntry } from '$lib/types';
 	import {
 		abbreviateHome,
@@ -62,9 +62,12 @@
 	// it, the picker still opens for manual entry but explains why search is
 	// unavailable instead of firing searches that would only fail. Browse is
 	// hidden too: it resolves the picked folder name through the same tool.
-	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.SERVER_FILE_GLOB_SEARCH));
+	// effective policy: the active conversation's tool policy, or global defaults
 	const fileSearchEnabled = $derived(
-		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
+		fileSearchKey !== null &&
+			conversationsStore.preferences.isToolEnabled(fileSearchKey) &&
+			conversationsStore.preferences.isCategoryEnabled(ToolSource.SERVER)
 	);
 	const searchUnavailableMessage = $derived(
 		fileSearchKey === null
@@ -212,7 +215,7 @@
 	// so the caller fails visibly instead of committing a bare leaf name.
 	async function resolveNativeName(name: string): Promise<string | null> {
 		try {
-			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
 				include: buildCaseInsensitiveGlob(name),
 				limit: SEARCH.NATIVE_LIMIT,
 				max_depth: SEARCH.NATIVE_MAX_DEPTH,
@@ -323,80 +326,81 @@
 </script>
 
 <button
-	type="button"
 	class={[
 		'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
 		className
 	]}
-	onclick={onOpen}
 	{disabled}
+	onclick={onOpen}
+	type="button"
 >
 	<ChatFormCurrentWorkingDirectoryChip
 		{directory}
-		{homeBase}
 		{disabled}
-		{showTooltip}
+		{homeBase}
 		onClear={handleDismiss}
+		{showTooltip}
 	/>
 </button>
 
-<Popover.Root open={isOpen} onOpenChange={handleOpenChange}>
+<Popover.Root onOpenChange={handleOpenChange} open={isOpen}>
 	<Popover.Trigger
+		aria-hidden="true"
 		class="pointer-events-none absolute inset-0 opacity-0"
 		tabindex={-1}
-		aria-hidden="true"
 	>
 		<span class="sr-only">Open working directory picker</span>
 	</Popover.Trigger>
 
 	<Popover.Content
-		side="top"
 		align="start"
-		sideOffset={12}
-		{customAnchor}
-		preventScroll={false}
-		onkeydown={handleKeydown}
-		onOpenAutoFocus={(event) => event.preventDefault()}
-		onCloseAutoFocus={(event) => event.preventDefault()}
 		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl"
+		{customAnchor}
+		onCloseAutoFocus={(event) => event.preventDefault()}
+		onOpenAutoFocus={(event) => event.preventDefault()}
+		onkeydown={handleKeydown}
+		preventScroll={false}
+		side="top"
+		sideOffset={12}
 	>
 		<div class="p-2 min-h-22 flex flex-col justify-between">
 			<SearchInput
 				bind:ref={searchInputRef}
 				bind:value={query}
-				placeholder="Choose working directory"
-				onClose={closePicker}
 				class="w-full"
+				onClose={closePicker}
+				placeholder="Choose working directory"
 			/>
 
 			{#if !fileSearchEnabled}
 				<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
 			{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
 				<ChatFormCurrentWorkingDirectoryResultsList
-					results={queryResults}
+					bind:container={listContainer}
+					error={searchError}
 					hoveredIndex={nav.hoveredIndex}
 					isSearching={search.isSearching}
-					error={searchError}
-					rawQuery={query}
-					bind:container={listContainer}
 					onCommit={commit}
 					onHover={(index) => nav.setHover(index)}
+					rawQuery={query}
+					results={queryResults}
 				/>
 			{/if}
 
 			{#if pickerSupported && fileSearchEnabled}
 				<button
-					type="button"
 					class="-mt-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
 					onclick={browseNative}
+					type="button"
 				>
 					<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
+
 					<span>Browse</span>
 				</button>
 			{/if}
 
 			{#if homeBase && fileSearchEnabled}
-				<div class="-mx-2 my-2 h-px bg-border/20" aria-hidden="true"></div>
+				<div aria-hidden="true" class="-mx-2 my-2 h-px bg-border/20"></div>
 
 				<span class="px-2 py-1.5 font-mono text-[10px]">
 					Searching in:
