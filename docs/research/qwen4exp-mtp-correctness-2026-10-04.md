@@ -333,6 +333,7 @@ a regression test that failed before its fix, except where noted.
 | The fit logs why an extra model is measured next to its parent and does not repeat the failed attempt. | not tested: logging and control flow only | none |
 | A file with some trunk block tensors is a trunk: one that lacks others fails to load. The loader used to take a missing `blk.0.hc_attn_norm.weight` alone as the mark of a head-only file. Third review pass. | a combined file without that one tensor loaded and ran as a head, embedding straight into the LM head | "a trunk that lacks a tensor is rejected, not run as a head" |
 | A chained decode on a context with embeddings enabled returns -1. Third review pass. | abort at `llama-graph.cpp:3887`, `missing result_norm/result_embd tensor` | `test_invalid_chain`, case 7 |
+| A table-less head whose devices cannot use the buffer of a borrowed table is rejected at context creation. Fifth review pass. | abort at `ggml-backend.cpp:1169`, `pre-allocated tensor (output.weight) in a buffer (SYCL0) that cannot run the operation`, for a host-only head next to a target on the A770 | `test_borrowed_tables`, "borrowed tables in a buffer the head's devices cannot use are rejected" (`--backend SYCL0` only) |
 | Checkpoint margins are looked up by device in the target model's device list, not by position in the context's own list. Fourth review pass. | a device the margins were not given for took the first margin | `test_checkpoint_placement`, "a device the margins were not given for keeps the largest one" (`--backend SYCL0` only) |
 | The server's checkpoint guard decides before every checkpoint update instead of once (`common_speculative_checkpoint_flags`). Added after a third review pass, on `f5b0150d4`. | the first decision was kept while a checkpoint outgrew its device copy | `test_checkpoint_placement`; its host branch needs a device that reports memory, so it only runs under `--backend SYCL0` |
 
@@ -343,8 +344,8 @@ already normalized residual changes it only through the epsilon term. Drafts
 therefore are not expected to be bit-identical to earlier builds.
 
 Results on the final source: CPU `test-qwen4exp-mtp` 74 PASS (f16) and 49 PASS
-(`--q8-kv`); Arc A770 `--backend SYCL0` 74 PASS and 49 PASS, 0 new i915/xe fault
-lines. Both real head files on disk hold only block 48, the head block, besides
+(`--q8-kv`); Arc A770 `--backend SYCL0` 75 PASS and 50 PASS (one case needs a
+device), 0 new i915/xe fault lines. Both real head files on disk hold only block 48, the head block, besides
 their shared tensors, so the new head-only rule classifies them as before; the
 Q8_0 head still loads and generates on CPU with the head-only warning.
 

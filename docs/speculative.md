@@ -112,7 +112,10 @@ quantization, not the head's. `--fit` measures such a head next to the target's
 context; one "requires ctx_other" error line during fitting is expected. Outside an
 MTP context the head has nothing to run and context creation fails with an error.
 The target's tables must have the head's embedding width and vocabulary size, or
-context creation fails with an error that names both shapes.
+context creation fails with an error that names both shapes. The head must also be
+loaded on devices that can use the buffers the target's tables are in: a head kept
+off the target's GPU (`--spec-draft-device none`) next to an offloaded target is
+rejected with an error, since the tables are not copied.
 
 With a separate head the target does not load its own MTP block, if its file has
 one: that block would never run. A combined target whose block lacks the draft

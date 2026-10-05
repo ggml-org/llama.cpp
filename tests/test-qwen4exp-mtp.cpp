@@ -676,6 +676,22 @@ static void test_borrowed_tables(const std::string & bare_path, const std::strin
         fprintf(stderr, "PASS borrowed tables flash=%d\n", flash);
     }
 
+    // A head on other devices than its target cannot use tables that sit in the target's device buffers.
+    if (test_device != nullptr) {
+        ggml_backend_dev_t device_saved = test_device;
+        test_device = nullptr;
+        auto bare_host = load_model(bare_path);
+        test_device = device_saved;
+        require(bool(bare_host), "host-only table-less head loads");
+        auto params = llama_context_default_params();
+        params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        params.ctx_other = parent.get();
+        params.n_ctx = 128;
+        require(!llama_context_ptr(llama_init_from_model(bare_host.get(), params)),
+                "borrowed tables in a buffer the head's devices cannot use are rejected");
+        fprintf(stderr, "PASS borrowed tables on a foreign device\n");
+    }
+
     // The public driver hands the target context to the draft context the same way the server does.
     for (bool chained : {false, true}) {
         require(driver_drafts(target, bare.get(), chained, 1, 8, false) == driver_drafts(target, head, chained, 1, 8, false),

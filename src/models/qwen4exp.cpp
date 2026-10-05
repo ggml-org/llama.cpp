@@ -603,8 +603,11 @@ static const llama_model & qwen4exp_mtp_lender(const llama_cparams & cparams) {
     return *llama_get_model(cparams.ctx_other);
 }
 
-// A borrowed table has to have the head's embedding width and vocabulary size.
-static ggml_tensor * qwen4exp_mtp_borrow(ggml_tensor * table, const char * what, int64_t n_embd, int64_t n_vocab) {
+// A borrowed table has to have the head's embedding width and vocabulary size. It also has to sit in a
+// buffer that a backend of this context can use: the context is built on the head's devices, which need
+// not include the device that holds the target's table.
+static ggml_tensor * qwen4exp_mtp_borrow(ggml_tensor * table, const char * what, int64_t n_embd, int64_t n_vocab,
+                                         ggml_backend_sched_t sched) {
     if (table == nullptr) {
         throw std::runtime_error(format("QWEN4EXP MTP head has no %s and the target model has none to lend", what));
     }
@@ -612,6 +615,19 @@ static ggml_tensor * qwen4exp_mtp_borrow(ggml_tensor * table, const char * what,
         throw std::runtime_error(format("QWEN4EXP MTP head cannot borrow the target model's %s: it is %" PRId64 " x %" PRId64
                                         ", the head needs %" PRId64 " x %" PRId64,
                                         what, table->ne[0], table->ne[1], n_embd, n_vocab));
+    }
+    if (table->buffer != nullptr) {
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(table->buffer);
+        bool usable = false;
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(sched) && !usable; i++) {
+            usable = ggml_backend_supports_buft(ggml_backend_sched_get_backend(sched, i), buft);
+        }
+        if (!usable) {
+            throw std::runtime_error(format("QWEN4EXP MTP head cannot borrow the target model's %s: it is in a %s buffer, "
+                                            "which none of the head's devices can use. Load the head on the target's "
+                                            "devices, or use a head with its own tables",
+                                            what, ggml_backend_buft_name(buft)));
+        }
     }
     return table;
 }
@@ -663,7 +679,7 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
 
     ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
     if (tok_embd_w == nullptr) {
-        tok_embd_w = qwen4exp_mtp_borrow(qwen4exp_mtp_lender(cparams).tok_embd, "token embedding", n_embd, model.vocab.n_tokens());
+        tok_embd_w = qwen4exp_mtp_borrow(qwen4exp_mtp_lender(cparams).tok_embd, "token embedding", n_embd, model.vocab.n_tokens(), sched);
     }
     ggml_tensor * tok_embd   = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     cb(tok_embd, "mtp_tok_embd", il);
@@ -814,7 +830,7 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     if (head_w == nullptr) {
         const llama_model & lender = qwen4exp_mtp_lender(cparams);
-        head_w = qwen4exp_mtp_borrow(lender.output, "LM head", n_embd, model.vocab.n_tokens());
+        head_w = qwen4exp_mtp_borrow(lender.output, "LM head", n_embd, model.vocab.n_tokens(), sched);
         head_s = lender.output_s;
     }
 
