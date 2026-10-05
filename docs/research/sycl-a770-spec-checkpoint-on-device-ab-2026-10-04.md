@@ -55,6 +55,10 @@ DSpark types and 0 otherwise, so a hybrid target is full-removal only under
 
 ## Method
 
+Commit ids quoted in this note name the tree a result was measured on. They are commits of
+the PR 90 branch, which was merged as one squashed commit, so they are not in the history
+of `master`; `git fetch origin pull/90/head` retrieves them.
+
 - Tree: `99db3ec3f` plus the six-line change. Two snapshots of one SYCL build
   directory; only `libllama-server-impl.so` differs (sha256 `5c19b2e2898d94f9...`
   host, `d0165b6cf835c7ce...` on-device), every other library is byte-identical.

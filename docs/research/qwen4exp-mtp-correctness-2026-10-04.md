@@ -10,6 +10,10 @@ preserves the full hyper-connection state, uses the full vocabulary, and compute
 confidence over the same top-10 candidates as sequential drafting. It reuses the
 ordinary attention builder for cache rotations, padding, masks, and writes.
 
+Commit ids quoted in this note name the tree a result was measured on. They are commits of
+the PR 90 branch, which was merged as one squashed commit, so they are not in the history
+of `master`; `git fetch origin pull/90/head` retrieves them.
+
 Two additional correctness fixes came from the regression tests:
 
 - Masked sequential MTP output now selects the requested hidden-state rows.
