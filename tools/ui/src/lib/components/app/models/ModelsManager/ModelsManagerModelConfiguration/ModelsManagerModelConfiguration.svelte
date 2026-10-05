@@ -14,11 +14,12 @@
 	interface Props {
 		onClose: () => void;
 		onToggleLoad: () => void;
+		onUseInChat: () => void;
 		onUseInNewChat: () => void;
 		option: ModelOption;
 	}
 
-	let { onClose, onToggleLoad, onUseInNewChat, option }: Props = $props();
+	let { onClose, onToggleLoad, onUseInChat, onUseInNewChat, option }: Props = $props();
 
 	// the same removal the table row offers, confirmed by the same dialog
 	let deleteOpen = $state(false);
@@ -64,6 +65,7 @@
 		{isLoaded}
 		{onClose}
 		{onToggleLoad}
+		{onUseInChat}
 		{onUseInNewChat}
 		{option}
 		{status}

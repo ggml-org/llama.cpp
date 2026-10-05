@@ -12,7 +12,7 @@
 	} from './utils';
 	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
 	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
-	import { conversationsStore, modelsStore, uiStore } from '$lib/stores';
+	import { conversationsStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { filterModelOptions } from '$lib/utils';
 	import { type Snippet, untrack } from 'svelte';
@@ -225,12 +225,30 @@
 		await modelsStore.status.load(option.model);
 	}
 
+	/** The chat sits behind the dialog, so the dialog closes and the composer takes focus. */
+	function returnToChat(): void {
+		uiStore.manageModelsOpen = false;
+		uiStore.requestComposerFocus();
+	}
+
+	/** Switch the open chat to this model, the way the desktop model dropdown does. */
+	async function useInChat(option: ModelOption): Promise<void> {
+		await modelsStore.selectModelById(option.id, { recordRecent: true });
+
+		// only the built-in server loads on request, and only in router mode
+		if (serverStore.isRouterMode && !modelsStore.isModelLoaded(option.model)) {
+			modelsStore.status
+				.load(option.model)
+				.catch((error) => console.error('Failed to load model:', error));
+		}
+
+		returnToChat();
+	}
+
 	async function useInNewChat(option: ModelOption): Promise<void> {
 		await modelsStore.selectModelById(option.id);
 		await conversationsStore.openNewChat();
-		// the chat is behind the dialog: close it, then let the composer take focus
-		uiStore.manageModelsOpen = false;
-		uiStore.requestComposerFocus();
+		returnToChat();
 	}
 </script>
 
@@ -266,6 +284,7 @@
 					<ModelsManagerModelConfiguration
 						onClose={() => (selectedId = null)}
 						onToggleLoad={() => void toggleLoad(shownOption)}
+						onUseInChat={() => void useInChat(shownOption)}
 						onUseInNewChat={() => void useInNewChat(shownOption)}
 						option={shownOption}
 					/>
