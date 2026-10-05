@@ -1046,6 +1046,17 @@ static bool ggml_gallocr_needs_realloc(ggml_gallocr_t galloc, struct ggml_cgraph
         }
     }
 
+    for (int i = 0; i < graph->n_leafs; i++) {
+        struct ggml_tensor * leaf_node = graph->leafs[i];
+        struct leaf_alloc * leaf_node_alloc = &galloc->leaf_allocs[i];
+        if (!ggml_gallocr_node_needs_realloc(galloc, leaf_node, &leaf_node_alloc->leaf)) {
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: leaf %s is not valid\n", __func__, leaf_node->name);
+#endif
+            return true;
+        }
+    }
+
     return false;
 }
 
