@@ -562,7 +562,9 @@ def swa_server():
     return swa
 
 
-def test_slot_restore_preserves_context_checkpoints(swa_server):
+# the non-ASCII name checks that the appendix lands in the same file as the llama state on Windows
+@pytest.mark.parametrize("filename", ["ckpt_slot1.bin", "ckpt_slot1_é.bin"])
+def test_slot_restore_preserves_context_checkpoints(swa_server, filename):
     server = swa_server
     server.start()
 
@@ -596,11 +598,11 @@ def test_slot_restore_preserves_context_checkpoints(swa_server):
     assert res.status_code == 200
 
     res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "ckpt_slot1.bin",
+        "filename": filename,
     })
     assert res.status_code == 200
     assert res.body["n_saved"] > 0
-    ckpt_file = os.path.join(server.slot_save_path, "ckpt_slot1.bin")
+    ckpt_file = os.path.join(server.slot_save_path, filename)
     assert res.body["n_written"] == os.path.getsize(ckpt_file)
 
     res = server.make_request("POST", "/completion", data={
@@ -611,7 +613,7 @@ def test_slot_restore_preserves_context_checkpoints(swa_server):
     assert res.status_code == 200
 
     res = server.make_request("POST", "/slots/1?action=restore", data={
-        "filename": "ckpt_slot1.bin",
+        "filename": filename,
     })
     assert res.status_code == 200
     assert res.body["n_read"] == os.path.getsize(ckpt_file)
@@ -623,6 +625,105 @@ def test_slot_restore_preserves_context_checkpoints(swa_server):
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == n_live
+
+
+# checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
+# n_tokens(8) pos_min(4) pos_max(4) and three blobs (target, draft, speculative), each size(8) + data
+def parse_ckpt_appendix(data):
+    off = data.find(struct.pack("<II", 0x504b4353, 1))
+    assert off > 0
+    count = struct.unpack_from("<I", data, off + 8)[0]
+    ckpts = []
+    pos = off + 12
+    for _ in range(count):
+        start = pos
+        pos += 16
+        blobs = []
+        for _ in range(3):
+            n = struct.unpack_from("<Q", data, pos)[0]
+            blobs.append(pos + 8)
+            pos += 8 + n
+        ckpts.append((start, pos, blobs[0]))
+    assert pos == len(data)
+    return off, ckpts
+
+
+# a damaged appendix must be ignored, or its checkpoints dropped when they fail to load, without aborting the server
+@pytest.mark.parametrize("damage", ["oversized_blob", "corrupt_state", "many_checkpoints"])
+def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
+    server = swa_server
+    server.start()
+
+    base = "The quick brown fox jumps over the lazy dog. " * 20
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_live = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "ckpt_damaged.bin",
+    })
+    assert res.status_code == 200
+
+    path = os.path.join(server.slot_save_path, "ckpt_damaged.bin")
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+    off, ckpts = parse_ckpt_appendix(data)
+
+    if damage == "oversized_blob":
+        # the first target blob declares 64 MiB that are not in the file
+        data = data[:ckpts[0][0] + 16] + struct.pack("<Q", 64 << 20)
+    elif damage == "corrupt_state":
+        # the sizes are intact, but the target states do not load
+        for _, _, tgt in ckpts:
+            struct.pack_into("<I", data, tgt, 0xdeadbeef)
+    else:
+        # more than 1024 entries: empty fillers that never match go first, the real checkpoints stay last
+        filler = struct.pack("<qiiQQQ", 0, 0, 1 << 30, 0, 0, 0)
+        data = data[:off + 12] + filler * (1025 - len(ckpts)) + data[off + 12:]
+        struct.pack_into("<I", data, off + 8, 1025)
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "ckpt_damaged.bin",
+    })
+    assert res.status_code == 200
+    if damage == "oversized_blob":
+        assert res.body["n_read"] == off
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    if damage == "many_checkpoints":
+        assert res.body["timings"]["prompt_n"] == n_live
+    else:
+        assert res.body["timings"]["prompt_n"] > n_live
 
 
 # the draft blobs of the checkpoint appendix are not covered by the main payload checks,
