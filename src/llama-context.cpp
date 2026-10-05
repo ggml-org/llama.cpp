@@ -1035,6 +1035,22 @@ void llama_context::sched_reserve() {
         n_input_tensors_tg = this->n_input_tensors;
     }
 
+    // An MTP context decodes its catch-up rows without an output row. The allocator does not plan
+    // that graph as a subset of the pp graph: the scheduler's copy of the output indices is empty
+    // then, the two free blocks it kept apart merge, and best fit places the tensors above them
+    // differently (11 MiB more for a 512-row ubatch of a Qwen4Exp head). Reserve that shape too.
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        std::vector<size_t> sizes_catchup(backend_ptrs.size(), 0);
+        auto * gf = graph_reserve(n_tokens, n_seqs, 0, mctx.get(), model.hparams.no_alloc,
+                                  model.hparams.no_alloc ? sizes_catchup.data() : nullptr);
+        if (!gf) {
+            throw std::runtime_error("failed to allocate compute catch-up buffers");
+        }
+        for (size_t i = 0; i < sizes_catchup.size(); ++i) {
+            backend_buf_exp_size[i] = std::max(backend_buf_exp_size[i], sizes_catchup[i]);
+        }
+    }
+
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
         // TODO: the worst case graph is not always reached for `n_seqs > 1`
@@ -3107,7 +3123,8 @@ static void ubatch_prepare_reserve(
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
-    GGML_ASSERT(n_outputs >= 1);
+    // only the catch-up graph of an MTP context is reserved without an output row
+    GGML_ASSERT(n_outputs >= 1 || cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP);
 
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs;  // round to next multiple of n_seqs

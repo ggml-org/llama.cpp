@@ -760,6 +760,7 @@ struct reserve_log_capture {
     ggml_log_callback previous;
     void * previous_data;
     int reserves = 0;
+    int catchup_graphs = 0; // graphs without an output row in the latest reservation
 
     reserve_log_capture() {
         llama_log_get(&previous, &previous_data);
@@ -771,8 +772,15 @@ struct reserve_log_capture {
     }
 
     static void callback(ggml_log_level, const char * text, void * data) {
-        if (std::string(text).find("sched_reserve: reserving ...") != std::string::npos) {
-            ++static_cast<reserve_log_capture *>(data)->reserves;
+        auto * capture = static_cast<reserve_log_capture *>(data);
+        const std::string line(text);
+        if (line.find("sched_reserve: reserving ...") != std::string::npos) {
+            ++capture->reserves;
+            capture->catchup_graphs = 0;
+        }
+        if (line.find("reserving a graph for ubatch") != std::string::npos &&
+            line.find("n_outputs =    0") != std::string::npos) {
+            ++capture->catchup_graphs;
         }
     }
 };
@@ -793,6 +801,67 @@ static void test_chain_reserve_growth(llama_model * model) {
     // one for switching the hidden export on, then one per doubling: 4, 8, 16, 32 rows
     require(logs.reserves <= 6, "chain row growth reserves geometrically, not per row");
     fprintf(stderr, "PASS chain reserve growth\n");
+}
+
+// A catch-up decode marks no row as an output. The allocator does not plan that graph as a
+// subset of the prompt graph: with the scheduler's copy of the output indices empty, two free
+// blocks merge and best fit places the tensors above them differently. On a real head that plan
+// was 11 MiB larger than the reserved one, so the context has to reserve that shape as well.
+static void test_catchup_reservation(llama_model * model) {
+    reserve_log_capture logs;
+    auto ctx = make_context(model, true);
+    decode(ctx.get(), {5}, initial_hidden(), 0);
+    require(logs.reserves >= 1, "an MTP context reserves its graphs");
+    require(logs.catchup_graphs >= 1, "the MTP reservation covers a graph without output rows");
+    fprintf(stderr, "PASS catch-up reservation\n");
+}
+
+// The same on real weights: a head-only GGUF given on the command line. One row first, so that
+// the full catch-up ubatch that follows is planned from scratch, as after any draft.
+static void test_catchup_real_head(const std::string & path) {
+    auto model = load_model(path);
+    require(bool(model), "load the real head");
+    auto params = llama_context_default_params();
+    params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    params.n_ctx = 4096;
+    params.n_batch = 2048;
+    params.n_ubatch = 512;
+    params.n_seq_max = 1;
+    params.n_outputs_max = 1; // as the server's draft context
+    params.n_threads = params.n_threads_batch = 12;
+    params.type_k = params.type_v = GGML_TYPE_Q8_0;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    llama_context_ptr ctx(llama_init_from_model(model.get(), params));
+    require(bool(ctx), "create an MTP context on the real head");
+    const int rows = int(llama_n_ubatch(ctx.get()));
+    const std::vector<float> hidden(size_t(rows) * llama_model_n_embd_out(model.get()), 0.01f);
+    int pos = 0;
+    const auto run = [&](int n_rows, int n_outputs) {
+        llama_batch batch = llama_batch_init(n_rows, 0, 1);
+        for (int i = 0; i < n_rows; ++i) {
+            common_batch_add(batch, 5, pos + i, {0}, i >= n_rows - n_outputs);
+        }
+        batch.embd = const_cast<float *>(hidden.data());
+        llama_set_embeddings_nextn(ctx.get(), true, true);
+        const int rc = llama_decode(ctx.get(), batch);
+        batch.embd = nullptr;
+        llama_batch_free(batch);
+        require(rc == 0, "decode on the real head");
+        pos += n_rows;
+    };
+    run(1, 1);
+    const size_t reserved = compute_bytes(ctx.get());
+    run(rows, 0);
+    const size_t used = compute_bytes(ctx.get());
+    fprintf(stderr, "real head: %.4f MiB reserved, %.4f MiB after a %d-row catch-up\n",
+            reserved / 1048576.0, used / 1048576.0, rows);
+    // Not an equality. The reserved graph carries the attention mask of a full cache and a decode a
+    // smaller one, and best fit is not monotonic in tensor sizes: on the Q8_0 Qwen3.8 head one
+    // 8 KiB tensor then lands above a 20 MiB one instead of in a hole, and the decode plans 8 KiB
+    // more than was reserved. The missing reservation this test is about was 11 MiB.
+    const size_t plan_noise_bytes = 1024 * 1024;
+    require(used <= reserved + plan_noise_bytes, "a full catch-up ubatch fits the reserved compute buffers");
+    fprintf(stderr, "PASS catch-up on a real head\n");
 }
 
 static void test_fit(const std::string & target_path, const std::string & head_path, bool separate_only = false) {
@@ -936,6 +1005,7 @@ int main(int argc, char ** argv) {
         if (level == GGML_LOG_LEVEL_ERROR) { fputs(text, stderr); }
     }, nullptr);
     llama_backend_init();
+    std::string real_head_path;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--q8-kv") {
             q8_kv = true;
@@ -943,7 +1013,15 @@ int main(int argc, char ** argv) {
             ggml_backend_load_all();
             test_device = ggml_backend_dev_by_name(argv[++i]);
             require(test_device != nullptr, "requested backend is available");
+        } else if (std::string(argv[i]) == "--catchup-real-head" && i + 1 < argc) {
+            real_head_path = argv[++i];
         }
+    }
+    if (!real_head_path.empty()) {
+        // opt-in: needs a real head-only GGUF, which the fixtures cannot stand in for
+        test_catchup_real_head(real_head_path);
+        llama_backend_free();
+        return 0;
     }
     const auto dir = std::filesystem::temp_directory_path() / ("test-qwen4exp-mtp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     require(std::filesystem::create_directory(dir), "create temporary fixture directory");
@@ -1076,6 +1154,7 @@ int main(int argc, char ** argv) {
     test_ordinary_draft_driver(target.get(), head.get());
     test_chain_metadata(head.get());
     test_chain_reserve_growth(head.get());
+    test_catchup_reservation(head.get());
     test_fit(target_path, head_path);
     test_fit_ordinary_head(target_path, head_path);
     test_fit_borrowed_head(target_path, bare_path);
