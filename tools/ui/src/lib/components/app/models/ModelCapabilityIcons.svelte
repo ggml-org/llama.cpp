@@ -39,40 +39,49 @@
 	let shownModalities = $derived(
 		MODALITY_ORDER.filter((modality) => modalities?.[MODALITY_FLAG_KEYS[modality]])
 	);
+
+	// an icon-less box still takes the gap where its icons would sit, so a caller with
+	// nothing to show renders no box at all
+	let hasIcons = $derived(
+		(!hideCapabilities && capabilities.length > 0) ||
+			(shownModalities.length > 0 && !hideModalities)
+	);
 </script>
 
-<span class="inline-flex items-center {gapClass}">
-	{#if !hideCapabilities}
-		{#each capabilities as capability (capability)}
-			{@const Icon = CAPABILITY_ICONS[capability]}
-
-			<Tooltip.Root>
-				<Tooltip.Trigger>
-					<Icon class="{iconSize} text-muted-foreground" />
-				</Tooltip.Trigger>
-
-				<Tooltip.Content>
-					<p>{CAPABILITY_LABELS[capability]}</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
-		{/each}
-	{/if}
-
-	{#if shownModalities.length > 0 && !hideModalities}
-		<span class="inline-flex items-center {gapClass} text-muted-foreground">
-			{#each shownModalities as modality (modality)}
-				{@const Icon = MODALITY_ICONS[modality]}
+{#if hasIcons}
+	<span class="inline-flex items-center {gapClass}">
+		{#if !hideCapabilities}
+			{#each capabilities as capability (capability)}
+				{@const Icon = CAPABILITY_ICONS[capability]}
 
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<Icon class={iconSize} />
+						<Icon class="{iconSize} text-muted-foreground" />
 					</Tooltip.Trigger>
 
 					<Tooltip.Content>
-						<p>{MODALITY_LABELS[modality]}</p>
+						<p>{CAPABILITY_LABELS[capability]}</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
 			{/each}
-		</span>
-	{/if}
-</span>
+		{/if}
+
+		{#if shownModalities.length > 0 && !hideModalities}
+			<span class="inline-flex items-center {gapClass} text-muted-foreground">
+				{#each shownModalities as modality (modality)}
+					{@const Icon = MODALITY_ICONS[modality]}
+
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Icon class={iconSize} />
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p>{MODALITY_LABELS[modality]}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/each}
+			</span>
+		{/if}
+	</span>
+{/if}
