@@ -1230,7 +1230,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
                 mma_block_scaled_fp4<type>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
-            }            
+            }
         }
     }
 }
