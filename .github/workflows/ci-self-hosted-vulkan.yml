@@ -186,7 +186,7 @@ jobs:
           LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
   gpu-vulkan-amd:
-    runs-on: [self-hosted, Linux, gfx1201]
+    runs-on: [self-hosted, Linux, gfx1201, 1accel]
     container: "ubuntu:26.04"
 
     steps:
