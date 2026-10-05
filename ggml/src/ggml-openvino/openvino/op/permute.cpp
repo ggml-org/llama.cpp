@@ -121,7 +121,26 @@ OutputVector translate_permute(const NodeContext & context) {
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
 
-        if (op_case == 3 || op_case == 4) {
+        if ((op_case == 3 || op_case == 4) && n_seq == 1 && perm_values == std::vector<int64_t>{0, 2, 1, 3}) {
+            // one sequence: slice the cache [1, 1, ctx, n_heads * head_size] on its context axis, then split the
+            // heads. The reshape after the slice also restates the head count and head size: the GPU plugin loses
+            // all dimensions of a slice with a runtime end, and SDPA would then run its reference kernel
+            auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+            auto sliced = std::make_shared<ov::op::v8::Slice>(src, zero, attention_size, one, two);
+            if (n_heads == 1) {
+                res = std::make_shared<ov::op::v1::Reshape>(
+                    sliced,
+                    ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, -1, head_size}),
+                    false);
+            } else {
+                auto split = std::make_shared<ov::op::v1::Reshape>(
+                    sliced,
+                    ov::op::v0::Constant::create(ov::element::i64, {4},
+                                                 std::vector<int64_t>{1, -1, n_heads, head_size}),
+                    false);
+                res = std::make_shared<ov::op::v1::Transpose>(split, perm);
+            }
+        } else if (op_case == 3 || op_case == 4) {
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
                 src, ov::op::v0::Constant::create(ov::element::i64, {4}, {n_seq, ctx_per_seq, n_heads, head_size}),
                 false);
@@ -133,7 +152,12 @@ OutputVector translate_permute(const NodeContext & context) {
                     std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
             }
             auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, one);
-            res = std::make_shared<ov::op::v1::Transpose>(slice2, perm);
+            // restate the head count and head size, see above
+            auto restated = std::make_shared<ov::op::v1::Reshape>(
+                slice2,
+                ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, -1, n_heads, head_size}),
+                true);
+            res = std::make_shared<ov::op::v1::Transpose>(restated, perm);
         } else {
             auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(

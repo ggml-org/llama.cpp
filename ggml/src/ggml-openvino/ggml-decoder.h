@@ -67,6 +67,9 @@ struct ComputeParams {
     int attention_size = -1;
     int attention_size_swa = -1;
     int attention_size_static = -1;  // encoder/cross-attn KV fill level (whisper)
+    // OV names of the KQ mask inputs that n_seq_active (mask->ne[3]) and attention_size(_swa) (mask->ne[0]) were read from
+    std::string mask_name;
+    std::string mask_swa_name;
     // Sliding window width, read back from the band of ggml's own SWA mask. ggml never passes
     // n_swa down to a backend, but fill_mask() bakes it into the mask contents, so the widest
     // unmasked row recovers it. Shorter than n_swa while the sequence is still short, which is

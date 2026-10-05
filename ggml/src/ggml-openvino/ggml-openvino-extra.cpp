@@ -141,7 +141,9 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_NATIVE_SOFTPLUS",
         "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
         "GGML_OPENVINO_REQUANT_KQUANT",
+        "GGML_OPENVINO_REQUANT_EMBD",
         "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
+        "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
         // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
         "GGML_OPENVINO_FULL_GRAPH_KEY",
     };
@@ -322,6 +324,10 @@ bool ggml_openvino_is_gpu() {
     return has_prefix(ggml_openvino_get_device_name(), "GPU");
 }
 
+bool ggml_openvino_shape_from_mask_enabled() {
+    return ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK") == 0;
+}
+
 size_t ggml_openvino_max_alloc_size() {
     return ggml_openvino_get_device_config().max_alloc_size;
 }
@@ -354,6 +360,13 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL() {
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant) {
     if (no_requant) {
+        return std::nullopt;
+    }
+    // GGML_OPENVINO_REQUANT_EMBD=native keeps token_embd/output in the file's quantization (tied models: also the lm_head)
+    const bool is_embd_or_output =
+        strncmp(tensor->name, "token_embd.weight", 17) == 0 || strncmp(tensor->name, "output.weight", 13) == 0;
+    const char * rq_embd = ggml_openvino_getenv_str("GGML_OPENVINO_REQUANT_EMBD");
+    if (is_embd_or_output && rq_embd && strcmp(rq_embd, "native") == 0 && !ggml_openvino_is_npu()) {
         return std::nullopt;
     }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {

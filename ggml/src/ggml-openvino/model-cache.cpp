@@ -166,6 +166,7 @@ bool ggml_openvino_model_cache_only() {
 
 static const char * cache_settings[] = {
     "GGML_OPENVINO_REQUANT_KQUANT",
+    "GGML_OPENVINO_REQUANT_EMBD",
     "GGML_OPENVINO_NATIVE_SOFTPLUS",
     "GGML_OPENVINO_DISABLE_KV_SLICE",
     "GGML_OPENVINO_MANUAL_GQA_ATTN",
@@ -175,6 +176,7 @@ static const char * cache_settings[] = {
     "GGML_OPENVINO_REDUCE_COMPILE_MEM",
     "GGML_OPENVINO_MEMORY_OPTIMIZE",
     "GGML_OPENVINO_PROFILING",
+    "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
 };
 
 void ggml_openvino_model_cache_init() {

@@ -1,6 +1,7 @@
 #include "utils.h"
 
 #include "ggml-impl.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <cmath>
 #include <cstddef>
@@ -416,7 +417,10 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     // This ensures NPUW's FOLD doesn't parametrize per-layer slice indices (which
     // would introduce dynamic shapes). A shared Split node sits outside the repeated
     // subgraph boundary; each layer receives one of its output ports.
-    if (context.is_static() && view_input_size == 1) {
+    // The dynamic GPU path uses it too: a StridedSlice costs a full shape inference per run on GPU, a Split output does
+    // not (gemma-4 slices its per-layer embeddings this way, once per layer)
+    const bool dynamic_split = !context.is_static() && !context.is_stateful() && ggml_openvino_is_gpu();
+    if ((context.is_static() || dynamic_split) && view_input_size == 1) {
         auto view_stride_v = context.get_view_input_stride(input_index, 0);
         auto view_src_stride_v = context.get_view_input_src_stride(input_index, 0);
         auto view_ggml_shape = context.get_view_input_ggml_shape(input_index, 0);
@@ -456,6 +460,26 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                     size_t relative_offset = view_offset >= view_src_offset ? view_offset - view_src_offset : 0;
                     int64_t split_index = static_cast<int64_t>(relative_offset / view_src_stride_v[split_dim]);
 
+                    if (split_index >= 0 && split_index < num_splits && dynamic_split) {
+                        // the Split keeps its input alive, so only keep a weak reference to it on the input
+                        auto src_node = input.get_node_shared_ptr();
+                        std::string rt_key =
+                            "split_dim_weak_" + std::to_string(split_dim) + "_" + std::to_string(input.get_index());
+                        auto & rt_info = src_node->get_rt_info();
+                        std::shared_ptr<ov::Node> split_node;
+                        if (rt_info.count(rt_key) != 0) {
+                            split_node = rt_info[rt_key].as<std::weak_ptr<ov::Node>>().lock();
+                        }
+                        if (split_node == nullptr) {
+                            auto axis_const =
+                                ov::op::v0::Constant::create(ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
+                            split_node =
+                                std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
+                            split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
+                            rt_info[rt_key] = std::weak_ptr<ov::Node>(split_node);
+                        }
+                        return split_node->output(static_cast<size_t>(split_index));
+                    }
                     if (split_index >= 0 && split_index < num_splits) {
                         auto src_node = input.get_node_shared_ptr();
                         std::string rt_key = "split_dim_" + std::to_string(split_dim);
