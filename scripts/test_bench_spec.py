@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 
@@ -260,6 +261,39 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         for inherited in ("/opt/lib:", ":/opt/lib", "/opt/lib::"):
             self.assertEqual(BENCH_SPEC.library_path("/build/bin", inherited), "/build/bin:/opt/lib", inherited)
         self.assertEqual(BENCH_SPEC.library_path("/build/bin", "/opt/lib::/other"), "/build/bin:/opt/lib:/other")
+
+    def test_run_arm_fails_the_launch_when_the_warmup_fails(self) -> None:
+        arm = {"name": "a", "kv": "q8_0", "spec_label": "none"}
+        prompts = [{"id": "p1", "messages": [{"role": "user", "content": "hi"}]}]
+        good = {"content": "ok", "tokens": [11], "timings": {"predicted_n": 1},
+                "completion_probabilities": [{"id": 11, "logprob": -0.1, "top_logprobs": [{"id": 11, "logprob": -0.1}]}]}
+        bad = {"content": "ok", "tokens": [11], "timings": {"predicted_n": 1},
+               "completion_probabilities": [{"id": 11, "logprob": -0.1, "top_logprobs": [{"id": 12, "logprob": -0.05}]}]}
+
+        def launch(warmup: Any) -> tuple[dict, mock.Mock]:
+            run_prompt = mock.Mock(return_value={"id": "p1", "tg_median": 10.0, "accept_rate_median": None,
+                                                 "completion_tokens": 1, "draft_reported": False})
+            with mock.patch.multiple(BENCH_SPEC, start_server=mock.Mock(), stop_server=mock.Mock(),
+                                     wait_health=mock.Mock(return_value=True),
+                                     apply_chat_template=mock.Mock(return_value="prompt"),
+                                     post_completion=mock.Mock(**warmup), run_prompt=run_prompt,
+                                     scan_log=mock.Mock(return_value={})), \
+                    mock.patch.object(BENCH_SPEC.time, "sleep"):
+                return BENCH_SPEC.run_arm(arm, prompts), run_prompt
+
+        # a request error: the first measured request would absorb the JIT work the warmup removes
+        result, run_prompt = launch({"side_effect": OSError("connection reset")})
+        self.assertIn("warmup", result["error"])
+        run_prompt.assert_not_called()
+        self.assertTrue(BENCH_SPEC.launch_problems(result))
+        # a response that fails the verifier fails the launch as a measured one would
+        result, run_prompt = launch({"return_value": bad})
+        self.assertIn("warmup", result["error"])
+        run_prompt.assert_not_called()
+        # a clean warmup goes on to the measured prompts
+        result, run_prompt = launch({"return_value": good})
+        self.assertIsNone(result["error"])
+        run_prompt.assert_called_once()
 
     def test_run_ab_refuses_equal_arm_names(self) -> None:
         # both arms would share one launch list, and one arm's launches could stand in for the other's

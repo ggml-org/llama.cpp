@@ -84,8 +84,9 @@ of `master`; `git fetch origin pull/90/head` retrieves them.
   out i915-...`, page faults, CAT errors, `wedged` and `banned`), the report
   counts the paired cells whose arms generated different token streams and
   sums per arm the response rows that carried argmax evidence (see
-  "Correctness evidence"). Equal arm names and empty `LD_LIBRARY_PATH`
-  entries are refused or dropped, each arm records the libraries `ldd`
+  "Correctness evidence"). A warmup request that fails or whose response fails
+  the verifier fails its launch instead of being skipped. Equal arm names and
+  empty `LD_LIBRARY_PATH` entries are refused or dropped, each arm records the libraries `ldd`
   resolves for it, and flash-attention evidence is taken from runtime lines
   only; the `ngram-mod` probe summary had recorded the model path
   (`Qwen3.8-Flash-Next`) as such evidence and was rescanned from its logs.

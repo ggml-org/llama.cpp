@@ -45,10 +45,10 @@ MODE=ab is a paired A/B of two server builds under one speculative config:
   OUT_TAG        suffix for the summary and log file names
 It refuses to start (exit 70) while another process holds the render node,
 reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt.
-It exits non-zero when a launch failed, a response failed the target-argmax
-verifier, a speculative arm reported no draft statistics, a fault line appeared,
-or the kernel log could not be compared (unreadable, wrapped or cleared during
-the run). The verifier has argmax evidence only for tokens the server sampled on
+It exits non-zero when a launch failed (a failed or unverified warmup fails it
+too), a response failed the target-argmax verifier, a speculative arm reported
+no draft statistics, a fault line appeared, or the kernel log could not be
+compared (unreadable, wrapped or cleared during the run). The verifier has argmax evidence only for tokens the server sampled on
 its normal path: it sends no top list for tokens emitted from a verified draft
 round, where the check is the token id and a finite log-probability
 (verifier_rows_with_argmax counts the rows that had the evidence).
@@ -464,14 +464,22 @@ def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]], tag: str = "") -
             return {"arm": arm, "error": "health_timeout", "prompts": []}
         # SYCL JIT warmup: run the first prompt once (discarded) so kernel
         # compilation (incl. batched-verify when spec fires) is not charged to
-        # the first measured generation.
+        # the first measured generation. A failed warmup fails the launch: the
+        # first measured request would absorb that work, and a warmup response
+        # that fails the verifier must not slip past the launch gate.
         print("  warmup...", flush=True)
         try:
             wp = prompts[0]
             messages = wp.get("messages") or [{"role": "user", "content": wp.get("prompt", "")}]
-            post_completion(apply_chat_template(messages), int(wp.get("n_predict", 256)))
-        except Exception as e:  # noqa: BLE001 - warmup failures are non-fatal
-            print(f"  warmup error (continuing): {e}", flush=True)
+            evidence = analyze_native_response(
+                post_completion(apply_chat_template(messages), int(wp.get("n_predict", 256))))
+        except Exception as e:  # noqa: BLE001 - any failure, request or response, fails the launch
+            print(f"  !! warmup failed: {e}", flush=True)
+            return {"arm": arm, "error": f"warmup failed: {e}", "prompts": []}
+        if not evidence["verifier_invariant_ok"]:
+            print(f"  !! warmup response failed the target-argmax verifier: {evidence['verifier_failures'][:3]}",
+                  flush=True)
+            return {"arm": arm, "error": "warmup response failed the target-argmax verifier", "prompts": []}
         results = []
         for p in prompts:
             r = run_prompt(p)
