@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
+export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -54,6 +54,7 @@ export { modelLoadFraction, modelLoadProgressText } from './progress';
 export {
 	createMessageCountMap,
 	getMessageCount,
+	getConversationModel,
 	buildConversationTree,
 	type ConversationTreeItem
 } from './conversation-utils';
@@ -106,6 +107,9 @@ export {
 // Model name utilities
 export { normalizeModelName, isValidModelName } from './model-names';
 
+// Sidecar token utilities
+export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken, sidecarFromTag } from './sidecars';
+
 // Portal utilities
 export { portalToBody } from './portal-to-body';
 
@@ -127,9 +131,9 @@ export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 
-// SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
+// SSE-with-JSON stream iterator (used by server tool streaming, decoupled
 // from chat.service.ts which embeds its own SSE parser for resume support)
-export { parseSseJsonStream } from './sse';
+export { extractSseDataPayload, parseSseJsonStream, splitSseRecords } from './sse';
 
 // Stream session identity (conversation-id based)
 export { streamIdentity } from './stream-identity';
@@ -149,7 +153,10 @@ export {
 	getResourceIcon,
 	getResourceTextContent,
 	getResourceBlobContent,
-	downloadResourceContent
+	downloadResourceContent,
+	getMcpIconUrl,
+	getMcpServerFaviconFallback,
+	getMcpServerLabel
 } from './mcp';
 
 // URI Template utilities
@@ -281,7 +288,8 @@ export {
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
-	isWebSearchToolName
+	isWebSearchToolName,
+	looksLikeSearchResult
 } from './search-results';
 
 // Cache utilities
@@ -310,7 +318,7 @@ export {
 	withAbortSignal
 } from './abort';
 
-// Tool-call meta utilities. Parsers for each built-in tool live next to
+// Tool-call meta utilities. Parsers for each server tool live next to
 // their renderer family under
 // `src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/`.
 // This module only carries the helpers that genuinely cross tool
@@ -321,7 +329,7 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getBuiltinToolUi } from './built-in-tools';
+export { getToolUi } from './tool-ui';
 
 // Chat command picker
 
@@ -330,6 +338,18 @@ export { getChatCommands } from './chat-commands';
 // Sandbox tool definition
 // SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.
 export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-tool';
+
+// Browser `get_datetime` executor (the browser clock, not the server's)
+export { executeGetDatetimeTool } from './get-datetime';
+
+// Browser fallback for the server's get_info tool
+export { detectOs, executeBrowserInfoTool } from './browser-info';
+
+// Tool-use support detection from a chat template
+export { detectToolUseSupport } from './chat-template-tool-detector';
+
+// Model memory estimation
+export { minMemoryTierGb } from './model-compatibility';
 
 // Cryptography utilities
 

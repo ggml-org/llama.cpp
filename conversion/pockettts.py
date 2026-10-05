@@ -77,6 +77,7 @@ def _load_hparams(dir_model: Path) -> dict[str, Any]:
 
 
 @ModelBase.register("PocketTTSModel")
+# [TAG_HF_EXAMPLE_MISSING] model is gated, and the checkpoint requires cd to subdir, not supported here
 class PocketTTSModel(TextModel):
     model_arch = gguf.MODEL_ARCH.POCKETTTS
 
@@ -174,6 +175,7 @@ class PocketTTSModel(TextModel):
 
 
 @ModelBase.register("PocketTTSModel")
+# [TAG_HF_EXAMPLE_MISSING] model is gated, and the checkpoint requires cd to subdir, not supported here
 class PocketTTSMmprojModel(MmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False

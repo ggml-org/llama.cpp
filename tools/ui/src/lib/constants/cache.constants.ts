@@ -32,13 +32,3 @@ export const MCP_RESOURCE_CACHE = {
 	/** TTL for MCP resource cache entries in milliseconds (5 minutes) */
 	TTL_MS: 5 * 60 * 1000
 } as const;
-
-/**
- * Limits for pruning inactive conversation states held in memory.
- */
-export const INACTIVE_CONVERSATION = {
-	/** Maximum age (in ms) for inactive conversation states before cleanup (30 minutes) */
-	MAX_AGE_MS: 30 * 60 * 1000,
-	/** Maximum number of inactive conversation states to keep in memory */
-	MAX_STATES: 10
-} as const;

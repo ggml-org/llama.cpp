@@ -20,14 +20,13 @@ on:
     # Rebuild daily rather than on every push because it is expensive
     - cron: '12 4 * * *'
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
-
-# Fine-grant permission
-# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
-permissions:
-  packages: write
 
 jobs:
   create_tag:
@@ -44,6 +43,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       - name: Determine source tag name
         id: srctag
@@ -61,9 +61,12 @@ jobs:
   build_ui:
     name: Build UI
     needs: create_tag
+    permissions:
+      actions: write
+      contents: read
     uses: ./.github/workflows/ui-build.yml
     with:
-      hf_ui_version: ${{ needs.create_tag.outputs.source_tag }}
+      ui_version: ${{ needs.create_tag.outputs.source_tag }}
 
   prepare_matrices:
     name: Prepare Docker matrices
@@ -89,8 +92,8 @@ jobs:
             { "tag": "cpu", "dockerfile": ".devops/s390x.Dockerfile", "platforms": "linux/s390x", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04-s390x", "prebuilt_ui": true },
             { "tag": "cuda cuda12", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "12.8.1", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "cuda cuda12", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "12.8.1", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
-            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.3.0", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
-            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.3.0", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
+            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.4.1", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
+            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.4.1", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
             { "tag": "musa", "dockerfile": ".devops/musa.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "intel", "dockerfile": ".devops/intel.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "vulkan", "dockerfile": ".devops/vulkan.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04" },
@@ -145,6 +148,11 @@ jobs:
     needs: [prepare_matrices, create_tag, build_ui]
 
     runs-on: ${{ matrix.config.runs_on }}
+    # cache-mode: write # for QEMU
+    permissions:
+      actions: write
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -161,14 +169,14 @@ jobs:
         if: ${{ matrix.config.prebuilt_ui == true }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
-      - name: Set up QEMU
-        if: ${{ contains(matrix.config.platforms, 'linux/amd64') }}
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
-        with:
-          image: tonistiigi/binfmt:qemu-v10.2.1
+      # - name: Set up QEMU
+      #   if: ${{ contains(matrix.config.platforms, 'linux/amd64') }}
+      #   uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
+      #   with:
+      #     image: tonistiigi/binfmt:qemu-v10.2.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
@@ -393,6 +401,11 @@ jobs:
     name: Create shared tags from digests
     needs: [prepare_matrices, push_to_registry, create_tag]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -427,6 +440,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create tags from digests
+        id: create_tags
         shell: bash
         run: |
           set -euo pipefail
@@ -438,6 +452,7 @@ jobs:
           SRC_TAG="${{ needs.create_tag.outputs.source_tag }}"
           BUILD_DATE="${{ steps.build_date.outputs.date }}"
           COMMIT_SHA="${{ steps.checkout.outputs.commit }}"
+          echo "image_repo=${IMAGE_REPO}" >> "$GITHUB_OUTPUT"
           TAGS="${{ matrix.config.tag }}"
           ARCHES="${{ matrix.config.arches }}"
           DIGEST_GLOB="/tmp/digests/*.tsv"
@@ -504,6 +519,16 @@ jobs:
 
               echo "Creating ${merged_versioned_tag} from ${refs[*]}"
               docker buildx imagetools create "${annotations[@]}" --tag "${merged_versioned_tag}" "${refs[@]}"
+
+              if [[ "$tag_name" == "${TAGS%% *}" ]]; then
+                  local digest
+                  digest="$(docker buildx imagetools inspect "${merged_versioned_tag}" --format '{{.Manifest.Digest}}')"
+                  if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                      echo "Invalid digest for ${merged_versioned_tag}: ${digest}" >&2
+                      exit 1
+                  fi
+                  echo "${image_type}_digest=${digest}" >> "$GITHUB_OUTPUT"
+              fi
           }
 
           for tag in $TAGS; do
@@ -527,3 +552,24 @@ jobs:
           done
         env:
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
+
+      - name: Attest full image
+        if: ${{ matrix.config.full }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.create_tags.outputs.image_repo }}
+          subject-digest: ${{ steps.create_tags.outputs.full_digest }}
+
+      - name: Attest light image
+        if: ${{ matrix.config.light }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.create_tags.outputs.image_repo }}
+          subject-digest: ${{ steps.create_tags.outputs.light_digest }}
+
+      - name: Attest server image
+        if: ${{ matrix.config.server }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.create_tags.outputs.image_repo }}
+          subject-digest: ${{ steps.create_tags.outputs.server_digest }}

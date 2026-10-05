@@ -92,6 +92,67 @@ describe('ChatService stream resume', () => {
 		expect(ChatService.getStreamState('conv-a')!.model).toBe('model-y');
 	});
 
+	describe('throttled saves (per-chunk path)', () => {
+		// unique conversation ids: the throttle tracker is module state and
+		// outlives beforeEach's localStorage.clear()
+		let counter = 0;
+
+		const freshConv = () => `conv-throttle-${++counter}`;
+
+		it('writes immediately when no write was recorded for the conversation', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(100);
+		});
+
+		it('holds a save pending when it lands inside the interval, flush forces it out', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.saveStreamStateThrottled(conv, 200);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(100);
+
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(200);
+		});
+
+		it('flush is a no-op when nothing is pending', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.flushStreamState(conv);
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(100);
+		});
+
+		it('an immediate save resets the throttle window', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.saveStreamState(conv, 150);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(150);
+
+			ChatService.saveStreamStateThrottled(conv, 200);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(150);
+
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(200);
+		});
+
+		it('clearStreamState drops the pending throttled state', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.saveStreamStateThrottled(conv, 200);
+			ChatService.clearStreamState(conv);
+			expect(ChatService.getStreamState(conv)).toBeNull();
+
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)).toBeNull();
+		});
+	});
+
 	describe('resumeStreamIdentity', () => {
 		it('appends the persisted model so the resume key matches the frozen POST identity', () => {
 			ChatService.saveStreamState('conv-a', 10, 'model-x');

@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("BloomForCausalLM", "BloomModel")
+@ModelBase.example("bigscience/bloom-560m")
 class BloomModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BLOOM
 

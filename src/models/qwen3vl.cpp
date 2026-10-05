@@ -18,6 +18,7 @@ void llama_model_qwen3vl::load_arch_tensors(llama_model_loader &) {
 
     int64_t n_vocab_out = n_vocab;
     if (arch == LLM_ARCH_QWEN3TTS) {
+        // [TAG_LLAMA_N_VOCAB_OUT]
         n_vocab_out = 3072;
     }
 

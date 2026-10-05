@@ -22,9 +22,9 @@
 
 				{#if !isLoadingModel}
 					<button
-						onclick={() => serverStore.fetch()}
-						disabled={serverStore.loading}
 						class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
+						disabled={serverStore.loading}
+						onclick={() => serverStore.fetch()}
 					>
 						<RefreshCw class="h-3 w-3 {serverStore.loading ? 'animate-spin' : ''}" />
 						{serverStore.loading ? 'Retrying...' : 'Retry'}

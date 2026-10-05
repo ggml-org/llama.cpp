@@ -14,6 +14,7 @@ from .base import MmprojModel, ModelBase, SentencePieceTokenTypes, TextModel, gg
 
 
 @ModelBase.register("PhiForCausalLM")
+@ModelBase.example("microsoft/phi-2")
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
 
@@ -36,6 +37,7 @@ class Phi2Model(TextModel):
 
 
 @ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV")
+@ModelBase.example("microsoft/Phi-3-mini-4k-instruct")
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
@@ -210,6 +212,7 @@ class Phi3MiniModel(TextModel):
 
 
 @ModelBase.register("Phi4ForCausalLMV")
+# [TAG_HF_EXAMPLE_MISSING]
 class Phi4VisionMmprojModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -336,6 +339,7 @@ class Phi4VisionMmprojModel(MmprojModel):
 
 
 @ModelBase.register("PhiMoEForCausalLM")
+@ModelBase.example("microsoft/Phi-3.5-MoE-instruct")
 class PhiMoeModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHIMOE
 

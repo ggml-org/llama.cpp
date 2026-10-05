@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("MellumForCausalLM")
+@ModelBase.example("JetBrains/Mellum2-12B-A2.5B-Base")
 class MellumModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MELLUM
 

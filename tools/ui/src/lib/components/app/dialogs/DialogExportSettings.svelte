@@ -23,7 +23,7 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
@@ -52,11 +52,11 @@
 		</AlertDialog.Header>
 
 		<div class="flex items-center gap-2 py-2">
-			<Checkbox id="include-sensitive" bind:checked={includeSensitiveData} />
+			<Checkbox bind:checked={includeSensitiveData} id="include-sensitive" />
 
 			<Label
-				for="include-sensitive"
 				class="text-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+				for="include-sensitive"
 			>
 				{#if includeSensitiveData}
 					<span class="text-destructive">Include sensitive data (not recommended)</span>
@@ -70,8 +70,8 @@
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
 
 			<AlertDialog.Action
-				onclick={onConfirm}
 				class="bg-destructive text-white hover:bg-destructive/80"
+				onclick={onConfirm}
 			>
 				{#if includeSensitiveData}
 					Export Anyway

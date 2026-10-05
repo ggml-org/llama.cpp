@@ -6,7 +6,7 @@
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { FileTypeText } from '$lib/enums';
 	import type { AgenticSection } from '$lib/types';
-	import { getBuiltinToolUi } from '$lib/utils';
+	import { getToolUi } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -18,10 +18,10 @@
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const runJsMeta = $derived(parseRunJavascriptMeta(section));
-	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
+	const title = $derived(getToolUi(section.toolName)?.label ?? section.toolName ?? '');
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={runJsMeta} {title} {onToggle}>
+<ToolCallBlock {isStreaming} meta={runJsMeta} {onToggle} {open} {section} {title}>
 	{#snippet children(meta, ctx)}
 		{#if ctx.isPending}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">Running...</div>
@@ -30,8 +30,10 @@
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
 				<span>{meta.errorMessage}</span>
 			</div>
+
 			<div class="mt-3">
 				<SyntaxHighlightedCode
 					code={meta.code}
@@ -47,13 +49,17 @@
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				streaming={ctx.isCodeStreaming}
 			/>
+
 			<div class="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground/70">
 				<Terminal class="h-3 w-3" />
+
 				<span>Console</span>
+
 				{#if meta.timeoutMs != null}
 					<span class="font-mono">&middot;&nbsp;timeout&nbsp;{meta.timeoutMs}&nbsp;ms</span>
 				{/if}
 			</div>
+
 			{#if section.toolResult}
 				<div class="mt-1">
 					<SyntaxHighlightedCode

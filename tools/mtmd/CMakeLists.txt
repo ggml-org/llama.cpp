@@ -17,6 +17,7 @@ add_library(mtmd
             mtmd-audio.cpp
             mtmd-image.cpp
             mtmd.h
+            mtmd-internal.h
             mtmd-helper.cpp
             mtmd-helper-gen.cpp
             mtmd-helper-common.h
@@ -29,6 +30,8 @@ add_library(mtmd
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
+            models/deepseek4v.cpp
+            models/dots3note.cpp
             models/dotsocr.cpp
             models/exaone4_5.cpp
             models/gemma4a.cpp
@@ -52,6 +55,7 @@ add_library(mtmd
             models/qwen2vl.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
+            models/ling3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
             models/mimo-audio.cpp
@@ -78,10 +82,8 @@ set_target_properties(mtmd PROPERTIES
 )
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
-target_link_libraries     (mtmd PRIVATE Threads::Threads)
+target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::miniaudio vendor::stb vendor::sheredom)
 target_include_directories(mtmd PUBLIC  .)
-target_include_directories(mtmd PRIVATE ../..)
-target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
 if (MTMD_VIDEO)
@@ -92,6 +94,9 @@ if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)
     target_compile_definitions(mtmd PUBLIC  LLAMA_SHARED)
+
+    # export all symbols so that internal components can be tested by test-mtmd-impl
+    set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 set(MTMD_PUBLIC_HEADERS
@@ -117,6 +122,13 @@ endif()
 if (ANDROID)
     # miniaudio.h defines ma_android_sdk_version() without a prior prototype
     target_compile_options(mtmd PRIVATE -Wno-missing-prototypes)
+endif()
+
+# MSVC defines _M_X64 for ARM64EC, so miniaudio.h takes its x64 path.
+# ARM64EC does not support AVX types.
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" MTMD_GENERATOR_PLATFORM_LWR)
+if (MSVC AND MTMD_GENERATOR_PLATFORM_LWR STREQUAL "arm64ec")
+    target_compile_definitions(mtmd PRIVATE MA_NO_AVX2)
 endif()
 
 if (TARGET BUILD_INFO)

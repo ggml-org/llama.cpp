@@ -29,6 +29,12 @@ identify which PRs require a version bump before cutting a release._
 Releases are created by running the [make-release](.github/workflows/make-release.yml)
 which is a manual workflow.
 
+The workflow runs against the branch selected in the "Run workflow" dialog
+(default `master`) and takes an optional `commit` SHA. When a commit is given,
+the workflow validates that the commit belongs to the branch and is not older
+than 3 days from the branch HEAD, then releases that commit instead of the
+branch HEAD.
+
 The workflow creates an annotated git tag (e.g. `v0.1.0`) and pushes it to the
 remote. No GitHub Release object is created, the tag is the release artifact.
 

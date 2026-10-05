@@ -12,9 +12,9 @@ export interface SourceHistoryEntry {
 }
 
 export class SourceHistory {
-	private undoStack: SourceHistoryEntry[] = [];
-	private redoStack: SourceHistoryEntry[] = [];
 	private lastPush = 0;
+	private redoStack: SourceHistoryEntry[] = [];
+	private undoStack: SourceHistoryEntry[] = [];
 
 	constructor(
 		private limit = 100,
@@ -32,17 +32,6 @@ export class SourceHistory {
 		this.redoStack = [];
 	}
 
-	undo(current: SourceHistoryEntry): SourceHistoryEntry | null {
-		const entry = this.undoStack.pop();
-
-		if (!entry) return null;
-
-		this.redoStack.push(current);
-		this.lastPush = 0; // the next edit after an undo starts a new group
-
-		return entry;
-	}
-
 	redo(current: SourceHistoryEntry): SourceHistoryEntry | null {
 		const entry = this.redoStack.pop();
 
@@ -50,6 +39,17 @@ export class SourceHistory {
 
 		this.undoStack.push(current);
 		this.lastPush = 0;
+
+		return entry;
+	}
+
+	undo(current: SourceHistoryEntry): SourceHistoryEntry | null {
+		const entry = this.undoStack.pop();
+
+		if (!entry) return null;
+
+		this.redoStack.push(current);
+		this.lastPush = 0; // the next edit after an undo starts a new group
 
 		return entry;
 	}

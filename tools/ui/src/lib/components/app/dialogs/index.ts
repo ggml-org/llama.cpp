@@ -19,6 +19,23 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
+ * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ *
+ * Shows the same MCP server list as the `/mcp-servers` route inside a modal
+ * dialog.
+ */
+export { default as DialogMcpServers } from './DialogMcpServers.svelte';
+
+/**
+ * **DialogSettingsChat** - Chat settings shown in a modal dialog
+ *
+ * Wraps the full SettingsChat layout (sidebar, mobile header, fields, footer)
+ * inside a ShadCN Dialog instead of a dedicated route. Section switching is
+ * handled in-app via `onSectionChange` rather than URL navigation.
+ */
+export { default as DialogSettingsChat } from './DialogSettingsChat.svelte';
+
+/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude
@@ -90,6 +107,17 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
  * ```
  */
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
+
+/**
+ * **DialogConfirmDownload** - Confirm a destructive download action
+ *
+ * Shared confirmation for stopping/cancelling an in-flight download or deleting
+ * a downloaded model, used by the discover quant chips and the model selector's
+ * download rows so both word the action identically. Owns the copy and the
+ * default store removal; render one instance per surface keyed by the acted-on
+ * repo:tag.
+ */
+export { default as DialogConfirmDownload } from './DialogConfirmDownload.svelte';
 
 /**
  * **DialogConversationRename** - Rename a conversation

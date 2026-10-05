@@ -106,18 +106,6 @@ void llama_model_t5::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_t5::build_arch_graph(const llm_graph_params & params) const {
-    switch (params.gtype) {
-        case LLM_GRAPH_TYPE_ENCODER:
-            return std::make_unique<graph<true>>(*this, params);
-        case LLM_GRAPH_TYPE_DEFAULT:
-        case LLM_GRAPH_TYPE_DECODER:
-            return std::make_unique<graph<false>>(*this, params);
-        default:
-            GGML_ABORT("invalid graph type");
-    };
-}
-
 template <>
 llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
@@ -367,4 +355,16 @@ llama_model_t5::graph<true>::graph(const llama_model & model, const llm_graph_pa
     res->t_embd = cur;
 
     ggml_build_forward_expand(gf, cur);
+}
+
+std::unique_ptr<llm_graph_context> llama_model_t5::build_arch_graph(const llm_graph_params & params) const {
+    switch (params.gtype) {
+        case LLM_GRAPH_TYPE_ENCODER:
+            return std::make_unique<graph<true>>(*this, params);
+        case LLM_GRAPH_TYPE_DEFAULT:
+        case LLM_GRAPH_TYPE_DECODER:
+            return std::make_unique<graph<false>>(*this, params);
+        default:
+            GGML_ABORT("invalid graph type");
+    };
 }
