@@ -48,9 +48,10 @@ reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt
 It exits non-zero when a launch failed (a failed or unverified warmup fails it
 too), a response failed the target-argmax verifier, a speculative arm reported
 no draft statistics, a fault line appeared, or the kernel log could not be
-compared (unreadable, wrapped or cleared during the run). The verifier has argmax evidence only for tokens the server sampled on
-its normal path: it sends no top list for tokens emitted from a verified draft
-round, where the check is the token id and a finite log-probability
+compared (unreadable, wrapped or cleared during the run). The verifier has
+argmax evidence only for tokens the server sampled on its normal path: it sends
+no top list for tokens emitted from a verified draft round, where the check is
+the token id and a finite log-probability
 (verifier_rows_with_argmax counts the rows that had the evidence).
 Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
 verified and how many restored a speculative checkpoint.
