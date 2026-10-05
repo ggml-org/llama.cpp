@@ -19,7 +19,7 @@ set "ND_COMMIT=043f1bf05e41343cc88dda619ddd86aee60a02fe"
 set "SRC_REPO=https://github.com/hli25/llama.cpp"
 set "SRC_COMMIT=67f2cab9652be2103876b4dcb85daa07943a7341"
 rem The source tree after every patch is applied. A different value means a patch went in wrong.
-set "EXPECT_TREE=0a932f89c0d705f044554e91111c8460df89fcf2"
+set "EXPECT_TREE=1d8081c894ce51e7d137ca388289e6351209fe23"
 
 set "HERE=%~dp0"
 set "PATCHES=%HERE%patches"

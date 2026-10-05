@@ -1,0 +1,48 @@
+From 7da106eb288ad8d97f22c1b2baac4c1883a2b443 Mon Sep 17 00:00:00 2001
+From: jayneelatintel <jayneel.vora@intel.com>
+Date: Sun, 4 Oct 2026 11:36:17 -0700
+Subject: [PATCH 11/11] dist-tp: count a PARTIAL weight once across ranks, not
+ once per rank
+
+The meta backend loads a PARTIAL tensor by giving each local buffer
+data / n_bufs, so that the all-reduce sums the shares back to the
+tensor. Under dist-TP each rank has one buffer (n_bufs == 1) and the
+all-reduce also sums over the ranks, so every rank kept the whole
+tensor and the sum counted it world_size times.
+
+The only PARTIAL tensor in the split config is ffn_down_exps.bias, and
+the graph split delays the all-reduce past the ADD_ID that adds it, so
+at 3 ranks the bias was added three times in every MoE layer. gpt-oss
+is the first model run on dist-TP that has this tensor: its output left
+the topic after a few tokens and then looped. Models without
+ffn_down_exps.bias load no PARTIAL tensor and are unchanged.
+
+Divide by n_bufs * world_size.
+---
+ ggml/src/ggml-backend-meta.cpp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
+index 0249de5..41f1dfe 100644
+--- a/ggml/src/ggml-backend-meta.cpp
++++ b/ggml/src/ggml-backend-meta.cpp
+@@ -1515,11 +1515,15 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
+         } break;
+         case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+             GGML_ASSERT(tensor->type == GGML_TYPE_F32);
++            // The all-reduce sums a PARTIAL tensor, so the shares must add up to the tensor. Under dist-TP each
++            // rank holds one buffer and the network sum adds the ranks too: divide by both, or a bias that is
++            // added before the all-reduce (ffn_down_exps.bias in gpt-oss) is counted once per rank.
++            const float n_shares = (float) n_bufs * (float) dist_world_size;
+             const int64_t ne = ggml_nelements(tensor);
+             std::vector<float> tmp;
+             tmp.reserve(ne);
+             for (int64_t i = 0; i < ne; i++) {
+-                tmp.push_back(((const float *) data)[i] / n_bufs);
++                tmp.push_back(((const float *) data)[i] / n_shares);
+             }
+             for (size_t j = 0; j < n_bufs; j++) {
+                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+-- 
+2.53.0.windows.3
+

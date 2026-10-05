@@ -102,13 +102,13 @@ This repository holds:
 
 | Path | What |
 |---|---|
-| `patches/` | 10 patches for llama.cpp's `dist-tp` branch: a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, profiling, and removal of the GitHub Actions workflows inherited from llama.cpp |
+| `patches/` | 11 patches for llama.cpp's `dist-tp` branch: a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, profiling, removal of the GitHub Actions workflows inherited from llama.cpp, and a fix for gpt-oss |
 | `build.cmd` | builds `llama-cli.exe` and its DLLs from scratch with the patches applied |
 | `scripts/` | PowerShell scripts, run from a controller machine, that prepare the USB4 links, check the nodes, launch every rank and verify what transport each one actually used |
 | `prompts/` | a sample prompt |
 
 The patches apply to `https://github.com/hli25/llama.cpp`, branch `dist-tp`, commit
-`0a932f89c0d705f044554e91111c8460df89fcf2`,
+(`1d8081c894ce51e7d137ca388289e6351209fe23`),
 
 #### 1. Requirements
 
@@ -282,9 +282,9 @@ prompt goes over TCP and only decode uses RDMA. Use
 
     -ub N    with    N = floor(262144 / (4 x n_embd))
 
-`n_embd` is printed in the model load log (`print_info: n_embd = ...`): 4096 gives 16, 5120 gives
-12, 8192 gives 8. A smaller ubatch processes the prompt in more, smaller GPU batches. The run
-prints the largest payload it saw against the ND limit.
+`n_embd` is printed in the model load log (`print_info: n_embd = ...`): 2880 gives 22, 4096 gives
+16, 5120 gives 12, 8192 gives 8. A smaller ubatch processes the prompt in more, smaller GPU
+batches. The run prints the largest payload it saw against the ND limit.
 
 Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
 `scripts\logs\results.jsonl`. Add `-Rank0Manual` to start ranks 1..N-1 and print the command for
@@ -359,6 +359,9 @@ address>:<port>` on every rank.
 - **`--dist-master` must be rank 0's own address**, or every rank waits forever at the rendezvous.
 - **A USB4 link can degrade under sustained load** while still reporting Up. Check each cable with
   `link_throughput.ps1` before and after a session; a reboot or re-plug restores it.
+- **gpt-oss needs `--no-jinja`.** With the model's own chat template, a reply cut off by `-n` makes
+  the chat parser throw, and llama-cli exits with 0xC0000409 before it prints its timings.
+  `--no-jinja` uses the built-in template, which does not parse the reply.
 
 ### 5. With NCCL
 
