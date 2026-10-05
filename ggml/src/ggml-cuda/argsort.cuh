@@ -1,5 +1,7 @@
 #include "common.cuh"
 
+#define CUDA_ARGSORT_BLOCK_SIZE 1024
+
 void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 #ifdef GGML_CUDA_USE_CUB

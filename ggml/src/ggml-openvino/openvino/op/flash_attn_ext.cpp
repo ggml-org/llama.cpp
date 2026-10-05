@@ -126,8 +126,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         if (env != nullptr) {
             return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
         }
-        const char * dev = ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE");
-        return dev != nullptr && std::string(dev) == "GPU";
+        return ggml_openvino_is_gpu();
     }();
     const bool use_manual_gqa_attention =
         manual_gqa_enabled && factor > 1 && num_heads_kv > 1 && !context.is_stateful();

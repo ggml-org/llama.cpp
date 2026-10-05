@@ -149,6 +149,13 @@ static value test_type_fn(const func_args & args) {
     JJ_DEBUG("test_type_fn: type=%s, %s or %s result=%d", typeid(T).name(), typeid(U).name(), typeid(V).name(), is_type ? 1 : 0);
     return mk_val<value_bool>(is_type);
 }
+template<typename T, typename U, typename V, typename W>
+static value test_type_fn(const func_args & args) {
+    args.ensure_count(1);
+    bool is_type = is_val<T>(args.get_pos(0)) || is_val<U>(args.get_pos(0)) || is_val<V>(args.get_pos(0)) || is_val<W>(args.get_pos(0));
+    JJ_DEBUG("test_type_fn: type=%s, %s, %s or %s result=%d", typeid(T).name(), typeid(U).name(), typeid(V).name(), typeid(W).name(), is_type ? 1 : 0);
+    return mk_val<value_bool>(is_type);
+}
 template<value_compare_op op>
 static value test_compare_fn(const func_args & args) {
     args.ensure_count(2, 2);
@@ -261,6 +268,30 @@ static value tojson(const func_args & args) {
     return mk_val<value_string>(json_str);
 }
 
+static value & get_attribute(const value & val, const value & attr, value & default_val) {
+    if (!attr->is_undefined()) {
+        if (is_val<value_array>(val)) {
+            value idx = attr;
+
+            if (is_val<value_string>(attr)) {
+                const std::string s = attr->as_string().str();
+                if (!s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); })) {
+                    try {
+                        idx = mk_val<value_int>(std::stoll(s));
+                    } catch (...) {
+                        idx = mk_val<value_undefined>();
+                    }
+                }
+            }
+
+            return val->at(idx, default_val);
+        } else if (is_val<value_object>(val)) {
+            return val->at(attr, default_val);
+        }
+    }
+    return default_val;
+}
+
 template<bool is_reject>
 static value selectattr(const func_args & args) {
     args.ensure_count(2, 4);
@@ -274,10 +305,7 @@ static value selectattr(const func_args & args) {
     if (args.count() == 2) {
         // example: array | selectattr("active")
         for (const auto & item : arr) {
-            if (!is_val<value_object>(item)) {
-                throw raised_exception("selectattr: item is not an object");
-            }
-            value attr_val = item->at(attribute, val_default);
+            value attr_val = get_attribute(item, attribute, val_default);
             bool is_selected = attr_val->as_bool();
             if constexpr (is_reject) is_selected = !is_selected;
             if (is_selected) out->push_back(item);
@@ -318,10 +346,7 @@ static value selectattr(const func_args & args) {
         }
         auto test_fn = it->second;
         for (const auto & item : arr) {
-            if (!is_val<value_object>(item)) {
-                throw raised_exception("selectattr: item is not an object");
-            }
-            value attr_val = item->at(attribute, val_default);
+            value attr_val = get_attribute(item, attribute, val_default);
             func_args test_args(args.ctx);
             test_args.push_back(attr_val); // attribute value
             test_args.push_back(extra_arg); // extra argument
@@ -348,6 +373,43 @@ static value default_value(const func_args & args) {
     return no_value ? args.get_pos(1) : args.get_pos(0);
 }
 
+static value toobject(const func_args & args) {
+    auto out = mk_val<value_object>();
+    value iter = args.get_pos(0, mk_val<value_undefined>());
+    bool iter_first = false;
+    if (is_val<value_array>(iter)) {
+        iter_first = true;
+        for (const auto & it : iter->as_array()) {
+            if (is_val<value_array>(it) && it->as_array().size() == 2) {
+                auto tuple = it->as_array();
+                auto key = tuple[0];
+                auto val = tuple[1];
+                JJ_DEBUG("namespace/dict: adding key '%s'", key->as_string().str().c_str());
+                out->insert(key, val);
+            } else {
+                throw raised_exception("namespace/dict() iterable argument must consist of tuples, not " + it->type());
+            }
+        }
+    } else if (is_val<value_object>(iter)) {
+        iter_first = true;
+        for (const auto & pair : iter->as_ordered_object()) {
+            JJ_DEBUG("namespace/dict: adding key '%s'", pair.first->as_string().str().c_str());
+            out->insert(pair.first, pair.second);
+        }
+    }
+    for (const auto & arg : args.get_args()) {
+        if (is_val<value_kwarg>(arg)) {
+            auto kwarg = cast_val<value_kwarg>(arg);
+            JJ_DEBUG("namespace/dict: adding key '%s'", kwarg->key.c_str());
+            out->insert(kwarg->key, kwarg->val);
+        } else if (!iter_first) {
+            throw raised_exception("namespace/dict() arguments must be kwargs, dict and/or iterable of tuples, not " + arg->type());
+        }
+        iter_first = false;
+    }
+    return out;
+}
+
 const func_builtins & global_builtins() {
     static const func_builtins builtins = {
         {"raise_exception", [](const func_args & args) -> value {
@@ -355,18 +417,8 @@ const func_builtins & global_builtins() {
             std::string msg = args.get_pos(0)->as_string().str();
             throw raised_exception("Jinja Exception: " + msg);
         }},
-        {"namespace", [](const func_args & args) -> value {
-            auto out = mk_val<value_object>();
-            for (const auto & arg : args.get_args()) {
-                if (!is_val<value_kwarg>(arg)) {
-                    throw raised_exception("namespace() arguments must be kwargs");
-                }
-                auto kwarg = cast_val<value_kwarg>(arg);
-                JJ_DEBUG("namespace: adding key '%s'", kwarg->key.c_str());
-                out->insert(kwarg->key, kwarg->val);
-            }
-            return out;
-        }},
+        {"dict", toobject},
+        {"namespace", toobject},
         {"strftime_now", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
             std::string format = args.get_pos(0)->as_string().str();
@@ -451,8 +503,8 @@ const func_builtins & global_builtins() {
         {"test_is_integer", test_type_fn<value_int>},
         {"test_is_float", test_type_fn<value_float>},
         {"test_is_number", test_type_fn<value_int, value_float>},
-        {"test_is_iterable", test_type_fn<value_array, value_string, value_undefined>},
-        {"test_is_sequence", test_type_fn<value_array, value_string, value_undefined>},
+        {"test_is_iterable", test_type_fn<value_object, value_array, value_string, value_undefined>},
+        {"test_is_sequence", test_type_fn<value_object, value_array, value_string, value_undefined>},
         {"test_is_mapping", test_type_fn<value_object>},
         {"test_is_lower", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
@@ -515,8 +567,28 @@ const func_builtins & global_builtins() {
         }},
         {"test_is_sameas", [](const func_args & args) -> value {
             // Check if an object points to the same memory address as another object
-            (void)args;
-            throw not_implemented_exception("sameas test not implemented");
+            args.ensure_count(2);
+            auto a = args.get_pos(0);
+            auto b = args.get_pos(1);
+            bool res = false;
+            if (!is_val<value_undefined>(a) && !is_val<value_undefined>(b)) {
+                if (is_val<value_none>(a) && is_val<value_none>(b)) {
+                    res = true;
+                } else if (is_val<value_bool>(a) && is_val<value_bool>(b)) {
+                    if (a->as_bool() == b->as_bool()) {
+                        res = true;
+                    }
+                } else if (is_val<value_int>(a) && is_val<value_int>(b)) {
+                    const int64_t x = a->as_int();
+                    // Allow comparison within small-int cache range
+                    if (x >= -5 && x <= 256 && x == b->as_int()) {
+                        res = true;
+                    }
+                } else if (a == b) {
+                    res = true;
+                }
+            }
+            return mk_val<value_bool>(res);
         }},
         {"test_is_escaped", [](const func_args & args) -> value {
             (void)args;
@@ -1021,22 +1093,14 @@ const func_builtins & value_array_t::get_builtins() const {
             }
             value val_delim = args.get_kwarg_or_pos("d",         1);
             value attribute = args.get_kwarg_or_pos("attribute", 2);
+            value undef = mk_val<value_undefined>();
             const auto & arr = args.get_pos(0)->as_array();
-            const bool attr_is_int = is_val<value_int>(attribute);
-            if (!attribute->is_undefined() && !is_val<value_string>(attribute) && !attr_is_int) {
-                throw raised_exception("join() attribute must be string or integer");
-            }
-            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
             const std::string delim = val_delim->is_undefined() ? "" : val_delim->as_string().str();
             std::string result;
             for (size_t i = 0; i < arr.size(); ++i) {
                 value val_arr = arr[i];
                 if (!attribute->is_undefined()) {
-                    if (attr_is_int && is_val<value_array>(val_arr)) {
-                        val_arr = val_arr->at(attr_int);
-                    } else if (!attr_is_int && is_val<value_object>(val_arr)) {
-                        val_arr = val_arr->at(attribute);
-                    }
+                    val_arr = get_attribute(val_arr, attribute, undef);
                 }
                 if (!is_val<value_string>(val_arr) && !is_val<value_int>(val_arr) && !is_val<value_float>(val_arr)) {
                     throw raised_exception("join() can only join arrays of strings or numerics");
@@ -1068,21 +1132,11 @@ const func_builtins & value_array_t::get_builtins() const {
             }
             value val       = args.get_pos(0);
             value attribute = args.get_kwarg_or_pos("attribute", 1);
-            const bool attr_is_int = is_val<value_int>(attribute);
-            if (!is_val<value_string>(attribute) && !attr_is_int) {
-                throw raised_exception("map: attribute must be string or integer");
-            }
-            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
             value default_val = args.get_kwarg("default", mk_val<value_undefined>());
             auto out = mk_val<value_array>();
             auto arr = val->as_array();
             for (const auto & item : arr) {
-                value attr_val;
-                if (attr_is_int) {
-                    attr_val = is_val<value_array>(item) ? item->at(attr_int, default_val) : default_val;
-                } else {
-                    attr_val = is_val<value_object>(item) ? item->at(attribute, default_val) : default_val;
-                }
+                value attr_val = get_attribute(item, attribute, default_val);
                 out->push_back(attr_val);
             }
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(out->as_array())) : out;
@@ -1119,22 +1173,14 @@ const func_builtins & value_array_t::get_builtins() const {
             // FIXME: sorting is currently always case sensitive
             //const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
-            const bool attr_is_int = is_val<value_int>(attribute);
-            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
+            value undef = mk_val<value_undefined>();
             std::vector<value> arr = val->as_array(); // copy
             std::sort(arr.begin(), arr.end(),[&](const value & a, const value & b) {
                 value val_a = a;
                 value val_b = b;
                 if (!attribute->is_undefined()) {
-                    if (attr_is_int && is_val<value_array>(a) && is_val<value_array>(b)) {
-                        val_a = a->at(attr_int);
-                        val_b = b->at(attr_int);
-                    } else if (!attr_is_int && is_val<value_object>(a) && is_val<value_object>(b)) {
-                        val_a = a->at(attribute);
-                        val_b = b->at(attribute);
-                    } else {
-                        throw raised_exception("sort: unsupported object attribute comparison between " + a->type() + " and " + b->type());
-                    }
+                    val_a = get_attribute(a, attribute, undef);
+                    val_b = get_attribute(b, attribute, undef);
                 }
                 return value_compare(val_a, val_b, reverse ? value_compare_op::gt : value_compare_op::lt);
             });
@@ -1152,19 +1198,23 @@ const func_builtins & value_array_t::get_builtins() const {
             args.ensure_vals<value_array>();
             value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
             value attribute   = args.get_kwarg_or_pos("attribute",      2);
-            if (!attribute->is_undefined()) {
-                throw not_implemented_exception("min: attribute not implemented");
-            }
             // FIXME: min is currently always case sensitive
             (void) val_case;
+            value undef = mk_val<value_undefined>();
             const auto & arr = args.get_pos(0)->as_array();
             if (arr.empty()) {
-                return mk_val<value_undefined>();
+                return undef;
             }
             value result = arr[0];
-            for (size_t i = 1; i < arr.size(); ++i) {
-                if (value_compare(arr[i], result, value_compare_op::lt)) {
-                    result = arr[i];
+            for (const auto & item : arr) {
+                value val_arr = item;
+                value val_cmp = result;
+                if (!attribute->is_undefined()) {
+                    val_arr = get_attribute(val_arr, attribute, undef);
+                    val_cmp = get_attribute(val_cmp, attribute, undef);
+                }
+                if (value_compare(val_arr, val_cmp, value_compare_op::lt)) {
+                    result = item;
                 }
             }
             return result;
@@ -1174,19 +1224,23 @@ const func_builtins & value_array_t::get_builtins() const {
             args.ensure_vals<value_array>();
             value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
             value attribute   = args.get_kwarg_or_pos("attribute",      2);
-            if (!attribute->is_undefined()) {
-                throw not_implemented_exception("max: attribute not implemented");
-            }
             // FIXME: max is currently always case sensitive
             (void) val_case;
+            value undef = mk_val<value_undefined>();
             const auto & arr = args.get_pos(0)->as_array();
             if (arr.empty()) {
-                return mk_val<value_undefined>();
+                return undef;
             }
             value result = arr[0];
-            for (size_t i = 1; i < arr.size(); ++i) {
-                if (value_compare(arr[i], result, value_compare_op::gt)) {
-                    result = arr[i];
+            for (const auto & item : arr) {
+                value val_arr = item;
+                value val_cmp = result;
+                if (!attribute->is_undefined()) {
+                    val_arr = get_attribute(val_arr, attribute, undef);
+                    val_cmp = get_attribute(val_cmp, attribute, undef);
+                }
+                if (value_compare(val_arr, val_cmp, value_compare_op::gt)) {
+                    result = item;
                 }
             }
             return result;

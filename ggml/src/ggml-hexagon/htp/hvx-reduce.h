@@ -326,6 +326,79 @@ static inline int32_t hvx_reduce_max_i32(const uint8_t * restrict src, const int
     }
 }
 
+static inline void hvx_argmax_f32(
+    const float * restrict src,
+    uint32_t n,
+    uint32_t offset,
+    float * out_val,
+    int32_t * out_idx
+) {
+    if (n == 0) {
+        *out_val = -INFINITY;
+        *out_idx = (int32_t) offset;
+        return;
+    }
+
+    if (n < 32 || !hex_is_aligned((void *) src, 128)) {
+        float best_val = src[0];
+        int32_t best_idx = (int32_t) offset;
+        for (uint32_t i = 1; i < n; i++) {
+            if (src[i] > best_val) {
+                best_val = src[i];
+                best_idx = (int32_t) (offset + i);
+            }
+        }
+        *out_val = best_val;
+        *out_idx = best_idx;
+        return;
+    }
+
+    static const int32_t c_lane_idx[32] __attribute__((aligned(128))) = {
+         0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+        16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+    };
+
+    const HVX_Vector v_init_idx = *(const HVX_Vector *) c_lane_idx;
+    const HVX_Vector v_step     = Q6_V_vsplat_R(32);
+    HVX_Vector v_cur_idx        = Q6_Vw_vadd_VwVw(v_init_idx, Q6_V_vsplat_R((int32_t) offset));
+    HVX_Vector v_max_val        = hvx_vec_splat_f32(-INFINITY);
+    HVX_Vector v_max_idx        = v_cur_idx;
+
+    const HVX_Vector * vsrc = (const HVX_Vector *) src;
+    const uint32_t nvec = n / 32;
+
+    for (uint32_t vi = 0; vi < nvec; vi++) {
+        HVX_Vector v = vsrc[vi];
+        HVX_VectorPred pred = Q6_Q_vcmp_gt_VsfVsf(v, v_max_val);
+        v_max_val = Q6_V_vmux_QVV(pred, v, v_max_val);
+        v_max_idx = Q6_V_vmux_QVV(pred, v_cur_idx, v_max_idx);
+        v_cur_idx = Q6_Vw_vadd_VwVw(v_cur_idx, v_step);
+    }
+
+    HVX_VectorAlias u_val, u_idx;
+    u_val.v = v_max_val;
+    u_idx.v = v_max_idx;
+
+    float best_val = u_val.fp32[0];
+    int32_t best_idx = (int32_t) u_idx.w[0];
+    for (int i = 1; i < 32; i++) {
+        if (u_val.fp32[i] > best_val) {
+            best_val = u_val.fp32[i];
+            best_idx = (int32_t) u_idx.w[i];
+        }
+    }
+
+    for (uint32_t i = nvec * 32; i < n; i++) {
+        if (src[i] > best_val) {
+            best_val = src[i];
+            best_idx = (int32_t) (offset + i);
+        }
+    }
+
+    *out_val = best_val;
+    *out_idx = best_idx;
+}
+
 #undef hvx_reduce_loop_body
 #undef HVX_REDUCE_MAX_OP
 #undef HVX_REDUCE_SUM_OP

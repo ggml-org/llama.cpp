@@ -111,6 +111,20 @@ static inline HVX_Vector hvx_vec_neg_f32(HVX_Vector v) {
 #endif  // __HVX_ARCH__ > 75
 }
 
+static inline HVX_Vector hvx_vec_step_f32(HVX_Vector v) {
+    const HVX_Vector zero = Q6_V_vzero();
+    const HVX_Vector one  = hvx_vec_splat_f32(1.0f);
+    HVX_VectorPred q = Q6_Q_vcmp_gt_VsfVsf(v, zero);
+    return Q6_V_vmux_QVV(q, one, zero);
+}
+
+static inline HVX_Vector hvx_vec_step_f16(HVX_Vector v) {
+    const HVX_Vector zero = Q6_V_vzero();
+    const HVX_Vector one  = hvx_vec_splat_f16((_Float16) 1.0f);
+    HVX_VectorPred q = Q6_Q_vcmp_gt_VhfVhf(v, zero);
+    return Q6_V_vmux_QVV(q, one, zero);
+}
+
 static inline HVX_VectorPred hvx_vec_is_nan_f16(HVX_Vector v) {
     const HVX_Vector vnan_exp  = Q6_Vh_vsplat_R(0x7C00);
     const HVX_Vector vnan_frac = Q6_Vh_vsplat_R(0x7FFF);
@@ -286,6 +300,139 @@ static inline HVX_Vector hvx_vec_load_act_tile(const uint8_t * y_q, uint32_t kt,
         return Q6_V_vror_VR(*v_act_all, 64);
     } else {
         return Q6_V_vror_VR(*v_act_all, 96);
+    }
+}
+
+// Full tile, in place. tmp: 32 vectors scratch.
+// Use when result must stay in m. Slowest (spills).
+static inline void hvx_transpose_32x32_w_shuff_inplace(HVX_Vector * restrict m, HVX_Vector * restrict tmp) {
+    for (int i = 0; i < 16; ++i) {
+        HVX_VectorPair p = Q6_W_vshuff_VVR(m[2*i + 1], m[2*i], -4);
+        tmp[2*i + 0] = Q6_V_lo_W(p);
+        tmp[2*i + 1] = Q6_V_hi_W(p);
+    }
+
+    for (int b = 0; b < 32; b += 4) {
+        HVX_VectorPair p0 = Q6_W_vshuff_VVR(tmp[b + 2], tmp[b + 0], -8);
+        HVX_VectorPair p1 = Q6_W_vshuff_VVR(tmp[b + 3], tmp[b + 1], -8);
+        m[b + 0] = Q6_V_lo_W(p0); m[b + 1] = Q6_V_hi_W(p0);
+        m[b + 2] = Q6_V_lo_W(p1); m[b + 3] = Q6_V_hi_W(p1);
+    }
+
+    for (int b = 0; b < 32; b += 8) {
+        for (int i = 0; i < 4; ++i) {
+            HVX_VectorPair p = Q6_W_vshuff_VVR(m[b + i + 4], m[b + i], -16);
+            tmp[b + 2*i + 0] = Q6_V_lo_W(p);
+            tmp[b + 2*i + 1] = Q6_V_hi_W(p);
+        }
+    }
+
+    for (int b = 0; b < 32; b += 16) {
+        for (int i = 0; i < 8; ++i) {
+            HVX_VectorPair p = Q6_W_vshuff_VVR(tmp[b + i + 8], tmp[b + i], -32);
+            m[b + 2*i + 0] = Q6_V_lo_W(p);
+            m[b + 2*i + 1] = Q6_V_hi_W(p);
+        }
+    }
+
+    for (int i = 0; i < 16; ++i) {
+        HVX_VectorPair p = Q6_W_vshuff_VVR(m[i + 16], m[i], -64);
+        tmp[2 * i + 0]   = Q6_V_lo_W(p);
+        tmp[2 * i + 1]   = Q6_V_hi_W(p);
+    }
+
+    for (int i = 0; i < 32; ++i) {
+        m[i] = tmp[i];
+    }
+}
+
+// Rows [0, nrows) of the transpose of src[0, ncols) to dst. src is clobbered, must not alias dst.
+// Use when not in VTCM or for full tiles.
+static inline void hvx_transpose_32x32_w_shuff(uint8_t * restrict dst, uint32_t dst_stride, HVX_Vector * restrict src,
+                                               uint32_t nrows, uint32_t ncols) {
+    for (uint32_t g = 0; g < ncols; g += 8) {
+        HVX_Vector * s = src + g;
+
+        HVX_VectorPair a0 = Q6_W_vshuff_VVR(s[1], s[0], -4);
+        HVX_VectorPair a1 = Q6_W_vshuff_VVR(s[3], s[2], -4);
+        HVX_VectorPair a2 = Q6_W_vshuff_VVR(s[5], s[4], -4);
+        HVX_VectorPair a3 = Q6_W_vshuff_VVR(s[7], s[6], -4);
+
+        HVX_VectorPair b0 = Q6_W_vshuff_VVR(Q6_V_lo_W(a1), Q6_V_lo_W(a0), -8);
+        HVX_VectorPair b1 = Q6_W_vshuff_VVR(Q6_V_hi_W(a1), Q6_V_hi_W(a0), -8);
+        HVX_VectorPair b2 = Q6_W_vshuff_VVR(Q6_V_lo_W(a3), Q6_V_lo_W(a2), -8);
+        HVX_VectorPair b3 = Q6_W_vshuff_VVR(Q6_V_hi_W(a3), Q6_V_hi_W(a2), -8);
+
+        HVX_VectorPair c0 = Q6_W_vshuff_VVR(Q6_V_lo_W(b2), Q6_V_lo_W(b0), -16);
+        HVX_VectorPair c1 = Q6_W_vshuff_VVR(Q6_V_hi_W(b2), Q6_V_hi_W(b0), -16);
+        HVX_VectorPair c2 = Q6_W_vshuff_VVR(Q6_V_lo_W(b3), Q6_V_lo_W(b1), -16);
+        HVX_VectorPair c3 = Q6_W_vshuff_VVR(Q6_V_hi_W(b3), Q6_V_hi_W(b1), -16);
+
+        s[0] = Q6_V_lo_W(c0); s[1] = Q6_V_hi_W(c0);
+        s[2] = Q6_V_lo_W(c1); s[3] = Q6_V_hi_W(c1);
+        s[4] = Q6_V_lo_W(c2); s[5] = Q6_V_hi_W(c2);
+        s[6] = Q6_V_lo_W(c3); s[7] = Q6_V_hi_W(c3);
+    }
+
+    for (uint32_t k = 0; 4 * k < nrows; k++) {
+        HVX_VectorPair d0 = Q6_W_vshuff_VVR(src[k + 8],  src[k],      -32);
+        HVX_VectorPair d1 = Q6_W_vshuff_VVR(src[k + 24], src[k + 16], -32);
+
+        HVX_VectorPair e0 = Q6_W_vshuff_VVR(Q6_V_lo_W(d1), Q6_V_lo_W(d0), -64);
+        HVX_VectorPair e1 = Q6_W_vshuff_VVR(Q6_V_hi_W(d1), Q6_V_hi_W(d0), -64);
+
+        uint8_t * d = dst + 4 * k * dst_stride;
+        *(HVX_Vector *) (d + 0 * dst_stride) = Q6_V_lo_W(e0);
+        *(HVX_Vector *) (d + 1 * dst_stride) = Q6_V_hi_W(e0);
+        *(HVX_Vector *) (d + 2 * dst_stride) = Q6_V_lo_W(e1);
+        *(HVX_Vector *) (d + 3 * dst_stride) = Q6_V_hi_W(e1);
+    }
+}
+
+// Specialized store that will follow outstanding scatters or gathers to make sure they complete
+static inline void hvx_gather_sync(void * vtcm_addr) {
+    asm volatile("vmem(%0+#0):scatter_release\n"
+                 "v0 = vmem(%0+#0)\n" :: "r"(vtcm_addr) : "v0", "memory");
+}
+
+// Lane k = k * stride. Offsets for the _gather transposes.
+static inline HVX_Vector hvx_vec_gather_offsets_w(uint32_t stride) {
+    int32_t offsets[32] __attribute__((aligned(128)));
+    for (int k = 0; k < 32; k++) {
+        offsets[k] = k * stride;
+    }
+    return *(HVX_Vector *) offsets;
+}
+
+static inline HVX_Vector hvx_vec_gather_offsets_h(uint32_t stride) {
+    int16_t offsets[64] __attribute__((aligned(128)));
+    for (int k = 0; k < 64; k++) {
+        offsets[k] = k * stride;
+    }
+    return *(HVX_Vector *) offsets;
+}
+
+// Rows [0, nrows) of the transpose of ncols src vectors (src_stride apart) to dst.
+// src, dst in VTCM. Async: hvx_gather_sync() before use.
+// Use for partial tiles (small ncols). Fewest packets.
+static inline void hvx_transpose_32x32_w_gather(uint8_t * restrict dst, uint32_t dst_stride, const uint8_t * restrict src,
+                                                uint32_t src_stride, HVX_Vector offsets, uint32_t nrows, uint32_t ncols) {
+    const uint32_t mu = ncols * src_stride;
+
+    #pragma unroll(4)
+    for (uint32_t r = 0; r < nrows; r++) {
+        Q6_vgather_ARMVw((HVX_Vector *) (dst + r * dst_stride), (size_t) (src + r * sizeof(int32_t)), mu, offsets);
+    }
+}
+
+// 16-bit version of hvx_transpose_32x32_w_gather.
+static inline void hvx_transpose_64x64_h_gather(uint8_t * restrict dst, uint32_t dst_stride, const uint8_t * restrict src,
+                                                uint32_t src_stride, HVX_Vector offsets, uint32_t nrows, uint32_t ncols) {
+    const uint32_t mu = ncols * src_stride;
+
+    #pragma unroll(4)
+    for (uint32_t r = 0; r < nrows; r++) {
+        Q6_vgather_ARMVh((HVX_Vector *) (dst + r * dst_stride), (size_t) (src + r * sizeof(int16_t)), mu, offsets);
     }
 }
 

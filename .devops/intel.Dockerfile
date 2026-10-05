@@ -1,4 +1,4 @@
-ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
+ARG ONEAPI_VERSION=2026.1.1-devel-ubuntu24.04
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
@@ -19,7 +19,7 @@ RUN npm ci
 COPY tools/ui/ ./
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
-FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
+FROM docker.io/intel/oneapi-toolkit:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=ON
 ARG LEVEL_ZERO_VERSION=1.28.2
@@ -59,7 +59,7 @@ RUN mkdir -p /app/full \
     && cp requirements.txt /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
-FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS base
+FROM docker.io/intel/oneapi-toolkit:$ONEAPI_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A

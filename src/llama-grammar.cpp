@@ -194,7 +194,11 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
     if (*pos == '[') {
         pos++;
         const char * int_end = parse_int(pos);
-        uint32_t token_id = std::stoul(std::string(pos, int_end - pos));
+        unsigned long id = std::stoul(std::string(pos, int_end - pos));
+        if (id > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error(std::string("parsed token id is too big at ") + pos);
+        }
+        uint32_t token_id = static_cast<uint32_t>(id);
         pos = int_end;
         if (*pos != ']') {
             throw std::runtime_error(std::string("expecting ']' at ") + pos);

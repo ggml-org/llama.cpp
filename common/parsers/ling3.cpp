@@ -75,9 +75,10 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
                      (last_close == std::string::npos || last_open > last_close);
     }
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
@@ -100,6 +101,13 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
         // a trailing end-of-turn token is consumed instead of leaking into content
         auto tail = p.optional(p.content(p.until(ROLE_END))) + p.optional(p.literal(ROLE_END));
+
+        // the think block must close before the JSON, so the turn cannot end inside the reasoning
+        if (has_response_format) {
+            auto closed_reasoning = p.literal(THINK_START) + think_body + p.literal(THINK_END);
+            auto response_format  = p.content(p.schema(p.json(), "response-format", inputs.json_schema));
+            return opener + (closed_reasoning << response_format) + end;
+        }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
             return opener + reasoning + tail + end;
@@ -180,7 +188,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             parser.build_grammar(builder, data.grammar_lazy);
         });

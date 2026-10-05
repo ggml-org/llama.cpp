@@ -41,6 +41,8 @@ export const SVG = {
 	 * so an author <style> stays scoped to that root and can not reach the page.
 	 */
 	SANITIZE_CONFIG: {
+		ADD_ATTR: ['calcMode', 'from', 'to'],
+		ADD_TAGS: ['animate', 'set', 'use'],
 		FORBID_TAGS: ['foreignObject', 'script'],
 		USE_PROFILES: { svg: true, svgFilters: true }
 	},

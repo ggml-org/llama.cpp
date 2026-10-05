@@ -433,6 +433,12 @@ struct value_array_t : public value_t {
         }
         return val_arr[index];
     }
+    virtual value & at(const value & index, value & default_val) override {
+        if (!is_val<value_int>(index) && !is_val<value_bool>(index)) {
+            return default_val;
+        }
+        return at(index->as_int(), default_val);
+    }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {
         if (std::all_of(val_arr.begin(), val_arr.end(), [&](auto & val) -> bool {

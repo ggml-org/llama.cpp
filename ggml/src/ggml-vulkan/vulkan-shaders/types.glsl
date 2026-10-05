@@ -23,6 +23,7 @@
 #else
 #define A_TYPE float
 #endif
+#define A_TYPE_PACKED64 vec2
 #endif
 
 #if defined(DATA_A_F16)

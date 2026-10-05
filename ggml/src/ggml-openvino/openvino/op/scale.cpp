@@ -37,6 +37,10 @@ OutputVector translate_scale(const NodeContext & context) {
 
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
 
+    if (context.get_op_case() == 2) {
+        return {context.get_input(0)};
+    }
+
     if (context.get_op_case() == 1 && context.has_input("cache_rs_reset_len")) {
         auto cache_rs_reset_idx = context.get_input("cache_rs_reset_idx");
         auto cache_rs_reset_len = context.get_input("cache_rs_reset_len");

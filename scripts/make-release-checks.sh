@@ -8,6 +8,7 @@
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT
 #   RELEASE_BRANCH: when set, HEAD must belong to origin/RELEASE_BRANCH and must
 #     not be older than 3 days from the branch HEAD (skipped when unset)
+#   REQUIRE_DOCKER: set to "false" to skip the container image check (default: true)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -126,6 +127,8 @@ if [[ -z "${NIGHTLY_TAG}" ]]; then
     echo "Warning: no nightly tag points at ${SHA} - skipping container image check"
 elif [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
     echo "Warning: GITHUB_REPOSITORY not set - skipping container image check (local run)"
+elif [[ "${REQUIRE_DOCKER:-true}" != "true" ]]; then
+    echo "Require Docker is disabled - skipping container image check"
 else
     CONTAINER_REPO="${GITHUB_REPOSITORY,,}"  # lower-case owner/repo for ghcr.io
     GHCR_TOKEN="$(curl -fsSL \

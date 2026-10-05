@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: false
+      require_docker:
+        description: 'Require the Docker workflow to have completed successfully'
+        required: true
+        type: boolean
+        default: true
       apiabi_compare_tag:
         description: 'Tag to compare against for API/ABI check (default: latest release)'
         required: false
@@ -27,6 +32,7 @@ on:
 env:
   GH_TOKEN: ${{ github.token }}
 
+cache-mode: none
 permissions:
   contents: write
   packages: write
@@ -55,6 +61,7 @@ jobs:
           RELEASE_BRANCH: ${{ github.ref_name }}
           SKIP_APIABI_CHECK: ${{ github.event.inputs.skip_apiabi_check }}
           APIABI_COMPARE_TAG: ${{ github.event.inputs.apiabi_compare_tag }}
+          REQUIRE_DOCKER: ${{ github.event.inputs.require_docker }}
 
       - name: Create release tag
         if: ${{ github.event.inputs.dry_run == 'false' }}

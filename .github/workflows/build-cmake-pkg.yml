@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   workflow_call:
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   linux:
     runs-on: [self-hosted, Linux, CPU]

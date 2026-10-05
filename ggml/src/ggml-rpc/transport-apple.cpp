@@ -26,6 +26,7 @@
 // so every SEND posts a whole 128KiB stride over the wire, even when partially filled.
 // (In testing 128KiB was the best performing among 32, 64, 128, 256)
 
+//TODO: add mechanism similar to https://github.com/ggml-org/llama.cpp/pull/29440 to prevent idle CPU from spinning
 static constexpr uint32_t RDMA_SEG_MAGIC   = 0x52534547u; // "RSEG"
 static constexpr int      RDMA_NBUF        = 16;          // ring depth (frames per direction)
 static constexpr size_t   RDMA_FRAME       = 4096;        // Thunderbolt frame (fixed on Apple)
