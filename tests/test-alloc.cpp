@@ -1099,6 +1099,38 @@ static void test_buft_get_alloc_size_n_does_not_allocate() {
     GGML_ASSERT(x[1]->data == nullptr);
 }
 
+static void test_tallocr_alloc_overflow() {
+    // Regression test for integer overflow in ggml_tallocr_alloc.
+    // A tensor with a dimension that makes ggml_nbytes wrap around SIZE_MAX
+    // must be rejected instead of returning a pointer into an undersized buffer.
+    dummy_backend backend = dummy_backend_init(512, /*align*/ 32);
+    ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 512);
+    GGML_ASSERT(buf != nullptr);
+
+    struct ggml_tallocr talloc = ggml_tallocr_new(buf);
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ 1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx = ggml_init(params);
+    GGML_ASSERT(ctx != nullptr);
+
+    ggml_tensor * t = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, 1);
+    // Craft ne[0] so that ggml_nbytes is near SIZE_MAX. After GGML_PAD this
+    // would wrap to 0 or a small value, bypassing the buffer bounds check.
+    t->ne[0] = SIZE_MAX - 15;
+    t->nb[0] = 1;
+
+    const enum ggml_status status = ggml_tallocr_alloc(&talloc, t);
+    GGML_ASSERT(status == GGML_STATUS_FAILED);
+    GGML_ASSERT(t->data == nullptr);
+
+    ggml_free(ctx);
+    ggml_backend_buffer_free(buf);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1139,5 +1171,6 @@ int main() {
     run("test_buft_get_alloc_size_n_custom_override", test_buft_get_alloc_size_n_custom_override);
     run("test_buft_get_alloc_size_n_custom_override_ctx_size", test_buft_get_alloc_size_n_custom_override_ctx_size);
     run("test_buft_get_alloc_size_n_does_not_allocate", test_buft_get_alloc_size_n_does_not_allocate);
+    run("test_tallocr_alloc_overflow", test_tallocr_alloc_overflow);
     return 0;
 }
