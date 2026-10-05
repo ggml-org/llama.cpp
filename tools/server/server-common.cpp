@@ -8,6 +8,7 @@
 #include "base64.hpp"
 
 #include "server-common.h"
+#include "server-decision.h"
 
 #include <random>
 #include <sstream>
@@ -144,40 +145,47 @@ const char * get_media_marker() {
 }
 
 //
-// model output modalities
+// model architecture
 //
 
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type) {
-    switch (decision_type) {
-        case COMMON_DECISION_TYPE_OPENJEV:
-        case COMMON_DECISION_TYPE_LEV:
-        case COMMON_DECISION_TYPE_KEV:
-        case COMMON_DECISION_TYPE_NIMBLE:
-        case COMMON_DECISION_TYPE_LAYA:
-        case COMMON_DECISION_TYPE_CLEF:
-            return {"decisions"};
-        default:
-            // fallback when there is no decision type or the metadata is bad
-            return {"text"};
+static std::vector<std::string> input_modalities_from(bool inp_image, bool inp_audio, bool inp_video) {
+    std::vector<std::string> res = {"text"};
+    if (inp_image) {
+        res.push_back("image");
+    }
+    if (inp_audio) {
+        res.push_back("audio");
+    }
+    if (inp_video) {
+        res.push_back("video");
+    }
+    return res;
+}
+
+server_model_architecture::server_model_architecture(const llama_model * model, bool inp_image, bool inp_audio, bool inp_video) :
+    input_modalities(input_modalities_from(inp_image, inp_audio, inp_video)),
+    output_modalities(server_decision_output_modalities(common_get_decision_type(model))) {
+}
+
+server_model_architecture::server_model_architecture(const std::string & model_path, bool inp_image, bool inp_audio, bool inp_video) :
+    input_modalities(input_modalities_from(inp_image, inp_audio, inp_video)) {
+    if (!model_path.empty()) {
+        output_modalities = server_decision_output_modalities(common_get_decision_type(model_path));
     }
 }
 
-json server_model_architecture_json(
-        bool inp_image,
-        bool inp_audio,
-        bool inp_video,
-        const std::vector<std::string> & output_modalities) {
-    std::vector<std::string> input_modalities = {"text"};
-    if (inp_image) {
-        input_modalities.push_back("image");
+server_model_architecture server_model_architecture::from_json(const server_model_architecture & cur, const json & data) {
+    try {
+        server_model_architecture res = cur;
+        res.input_modalities  = data.value("input_modalities",  res.input_modalities);
+        res.output_modalities = data.value("output_modalities", res.output_modalities);
+        return res;
+    } catch (const common_json_error &) {
+        return cur; // a bad report changes nothing
     }
-    if (inp_audio) {
-        input_modalities.push_back("audio");
-    }
-    if (inp_video) {
-        input_modalities.push_back("video");
-    }
+}
 
+json server_model_architecture::to_json() const {
     return {
         {"input_modalities",  input_modalities},
         {"output_modalities", output_modalities},

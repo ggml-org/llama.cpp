@@ -132,6 +132,9 @@ private:
     float get_temperature(const server_decision_question & question) const;
 };
 
+// output modalities of a model in GET /models, from its decision type
+std::vector<std::string> server_decision_output_modalities(common_decision_type type);
+
 // group the tasks so that the common prefix of their prompts is evaluated only once
 // each group is one parent and its children, it takes at most n_slots slots
 // note: the order of the tasks is preserved

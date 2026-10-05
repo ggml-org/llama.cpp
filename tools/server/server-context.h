@@ -19,7 +19,7 @@ struct server_context_meta {
     std::set<std::string> model_aliases;
     std::set<std::string> model_tags;
     std::string model_path;
-    std::vector<std::string> model_output_modalities; // output modalities for GET /models
+    server_model_architecture model_architecture; // for GET /models
     bool has_mtmd;
     bool has_inp_image;
     bool has_inp_audio;

@@ -804,6 +804,24 @@ json server_decision_context::format_answer(const server_decision_question & que
 }
 
 //
+// model output modalities
+//
+
+std::vector<std::string> server_decision_output_modalities(common_decision_type type) {
+    switch (type) {
+        case COMMON_DECISION_TYPE_OPENJEV:
+        case COMMON_DECISION_TYPE_LEV:
+        case COMMON_DECISION_TYPE_KEV:
+        case COMMON_DECISION_TYPE_NIMBLE:
+        case COMMON_DECISION_TYPE_LAYA:
+        case COMMON_DECISION_TYPE_CLEF:
+            return {"decisions"};
+        default:
+            return {"text"}; // no decision type, or unknown
+    }
+}
+
+//
 // shared prompt prefix
 //
 
