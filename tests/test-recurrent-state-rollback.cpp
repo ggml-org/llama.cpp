@@ -487,8 +487,7 @@ static test_status test_shared_seq_reserve(const common_params & params, llama_m
     // see [TAG_RESERVE_DIAG_DECAY] in llama-context.cpp
     char arch_str[64] = {};
     llama_model_meta_val_str(model, "general.architecture", arch_str, sizeof(arch_str));
-    const llm_arch arch = llm_arch_from_string(arch_str);
-    if (arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_MINIMAX_01) {
+    if (strcmp(arch_str, "kimi-linear") == 0 || strcmp(arch_str, "minimax-01") == 0) {
         LOG_INF("%s: skipping %s, its reserve uses n_seqs = 1\n", __func__, arch_str);
         return test_status::SKIP;
     }
