@@ -40,14 +40,14 @@
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'relative cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40'
+		'relative cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40 max-md:px-3 max-md:py-3.5'
 	]}
 	onclick={onToggle}
 	onkeydown={handleKeydown}
 	role="button"
 	tabindex="0"
 >
-	<span class="flex min-w-0 items-center gap-3 max-md:pr-8" style="padding-left: {indent}px">
+	<span class="flex min-w-0 items-center gap-3 max-md:pr-9" style="padding-left: {indent}px">
 		<ModelAvatar option={entry.base} size="size-9" />
 
 		<span class="min-w-0">

@@ -31,7 +31,7 @@
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'group relative rounded-md px-2 py-2 transition',
+		'group relative rounded-md px-2 py-2 transition max-md:px-3 max-md:py-3',
 		isHidden && 'opacity-60',
 		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 	]}
@@ -40,7 +40,7 @@
 	     the button: a button nested in a role="button" row is invalid -->
 	<button
 		aria-pressed={selected}
-		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:pr-8"
+		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:pr-9"
 		onclick={() => onSelect(option)}
 		style="padding-left: {indent}px"
 		type="button"
