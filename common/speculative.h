@@ -48,6 +48,7 @@ struct common_speculative_checkpoint_place {
 // LLAMA_STATE_SEQ_FLAGS_ON_DEVICE keeps a device copy that --fit does not measure and that is allocated
 // again whenever its size changes. It is chosen only while every device of the model keeps its margin free
 // after the copy has grown to the new size. Otherwise the checkpoint stays on the host.
+// The whole growth is checked against each device, which overstates a device's part of a split model.
 // margins are indexed like --fit-target: by the device order of model_margins, the model they were given
 // for. A device that model does not use keeps the largest margin free.
 llama_state_seq_flags common_speculative_checkpoint_flags(

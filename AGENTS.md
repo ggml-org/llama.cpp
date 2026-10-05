@@ -184,7 +184,7 @@ edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
 ```bash
 sudo systemctl stop llama-sycl.cpp.service
 fuser -v /dev/dri/renderD128               # verify sole tenancy
-dmesg | grep -iE '(i915|xe).*(reset|hang|timeout|GuC|device.?lost)'
+dmesg | grep -iE '\b(i915|xe)\b.*(reset|hang|hung|timed? ?out|GuC|wedged|device.?lost)'
 # ... run benchmark wrapped in timeout ...
 sudo systemctl start llama-sycl.cpp.service
 ```
@@ -363,8 +363,11 @@ yet**: `ccs_mode` reads 1 (live), so compute still runs on one engine. See "Open
 3. A stall on xe can be silent. LR-mode queues have no job watchdog, and the reset line appears
    only when something later asks the engine to preempt. Keep every GPU run in `timeout` and do
    not read a clean dmesg as proof that a run was healthy.
-4. Fault gates must match both drivers: `(i915|xe).*(reset|hang|timeout|GuC|device.?lost)`.
-   The harnesses in `scripts/` already do.
+4. Fault gates must match both drivers and every spelling of a timeout (`timeout`, xe's
+   `Timedout job`, i915's `time out`):
+   `\b(i915|xe)\b.*(reset|hang|hung|timed? ?out|GuC|wedged|device.?lost)`.
+   `scripts/perf/bench_spec.py` uses this pattern; the older harnesses in `scripts/` miss at least
+   the spaced and past-tense forms.
 5. Do not design for concurrent compute queues. With one CCS enabled, two SYCL queues run
    their kernels one after another (i915: from source, doc 09-28; xe: expected with
    `ccs_mode` = 1, not measured).

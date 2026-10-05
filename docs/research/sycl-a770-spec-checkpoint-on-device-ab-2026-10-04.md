@@ -76,9 +76,11 @@ of `master`; `git fetch origin pull/90/head` retrieves them.
   fails the target-argmax verifier and a speculative arm without draft
   statistics now each make the run fail. Applied to the summaries kept here,
   the last two exclude no launch. An odd `LAUNCHES` is flagged as an unbalanced
-  order, the hash recorded per arm is that of the configured binary, and each
-  response records how many of its rows carried argmax evidence (see
-  "Correctness evidence").
+  order, the hashes recorded per arm cover the configured binary and every
+  shared library in its directory, the summary names the kernel driver bound
+  to the render node, the fault gate also matches `Timedout job`, `time out`
+  and `wedged`, and each response records how many of its rows carried argmax
+  evidence (see "Correctness evidence").
 - Requests: `prompts.jsonl`, `n_predict` 256, temperature 0, `cache_prompt`
   false, `--parallel 1`, q8_0 KV, flash attention on.
 - No persistent SYCL cache and no SYCL graph (`GGML_SYCL_ENABLE_GRAPH` unset).
@@ -218,6 +220,13 @@ them (`spec_ckpt_place()` and `spec_ckpt_flags()` in
   margin;
 - otherwise that checkpoint goes to the host, as before this change. A GPU that
   reports no memory figures counts as full.
+- on a model split across several GPUs the whole growth is compared with each
+  device, although the state writer allocates one buffer per buffer type and a
+  device only holds its own part. That overstates every device's need, so a
+  split model can keep checkpoints on the host while each device has room for
+  its part. The error is toward the pre-change path. The state API reports one
+  total; checking each device against its own part needs sizes per buffer type,
+  which it does not expose.
 
 The first version of the guard decided once, at the first checkpoint. That is
 enough for a state of constant size, such as the recurrent state of the 9B run
