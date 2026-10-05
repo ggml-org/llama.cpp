@@ -3,7 +3,7 @@
 bool ggml_kv_stream_resume_layout_make(
         uint32_t heads, uint32_t queries, uint32_t splits, uint32_t values,
         ggml_kv_stream_resume_plan & output) {
-    if (!heads || !queries || queries > 2 || !splits || (values != 8 && values != 32) ||
+    if (!heads || !queries || queries > 2 || !splits || (values != 8 && values != 16 && values != 32) ||
             size_t(heads) > SIZE_MAX/queries ||
             size_t(heads)*queries > SIZE_MAX/splits) return false;
     const size_t rows = size_t(heads)*queries*splits;

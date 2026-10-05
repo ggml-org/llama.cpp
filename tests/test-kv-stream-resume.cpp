@@ -93,6 +93,18 @@ int main(int argc, char ** argv) {
             t.assert_equal(size_t(442944),plan.bytes);
         }
     });
+    t.test("resume_layout_covers_legacy_half_value_accumulators", [&](testing & t) {
+        ggml_kv_stream_resume_plan plan;
+        if (!t.assert_true(ggml_kv_stream_resume_layout_make(24,1,3,16,plan))) return;
+        t.assert_equal(size_t(663552),plan.state_bytes);
+        t.assert_equal(size_t(663552),plan.partial_offset);
+        t.assert_equal(size_t(737280),plan.meta_offset);
+        t.assert_equal(size_t(737856),plan.bytes);
+        for (uint32_t values : {0u,1u,4u,9u,17u,64u}) {
+            t.assert_true(!ggml_kv_stream_resume_layout_make(24,1,3,values,plan));
+            t.assert_equal(size_t(737856),plan.bytes);
+        }
+    });
     if (argc>1 && !std::strcmp(argv[1],"--cuda")) t.test("native_resume_contract_is_available", [&](testing & t) {
         ggml_backend_load_all(); auto * dev=ggml_backend_dev_by_name("CUDA0");
         if (!t.assert_true(dev != nullptr)) return;
@@ -147,14 +159,15 @@ int main(int argc, char ** argv) {
         block_workspace workspace(f,512*1024);
         for (size_t active : {size_t(769),size_t(1025)}) for (uint32_t queries : {1u,2u,3u,4u}) {
             block_inputs input(f,active,queries);
-            if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,queries == 1}))) return;
+            // Multi-query verification is decode work, not a strict-gather prefill.
+            if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,true}))) return;
             for (uint32_t layer=0;layer<2;++layer) {
                 const auto expected=ordinary(f,input,layer);
                 if (!t.assert_true(f.resident->compute_streamed(
                         layer,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get(),true,4))) return;
                 ggml_backend_synchronize(backend.get());
                 close_values(t,expected,input.read(),1e-6f);
-                const size_t calls=queries == 1 ? (active == 769 && layer == 1 ? 3 : 2) : 1;
+                const size_t calls=queries <= 2 ? (active == 769 && layer == 1 ? 3 : 2) : 1;
                 t.assert_equal(calls,f.resident->last_attention_calls());
             }
             t.assert_true(!f.resident->sequence_active());

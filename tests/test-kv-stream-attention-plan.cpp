@@ -3,6 +3,7 @@
 #include "testing.h"
 
 #include <limits>
+#include <utility>
 
 using family = ggml_cuda_kv_stream_kernel_family;
 using style = ggml_cuda_kv_stream_execution_style;
@@ -59,9 +60,32 @@ int main() {
                 t.assert_true(output.family == supplied);
             }
         }
-        t.assert_true(ggml_cuda_kv_stream_attention_select(610, 1, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0) == path::none);
         t.assert_true(ggml_cuda_kv_stream_attention_select(860, 2, GGML_TYPE_Q5_0, GGML_TYPE_Q4_0) == path::none);
         t.assert_true(ggml_cuda_kv_stream_attention_select(860, 2, GGML_TYPE_F16, GGML_TYPE_F16) == path::none);
+    });
+    t.test("pascal_tg1_quantized_admission_does_not_enable_later_query_widths", [](testing & t) {
+        using path = ggml_cuda_kv_stream_attention_path;
+        for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}, std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
+                std::pair{GGML_TYPE_Q4_0,GGML_TYPE_F16}, std::pair{GGML_TYPE_BF16,GGML_TYPE_Q8_0}}) {
+            t.assert_true(ggml_cuda_kv_stream_attention_select(610,1,pair.first,pair.second) == path::vector);
+            for (uint32_t queries : {0u,2u,3u,4u})
+                t.assert_true(ggml_cuda_kv_stream_attention_select(610,queries,pair.first,pair.second) == path::none);
+            for (int cc : {500,600,609})
+                t.assert_true(ggml_cuda_kv_stream_attention_select(cc,1,pair.first,pair.second) == path::none);
+        }
+        for (auto pair : {std::pair{GGML_TYPE_F16,GGML_TYPE_F16}, std::pair{GGML_TYPE_BF16,GGML_TYPE_F16}})
+            t.assert_true(ggml_cuda_kv_stream_attention_select(610,1,pair.first,pair.second) == path::none);
+    });
+    t.test("vector_resume_values_follow_compiled_copy_width_not_physical_gpu", [](testing & t) {
+        for (auto type : {GGML_TYPE_F16,GGML_TYPE_BF16}) {
+            t.assert_equal(16u,ggml_cuda_kv_stream_vector_values_per_thread(type,610));
+            t.assert_equal(32u,ggml_cuda_kv_stream_vector_values_per_thread(type,700));
+            t.assert_equal(32u,ggml_cuda_kv_stream_vector_values_per_thread(type,1200));
+        }
+        for (auto type : {GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q8_0}) {
+            for (int cc : {610,700,860,1200})
+                t.assert_equal(8u,ggml_cuda_kv_stream_vector_values_per_thread(type,cc));
+        }
     });
     t.test("metadata_contract_has_no_new_query_or_head_size_policy", [](testing & t) {
         fixture f;

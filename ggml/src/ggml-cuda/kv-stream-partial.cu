@@ -289,10 +289,13 @@ static bool resume_plan(
             !queries || queries > 2 || !tokens || tokens > INT32_MAX) return false;
     auto native = ggml_cuda_kv_stream_vector_kernel(ggml_type(key),ggml_type(value),queries);
     auto resumed = ggml_cuda_kv_stream_resume_kernel(ggml_type(key),ggml_type(value),queries);
+    if (!native || !resumed) return false;
     auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
     const auto & device = ggml_cuda_info().devices[ctx.device];
-    // Keep the existing admission gate until legacy qualification, but let stock choose the family.
+    const int compiled_arch = ggml_cuda_highest_compiled_arch(device.cc);
+    if (compiled_arch < 0) return false;
+    // The wrapper admits the baseline; stock still chooses the executable family.
     ggml_tensor q{}, k{}, v{}, mask{}, op{};
     q.type = GGML_TYPE_F32; k.type = ggml_type(key); v.type = ggml_type(value); mask.type = GGML_TYPE_F16;
     const int64_t padded = int64_t((tokens+255)/256*256);
@@ -306,7 +309,7 @@ static bool resume_plan(
         for (int i = 2; i < 4; ++i) tensor->nb[i] = tensor->nb[i-1]*size_t(tensor->ne[i-1]);
     }
     op.op = GGML_OP_FLASH_ATTN_EXT; op.src[0] = &q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &mask;
-    if (!native || !resumed || ggml_cuda_kv_stream_attention_select(device.cc,queries,ggml_type(key),ggml_type(value)) == ggml_cuda_kv_stream_attention_path::none ||
+    if (ggml_cuda_kv_stream_attention_select(device.cc,queries,ggml_type(key),ggml_type(value)) == ggml_cuda_kv_stream_attention_path::none ||
             ggml_cuda_flash_attn_ext_kernel_family(ctx.device, &op) != kernel_family::vector ||
             (!ggml_is_quantized(ggml_type(key)) && !ggml_is_quantized(ggml_type(value)))) return false;
     int occupancy = 0;
@@ -330,17 +333,17 @@ static bool resume_plan(
     ggml_kv_stream_resume_plan next;
     if (!ggml_kv_stream_resume_layout_make(
             heads,queries,uint32_t(splits),
-            value == GGML_TYPE_F16 || value == GGML_TYPE_BF16 ? 32 : 8,next)) return false;
+            ggml_cuda_kv_stream_vector_values_per_thread(ggml_type(value),compiled_arch),next)) return false;
     next.tokens = tokens;
     output = next;
     return true;
 }
 
-static bool resume_plan_valid(const ggml_kv_stream_resume_plan & plan, ggml_type value) {
+static bool resume_plan_valid(const ggml_kv_stream_resume_plan & plan, ggml_type value, int compiled_arch) {
     ggml_kv_stream_resume_plan checked;
     return plan.tokens && ggml_kv_stream_resume_layout_make(
         plan.heads,plan.queries,plan.splits,
-        value == GGML_TYPE_F16 || value == GGML_TYPE_BF16 ? 32 : 8,checked) &&
+        ggml_cuda_kv_stream_vector_values_per_thread(value,compiled_arch),checked) &&
         checked.bytes == plan.bytes && checked.state_bytes == plan.state_bytes &&
         checked.partial_offset == plan.partial_offset && checked.meta_offset == plan.meta_offset &&
         checked.values_per_thread == plan.values_per_thread;
@@ -353,8 +356,10 @@ static bool resume_common(
         uintptr_t & base, span & scratch, bool segmented = false, bool metadata_checked = false) {
     if (capture_active(backend) || (!metadata_checked && !(segmented ? supports_spans(backend,op) : supports(backend,op))) || !workspace) return false;
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2];
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    const int compiled_arch = ggml_cuda_highest_compiled_arch(ggml_cuda_info().devices[ctx.device].cc);
     if (q->ne[1] != plan.queries || q->ne[2] != plan.heads ||
-            !resume_plan_valid(plan,v->type)) return false;
+            compiled_arch < 0 || !resume_plan_valid(plan,v->type,compiled_arch)) return false;
     kernel = ggml_cuda_kv_stream_resume_kernel(k->type,v->type,plan.queries);
     base = uintptr_t(ggml_backend_buffer_get_base(workspace));
     const size_t capacity = ggml_backend_buffer_get_size(workspace);

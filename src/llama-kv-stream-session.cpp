@@ -30,9 +30,14 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
         ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
     const auto * ops=get ? get() : nullptr;
     ggml_kv_stream_resume_plan plan;
-    if (!ops || ops->version < 5 || !ops->resume_plan ||
-            !ops->resume_plan(backend,config.policy.shape.type_k,config.policy.shape.type_v,
-                config.query_heads,config.policy.shape.heads,std::min(2u,config.max_batch_rows),tokens,plan)) return false;
+    if (!ops || ops->version < 5 || !ops->resume_plan) return false;
+    const uint32_t queries = std::min(2u,config.max_batch_rows);
+    const auto query = [&](uint32_t rows) {
+        return ops->resume_plan(backend,config.policy.shape.type_k,config.policy.shape.type_v,
+            config.query_heads,config.policy.shape.heads,rows,tokens,plan);
+    };
+    // Match the model owner's TG1-only fallback during phase transitions and session reconstruction.
+    if (!query(queries) && (queries != 2 || !query(1))) return false;
     bytes=plan.bytes;
     if (ops->version >= 9 && ops->mma_workspace) {
         size_t mma=0;
