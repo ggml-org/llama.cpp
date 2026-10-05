@@ -130,6 +130,7 @@ option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE
 
 # extra artifacts
 option(LLAMA_BUILD_TESTS     "llama: build tests"                                                                ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_FUZZERS   "llama: build libFuzzer targets"                                                   OFF)
 option(LLAMA_BUILD_TOOLS     "llama: build tools"                                                                ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                                                             ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
@@ -222,6 +223,19 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
+if (LLAMA_BUILD_FUZZERS)
+    if (NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR MSVC)
+        message(FATAL_ERROR "LLAMA_BUILD_FUZZERS requires Clang for C and C++")
+    endif()
+    if (BUILD_SHARED_LIBS)
+        message(FATAL_ERROR "LLAMA_BUILD_FUZZERS requires -DBUILD_SHARED_LIBS=OFF")
+    endif()
+    if (NOT TARGET ggml-base)
+        message(FATAL_ERROR "LLAMA_BUILD_FUZZERS requires the ggml-base target")
+    endif()
+    add_subdirectory(fuzzers)
 endif()
 
 #
