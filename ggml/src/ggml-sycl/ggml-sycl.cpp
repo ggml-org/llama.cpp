@@ -6199,9 +6199,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         if (node->op == GGML_OP_MUL_MAT &&
             ggml_sycl_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU }, {})) {
             ggml_tensor * glu = cgraph->nodes[i + 2];
-            ggml_sycl_op_mul_mat_glu_mmvq_fused(*sycl_ctx, glu->src[0], glu->src[1], glu);
-            i += 2;
-            continue;
+            if (ggml_sycl_op_mul_mat_glu_mmvq_fused(*sycl_ctx, glu->src[0], glu->src[1], glu)) {
+                i += 2;
+                continue;
+            }
         }
 
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
