@@ -202,7 +202,7 @@ static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
 
 // fewest columns for which the XMX kernel is faster than the other kernels
 static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
-    return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K ? 1 : 2;
+    return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
 }
 
 static int g_all_sycl_device_count = -1;
