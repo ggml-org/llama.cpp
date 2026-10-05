@@ -15442,7 +15442,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_I32);
         case GGML_OP_CONCAT: {
             if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) { // CONCAT in development on Imagination devices
-                    return false;
+                return false;
             }
             return ggml_vk_concat_supported(op->src[0], op->src[1], op);
         }
