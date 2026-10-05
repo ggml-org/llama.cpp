@@ -6,6 +6,9 @@
 // The fix changes find_slot(ubatch, true) to find_slot(ubatch, false)
 // in state_read_meta(), allowing non-contiguous slot allocation.
 
+// TODO: merge with test-save-load-state.cpp
+// TODO: merge with test-recurrent-state-rollback.cpp
+
 #include "arg.h"
 #include "common.h"
 #include "llama.h"
