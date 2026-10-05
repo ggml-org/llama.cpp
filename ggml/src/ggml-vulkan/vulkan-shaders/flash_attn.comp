@@ -130,20 +130,15 @@ void main() {
         const float qd_inv = qd != 0.0f ? 1.0f / qd : 0.0f;
         vals = round(vals * qd_inv);
 
-        Qf[buf_ib].qs[buf_iqs] = pack32(i8vec4(vals));
+        const float thread_sum = vals.x + vals.y + vals.z + vals.w;
+        // Q8_0 K does not use the row sum.
+        const float sum = FaTypeK == GGML_TYPE_Q8_0 ? 0.0f : subgroupClusteredAdd(thread_sum, 8);
 
-        // Q8_0 K only needs (qd, _); the asymmetric Q4_*/Q5_* family also stores
-        // the row-sum scaled by qd, used in k_dot_correction.
-        if (FaTypeK == GGML_TYPE_Q8_0) {
-            if (buf_iqs == 0) {
-                Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0f);
-            }
-        } else {
-            const float thread_sum = vals.x + vals.y + vals.z + vals.w;
-            const float sum = subgroupClusteredAdd(thread_sum, 8);
+        if (r < Br) {
+            Qf[buf_ib].qs[buf_iqs] = pack32(i8vec4(vals));
 
             if (buf_iqs == 0) {
-                Qf[buf_ib].ds = FLOAT_TYPEV2(qd, sum * qd);
+                Qf[buf_ib].ds = FaTypeK == GGML_TYPE_Q8_0 ? FLOAT_TYPEV2(qd, 0.0f) : FLOAT_TYPEV2(qd, sum * qd);
             }
         }
 #endif
