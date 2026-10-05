@@ -166,7 +166,8 @@ static llama_model_ptr load_model(const std::string & path, bool load_mtp = true
 }
 
 static llama_context_ptr make_context(llama_model * model, bool flash, int n_seq = 1, int n_ubatch = 32,
-                                      llama_context * other = nullptr) {
+                                      llama_context * other = nullptr,
+                                      ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_data = nullptr) {
     auto params = llama_context_default_params();
     params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     params.ctx_other = other;
@@ -178,6 +179,8 @@ static llama_context_ptr make_context(llama_model * model, bool flash, int n_seq
     params.type_k = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
     params.type_v = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
     params.flash_attn_type = flash ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    params.cb_eval = cb_eval;
+    params.cb_eval_user_data = cb_data;
     llama_context_ptr ctx(llama_init_from_model(model, params));
     require(bool(ctx), "create MTP context");
     llama_set_embeddings_nextn(ctx.get(), true, true);
@@ -284,6 +287,34 @@ static void test_chain(llama_model * model, bool flash, int depth, int catchup, 
     const auto b = decode(chain.get(), {7}, h, pos0 + catchup + 1);
     require(close(a.logits, b.logits) && close(a.hidden, b.hidden), "continuation matches after rejection");
     fprintf(stderr, "PASS chain flash=%d depth=%d catchup=%d masked=%d pos=%d\n", flash, depth, catchup, masked, pos0);
+}
+
+// The chain's hidden export is read back after the whole graph ran. At depth one it is the step's
+// own hidden state, which the LM head consumes, so only the output flag keeps the allocator from
+// handing its memory to a later node. llm_graph_result::set_outputs() sets it on t_h_nextn after
+// every build; this pins that for the chain branch, which does not set it itself.
+static void test_chain_export_is_output(llama_model * model, bool flash) {
+    struct exports_seen {
+        int exports = 0;
+        int outputs = 0;
+    } seen;
+    const auto observe = [](ggml_tensor * t, bool ask, void * data) {
+        if (ask && std::string(t->name) == "h_nextn") {
+            auto * s = static_cast<exports_seen *>(data);
+            ++s->exports;
+            s->outputs += (t->flags & GGML_TENSOR_FLAG_OUTPUT) != 0;
+        }
+        return !ask;
+    };
+    for (int depth : {1, 3}) {
+        auto ctx = make_context(model, flash, 1, 32, nullptr, observe, &seen);
+        std::vector<llama_token> tokens(depth, 0);
+        tokens[0] = 5;
+        decode(ctx.get(), tokens, initial_hidden(depth), 0, true);
+    }
+    require(seen.exports >= 2, "chain decodes export their hidden state");
+    require(seen.outputs == seen.exports, "the chain's hidden export is a graph output");
+    fprintf(stderr, "PASS chain export is a graph output flash=%d\n", flash);
 }
 
 // A sequence snapshot kept on the device restores the cache it was taken from for every K/V type.
@@ -1053,42 +1084,50 @@ int main(int argc, char ** argv) {
     auto target = load_model(target_path);
     auto changed = load_model(changed_path);
     require(head && head_host && target && changed, "canonical head and combined models load");
+    // Every model has to be gone before the fixtures are deleted and the backends freed: a model
+    // keeps its file mapped, and Windows cannot delete a mapped file.
+    const auto finish = [&]() {
+        head.reset();
+        head_host.reset();
+        target.reset();
+        changed.reset();
+        std::filesystem::remove_all(dir);
+        llama_backend_free();
+    };
     if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
         test_ordinary_context(head.get(), target.get());
         test_ordinary_draft_driver(target.get(), head.get());
-        head.reset(); target.reset(); changed.reset();
-        std::filesystem::remove_all(dir);
-        llama_backend_free();
+        finish();
         return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--borrowed-tables-only") {
         test_borrowed_tables(bare_path, doubled_path, head.get(), target.get());
-        head.reset(); target.reset(); changed.reset();
-        std::filesystem::remove_all(dir);
-        llama_backend_free();
+        finish();
         return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--invalid-chain-only") {
         test_invalid_chain(head.get(), true);
-        head.reset(); target.reset(); changed.reset();
-        std::filesystem::remove_all(dir);
-        llama_backend_free();
+        finish();
         return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--head-only") {
-        auto ctx = make_context(head.get(), false);
-        decode(ctx.get(), {5}, initial_hidden(), 0);
+        {
+            auto ctx = make_context(head.get(), false);
+            decode(ctx.get(), {5}, initial_hidden(), 0);
+        }
         fprintf(stderr, "PASS canonical head decode\n");
-        std::filesystem::remove_all(dir);
+        finish();
         return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--mixer-only") {
-        auto a = make_context(target.get(), false);
-        auto b = make_context(changed.get(), false);
-        require(close(decode(a.get(), {5}, initial_hidden(), 0).logits,
-                      decode(b.get(), {5}, initial_hidden(), 0).logits), "MTP logits independent of trunk mixer");
+        {
+            auto a = make_context(target.get(), false);
+            auto b = make_context(changed.get(), false);
+            require(close(decode(a.get(), {5}, initial_hidden(), 0).logits,
+                          decode(b.get(), {5}, initial_hidden(), 0).logits), "MTP logits independent of trunk mixer");
+        }
         fprintf(stderr, "PASS independent draft mixer\n");
-        std::filesystem::remove_all(dir);
+        finish();
         return 0;
     }
     for (int omitted = 0; omitted < 4; ++omitted) {
@@ -1148,6 +1187,7 @@ int main(int argc, char ** argv) {
         }
         test_chain(head.get(), flash, 4, 2, true, true);
         test_chain(head.get(), flash, 32, 0, true);
+        test_chain_export_is_output(head.get(), flash);
     }
     test_driver(target.get(), head.get());
     test_driver_failed_draft(target.get(), head.get());
@@ -1158,9 +1198,7 @@ int main(int argc, char ** argv) {
     test_fit(target_path, head_path);
     test_fit_ordinary_head(target_path, head_path);
     test_fit_borrowed_head(target_path, bare_path);
-    head.reset(); target.reset(); changed.reset();
-    std::filesystem::remove_all(dir);
-    llama_backend_free();
+    finish();
     fprintf(stderr, "PASS Qwen4Exp MTP regression suite\n");
     return 0;
 }

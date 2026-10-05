@@ -44,6 +44,8 @@ static std::vector<llama_tokens> driver_drafts(
     cp.n_outputs_max = 32;
     cp.n_threads = cp.n_threads_batch = 1;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    // the --q8-kv run covers the driver paths too, for both contexts
+    cp.type_k = cp.type_v = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
     llama_context_ptr target(llama_init_from_model(target_model, cp));
     require(bool(target), "driver target context");
     cp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
@@ -186,6 +188,7 @@ static void test_ordinary_draft_driver(llama_model * target_model, llama_model *
     cp.n_batch = cp.n_ubatch = 32;
     cp.n_threads = cp.n_threads_batch = 1;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    cp.type_k = cp.type_v = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
     llama_context_ptr target(llama_init_from_model(target_model, cp));
     llama_context_ptr draft(llama_init_from_model(head, cp));
     llama_context_ptr reference(llama_init_from_model(head, cp));
