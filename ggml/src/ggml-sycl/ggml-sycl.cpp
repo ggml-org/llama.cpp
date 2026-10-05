@@ -4962,9 +4962,42 @@ static bool ggml_sycl_mul_mat_glu_mmvq_plain(ggml_backend_sycl_context & ctx, gg
                                              /*stride_col_dst=*/(int) glu->ne[0], stream);
 }
 
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+// {mul_mat(gate), mul_mat(up), GLU} on the reorder layout via the ESIMD DMMV kernel, for
+// same-type K-quant pairs and a single activation column. It reads the F32 activation
+// directly, so one launch replaces three and no q8_1 quantization is needed.
+static bool ggml_sycl_mul_mat_glu_dmmv_esimd(ggml_backend_sycl_context & ctx, ggml_tensor * glu,
+                                             ggml_tensor * gate, ggml_tensor * up, const ggml_tensor * wu,
+                                             const ggml_tensor * wg, const ggml_tensor * act) {
+    // the kernel reads the activation while writing the output, and the allocator may give glu the dead activation's memory
+    const char * act_begin = (const char *) act->data;
+    const char * glu_begin = (const char *) glu->data;
+    if (act_begin < glu_begin + ggml_nbytes(glu) && glu_begin < act_begin + ggml_nbytes(act)) {
+        return false;
+    }
+
+    // install the reorder (SoA) layout the kernel needs, as the unfused DMMV path would
+    opt_for_reorder(&ctx, wu, act, up, mul_mat_algo::DMMV);
+    opt_for_reorder(&ctx, wg, act, gate, mul_mat_algo::DMMV);
+
+    const auto * extra_u = static_cast<const ggml_tensor_extra_gpu *>(wu->extra);
+    const auto * extra_g = static_cast<const ggml_tensor_extra_gpu *>(wg->extra);
+    if (!extra_u || !extra_g || !extra_u->optimized_feature.reorder || !extra_g->optimized_feature.reorder) {
+        return false;
+    }
+
+    // log the up mat-mul: glu's own srcs are the two intermediates the fusion never materialises
+    scope_op_debug_print scope_dbg_print(__func__, up, /*num_src=*/2, " : fused with gate + GLU (ESIMD)");
+
+    return ggml_sycl_dequantize_mul_mat_vec_glu_reorder_esimd(wu->type, ggml_get_glu_op(glu), wu->data, wg->data,
+                                                              (const float *) act->data, (float *) glu->data,
+                                                              (int) wu->ne[0], (int) wu->ne[1], ctx.stream());
+}
+#endif
+
 // Fused dense-FFN mat-vec for the {mul_mat(gate), mul_mat(up), GLU} subgraph at node_idx.
 // Returns false if it declined, in which case the caller runs the three nodes normally.
-static bool ggml_sycl_op_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, ggml_tensor * gate, ggml_tensor * up, ggml_tensor * glu) {
+static bool ggml_sycl_op_mul_mat_glu_fused(ggml_backend_sycl_context & ctx, ggml_tensor * gate, ggml_tensor * up, ggml_tensor * glu) {
     const ggml_tensor * wu   = up->src[0];
     const ggml_tensor * wg   = gate->src[0];
     const ggml_tensor * act  = up->src[1];
@@ -4974,6 +5007,16 @@ static bool ggml_sycl_op_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx,
     if (ggml_backend_buffer_is_sycl_split(wu->buffer) || ggml_backend_buffer_is_sycl_split(wg->buffer)) {
         return false;
     }
+
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+    // single-column same-type K-quant pairs take the ESIMD kernel, as the unfused mul-mats
+    // would via DMMV; if the reorder layout could not be installed, fall through to mmvq
+    if (g_ggml_sycl_enable_esimd && wu->type == wg->type && act->ne[1] == 1 && wu->type != GGML_TYPE_Q8_0 &&
+        ggml_sycl_supports_reorder_esimd(wu->type) &&
+        ggml_sycl_mul_mat_glu_dmmv_esimd(ctx, glu, gate, up, wu, wg, act)) {
+        return true;
+    }
+#endif
 
     // with DMMV prioritised the unfused path would not have gone through mmvq at all
     if (g_ggml_sycl_prioritize_dmmv) {
@@ -6199,7 +6242,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         if (node->op == GGML_OP_MUL_MAT &&
             ggml_sycl_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU }, {})) {
             ggml_tensor * glu = cgraph->nodes[i + 2];
-            if (ggml_sycl_op_mul_mat_glu_mmvq_fused(*sycl_ctx, glu->src[0], glu->src[1], glu)) {
+            if (ggml_sycl_op_mul_mat_glu_fused(*sycl_ctx, glu->src[0], glu->src[1], glu)) {
                 i += 2;
                 continue;
             }
