@@ -138,7 +138,7 @@ jobs:
             });
 
       - name: Re-tag container images with release version
-        if: ${{ github.event.inputs.dry_run == 'false' && steps.desc.outputs.nightly_tag != '' }}
+        if: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.require_docker != 'false' && steps.desc.outputs.nightly_tag != '' }}
         env:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
@@ -151,14 +151,23 @@ jobs:
 
           VARIANTS=("" "-cuda" "-cuda13" "-vulkan" "-rocm" "-intel" "-musa" "-openvino")
           TYPES=("full" "light" "server")
+          # the release is already created at this point, so keep going on a
+          # missing image and report all of them at the end
+          MISSING=()
           for type in "${TYPES[@]}"; do
             for variant in "${VARIANTS[@]}"; do
               src="${IMAGE_REPO}:${type}${variant}-${NIGHTLY_TAG}"
               dst="${IMAGE_REPO}:${type}${variant}-${VERSION}"
               echo "Tagging ${src} -> ${dst}"
-              docker buildx imagetools create --tag "${dst}" "${src}"
+              if ! docker buildx imagetools create --tag "${dst}" "${src}"; then
+                MISSING+=("${type}${variant}")
+              fi
             done
           done
+          if [[ ${#MISSING[@]} -gt 0 ]]; then
+            echo "::error::failed to re-tag container images for ${NIGHTLY_TAG}:${MISSING[*]}"
+            exit 1
+          fi
 
       - name: Dry run summary
         if: ${{ github.event.inputs.dry_run == 'true' }}
