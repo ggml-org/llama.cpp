@@ -16,7 +16,7 @@ The naming and structure related to multimodal support have evolved, which might
 
 ## Pre-quantized models
 
-See the list of pre-quantized model [here](../../docs/multimodal.md)
+See the list of pre-quantized model [here](../../docs/features/multimodal.md)
 
 ## How it works and what is `mmproj`?
 
@@ -42,26 +42,26 @@ Built upon `clip.cpp` (similar to `llava.cpp`), `libmtmd` offers several advanta
 Multimodal projector (`mmproj`) files are specific to each model architecture.
 
 For the following models, you can use `convert_hf_to_gguf.py` with `--mmproj` flag to get the `mmproj` file:
-- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) ; See the guide [here](../../docs/multimodal/gemma3.md) - Note: 1B variant does not have vision support
+- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) ; See the guide [here](../../docs/features/multimodal/gemma3.md) - Note: 1B variant does not have vision support
 - SmolVLM (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
 - SmolVLM2 (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
 - [Pixtral 12B](https://huggingface.co/mistral-community/pixtral-12b) - only works with `transformers`-compatible checkpoint
 - Qwen 2 VL and Qwen 2.5 VL (from [Qwen](https://huggingface.co/Qwen))
 - [Mistral Small 3.1 24B](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
 - InternVL 2.5 and InternVL 3 from [OpenGVLab](https://huggingface.co/OpenGVLab) (note: we don't support conversion of `InternVL3-*-hf` model, only non-HF version is supported ; `InternLM2Model` **text** model is not supported)
-- [MiniCPM-V 4.6](https://huggingface.co/openbmb/MiniCPM-V-4_6) ; See the guide [here](../../docs/multimodal/minicpmv4.6.md) - requires the standard `transformers` v5.7.0+ checkpoint
+- [MiniCPM-V 4.6](https://huggingface.co/openbmb/MiniCPM-V-4_6) ; See the guide [here](../../docs/features/multimodal/minicpmv4.6.md) - requires the standard `transformers` v5.7.0+ checkpoint
 
 For older models, please refer to the relevant guide for instructions on how to obtain or create them:
 
 NOTE: conversion scripts are located under `tools/mtmd/legacy-models`
 
-- [LLaVA](../../docs/multimodal/llava.md)
-- [MobileVLM](../../docs/multimodal/MobileVLM.md)
-- [GLM-Edge](../../docs/multimodal/glmedge.md)
-- [MiniCPM-V 2.5](../../docs/multimodal/minicpmv2.5.md)
-- [MiniCPM-V 2.6](../../docs/multimodal/minicpmv2.6.md)
-- [MiniCPM-o 2.6](../../docs/multimodal/minicpmo2.6.md)
-- [MiniCPM-V 4.0](../../docs/multimodal/minicpmv4.0.md)
-- [MiniCPM-o 4.0](../../docs/multimodal/minicpmo4.0.md)
-- [MiniCPM-V 4.5](../../docs/multimodal/minicpmv4.5.md)
-- [IBM Granite Vision](../../docs/multimodal/granitevision.md)
+- [LLaVA](../../docs/features/multimodal/llava.md)
+- [MobileVLM](../../docs/features/multimodal/MobileVLM.md)
+- [GLM-Edge](../../docs/features/multimodal/glmedge.md)
+- [MiniCPM-V 2.5](../../docs/features/multimodal/minicpmv2.5.md)
+- [MiniCPM-V 2.6](../../docs/features/multimodal/minicpmv2.6.md)
+- [MiniCPM-o 2.6](../../docs/features/multimodal/minicpmo2.6.md)
+- [MiniCPM-V 4.0](../../docs/features/multimodal/minicpmv4.0.md)
+- [MiniCPM-o 4.0](../../docs/features/multimodal/minicpmo4.0.md)
+- [MiniCPM-V 4.5](../../docs/features/multimodal/minicpmv4.5.md)
+- [IBM Granite Vision](../../docs/features/multimodal/granitevision.md)

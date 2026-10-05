@@ -114,7 +114,7 @@ class DocsGenerator:
         lines.append("")
         lines.append("## How to add a backend to this table:")
         lines.append("")
-        lines.append("1. Run `test-backend-ops support --output csv` with your backend name and redirect output to a csv file in `docs/ops/` (e.g., `docs/ops/CUDA.csv`)")
+        lines.append("1. Run `test-backend-ops support --output csv` with your backend name and redirect output to a csv file in `docs/ops/` (e.g., `docs/ops/SYCL.csv`)")
         lines.append("2. Regenerate `/docs/ops.md` via `./scripts/create_ops_docs.py`")
         lines.append("")
         lines.append("Legend:")

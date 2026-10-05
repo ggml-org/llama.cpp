@@ -99,7 +99,7 @@ For a more complete example, see `test_example_native()` in
 - **`json_number()`** - JSON number parser
 - **`json_bool()`** - JSON boolean parser
 - **`json_null()`** - JSON null parser
-- **`json_string_content()`** - JSON string content without surrounding quotes
+- **`string_content(delimiter)`** - String content without the surrounding delimiter character
 - **`json_member(key, p)`** - JSON object member with specific key and value parser
 
 ### Grammar Building
@@ -188,7 +188,7 @@ content-only models with optional reasoning.
 - **`content(p)`** - Tag node for extracting `content`
 
 ```cpp
-build_chat_peg_parser([&](common_chat_peg_parser & p) {
+build_chat_peg_parser([&](common_chat_peg_builder & p) {
     return p.sequence({
         p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>"),
         p.content(p.until("<tool_call>")),
@@ -198,8 +198,8 @@ build_chat_peg_parser([&](common_chat_peg_parser & p) {
 ```
 
 Use `common_chat_peg_mapper` to extract the content. Note that this is already
-done for you in `common_chat_peg_parser` when
-`chat_format == COMMON_CHAT_FORMAT_PEG_SIMPLE`.
+done for you in `common_chat_peg_parse()` (`common/chat.cpp`) when
+`format == COMMON_CHAT_FORMAT_PEG_SIMPLE`.
 
 ```cpp
 auto result = parser.parse(ctx);

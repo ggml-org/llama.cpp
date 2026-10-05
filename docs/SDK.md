@@ -89,8 +89,10 @@ separate archive, so static consumption of the helpers is unsupported.
 - First GPU launch pays a one-time cold-JIT (~37 s on Arc A770), cached under
   `~/.cache`. AOT (`-DGGML_SYCL_DEVICE_ARCH=acm-g10`) avoids it at the cost of
   a ~45 min build.
-- Head dims must be multiples of 128 for turbo KV types; see the repository
-  CLAUDE.md / AGENTS.md architecture notes.
+- Turbo KV types use 128-element blocks. For head dims that are not a multiple
+  of 128, the KV cache zero-pads each head up to the next multiple of 128
+  (`src/llama-kv-cache.cpp`), which costs extra cache memory; see the
+  repository CLAUDE.md / AGENTS.md architecture notes.
 
 ## Runtime env knobs
 

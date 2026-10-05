@@ -320,7 +320,7 @@ on 7.3-rc. So:
   and 09-28 notes are i915 too. None of those numbers is an xe baseline.
 - The xe stack is newer (live): icpx 2026.1.1, IGC 2.41.10, level-zero-loader 1.34.0,
   compute-runtime git `be85a8d685` plus the read-only userptr retry patch
-  (`docs/research/patches/`), GuC 70.53.0.
+  (`docs/research/software-stack/patches/`), GuC 70.53.0.
 
 **Why xe.** The maintainer's reason for the move: i915 gives DG2 exactly one compute engine
 (CCS) and has no control for more. xe lists four behind a `ccs_mode` knob. **That is not in use
@@ -356,7 +356,7 @@ yet**: `ccs_mode` reads 1 (live), so compute still runs on one engine. See "Open
    (`basename "$(readlink /sys/bus/pci/devices/0000:03:00.0/driver)"`). Never compare an xe
    number with an i915-era baseline; re-bench the baseline on the same boot.
 2. On xe leave the copy-engine variables alone. An `engine_class=bcs` reset is the
-   compute-runtime defect in `docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`: not a kernel
+   compute-runtime defect in `docs/research/software-stack/xe-kmd-bcs-copy-engine-2026-09-30.md`: not a kernel
    regression, not a llama.cpp bug. `--prefetch-experts-slots` needs `UR_L0_USE_COPY_ENGINE=1`,
    which brings the failure back on any runtime without the retry patch (in no release as of
    2026-09-30).

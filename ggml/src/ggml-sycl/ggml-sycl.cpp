@@ -6717,7 +6717,7 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
 // Fuses (ffn_gate MUL_MAT, ffn_up MUL_MAT, GLU) into one kernel for
 // single-token dense Q4_K decode. Default ON as of the P6.2 re-campaign
 // against this fixed kernel (PR #38 carries the promotion evidence; the
-// docs/research/ffn-fusion-campaign-2026-07-26/ directory predates the fix
+// docs/research/sycl/ffn-fusion-campaign-2026-07-26/ directory predates the fix
 // and is historical only). Set GGML_SYCL_FFN_FUSION=0 to opt out.
 static bool ggml_sycl_ffn_fusion_enabled() {
     static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 1) != 0;

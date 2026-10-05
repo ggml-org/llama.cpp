@@ -95,7 +95,7 @@ Generate deterministic prompts at several depths:
 
 ```sh
 python3 examples/turboanchorkv/make-needle-prompt.py \
-  docs/function-calling.md build/needle-50.txt --depth 0.5
+  docs/features/function-calling.md build/needle-50.txt --depth 0.5
 
 TURBOANCHORKV_MODE=generate \
 TURBOANCHORKV_RATIO=5 \

@@ -9,7 +9,7 @@ Adding a model requires few steps:
 
 After following these steps, you can open PR.
 
-Also, it is important to check that the examples and main ggml backends (CUDA, METAL, CPU) are working with the new architecture, especially:
+Also, it is important to check that the examples and the main ggml backends of this fork (CPU, SYCL, Vulkan) are working with the new architecture, especially:
 - [cli](/tools/cli/)
 - [completion](/tools/completion/)
 - [imatrix](/tools/imatrix/)
@@ -93,7 +93,7 @@ block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
 Depending on the model configuration, tokenizer, code and tensors layout, you will have to override:
 - `TextModel#set_gguf_parameters`
 - `MmprojModel#set_gguf_parameters`
-- `ModelBase#set_vocab`
+- `TextModel#set_vocab`
 - `ModelBase#modify_tensors`
 
 NOTE: Tensor names must end with `.weight` or `.bias` suffixes, that is the convention and several tools like `quantize` expect this to proceed the weights.
@@ -105,19 +105,19 @@ The model params and tensors layout must be defined in `llama.cpp` source files:
 2. In `src/llama-arch.cpp`:
     - Add the architecture name to the `LLM_ARCH_NAMES` map.
     - You may also need to update `LLM_KV_NAMES`, `LLM_TENSOR_NAMES` and `LLM_TENSOR_INFOS`
-3. Add any non-standard metadata loading in the `llama_model_loader` constructor in `src/llama-model-loader.cpp`.
+3. Load any architecture-specific metadata in the model's `load_arch_hparams` override (see section 3), using `llama_model_loader` accessors such as `get_key`.
 4. If the model has a RoPE operation, add a case for the architecture in `llama_model_rope_type` function in `src/llama-model.cpp`.
-5. Check for other places that switch/iterate over every `llm_arch` value, e.g. `src/llama-model-saver.cpp` and any mandatory-hparam lists (such as which archs require MoE metadata). Grep for `LLM_ARCH_` usages to find them. Missing one of these is a common cause of CI test failures (e.g. `test-llama-archs`) after adding a new arch.
+5. Check for other places that switch/iterate over every `llm_arch` value, e.g. `src/llama-model-saver.cpp` and any mandatory-hparam lists (such as which archs require MoE metadata). Grep for `LLM_ARCH_` usages to find them. Missing one of these is a common cause of test failures (e.g. `test-llama-archs`) after adding a new arch.
 
 NOTE: The dimensions in `ggml` are typically in the reverse order of the `pytorch` dimensions.
 
 ### 3. Build the GGML graph implementation
 
-This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`:
-1. Create a new struct that inherits from `llama_model_base`.
-2. Implement the graph-building logic in its `build_arch_graph` method.
-3. The `build_arch_graph` method should return a constructed graph (inherited from `llm_graph_context`). Have a look at existing implementations like `llama_model_llama`, `llama_model_dbrx` or `llama_model_bert`.
-4. Then, in the `llama_model_mapping` function, add a case for your architecture to instantiate your new graph-building struct.
+This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/models/<name>.cpp` (`src/CMakeLists.txt` picks up every `models/*.cpp`):
+1. Declare a new struct that inherits from `llama_model_base` in `src/models/models.h`.
+2. Override `load_arch_hparams` and `load_arch_tensors` to read the hyperparameters and create the tensors.
+3. Implement the graph-building logic in a nested `graph` struct (inherited from `llm_graph_context`) and return it from the `build_arch_graph` method. Have a look at existing implementations like `llama_model_llama`, `llama_model_dbrx` or `llama_model_bert`.
+4. Then, in the `llama_model_mapping` function in `src/llama-model.cpp`, add a case for your architecture to instantiate your new struct.
 
 Some `ggml` backends do not support all operations. Backend implementations can be added in a separate PR.
 
@@ -125,7 +125,7 @@ Note: to debug the inference graph: you can use [llama-eval-callback](/examples/
 
 ### 4. Optional: Add multimodal encoder implementation
 
-If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../multimodal.md) and in the `tools/mtmd` source directory.
+If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../features/multimodal.md) and in the `tools/mtmd` source directory.
 
 1. In the conversion script, make sure you add a subclass that extends `MmprojModel` or another class that inherits from the same base class.
 2. Add the encoder definition in `clip.cpp`.
@@ -134,7 +134,7 @@ If the new model supports multimodal inputs, you will need to add a new encoder 
 
 Note:
 - Many multimodal encoders are based on models that are already supported. Make sure to read the existing encoder definitions in `tools/mtmd/models` before adding a new one. In `libmtmd`, it is generally better to extend an existing model than to duplicate code.
-- To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](tools/mtmd/debug/mtmd-debug.cpp).
+- To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](/tools/mtmd/debug/mtmd-debug.cpp).
 - Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
 - For audio generation models, see `tools/mtmd/README-dev.md`
@@ -162,7 +162,7 @@ For more information about `ggml_rope_ext`, please refer to the in-code document
 Examples:
 - `libmtmd` implements 2D RoPE with `GGML_ROPE_TYPE_NORMAL` ordering by splitting the input tensor in half, applying `ggml_rope_ext` separately to each half, then joining them back together using `ggml_concat`.
 - The [Kimi-K2.5](https://github.com/ggml-org/llama.cpp/pull/19170) vision encoder uses vision RoPE with interleaved frequencies. The weights must be permuted during conversion in order to reuse the `build_rope_2d()` function.
-- [Gemma 4](https://github.com/ggml-org/llama.cpp/pull/21309) uses "proportional" RoPE. We employ a trick where `rope_freqs` is set to a very large value in the last dimensions to prevent those dimensions from being rotated. See the `Gemma4Model` class in `convert_hf_to_gguf.py`.
+- [Gemma 4](https://github.com/ggml-org/llama.cpp/pull/21309) uses "proportional" RoPE. We employ a trick where `rope_freqs` is set to a very large value in the last dimensions to prevent those dimensions from being rotated. See the `Gemma4Model` class in `conversion/gemma.py`.
 - Some models require scaling the input position. For example, `[0, 1, 2, ...]` becomes `[0, 0.5, 1, ...]`. In this case, you can provide the scaling via `freq_scale = 0.5f`.
 - Some models use learned RoPE frequencies instead of relying on `powf(freq_base, -2.0 * i / n_dims)`. In this case, you can provide the learned frequencies via the `rope_freqs` tensor (corresponding to the `c` argument in `ggml_rope_ext`), then set `freq_base = 1.0f`. An important note is that `rope_freqs` in GGML is the **inverse** (`theta = pos[i] / rope_freqs`), so you may need to invert `rope_freqs` during conversion.
 

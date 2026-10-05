@@ -26,7 +26,7 @@ rationale and the paper corpus.
 ## Operating contract
 
 **Precedence when instructions conflict:** current task intent > this file, `AGENTS.md`, and the
-pinned toolchain versions in `docs/research/sycl-build-runtime-pins.md` > scoped file/platform
+pinned toolchain versions in `docs/research/software-stack/sycl-build-runtime-pins.md` > scoped file/platform
 rules > global defaults. At the same level the more recent and more specific instruction wins.
 Project conventions override style and tool defaults; they never override safety or integrity
 rules. When a material conflict cannot be resolved from context or tools, state it plainly and ask
@@ -245,9 +245,10 @@ MKL and ONEDNN routes), `GGML_SYCL_GRAPH_PROFILE`, `GGML_SYCL_ROPE_FUSION_PROFIL
 
 ## Standing decisions - do not re-litigate without new evidence
 
-Full evidence lives in `docs/research/` (dated artifacts, notably
-`sycl-a770-p5-performance-campaign-2026-07-19.md`, `standard-sycl-baseline-2026-07-11.md`,
-`sycl-build-runtime-pins.md`) and `turbo-fa-research-artifact.md`.
+Full evidence lives in `docs/research/` (dated artifacts sorted by topic, index in
+`docs/research/README.md`; notably `sycl/sycl-a770-p5-performance-campaign-2026-07-19.md`,
+`sycl/standard-sycl-baseline-2026-07-11.md`, `software-stack/sycl-build-runtime-pins.md`
+and `turbo/turbo-fa-research-artifact.md`).
 
 - **Turbo is a CAPACITY feature**, not a speed feature: more context or a bigger model in the same
   VRAM. Parity with f16/q8_0 decode t/s is not the bar, and the turbo FA-speed chase is closed.

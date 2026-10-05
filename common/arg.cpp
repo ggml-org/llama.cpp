@@ -2969,7 +2969,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (!llama_supports_gpu_offload()) {
                 fprintf(stderr, "warning: no usable GPU found, --gpu-layers option will be ignored\n");
                 fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
-                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
+                fprintf(stderr, "warning: consult docs/build/build.md for compilation instructions\n");
             }
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
@@ -4519,7 +4519,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (!llama_supports_gpu_offload()) {
                 fprintf(stderr, "warning: no usable GPU found, --gpu-layers-draft option will be ignored\n");
                 fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
-                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
+                fprintf(stderr, "warning: consult docs/build/build.md for compilation instructions\n");
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));

@@ -47,7 +47,7 @@ Fit includes target and draft model memory before budgeting cache capacity.
 | --- | --- |
 | `auto` | Preserve repacking unless cache-aware fitting selects CPU experts; apply the automatic slab floor |
 | `on` | Disable repacking and use an automatic budget |
-| `soft` | Try spare VRAM with stock placement before evicting experts |
+| `soft` | Try spare VRAM with stock placement before evicting experts; reaches the provider as `on` |
 | Positive integer | Per-device cache budget cap in MiB, without repacking |
 | `off` or `0` | Disable the cache |
 
@@ -82,17 +82,20 @@ identical. The Vulkan provider does not have this workaround and stays
 dormant in the same scenario.
 
 **Free-memory queries can silently report the wrong number.**
-`ggml_backend_sycl_get_device_memory()` falls back to reporting free equal to
-total when neither the Level Zero Sysman API (needs `ZES_ENABLE_SYSMAN=1`,
-not set by default in most environments) nor the SYCL
-`ext_intel_free_memory` aspect is available. Confirmed directly: with a
-separate process holding ~14 GiB of an Arc A770's 16 GiB, `--list-devices`
+The SYCL free-memory query (`ggml/src/ggml-sycl/mem.cpp`) falls back to
+reporting free equal to total when both of its sources fail: the Level Zero
+Sysman query (the default, `GGML_SYCL_GET_MEM_API=0`, initialized with
+`zesInit`; unavailable when Level Zero support is compiled out or
+`GGML_SYCL_USE_LEVEL_ZERO_API=0`) and the SYCL `ext_intel_free_memory`
+aspect (needs `ZES_ENABLE_SYSMAN=1`). Observed on an Arc A770: with a
+separate process holding ~14 GiB of its 16 GiB, `--list-devices`
 still reported "15473 MiB, 15473 MiB free". The SYCL provider's budget
 derivation above checks for this (refuses to derive a budget when free
 equals total, logging the raw free/total pair instead of trusting it) but
-cannot distinguish a genuinely idle device from an unmeasurable one - set
-`ZES_ENABLE_SYSMAN=1` if you need the automatic derivation to actually
-reflect device state on a shared or multi-process box.
+cannot distinguish a genuinely idle device from an unmeasurable one - keep
+the Level Zero query available, or set `ZES_ENABLE_SYSMAN=1` for the SYCL
+fallback, if you need the automatic derivation to actually reflect device
+state on a shared or multi-process box.
 
 **Pools thrash below their working set.** A pool is keyed by
 `(expert_size, wtype)` alone, so every tensor of that shape shares it, but
@@ -110,7 +113,9 @@ imbalance to whichever shape is discovered last).
 Given the two gaps above, benchmark before relying on `auto`/`on`/`soft` in
 production: compare `--moe-cache off` against your intended mode with
 `llama-bench` on your actual model and hardware, and only switch the default
-on for your deployment once the comparison favors it.
+on for your deployment once the comparison favors it. Pass `--moe-cache off`
+explicitly for the baseline: `llama-bench` defaults to `auto` (or to
+`LLAMA_ARG_MOE_CACHE`), unlike the other tools.
 
 ## Vulkan and SYCL implementation limits
 
@@ -118,7 +123,7 @@ Both providers share the same v1 shape:
 
 - One selected device per session (Vulkan or SYCL, not mixed).
 - Fills are synchronous and bounded per dispatch; neither provider has a
-  background fill worker or predictive prefetch yet (`moe-cache-common.h`'s
+  background fill worker or predictive prefetch yet (`ggml/src/ggml-moe-cache-common.h`'s
   `moe_cache_device` already carries the queue/worker/inflight fields for one,
   unused by either provider - a natural v2).
 - Fused SwiGLU cache dispatch is unavailable. The ordinary CPU path handles it.
@@ -142,25 +147,35 @@ Vulkan and SYCL read these names too; they do not require a CUDA backend.
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
+| `GGML_CUDA_MOE_CACHE_BUDGET_MB` | unset | Per-device cache budget in MiB; see below |
 | `GGML_CUDA_MOE_CACHE_RESERVE_MB` | 3072 | VRAM kept outside the cache |
-| `GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB` | 512 (auto) / 1024 (forced) | Minimum expert size; lower it if `-lv 4`/debug shows experts rejected below the floor |
-| `GGML_CUDA_MOE_CACHE_MAX_BATCH` | 8 | Maximum eligible token batch |
+| `GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB` | SYCL: 512; Vulkan: 512 (auto) / 1024 (forced) | Minimum expert size; lower it if `-lv 4`/debug shows experts rejected below the floor |
+| `GGML_CUDA_MOE_CACHE_MAX_BATCH` | 8 | Maximum eligible token batch (capped at 8) |
 | `GGML_CUDA_MOE_CACHE_INSERTS` | 8 | Bound on fills per plan |
-| `GGML_CUDA_MOE_CACHE_QUEUE_MB` | 512 | Bound on fill bytes |
+| `GGML_CUDA_MOE_CACHE_QUEUE_MB` | 512 | Bound on fill bytes per plan |
+| `GGML_CUDA_MOE_CACHE_HOT_USES` | 4 | Resident uses that make an expert "hot"; hot experts are evicted only when every eligible slot is hot |
 | `GGML_CUDA_MOE_CACHE_STATS` | 0 | Periodic statistics interval; zero means teardown only |
 
-Explicit `--moe-cache` or `LLAMA_ARG_MOE_CACHE` overrides provider mode/budget
-settings. Other shared controls may apply only to providers in TheTom's tree;
-this document does not promise asynchronous, fused, or multi-device behavior.
+`moe_cache_read_config()` in `ggml/src/ggml-moe-cache-common.h` parses further
+`GGML_CUDA_MOE_CACHE*` names (for example `GGML_CUDA_MOE_CACHE=0` and
+`GGML_CUDA_MOE_CACHE_MODE=auto|on|off`); this document does not promise their
+effect on the Vulkan or SYCL provider.
+
+Explicit `--moe-cache` or `LLAMA_ARG_MOE_CACHE` overrides the provider mode,
+and the budget only when a positive MiB value is given: with `on`/`auto`/`soft`,
+`GGML_CUDA_MOE_CACHE_BUDGET_MB` still applies (and the SYCL provider then skips
+its free-minus-reserve derivation). Other shared controls may apply only to
+providers in TheTom's tree; this document does not promise asynchronous,
+fused, or multi-device behavior.
 
 `GGML_CUDA_MOE_CACHE_BUDGET_MB` alone, with no `--moe-cache` flag at all,
-still engages a session: `ggml_backend_sched_new()` probes every registered
-provider on every scheduler it creates, independent of the CLI default
-(confirmed: `--cpu-moe` with no `--moe-cache` and this env var set produced a
-"SYCL session ready" log line and normal cache activity). This is
+still engages a session: `ggml_backend_sched_new()` probes the registered
+providers whose backend owns a device in the scheduler, independent of the
+CLI default (observed: `--cpu-moe` with no `--moe-cache` and this env var set
+produced a "SYCL session ready" log line and normal cache activity). This is
 pre-existing, shared behavior, not specific to the SYCL provider or to the
-default change above - clear it from the environment if you need `off` to be
-the actual last word.
+default change above. An explicit `--moe-cache off` destroys such a session;
+only the implicit default leaves it running.
 
 ## Validation
 

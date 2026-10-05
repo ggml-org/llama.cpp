@@ -18,14 +18,14 @@ This skill walks a contributor through adding a new model architecture. AI-gener
 - Do not bundle unrelated work into this PR - see Step 4 and Step 5 below for the specifics on multimodal and chat-template/parsing work.
 - Never hack around RoPE with a custom sin/cos implementation. Several past PRs tried this and were closed. If the existing `ggml_rope_ext` (see Step 2's RoPE tips) genuinely cannot express what this model needs, the contributor should open an issue to discuss it with maintainers first - not send a PR with a custom RoPE implementation.
 
-Before starting, read `CONTRIBUTING.md`, `AGENTS.md` and `docs/development/HOWTO-add-model.md` if they are not already in context. Also run `git log --oneline -- src/models` and look at at least 3 recent PRs that added a model (their merge commits/diffs) - this shows current convention more reliably than the docs, which can lag behind.
+Before starting, read `AGENTS.md` and `docs/development/HOWTO-add-model.md` if they are not already in context. Also run `git log --oneline -- src/models` and look at at least 3 recent PRs that added a model (their merge commits/diffs) - this shows current convention more reliably than the docs, which can lag behind.
 
 ## Step 0 - Scope and dedup check
 
 Ask the contributor:
 1. Which model (HF repo id or name)? Is it text-only or does it have a multimodal (vision/audio) encoder?
 2. Do they already have the HF `config.json`/weights available locally?
-3. Have they checked for an existing PR/issue on this model? Suggest `gh search issues "<model name>"` and `gh search prs "<model name>"` in the `ggml-org/llama.cpp` repo. In this fork, also check for in-flight work: `git branch -r | grep <model>` and `gh search prs --repo TheTom/llama-cpp-turboquant "<model name>"` - model work often lives in fork experiment branches (e.g. the existing `origin/feat/gemma4-mtp`, `origin/feat/gemma4uv`, `origin/oscar` branches). If an existing PR covers it, the contributor should comment there and collaborate rather than open a duplicate (per CONTRIBUTING.md's AI Usage Policy).
+3. Have they checked for an existing PR/issue on this model? Suggest `gh search issues "<model name>"` and `gh search prs "<model name>"` in the `ggml-org/llama.cpp` repo. In this fork, also check for in-flight work: `git branch -r | grep <model>` and `gh search prs --repo TheTom/llama-cpp-turboquant "<model name>"` - model work often lives in fork experiment branches (e.g. the existing `origin/feat/gemma4-mtp`, `origin/feat/gemma4uv`, `origin/oscar` branches). If an existing PR covers it, the contributor should comment there and collaborate rather than open a duplicate.
 4. What existing supported architecture is this model closest to (e.g. "Llama-like with sliding window", "MoE like DBRX", "BERT-style encoder")?
 
 If the contributor doesn't know the closest reference architecture, you may grep `conversion/*.py` and `src/models/*.cpp` for architectures with a similar config shape (layer count, head count, MoE expert count, norm placement) and suggest 1-2 candidates - but let the contributor confirm the choice rather than picking one yourself; this choice is a design decision they need to own.
@@ -52,13 +52,13 @@ Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 1
 
 ## Step 4 - Optional: multimodal encoder
 
-Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
+Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/features/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
 
 Skill-specific addition, and read this carefully: **whether the multimodal encoder can be bundled into the same PR as the base text-model support depends on how conventional the change is.** It's OK to bundle it if the encoder support is conventional - i.e. no new infra or logic is needed, it's just a new cgraph reusing existing preprocessing/projector machinery (e.g. siglip/pixtral/qwen with just a new projector). If it requires anything beyond that - a new preprocessor, non-standard projector logic, or changes to shared `libmtmd` infra/logic - STOP, tell the contributor this is non-conventional, and have them land the text model first with the encoder as a dedicated follow-up PR. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
 
 ## Step 5 - Optional: chat template / parsing support
 
-Only do this if the model needs a new built-in chat template (`src/llama-chat.cpp`) or a new output parser (see `docs/development/parsing.md` and `docs/autoparser.md`). If either is needed beyond what a user-supplied Jinja template already covers, treat it as its own dedicated follow-up PR, not part of the base model-support PR - call this out explicitly to the contributor rather than silently bundling it in.
+Only do this if the model needs a new built-in chat template (`src/llama-chat.cpp`) or a new output parser (see `docs/development/parsing.md` and `docs/development/autoparser.md`). If either is needed beyond what a user-supplied Jinja template already covers, treat it as its own dedicated follow-up PR, not part of the base model-support PR - call this out explicitly to the contributor rather than silently bundling it in.
 
 ## Common pitfalls (from past PR reviews)
 
@@ -89,9 +89,9 @@ Reference: `examples/model-conversion/README.md`.
 3. Quantize (including QAT variants if relevant) and re-verify.
 4. Run perplexity evaluation (simple and full).
 5. Sanity-check across `tools/cli`, `tools/completion`, `tools/imatrix`, `tools/quantize`, and `tools/server`.
-6. CPU backend first; other backends (CUDA, Metal, ...) can be separate follow-up PRs per `CONTRIBUTING.md` (relaxed in this fork - fork-internal model work may bundle backends, but CPU-first still catches the most bugs cheapest).
+6. CPU backend first; other backends (SYCL, Vulkan, ...) can be separate follow-up PRs, as upstream llama.cpp's `CONTRIBUTING.md` asks (relaxed in this fork - fork-internal model work may bundle backends, but CPU-first still catches the most bugs cheapest).
 7. **Fork-specific:** run the model with turbo KV cache types, not just f16/q8_0 - `-ctk q8_0 -ctv turbo3` (and turbo2/turbo4), with flash attention. This exercises the rotation/padding path: head dims not a multiple of 128 must zero-pad correctly, and MLA/DeepSeek4 archs must use identical K/V types. Also quantize a copy to `TQ4_1S` and confirm it loads, decodes coherently, and runs on the CUDA kernels (TQ weights are arch-agnostic, but a new arch's graph must route them through the fused-TQ path, not the mmvq abort).
-8. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` (and `CONTRIBUTING.md`'s "Coding guidelines"/"Naming guidelines" sections) - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming (`kebab-case` for file names), matching indentation/brace style, etc.
+8. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming (`kebab-case` for file names), matching indentation/brace style, etc.
 
 ## Fork-specific additions (TurboQuant)
 

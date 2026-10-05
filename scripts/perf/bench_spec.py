@@ -56,7 +56,7 @@ the probabilities of accepted draft tokens (the port of upstream llama.cpp PR
 Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
 verified and how many restored a speculative checkpoint.
 Worked run and how to read the output:
-docs/research/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
+docs/research/speculative/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
 """
 from __future__ import annotations
 

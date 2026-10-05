@@ -226,7 +226,7 @@ turbo inference on this stack invalid as a *correctness* benchmark. The
 doc's lesson is explicit: **use CPU-FA**, not -fa off on GPU.
 
 **Consequence.** The turbo2/3/4 PPL numbers in
-`docs/ppl-results/mistral-7b-q4km/RESULTS.md` and the
+`docs/turboquant/ppl-results/mistral-7b-q4km/RESULTS.md` and the
 `a1495e8b1 ppl(mistral-7b): Q4_K_M wikitext-2 KV matrix — turbo4 beats
 q4_0 (post-2a gate PASS)` commit message are **superseded**. Specifically:
 
@@ -267,7 +267,7 @@ timeout.
 
 **Status:** prior turbo numbers **SUPERSEDED**. CPU-FA re-runs **IN
 FLIGHT** (background jobs, one per turbo type, full 642 chunks). After
-they land, `docs/ppl-results/mistral-7b-q4km/RESULTS.md` and the PPL row
+they land, `docs/turboquant/ppl-results/mistral-7b-q4km/RESULTS.md` and the PPL row
 in `RALPH_TASKS.md` will be amended to reflect the CPU-FA numbers; the
 `a1495e8b1` commit message is left as-is (history is history — the
 addendum is the correction, not a force-amend).
@@ -588,8 +588,8 @@ RALPH_TASKS.md. Quality at extended ctx (past n_ctx_train=32768) is out
 of scope — capacity is VRAM residency, not compute correctness.
 
 Files:
-  - docs/ppl-results/mistral-7b-q4km/capacity-RESULTS.md (the result doc)
-  - docs/ppl-results/mistral-7b-q4km/sweep_final.csv (merged v10+v11, retro-patched)
+  - docs/turboquant/ppl-results/mistral-7b-q4km/capacity-RESULTS.md (the result doc)
+  - docs/turboquant/ppl-results/mistral-7b-q4km/sweep_final.csv (merged v10+v11, retro-patched)
   - sweep-logs/mistral-7b-cap/sweep_v10.log, sweep_v11.log (raw sweep output)
   - sweep-logs/mistral-7b-cap/*.log (per-probe logs)
   - /tmp/ralph-cap-mistral.sh (v10 sweep driver)
@@ -639,7 +639,7 @@ LLAMA_TEST_TURBO_FA=1 (exercises [5b] SYCL FA on turbo types):
     - same XFAIL pattern as the non-FA turbo2
 
 Harness output archived in
-`docs/ppl-results/mistral-7b-q4km/harness/`.
+`docs/turboquant/ppl-results/mistral-7b-q4km/harness/`.
 
 P1 [model 1] is now COMPLETE on all 3 sub-tasks:
   - sub-task 1: PPL matrix (CPU-FA, 5 KV types) — RESOLVED commit cd2ede92e
@@ -713,8 +713,8 @@ GQA 4:1, n_ctx_train=131072, 32 layers). Same methodology as model 1:
   session leader and survives.
 
 **Files:**
-  - `docs/ppl-results/llama31-8b-heretic/RESULTS.md` (the result doc)
-  - `docs/ppl-results/llama31-8b-heretic/ppl.csv` (merged, retro-patched)
+  - `docs/turboquant/ppl-results/llama31-8b-heretic/RESULTS.md` (the result doc)
+  - `docs/turboquant/ppl-results/llama31-8b-heretic/ppl.csv` (merged, retro-patched)
   - `sweep-logs/llama31-8b/ppl_*.log` (per-probe logs)
   - `/tmp/ralph-ppl-llama31-8b.sh` (initial driver, killed by 300s timeout)
   - `/tmp/ralph-ppl-llama31-turbo34.sh` (chained driver for turbo3+4)
@@ -786,7 +786,7 @@ LLAMA_TEST_TURBO_FA=1 (exercises [5b] SYCL FA on turbo types):
   - flash_attn turbo2_0 d=128: WARN (cosine=0.89-0.91, same XFAIL)
 
 Harness output archived in
-`docs/ppl-results/llama31-8b-heretic/harness/`.
+`docs/turboquant/ppl-results/llama31-8b-heretic/harness/`.
 
 P1 [model 2 — llama31-8b] is now COMPLETE on all 3 sub-tasks:
   - sub-task 1: PPL matrix (CPU-FA, 6 KV types, 564 chunks) — RESOLVED commit c0785f7e1
@@ -1132,8 +1132,8 @@ probes recovered the v10 ceilings (f16/q4_0/q8_0) and the turbo
 type probes at c=524288. The detach pattern (setsid nohup ... < /dev/null
 & disown) is the correct fix.
 
-Full result doc: `docs/ppl-results/qwen3-coder-30b-a3b/capacity-RESULTS.md`.
-Enriched CSV: `docs/ppl-results/qwen3-coder-30b-a3b/sweep_enriched.csv`.
+Full result doc: `docs/turboquant/ppl-results/qwen3-coder-30b-a3b/capacity-RESULTS.md`.
+Enriched CSV: `docs/turboquant/ppl-results/qwen3-coder-30b-a3b/sweep_enriched.csv`.
 Remaining: sub-task 3 (correctness).
 
 ---
@@ -1166,7 +1166,7 @@ LLAMA_TEST_TURBO_FA=1 (exercises [5b] SYCL FA on turbo types):
     pattern; 2-bit precision at the edge)
 
 Harness output archived in
-`docs/ppl-results/qwen3-coder-30b-a3b/harness/`.
+`docs/turboquant/ppl-results/qwen3-coder-30b-a3b/harness/`.
 
 P1 [model 3 — Qwen3-Coder-30B-A3B MoE] is now COMPLETE on all 3
 sub-tasks:

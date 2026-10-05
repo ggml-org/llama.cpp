@@ -11,11 +11,11 @@ Set of LLM REST APIs and a web UI to interact with llama.cpp.
  * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
- * Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support
+ * Multimodal ([documentation](../../docs/features/multimodal.md)) / with OpenAI-compatible API support
  * Monitoring endpoints
  * Schema-constrained JSON response format
  * Prefilling of assistant messages similar to the Claude API
- * [Function calling](../../docs/function-calling.md) / tool use for ~any model
+ * [Function calling](../../docs/features/function-calling.md) / tool use for ~any model
  * Speculative decoding
  * Easy-to-use web UI
 
@@ -349,7 +349,7 @@ It is currently available in the following endpoints:
 - The non-OAI-compatible completions endpoint.
 - The non-OAI-compatible embeddings endpoint.
 
-For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
+For more details, please refer to [multimodal documentation](../../docs/features/multimodal.md)
 
 ### Server tools support
 
@@ -1484,7 +1484,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
-**See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
+**See our [Function calling](../../docs/features/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
 
 *Timings and context usage*
 
