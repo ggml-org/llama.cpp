@@ -40,14 +40,18 @@ MODE=ab is a paired A/B of two server builds under one speculative config:
   NAME_A / NAME_B               arm labels (default a / b)
   SPEC_ARGS      speculative flags for both arms (default: ngram-mod)
   LAUNCHES       server launches per arm (default 4), run in ABBA order so
-                 drift cancels; the first request of every launch is discarded
+                 drift cancels; an odd count leaves the order unbalanced, which
+                 the report flags. The first request of every launch is discarded
   OUT_TAG        suffix for the summary and log file names
 It refuses to start (exit 70) while another process holds the render node,
 reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt.
 It exits non-zero when a launch failed, a response failed the target-argmax
 verifier, a speculative arm reported no draft statistics, a fault line appeared,
 or the kernel log could not be compared (unreadable, wrapped or cleared during
-the run).
+the run). The verifier has argmax evidence only for tokens the server sampled on
+its normal path: it sends no top list for tokens emitted from a verified draft
+round, where the check is the token id and a finite log-probability
+(verifier_rows_with_argmax counts the rows that had the evidence).
 Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
 verified and how many restored a speculative checkpoint.
 Worked run and how to read the output:
@@ -255,10 +259,13 @@ def analyze_native_response(resp: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("/completion probability rows do not match returned tokens")
 
     failures: list[dict[str, Any]] = []
+    rows_with_argmax = 0
     for index, (token, row) in enumerate(zip(tokens, probs)):
         logprob = row.get("logprob") if isinstance(row, dict) else None
         top = row.get("top_logprobs") if isinstance(row, dict) else None
+        # the server sends no top list for the tokens of a verified draft round
         top_id = top[0].get("id") if isinstance(top, list) and top and isinstance(top[0], dict) else None
+        rows_with_argmax += top_id is not None
         if not isinstance(logprob, (int, float)) or not math.isfinite(logprob):
             failures.append({"index": index, "token": token, "reason": "nonfinite_target_logprob"})
         elif row.get("id") != token or (top_id is not None and top_id != token):
@@ -275,6 +282,7 @@ def analyze_native_response(resp: dict[str, Any]) -> dict[str, Any]:
         "token_sha256": hashlib.sha256(token_bytes).hexdigest(),
         "content_sha256": hashlib.sha256(str(resp.get("content", "")).encode("utf-8")).hexdigest(),
         "verifier_rows": len(probs),
+        "verifier_rows_with_argmax": rows_with_argmax,
         "verifier_invariant_ok": not failures,
         "verifier_failures": failures,
     }
@@ -564,6 +572,11 @@ def file_sha256(path: Path) -> str | None:
         return None
 
 
+def launch_order(launches: int) -> list[tuple[int, int]]:
+    """Arm indices of each launch pair: AB, BA, AB, ... Only an even count balances the positions."""
+    return [(0, 1) if i % 2 == 0 else (1, 0) for i in range(launches)]
+
+
 def paired_stats(a: list[float], b: list[float]) -> dict[str, Any]:
     """Paired B-A difference with a 95% t interval; pair i is the i-th launch of each arm."""
     n = min(len(a), len(b))
@@ -591,19 +604,26 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     out_path = RESULTS / f"summary_ab{suffix}.json"
     a, b = arms
     for arm in arms:
-        bin_dir = Path(arm["server_bin"]).resolve().parent
-        arm["sha256"] = {name: file_sha256(bin_dir / name) for name in ("llama-server", "libllama-server-impl.so")}
+        exe = Path(arm["server_bin"]).resolve()
+        arm["sha256"] = {exe.name: file_sha256(exe),
+                         "libllama-server-impl.so": file_sha256(exe.parent / "libllama-server-impl.so")}
         print(f"arm {arm['name']}: {arm['server_bin']}")
+
+    order_balanced = LAUNCHES % 2 == 0
+    unbalanced = (f"!! LAUNCHES={LAUNCHES} is odd: {a['name']} runs first more often than {b['name']}, "
+                  "so a drift over the run biases the paired delta")
+    if not order_balanced:
+        print(unbalanced, flush=True)
 
     kmsg_before = dmesg_lines()
     launches: dict[str, list[dict[str, Any]]] = {a["name"]: [], b["name"]: []}
     out: dict[str, Any] = {
         "mode": MODE, "model": MODEL, "draft_model": DRAFT_MODEL, "placement": PLACEMENT, "ctx": CTX,
         "threads": THREADS, "repeats": REPEATS, "launches_per_arm": LAUNCHES, "prompt_ids": prompt_ids,
-        "arms": arms, "server_extra": SERVER_EXTRA, "launches": launches,
+        "arms": arms, "server_extra": SERVER_EXTRA, "order_balanced": order_balanced, "launches": launches,
     }
-    for i in range(LAUNCHES):
-        for arm in ((a, b) if i % 2 == 0 else (b, a)):
+    for i, pair in enumerate(launch_order(LAUNCHES)):
+        for arm in (arms[pair[0]], arms[pair[1]]):
             holders = gpu_holders()
             if holders:
                 print(f"!! {RENDER_NODE} is held by {' '.join(holders)}; refusing to time a shared GPU", flush=True)
@@ -651,6 +671,8 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     for pid, st in stats.items():
         half = f"{st['ci95_half_pct']:.2f}" if st.get("ci95_half_pct") is not None else "n/a"
         print(f"| {pid} | {st['a_mean']:.2f} | {st['b_mean']:.2f} | {st['delta']:+.2f} | {st['delta_pct']:+.2f} | {half} |")
+    if not order_balanced:
+        print(unbalanced)
     if not ok:
         print("!! at least one launch is unusable; no paired statistics")
         for arm in arms:

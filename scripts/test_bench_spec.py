@@ -35,6 +35,7 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         self.assertTrue(evidence["verifier_invariant_ok"])
         self.assertEqual(evidence["token_ids"], [11, 12])
         self.assertEqual(evidence["verifier_rows"], 2)
+        self.assertEqual(evidence["verifier_rows_with_argmax"], 2)
         self.assertEqual(evidence["verifier_failures"], [])
         self.assertEqual(len(evidence["token_sha256"]), 64)
 
@@ -51,6 +52,8 @@ class BenchSpecEvidenceTests(unittest.TestCase):
 
         self.assertTrue(evidence["verifier_invariant_ok"])
         self.assertEqual(evidence["verifier_failures"], [])
+        # accepted, but the summary shows that the row carried no argmax evidence
+        self.assertEqual(evidence["verifier_rows_with_argmax"], 0)
 
     def test_analyze_native_response_rejects_non_argmax_and_nonfinite_logits(self) -> None:
         response = {
@@ -180,6 +183,12 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         self.assertEqual(BENCH_SPEC.launch_problems(bad_tokens), ["p: response failed the target-argmax verifier"])
         no_timing = {**good, "prompts": [{"id": "p", "tg_median": None, "all_verifier_invariants_ok": True}]}
         self.assertEqual(BENCH_SPEC.launch_problems(no_timing), ["p: no timings"])
+
+    def test_launch_order_is_balanced_only_for_an_even_count(self) -> None:
+        self.assertEqual(BENCH_SPEC.launch_order(4), [(0, 1), (1, 0), (0, 1), (1, 0)])
+        for launches, balanced in ((1, False), (2, True), (3, False), (4, True)):
+            first = [pair[0] for pair in BENCH_SPEC.launch_order(launches)]
+            self.assertEqual(first.count(0) == first.count(1), balanced, launches)
 
     def test_ab_exit_code_fails_closed_on_an_unevaluated_fault_gate(self) -> None:
         self.assertEqual(BENCH_SPEC.ab_exit_code(True, []), 0)
