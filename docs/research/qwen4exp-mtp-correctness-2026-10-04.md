@@ -338,6 +338,7 @@ a regression test that failed before its fix, except where noted.
 | A file with some trunk block tensors is a trunk: one that lacks others fails to load. The loader used to take a missing `blk.0.hc_attn_norm.weight` alone as the mark of a head-only file. Third review pass. | a combined file without that one tensor loaded and ran as a head, embedding straight into the LM head | "a trunk that lacks a tensor is rejected, not run as a head" |
 | A chained decode on a context with embeddings enabled returns -1. Third review pass. | abort at `llama-graph.cpp:3887`, `missing result_norm/result_embd tensor` | `test_invalid_chain`, case 7 |
 | A table-less head whose devices cannot use the buffer of a borrowed table is rejected at context creation. Fifth review pass. | abort at `ggml-backend.cpp:1169`, `pre-allocated tensor (output.weight) in a buffer (SYCL0) that cannot run the operation`, for a host-only head next to a target on the A770 | `test_borrowed_tables`, "borrowed tables in a buffer the head's devices cannot use are rejected" (`--backend SYCL0` only) |
+| A Qwen4Exp MTP context also reserves its full ubatch without an output row, for the scheduler and for `--fit`. Sixth review pass. | the first catch-up ubatch planned after a draft needed 11.0 MiB more than was reserved on the real head (152.0078 against 141.0157 MiB) | `test_catchup_reservation` (the reservation is made); `--catchup-real-head <gguf>` (opt-in, real weights, failed before the fix on the A770) |
 | Checkpoint margins are looked up by device in the target model's device list, not by position in the context's own list. Fourth review pass. | a device the margins were not given for took the first margin | `test_checkpoint_placement`, "a device the margins were not given for keeps the largest one" (`--backend SYCL0` only) |
 | The server's checkpoint guard decides before every checkpoint update instead of once (`common_speculative_checkpoint_flags`). Added after a third review pass, on `f5b0150d4`. | the first decision was kept while a checkpoint outgrew its device copy | `test_checkpoint_placement`; its host branch needs a device that reports memory, so it only runs under `--backend SYCL0` |
 
@@ -347,8 +348,8 @@ its hidden input, which is why drafting was not visibly affected: normalizing an
 already normalized residual changes it only through the epsilon term. Drafts
 therefore are not expected to be bit-identical to earlier builds.
 
-Results on the final source: CPU `test-qwen4exp-mtp` 74 PASS (f16) and 49 PASS
-(`--q8-kv`); Arc A770 `--backend SYCL0` 75 PASS and 50 PASS (one case needs a
+Results on the final source: CPU `test-qwen4exp-mtp` 75 PASS (f16) and 50 PASS
+(`--q8-kv`); Arc A770 `--backend SYCL0` 76 PASS and 51 PASS (one case needs a
 device), 0 new i915/xe fault lines. Both real head files on disk hold only block 48, the head block, besides
 their shared tensors, so the new head-only rule classifies them as before; the
 Q8_0 head still loads and generates on CPU with the head-only warning.
@@ -369,6 +370,31 @@ chained drafting at depth 4 accepted 818 of 1292. Neither log holds an
 allocation failure, an assertion or a failed chain decode, and the kernel log
 gained no i915/xe fault line. Both were observed once and are not a benchmark.
 
+Compute buffer of the draft context (sixth pass). Every `draft-mtp` launch of the
+real trunk ended with the draft context at 152.0078 MiB against an expectation of
+141.0157 MiB. It is one reallocation, at the first full catch-up ubatch that has
+to be planned from scratch, which is the case after any draft: a one-row or
+chain graph has replaced the reserved plan by then. A catch-up ubatch has no
+output row. The scheduler's device copy of the output indices, 128 bytes with one
+output row, is empty then; the two free blocks it kept apart merge, best fit
+places the next tensors differently, and the 50 MiB expert output that sets the
+peak ends up 11.2 MiB higher. A planner trace of both plans (taken in a second
+session with a tracing copy of `ggml-alloc.c` preloaded) shows the same 148
+allocator events in the same order with different offsets. The hidden export is
+not involved, the reservations before and after the switch are identical, and a
+CPU-only context does not grow, because it has no input copies.
+
+The context now reserves that shape as well. Measured on the A770 with the Q8_0
+head, SYCL0 compute buffer:
+
+| Configuration | Reserved before | Reserved now | After a catch-up ubatch |
+| --- | --- | --- | --- |
+| head alone, ctx 4096, one row then 512 rows without output (test, run twice) | 148.5236 MiB | 152.0000 MiB | 152.0078 MiB |
+| real trunk, `--fit on --fit-target 1024`, ctx 16384, short request then long prompt (one launch) | 141.0157 MiB | 152.0000 MiB | 152.0078 MiB |
+
+The fit-time measurement of the head reports 152 MiB of compute memory where it
+reported 141 MiB. No i915/xe fault line in either run.
+
 Limits of this follow-up:
 
 - The on-device restore fix was exercised through the full-state path on a plain
@@ -381,11 +407,15 @@ Limits of this follow-up:
 - Borrowed tables of the right shape from an unrelated model are not detected.
 - Embeddings on Qwen4Exp now return the wide residual in front of the output
   mixer, `hc * n_embd` values per token. Pooled embeddings were not tested.
-- Every `draft-mtp` launch of the real trunk on the A770 ends with one context
-  at a 152.0 MiB compute buffer against a 141.0 MiB expectation, with and
-  without chaining (seen in another session's logs). Fit-time contexts are
-  measured before the hidden export is switched on; whether that accounts for
-  the 11 MiB was not established.
+- The catch-up reservation is 8192 bytes short of what a decode plans, so a
+  `draft-mtp` launch still logs one `does not match expectation` line (152.0078
+  against 152.0000 MiB) and reallocates the draft buffer once. The reserved
+  graph carries the attention mask of a full cache, a decode a smaller one; with
+  the smaller mask the free block above the attention output is smaller than the
+  one below it, the 8 KiB `hc_inject` tensor goes there, and the 20 MiB residual
+  lands 8 KiB higher. Best fit is not monotonic in tensor sizes, so no reserved
+  shape bounds every decode. Head shapes other than this one and the other MTP
+  architectures were not measured; the extra reservation is limited to Qwen4Exp.
 
 ## User-reported real-head evidence
 
