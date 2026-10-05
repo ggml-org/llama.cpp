@@ -71,7 +71,10 @@ DSpark types and 0 otherwise, so a hybrid target is full-removal only under
   a kernel log that could not be compared, a `fuser` error, a response that
   fails the target-argmax verifier and a speculative arm without draft
   statistics now each make the run fail. Applied to the summaries kept here,
-  the last two exclude no launch.
+  the last two exclude no launch. An odd `LAUNCHES` is flagged as an unbalanced
+  order, the hash recorded per arm is that of the configured binary, and each
+  response records how many of its rows carried argmax evidence (see
+  "Correctness evidence").
 - Requests: `prompts.jsonl`, `n_predict` 256, temperature 0, `cache_prompt`
   false, `--parallel 1`, q8_0 KV, flash attention on.
 - No persistent SYCL cache and no SYCL graph (`GGML_SYCL_ENABLE_GRAPH` unset).
@@ -159,8 +162,16 @@ VRAM exhaustion in the unmodified code path and is independent of the flag.
   The host and device paths agreeing to seven digits says the failure is the
   replay-versus-batch comparison on a real quantized model, not the device
   path. This test covers full sequence state, not `PARTIAL_ONLY`.
-- Every run in both arms passed the harness verifier (each generated token is
-  the target argmax in the server's own probabilities).
+- Every run in both arms passed the harness verifier. That says less than its
+  name: the server sends a top list only for a token it samples on its normal
+  path, and the tokens of a verified draft round are emitted without one
+  (`// TODO: set result.probs` in the accept path of
+  `tools/server/server-context.cpp`). For those rows the verifier can only
+  check the token id and a finite log-probability. The harness has counted the
+  rows with a top list since a later review pass: two single-launch runs of
+  this configuration had 1 such row in 256 per response. The verifier therefore
+  did not establish that the generated tokens are the target's argmax here;
+  that rests on the server's own draft verification.
 - Token streams are not a usable oracle. The same binary, prompt and seed gave
   different streams on consecutive requests in both arms, including pairs where
   every drafted token was accepted (host arm, code_edit: `7011...` and
@@ -197,7 +208,10 @@ them (`spec_ckpt_place()` and `spec_ckpt_flags()` in
   device without a memory query;
 - a larger one stays on the device only if every device of the context's model
   reports at least the growth in free memory plus the `--fit-target` margin the
-  user gave (default 1024 MiB, taken before the server adds an mmproj to it);
+  user gave (default 1024 MiB, taken before the server adds an mmproj to it).
+  The margins follow the device order of the target model, so a device is
+  looked up there by identity; one the target does not use keeps the largest
+  margin;
 - otherwise that checkpoint goes to the host, as before this change. A GPU that
   reports no memory figures counts as full.
 
@@ -280,6 +294,9 @@ test fails at the first of these.
 - The four guard runs are single launches: their throughput columns are not a
   measurement of the guard. The per-update decision adds two state-size passes
   to every checkpoint update; their cost was not measured.
+- The margin lookup by device was tested with one GPU: a model on that GPU
+  against a host-only reference model. No run had two GPUs or a draft on
+  another device than its target.
 - No model whose partial state grows (hybrid memory over a sliding-window cache,
   DeepSeek-V4) was run with the guard. That the writer frees the old copy before
   it allocates the new one was read from source, not observed on the device.
