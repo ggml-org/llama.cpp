@@ -285,8 +285,9 @@ void main() {
                 const uint32_t block = ib % (HSK / 32);
                 if (idx + gl_WorkGroupSize.x <= quant_iters || c < Bc) {
                     const uint buf_ib = c * qf_stride + block;
-                    if (!KV_bounds_check || j * Bc + c < KV) {
-                        const uint global_ib = (j * Bc + c) * k_stride + block;
+                    uint32_t kcol;
+                    if (fa_kv_index(j * Bc + c, kcol)) {
+                        const uint global_ib = kcol * k_stride + block;
                         k_block_to_shmem(buf_ib, global_ib, iqs, k_offset);
                     } else {
                         k_block_to_shmem_zero(buf_ib, iqs);
@@ -363,7 +364,8 @@ void main() {
                                 (hsk4 % 2 == 0) ? 2 : 1;
 
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
-            if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+            uint32_t kcol;
+            if (!fa_kv_index(j * Bc + c * cols_per_iter + col_tid, kcol)) {
                 continue;
             }
 
@@ -400,7 +402,7 @@ void main() {
                         }
                     }
                 } else {
-                    const uint coord = (j * Bc + c * cols_per_iter + col_tid) * k_stride * BLOCK_SIZE_K + 4 * (d_tid * (HSK_per_thread / 4) + d_block);
+                    const uint coord = kcol * k_stride * BLOCK_SIZE_K + 4 * (d_tid * (HSK_per_thread / 4) + d_block);
                     const uint ib = coord / BLOCK_SIZE_K;
                     const uint iqs = (coord % BLOCK_SIZE_K);
 
