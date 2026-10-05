@@ -1,5 +1,5 @@
-// Tests for GGML_OP_SLEEP, on every backend that supports it. Two properties are checked:
-//   - the op is a pass-through: the output must be a bit-for-bit copy of the input
+// Tests for GGML_OP_SLEEP, on every backend that supports it. Three properties are checked:
+//   - the op only delays: input = output
 //   - the op does not return early: a chain of n sleeps must take at least n*us
 // Only a lower bound is asserted for the duration. A busy-wait cannot finish early, so that bound is
 // deterministic, whereas an upper bound would be flaky on a loaded machine.
@@ -89,17 +89,18 @@ static test_result test_sleep(ggml_backend_t backend, ggml_type type, int64_t ne
         const int64_t t_min_us = (int64_t) n_nodes * us;
 
         const bool ok_status = status == GGML_STATUS_SUCCESS;
+        const bool ok_alias  = out->data == x->data;
         const bool ok_data   = memcmp(data_in.data(), data_out.data(), data_in.size()) == 0;
         const bool ok_time   = t_us >= t_min_us;
 
-        printf("%selapsed=%7" PRId64 " us (>= %6" PRId64 ")  data: %-4s  time: %s\n",
-                desc, t_us, t_min_us, ok_data ? "OK" : "FAIL", ok_time ? "OK" : "FAIL");
+        printf("%selapsed=%7" PRId64 " us (>= %6" PRId64 ")  alias: %-4s  data: %-4s  time: %s\n",
+                desc, t_us, t_min_us, ok_alias ? "OK" : "FAIL", ok_data ? "OK" : "FAIL", ok_time ? "OK" : "FAIL");
 
         if (!ok_status) {
             printf("    compute failed: %s\n", ggml_status_to_string(status));
         }
 
-        result = ok_status && ok_data && ok_time ? TEST_OK : TEST_FAIL;
+        result = ok_status && ok_alias && ok_data && ok_time ? TEST_OK : TEST_FAIL;
 
         ggml_gallocr_free(galloc);
         ggml_backend_buffer_free(buf_static);
@@ -129,7 +130,7 @@ int main() {
             continue;
         }
 
-        // a zero duration must still produce a valid copy, longer ones are checked against the clock,
+        // a zero duration must still be a valid no-op, longer ones are checked against the clock,
         // and the last case verifies that a chain of sleeps accumulates instead of collapsing into one
         const struct {
             ggml_type type;
