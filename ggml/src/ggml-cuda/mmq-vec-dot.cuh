@@ -1227,7 +1227,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         for (int n = 0; n < ntx; ++n) {
             // accumulate in place into the output sum array
             tile_C & C = *reinterpret_cast<tile_C *>(sum + (j0 / tile_C::J + n) * tile_C::ne);
-            #pragma unroll
+#pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
                 mma_block_scaled_fp4<type>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
             }            
