@@ -102,13 +102,13 @@ This repository holds:
 
 | Path | What |
 |---|---|
-| `patches/` | 9 patches for llama.cpp's `dist-tp` branch: a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, and profiling |
+| `patches/` | 10 patches for llama.cpp's `dist-tp` branch: a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, profiling, and removal of the GitHub Actions workflows inherited from llama.cpp |
 | `build.cmd` | builds `llama-cli.exe` and its DLLs from scratch with the patches applied |
 | `scripts/` | PowerShell scripts, run from a controller machine, that prepare the USB4 links, check the nodes, launch every rank and verify what transport each one actually used |
 | `prompts/` | a sample prompt |
 
 The patches apply to `https://github.com/hli25/llama.cpp`, branch `dist-tp`, commit
-`67f2cab9652be2103876b4dcb85daa07943a7341`.
+`0a932f89c0d705f044554e91111c8460df89fcf2`,
 
 #### 1. Requirements
 
