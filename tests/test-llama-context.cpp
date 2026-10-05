@@ -1,9 +1,9 @@
 // Tests for llama_context state handling: KV and recurrent state save / load / copy / rollback.
 //
 // Merged from the former test-save-load-state.cpp, test-recurrent-state-rollback.cpp and
-// test-state-restore-fragmented.cpp. The fragmented-restore case is a regression test for
-// the fix in https://github.com/ggml-org/llama.cpp/issues/17527: state restore must not
-// require contiguous KV cache slots, so it works on a fragmented cache.
+// test-state-restore-fragmented.cpp. The fragmented-restore case is a regression test for a
+// fix that made state restore work on a fragmented KV cache:
+// ref: https://github.com/ggml-org/llama.cpp/issues/17527
 //
 // Run a single model:   test-llama-context -m model.gguf -lv 5
 // Run a whole dialect:  test-llama-context --models build/tests/test-models
@@ -698,6 +698,11 @@ static test_status test_baseline(model_run & mr) {
     auto ctx  = make_ctx(mr.model, mr.params, opts);
     auto smpl = make_dist_sampler(mr.params.sampling.seed);
 
+    if (!ctx) {
+        TLOG_ERR("%s: failed to create context\n", __func__);
+        return test_status::FAIL;
+    }
+
     auto n_past = 0;
     if (!common_prompt_batch_decode(ctx.get(), mr.tokens, (int) mr.tokens.size(), n_past, mr.params.n_batch, mr.params.out_file, true)) {
         TLOG_ERR("%s: failed to decode prompt\n", __func__);
@@ -773,6 +778,11 @@ static test_status test_state_load(model_run & mr) {
     auto ctx  = make_ctx(mr.model, mr.params, opts);
     auto smpl = make_dist_sampler(mr.params.sampling.seed);
 
+    if (!ctx) {
+        TLOG_ERR("%s: failed to create context\n", __func__);
+        return test_status::FAIL;
+    }
+
     llama_tokens unused_sts(mr.tokens.size());
     size_t n_token_count_out = 0;
 
@@ -803,6 +813,11 @@ static test_status test_seq_cp(model_run & mr, bool on_device) {
 
     auto ctx  = make_ctx(mr.model, mr.params, opts);
     auto smpl = make_dist_sampler(mr.params.sampling.seed);
+
+    if (!ctx) {
+        TLOG_ERR("%s: failed to create context\n", __func__);
+        return test_status::FAIL;
+    }
 
     TLOGV(LOG_LEVEL_INFO, "io path: %s\n", on_device ? "device" : "host");
 
@@ -924,6 +939,10 @@ static test_status test_seq_cp_scatter(model_run & mr, bool on_device) {
 // compares blobs rather than generated text: a partially restored cell still decodes to plausible tokens
 static test_status test_state_roundtrip(model_run & mr) {
     auto ctx = make_ctx(mr.model, mr.params, ctx_opts());
+    if (!ctx) {
+        TLOG_ERR("%s: failed to create context\n", __func__);
+        return test_status::FAIL;
+    }
 
     common_batch batch = common_batch_get_one(ctx.get(), mr.tokens);
     if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
@@ -1209,11 +1228,16 @@ static test_status test_state_rotation(model_run & mr) {
 // restore a sequence into a fragmented cache: the slots freed by the removed sequence are
 // scattered between live cells of the other sequences, so the restore cannot claim one
 // contiguous block
+// the restored state must come back byte for byte, and the sequence must continue to behave
+// exactly as the same sequence in a context where it was never removed
+// ref: https://github.com/ggml-org/llama.cpp/issues/17527
 static test_status test_state_restore_fragmented(model_run & mr) {
     if (arch_reserves_single_seq(mr.model)) {
         TLOG_INF("%s: skipping, the interleaved batch is a multi-seq graph\n", __func__);
         return test_status::SKIP;
     }
+
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
 
     ctx_opts opts;
     opts.n_ctx      = 256;
@@ -1223,64 +1247,109 @@ static test_status test_state_restore_fragmented(model_run & mr) {
     opts.n_batch    = 3*70;
     opts.n_ubatch   = 3*70;
 
-    auto ctx = make_ctx(mr.model, mr.params, opts);
-    if (!ctx) {
-        TLOG_ERR("%s: failed to create context\n", __func__);
+    // ctx removes and restores seq 1, ctx_keep keeps it untouched as the reference
+    llama_context_ptr ctx      = make_ctx(mr.model, mr.params, opts);
+    llama_context_ptr ctx_keep = make_ctx(mr.model, mr.params, opts);
+    if (!ctx || !ctx_keep) {
+        TLOG_ERR("%s: failed to create contexts\n", __func__);
         return test_status::FAIL;
     }
 
-    const size_t n_tokens = std::min<size_t>(70, mr.tokens.size());
+    const llama_pos n_tokens = (llama_pos) std::min<size_t>(70, mr.tokens.size());
 
-    // interleave the 3 sequences: 01201230123...
-    {
-        common_batch batch(ctx.get());
-        for (size_t i = 0; i < n_tokens; i++) {
+    // interleave the 3 sequences: 01201230123... - seq 1 owns every third cell
+    const auto decode_interleaved = [&](llama_context * cur) {
+        common_batch batch(cur);
+        for (llama_pos i = 0; i < n_tokens; i++) {
             for (llama_seq_id s = 0; s < 3; ++s) {
-                batch.add(mr.tokens[i], (llama_pos) i, s, false);
+                batch.add(mr.tokens[i], i, s, false);
             }
         }
         batch.set_output(batch.size() - 1, true);
 
-        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
-            TLOG_ERR("%s: failed to decode interleaved prompt\n", __func__);
-            return test_status::FAIL;
-        }
-    }
+        return llama_process(cur, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
+    };
 
-    TLOG_INF("%s: processed prompt on seq 0, 1, 2 (%zu tokens each)\n", __func__, n_tokens);
-
-    std::vector<uint8_t> seq_state;
-    if (!get_seq_state(ctx.get(), 1, LLAMA_STATE_SEQ_FLAGS_NONE, seq_state)) {
+    if (!decode_interleaved(ctx.get()) || !decode_interleaved(ctx_keep.get())) {
+        TLOG_ERR("%s: failed to decode interleaved prompt\n", __func__);
         return test_status::FAIL;
     }
-    TLOG_INF("%s: saved seq 1 state, %zu bytes\n", __func__, seq_state.size());
+
+    TLOG_INF("%s: processed the prompt on seq 0, 1, 2 (%d tokens each)\n", __func__, n_tokens);
+
+    std::vector<uint8_t> state_before;
+    if (!get_seq_state(ctx.get(), 1, LLAMA_STATE_SEQ_FLAGS_NONE, state_before)) {
+        return test_status::FAIL;
+    }
 
     // clearing seq 1 leaves holes where its cells were - no contiguous block large enough
     // for the seq 1 state is left in the cache
     llama_memory_t mem = llama_get_memory(ctx.get());
     llama_memory_seq_rm(mem, 1, -1, -1);
-    TLOG_INF("%s: cleared seq 1 to create fragmentation\n", __func__);
 
-    const size_t nset = llama_state_seq_set_data(ctx.get(), seq_state.data(), seq_state.size(), 1);
-    if (nset != seq_state.size()) {
-        TLOG_ERR("\n%s: failed to restore seq state into fragmented cache (got %zu, expected %zu)\n",
-                __func__, nset, seq_state.size());
+    const size_t nset = llama_state_seq_set_data(ctx.get(), state_before.data(), state_before.size(), 1);
+    if (nset != state_before.size()) {
+        TLOG_ERR("%s: failed to restore seq state into fragmented cache (got %zu, expected %zu)\n",
+                __func__, nset, state_before.size());
         return test_status::FAIL;
     }
-    TLOG_INF("%s: restored state into seq 1, %zu bytes\n", __func__, nset);
 
-    // the restored state must still be usable
-    auto smpl = make_dist_sampler(mr.params.sampling.seed);
+    TLOG_INF("%s: restored seq 1 into a fragmented cache, %zu bytes\n", __func__, nset);
 
-    const auto next_token = llama_sampler_sample(smpl.get(), ctx.get(), -1);
-    const auto next_token_str = common_token_to_piece(ctx.get(), next_token);
+    // the restore has to be lossless - the cells the sequence ends up in are irrelevant, its
+    //   state has to come back exactly as it was saved
+    std::vector<uint8_t> state_after;
+    if (!get_seq_state(ctx.get(), 1, LLAMA_STATE_SEQ_FLAGS_NONE, state_after)) {
+        return test_status::FAIL;
+    }
 
-    if (!decode_one(ctx.get(), next_token, (llama_pos) n_tokens, 1)) {
+    if (state_before != state_after) {
+        size_t i = 0;
+        while (i < state_before.size() && i < state_after.size() && state_before[i] == state_after[i]) {
+            ++i;
+        }
+
+        TLOG_ERR("%s: seq 1 state changed by the restore, %zu bytes -> %zu bytes, first difference at byte %zu (%02x -> %02x)\n",
+                __func__, state_before.size(), state_after.size(), i,
+                i < state_before.size() ? state_before[i] : 0,
+                i < state_after.size()  ? state_after[i]  : 0);
+        return test_status::FAIL;
+    }
+
+    // the restored sequence must continue exactly as the untouched one - decode the same token
+    //   on seq 1 in both contexts and compare the logits they produce
+    const llama_token token = gen_token(n_vocab, 1, n_tokens);
+
+    if (!decode_one(ctx.get(), token, n_tokens, 1) || !decode_one(ctx_keep.get(), token, n_tokens, 1)) {
         TLOG_ERR("%s: failed to decode with restored state\n", __func__);
         return test_status::FAIL;
     }
 
-    TLOG_INF("%s: successfully decoded with restored state, generated: '%s'\n", __func__, next_token_str.c_str());
+    const float * logits      = llama_get_logits(ctx.get());
+    const float * logits_keep = llama_get_logits(ctx_keep.get());
+    if (!logits || !logits_keep) {
+        TLOG_ERR("%s: missing logits after the restore\n", __func__);
+        return test_status::FAIL;
+    }
+
+    const double diff = nmse(logits, logits_keep, n_vocab);
+    if (diff > NMSE_THRESHOLD) {
+        size_t i = 0;
+        float  max_diff = 0.0f;
+        for (int t = 0; t < n_vocab; ++t) {
+            const float d = logit_diff(logits[t], logits_keep[t]);
+            if (d > max_diff) {
+                max_diff = d;
+                i = t;
+            }
+        }
+
+        TLOG_ERR("%s: logits of the restored seq 1 differ from the reference: nmse %g > %g, worst %g at token %zu\n",
+                __func__, diff, NMSE_THRESHOLD, max_diff, i);
+        return test_status::FAIL;
+    }
+
+    TLOG_INF("%s: restored seq 1 continued identically to the reference, nmse %g\n", __func__, diff);
 
     return test_status::PASS;
 }
