@@ -41,9 +41,41 @@ inline mul_mv_mma_tile mul_mv_mma_tile_init(constant ggml_metal_kargs_mul_mv_ext
     return tile;
 }
 
+// a lane of a few-row MMA tile of MUL_MAT_ID: the src1 rows are the tokens that kernel_mul_mm_id_map0 listed for an expert
+struct mul_mv_mma_tile_id {
+    short    fm;
+    short    fn;
+    int      i01;
+    int      i11; // first entry of the token list
+    int      n1;  // tokens routed to the expert
+    uint64_t offset0;
+    device const int32_t * ids; // token*ne20 + slot per entry
+};
+
+// tgpig.z indexes the experts with tokens; a tile past them gets no tokens. The kernel loops over the 8*RT-row tiles of its expert
+template<short NT, short RT>
+inline mul_mv_mma_tile_id mul_mv_mma_tile_id_init(
+        constant ggml_metal_kargs_mul_mv_mma_id & args, device const char * htpe, device const char * hids, device const char * hact, uint3 tgpig, ushort tiisg) {
+    device const int32_t * act = (device const int32_t *) hact;
+
+    const bool active = (int) tgpig.z < act[0];
+    const int  im     = active ? act[1 + tgpig.z] : 0;
+
+    mul_mv_mma_tile_id tile;
+    tile.fm      = mul_mv_mma_lane_fm(tiisg);
+    tile.fn      = mul_mv_mma_lane_fn(tiisg);
+    tile.i01     = tgpig.x*(8*NT);
+    tile.i11     = 0;
+    tile.n1      = active ? ((device const uint32_t *) htpe)[im] : 0;
+    tile.offset0 = (uint64_t) im*args.nb02;
+    tile.ids     = (device const int32_t *) hids + im*args.ne21;
+
+    return tile;
+}
+
 // the src0 row of A fragment row fm in 8-row tile t, clamped to the last row
-inline device const char * mul_mv_mma_src0_row(
-        thread const mul_mv_mma_tile & tile, constant ggml_metal_kargs_mul_mv_ext & args, device const char * src0, short t) {
+template<typename T, typename A>
+inline device const char * mul_mv_mma_src0_row(thread const T & tile, constant A & args, device const char * src0, short t) {
     const int r = min(tile.i01 + 8*t + tile.fm, args.ne01 - 1);
     return src0 + tile.offset0 + (uint64_t) r*args.nb01;
 }
@@ -53,6 +85,12 @@ inline device const float * mul_mv_mma_src1_row(
         thread const mul_mv_mma_tile & tile, constant ggml_metal_kargs_mul_mv_ext & args, device const char * src1, short rt, short e) {
     const int r = min(tile.i11 + 8*rt + tile.fn + e, args.ne11 - 1);
     return (device const float *) (src1 + tile.offset1 + (uint64_t) r*args.nb11);
+}
+
+inline device const float * mul_mv_mma_src1_row(
+        thread const mul_mv_mma_tile_id & tile, constant ggml_metal_kargs_mul_mv_mma_id & args, device const char * src1, short rt, short e) {
+    const int id = tile.ids[min(tile.i11 + 8*rt + tile.fn + e, tile.n1 - 1)];
+    return (device const float *) (src1 + (uint64_t) ((id % args.ne20) % args.ne11)*args.nb11 + (uint64_t) (id / args.ne20)*args.nb12);
 }
 
 constexpr constant static ushort mma_f16_1024_bits = 0x6400;
@@ -105,6 +143,49 @@ inline void mul_mv_mma_store(
         if (r0 < args.ne01 && r1 < args.ne11) {
             const uint64_t i = (uint64_t) r1*args.ne0 + r0;
             dst_f32[i] = FC_mul_mv_mma_add ? sum + res_f32[i] : sum;
+        }
+    }
+}
+
+// adds up the K slices like the mul_mv_mma_store above and writes each token row of the expert tile to the dst row of its token and slot
+template<short NT, short RT>
+inline void mul_mv_mma_store(
+        thread float (&acc)[RT][NT][2],
+        constant ggml_metal_kargs_mul_mv_mma_id & args,
+        device const char * src2,
+        device char * dst,
+        threadgroup char * shmem,
+        thread const mul_mv_mma_tile_id & tile, ushort tiisg, ushort sgitg) {
+    const short NSG = FC_mul_mv_mma_nsg;
+
+    threadgroup float * red = (threadgroup float *) shmem;
+
+    FOR_UNROLL (short rt = 0; rt < RT; ++rt) {
+        FOR_UNROLL (short t = 0; t < NT; ++t) {
+            red[((sgitg*RT + rt)*NT + t)*64 + 2*tiisg + 0] = acc[rt][t][0];
+            red[((sgitg*RT + rt)*NT + t)*64 + 2*tiisg + 1] = acc[rt][t][1];
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (short idx = sgitg*32 + tiisg; idx < RT*NT*64; idx += NSG*32) {
+        float sum = 0.0f;
+        for (short sg = 0; sg < NSG; ++sg) {
+            sum += red[sg*(RT*NT*64) + idx];
+        }
+
+        const short rt = idx/(NT*64);
+        const short t  = (idx/64) % NT;
+        const short l  = (idx % 64)/2;
+        const short e  = idx % 2;
+
+        const int r0 = tile.i01 + 8*t  + mul_mv_mma_lane_fm(l);
+        const int r1 = tile.i11 + 8*rt + mul_mv_mma_lane_fn(l) + e;
+
+        if (r0 < args.ne01 && r1 < tile.n1) {
+            const int id = tile.ids[r1];
+            ((device float *) dst)[((uint64_t) (id / args.ne20)*args.ne1 + id % args.ne20)*args.ne0 + r0] = sum;
         }
     }
 }
@@ -197,20 +278,18 @@ inline void load_mma_blk_b(device const float2 * const y[RT][2], int ib, thread 
 
 // few-row mat-mat (2..16 src1 rows) on 8x8 simdgroup matrices for 32-weight block types: a threadgroup reads each weight once
 // for 8*NT src0 rows x 8*RT src1 rows, and its NSG simdgroups split K
-template<short NT, short RT, typename Q>
-kernel void kernel_mul_mv_mma_blk(
-        constant ggml_metal_kargs_mul_mv_ext & args,
+template<short NT, short RT, typename Q, typename T, typename A>
+__attribute__((always_inline)) inline void mul_mv_mma_blk_impl(
+        constant A & args,
+        thread const T & tile,
         device const char * src0,
         device const char * src1,
         device       char * dst,
         device const char * src2,
-        threadgroup  char * shmem [[threadgroup(0)]],
-        uint3  tgpig[[threadgroup_position_in_grid]],
-        ushort tiisg[[thread_index_in_simdgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+        threadgroup  char * shmem,
+        ushort tiisg,
+        ushort sgitg) {
     const short NSG = FC_mul_mv_mma_nsg;
-
-    const mul_mv_mma_tile tile = mul_mv_mma_tile_init<NT, RT>(args, tgpig, tiisg);
 
     device const ushort * x[NT];
     FOR_UNROLL (short t = 0; t < NT; ++t) {
@@ -301,7 +380,44 @@ kernel void kernel_mul_mv_mma_blk(
     mul_mv_mma_store<NT, RT>(acc, args, src2, dst, shmem, tile, tiisg, sgitg);
 }
 
+template<short NT, short RT, typename Q>
+kernel void kernel_mul_mv_mma_blk(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device const char * src2,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    const mul_mv_mma_tile tile = mul_mv_mma_tile_init<NT, RT>(args, tgpig, tiisg);
+
+    mul_mv_mma_blk_impl<NT, RT, Q>(args, tile, src0, src1, dst, src2, shmem, tiisg, sgitg);
+}
+
+template<short NT, short RT, typename Q>
+kernel void kernel_mul_mv_mma_id_blk(
+        constant ggml_metal_kargs_mul_mv_mma_id & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device const char * htpe,
+        device const char * hids,
+        device const char * hact,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_mv_mma_tile_id tile = mul_mv_mma_tile_id_init<NT, RT>(args, htpe, hids, hact, tgpig, tiisg);
+    for (; tile.i11 < tile.n1; tile.i11 += 8*RT) {
+        mul_mv_mma_blk_impl<NT, RT, Q>(args, tile, src0, src1, dst, nullptr, shmem, tiisg, sgitg);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 typedef decltype(kernel_mul_mv_mma_blk<4, 1, mul_mv_mma_q4_0>) mul_mv_mma_t;
+typedef decltype(kernel_mul_mv_mma_id_blk<4, 1, mul_mv_mma_q4_0>) mul_mv_mma_id_t; // MUL_MAT_ID runs only nt4 rt1 (ggml_metal_op_mul_mat_mma_tiling)
 
 template [[host_name("kernel_mul_mv_mma_q4_0_f32_nt1_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<1, 1, mul_mv_mma_q4_0>;
 template [[host_name("kernel_mul_mv_mma_q4_0_f32_nt2_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<2, 1, mul_mv_mma_q4_0>;
@@ -309,10 +425,12 @@ template [[host_name("kernel_mul_mv_mma_q4_0_f32_nt4_rt1")]] kernel mul_mv_mma_t
 template [[host_name("kernel_mul_mv_mma_q4_0_f32_nt1_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<1, 2, mul_mv_mma_q4_0>;
 template [[host_name("kernel_mul_mv_mma_q4_0_f32_nt2_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<2, 2, mul_mv_mma_q4_0>;
 template [[host_name("kernel_mul_mv_mma_q4_0_f32_nt4_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<4, 2, mul_mv_mma_q4_0>;
+template [[host_name("kernel_mul_mv_mma_id_q4_0_f32_nt4_rt1")]] kernel mul_mv_mma_id_t kernel_mul_mv_mma_id_blk<4, 1, mul_mv_mma_q4_0>;
 
 template [[host_name("kernel_mul_mv_mma_q8_0_f32_nt1_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<1, 1, mul_mv_mma_q8_0>;
 template [[host_name("kernel_mul_mv_mma_q8_0_f32_nt2_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<2, 1, mul_mv_mma_q8_0>;
 template [[host_name("kernel_mul_mv_mma_q8_0_f32_nt4_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_blk<4, 1, mul_mv_mma_q8_0>;
+template [[host_name("kernel_mul_mv_mma_id_q8_0_f32_nt4_rt1")]] kernel mul_mv_mma_id_t kernel_mul_mv_mma_id_blk<4, 1, mul_mv_mma_q8_0>;
 
 // q5_K scale and min of sub-block j from the 12 packed bytes, held as 3 words
 inline float2 mul_mv_mma_q5_K_scale_min(thread const uint * w, short j) {
@@ -374,23 +492,21 @@ inline void load_q5_K_mma_b(device const float2 * const y[RT][2], int ip, thread
 
 // few-row mat-mat for q5_K over pairs of 32-weight sub-blocks, laid out like mul_mv_mma_q4_0: A lane (m, j) holds qs and qh bytes 4*j .. 4*j + 7 of a pair (j even).
 // the 1/16 of the in-place high nibbles and the sub-block scales go into the accumulation; the mins are removed with the src1 sums.
-template<short NT, short RT>
-kernel void kernel_mul_mv_mma_q5_K_f32(
-        constant ggml_metal_kargs_mul_mv_ext & args,
+template<short NT, short RT, typename T, typename A>
+__attribute__((always_inline)) inline void mul_mv_mma_q5_K_impl(
+        constant A & args,
+        thread const T & tile,
         device const char * src0,
         device const char * src1,
         device       char * dst,
         device const char * src2,
-        threadgroup  char * shmem [[threadgroup(0)]],
-        uint3  tgpig[[threadgroup_position_in_grid]],
-        ushort tiisg[[thread_index_in_simdgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+        threadgroup  char * shmem,
+        ushort tiisg,
+        ushort sgitg) {
     const short NSG = FC_mul_mv_mma_nsg;
 
     constexpr float hi_scale = 1.0f/16;
     constexpr short pairs    = QK_K/64;
-
-    const mul_mv_mma_tile tile = mul_mv_mma_tile_init<NT, RT>(args, tgpig, tiisg);
 
     device const block_q5_K * x[NT];
     FOR_UNROLL (short t = 0; t < NT; ++t) {
@@ -494,17 +610,8 @@ kernel void kernel_mul_mv_mma_q5_K_f32(
     mul_mv_mma_store<NT, RT>(acc, args, src2, dst, shmem, tile, tiisg, sgitg);
 }
 
-template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt1_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<1, 1>;
-template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt2_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<2, 1>;
-template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt4_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<4, 1>;
-template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt1_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<1, 2>;
-template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt2_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<2, 2>;
-template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt4_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<4, 2>;
-
-// few-row mat-mat for any type with a 16-weight dequantizer: a lane dequantizes 16 consecutive weights of a 64-weight chunk once for all src1 rows.
-// MMA step s at MMA-k index j reads chunk weight 16*(j/2) + 8*(j%2) + s.
-template<short NT, short RT, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
-kernel void kernel_mul_mv_mma_gen(
+template<short NT, short RT>
+kernel void kernel_mul_mv_mma_q5_K_f32(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
         device const char * src1,
@@ -514,9 +621,53 @@ kernel void kernel_mul_mv_mma_gen(
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
-    const short NSG = FC_mul_mv_mma_nsg;
-
     const mul_mv_mma_tile tile = mul_mv_mma_tile_init<NT, RT>(args, tgpig, tiisg);
+
+    mul_mv_mma_q5_K_impl<NT, RT>(args, tile, src0, src1, dst, src2, shmem, tiisg, sgitg);
+}
+
+template<short NT, short RT>
+kernel void kernel_mul_mv_mma_id_q5_K_f32(
+        constant ggml_metal_kargs_mul_mv_mma_id & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device const char * htpe,
+        device const char * hids,
+        device const char * hact,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_mv_mma_tile_id tile = mul_mv_mma_tile_id_init<NT, RT>(args, htpe, hids, hact, tgpig, tiisg);
+    for (; tile.i11 < tile.n1; tile.i11 += 8*RT) {
+        mul_mv_mma_q5_K_impl<NT, RT>(args, tile, src0, src1, dst, nullptr, shmem, tiisg, sgitg);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
+template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt1_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<1, 1>;
+template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt2_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<2, 1>;
+template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt4_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<4, 1>;
+template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt1_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<1, 2>;
+template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt2_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<2, 2>;
+template [[host_name("kernel_mul_mv_mma_q5_K_f32_nt4_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_q5_K_f32<4, 2>;
+template [[host_name("kernel_mul_mv_mma_id_q5_K_f32_nt4_rt1")]] kernel mul_mv_mma_id_t kernel_mul_mv_mma_id_q5_K_f32<4, 1>;
+
+// few-row mat-mat for any type with a 16-weight dequantizer: a lane dequantizes 16 consecutive weights of a 64-weight chunk once for all src1 rows.
+// MMA step s at MMA-k index j reads chunk weight 16*(j/2) + 8*(j%2) + s.
+template<short NT, short RT, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &), typename T, typename A>
+__attribute__((always_inline)) inline void mul_mv_mma_gen_impl(
+        constant A & args,
+        thread const T & tile,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device const char * src2,
+        threadgroup  char * shmem,
+        ushort tiisg,
+        ushort sgitg) {
+    const short NSG = FC_mul_mv_mma_nsg;
 
     device const block_q * x[NT];
     FOR_UNROLL (short t = 0; t < NT; ++t) {
@@ -584,13 +735,50 @@ kernel void kernel_mul_mv_mma_gen(
     mul_mv_mma_store<NT, RT>(acc, args, src2, dst, shmem, tile, tiisg, sgitg);
 }
 
+template<short NT, short RT, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
+kernel void kernel_mul_mv_mma_gen(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device const char * src2,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    const mul_mv_mma_tile tile = mul_mv_mma_tile_init<NT, RT>(args, tgpig, tiisg);
+
+    mul_mv_mma_gen_impl<NT, RT, block_q, nl, dequantize_func>(args, tile, src0, src1, dst, src2, shmem, tiisg, sgitg);
+}
+
+template<short NT, short RT, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
+kernel void kernel_mul_mv_mma_id_gen(
+        constant ggml_metal_kargs_mul_mv_mma_id & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device const char * htpe,
+        device const char * hids,
+        device const char * hact,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_mv_mma_tile_id tile = mul_mv_mma_tile_id_init<NT, RT>(args, htpe, hids, hact, tgpig, tiisg);
+    for (; tile.i11 < tile.n1; tile.i11 += 8*RT) {
+        mul_mv_mma_gen_impl<NT, RT, block_q, nl, dequantize_func>(args, tile, src0, src1, dst, nullptr, shmem, tiisg, sgitg);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 #define MUL_MV_MMA_GEN(tname, bq, nl, deq) \
 template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt1_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<1, 1, bq, nl, deq>; \
 template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt2_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<2, 1, bq, nl, deq>; \
 template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt4_rt1")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<4, 1, bq, nl, deq>; \
 template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt1_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<1, 2, bq, nl, deq>; \
 template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt2_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<2, 2, bq, nl, deq>; \
-template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt4_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<4, 2, bq, nl, deq>;
+template [[host_name("kernel_mul_mv_mma_" tname "_f32_nt4_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<4, 2, bq, nl, deq>; \
+template [[host_name("kernel_mul_mv_mma_id_" tname "_f32_nt4_rt1")]] kernel mul_mv_mma_id_t kernel_mul_mv_mma_id_gen<4, 1, bq, nl, deq>;
 
 // q8_0 with 9..16 src1 rows: the per-block scaling above is slower than dequantizing to f32
 template [[host_name("kernel_mul_mv_mma_q8_0_f32_nt1_rt2")]] kernel mul_mv_mma_t kernel_mul_mv_mma_gen<1, 2, block_q8_0, 2, dequantize_q8_0>;

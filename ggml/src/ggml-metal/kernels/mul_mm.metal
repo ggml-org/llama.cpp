@@ -366,10 +366,17 @@ kernel void kernel_mul_mm_id_map0(
         device  const char * src2,
         device        char * htpe,
         device        char * hids,
+        device        char * hact,
         threadgroup   char * shmem [[threadgroup(0)]],
         ushort tpitg[[thread_position_in_threadgroup]],
         ushort   ntg[[threads_per_threadgroup]]) {
     const short ide = tpitg; // expert id
+
+    threadgroup atomic_uint n_act;
+    if (tpitg == 0) {
+        atomic_store_explicit(&n_act, 0, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     uint32_t n_all = 0;
 
@@ -412,6 +419,18 @@ kernel void kernel_mul_mm_id_map0(
 
     device uint32_t * tpe_u32 = (device uint32_t *) (htpe);
     tpe_u32[ide] = n_all;
+
+    // the experts with tokens, in any order: act[0] of them in act[1..]
+    device int32_t * act_i32 = (device int32_t *) hact;
+    if (n_all > 0) {
+        act_i32[1 + atomic_fetch_add_explicit(&n_act, 1, memory_order_relaxed)] = ide;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tpitg == 0) {
+        act_i32[0] = atomic_load_explicit(&n_act, memory_order_relaxed);
+    }
 }
 
 kernel void kernel_mul_mm_id_amax_part_f32(

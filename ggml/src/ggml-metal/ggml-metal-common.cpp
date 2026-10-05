@@ -65,6 +65,9 @@ enum ggml_metal_mma_kind ggml_metal_mul_mv_mma_kind(enum ggml_type type, int rt)
 }
 
 int ggml_metal_mul_mv_mma_rt(const struct ggml_tensor * op) {
+    if (op->op == GGML_OP_MUL_MAT_ID) {
+        return 1;
+    }
     return op->src[1]->ne[1] > GGML_METAL_MMA_TILE_ROWS ? 2 : 1;
 }
 
@@ -150,6 +153,72 @@ bool ggml_metal_op_mul_mat_use_mma(const struct ggml_tensor * op) {
         src1->type == GGML_TYPE_F32 && src1->ne[1] >= ggml_metal_mul_mv_mma_rows_min(src0->type) && src1->ne[1] <= GGML_METAL_MMA_ROWS_MAX &&
         !ggml_is_transposed(src0) && !ggml_is_transposed(src1) &&
         src1->nb[0] == sizeof(float) && src1->nb[1] % 16 == 0 && src1->nb[2] % 16 == 0 && src1->nb[3] % 16 == 0;
+}
+
+// the expert counts per token that kernel_mul_mm_id_map0 is instantiated for
+static bool ggml_metal_mul_mm_id_map0_supported(int64_t ne20) {
+    switch (ne20) {
+        case 1: case 2: case 4: case 5: case 6: case 8: case 10: case 16: case 22:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// the fewest tokens of MUL_MAT_ID for the few-row MMA kernels
+static constexpr int64_t GGML_METAL_MMA_ID_TOKENS_MIN = 2;
+
+// the longest src0 rows (K) that the mat-vec kernels read slowly enough for the MMA and mat-mat kernels to take over sooner
+static constexpr int64_t GGML_METAL_MMA_ID_SHORT_K = 512;
+
+static bool ggml_metal_mul_mat_id_mma_ok(const struct ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    const ggml_tensor * ids  = op->src[2];
+
+    return ggml_metal_mul_mat_mma_type_ok(op) && ggml_metal_mul_mm_id_map0_supported(ids->ne[0]) &&
+        src1->type == GGML_TYPE_F32 && ids->ne[1] >= GGML_METAL_MMA_ID_TOKENS_MIN &&
+        !ggml_is_transposed(src0) && !ggml_is_transposed(src1) &&
+        src1->nb[0] == sizeof(float) && src1->nb[1] % 16 == 0 && src1->nb[2] % 16 == 0;
+}
+
+// the fewest tokens per expert at which the MMA kernel beats the mat-vec kernel (measured on an M3 Ultra)
+static float ggml_metal_mul_mat_id_mma_rows_min(int64_t ne00) {
+    return ne00 <= GGML_METAL_MMA_ID_SHORT_K ? 0.5f : 2.0f;
+}
+
+// the most tokens per expert at which the MMA kernel, reading the weights once per 8 tokens, beats the mat-mat kernel
+// (measured on an M3 Ultra); weights of 2 bytes or more lose sooner
+static float ggml_metal_mul_mat_id_mma_rows_max(enum ggml_type type) {
+    return ggml_type_size(type) >= 2*(size_t) ggml_blck_size(type) ? 4.0f : 6.0f;
+}
+
+// the fewest tokens at which the mat-mat kernel beats the MMA kernel (measured on an M3 Ultra)
+static int64_t ggml_metal_mul_mat_id_mm_tokens_min(int64_t ne00) {
+    return ne00 <= GGML_METAL_MMA_ID_SHORT_K ? 128 : 256;
+}
+
+enum ggml_metal_mul_mat_id_kernel ggml_metal_op_mul_mat_id_kernel(const struct ggml_tensor * op, bool has_simdgroup_mm) {
+    const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne02 = op->src[0]->ne[2]; // n_expert
+    const int64_t ne20 = op->src[2]->ne[0]; // n_expert_used
+    const int64_t ne21 = op->src[2]->ne[1]; // n_tokens
+
+    const bool use_mm = ggml_metal_op_mul_mat_id_use_mm(op, has_simdgroup_mm);
+
+    if (has_simdgroup_mm && ggml_metal_mul_mat_id_mma_ok(op) && ne21 < ggml_metal_mul_mat_id_mm_tokens_min(ne00)) {
+        // the mat-vec kernels stay faster for about one token per expert, and the mat-mat kernel past a few
+        const float rows = (float) (ne21*ne20)/ne02;
+
+        if (rows < ggml_metal_mul_mat_id_mma_rows_min(ne00)) {
+            return GGML_METAL_MUL_MAT_ID_KERNEL_MV;
+        }
+        if (!use_mm || rows <= ggml_metal_mul_mat_id_mma_rows_max(op->src[0]->type)) {
+            return GGML_METAL_MUL_MAT_ID_KERNEL_MMA;
+        }
+    }
+
+    return use_mm ? GGML_METAL_MUL_MAT_ID_KERNEL_MM : GGML_METAL_MUL_MAT_ID_KERNEL_MV;
 }
 
 bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op) {
