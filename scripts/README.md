@@ -85,7 +85,7 @@ are required so discarding sample 0 leaves two values for a Student-t interval.
 | `tool_bench.py` | Python benchmark analysis and plotting tool with inline dependency metadata. |
 | `tool_bench.sh` | Shell entry point/wrapper for the benchmark tool workflow. |
 | `server-bench.py` | Measures throughput of a running OpenAI-compatible `llama-server` and writes console summaries and plots. |
-| `perf/bench_spec.py` | A770 SYCL speculative-decoding and KV-type HTTP benchmark harness. Launches `llama-server`, executes fixed prompts, and records request/server evidence. |
+| `perf/bench_spec.py` | A770 SYCL speculative-decoding and KV-type HTTP benchmark harness. Launches `llama-server`, executes fixed prompts, and records request/server evidence. `MODE=ab` runs a paired A/B of two server builds (ABBA launches, sole-tenancy gate, paired 95% CIs). |
 | `perf/prompts.jsonl` | Normal prompt fixture for speculative-decoding comparisons. |
 | `perf/prompts_adversarial.jsonl` | Adversarial prompt fixture for proving the ngram-mod hard-off mechanism. |
 | `perf/FINDINGS.md` | Preserved interpretation and reproduction commands for the speculative-decoding experiments. |

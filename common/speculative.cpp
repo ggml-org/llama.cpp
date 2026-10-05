@@ -288,7 +288,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         for (auto & smpl : smpls) {
             common_params_sampling params;
             params.no_perf = false;
-            params.top_k = 10;
+            params.top_k = LLAMA_DRAFT_TOP_K;
             params.samplers.assign(1, COMMON_SAMPLER_TYPE_TOP_K);
 
             smpl.reset(common_sampler_init(llama_get_model(ctx_dft), params));
@@ -653,7 +653,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = 10;
+            sparams.top_k    = LLAMA_DRAFT_TOP_K;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
         }
@@ -663,7 +663,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         if (this->params.backend_sampling) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-                llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
+                llama_sampler_chain_add(chain, llama_sampler_init_top_k(LLAMA_DRAFT_TOP_K));
 
                 if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
                     SPC_WRN("backend offload failed for seq_id=%d; using CPU sampler\n", (int) seq_id);
@@ -1213,7 +1213,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = 10;
+            sparams.top_k    = LLAMA_DRAFT_TOP_K;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(model_dft, sparams));
         }
@@ -1223,7 +1223,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (this->params.backend_sampling && !is_dflash2) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-                llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
+                llama_sampler_chain_add(chain, llama_sampler_init_top_k(LLAMA_DRAFT_TOP_K));
 
                 if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
                     SPC_WRN("backend offload failed for seq_id=%d; using CPU sampler\n", (int) seq_id);
@@ -1682,7 +1682,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = 10;
+            sparams.top_k    = LLAMA_DRAFT_TOP_K;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
         }
@@ -1707,7 +1707,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (this->params.backend_sampling && !chain_graph) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-                llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
+                llama_sampler_chain_add(chain, llama_sampler_init_top_k(LLAMA_DRAFT_TOP_K));
 
                 if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
                     SPC_WRN("backend offload failed for seq_id=%d; using CPU sampler\n", (int) seq_id);
@@ -1734,21 +1734,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
         this->n_max = this->params.n_max;
-
-        if (adaptive) {
-            if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
-                GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
-                        __func__, this->params.n_min_adaptive, this->params.n_max);
-            }
-
-            adaptive_ctrl.assign(n_seq, common_speculative_adaptive());
-            for (uint32_t s = 0; s < n_seq; ++s) {
-                // start at the floor max(1, n_min_adaptive), bounded by n_max;
-                // the controller climbs from there once acceptance feedback arrives
-                adaptive_ctrl[s].reset(this->params.n_max, this->params.n_min_adaptive);
-            }
-            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
-        }
 
         if (adaptive) {
             if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
@@ -2130,16 +2115,20 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
 
             if (n_seq_drafting == 1) {
-                auto & dp = dparams[seq_one];
-                auto * smpl = smpls[seq_one].get();
-                common_sampler_reset(smpl);
-
-                // effective draft cap: adaptive depth (or n_max), then clamped by the
-                // per-call context bound from the server (same as the sequential path)
+                const auto & dp = dparams[seq_one];
                 n_cap[seq_one] = adaptive ? adaptive_ctrl[seq_one].n_cur : params.n_max;
                 if (dp.n_max > 0 && dp.n_max < n_cap[seq_one]) {
                     n_cap[seq_one] = dp.n_max;
                 }
+            }
+
+            // A chain must stay in one microbatch: later rows have placeholder inputs.
+            // Larger requests use the ordinary sequential path below.
+            if (n_seq_drafting == 1 && n_cap[seq_one] <= std::min(batch_capacity, ubatch_capacity)) {
+                auto & dp = dparams[seq_one];
+                auto * smpl = smpls[seq_one].get();
+                common_sampler_reset(smpl);
+
                 const int n_chain = n_cap[seq_one];
 
                 // deferred rows at or past pos0 hold candidates the verify
@@ -2175,9 +2164,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     SPC_ERR("%s", "chain decode: the draft batch rejected a row, no draft this round\n");
                     return;
                 }
-                // the batch now owns the catch-up rows
-                defer_clear();
-
                 // The chain batch starts at the deferred catch-up rows, which can sit
                 // below the draft KV max from an earlier/rejected draft (position
                 // rewind or a repeated decode). Drop the draft cells at/above the
@@ -2211,9 +2197,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_mtp_chain(ctx_dft, false);
 
                 if (ret != 0) {
+                    // nothing was decoded: the catch-up rows stay deferred for the next flush or draft
                     SPC_ERR("llama_process(chain) returned %d\n", ret);
                     return;
                 }
+                // the draft cache now holds the catch-up rows
+                defer_clear();
 
                 // the chain samples greedily in-graph and emits [token id, top prob]
                 // pairs as 2-float rows, packed from the start of the logits buffer;
@@ -3207,6 +3196,67 @@ const std::vector<double> & common_speculative_get_synth_probs(const common_spec
     return spec->synth_probs;
 }
 
+llama_state_seq_flags common_speculative_checkpoint_flags(
+        common_speculative_checkpoint_place & place,
+        llama_context * ctx, llama_seq_id seq_id,
+        const std::vector<size_t> & margins, const llama_model * model_margins) {
+    const llama_state_seq_flags flags_host   = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    const llama_state_seq_flags flags_device = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
+
+    // the host size counts the tensor data, the device size leaves it out
+    const size_t size_host   = llama_state_seq_get_size_ext(ctx, seq_id, flags_host);
+    const size_t size_device = llama_state_seq_get_size_ext(ctx, seq_id, flags_device);
+    const size_t size_copy   = size_host > size_device ? size_host - size_device : 0;
+
+    // the state writer frees the copy the context holds before it allocates one of another size,
+    // so only the growth has to fit
+    const size_t size_new = size_copy > place.size_copy ? size_copy - place.size_copy : 0;
+
+    const double mib = 1024.0 * 1024.0;
+    llama_state_seq_flags flags = flags_device;
+
+    const llama_model * model = llama_get_model(ctx);
+    for (int i = 0; size_new > 0 && i < llama_model_n_devices(model); i++) {
+        ggml_backend_dev_t dev = llama_model_get_device(model, i);
+
+        size_t free  = 0;
+        size_t total = 0;
+        ggml_backend_dev_memory(dev, &free, &total);
+        if (free == 0 && total == 0) {
+            const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+            if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                continue; // tensors of such a device live in host memory, as --fit assumes
+            }
+        }
+
+        // the margins follow the device order of another model, which this one need not share
+        size_t margin = margins.empty() ? 0 : *std::max_element(margins.begin(), margins.end());
+        for (int j = 0; !margins.empty() && j < llama_model_n_devices(model_margins); j++) {
+            if (llama_model_get_device(model_margins, j) == dev) {
+                margin = margins[std::min((size_t) j, margins.size() - 1)];
+                break;
+            }
+        }
+        if (free < size_new + margin) {
+            if (place.flags != flags_host) {
+                LOG_INF("%s: seq %d checkpoint stays on the host: %s has %.1f MiB free, the device copy needs %.1f MiB on top of the %.1f MiB margin\n",
+                        __func__, seq_id, ggml_backend_dev_name(dev), free / mib, size_new / mib, margin / mib);
+            }
+            flags = flags_host;
+            break;
+        }
+    }
+
+    if (flags == flags_device) {
+        if (place.flags != flags_device) {
+            LOG_INF("%s: seq %d checkpoint stays on the device (%.1f MiB)\n", __func__, seq_id, size_copy / mib);
+        }
+        place.size_copy = size_copy;
+    }
+    place.flags = flags;
+    return flags;
+}
+
 common_params common_base_params_to_speculative(const common_params & params) {
     const bool has_draft = params.speculative.has_dft();
 
@@ -3222,6 +3272,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
             result.devices           = params_spec.devices;
         }
         result.model                 = params_spec.mparams;
+        result.model_is_spec_draft   = true;
         result.n_gpu_layers          = params_spec.n_gpu_layers;
         result.tensor_buft_overrides = params_spec.tensor_buft_overrides;
 
@@ -3285,12 +3336,7 @@ common_speculative_init_result::common_speculative_init_result(
     llama_context * ctx_tgt) :
     pimpl(new impl{}) {
     const bool has_draft = params.speculative.has_dft();
-    const bool spec_mtp = std::find(params.speculative.types.begin(),
-                                    params.speculative.types.end(),
-                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end() ||
-                          std::find(params.speculative.types.begin(),
-                                    params.speculative.types.end(),
-                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != params.speculative.types.end();
+    const bool spec_mtp = params.speculative.has_mtp();
     GGML_ASSERT(has_draft || spec_mtp);
 
     auto mparams = common_model_params_to_llama(params);

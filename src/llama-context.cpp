@@ -1035,6 +1035,22 @@ void llama_context::sched_reserve() {
         n_input_tensors_tg = this->n_input_tensors;
     }
 
+    // An MTP context decodes its catch-up rows without an output row. The allocator does not plan
+    // that graph as a subset of the pp graph: the scheduler's copy of the output indices is empty
+    // then, the two free blocks it kept apart merge, and best fit places the tensors above them
+    // differently (11 MiB more for a 512-row ubatch of a Qwen4Exp head). Reserve that shape too.
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        std::vector<size_t> sizes_catchup(backend_ptrs.size(), 0);
+        auto * gf = graph_reserve(n_tokens, n_seqs, 0, mctx.get(), model.hparams.no_alloc,
+                                  model.hparams.no_alloc ? sizes_catchup.data() : nullptr);
+        if (!gf) {
+            throw std::runtime_error("failed to allocate compute catch-up buffers");
+        }
+        for (size_t i = 0; i < sizes_catchup.size(); ++i) {
+            backend_buf_exp_size[i] = std::max(backend_buf_exp_size[i], sizes_catchup[i]);
+        }
+    }
+
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
         // TODO: the worst case graph is not always reached for `n_seqs > 1`
@@ -1658,6 +1674,12 @@ void llama_context::set_embeddings(bool value) {
 void llama_context::set_embeddings_nextn(bool value, bool masked) {
     LLAMA_LOG_DEBUG("%s: value = %d, masked = %d\n", __func__, value, masked);
 
+    // The export marks a graph node as an output. The allocator only honours that when it plans the
+    // buffers, so plan them again: otherwise the node that follows overwrites the export in place.
+    if (cparams.embeddings_nextn != value || cparams.embeddings_nextn_masked != masked) {
+        sched_need_reserve = true;
+    }
+
     cparams.embeddings_nextn        = value;
     cparams.embeddings_nextn_masked = masked;
 }
@@ -2242,6 +2264,54 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const bool output_all   = cparams.embeddings;
     const bool has_samplers = !sampling.samplers.empty();
 
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.mtp_chain) {
+        // A chain returns packed [token, probability] rows, not the vocabulary logits a backend sampler reads.
+        if (has_samplers) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain does not support backend samplers\n", __func__);
+            return -1;
+        }
+        // The chain graph has no embedding tensor, and embeddings would turn the catch-up rows into outputs.
+        if (cparams.embeddings) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain does not support embeddings\n", __func__);
+            return -1;
+        }
+        // Splitting a chain restarts later steps from placeholder token/hidden inputs.
+        if (batch_inp.tokens.size() > std::min(cparams.n_batch, cparams.n_ubatch)) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain must fit in one batch and microbatch\n", __func__);
+            return -1;
+        }
+        const auto & seq_ids = batch_inp.tokens.front().seq_ids;
+        if (seq_ids.size() != 1) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires exactly one sequence\n", __func__);
+            return -1;
+        }
+        const llama_seq_id seq_id = *seq_ids.begin();
+        bool seen_output = false;
+        for (const auto & tok : batch_inp.tokens) {
+            if (tok.seq_ids.size() != 1 || tok.seq_ids.count(seq_id) == 0) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires the same sequence on every row\n", __func__);
+                return -1;
+            }
+            if (tok.id == LLAMA_TOKEN_NULL) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires token IDs\n", __func__);
+                return -1;
+            }
+            if (!tok.has_embd) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires hidden states on every row\n", __func__);
+                return -1;
+            }
+            if (seen_output && !tok.output) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain outputs must form a contiguous suffix\n", __func__);
+                return -1;
+            }
+            seen_output |= tok.output;
+        }
+        if (!seen_output) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires at least one output row\n", __func__);
+            return -1;
+        }
+    }
+
     // Reset each attached backend sampler's transactional draw state before this
     // round's batches are processed, so a candidate rejected earlier in
     // speculative decoding cannot leave rng_backend desynced from the
@@ -2303,6 +2373,18 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) &&
                 "non-causal attention requires n_ubatch >= n_tokens");
+
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+            cparams.mtp_chain && n_tokens_all > mtp_chain_rows) {
+        // Chains grow by a row as catch-up rows pile up. Double the high-water mark, up to the longest
+        // chain the checks above let through, so that not every new maximum costs a reservation.
+        const uint32_t rows_max = std::min(cparams.n_batch, cparams.n_ubatch);
+        mtp_chain_rows = std::min(rows_max, std::max<uint32_t>(n_tokens_all, 2 * mtp_chain_rows));
+        const uint32_t reserve_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+        if (graph_max_nodes(reserve_tokens) > gf_res_reserve->get_max_nodes()) {
+            sched_need_reserve = true;
+        }
+    }
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
@@ -2938,6 +3020,16 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         }
     }
 
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        // Only actual chain rows unroll a projection, block, head and sampler.
+        // Retain the high watermark across sequential/chain mode switches.
+        uint32_t nodes_per_step = 512;
+        for (const auto & lora : model.loras) {
+            nodes_per_step += lora->get_n_nodes();
+        }
+        res = std::max(res, mtp_chain_rows * nodes_per_step);
+    }
+
     uint32_t n_sampling_nodes = 0;
     uint32_t n_sampling_nodes_max = 0;
     for (const auto & [seq_id, sampler] : sampling.samplers) {
@@ -3031,7 +3123,8 @@ static void ubatch_prepare_reserve(
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
-    GGML_ASSERT(n_outputs >= 1);
+    // only the catch-up graph of an MTP context is reserved without an output row
+    GGML_ASSERT(n_outputs >= 1 || cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP);
 
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs;  // round to next multiple of n_seqs
@@ -3062,7 +3155,12 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        // Dummy reservation batches can contain multiple sequences and arbitrary
+        // output masks. Reserve the ordinary graph; actual chains allocate on use.
+        gparams.cparams.mtp_chain = false;
+    }
 
     res->reset();
 
@@ -3516,7 +3614,8 @@ class llama_io_read_device : public llama_io_read_i {
         for (const auto & rinfo : rinfos) {
             auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
 
-            const int64_t n = rinfo.size / ggml_element_size(rinfo.tensor);
+            // size / element size counts blocks for a block-quantized type: scale to elements, as the writer does
+            const int64_t n = rinfo.size/ggml_element_size(rinfo.tensor)*ggml_blck_size(rinfo.tensor->type);
 
             auto & mbuf = mbufs_new[buft];
 
@@ -4622,7 +4721,7 @@ void llama_set_nextn_layer_offset(llama_context * ctx, int32_t offset) {
 }
 
 bool llama_model_supports_mtp_chain(const llama_model * model) {
-    return model != nullptr && model->arch == LLM_ARCH_QWEN35;
+    return model != nullptr && (model->arch == LLM_ARCH_QWEN35 || model->arch == LLM_ARCH_QWEN4EXP);
 }
 
 bool llama_model_uses_shared_position_draft(const llama_model * model) {

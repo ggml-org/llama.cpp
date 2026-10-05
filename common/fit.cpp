@@ -441,7 +441,9 @@ common_device_memory_data_vec common_get_device_memory_data(
     return ret;
 }
 
-common_device_memory_data_vec common_get_device_memory_data_with_parent(
+// measures a model that only builds next to the context of the model it follows,
+// such as a draft that borrows tensors through ctx_other
+static std::vector<llama_device_memory_data> common_get_device_memory_data_impl_with_parent(
         const char * path_model,
         const llama_model_params * mparams,
         const llama_context_params * cparams,
@@ -469,9 +471,26 @@ common_device_memory_data_vec common_get_device_memory_data_with_parent(
         throw std::runtime_error("failed to create parent llama_context");
     }
 
-    std::vector<llama_device_memory_data> impl = common_get_device_memory_data_impl(
+    return common_get_device_memory_data_impl(
             path_model, mparams, cparams, devs, hp_ngl, hp_n_ctx_train, hp_n_expert,
             log_level, nullptr, ctx_parent.get());
+}
+
+common_device_memory_data_vec common_get_device_memory_data_with_parent(
+        const char * path_model,
+        const llama_model_params * mparams,
+        const llama_context_params * cparams,
+        const char * path_parent,
+        const llama_model_params * mparams_parent,
+        const llama_context_params * cparams_parent,
+        std::vector<ggml_backend_dev_t> & devs,
+        uint32_t & hp_ngl,
+        uint32_t & hp_n_ctx_train,
+        uint32_t & hp_n_expert,
+        ggml_log_level log_level) {
+    std::vector<llama_device_memory_data> impl = common_get_device_memory_data_impl_with_parent(
+            path_model, mparams, cparams, path_parent, mparams_parent, cparams_parent,
+            devs, hp_ngl, hp_n_ctx_train, hp_n_expert, log_level);
 
     common_device_memory_data_vec ret(impl.size());
     for (size_t i = 0; i < impl.size(); i++) {
@@ -512,6 +531,7 @@ static void common_params_fit_impl(
 
     dmds_t   dmds_extra;       // memory of the extra model, laid out on the devices of the main model
     uint32_t n_ctx_extra = 0;  // context that memory was measured at
+    bool     extra_needs_parent = false; // the extra model only builds next to a context of the main model
 
     // the extra model competes for the same memory as the main model, add it to every measurement
     // its memory is measured again whenever the context it follows changes
@@ -533,8 +553,22 @@ static void common_params_fit_impl(
 
             dmds_t measured;
             try {
-                measured = common_get_device_memory_data_impl(
-                    extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
+                if (!extra_needs_parent) {
+                    try {
+                        measured = common_get_device_memory_data_impl(
+                            extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
+                    } catch (const std::runtime_error & e) {
+                        // a draft that borrows tensors from the main model only builds next to its context
+                        LOG_INF("%s: the extra model does not measure on its own (%s), measuring it next to the main model\n",
+                                __func__, e.what());
+                        extra_needs_parent = true;
+                    }
+                }
+                if (extra_needs_parent) {
+                    measured = common_get_device_memory_data_impl_with_parent(
+                        extra->path_model, extra->mparams, extra->cparams, path_model, mparams, cparams,
+                        devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
+                }
             } catch (const std::runtime_error & e) {
                 // the extra model is optional, fit the main model alone rather than giving up
                 LOG_WRN("%s: failed to measure the memory of the extra model, fitting without it: %s\n", __func__, e.what());

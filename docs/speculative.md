@@ -80,7 +80,59 @@ See:
 
 ### Chained MTP (`--spec-chain N`)
 
-Chained MTP drafts N tokens in one decode. It currently supports dense Qwen3.5-family models and requires flash attention. For recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2.
+Chained MTP drafts N tokens in one decode. It supports dense Qwen3.5-family models,
+which require flash attention, and Qwen4Exp (Qwen3.8-Flash-Next) with or without flash
+attention, including its full hyper-connection hidden state.
+Chaining is opt-in; use `--spec-chain N` to enable it. For
+recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2. Drafts that
+exceed the draft context's batch or microbatch capacity, and rounds with multiple
+drafting sequences, use sequential MTP.
+Deferred catch-up admission reserves space for the maximum draft depth; larger
+catch-up batches are processed before drafting. Both drafting paths honor the
+per-call `n_max` limit supplied by the server for remaining context and generation
+budget.
+
+Qwen4Exp MTP heads must contain all three `blk.N.nextn.hc_head_*` mixer tensors.
+The trunk's `output_hc_*` tensors are independently trained and cannot replace them.
+Use the original head GGUF; output-only renamed workaround files are rejected.
+An MTP-only head carries no trunk blocks, so drafting requires an MTP context.
+An ordinary context on such a head (a non-MTP `--spec-type`, or `-m head.gguf`)
+still initializes: it runs only the shared embedding and LM head and caches no
+layers, which lets `--fit` measure it. Its logits depend on the current token
+alone and are not a usable language model; context creation logs a warning.
+Both fixed and adaptive MTP support a separate head with `--fit on`:
+
+```bash
+llama-server -m target.gguf --spec-draft-model mtp-head.gguf \
+    --spec-type draft-mtp-adaptive --spec-chain 4 --fit on
+```
+
+A head exported without `token_embd.weight` and `output.weight` borrows both tables
+from the target model, so they are held once. The borrowed tables have the target's
+quantization, not the head's. `--fit` measures such a head next to the target's
+context; one "requires ctx_other" error line during fitting is expected. Outside an
+MTP context the head has nothing to run and context creation fails with an error.
+The target's tables must have the head's embedding width and vocabulary size, or
+context creation fails with an error that names both shapes. The head must also be
+loaded on devices that can use the buffers the target's tables are in: a head kept
+off the target's GPU (`--spec-draft-device none`) next to an offloaded target is
+rejected with an error, since the tables are not copied.
+
+With a separate head the target does not load its own MTP block, if its file has
+one: that block would never run. A combined target whose block lacks the draft
+mixer therefore still works next to a complete head.
+
+Qwen4Exp chained drafts use the full vocabulary and the sequential draft sampler's
+top-10 confidence normalization. Chaining reduces host round trips; it does not
+make target-model verification constant-cost as draft depth increases.
+Direct Qwen4Exp MTP API calls with chaining enabled must fit the complete batch
+in one microbatch and use one sequence with a nonempty output suffix after any
+catch-up rows. Every row must carry both a token ID and a hidden-state embedding;
+later generated rows may use zero placeholders. A context with a backend sampler
+attached cannot chain: a chain returns packed token and probability rows instead of
+vocabulary logits. A context with embeddings enabled cannot chain either: the chain
+graph has no embedding output. Invalid batches return a decode error before changing
+the KV cache.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)

@@ -400,6 +400,13 @@ struct common_params_speculative {
         return !draft.mparams.empty();
     }
 
+    // whether a multi-token prediction head drafts, with a fixed or an adaptive depth
+    bool has_mtp() const {
+        return std::any_of(types.begin(), types.end(), [](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE;
+        });
+    }
+
     bool has_synth() const {
         return synth_len != -1.0 || !synth_rates.empty();
     }
@@ -544,6 +551,7 @@ struct common_params {
     struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
+    bool model_is_spec_draft = false; // model is the separate draft model, set by common_base_params_to_speculative
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
     std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT

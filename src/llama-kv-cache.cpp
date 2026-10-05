@@ -1757,11 +1757,12 @@ bool llama_kv_cache::get_has_shift() const {
 }
 
 ggml_type llama_kv_cache::type_k() const {
-    return layers[0].k->type;
+    // a cache whose filter rejected every layer has no representative type
+    return layers.empty() ? GGML_TYPE_COUNT : layers[0].k->type;
 }
 
 ggml_type llama_kv_cache::type_v() const {
-    return layers[0].v->type;
+    return layers.empty() ? GGML_TYPE_COUNT : layers[0].v->type;
 }
 
 std::vector<uint32_t> llama_kv_cache::get_layer_ids() const {

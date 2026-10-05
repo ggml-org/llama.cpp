@@ -389,6 +389,9 @@ struct server_slot {
     llama_tokens spec_prompt;
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
+    // where spec_ckpt is kept, per context: on the device or on the host
+    common_speculative_checkpoint_place spec_ckpt_place_tgt;
+    common_speculative_checkpoint_place spec_ckpt_place_dft;
     bool spec_is_replay = false;
     std::mt19937 spec_synth_rng;
 
@@ -1059,6 +1062,9 @@ private:
     llama_model   * model_dft = nullptr;
     llama_context * ctx_dft   = nullptr;
 
+    // --fit-target as the user gave it, before load_model() adds the mmproj to it
+    std::vector<size_t> spec_ckpt_margins;
+
     common_speculative_init_result_ptr spec_init;
 
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
@@ -1185,18 +1191,14 @@ private:
         }
 
         params_base = params_load;
+        spec_ckpt_margins = params_base.fit_params_target;
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
 
         const bool has_mmproj = !params_base.mmproj.path.empty();
         const bool has_draft = params_base.speculative.has_dft();
-        const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-                                        params_base.speculative.types.end(),
-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end() ||
-                              std::find(params_base.speculative.types.begin(),
-                                        params_base.speculative.types.end(),
-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != params_base.speculative.types.end();
+        const bool spec_mtp = params_base.speculative.has_mtp();
         const bool has_spec = has_draft || spec_mtp;
         const server_shared_draft_device_config shared_draft_devices = server_prepare_shared_draft_devices(params_base);
 
@@ -3114,6 +3116,20 @@ private:
         }
     }
 
+    // State flags for the next update of the slot's speculative checkpoint in its target or draft context.
+    // Every update picks them again, because the device copy can grow with the sequence.
+    llama_state_seq_flags spec_ckpt_place(server_slot & slot, bool is_dft) {
+        auto & place = is_dft ? slot.spec_ckpt_place_dft : slot.spec_ckpt_place_tgt;
+        return common_speculative_checkpoint_flags(place, is_dft ? slot.ctx_dft : slot.ctx_tgt, slot.id,
+                spec_ckpt_margins, model_tgt);
+    }
+
+    // State flags of the checkpoint the slot holds: a load has to use the flags of the update before it.
+    llama_state_seq_flags spec_ckpt_flags(server_slot & slot, bool is_dft) {
+        const auto & place = is_dft ? slot.spec_ckpt_place_dft : slot.spec_ckpt_place_tgt;
+        return place.flags != 0 ? place.flags : spec_ckpt_place(slot, is_dft);
+    }
+
     // @ngxson : for debugging only
     int64_t t_pre_decode  = 0;
     int64_t t_decode      = 0;
@@ -3379,8 +3395,13 @@ private:
                                 llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id),
                                 llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id));
 
+                        // speculative checkpoints stay on the device where it has room: this and the two other
+                        // slot.spec_ckpt updates below pick their flags with spec_ckpt_place(), and the three
+                        // loads reuse them through spec_ckpt_flags().
+                        // A770 A/B, which sites execute, and limits:
+                        // docs/research/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
                         if (use_ckpt_dft) {
-                            slot.spec_ckpt.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            slot.spec_ckpt.update_dft(ctx_dft, slot.id, spec_ckpt_place(slot, true));
                         }
 
                         slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
@@ -3419,7 +3440,7 @@ private:
 
             if (ctx_dft) {
                 if (use_ckpt_dft) {
-                    ckpt.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    ckpt.load_dft(ctx_dft, slot.id, spec_ckpt_flags(slot, true));
                 }
 
                 if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, ckpt.pos_max + 1, -1)) {
@@ -3438,7 +3459,7 @@ private:
                 if (use_ckpt_tgt) {
                     //const int64_t t_start = ggml_time_us();
 
-                    ckpt.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    ckpt.update_tgt(ctx_tgt, slot.id, spec_ckpt_place(slot, false));
 
                     //const int64_t t_total = ggml_time_us() - t_start;
                     //printf("checkpoint total: %f ms\n", t_total / 1000.0);
@@ -3450,7 +3471,7 @@ private:
                 }
 
                 if (use_ckpt_dft) {
-                    ckpt.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    ckpt.update_dft(ctx_dft, slot.id, spec_ckpt_place(slot, true));
                 }
             }
         });
@@ -4271,18 +4292,20 @@ private:
 
             GGML_ASSERT(n_draft > 0);
 
+            // batch indices of the draft tokens, used to get the token probabilities below
+            auto spec_i_batch = std::move(slot.spec_i_batch);
+
             // verify and try to accept the draft
             {
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
-                GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
+                GGML_ASSERT(spec_i_batch.size() == n_draft + 1);
                 const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
                 auto accepted = synth_probs.empty()
-                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
+                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft)
                     : server_sample_and_accept_synth(
-                            slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
+                            slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft,
                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
-                slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
 
@@ -4307,10 +4330,10 @@ private:
 
                         SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
-                        ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                        ckpt.load_tgt(slot.ctx_tgt, slot.id, spec_ckpt_flags(slot, false));
 
                         if (slot.ctx_dft) {
-                            ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            ckpt.load_dft(slot.ctx_dft, slot.id, spec_ckpt_flags(slot, true));
                         }
 
                         slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1);
@@ -4369,7 +4392,10 @@ private:
                 result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
                 result.prob         = 1.0f; // set later
 
-                // TODO: set result.probs
+                // post_sampling_probs is not supported with speculative decoding
+                if (slot.task->params.sampling.n_probs > 0 && !slot.task->params.post_sampling_probs) {
+                    populate_token_probs(slot, result, false, params_base.special, spec_i_batch[i]);
+                }
 
                 slot.stats.n_gen += 1;
 
