@@ -29,6 +29,11 @@ struct server_decision_question {
     std::vector<server_decision_option> options; // in the order of the model outputs
 };
 
+// true if the model is a decision model that /v1/systemone can serve
+inline bool server_decision_type_is_supported(common_decision_type type) {
+    return type != COMMON_DECISION_TYPE_NONE && type != COMMON_DECISION_TYPE_UNKNOWN;
+}
+
 struct server_decision_context {
     common_decision_type type = COMMON_DECISION_TYPE_NONE;
 

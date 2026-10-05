@@ -106,18 +106,28 @@ std::string gen_tool_call_id();
 const char * get_media_marker();
 
 //
-// model output modalities
+// model architecture
 //
 
-// output modalities for architecture.output_modalities in GET /models
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type);
+// "architecture" object of GET /models; shared by the direct server and the router
+struct server_model_architecture {
+    std::vector<std::string> input_modalities  = {"text"};
+    std::vector<std::string> output_modalities = {"text"};
 
-// architecture object of GET /models; shared by the direct server and the router
-json server_model_architecture_json(
-        bool inp_image,
-        bool inp_audio,
-        bool inp_video,
-        const std::vector<std::string> & output_modalities);
+    server_model_architecture() = default;
+
+    // from a loaded model, mctx can be null
+    server_model_architecture(const llama_model * model, const mtmd_context * mctx);
+
+    // from the files, the model is not loaded; mmproj_path can be empty
+    // note: this cannot see video support
+    server_model_architecture(const std::string & model_path, const std::string & mmproj_path);
+
+    json to_json() const;
+
+private:
+    void init(common_decision_type decision_type, bool inp_image, bool inp_audio, bool inp_video);
+};
 
 //
 // lora utils

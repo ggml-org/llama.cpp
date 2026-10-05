@@ -8,6 +8,7 @@
 #include "base64.hpp"
 
 #include "server-common.h"
+#include "server-decision.h"
 
 #include <random>
 #include <sstream>
@@ -144,30 +145,30 @@ const char * get_media_marker() {
 }
 
 //
-// model output modalities
+// model architecture
 //
 
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type) {
-    switch (decision_type) {
-        case COMMON_DECISION_TYPE_OPENJEV:
-        case COMMON_DECISION_TYPE_LEV:
-        case COMMON_DECISION_TYPE_KEV:
-        case COMMON_DECISION_TYPE_NIMBLE:
-        case COMMON_DECISION_TYPE_LAYA:
-        case COMMON_DECISION_TYPE_CLEF:
-            return {"decisions"};
-        default:
-            // fallback when there is no decision type or the metadata is bad
-            return {"text"};
-    }
+server_model_architecture::server_model_architecture(const llama_model * model, const mtmd_context * mctx) {
+    init(
+        common_get_decision_type(model),
+        mctx && mtmd_support_vision(mctx),
+        mctx && mtmd_support_audio(mctx),
+        mctx && mtmd_helper_support_video(mctx));
 }
 
-json server_model_architecture_json(
-        bool inp_image,
-        bool inp_audio,
-        bool inp_video,
-        const std::vector<std::string> & output_modalities) {
-    std::vector<std::string> input_modalities = {"text"};
+server_model_architecture::server_model_architecture(const std::string & model_path, const std::string & mmproj_path) {
+    mtmd_caps caps = { false, false };
+    if (!mmproj_path.empty()) {
+        caps = mtmd_get_cap_from_file(mmproj_path.c_str());
+    }
+    init(
+        model_path.empty() ? COMMON_DECISION_TYPE_NONE : common_get_decision_type(model_path),
+        caps.inp_vision,
+        caps.inp_audio,
+        false);
+}
+
+void server_model_architecture::init(common_decision_type decision_type, bool inp_image, bool inp_audio, bool inp_video) {
     if (inp_image) {
         input_modalities.push_back("image");
     }
@@ -177,7 +178,12 @@ json server_model_architecture_json(
     if (inp_video) {
         input_modalities.push_back("video");
     }
+    if (server_decision_type_is_supported(decision_type)) {
+        output_modalities = {"decisions"};
+    }
+}
 
+json server_model_architecture::to_json() const {
     return {
         {"input_modalities",  input_modalities},
         {"output_modalities", output_modalities},

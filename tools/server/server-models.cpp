@@ -539,14 +539,13 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
 
 void server_model_meta::update_caps(const common_params & base) {
     // reset to the default so a failed refresh cannot keep old values
-    architecture = server_model_architecture_json(false, false, false, {"text"});
+    architecture = server_model_architecture();
 
-    // resolve the model file offline; do not download
-    common_params params;
-    params.model = base.model;
-    // --no-mmproj applies to child models and blocks auto-attached projectors
-    params.no_mmproj = base.no_mmproj;
     try {
+        common_params params;
+        params.model = base.model;
+        // --no-mmproj applies to child models and blocks auto-attached projectors
+        params.no_mmproj = base.no_mmproj;
         preset.apply_to_params(params, {
             "LLAMA_ARG_MODEL",
             "LLAMA_ARG_MODEL_URL",
@@ -558,33 +557,11 @@ void server_model_meta::update_caps(const common_params & base) {
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-        common_models_handler_apply(handler, params);
+        common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
+        architecture = server_model_architecture(params.model.path, params.no_mmproj ? "" : params.mmproj.path);
     } catch (const std::exception & e) {
-        LOG_WRN("failed to resolve the model of '%s': %s\n", name.c_str(), e.what());
-        return;
+        LOG_WRN("failed to read the architecture of '%s': %s\n", name.c_str(), e.what());
     }
-
-    // read the output modalities from the GGUF metadata
-    std::vector<std::string> output_modalities = {"text"};
-    if (!params.model.path.empty()) {
-        output_modalities = server_model_output_modalities(common_get_decision_type(params.model.path));
-    }
-
-    bool inp_image = false;
-    bool inp_audio = false;
-    try {
-        if (!params.no_mmproj && !params.mmproj.path.empty()) {
-            mtmd_caps caps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
-            inp_image = caps.inp_vision;
-            inp_audio = caps.inp_audio;
-        }
-    } catch (const std::exception & e) {
-        LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
-        // keep the output modalities from the GGUF metadata
-    }
-
-    // offline discovery cannot see video; a loaded model reports it
-    architecture = server_model_architecture_json(inp_image, inp_audio, false, output_modalities);
 }
 
 //
@@ -1329,27 +1306,6 @@ void server_models::update_status(const std::string & name, const update_status_
         }
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
-            // the child replaces both arrays in full; a bad or missing value changes nothing
-            if (args.loaded_info.contains("architecture") && args.loaded_info.at("architecture").is_object()) {
-                const json & child_arch = args.loaded_info.at("architecture");
-                for (const char * key : { "input_modalities", "output_modalities" }) {
-                    if (!child_arch.contains(key) || !child_arch.at(key).is_array()) {
-                        continue;
-                    }
-                    std::vector<std::string> modalities;
-                    bool valid = true;
-                    for (const auto & m : child_arch.at(key)) {
-                        if (!m.is_string()) {
-                            valid = false;
-                            break;
-                        }
-                        modalities.push_back(m.get<std::string>());
-                    }
-                    if (valid) {
-                        meta.architecture[key] = std::move(modalities);
-                    }
-                }
-            }
         }
         if (!args.progress.is_null()) {
             meta.progress = args.progress;
@@ -2118,7 +2074,7 @@ void server_models_routes::init_routes() {
                 {"owned_by",      "llamacpp"}, // for OAI-compat
                 {"created",       t},          // for OAI-compat
                 {"status",        status},
-                {"architecture",  meta.architecture},
+                {"architecture",  meta.architecture.to_json()},
                 {"source",        server_model_source_to_string(meta.source)},
                 {"can_remove",    meta.source == SERVER_MODEL_SOURCE_CACHE},
                 // {"need_download", meta.need_download},
