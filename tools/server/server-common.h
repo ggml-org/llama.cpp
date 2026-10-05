@@ -18,6 +18,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -61,9 +62,55 @@ enum error_type {
     ERROR_TYPE_SERVER,
     ERROR_TYPE_NOT_FOUND,
     ERROR_TYPE_PERMISSION,
-    ERROR_TYPE_UNAVAILABLE, // custom error
-    ERROR_TYPE_NOT_SUPPORTED, // custom error
-    ERROR_TYPE_EXCEED_CONTEXT_SIZE, // custom error
+    ERROR_TYPE_UNAVAILABLE,               // custom error
+    ERROR_TYPE_NOT_SUPPORTED,             // custom error
+    ERROR_TYPE_EXCEED_CONTEXT_SIZE,       // custom error
+    ERROR_TYPE_EXCEED_BATCH_SIZE,         // custom error: the head output does not fit one batch
+    ERROR_TYPE_INVALID_REQUEST_SEMANTIC,  // custom error: valid syntax, invalid semantics
+    ERROR_TYPE_RATE_LIMITED,              // custom error: a server limit refused the request
+    ERROR_TYPE_REQUEST_TOO_LARGE,         // custom error: valid request, more work than the server renders
+    ERROR_TYPE_COUNT,
+};
+
+// the wire shape of an error kind: HTTP status and "type" string
+struct error_info {
+    int          code;
+    const char * type;
+};
+
+// the one place the (code, type) pair of an error kind is written. 400 is shared on purpose;
+// a client tells the 400 kinds apart by their "type" string
+inline error_info error_type_info(error_type type) {
+    switch (type) {
+        case ERROR_TYPE_INVALID_REQUEST:         return { 400, "invalid_request_error" };
+        case ERROR_TYPE_AUTHENTICATION:          return { 401, "authentication_error" };
+        case ERROR_TYPE_SERVER:                  return { 500, "server_error" };
+        case ERROR_TYPE_NOT_FOUND:               return { 404, "not_found_error" };
+        case ERROR_TYPE_PERMISSION:              return { 403, "permission_error" };
+        case ERROR_TYPE_UNAVAILABLE:             return { 503, "unavailable_error" };
+        case ERROR_TYPE_NOT_SUPPORTED:           return { 501, "not_supported_error" };
+        case ERROR_TYPE_EXCEED_CONTEXT_SIZE:     return { 400, "exceed_context_size_error" };
+        case ERROR_TYPE_EXCEED_BATCH_SIZE:       return { 400, "exceed_batch_size_error" };
+        case ERROR_TYPE_INVALID_REQUEST_SEMANTIC: return { 422, "unprocessable_entity_error" };
+        case ERROR_TYPE_RATE_LIMITED:            return { 429, "rate_limit_error" };
+        case ERROR_TYPE_REQUEST_TOO_LARGE:       return { 413, "request_too_large_error" };
+        case ERROR_TYPE_COUNT: break;
+    }
+    return { 500, "server_error" }; // answer the caller, do not die over an unknown kind
+}
+
+// well-formed JSON the endpoint refuses, answered 422. Must not derive from std::invalid_argument,
+// which ex_wrapper maps to 400 on every route
+struct server_invalid_request : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+// answer the client with exactly this kind, whatever route raised it. For example an image for a
+// model without vision
+struct server_status_error : std::runtime_error {
+    server_status_error(error_type type, const std::string & message) : std::runtime_error(message), type(type) {}
+
+    error_type type;
 };
 
 // thin wrapper around common_grammar_trigger with (de)serialization functions

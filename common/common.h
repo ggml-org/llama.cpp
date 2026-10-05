@@ -636,6 +636,8 @@ struct common_params {
     int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    int32_t decision_max_queued = -1;    // queued decision tasks at which /v1/systemone answers 429, < 0 derives 8 * n_parallel, 0 is unlimited
+    int32_t decision_max_prompt_tokens = -1; // prompt tokens one /v1/systemone request may total before it answers 413, < 0 derives 8 * n_parallel * slot context, 0 is unlimited
 
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT

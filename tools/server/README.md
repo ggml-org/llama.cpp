@@ -219,6 +219,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--threads-http N` | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP) |
 | `--cache-prompt, --no-cache-prompt` | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT) |
 | `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |
+| `--decision-max-queued N` | queued decision tasks at which `POST /v1/systemone` starts answering `429`; a parent and each child count one; negative for `8 x --parallel`, `0` for unlimited (default: -1)<br/>(env: LLAMA_ARG_DECISION_MAX_QUEUED) |
+| `--decision-max-prompt-tokens N` | rendered prompt tokens `POST /v1/systemone` accepts in one request before it answers `413`; counted over every task the request builds, before a shared prefix is discounted; negative for `8 x --parallel x` the context of one slot, `0` for unlimited (default: -1)<br/>(env: LLAMA_ARG_DECISION_MAX_PROMPT_TOKENS) |
 | `--metrics` | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS) |
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
@@ -1703,24 +1705,34 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
 
 *Options:*
 
+`model`: Optional, ignored. The answer reports the model that answered it, which is the one this server was started with.
+
 `state`: The content to evaluate. Can be a string, an object or an array. A value that is not a string is given to the model as JSON text.
 
-`images`: Optional. An array of images, the maximum number may be limited depending on the model. Each one is a data URL (`data:image/...;base64,...`). See the image input section below.
+`images`: Optional. An array of images, at most 8 per request, counted together with the image parts of a chat-message `state`. Each one is a data URL (`data:image/...;base64,...`). See the image input section below.
 
 `questions`: An object that maps a question id to a question. Each question has these fields:
 
 - `type`: One of `choice`, `score`, `noul`.
-- `instructions`: The question. Can be a string, an object or an array.
+- `instructions`: The question. Can be a non-empty string, object or array. A number, a boolean, `null`, an empty string, an empty object and an empty array are all refused with `422`: no template may fall back to another value when this one is missing, so the request is refused instead. Jev lists `null` as allowed here and the check is stricter than that; the answer is the same, the request shape is not.
 - `criteria`: The possible answers, the shape depends on `type`:
   - `choice`: An object that maps each option to its description. The description can be `null`.
   - `score`: An array of 2 to 10 level descriptions, lowest level first.
   - `noul`: Optional. An object with the descriptions of `true` and `false`.
 
-The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
+The key of a question is given to the model along with the question, so the answer can depend on how the question was named. Nimble and clef need it: their prompts are a named schema and name the field they answer.
 
-The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya and clef. For laya, long questions and options are truncated to the token budget the model was trained with.
+The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly. Nimble also reads all the questions, but answers the one it is asked about.
 
-For laya and clef, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A server that runs clef only serves this endpoint, text generation is not available.
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for kev and clef. Laya derives its limit from the token window its head reads, and refuses a question that does not fit it, rather than answering from a window that holds less of the question than was sent. Long questions and options within the limit are truncated to that same budget.
+
+The limit is reported at startup:
+
+```
+/v1/systemone: decision model type: laya, at most 44 options per question
+```
+
+For laya and clef, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A clef request that does not fit is not refused, so set `--ubatch-size` to at least the longest prompt you intend to send. A server that runs clef only serves this endpoint, text generation is not available.
 
 *Image input:*
 
@@ -1732,6 +1744,8 @@ Images can be given in two ways, and both can be used in the same request:
 - A `state` made of chat messages, either an array of messages or an object with a `messages` array. An `image_url` part in the `content` of a message is taken as an image, in the same format as chat completions. Only data URLs are accepted.
 
 All the images are placed before the state in the prompt, the ones from `images` first. The image parts are removed from the state.
+
+A request may carry 8 images in total. The two ways of giving them share that one count, so images in the `state` count towards it, and the limit is the server's own: it is the same for every model, and it does not depend on the one that answers. A request over it is refused with `422`, and the message names the maximum.
 
 *Response:*
 
@@ -1749,7 +1763,7 @@ All the images are placed before the state in the prompt, the ones from `images`
 - `noul`:
   - `noul`: The probability that the answer is true.
 
-`usage`: `input_tokens` is the number of prompt tokens of all questions. `output_tokens` is always 0.
+`usage`: `input_tokens` is the number of prompt tokens evaluated, counting a shared prefix once. `output_tokens` is always 0.
 
 The probabilities are scaled with the temperatures stored in the model file. They are not guaranteed to be calibrated for your data.
 
@@ -1827,7 +1841,37 @@ curl http://127.0.0.1:8080/v1/systemone \
     }' | jq
 ```
 
-An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images returns the error `501` if the model does not support image input, or if no multimodal projector is loaded.
+A malformed body returns `400`; a well-formed body the route cannot accept returns `422`, and the message names the field to fix. A model that is not a decision model, or a decision model the server cannot run, returns `501`. A request with images returns `501` if the model does not support image input, or if no multimodal projector is loaded. A request that arrives while the queued decision tasks are at `--decision-max-queued` returns `429` with a `Retry-After` header.
+
+That threshold is read when the request arrives, so it is not a bound on the queue: a request is admitted whole, however many tasks it weighs. It sheds load between requests, it does not limit the size of one request. The refusals are counted by `llamacpp:decision_requests_refused_total`.
+
+The statuses follow the Jev error table:
+
+| Status | This server |
+|---|---|
+| `400` | the body is not JSON (`invalid_request_error`); a prompt that no longer fits its slot's context (`exceed_context_size_error`); a decision prompt too large for one batch (`exceed_batch_size_error`) |
+| `413` | the rendered prompts total more than `--decision-max-prompt-tokens` (`request_too_large_error`); this server's own status |
+| `422` | the body is well formed JSON, but a field has a type or value the route will not accept (`unprocessable_entity_error`); every message names the field |
+| `429` | the queued decision tasks are at `--decision-max-queued` (`rate_limit_error`); carries `Retry-After` |
+| `500` | the model file, its converter template, or the head is at fault (`server_error`); never the caller's request |
+| `501` | the loaded model cannot serve this endpoint at all (`not_supported_error`); not a decision model, or a request with images the model or the server cannot take |
+
+`422` separates a body that parsed but carries a field the route rejects from a body that is not JSON at all: the first is `422` and must name the field, the second is `400`, so a wrong type in a recognized field is `422`. `413` is this server's own status for one request that would make the server hold more rendered prompt than the queue admits; the check runs before the request is grouped or posted, so none of it is queued, and it is not retryable. `429` is the load signal, standing in for Jev's `529`, which this server never returns, and is the only refusal that carries `Retry-After`.
+
+The `500`s are server faults, never the shape of the request. A size fault is a `400` with a type that says which limit was hit: `exceed_context_size_error` for a slot's context (raise `--ctx-size`), `exceed_batch_size_error` for the one batch the head reads (shorten the question or raise `--ubatch-size`).
+
+#### Behavior changes
+
+What follows differs from the Jev service as documented in its API. Each is a change a caller can observe on the wire.
+
+- `401`, `403` and `529` are never returned. The route takes no credentials and enforces no per-caller policy, so `401` and `403` belong to a reverse proxy. `529` is Jev's own overload signal; this server signals overload with `429`, which the Jev SDK retries like a `5xx`.
+- A request whose rendered prompts exceed `--decision-max-prompt-tokens` answers `413` with `request_too_large_error`. Jev has no equivalent status. The check counts the prompt of every task the request builds, before a shared prefix is discounted, so the refusal is about the work the server would hold rather than about what a slot can decode: a single prompt longer than one slot's context is still a `400`. See `--decision-max-prompt-tokens`.
+- **`413` is not retryable.** Retrying an unchanged request cannot succeed, and unlike `429` it carries no `Retry-After`. Reduce the `"state"`, send fewer questions, or raise the limit.
+- The refusal message names the prompt total the server measured and the maximum it accepts. The total is the sum reached at the task that crossed the budget, so on a request of many questions it is a prefix of the whole rather than the whole; a request of one question reports that task exactly.
+- A `choice` answer and a `score` answer each carry `confidence`, a statistic computed from the probability distribution the answer already gives, summarizing how concentrated that distribution is. Choice uses the rule Jev publishes, `(N * p_max - 1) / (N - 1)`; score uses the mean distance to the most likely level, relative to a uniform distribution, which Jev documents only for 2 and 3 levels. A `noul` answer does not carry one: its distribution is a single number, so there is nothing left to summarize - the probability it returns already is the confidence.
+- `413` and `429` are counted separately, and only `429` is counted by `llamacpp:decision_requests_refused_total`, which counts requests refused because the decision queue was at `--decision-max-queued`. A `413` never reached that gate.
+- The "images" limit is `8` in total across both the `"images"` and `"media"` channels of a request, and it is owned by the server, so an image of more than `8` is refused whatever the model would accept.
+- `state` may be a JSON value as well as a string, and an unknown field in the body is ignored rather than refused.
 
 ## Server tools
 

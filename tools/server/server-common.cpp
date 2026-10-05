@@ -34,46 +34,11 @@
 #endif
 
 json format_error_response(const std::string & message, const enum error_type type) {
-    std::string type_str;
-    int code = 500;
-    switch (type) {
-        case ERROR_TYPE_INVALID_REQUEST:
-            type_str = "invalid_request_error";
-            code = 400;
-            break;
-        case ERROR_TYPE_AUTHENTICATION:
-            type_str = "authentication_error";
-            code = 401;
-            break;
-        case ERROR_TYPE_NOT_FOUND:
-            type_str = "not_found_error";
-            code = 404;
-            break;
-        case ERROR_TYPE_SERVER:
-            type_str = "server_error";
-            code = 500;
-            break;
-        case ERROR_TYPE_PERMISSION:
-            type_str = "permission_error";
-            code = 403;
-            break;
-        case ERROR_TYPE_NOT_SUPPORTED:
-            type_str = "not_supported_error";
-            code = 501;
-            break;
-        case ERROR_TYPE_UNAVAILABLE:
-            type_str = "unavailable_error";
-            code = 503;
-            break;
-        case ERROR_TYPE_EXCEED_CONTEXT_SIZE:
-            type_str = "exceed_context_size_error";
-            code = 400;
-            break;
-    }
-    return json {
-        {"code", code},
-        {"message", message},
-        {"type", type_str},
+    const error_info info = error_type_info(type);
+    return json{
+        { "code",    info.code },
+        { "message", message   },
+        { "type",    info.type },
     };
 }
 

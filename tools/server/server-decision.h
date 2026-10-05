@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -11,6 +12,7 @@
 // typed decision models (TypeSafe /v1/systemone API)
 // the model answers each question in one forward pass, no token is generated
 
+// one score per column of the model output, so a question of one type cannot be read in another's
 enum server_decision_question_type {
     SERVER_DECISION_QUESTION_CHOICE,
     SERVER_DECISION_QUESTION_SCORE,
@@ -24,15 +26,44 @@ struct server_decision_option {
 
 struct server_decision_question {
     std::string id;
-    server_decision_question_type type;
+    server_decision_question_type     type;
     json instructions;
     std::vector<server_decision_option> options; // in the order of the model outputs
+};
+
+// what a request asks for: its questions, and the state to evaluate them against
+struct server_decision_request {
+    std::vector<server_decision_question> questions;
+    json                                  state;
+    std::vector<raw_buffer>               files;
+};
+
+// how one model type reads a request. A new model type adds a field here and a case in init(),
+// not an argument to every seam
+struct decision_model_traits {
+    size_t n_options_max   = 0; // what one question may ask
+    bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
+    bool   choice_sorted   = false; // choice options are in the order of their keys
+
+    // OPENJEV, LEV, NIMBLE
+    std::vector<std::string> label_texts; // only if the label of an option is given to the template
+
+    // LAYA, KEV
+    std::string text_marker; // only if the options are delimited by a marker in the text
+};
+
+// the tasks of one request, grouped so a shared prompt prefix is evaluated once. n_shared is the
+// prefix tokens the children get from their parent; the caller subtracts them from usage
+struct server_decision_tasks {
+    std::vector<server_task> tasks;
+    int32_t                  n_shared = 0;
 };
 
 struct server_decision_context {
     common_decision_type type = COMMON_DECISION_TYPE_NONE;
 
-    // read the "<arch>.decision.*" metadata, type stays NONE if the model has none
+    // read the "<arch>.decision.*" metadata, type stays NONE if the model has none. Throws if the
+    // model is a decision model this server cannot run; the caller decides whether that is fatal.
     void init(const llama_model * model);
 
     // true if the questions of a request start with the same tokens, and the model can continue from them
@@ -64,12 +95,9 @@ struct server_decision_context {
         }
     }
 
-    // throw std::invalid_argument on bad input
-    std::vector<server_decision_question> parse_questions(const json & body) const;
-
-    // returns the state without its images, they are appended to files in order
-    // images come from "images" and from the image_url parts of a state made of chat messages
-    json parse_state(const json & body, std::vector<raw_buffer> & files) const;
+    // what the request asks for, checked against the limits of this model. The only entry point for
+    // parsing a body
+    server_decision_request parse_request(const json & body) const;
 
     // number of prompts that are evaluated to answer this question, each one shows the options in a different order
     size_t n_variants(const server_decision_question & question) const;
@@ -96,6 +124,16 @@ struct server_decision_context {
             const mtmd_helper_init_opt & init_opt,
             server_task & task) const;
 
+    // one task per pass of each question, or the single task that answers every question at once,
+    // grouped so a shared prefix is evaluated once. next_id hands out the task ids.
+    server_decision_tasks build_tasks(
+            const server_decision_request & request,
+            const std::function<int()> &    next_id,
+            mtmd_context *                  mctx,
+            const mtmd_helper_init_opt &    init_opt,
+            size_t                          n_slots,
+            size_t                          max_prompt_tokens) const;
+
     // scores: the raw model outputs of each variant
     json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const;
 
@@ -104,18 +142,14 @@ private:
     std::shared_ptr<const common_chat_template> tmpl; // the "systemone" template
 
     std::map<std::string, float> temperatures; // "<type>" or "<type>.<n_options bucket>"
-    size_t n_options_max   = 0;
-    bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
-    bool   choice_sorted   = false; // choice options are in the order of their keys
+    decision_model_traits        traits;
 
     // OPENJEV, LEV, NIMBLE
     std::vector<llama_token> labels;
-    std::vector<std::string> label_texts; // only if the label of an option is given to the template
 
     // LAYA, KEV
     llama_token token_marker      = LLAMA_TOKEN_NULL;
     llama_token token_sep         = LLAMA_TOKEN_NULL;
-    std::string text_marker;
     size_t      max_head_tokens   = 0; // question + options
     size_t      max_option_tokens = 48;
 
@@ -125,14 +159,76 @@ private:
             const server_decision_question & question,
             size_t variant,
             size_t n_images) const;
-    json render_options(const server_decision_question & question, size_t variant) const;
     size_t n_outputs(const server_decision_question & question) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
 
     float get_temperature(const server_decision_question & question) const;
 };
 
-// group the tasks so that the common prefix of their prompts is evaluated only once
-// each group is one parent and its children, it takes at most n_slots slots
-// note: the order of the tasks is preserved
-std::vector<server_task> server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots);
+//
+// free functions
+//
+
+// the two halves of a body, both refuse with server_invalid_request naming the field.
+// decision_parse_state appends the images to files
+std::vector<server_decision_question> decision_parse_questions(const json & body, const decision_model_traits & traits);
+json                                  decision_parse_state(const json & body, std::vector<raw_buffer> & files);
+
+// the options of one question in template order. Variant 1 is the reverse order, so the model
+// cannot prefer a position over an option
+json decision_template_options(
+        common_decision_type             type,
+        const decision_model_traits &    traits,
+        const server_decision_question & question,
+        size_t                           variant);
+
+// what one prompt is rendered from. A struct, so two counts of the same type cannot be swapped
+struct decision_prompt {
+    common_decision_type                       type     = COMMON_DECISION_TYPE_NONE;
+    const decision_model_traits &              traits;
+    const json &                               state;
+    const std::vector<server_decision_question> & questions;
+    const server_decision_question &           question;
+    size_t                                     variant  = 0;
+    size_t                                     n_images = 0;
+};
+
+// the globals the "systemone" template is given for one variant of one question of one request
+json decision_template_input(const decision_prompt & prompt);
+
+// executes the template on a template input
+std::string decision_render_template(const common_chat_template & tmpl, const json & inp);
+
+// the probability of each of the n options: a softmax over each variant, then the average of the
+// variants. Variant 1 is the reverse order; throws if a variant carries != n scores
+std::vector<double> decision_average_variants(const std::vector<std::vector<float>> & scores,
+                                              size_t                                  n,
+                                              float                                   temperature);
+
+// the scores of one question out of a joint head's vector, which holds the scores of every option
+// of the request in order. Throws if the vector is too short, so a short head is a server fault
+std::vector<float> decision_joint_scores(const std::vector<float> &         scores,
+                                         size_t                           offset,
+                                         const server_decision_question & question);
+
+// group the tasks so the common prefix of their prompts is evaluated once; task order is preserved
+server_decision_tasks server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots);
+
+// how many queued decision tasks the derived admission cap allows: whole
+// waves of slots, so a server with more slots queues proportionally more
+inline constexpr int DECISION_QUEUE_CAP_PER_SLOT = 8;
+
+// the queued decision tasks at which /v1/systemone starts refusing, a
+// parent and each child counting one.
+size_t decision_queue_cap(int cap, int n_parallel);
+
+// the rendered prompt tokens one /v1/systemone request may total.
+size_t decision_prompt_budget(int cap, int n_parallel, int n_ctx_slot);
+
+// the Retry-After a refusal carries, in seconds. The cap counts tasks, not time, so this is a floor
+// for the client, not an estimate of when the queue will drain
+inline constexpr int DECISION_RETRY_AFTER_S = 1;
+
+// how many images one /v1/systemone request may carry, shared by the images field and the image
+// parts of a chat-message state. A request over it is refused whole, before any image is decoded
+inline constexpr size_t DECISION_MAX_IMAGES = 8;

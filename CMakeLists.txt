@@ -254,7 +254,9 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP)
+# the unified binary links the llama-*-impl libraries, which tools/ only creates when the server and
+# the other tools are built
+if (LLAMA_BUILD_APP AND LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER)
     add_subdirectory(app)
 endif()
 

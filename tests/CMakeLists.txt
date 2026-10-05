@@ -160,9 +160,11 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp)
     llama_build_and_test(test-batch-alloc.cpp)
-    llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    target_link_libraries(test-chat PRIVATE server-context)
+    # the target only exists when tools/ adds tools/server, so the same condition guards the test
+    if (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER)
+        llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        target_link_libraries(test-chat PRIVATE server-context)
+    endif()
     llama_build_and_test(test-json-schema-to-grammar.cpp)
 
     if (NOT GGML_BACKEND_DL)
@@ -314,14 +316,24 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
     llama_build_and_test(test-col2im-1d.cpp)
 endif()
 
-# libmtmd
-set(LLAMA_TEST_NAME test-mtmd-c-api)
-llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
-unset(LLAMA_TEST_NAME)
+# libmtmd. tools/ adds the target, and LLAMA_BUILD_MTMD adds it standalone when tools/ is off. Without
+# the guard the link degrades to -lmtmd and the test compiles against the installed mtmd headers
+if (LLAMA_BUILD_TOOLS OR LLAMA_BUILD_MTMD)
+    set(LLAMA_TEST_NAME test-mtmd-c-api)
+    llama_build_and_test(test-mtmd-c-api.c)
+    target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+    unset(LLAMA_TEST_NAME)
 
-llama_build_and_test(test-mtmd-impl.cpp)
-target_link_libraries(test-mtmd-impl PRIVATE mtmd)
+    llama_build_and_test(test-mtmd-impl.cpp)
+    target_link_libraries(test-mtmd-impl PRIVATE mtmd)
+endif()
+
+# server-context: the logic of the server, tested without a model and without a server
+# the target only exists when tools/ adds tools/server, so the same condition guards the test
+if (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER)
+    llama_build_and_test(${PROJECT_SOURCE_DIR}/tools/server/tests/test-server-decision.cpp)
+    target_link_libraries(test-server-decision PRIVATE server-context)
+endif()
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)

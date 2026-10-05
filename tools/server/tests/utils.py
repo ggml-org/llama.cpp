@@ -123,6 +123,8 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    decision_max_queued: int | None = None
+    decision_max_prompt_tokens: int | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -242,6 +244,12 @@ class ServerProcess:
             server_args.extend(["--spec-type", self.spec_type])
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
+        if self.decision_max_queued is not None:
+            # 0 and negative values are meaningful, so this cannot be a truthiness test
+            server_args.extend(["--decision-max-queued", self.decision_max_queued])
+        if self.decision_max_prompt_tokens is not None:
+            # a negative value derives the budget and 0 is unlimited, so this cannot be a truthiness test
+            server_args.extend(["--decision-max-prompt-tokens", self.decision_max_prompt_tokens])
         if self.spec_draft_n_max:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
@@ -526,13 +534,18 @@ server_instances: Set[ServerProcess] = set()
 
 
 class ServerPreset:
+    # Presets that load_all must not start: they have no test-sized model, so preloading them would
+    # download hundreds of megabytes and fail to reach /health. Their tests skip without *_LOCAL_MODEL.
+    NOT_PRELOADED = {"lev", "kev"}
+
     @staticmethod
     def load_all() -> None:
         """ Load all server presets to ensure model files are cached. """
+        skip = {"load_all"} | ServerPreset.NOT_PRELOADED
         servers: List[ServerProcess] = [
             method()
             for name, method in ServerPreset.__dict__.items()
-            if callable(method) and name != "load_all"
+            if callable(method) and name not in skip
         ]
         for server in servers:
             server.offline = False
@@ -652,10 +665,52 @@ class ServerPreset:
         server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
         server.model_hf_file = None
-        server.model_hf_repo = "ggml-org/tinyopenjev-for-testing-gguf:Q8_0"
+        local_model = os.environ.get("TINYOPENJEV_LOCAL_MODEL")
+        if local_model:
+            server.model_file = local_model
+            server.model_hf_repo = None
+        else:
+            server.model_hf_repo = "ggml-org/tinyopenjev-for-testing-gguf:Q8_0"
         server.n_ctx = 4096
         server.n_batch = 512
         server.n_slots = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def lev() -> ServerProcess:
+        # NOT a test model: there is no tiny lev, and the real one is far too large to download, so
+        # the lev route tests skip unless LEV_LOCAL_MODEL points at a local copy.
+        server = ServerProcess()
+        server.offline = True
+        server.model_hf_file = None
+        local_model = os.environ.get("LEV_LOCAL_MODEL")
+        if local_model:
+            server.model_file = local_model
+            server.model_hf_repo = None
+        else:
+            server.model_hf_repo = "ggml-org/lev-GGUF:Q4_K_M"
+        server.n_ctx = 4096
+        server.n_batch = 512
+        server.n_slots = 1
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def kev() -> ServerProcess:
+        # NOT a test model, same reason as lev(). Kev-0.8B is the smallest published one.
+        server = ServerProcess()
+        server.offline = True
+        server.model_hf_file = None
+        local_model = os.environ.get("KEV_LOCAL_MODEL")
+        if local_model:
+            server.model_file = local_model
+            server.model_hf_repo = None
+        else:
+            server.model_hf_repo = "ggml-org/Kev-0.8B-GGUF:Q8_0"
+        server.n_ctx = 4096
+        server.n_batch = 512
+        server.n_slots = 1
         server.seed = 42
         return server
 

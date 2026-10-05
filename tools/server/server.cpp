@@ -58,6 +58,14 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
         error_type error;
         try {
             return func(req);
+        } catch (const server_invalid_request & e) {
+            // the request is well-formed JSON, but the endpoint does not accept it (422)
+            error   = ERROR_TYPE_INVALID_REQUEST_SEMANTIC;
+            message = e.what();
+        } catch (const server_status_error & e) {
+            // the endpoint chose the status itself, for example 501 for a model that cannot answer
+            error   = e.type;
+            message = e.what();
         } catch (const std::invalid_argument & e) {
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;

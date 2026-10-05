@@ -6,6 +6,7 @@
 
 #include "json.h"
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -172,6 +173,10 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
     std::unique_ptr<server_res_generator> handle_count_tokens(const server_http_req & req, task_response_type res_type);
+
+    // handles POST /v1/systemone: evaluates the questions of the request against its state, one
+    // task per pass of each question, then assembles the answers into the response envelope
+    std::unique_ptr<server_res_generator> handle_systemone_impl(const server_http_req & req);
 
     // using unique_ptr to allow late initialization of const
     std::unique_ptr<const server_context_meta> meta;

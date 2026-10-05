@@ -757,7 +757,7 @@ struct server_slot {
         return res;
     }
 
-    // the other slot continues from the tokens processed so far
+    // copy the KV state and this slot's prompt to the other slot, nothing else
     void copy_prompt_to(server_slot & other) const {
         mem.seq_rm(other.id,     -1, -1);
         mem.seq_cp(id, other.id, -1, -1);
@@ -768,14 +768,12 @@ struct server_slot {
     void copy_state_to(server_slot & other) const {
         GGML_ASSERT(state == SLOT_STATE_DONE_PROMPT);
 
-        mem.seq_rm(other.id,     -1, -1);
-        mem.seq_cp(id, other.id, -1, -1);
+        copy_prompt_to(other); // the child starts from this prompt and evaluates none of it
 
         other.i_batch = i_batch;
 
         other.stats = stats;
 
-        other.prompt = prompt.clone();
         other.init_sampler();
     }
 };
@@ -973,6 +971,11 @@ public:
         metrics.reset_bucket();
     }
 
+    // counted on the HTTP thread that refused the request, reported by the next metrics task
+    void count_refused_decision() {
+        n_decision_refused++;
+    }
+
 private:
     // note: accessing these fields outside of this class is not thread-safe
     // use server_context methods instead
@@ -1016,6 +1019,9 @@ private:
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
+
+    // incremented by the HTTP threads, unlike the rest of the metrics it needs no lock
+    std::atomic<uint64_t> n_decision_refused = 0;
 
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
     // note: kept out of server_metrics, which is copied as-is into the task result
@@ -1227,6 +1233,14 @@ private:
         } catch (const std::exception & e) {
             SRV_ERR("failed to init decision model: %s\n", e.what());
             return false;
+        }
+        if (decision.type != COMMON_DECISION_TYPE_NONE) {
+            const size_t queue_cap = decision_queue_cap(params_base.decision_max_queued, params_base.n_parallel);
+            if (queue_cap == 0) {
+                SRV_INF("/v1/systemone: max queued = %s\n", "unlimited");
+            } else {
+                SRV_INF("/v1/systemone: max queued = %zu tasks\n", queue_cap);
+            }
         }
 
         n_ctx = llama_n_ctx(ctx_tgt);
@@ -2718,6 +2732,7 @@ private:
                     res->id                  = task.id;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
+                    res->n_decision_refused  = n_decision_refused.load();
                     res->metrics             = metrics;
 
                     if (task.metrics_reset_bucket) {
@@ -3394,12 +3409,14 @@ private:
 
                         if (!slot.can_split()) {
                             if (slot.task->n_tokens() > n_ubatch) {
+                                // a decision request names the limit it crossed, other routes keep the generic kind
                                 send_error(slot,
                                            string_format(
                                                "input (%d tokens) is too large to process. increase the physical batch "
                                                "size (current batch size: %d)",
                                                slot.task->n_tokens(), n_ubatch),
-                                           ERROR_TYPE_SERVER);
+                                           slot.task->type == SERVER_TASK_TYPE_DECISION ? ERROR_TYPE_EXCEED_BATCH_SIZE
+                                                                                        : ERROR_TYPE_SERVER);
                                 slot.release();
                                 return;
                             }
@@ -3429,10 +3446,10 @@ private:
                             const int32_t n_decision_first = slot.task->type == SERVER_TASK_TYPE_DECISION ? slot.task->decision.pos_first() : -1;
                             if (n_decision_first >= 0 && slot.task->n_tokens() - n_decision_first > n_batch) {
                                 send_error(slot,
-                                           string_format("the question and its options (%d tokens) are too large to process. "
-                                                         "increase the batch size (current batch size: %d)",
+                                           string_format("the question and its options (%d tokens) are too large for one "
+                                                         "batch (%d tokens); shorten the question or increase the batch size",
                                                          slot.task->n_tokens() - n_decision_first, n_batch),
-                                           ERROR_TYPE_INVALID_REQUEST);
+                                           ERROR_TYPE_EXCEED_BATCH_SIZE);
                                 slot.release();
                                 return;
                             }
@@ -5581,89 +5598,7 @@ void server_routes::init_routes() {
     };
 
     this->post_systemone = [this](const server_http_req & req) {
-        auto res = create_response();
-        const auto & decision = ctx_server.decision;
-        if (decision.type == COMMON_DECISION_TYPE_NONE) {
-            res->error(format_error_response("This model is not a decision model", ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
-
-        const json body = json::parse(req.body);
-        const auto questions = decision.parse_questions(body);
-
-        std::vector<raw_buffer> files;
-        const json state = decision.parse_state(body, files);
-        if (!files.empty() && (!decision.can_use_images() || !meta->has_inp_image)) {
-            res->error(format_error_response("This server does not support image input for decisions. For a model that supports it, start it with `--mmproj`", ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
-
-        // one task per variant of each question, or one task for all the questions
-        auto & rd = res->rd;
-        {
-            std::vector<server_task> tasks;
-            if (decision.is_joint()) {
-                server_task task = server_task(SERVER_TASK_TYPE_DECISION);
-                task.id = rd.get_new_id();
-                decision.fill_task_joint(state, questions, files, ctx_server.mctx, ctx_server.init_opt, task);
-                tasks.push_back(std::move(task));
-            } else {
-                for (const auto & question : questions) {
-                    for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
-                        server_task task = server_task(SERVER_TASK_TYPE_DECISION);
-                        task.id = rd.get_new_id();
-                        decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
-                        tasks.push_back(std::move(task));
-                    }
-                }
-            }
-            if (decision.can_share_prompt()) {
-                tasks = server_decision_group_tasks(std::move(tasks), params.n_parallel);
-            }
-            rd.post_tasks(std::move(tasks));
-        }
-
-        auto all_results = rd.wait_for_all(req.should_stop);
-
-        if (all_results.is_terminated) {
-            return res; // connection is closed
-        } else if (all_results.error) {
-            res->error(all_results.error->to_json());
-            return res;
-        }
-
-        json answers = json::object();
-        int32_t n_tokens = 0;
-        size_t i_result = 0;
-        size_t i_score  = 0;
-        for (const auto & question : questions) {
-            std::vector<std::vector<float>> scores;
-            if (decision.is_joint()) {
-                // one result with the scores of all the questions, in order
-                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[0].get());
-                GGML_ASSERT(result != nullptr && i_score + question.options.size() <= result->scores.size());
-                scores.emplace_back(result->scores.begin() + i_score, result->scores.begin() + i_score + question.options.size());
-                i_score += question.options.size();
-                n_tokens = result->n_tokens;
-            }
-            for (size_t variant = 0; !decision.is_joint() && variant < decision.n_variants(question); variant++) {
-                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result++].get());
-                GGML_ASSERT(result != nullptr);
-                scores.push_back(result->scores);
-                n_tokens += result->n_tokens;
-            }
-            answers[question.id] = decision.format_answer(question, scores);
-        }
-
-        res->ok(json{
-            {"model",   meta->model_name},
-            {"answers", answers},
-            {"usage",   {
-                {"input_tokens",  n_tokens},
-                {"output_tokens", 0},
-            }},
-        });
-        return res;
+        return handle_systemone_impl(req);
     };
 
     this->get_lora_adapters = [this](const server_http_req & req) {
@@ -5826,6 +5761,148 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
 
     GGML_ASSERT(dynamic_cast<server_task_result_slot_erase*>(result.get()) != nullptr);
     res->ok(result->to_json());
+    return res;
+}
+
+//
+// /v1/systemone
+//
+// the route owns the admission decision and the response envelope; build_tasks() renders and groups
+// the prompts, the reader posts them and waits
+//
+
+// the response body: the answers under the caller's ids, and the usage. Results are in task order,
+// one per pass of each question, or one joint result holding every option in question order
+static json decision_response_envelope(const std::string &                           model_name,
+                                       const std::vector<server_decision_question> & questions,
+                                       const server_decision_context &               decision,
+                                       const std::vector<server_task_result_ptr> &   results,
+                                       int32_t                                       n_shared) {
+    json    answers  = json::object();
+    int32_t n_tokens = 0;
+
+    const server_task_result_decision * joint = nullptr;
+    if (decision.is_joint()) {
+        // a wrong shape is a server fault, not an abort
+        if (results.empty()) {
+            throw std::runtime_error("the joint decision task returned no result");
+        }
+        joint = dynamic_cast<server_task_result_decision *>(results[0].get());
+        if (joint == nullptr) {
+            throw std::runtime_error("unexpected result type for a joint decision task");
+        }
+        n_tokens = joint->n_tokens;
+    }
+
+    size_t i_result = 0;
+    size_t i_score  = 0;
+    // results are consumed in task order, so a short vector is a server fault, not a caller fault
+    const auto take_result = [&results, &i_result]() -> const server_task_result_decision * {
+        if (i_result >= results.size()) {
+            throw std::runtime_error("a decision task returned no result");
+        }
+        const auto * result = dynamic_cast<server_task_result_decision *>(results[i_result++].get());
+        if (result == nullptr) {
+            throw std::runtime_error("unexpected result type for a decision task");
+        }
+        return result;
+    };
+
+    for (const auto & question : questions) {
+        std::vector<std::vector<float>> scores;
+        if (joint != nullptr) {
+            scores.push_back(decision_joint_scores(joint->scores, i_score, question));
+            i_score += question.options.size();
+        }
+        for (size_t variant = 0; joint == nullptr && variant < decision.n_variants(question); variant++) {
+            const auto * result = take_result();
+            scores.push_back(result->scores);
+            n_tokens += result->n_tokens;
+        }
+        answers[question.id] = decision.format_answer(question, scores);
+    }
+
+    return json{
+        { "model",   model_name         },
+        { "answers", std::move(answers) },
+        { "usage",
+         {
+              { "input_tokens", n_tokens - n_shared },
+              { "output_tokens", 0 },
+          }                             },
+    };
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_systemone_impl(const server_http_req & req) {
+    auto         res      = create_response();
+    const auto & decision = ctx_server.decision;
+
+    if (decision.type == COMMON_DECISION_TYPE_NONE) {
+        res->error(format_error_response("This model is not a decision model", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+
+    // no error handling below: the exception kind picks the status, ex_wrapper dispatches it
+    const json body = json::parse(req.body);
+
+    // Jev requires "model"; here it is accepted and ignored, the answer reports the loaded model
+    if (body.contains("model") && !body.at("model").is_string()) {
+        throw server_invalid_request("\"model\" must be a string");
+    }
+
+    const server_decision_request request = decision.parse_request(body);
+    if (!request.files.empty() && (!decision.can_use_images() || !meta->has_inp_image)) {
+        throw server_status_error(ERROR_TYPE_NOT_SUPPORTED,
+                                  "This server does not support image input for decisions. For a model that supports "
+                                  "it, start it with `--mmproj`");
+    }
+
+    const size_t cap = decision_queue_cap(params.decision_max_queued, params.n_parallel);
+
+    // the queue depth is not a time estimate, so Retry-After is only a floor for the client
+    const auto refuse = [&](size_t depth) {
+        SRV_WRN("/v1/systemone: refused, at least %zu tasks queued, cap %zu\n", depth, cap);
+        ctx_server.count_refused_decision();
+        res->headers["Retry-After"] = std::to_string(DECISION_RETRY_AFTER_S);
+        res->error(format_error_response("The server is busy, retry later", ERROR_TYPE_RATE_LIMITED));
+    };
+
+    // read-only fast path: skip the render when the queue is already at the cap. The bound is
+    // try_post_tasks(), this only avoids the work
+    if (cap != 0) {
+        const size_t n_queued = ctx_server.queue_tasks.queued_count(SERVER_TASK_TYPE_DECISION, cap);
+        if (n_queued >= cap) {
+            refuse(n_queued);
+            return res;
+        }
+    }
+
+    const size_t max_prompt_tokens = decision_prompt_budget(
+        params.decision_max_prompt_tokens, params.n_parallel, meta->slot_n_ctx);
+
+    server_decision_tasks grouped = decision.build_tasks(
+        request, [&rd = res->rd]() { return rd.get_new_id(); }, ctx_server.mctx, ctx_server.init_opt,
+        params.n_parallel, max_prompt_tokens);
+    const int32_t n_shared = grouped.n_shared;
+
+    // the gate reads the depth under the lock that also enqueues, so the batch is admitted whole
+    size_t depth = 0;
+    if (!res->rd.try_post_tasks(std::move(grouped.tasks), SERVER_TASK_TYPE_DECISION, cap, false, &depth)) {
+        refuse(depth);
+        return res;
+    }
+
+    const auto all_results = res->rd.wait_for_all(req.should_stop);
+    if (all_results.is_terminated) {
+        return res;  // the connection is closed, ~server_response_reader() cancels the tasks
+    }
+    if (all_results.error) {
+        res->error(all_results.error->to_json());
+        return res;
+    }
+
+    res->ok(decision_response_envelope(meta->model_name, request.questions, decision, all_results.results, n_shared));
+
     return res;
 }
 

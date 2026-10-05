@@ -25,6 +25,16 @@ static bool task_resets_idle_timer(server_task_type type) {
     return type != SERVER_TASK_TYPE_METRICS;
 }
 
+// the weight a task adds to the queued count of counted_type: one if the task is that type, plus one
+// per matching child
+static size_t task_weight(const server_task & task, server_task_type counted_type) {
+    size_t weight = task.type == counted_type ? 1 : 0;
+    for (const auto & child : task.child_tasks) {
+        weight += child.type == counted_type ? 1 : 0;
+    }
+    return weight;
+}
+
 int server_queue::post(server_task && task, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     GGML_ASSERT(task.id != -1);
@@ -47,8 +57,7 @@ int server_queue::post(server_task && task, bool front) {
     return task_id;
 }
 
-int server_queue::post(std::vector<server_task> && tasks, bool front) {
-    std::unique_lock<std::mutex> lock(mutex_tasks);
+void server_queue::post_locked(std::vector<server_task> && tasks, bool front) {
     bool reset_timer = false;
     for (auto & task : tasks) {
         if (task.id == -1) {
@@ -69,8 +78,59 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
     if (reset_timer) {
         time_last_task = ggml_time_ms();
     }
+}
+
+int server_queue::post(std::vector<server_task> && tasks, bool front) {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    post_locked(std::move(tasks), front);
     condition_tasks.notify_one();
     return 0;
+}
+
+size_t server_queue::queued_count_locked(server_task_type type, size_t stop_at) const {
+    const size_t bound = stop_at == 0 ? SIZE_MAX : stop_at; // 0 is try_post()'s "no bound"
+    size_t       count = 0;
+
+    const auto scan = [&](const std::deque<server_task> & tasks) {
+        for (const auto & task : tasks) {
+            if (count >= bound) {
+                return;
+            }
+            count += task_weight(task, type);
+        }
+    };
+
+    scan(queue_tasks);
+    scan(queue_tasks_deferred);
+    scan(queue_tasks_unhandled);
+    return count;
+}
+
+size_t server_queue::queued_count(server_task_type type, size_t stop_at) {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    return queued_count_locked(type, stop_at);
+}
+
+bool server_queue::try_post(std::vector<server_task> && tasks,
+                            server_task_type            counted_type,
+                            size_t                      cap,
+                            bool                        front,
+                            size_t *                    depth_at_refusal) {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+
+    if (cap != 0) {
+        const size_t depth = queued_count_locked(counted_type, cap);
+        if (depth >= cap) {
+            if (depth_at_refusal) {
+                *depth_at_refusal = depth;
+            }
+            return false;
+        }
+    }
+
+    post_locked(std::move(tasks), front);
+    condition_tasks.notify_one();
+    return true;
 }
 
 void server_queue::defer(server_task && task) {
@@ -522,8 +582,8 @@ void server_response_reader::post_task(server_task && task, bool front) {
     queue_tasks.post(std::move(task), front);
 }
 
-void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool front) {
-    GGML_ASSERT(id_tasks.empty() && "post_tasks() can only be called once per reader");
+void server_response_reader::register_tasks(std::vector<server_task> & tasks) {
+    GGML_ASSERT(id_tasks.empty() && "register_tasks() can only be called once per reader");
     id_tasks = server_task::get_list_id(tasks);
     states.reserve(tasks.size());
     size_t index = 0;
@@ -537,8 +597,28 @@ void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool 
         }
     }
     GGML_ASSERT(states.size() == id_tasks.size());
+    // registered before the post, so a result can never race the registration
     queue_results.add_waiting_task_ids(id_tasks);
+}
+
+void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool front) {
+    register_tasks(tasks);
     queue_tasks.post(std::move(tasks), front);
+}
+
+bool server_response_reader::try_post_tasks(std::vector<server_task> && tasks,
+                                            server_task_type            counted_type,
+                                            size_t                      cap,
+                                            bool                        front,
+                                            size_t *                    depth_at_refusal) {
+    register_tasks(tasks);
+    if (!queue_tasks.try_post(std::move(tasks), counted_type, cap, front, depth_at_refusal)) {
+        queue_results.remove_waiting_task_ids(id_tasks);
+        id_tasks.clear();
+        states.clear();
+        return false;
+    }
+    return true;
 }
 
 bool server_response_reader::has_next() const {

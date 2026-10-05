@@ -3598,6 +3598,31 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
+    add_opt(
+        common_arg({ "--decision-max-queued" }, "N",
+                   string_format(
+                       "decision tasks queued at which POST /v1/systemone starts answering 429; "
+                       "checked when the request arrives, not a bound on the queue; "
+                       "a parent and each child count one; negative for 8 x --parallel, 0 for unlimited (default: %d)",
+                       params.decision_max_queued),
+                   [](common_params & params, int value) {
+                       params.decision_max_queued = value;
+                   })
+            .set_examples({ LLAMA_EXAMPLE_SERVER })
+            .set_env("LLAMA_ARG_DECISION_MAX_QUEUED"));
+    add_opt(
+        common_arg({ "--decision-max-prompt-tokens" }, "N",
+                   string_format(
+                       "rendered prompt tokens POST /v1/systemone accepts in one request before it "
+                       "answers 413; counted over every task the request builds, across both image "
+                       "and text; negative for 8 x --parallel x the context of one slot, 0 for "
+                       "unlimited (default: %d)",
+                       params.decision_max_prompt_tokens),
+                   [](common_params & params, int value) {
+                       params.decision_max_prompt_tokens = value;
+                   })
+            .set_examples({ LLAMA_EXAMPLE_SERVER })
+            .set_env("LLAMA_ARG_DECISION_MAX_PROMPT_TOKENS"));
     add_opt(common_arg(
         {"--metrics"},
         string_format("enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled"),

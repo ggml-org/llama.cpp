@@ -1573,6 +1573,10 @@ std::string server_task_result_metrics::to_metrics() {
             "spec_decode_num_drafts_total",
             "Speculative: Total speculative decoding verification steps",
             (double) metrics.n_draft_verif_steps
+        }, {
+            "decision_requests_refused_total",
+            "Number of /v1/systemone requests refused because the decision queue was at its cap",
+            (double) n_decision_refused
         },
     };
 

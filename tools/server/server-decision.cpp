@@ -3,7 +3,9 @@
 #include "../../src/llama-ext.h" // staging API: llama_decision_order
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
+#include <cstdlib>
 #include <regex>
 #include <stdexcept>
 
@@ -17,7 +19,21 @@ static const char * decision_question_type_name(server_decision_question_type ty
 }
 
 // lev reads noul from a rating scale: 0 = certainly no, 8 = certainly yes
-static const size_t DECISION_LEV_N_RATINGS = 9;
+static constexpr size_t DECISION_LEV_N_RATINGS = 9;
+
+// Jev allows at most 255 options; a model can be narrower and init() derives that bound
+static constexpr size_t DECISION_OPTIONS_MAX_API = 255;
+
+// LAYA reads the question and options in one max_head_tokens window and
+// shortens the options to fit
+
+static constexpr size_t DECISION_HEAD_OVERHEAD_TOKENS = 16;
+static constexpr size_t DECISION_OPTION_MIN_TOKENS   = 4;
+
+// the tokens of a head's window left for the options
+static size_t decision_head_room(size_t max_head_tokens) {
+    return max_head_tokens - std::min(max_head_tokens, DECISION_HEAD_OVERHEAD_TOKENS);
+}
 
 static std::string decision_meta_str(const llama_model * model, const std::string & key) {
     char buf[256];
@@ -75,8 +91,8 @@ void server_decision_context::init(const llama_model * model) {
             }
             labels.push_back(toks[0]);
         }
-        n_options_max   = labels.size();
-        noul_true_first = true;
+        traits.n_options_max   = labels.size();
+        traits.noul_true_first = true;
     } else if (model_type == COMMON_DECISION_TYPE_LEV || model_type == COMMON_DECISION_TYPE_NIMBLE) {
         // label codes are A..Z then AA..ZZ, only the ones that are a single token are used
         std::vector<std::string> codes;
@@ -90,12 +106,12 @@ void server_decision_context::init(const llama_model * model) {
         }
         for (const auto & code : codes) {
             const auto toks = common_tokenize(vocab, code, false, false);
-            if (toks.size() == 1 && labels.size() < 255) {
+            if (toks.size() == 1 && labels.size() < DECISION_OPTIONS_MAX_API) {
                 labels.push_back(toks[0]);
-                label_texts.push_back(code);
+                traits.label_texts.push_back(code);
             }
         }
-        n_options_max = labels.size();
+        traits.n_options_max = labels.size();
     } else if (model_type == COMMON_DECISION_TYPE_KEV) {
         // the hidden state of an option is read at the token that ends it
         const auto toks = common_tokenize(vocab, "<|box_end|>", false, true);
@@ -103,55 +119,71 @@ void server_decision_context::init(const llama_model * model) {
             throw std::runtime_error("decision model has no <|box_end|> token");
         }
         token_marker  = toks[0];
-        n_options_max = 255;
+        // the options are separated by the marker token instead of being named, so the tokenizer
+        // sets no limit on how many there are: each one is a position in the prompt
+        traits.n_options_max = DECISION_OPTIONS_MAX_API;
     } else if (model_type == COMMON_DECISION_TYPE_LAYA) {
         token_marker = llama_vocab_mask(vocab);
         token_sep    = llama_vocab_sep(vocab);
         if (token_marker == LLAMA_TOKEN_NULL || token_sep == LLAMA_TOKEN_NULL) {
             throw std::runtime_error("decision model has no mask or sep token");
         }
-        text_marker = common_token_to_piece(vocab, token_marker, true);
+        traits.text_marker = common_token_to_piece(vocab, token_marker, true);
 
         const std::string val = decision_meta_str(model, prefix + "max_head_tokens");
         max_head_tokens = std::strtoul(val.c_str(), nullptr, 10);
         if (max_head_tokens == 0) {
             throw std::runtime_error("decision model has no valid max_head_tokens");
         }
-        n_options_max = 255;
+        // as kev, the options are marker-separated positions rather than
+        // named labels; tokenizer sets no limit on how many there are.
+        traits.n_options_max = std::min(DECISION_OPTIONS_MAX_API,
+                                        decision_head_room(max_head_tokens) / DECISION_OPTION_MIN_TOKENS);
+        if (traits.n_options_max == 0) {
+            throw std::runtime_error("the decision head cannot hold a single option");
+        }
     } else if (model_type == COMMON_DECISION_TYPE_CLEF) {
-        n_options_max   = 255;
-        noul_true_first = true;
-        choice_sorted   = true;
+        // the joint head reads the options of every question from the one prompt, so it has no
+        // window of its own to derive a bound from and the API ceiling is all it sets
+        traits.n_options_max   = DECISION_OPTIONS_MAX_API;
+        traits.noul_true_first = true;
+        traits.choice_sorted   = true;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
     }
     type = model_type;
 
-    SRV_INF("decision model type: %s\n", type_name.c_str());
+    SRV_INF("decision model type: %s, at most %zu options per question\n", type_name.c_str(), traits.n_options_max);
 }
 
 //
 // request parsing
 //
 
-std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
-    if (!body.contains("state") || body.at("state").is_null()) {
-        throw std::invalid_argument("\"state\" must be provided");
+// a criterion must carry content: Jev's EntryType minus the falsy values Jinja would branch on.
+// note: the backing json reports size() 1 and empty() false for a string, so read the string out
+static bool decision_instructions_valid(const json & val) {
+    if (val.is_string()) {
+        return !val.get<std::string>().empty();
     }
+    return (val.is_object() || val.is_array()) && !val.empty();
+}
+
+std::vector<server_decision_question> decision_parse_questions(const json & body, const decision_model_traits & traits) {
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
-        throw std::invalid_argument("\"questions\" must be a non-empty object");
+        throw server_invalid_request("\"questions\" must be a non-empty object");
     }
 
     std::vector<server_decision_question> questions;
     for (const auto & [id, q] : body.at("questions").items()) {
         auto err = [&id = id](const std::string & msg) {
-            return std::invalid_argument("questions." + id + ": " + msg);
+            return server_invalid_request("questions." + id + ": " + msg);
         };
         if (!q.is_object()) {
             throw err("must be an object");
         }
-        if (!q.contains("instructions") || q.at("instructions").is_null()) {
-            throw err("\"instructions\" must be provided");
+        if (!q.contains("instructions") || !decision_instructions_valid(q.at("instructions"))) {
+            throw err("\"instructions\" must be a non-empty string, object, or array");
         }
 
         server_decision_question question;
@@ -169,7 +201,7 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
             for (const auto & [key, description] : criteria.items()) {
                 question.options.push_back({key, description});
             }
-            if (choice_sorted) {
+            if (traits.choice_sorted) {
                 std::sort(question.options.begin(), question.options.end(), [](const auto & a, const auto & b) {
                     return a.key < b.key;
                 });
@@ -190,15 +222,18 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
             for (const char * key : {"false", "true"}) {
                 question.options.push_back({key, criteria.is_object() && criteria.contains(key) ? criteria.at(key) : json()});
             }
-            if (noul_true_first) {
+            if (traits.noul_true_first) {
                 std::swap(question.options[0], question.options[1]);
             }
         } else {
             throw err("\"type\" must be one of: choice, score, noul");
         }
 
-        if (question.options.size() > n_options_max) {
-            throw err(string_format("too many options (%zu), this model supports at most %zu", question.options.size(), n_options_max));
+        if (question.options.size() > traits.n_options_max) {
+            // the bound is the tokenizer's or the API's depending on the type, so do not call it the model's
+            throw err(string_format("\"criteria\" has %zu options, at most %zu are supported",
+                                    question.options.size(),
+                                    traits.n_options_max));
         }
 
         questions.push_back(std::move(question));
@@ -206,29 +241,45 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
     return questions;
 }
 
+server_decision_request server_decision_context::parse_request(const json & body) const {
+    server_decision_request request;
+    request.questions = decision_parse_questions(body, traits);
+    request.state     = decision_parse_state(body, request.files);
+    return request;
+}
+
 //
 // images
 //
 
-static const size_t DECISION_MAX_IMAGES = 8;
-
 static void decision_load_image(const json & url, std::vector<raw_buffer> & files) {
     if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:image/")) {
-        throw std::invalid_argument("images must be data URLs (data:image/...;base64,...)");
+        throw server_invalid_request("\"images\" must hold data URLs (data:image/...;base64,...)");
     }
     if (files.size() >= DECISION_MAX_IMAGES) {
-        throw std::invalid_argument(string_format("too many images, the maximum is %zu", DECISION_MAX_IMAGES));
+        throw server_invalid_request(string_format("\"images\" holds %zu, the maximum is %zu", files.size() + 1, DECISION_MAX_IMAGES));
     }
-    handle_media(files, url.get<std::string>(), "");
+    try {
+        handle_media(files, url.get<std::string>(), "");
+    } catch (const std::invalid_argument & e) {
+        // handle_media answers 400 on every route, but here the body is valid JSON with a bad value
+        throw server_invalid_request(string_format("\"images\" entry %zu: %s", files.size() + 1, e.what()));
+    }
 }
 
-json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+json decision_parse_state(const json & body, std::vector<raw_buffer> & files) {
+    // checked here, not in decision_parse_questions: the field belongs to this half of the body, and
+    // body.at() below would raise the 400 that ex_wrapper maps a json error to
+    if (!body.contains("state") || body.at("state").is_null()) {
+        throw server_invalid_request("\"state\" must be provided");
+    }
+    // a field this route does not take is a 422, like every other field this half refuses
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
-        throw std::invalid_argument("\"videos\" is not supported");
+        throw server_invalid_request("\"videos\" is not supported");
     }
     if (body.contains("images") && !body.at("images").is_null()) {
         if (!body.at("images").is_array()) {
-            throw std::invalid_argument("\"images\" must be an array");
+            throw server_invalid_request("\"images\" must be an array");
         }
         for (const auto & url : body.at("images")) {
             decision_load_image(url, files);
@@ -361,20 +412,25 @@ static std::string decision_kev_text(const json & val) {
 
 size_t server_decision_context::n_variants(const server_decision_question & question) const {
     // lev shows the options of a choice in 2 orders, to cancel the preference for the first label
-    if (type == COMMON_DECISION_TYPE_LEV && question.type == SERVER_DECISION_QUESTION_CHOICE && question.options.size() > 1) {
+    if (type == COMMON_DECISION_TYPE_LEV && question.type == SERVER_DECISION_QUESTION_CHOICE &&
+        question.options.size() > 1) {
         return 2;
     }
     return 1;
 }
 
 size_t server_decision_context::n_outputs(const server_decision_question & question) const {
+    // lev reads a noul on its ratings, every other question reads one output per option
     if (type == COMMON_DECISION_TYPE_LEV && question.type == SERVER_DECISION_QUESTION_NOUL) {
         return DECISION_LEV_N_RATINGS;
     }
     return question.options.size();
 }
 
-json server_decision_context::render_options(const server_decision_question & question, size_t variant) const {
+json decision_template_options(common_decision_type             type,
+                               const decision_model_traits &    traits,
+                               const server_decision_question & question,
+                               size_t                           variant) {
     const size_t n_options = question.options.size();
 
     // the second variant shows the options in the reverse order
@@ -391,73 +447,81 @@ json server_decision_context::render_options(const server_decision_question & qu
                 option["description"] = decision_kev_text(opt.description);
             }
         }
-        if (!label_texts.empty()) {
-            option["label"] = label_texts[i];
+        if (!traits.label_texts.empty()) {
+            option["label"] = traits.label_texts[i];
         }
         options.push_back(option);
     }
     return options;
 }
 
-std::string server_decision_context::render(
-        const json & state,
-        const std::vector<server_decision_question> & questions,
-        const server_decision_question & question,
-        size_t variant,
-        size_t n_images) const {
+std::string server_decision_context::render(const json & state,
+                                            const std::vector<server_decision_question> & questions,
+                                            const server_decision_question & question,
+                                            size_t variant,
+                                            size_t n_images) const {
+    return decision_render_template(
+        *tmpl, decision_template_input({ type, traits, state, questions, question, variant, n_images }));
+}
+
+std::string decision_render_template(const common_chat_template & tmpl, const json & inp) {
+    jinja::context ctx(tmpl.src);
+    jinja::global_from_json(ctx, inp, false);
+    jinja::runtime     runtime(ctx);
+    const jinja::value results = runtime.execute(tmpl.prog);
+    return jinja::runtime::gather_string_parts(results)->as_string().str();
+}
+
+json decision_template_input(const decision_prompt & prompt) {
     // the template is given raw JSON values, it serializes the ones that are not strings
     json inp = json{
-        {"id",           question.id},
-        {"type",         decision_question_type_name(question.type)},
-        {"instructions", question.instructions},
-        {"state",        state},
-        {"options",      render_options(question, variant)},
+        {"id",           prompt.question.id},
+        {"type",         decision_question_type_name(prompt.question.type)},
+        {"instructions", prompt.question.instructions},
+        {"state",        prompt.state},
+        {"options",      decision_template_options(prompt.type, prompt.traits, prompt.question, prompt.variant)},
     };
 
     // the nimble prompt lists all the questions of the request
-    if (type == COMMON_DECISION_TYPE_NIMBLE) {
+    if (prompt.type == COMMON_DECISION_TYPE_NIMBLE) {
         inp["questions"] = json::array();
-        for (const auto & q : questions) {
+        for (const auto & q : prompt.questions) {
             inp["questions"].push_back(json{
                 {"id",           q.id},
                 {"type",         decision_question_type_name(q.type)},
                 {"instructions", q.instructions},
-                {"options",      render_options(q, 0)},
+                {"options",      decision_template_options(prompt.type, prompt.traits, q, 0)},
             });
         }
     }
 
     // lev was trained with sorted keys
-    if (type == COMMON_DECISION_TYPE_LEV) {
+    if (prompt.type == COMMON_DECISION_TYPE_LEV) {
         inp = decision_sort_keys(inp);
     }
 
     // the kev template only takes text
-    if (type == COMMON_DECISION_TYPE_KEV) {
-        inp["state"]        = decision_kev_text(state);
-        inp["instructions"] = decision_kev_text(question.instructions);
+    if (prompt.type == COMMON_DECISION_TYPE_KEV) {
+        inp["state"]        = decision_kev_text(prompt.state);
+        inp["instructions"] = decision_kev_text(prompt.question.instructions);
     }
 
     // the input must not contain the marker of the options
-    if (!text_marker.empty()) {
-        inp = decision_replace_text(inp, text_marker, " ");
+    if (!prompt.traits.text_marker.empty()) {
+        inp = decision_replace_text(inp, prompt.traits.text_marker, " ");
     }
 
     // the template puts one media marker per image
     json images = json::array();
-    if (n_images > 0) {
+    if (prompt.n_images > 0) {
         inp = decision_replace_text(inp, get_media_marker(), " ");
-        for (size_t i = 0; i < n_images; i++) {
+        for (size_t i = 0; i < prompt.n_images; i++) {
             images.push_back(get_media_marker());
         }
     }
     inp["images"] = images;
 
-    jinja::context ctx(tmpl->source());
-    jinja::global_from_json(ctx, inp, false);
-    jinja::runtime runtime(ctx);
-    const jinja::value results = runtime.execute(tmpl->prog);
-    return jinja::runtime::gather_string_parts(results)->as_string().str();
+    return inp;
 }
 
 void server_decision_context::fill_task(
@@ -535,11 +599,22 @@ void server_decision_context::fill_task_laya(llama_tokens & tokens, const server
         options.emplace_back(tokens.begin() + markers[i], tokens.begin() + end);
     }
     set_max(max_option_tokens + 1);
-    if (n_options_tokens + 16 > max_head_tokens) {
+    const size_t n_options_tokens_full = n_options_tokens;
+    if (n_options_tokens > decision_head_room(max_head_tokens)) {
         // too many or too long options, shrink them evenly
-        set_max(std::max((size_t) 4, (max_head_tokens - std::min(max_head_tokens, (size_t) 16)) / n_options));
+        set_max(std::max(DECISION_OPTION_MIN_TOKENS, decision_head_room(max_head_tokens) / n_options));
     }
     const size_t n_question_max = std::max((size_t) 8, max_head_tokens - std::min(max_head_tokens, n_options_tokens));
+
+    // the head window no longer holds what the caller sent: warn with the budget and what was dropped
+    const bool clipped_options = n_options_tokens < n_options_tokens_full;
+    const bool clipped_question = head_end > 1 + n_question_max;
+    if (clipped_options || clipped_question) {
+        SRV_WRN("the model's head reads %zu tokens, the %zu options were shortened from %zu to %zu tokens, "
+                "the question to %zu of %zu\n",
+                max_head_tokens, n_options, n_options_tokens_full, n_options_tokens,
+                std::min(head_end, 1 + n_question_max) - 1, head_end - 1);
+    }
 
     llama_tokens out;
     out.push_back(tokens[0]);
@@ -575,18 +650,11 @@ void server_decision_context::fill_task_joint(
         server_task & task) const {
     json inp_questions = json::array();
     for (const auto & question : questions) {
-        json options = json::array();
-        for (const auto & opt : question.options) {
-            options.push_back(json{
-                {"key",         opt.key},
-                {"description", opt.description},
-            });
-        }
         inp_questions.push_back(json{
             {"id",           question.id},
             {"type",         decision_question_type_name(question.type)},
             {"instructions", question.instructions},
-            {"options",      options},
+            {"options",      decision_template_options(type, traits, question, 0)},
         });
     }
 
@@ -610,11 +678,7 @@ void server_decision_context::fill_task_joint(
     inp["mark_question"] = CLEF_MARK_QUESTION;
     inp["mark_option"]   = CLEF_MARK_OPTION;
 
-    jinja::context ctx(tmpl->source());
-    jinja::global_from_json(ctx, inp, false);
-    jinja::runtime runtime(ctx);
-    const jinja::value results = runtime.execute(tmpl->prog);
-    const std::string prompt   = jinja::runtime::gather_string_parts(results)->as_string().str();
+    const std::string prompt = decision_render_template(*tmpl, inp);
 
     const auto invalid = std::runtime_error("unexpected layout of the decision prompt");
 
@@ -658,7 +722,8 @@ void server_decision_context::fill_task_joint(
 
         const llama_tokens piece_tokens = common_tokenize(vocab, piece, false, true);
         if (order != LLAMA_DECISION_ORDER_NONE && piece_tokens.empty()) {
-            throw std::invalid_argument("the instructions and the options of a question must not be empty");
+            throw server_invalid_request("questions." + questions[i_question - 1].id +
+                                         ": the instructions and the options of a question must not be empty");
         }
         for (const llama_token token : piece_tokens) {
             task.tokens.push_back(token);
@@ -673,6 +738,64 @@ void server_decision_context::fill_task_joint(
     if (i_question != questions.size() || (size_t) task.decision.n_scores != n_options) {
         throw invalid;
     }
+}
+
+server_decision_tasks server_decision_context::build_tasks(
+        const server_decision_request & request,
+        const std::function<int()> &    next_id,
+        mtmd_context *                  mctx,
+        const mtmd_helper_init_opt &    init_opt,
+        size_t                          n_slots,
+        size_t                          max_prompt_tokens) const {
+    std::vector<server_task> tasks;
+
+    // an empty prompt would be answered on the completion result path, which the route cannot cast
+    const auto refuse_empty = [](const server_task & task, const std::string & field) {
+        if (task.tokens.empty()) {
+            throw server_invalid_request(field +
+                                         ": the rendered prompt is empty; "
+                                         "provide a non-empty \"state\" or non-empty \"instructions\"");
+        }
+    };
+
+    // count every task before grouping, so the throw lands at most one task past the budget
+    size_t n_prompt_tokens = 0;
+    const auto count_prompt = [&](const server_task & task) {
+        n_prompt_tokens += task.n_tokens();
+        if (max_prompt_tokens != 0 && n_prompt_tokens > max_prompt_tokens) {
+            throw server_status_error(
+                ERROR_TYPE_REQUEST_TOO_LARGE,
+                string_format("The request renders %zu prompt tokens, the maximum is %zu. "
+                              "Give a shorter \"state\", fewer questions, or raise the limit with "
+                              "--decision-max-prompt-tokens",
+                              n_prompt_tokens, max_prompt_tokens));
+        }
+    };
+
+    if (is_joint()) {
+        server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+        task.id          = next_id();
+        fill_task_joint(request.state, request.questions, request.files, mctx, init_opt, task);
+        refuse_empty(task, "questions");
+        count_prompt(task);
+        tasks.push_back(std::move(task));
+        return { std::move(tasks), 0 };
+    }
+
+    for (const auto & question : request.questions) {
+        for (size_t variant = 0; variant < n_variants(question); variant++) {
+            server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+            task.id          = next_id();
+            fill_task(request.state, request.questions, question, variant, request.files, mctx, init_opt, task);
+            refuse_empty(task, "questions." + question.id);
+            count_prompt(task);
+            tasks.push_back(std::move(task));
+        }
+    }
+
+    // a model that cannot share keeps n_shared at 0, so the route can subtract it unconditionally
+    return can_share_prompt() ? server_decision_group_tasks(std::move(tasks), n_slots)
+                              : server_decision_tasks{ std::move(tasks), 0 };
 }
 
 //
@@ -700,17 +823,22 @@ float server_decision_context::get_temperature(const server_decision_question & 
     return 1.0f;
 }
 
-// confidence formulas are the ones published by TypeSafe
+// confidence is only returned, never gated on, and only for a choice or
+// score where there is a distribution to summarize, not noul.
 
+// the choice formula TypeSafe publishes: how far p_max sits above uniform, in [0, 1]
 static double decision_confidence_choice(const std::vector<double> & probs) {
     if (probs.size() < 2) {
         return 1.0;
     }
     const double uniform = 1.0 / probs.size();
     const double p_max   = *std::max_element(probs.begin(), probs.end());
+    // p_max <= 1, so only the lower clamp can fire, and only for a uniform distribution
     return std::max(0.0, (p_max - uniform) / (1.0 - uniform));
 }
 
+// the score rule: mean distance to the most likely level, relative to a uniform distribution.
+// TypeSafe publishes it for 2 and 3 levels only
 static double decision_confidence_score(const std::vector<double> & probs) {
     if (probs.size() < 2) {
         return 1.0;
@@ -718,24 +846,19 @@ static double decision_confidence_score(const std::vector<double> & probs) {
     const size_t n    = probs.size();
     const size_t mode = std::max_element(probs.begin(), probs.end()) - probs.begin();
 
-    // mean distance to the mode, relative to the one of a uniform distribution around its center
     double dist         = 0.0;
     double dist_uniform = 0.0;
     for (size_t i = 0; i < n; i++) {
         dist         += probs[i] * std::fabs((double) i - (double) mode);
         dist_uniform += std::fabs((double) i - (n - 1) / 2.0) / n;
     }
-    return std::max(0.0, 1.0 - dist / dist_uniform);
+    // mass at the far end puts dist above dist_uniform, so both clamps can fire
+    return std::min(1.0, std::max(0.0, 1.0 - dist / dist_uniform));
 }
 
-json server_decision_context::format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const {
-    const size_t n = n_outputs(question);
-    if (scores.size() != n_variants(question)) {
-        throw std::runtime_error("decision result does not match the number of variants");
-    }
-
-    // softmax over the outputs of each variant, then the average of the variants
-    const float temperature = get_temperature(question);
+std::vector<double> decision_average_variants(const std::vector<std::vector<float>> & scores,
+                                              size_t                                  n,
+                                              float                                   temperature) {
     std::vector<double> probs(n, 0.0);
     for (size_t v = 0; v < scores.size(); v++) {
         const auto & s = scores[v];
@@ -754,10 +877,30 @@ json server_decision_context::format_answer(const server_decision_question & que
             sum += p[i];
         }
         for (size_t i = 0; i < n; i++) {
-            // the second variant is in the reverse order
             probs[v == 0 ? i : n - 1 - i] += p[i] / sum / scores.size();
         }
     }
+    return probs;
+}
+
+std::vector<float> decision_joint_scores(const std::vector<float> &         scores,
+                                         size_t                           offset,
+                                         const server_decision_question & question) {
+    const size_t n = question.options.size();
+    if (offset + n > scores.size()) {
+        throw std::runtime_error("the joint head returned fewer scores than the request has options");
+    }
+    return { scores.begin() + offset, scores.begin() + offset + n };
+}
+
+json server_decision_context::format_answer(const server_decision_question &        question,
+                                            const std::vector<std::vector<float>> & scores) const {
+    const size_t n = n_outputs(question);
+    if (scores.size() != n_variants(question)) {
+        throw std::runtime_error("decision result does not match the number of variants");
+    }
+
+    const std::vector<double> probs = decision_average_variants(scores, n, get_temperature(question));
 
     json answer = json{{"type", decision_question_type_name(question.type)}};
 
@@ -807,12 +950,53 @@ json server_decision_context::format_answer(const server_decision_question & que
 // shared prompt prefix
 //
 
-std::vector<server_task> server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots) {
-    n_slots = std::max(n_slots, (size_t) 1);
+// a group takes one slot per task, so it is bounded by the slots the server has, and a server with
+// none still runs one task
+static size_t decision_group_size(size_t n_tasks, size_t n_slots) {
+    return std::min(n_tasks, std::max(n_slots, (size_t) 1));
+}
 
-    std::vector<server_task> groups;
-    for (size_t i = 0; i < tasks.size(); i += n_slots) {
-        const size_t end = std::min(tasks.size(), i + n_slots);
+size_t decision_queue_cap(int cap, int n_parallel) {
+    if (cap > 0) {
+        return (size_t) cap;
+    }
+    if (cap == 0) {
+        return 0; // try_post() reads 0 as unlimited
+    }
+    return (size_t) DECISION_QUEUE_CAP_PER_SLOT * (size_t) std::max(n_parallel, 1);
+}
+
+// the product must saturate: a wrapped budget is a small number where a large one was meant, which
+// refuses every request instead of admitting the ones the operator sized the server for
+static size_t decision_prompt_budget_saturating_mul(size_t a, size_t b) {
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
+        return std::numeric_limits<size_t>::max();
+    }
+    return a * b;
+}
+
+size_t decision_prompt_budget(int cap, int n_parallel, int n_ctx_slot) {
+    if (cap > 0) {
+        return (size_t) cap;
+    }
+    if (cap == 0) {
+        return 0; // build_tasks() reads 0 as unlimited
+    }
+    // a server with no slot, or a slot with no context, still gets one of each, so the derivation
+    // never lands on 0 and turns the gate off by accident
+    const size_t slots  = (size_t) std::max(n_parallel, 1);
+    const size_t ctx    = (size_t) std::max(n_ctx_slot, 1);
+    size_t       budget = decision_prompt_budget_saturating_mul((size_t) DECISION_QUEUE_CAP_PER_SLOT, slots);
+    return decision_prompt_budget_saturating_mul(budget, ctx);
+}
+
+server_decision_tasks server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots) {
+    const size_t n_per_group = decision_group_size(tasks.size(), n_slots);
+
+    server_decision_tasks grouped;
+    grouped.tasks.reserve(tasks.size());
+    for (size_t i = 0; i < tasks.size(); i += n_per_group) {
+        const size_t  end    = std::min(tasks.size(), i + n_per_group);
         server_task & parent = tasks[i];
 
         // every task must have at least one token of its own to evaluate
@@ -824,17 +1008,20 @@ std::vector<server_task> server_decision_group_tasks(std::vector<server_task> &&
 
         if (end - i < 2 || n_shared == 0) {
             for (size_t j = i; j < end; j++) {
-                groups.push_back(std::move(tasks[j]));
+                grouped.tasks.push_back(std::move(tasks[j]));
             }
             continue;
         }
 
         parent.n_tokens_shared = n_shared;
+        // this is the only place the prefix is discounted: the parent evaluates it once, so the
+        // caller subtracts it once per child from the sum of the prompt lengths
+        grouped.n_shared += n_shared * (int32_t) (end - i - 1);
         for (size_t j = i + 1; j < end; j++) {
             tasks[j].id_parent = parent.id;
             parent.child_tasks.push_back(std::move(tasks[j]));
         }
-        groups.push_back(std::move(parent));
+        grouped.tasks.push_back(std::move(parent));
     }
-    return groups;
+    return grouped;
 }
