@@ -395,10 +395,9 @@ struct common_sampler * common_sampler_init(
             // only if user explicitly included adaptive-p sampler
             samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));
         } else {
-            // default: sample from distribution
-            const bool greedy = params.backend_sampling && !grmr && !rbudget && params.n_probs == 0 && params.temp == 0.0f &&
-                params.dynatemp_range == 0.0f && !params.samplers.empty() &&
-                params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE;
+            // Keep distribution sampling for dynamic temperature or requested probabilities.
+            const bool greedy = !params.samplers.empty() && params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE &&
+                params.temp == 0.0f && params.dynatemp_range == 0.0f && params.n_probs == 0;
             samplers.push_back(greedy ? llama_sampler_init_greedy() : llama_sampler_init_dist(params.seed));
         }
     } else if (params.mirostat == 1) {

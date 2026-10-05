@@ -2,6 +2,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "common.h"
+#include "sampling.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -351,6 +352,59 @@ static void test_backend_greedy_sampling(const test_params & params) {
     }
 }
 
+
+static void test_common_filtered_greedy(const test_params & params) {
+    auto check = [&](common_params_sampling sp, bool greedy) {
+        common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+        auto * chain = common_sampler_get(sampler.get());
+        auto * last = llama_sampler_chain_get(chain, llama_sampler_chain_n(chain) - 1);
+        GGML_ASSERT(strcmp(llama_sampler_name(last), greedy ? "greedy" : "dist") == 0);
+
+        llama_token_data tokens[] = {{0, -2.0f, 0.0f}, {1, -1.0f, 0.0f}, {2, 0.0f, 0.0f}, {3, 1.0f, 0.0f}};
+        llama_token_data_array candidates = {tokens, 4, -1, false};
+        llama_sampler_apply(chain, &candidates);
+        GGML_ASSERT(candidates.selected >= 0);
+        if (greedy || sp.n_probs > 0) {
+            GGML_ASSERT(candidates.data[candidates.selected].id == 3);
+        }
+        if (sp.n_probs > 0) {
+            GGML_ASSERT(candidates.data[candidates.selected].p == 1.0f);
+        }
+        if (sp.dynatemp_range > 0.0f) {
+            int positive = 0;
+            for (size_t i = 0; i < candidates.size; ++i) {
+                positive += candidates.data[i].p > 0.0f;
+            }
+            GGML_ASSERT(positive > 1);
+        }
+    };
+
+    common_params_sampling sp;
+    sp.temp = 0.0f;
+    sp.samplers = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+    for (bool backend : {false, true}) {
+        sp.backend_sampling = backend;
+        check(sp, true);
+        auto probabilities = sp;
+        probabilities.n_probs = 4;
+        check(probabilities, false);
+        auto dynamic = sp;
+        dynamic.dynatemp_range = 1.0f;
+        check(dynamic, false);
+    }
+    auto grammar = sp;
+    grammar.grammar = {COMMON_GRAMMAR_TYPE_USER, "root ::= [a-z]+"};
+    check(grammar, true);
+    auto budget = sp;
+    budget.reasoning_budget_start = {1};
+    budget.reasoning_budget_end = {{2}};
+    budget.reasoning_budget_tokens = 1;
+    check(budget, true);
+    sp.samplers = {COMMON_SAMPLER_TYPE_TEMPERATURE, COMMON_SAMPLER_TYPE_TOP_K};
+    check(sp, false);
+    sp.samplers.clear();
+    check(sp, false);
+}
 
 static void test_backend_filtered_greedy(const test_params & params) {
     for (int k : {1, 8}) {
@@ -2002,6 +2056,7 @@ struct backend_test_case {
 static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
     { "greedy_filtered", test_backend_filtered_greedy,         true },
+    { "common_greedy_filtered", test_common_filtered_greedy,    true },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
     { "penalties",       test_backend_penalties_sampling,      true  },
     { "temp",            test_backend_temp_sampling,           true  },
