@@ -115,6 +115,11 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             "[  812.103] xe 0000:03:00.0: [drm] GT0: Engine reset: engine_class=rcs, logical_mask: 0x1",
             "[  812.104] xe 0000:03:00.0: [drm] GT0: GuC load failed",
             "[  812.105] xe 0000:03:00.0: [drm] device lost",
+            # matched by no other word of the pattern: spaced and past-tense timeouts, a wedged device
+            "[  812.109] xe 0000:03:00.0: [drm] Tile0: GT0: Timedout job: seqno=7811, lrc_seqno=7811, flags=0x20",
+            "[  812.110] i915 0000:03:00.0: Fence expiration time out i915-0000:03:00.0:test-backend-op[3758008]",
+            "[  812.111] xe 0000:03:00.0: [drm] Tile0: GT0: timed out waiting for the engine to idle",
+            "[  812.112] xe 0000:03:00.0: [drm] device wedged, needs recovery",
         ]
         clean = [
             "[  812.106] pci 0000:03:00.0: reset complete",
@@ -126,6 +131,37 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             self.assertIsNotNone(BENCH_SPEC.GPU_FAULT_RE.search(line), line)
         for line in clean:
             self.assertIsNone(BENCH_SPEC.GPU_FAULT_RE.search(line), line)
+
+    def test_render_driver_names_the_bound_kernel_driver(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            drm = Path(root) / "class" / "drm"
+            driver = Path(root) / "bus" / "pci" / "drivers" / "xe"
+            (drm / "renderD128" / "device").mkdir(parents=True)
+            driver.mkdir(parents=True)
+            (drm / "renderD128" / "device" / "driver").symlink_to(driver)
+
+            self.assertEqual(BENCH_SPEC.render_driver("/dev/dri/renderD128", str(drm)), "xe")
+            self.assertIsNone(BENCH_SPEC.render_driver("/dev/dri/renderD129", str(drm)))
+
+    def test_build_hashes_cover_every_library_of_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            bin_dir = Path(root)
+            exe = bin_dir / "llama-server"
+            exe.write_bytes(b"server")
+            (bin_dir / "libllama-server-impl.so").write_bytes(b"impl")
+            (bin_dir / "libllama.so.0.5.0").write_bytes(b"llama a")
+            (bin_dir / "libllama.so.0").symlink_to("libllama.so.0.5.0")
+            (bin_dir / "libllama.so").symlink_to("libllama.so.0")
+            (bin_dir / "test-foo").write_bytes(b"not loaded by the server")
+
+            hashes = BENCH_SPEC.build_hashes(exe)
+            # one entry per file: the symlinks name the same library
+            self.assertEqual(sorted(hashes), ["libllama-server-impl.so", "libllama.so.0.5.0", "llama-server"])
+            # a change confined to a core library shows up although the server binary is unchanged
+            (bin_dir / "libllama.so.0.5.0").write_bytes(b"llama b")
+            changed = BENCH_SPEC.build_hashes(exe)
+            self.assertEqual(changed["llama-server"], hashes["llama-server"])
+            self.assertNotEqual(changed["libllama.so.0.5.0"], hashes["libllama.so.0.5.0"])
 
     def test_kmsg_lines_since_returns_only_appended_lines(self) -> None:
         self.assertEqual(BENCH_SPEC.kmsg_lines_since(["a", "b"], ["a", "b", "c"]), ["c"])

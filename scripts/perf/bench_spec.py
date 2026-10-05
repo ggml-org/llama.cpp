@@ -107,8 +107,10 @@ OUT_TAG = os.environ.get("OUT_TAG", "")
 RENDER_NODE = os.environ.get("RENDER_NODE", "/dev/dri/renderD128")
 EXIT_GPU_BUSY = 70
 EXIT_USAGE = 2
-# both Arc kernel drivers: i915 and xe ("hang" also covers i915's "GPU HANG")
-GPU_FAULT_RE = re.compile(r"\b(?:i915|xe)\b.*(?:reset|hang|timeout|GuC|device.?lost)", re.IGNORECASE)
+# both Arc kernel drivers: i915 and xe ("hang" also covers i915's "GPU HANG"; "timed? ?out" covers
+# timeout, xe's "Timedout job" and i915's "time out")
+GPU_FAULT_RE = re.compile(r"\b(?:i915|xe)\b.*(?:reset|hang|hung|timed? ?out|GuC|wedged|device.?lost)",
+                          re.IGNORECASE)
 # two-sided 95% Student t quantiles, index = degrees of freedom (capped at 15)
 T95 = [float("nan"), 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365,
        2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131]
@@ -578,6 +580,30 @@ def file_sha256(path: Path) -> str | None:
         return None
 
 
+def build_hashes(exe: Path) -> dict[str, str | None]:
+    """sha256 of the server binary and of every shared library in its directory, keyed by file name.
+
+    A shared build keeps core code (libllama, the ggml backends) in libraries the server loads from
+    its own directory (library_path puts it first), so the binary alone can be byte-identical across
+    builds that differ. Symlinks are skipped: they name a library that is hashed under its own name.
+    Libraries resolved outside that directory (oneAPI, the system) are not hashed.
+    """
+    hashes = {exe.name: file_sha256(exe)}
+    for lib in sorted(exe.parent.glob("lib*.so*")):
+        if lib.is_file() and not lib.is_symlink():
+            hashes[lib.name] = file_sha256(lib)
+    return hashes
+
+
+def render_driver(render_node: str, drm_sysfs_root: str = "/sys/class/drm") -> str | None:
+    """Kernel driver bound to the render node's device (xe or i915 on an Arc), None when unknown."""
+    link = Path(drm_sysfs_root) / Path(render_node).name / "device" / "driver"
+    try:
+        return Path(os.readlink(link)).name
+    except OSError:
+        return None
+
+
 def launch_order(launches: int) -> list[tuple[int, int]]:
     """Arm indices of each launch pair: AB, BA, AB, ... Only an even count balances the positions."""
     return [(0, 1) if i % 2 == 0 else (1, 0) for i in range(launches)]
@@ -614,9 +640,11 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     a, b = arms
     for arm in arms:
         exe = Path(arm["server_bin"]).resolve()
-        arm["sha256"] = {exe.name: file_sha256(exe),
-                         "libllama-server-impl.so": file_sha256(exe.parent / "libllama-server-impl.so")}
-        print(f"arm {arm['name']}: {arm['server_bin']}")
+        arm["sha256"] = build_hashes(exe)
+        print(f"arm {arm['name']}: {arm['server_bin']} ({len(arm['sha256'])} files hashed)")
+    # numbers from one kernel driver are no baseline for the other (AGENTS.md, "Kernel Driver")
+    kernel_driver = render_driver(RENDER_NODE)
+    print(f"kernel driver of {RENDER_NODE}: {kernel_driver or 'unknown'}")
 
     order_balanced = LAUNCHES % 2 == 0
     unbalanced = (f"!! LAUNCHES={LAUNCHES} is odd: {a['name']} runs first more often than {b['name']}, "
@@ -629,7 +657,7 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
     out: dict[str, Any] = {
         "mode": MODE, "model": MODEL, "draft_model": DRAFT_MODEL, "placement": PLACEMENT, "ctx": CTX,
         "threads": THREADS, "repeats": REPEATS, "launches_per_arm": LAUNCHES, "prompt_ids": prompt_ids,
-        "arms": arms, "server_extra": SERVER_EXTRA, "order_balanced": order_balanced, "launches": launches,
+        "kernel_driver": kernel_driver, "arms": arms, "server_extra": SERVER_EXTRA, "order_balanced": order_balanced, "launches": launches,
     }
     for i, pair in enumerate(launch_order(LAUNCHES)):
         for arm in (arms[pair[0]], arms[pair[1]]):
@@ -702,6 +730,7 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
         print(f"\nnew i915/xe fault lines in dmesg: {len(new_faults)}")
         for line in new_faults[:5]:
             print(f"  {line}")
+    print(f"kernel driver: {kernel_driver or 'unknown'}")
     print(f"\nsummary -> {out_path}")
     return ab_exit_code(ok, new_faults)
 
