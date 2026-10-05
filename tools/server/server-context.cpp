@@ -140,7 +140,7 @@ struct server_batch {
     struct token {
         int32_t id_slot;
         llama_token token;
-        llama_pos pos;
+        std::array<llama_pos, GGML_MROPE_SECTIONS> pos; // only pos[0] is used for text tokens
         bool output;
         bool is_prompt; // for stats tracking
         int32_t decision_order = 0;
@@ -154,8 +154,7 @@ struct server_batch {
     server_slot * slot_batched = nullptr;
 
     // embedding entries, they can be mixed with tokens if the context supports it
-    std::vector<float>     embd;     // n_embd per row
-    std::vector<llama_pos> embd_pos; // GGML_MROPE_SECTIONS per row
+    std::vector<float> embd; // n_embd per row
 
     float  alora_scale       = -1.0f;
     size_t alora_disabled_id = 0;
@@ -171,7 +170,7 @@ struct server_batch {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, token, pos, output, is_prompt });
+        tokens.push_back({ id_slot, token, { pos, 0, 0, 0 }, output, is_prompt });
         return true;
     }
 
@@ -180,21 +179,19 @@ struct server_batch {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos[0], output, is_prompt });
-        tokens.back().i_embd = (int32_t) (embd_pos.size() / GGML_MROPE_SECTIONS);
+        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, { pos[0], pos[1], pos[2], pos[3] }, output, is_prompt });
+        tokens.back().i_embd = (int32_t) (embd.size() / n_embd);
         embd.insert(embd.end(), embd_in, embd_in + n_embd);
-        embd_pos.insert(embd_pos.end(), pos, pos + GGML_MROPE_SECTIONS);
         return true;
     }
 
     bool has_embd() const {
-        return !embd_pos.empty();
+        return !embd.empty();
     }
 
     void clear() {
         tokens.clear();
         embd.clear();
-        embd_pos.clear();
         view.clear();
         slot_batched      = nullptr;
         alora_scale       = -1.0f;
@@ -224,9 +221,9 @@ struct server_batch {
         for (int32_t i = off; i < off + n_tokens; i++) {
             const auto & t = tokens[i];
             if (t.i_embd >= 0) {
-                view.add_embd({ embd.data() + (size_t) t.i_embd * n_embd, 1, (size_t) n_embd }, embd_pos.data() + (size_t) t.i_embd * GGML_MROPE_SECTIONS, t.id_slot, t.output);
+                view.add_embd({ embd.data() + (size_t) t.i_embd * n_embd, 1, (size_t) n_embd }, t.pos.data(), t.id_slot, t.output);
             } else {
-                view.add(t.token, t.pos, t.id_slot, t.output);
+                view.add(t.token, t.pos[0], t.id_slot, t.output);
             }
             view.tokens.back().decision_order = t.decision_order;
         }
