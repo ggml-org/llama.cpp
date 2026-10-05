@@ -1,0 +1,32 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build CPU Docker Image",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "build",
+                "-f",
+                "${workspaceFolder}\\.devops\\cpu.Dockerfile",
+                "-t",
+                "llama.cpp:cpu",
+                "${workspaceFolder}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Docker: Run llama-server",
+            "type": "shell",
+            "command": "docker run --rm -p 8080:8080 -v C:\\Users\\Tamil.Arasu\\AppData\\Local\\Docpack\\models:/models llama.cpp:cpu -m /models/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_0.gguf",            
+            "problemMatcher": []
+        }
+    ]
+}
