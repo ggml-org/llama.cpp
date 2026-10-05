@@ -73,7 +73,9 @@
 {#if isMobile}
 	<Button
 		aria-label="Reasoning effort"
-		class="h-auto gap-1 rounded-sm {isDefault ? 'px-1' : 'px-1.75!'} py-1 text-xs"
+		class="h-auto gap-1 rounded-sm bg-transparent {isDefault
+			? 'px-1'
+			: 'px-1.75!'} py-1 text-xs [@media(pointer:coarse)]:hover:bg-transparent"
 		onclick={() => (isOpen = true)}
 		variant="ghost"
 	>
@@ -100,7 +102,9 @@
 				<Button
 					{...props}
 					aria-label="Reasoning effort"
-					class="h-auto gap-1 rounded-sm {isDefault ? 'px-1' : 'px-1.75!'} py-1 text-xs"
+					class="h-auto gap-1 rounded-sm bg-transparent {isDefault
+						? 'px-1'
+						: 'px-1.75!'} py-1 text-xs [@media(pointer:coarse)]:hover:bg-transparent"
 					variant="ghost"
 				>
 					{@render triggerLabel()}
