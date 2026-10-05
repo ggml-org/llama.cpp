@@ -5896,6 +5896,7 @@ void ggml_vk_matmul(
         for (uint64_t n_base = 0; n_base < n; n_base += max_n) {
             const uint32_t n_chunk = (uint32_t) std::min(n - n_base, max_n);
             GGML_ASSERT(n_base * b_col_bytes < b.size && n_base * d_col_bytes < d.size);
+            GGML_ASSERT(b.size != VK_WHOLE_SIZE && d.size != VK_WHOLE_SIZE);
             vk_subbuffer b_chunk = b;
             vk_subbuffer d_chunk = d;
             b_chunk.offset += n_base * b_col_bytes;
