@@ -263,7 +263,16 @@ Two nodes over RDMA:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B -ExtraArgs '-ub 16'
 ```
 
-Three nodes, full-mesh all-reduce, every direction on RDMA:
+Three nodes, ring all-reduce. Each all-reduce goes round the ring, every rank sending only to the
+next (rank r to r+1, the last rank back to rank 0), so each cable carries data in one direction.
+Order `-RankNodes` so that every direction the ring uses passed the test in section 3.5:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -ExtraArgs '-ub 16'
+```
+
+Three nodes, full-mesh all-reduce. Each all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to
+both peers at once, so the mesh uses both directions of every cable:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-ub 16'
@@ -271,7 +280,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Tran
 
 If one direction of one cable cannot carry ND data, add `-MeshRelay u`: the reverse direction of
 ring edge u (rank u+1 to rank u) is then relayed through the third rank instead, and every byte
-still goes over RDMA. The run must report `ranks with a mesh direction on TCP: 0 of 3`.
+still goes over RDMA, but each relayed message takes two hops. The run must report
+`ranks with a mesh direction on TCP: 0 of 3`.
 
 `-Transport tcp` runs the same thing over TCP on the same cables, and `-Transport none -RankNodes A`
 runs a single node.
