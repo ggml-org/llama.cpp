@@ -54,10 +54,10 @@ struct server_decision_context {
     }
 
     // true if the prompt of the model has a place for images
-    // TODO: clef needs token and embedding entries in the same batch, see https://github.com/ggml-org/llama.cpp/pull/29622
     bool can_use_images() const {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
+            case COMMON_DECISION_TYPE_CLEF:
                 return true;
             default:
                 return false;
@@ -87,7 +87,14 @@ struct server_decision_context {
             server_task & task) const;
 
     // set the prompt of all the questions, the result has the scores of all their options, in order
-    void fill_task_joint(const json & state, const std::vector<server_decision_question> & questions, server_task & task) const;
+    // mctx is only used if there are files
+    void fill_task_joint(
+            const json & state,
+            const std::vector<server_decision_question> & questions,
+            const std::vector<raw_buffer> & files,
+            mtmd_context * mctx,
+            const mtmd_helper_init_opt & init_opt,
+            server_task & task) const;
 
     // scores: the raw model outputs of each variant
     json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const;

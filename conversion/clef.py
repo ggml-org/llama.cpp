@@ -11,8 +11,9 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, gguf, logger
+from .base import ModelBase, gguf, logger
 from .qwen import Qwen3_5TextModel
+from .qwen3vl import Qwen3VLVisionModel
 
 
 def _is_clef_checkpoint(dir_model: Path) -> bool:
@@ -65,6 +66,7 @@ class ClefModel(Qwen3_5TextModel):
 
         # the pieces of the prompt are tokenized one by one, the server gives the text that separates them (sep)
         # and the text that starts the span of a question or of an option (mark_question, mark_option)
+        # images is one media marker per image, the vision start and end tokens are added by the server
         # the keys of JSON objects are given in sorted order
         option = (
             "{% set d = o.description %}"
@@ -75,6 +77,7 @@ class ClefModel(Qwen3_5TextModel):
         )
         return (
             text(f"<|im_start|>system\n{cls._SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\nSTATE:\n")
+            + "{% if images %}{{ sep }}{% for image in images %}{{ image }}{% endfor %}" + text("\n") + "{% endif %}"
             + "{{ sep }}" + render("state")
             + "{{ sep }}" + text("\n\nSCHEMA FIELDS:\n")
             + "{% for q in questions %}"
@@ -143,8 +146,5 @@ class ClefModel(Qwen3_5TextModel):
 
 
 @ModelBase.register("ClefModel")
-class ClefVisionModel(MmprojModel):
-    def __init__(self, *args, **kwargs):
-        del args, kwargs
-        raise NotImplementedError(
-            "multimodal input is not supported yet for Clef, requires https://github.com/ggml-org/llama.cpp/pull/29622 to be merged first")
+class ClefVisionModel(Qwen3VLVisionModel):
+    pass

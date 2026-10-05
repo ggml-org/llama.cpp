@@ -125,7 +125,7 @@ static clef_spans clef_get_spans(const llama_ubatch & ubatch) {
     std::vector<bool> has_option;
 
     // TODO: support multiple sequences
-    bool ok = ubatch.decision_order != nullptr && ubatch.n_seqs_unq == 1;
+    bool ok = ubatch.decision_order != nullptr && ubatch.token != nullptr && ubatch.n_seqs_unq == 1;
 
     const int32_t n_tokens = ubatch.n_tokens;
     for (int32_t i = 0; ok && i < n_tokens;) {
@@ -156,6 +156,11 @@ static clef_spans clef_get_spans(const llama_ubatch & ubatch) {
         i = end;
     }
 
+    // the head reads the token ids of the spans, they cannot be embeddings
+    for (int32_t i = 0; ok && ubatch.is_mixed() && i < n_tokens; i++) {
+        ok = !ubatch.type[i] || ubatch.decision_order[i] == LLAMA_DECISION_ORDER_NONE;
+    }
+
     // each question needs an option
     res.valid = ok && !res.questions.empty() && std::find(has_option.begin(), has_option.end(), false) == has_option.end();
     if (!res.valid) {
@@ -177,8 +182,9 @@ public:
     }
 
     void set_input(const llama_ubatch * ubatch) override {
-        GGML_ASSERT(ubatch->token);
-        ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens * sizeof(llama_token));
+        // a batch of embeddings has no token ids, and no usable spans
+        const std::vector<llama_token> no_tokens(ubatch->token ? 0 : n_tokens, 0);
+        ggml_backend_tensor_set(tokens, ubatch->token ? ubatch->token : no_tokens.data(), 0, n_tokens * sizeof(llama_token));
 
         const auto spans = clef_get_spans(*ubatch);
         GGML_ASSERT(spans.questions.size() == n_questions && spans.options.size() == n_options);
@@ -308,12 +314,35 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
     ggml_build_forward_expand(gf, cur);
 }
 
-// same as build_attn_inp_no_cache(), but the mask is causal even if the batch is processed by the encoder path
-llm_graph_input_attn_no_cache * llama_model_clef::graph::build_attn_inp_causal() {
-    llama_cparams cparams_causal = cparams;
-    cparams_causal.causal_attn = true;
+// causal mask by batch order: the tokens of an image share the same position
+class llm_graph_input_attn_clef : public llm_graph_input_attn_no_cache {
+public:
+    using llm_graph_input_attn_no_cache::llm_graph_input_attn_no_cache;
 
-    auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams_causal);
+    void set_input(const llama_ubatch * ubatch) override {
+        const int64_t n_tokens = ubatch->n_tokens;
+
+        const auto fill_mask = [&](auto * data, auto zero, auto ninf) {
+            for (int64_t i1 = 0; i1 < n_tokens; ++i1) {
+                for (int64_t i0 = 0; i0 < n_tokens; ++i0) {
+                    const bool visible = i0 <= i1 && ubatch->seq_id[i0][0] == ubatch->seq_id[i1][0];
+                    data[i1 * n_tokens + i0] = visible ? zero : ninf;
+                }
+            }
+        };
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
+        if (self_kq_mask->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
+        } else {
+            fill_mask((float *) self_kq_mask->data, 0.0f, -INFINITY);
+        }
+    }
+};
+
+// same as build_attn_inp_no_cache(), with a causal mask even if the batch is processed by the encoder path
+llm_graph_input_attn_no_cache * llama_model_clef::graph::build_attn_inp_causal() {
+    auto inp = std::make_unique<llm_graph_input_attn_clef>(hparams, cparams);
 
     const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
