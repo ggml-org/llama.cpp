@@ -495,13 +495,6 @@ struct server_task_result_metrics : server_task_result {
     int n_processing_slots = 0;
     int n_tasks_deferred = 0;
 
-    // recent per-slot TPS snapshots (last completed requests)
-    struct recent_slot {
-        int    id         = -1;
-        double prompt_tps = 0.0;
-        double gen_tps    = 0.0;
-    };
-    std::vector<recent_slot> recent;
 
     server_metrics metrics;
 

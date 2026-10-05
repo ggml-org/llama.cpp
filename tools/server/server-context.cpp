@@ -2544,17 +2544,6 @@ private:
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
 
-                    // collect TPS from active slots
-                    for (const server_slot & slot : slots) {
-                        if (slot.is_processing() && slot.stats.is_set()) {
-                            res->recent.push_back({
-                                slot.id,
-                                slot.stats.n_prompt_tps(),
-                                slot.stats.n_gen_tps(),
-                            });
-                        }
-                    }
-
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }

@@ -2063,7 +2063,7 @@ void server_models_routes::init_routes() {
                         {"prompt", json{{"tokens_total", 0}, {"tokens_cached_total", 0}, {"tokens_per_second", 0.0}}},
                         {"prediction", json{{"tokens_total", 0}, {"tokens_per_second", 0.0}}},
                         {"decode", json{{"total", 0}, {"n_tokens_max", 0}, {"busy_slots_per_decode", 0.0}, {"speculative", json{{"draft_tokens_total", 0}, {"verification_steps_total", 0}, {"accepted_tokens", json{{"total", 0}}}}}}},
-                        {"kvcache", json{{"capacity_tokens", 0}, {"used_tokens", 0}, {"utilization", 0.0}, {"slots", json::array()}}},
+                        {"kvcache", json{{"capacity_tokens", 0}, {"active_tokens", 0}, {"utilization", 0.0}, {"slots", json::array()}}},
                         {"memory", json{{"context_bytes", 0}, {"model_bytes", 0}}},
                     };
                 };
@@ -2137,6 +2137,8 @@ void server_models_routes::init_routes() {
                                 auto & m = child_resp["metrics"];
                                 if (m.is_array() && !m.empty()) {
                                     child_metrics = m[0];
+                                } else if (m.is_object()) {
+                                    child_metrics = m;
                                 }
                             }
                             entry["metrics"] = child_metrics;

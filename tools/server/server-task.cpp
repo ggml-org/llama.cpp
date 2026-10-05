@@ -1556,7 +1556,7 @@ json server_task_result_metrics::to_json() {
 
     json kvcache = json::object();
     kvcache["capacity_tokens"] = metrics.kvcache_capacity_tokens;
-    kvcache["used_tokens"]    = metrics.kvcache_used_tokens;
+    kvcache["active_tokens"] = metrics.kvcache_used_tokens;
     kvcache["utilization"]    = json_round1(std::round(utilization * 10.0) / 10.0);
     kvcache["slots"]          = json::array();
     for (const auto & slot : metrics.kvcache_slots) {
@@ -1611,22 +1611,8 @@ json server_task_result_metrics::to_json() {
         {"model_bytes",   metrics.memory_model_bytes},
     };
 
-    if (!recent.empty()) {
-        json recent_arr = json::array();
-        for (const auto & r : recent) {
-            recent_arr.push_back(json{
-                {"slot",         r.id},
-                {"prompt_tps",   json_round1(std::round(r.prompt_tps * 10.0) / 10.0)},
-                {"generation_tps", json_round1(std::round(r.gen_tps * 10.0) / 10.0)},
-            });
-        }
-        base["recent"] = recent_arr;
-    }
-
-    json result = json::array();
-    result.push_back(base);
     json wrapped = json::object();
-    wrapped["metrics"] = result;
+    wrapped["metrics"] = base;
     return wrapped;
 }
 
