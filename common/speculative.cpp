@@ -3197,6 +3197,7 @@ const std::vector<double> & common_speculative_get_synth_probs(const common_spec
 }
 
 llama_state_seq_flags common_speculative_checkpoint_flags(
+        common_speculative_checkpoint_place & place,
         llama_context * ctx, llama_seq_id seq_id, const std::vector<size_t> & margins) {
     const llama_state_seq_flags flags_host   = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
     const llama_state_seq_flags flags_device = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
@@ -3205,13 +3206,16 @@ llama_state_seq_flags common_speculative_checkpoint_flags(
     const size_t size_host   = llama_state_seq_get_size_ext(ctx, seq_id, flags_host);
     const size_t size_device = llama_state_seq_get_size_ext(ctx, seq_id, flags_device);
     const size_t size_copy   = size_host > size_device ? size_host - size_device : 0;
-    if (size_copy == 0) {
-        return flags_device;
-    }
+
+    // the state writer frees the copy the context holds before it allocates one of another size,
+    // so only the growth has to fit
+    const size_t size_new = size_copy > place.size_copy ? size_copy - place.size_copy : 0;
 
     const double mib = 1024.0 * 1024.0;
+    llama_state_seq_flags flags = flags_device;
+
     const llama_model * model = llama_get_model(ctx);
-    for (int i = 0; i < llama_model_n_devices(model); i++) {
+    for (int i = 0; size_new > 0 && i < llama_model_n_devices(model); i++) {
         ggml_backend_dev_t dev = llama_model_get_device(model, i);
 
         size_t free  = 0;
@@ -3225,15 +3229,24 @@ llama_state_seq_flags common_speculative_checkpoint_flags(
         }
 
         const size_t margin = margins.empty() ? 0 : margins[std::min((size_t) i, margins.size() - 1)];
-        if (free < size_copy + margin) {
-            LOG_INF("%s: seq %d checkpoint stays on the host: %s has %.1f MiB free, the device copy needs %.1f MiB on top of the %.1f MiB margin\n",
-                    __func__, seq_id, ggml_backend_dev_name(dev), free / mib, size_copy / mib, margin / mib);
-            return flags_host;
+        if (free < size_new + margin) {
+            if (place.flags != flags_host) {
+                LOG_INF("%s: seq %d checkpoint stays on the host: %s has %.1f MiB free, the device copy needs %.1f MiB on top of the %.1f MiB margin\n",
+                        __func__, seq_id, ggml_backend_dev_name(dev), free / mib, size_new / mib, margin / mib);
+            }
+            flags = flags_host;
+            break;
         }
     }
 
-    LOG_INF("%s: seq %d checkpoint stays on the device (%.1f MiB)\n", __func__, seq_id, size_copy / mib);
-    return flags_device;
+    if (flags == flags_device) {
+        if (place.flags != flags_device) {
+            LOG_INF("%s: seq %d checkpoint stays on the device (%.1f MiB)\n", __func__, seq_id, size_copy / mib);
+        }
+        place.size_copy = size_copy;
+    }
+    place.flags = flags;
+    return flags;
 }
 
 common_params common_base_params_to_speculative(const common_params & params) {

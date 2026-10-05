@@ -36,17 +36,17 @@ site.
 `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE` at six
 calls on `slot.spec_ckpt` (line numbers below are those after the guard was
 added). The prompt-cache checkpoints (`:453-477`, `:2681-2682`,
-`:3745-3746`) stay host-resident. `slot.spec_ckpt` is used nowhere else, so a
+`:3749-3750`) stay host-resident. `slot.spec_ckpt` is used nowhere else, so a
 device handle never reaches a host reader.
 
 | site | call | executes when |
 |---|---|---|
-| `:3399` | `update_dft` before drafting | draft context is full-removal only |
-| `:3438` | `load_dft` after drafting | draft context is full-removal only |
-| `:3457` | `update_tgt` before verify | target is full-removal only, or bounded rollback with a draft longer than `n_rs_seq` |
-| `:3469` | `update_dft` before verify | draft context is bounded rollback: unreachable, the draft context is always built with `n_rs_seq = 0` (`common/common.cpp:1308`, `common/speculative.cpp:3335`) |
-| `:4326` | `load_tgt` on partial acceptance | as `:3457`, and a draft token was rejected |
-| `:4329` | `load_dft` on partial acceptance | as `:4326`, with a draft context |
+| `:3403` | `update_dft` before drafting | draft context is full-removal only |
+| `:3442` | `load_dft` after drafting | draft context is full-removal only |
+| `:3461` | `update_tgt` before verify | target is full-removal only, or bounded rollback with a draft longer than `n_rs_seq` |
+| `:3473` | `update_dft` before verify | draft context is bounded rollback: unreachable, the draft context is always built with `n_rs_seq = 0` (`common/common.cpp:1308`, `common/speculative.cpp:3348`) |
+| `:4330` | `load_tgt` on partial acceptance | as `:3461`, and a draft token was rejected |
+| `:4333` | `load_dft` on partial acceptance | as `:4330`, with a draft context |
 
 The removal type comes from `common_context_can_seq_rm`. `need_n_rs_seq()`
 (`common/common.h:414`) returns `draft.n_max` for the MTP, EAGLE3, DFlash and
@@ -179,32 +179,58 @@ VRAM exhaustion in the unmodified code path and is independent of the flag.
 
 Added in review, after the measurements above. The six sites no longer pass the
 flag unconditionally. Each slot picks the flags for its target and for its
-draft context at that context's first checkpoint and keeps them
-(`spec_ckpt_flags()` in `tools/server/server-context.cpp`, decision in
+draft context before every checkpoint update, and the load that follows reuses
+them (`spec_ckpt_place()` and `spec_ckpt_flags()` in
+`tools/server/server-context.cpp`, decision in
 `common_speculative_checkpoint_flags()` in `common/speculative.cpp`):
 
 - the device copy would hold `size(PARTIAL_ONLY) - size(PARTIAL_ONLY | ON_DEVICE)`
   bytes, the tensor data the host form carries;
-- it stays on the device only if every device of the context's model reports at
-  least that much free memory plus the `--fit-target` margin the user gave
-  (default 1024 MiB, taken before the server adds an mmproj to it);
-- otherwise the checkpoint stays on the host, as before this change. A GPU that
+- the context still holds the copy of its latest device checkpoint, and the state
+  writer frees that before it allocates one of another size, so only the growth
+  over that copy needs new memory. A checkpoint that is no larger keeps the
+  device without a memory query;
+- a larger one stays on the device only if every device of the context's model
+  reports at least the growth in free memory plus the `--fit-target` margin the
+  user gave (default 1024 MiB, taken before the server adds an mmproj to it);
+- otherwise that checkpoint goes to the host, as before this change. A GPU that
   reports no memory figures counts as full.
 
-The decision is logged once per slot and context. Two one-launch runs of the 9B
-self-draft configuration on the A770, `guarded` being the build with the guard
-(`summary_ab-review-guard-room.json`, `summary_ab-review-guard-tight.json`):
+The first version of the guard decided once, at the first checkpoint. That is
+enough for a state of constant size, such as the recurrent state of the 9B run
+below. It is not enough where the partial state includes attention cells and
+grows with the sequence (a sliding-window cache under a hybrid memory, the
+DeepSeek-V4 raw window): the writer allocates a larger copy on every change of
+size. A later review pointed this out and the decision moved to every update.
+
+A decision is logged when it is first made and when it changes. One-launch runs
+of the 9B self-draft configuration on the A770, `guarded` being the build with
+the guard. The first two rows are the first version
+(`summary_ab-review-guard-room.json`, `summary_ab-review-guard-tight.json`), the
+last two the per-update version (`summary_ab-review-guard2-room.json`,
+`summary_ab-review-guard2-tight.json`):
 
 | run | margin | log line of the guarded arm (draft and target context) | restores | exit |
 |---|---|---|---|---|
 | room | default 1024 MiB | `seq 0 checkpoint stays on the device (50.2 MiB)`, twice | 2 | 0 |
 | tight | `--fit off --fit-target 15000` | `seq 0 checkpoint stays on the host: SYCL0 has 5665.7 MiB free, the device copy needs 50.2 MiB on top of the 15000.0 MiB margin`, twice (5665.4 MiB the second time) | 3 | 0 |
+| room, per update | default 1024 MiB | `seq 0 checkpoint stays on the device (50.2 MiB)`, twice | 1 | 0 |
+| tight, per update | `--fit off --fit-target 15000` | the host line twice (5665.8 and 5665.5 MiB free) | 2 | 0 |
 
-Both runs completed all requests with 0 new i915/xe fault lines. The guard is a
-check at one moment: it does not reserve the memory, so a compute buffer that
-grows later can still take the space, and a backend that over-reports free
+All four runs completed all requests with 0 new i915/xe fault lines, and the
+per-update runs logged each decision once: the state did not change size. The
+guard checks, it does not reserve: a compute buffer that grows between two
+checkpoints can still take the space, and a backend that over-reports free
 memory defeats it. It also only decides where the copy goes; a failed device
 allocation inside the state writer still aborts.
+
+The growth path has no real-model run. `test_checkpoint_placement` in
+`tests/test-qwen4exp-mtp.cpp` covers it on the fixture, whose head context saves
+its whole cache: on the A770 a checkpoint that outgrew its device copy goes to
+the host under a margin no device can keep, a checkpoint of unchanged size
+keeps the device under the same margin, and a grown one with room goes back to
+the device. With the first version's keep-the-first-decision rule put back, the
+test fails at the first of these.
 
 ## Related findings from the same session
 
@@ -238,16 +264,20 @@ allocation inside the state writer still aborts.
   sizes or acceptance rates.
 - The stream-matched table is post-hoc. The pre-planned statistic is the
   launch-paired one, whose interval includes zero.
-- Site `:3469` was not executed and cannot be in this fork. Sites `:4326` and
-  `:4329` executed only on the 18 to 26 rejections per arm.
+- Site `:3473` was not executed and cannot be in this fork. Sites `:4330` and
+  `:4333` executed only on the 18 to 26 rejections per arm.
 - VRAM figures for the extra device copy are derived from checkpoint sizes, not
   read from the device.
 - The guard was exercised on one model and one device, one launch per case. Its
   two outcomes were forced with `--fit-target`, not reached by a model that
   fills the card through `--fit`. Multi-device placement, a draft on another
   device than its target, and more than one slot were not run.
-- The two guard runs are single launches: their throughput columns are not a
-  measurement of the guard.
+- The four guard runs are single launches: their throughput columns are not a
+  measurement of the guard. The per-update decision adds two state-size passes
+  to every checkpoint update; their cost was not measured.
+- No model whose partial state grows (hybrid memory over a sliding-window cache,
+  DeepSeek-V4) was run with the guard. That the writer frees the old copy before
+  it allocates the new one was read from source, not observed on the device.
 - `PARTIAL_ONLY | ON_DEVICE` restore exactness was not tested in isolation; the
   byte-exact evidence is for the full-state on-device path.
 - JIT build only, eager submission only. SYCL graph replay

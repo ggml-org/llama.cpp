@@ -37,11 +37,20 @@ const std::vector<double> & common_speculative_get_synth_probs(const common_spec
 
 common_params common_base_params_to_speculative(const common_params & params);
 
-// State flags for a speculative checkpoint of one sequence of ctx.
-// LLAMA_STATE_SEQ_FLAGS_ON_DEVICE keeps a device copy that is allocated at the first checkpoint, after
-// --fit has placed the model, so it is chosen only while every device of the model would still have its
-// margin free (margins are indexed like --fit-target). Otherwise the checkpoint stays on the host.
+// Where the speculative checkpoints of one sequence of a context are kept.
+struct common_speculative_checkpoint_place {
+    llama_state_seq_flags flags     = 0; // state flags of the latest checkpoint, 0 before the first one
+    size_t                size_copy = 0; // tensor bytes of the copy the context holds on the device
+};
+
+// Picks the state flags for the next speculative checkpoint of one sequence of ctx and records them in place.
+// Call it before every checkpoint update; the load that follows has to use place.flags.
+// LLAMA_STATE_SEQ_FLAGS_ON_DEVICE keeps a device copy that --fit does not measure and that is allocated
+// again whenever its size changes. It is chosen only while every device of the model keeps its margin free
+// after the copy has grown to the new size (margins are indexed like --fit-target). Otherwise the
+// checkpoint stays on the host.
 llama_state_seq_flags common_speculative_checkpoint_flags(
+        common_speculative_checkpoint_place & place,
         llama_context * ctx, llama_seq_id seq_id, const std::vector<size_t> & margins);
 
 struct common_speculative_output_limits {

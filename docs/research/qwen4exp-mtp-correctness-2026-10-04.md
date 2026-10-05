@@ -331,6 +331,7 @@ a regression test that failed before its fix, except where noted.
 | The chain row high-water mark doubles instead of growing by one. | 31 scheduler reservations for chains of 1 to 32 rows, 5 after | `test_chain_reserve_growth` |
 | A chain runs inside the compute buffers of the ordinary graph. | none: added as a guard for the claim that `--fit` covers chaining | assertion in `test_chain` |
 | The fit logs why an extra model is measured next to its parent and does not repeat the failed attempt. | not tested: logging and control flow only | none |
+| The server's checkpoint guard decides before every checkpoint update instead of once (`common_speculative_checkpoint_flags`). Added after a third review pass, on `f5b0150d4`. | the first decision was kept while a checkpoint outgrew its device copy | `test_checkpoint_placement`; its host branch needs a device that reports memory, so it only runs under `--backend SYCL0` |
 
 The hidden-export finding was not in either review. It surfaced while testing
 the embeddings width. The Qwen4Exp head applies the same per-stream RMSNorm to
@@ -338,13 +339,14 @@ its hidden input, which is why drafting was not visibly affected: normalizing an
 already normalized residual changes it only through the epsilon term. Drafts
 therefore are not expected to be bit-identical to earlier builds.
 
-Results on the final source: CPU `test-qwen4exp-mtp` 70 PASS (f16) and 47 PASS
-(`--q8-kv`); Arc A770 `--backend SYCL0` 70 PASS and 47 PASS, 0 new i915/xe fault
+Results on the final source: CPU `test-qwen4exp-mtp` 72 PASS (f16) and 48 PASS
+(`--q8-kv`); Arc A770 `--backend SYCL0` 72 PASS and 48 PASS, 0 new i915/xe fault
 lines. Real head on CPU, chain depth 6, 16 and 64 at microbatch sizes from the
 chain length up to 512: the compute buffers stayed at their reserved size
 (6.6 MiB to 566.0 MiB depending on the configuration).
 
-Real trunk with its Q8_0 head on the A770, final build, `--fit on --fit-target
+Real trunk with its Q8_0 head on the A770, build of `f5b0150d4` (before the
+guard moved to every update), `--fit on --fit-target
 1024`, ctx 16384, q8_0 K/V, one launch per case with six requests of 192
 tokens: sequential drafting at depth 6 accepted 850 of 1750 drafted tokens,
 chained drafting at depth 4 accepted 818 of 1292. Neither log holds an

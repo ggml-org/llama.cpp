@@ -5,6 +5,7 @@
 #include "gguf.h"
 #include "llama.h"
 #include "llama-cpp.h"
+#include "speculative.h"
 #include "../src/llama-ext.h"
 #include "../src/llama-model-saver.h"
 #include "../src/llama-context.h"
@@ -301,6 +302,43 @@ static void test_on_device_state(llama_model * model, bool flash) {
     require(close(expected.logits, actual.logits) && close(expected.hidden, actual.hidden),
             "on-device restore reproduces the snapshotted cache");
     fprintf(stderr, "PASS on-device sequence state flash=%d\n", flash);
+}
+
+// A speculative checkpoint stays on the device only while the device keeps its margin, and that is
+// decided again whenever the checkpoint needs a larger device copy than the context holds.
+static void test_checkpoint_placement(llama_model * model, bool flash) {
+    const llama_state_seq_flags on_host   = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    const llama_state_seq_flags on_device = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
+    const std::vector<size_t> no_margin = {0};
+    const std::vector<size_t> no_room   = {(size_t) 1 << 50}; // a margin that no device can keep
+
+    auto ctx = make_context(model, flash);
+    decode(ctx.get(), {3, 4, 5}, initial_hidden(3), 0);
+
+    common_speculative_checkpoint_place place;
+    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_margin) == on_device && place.flags == on_device,
+            "a checkpoint with room stays on the device");
+    const size_t size_first = place.size_copy;
+    require(size_first > 0, "the checkpoint has tensor data to place");
+
+    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_room) == on_device && place.size_copy == size_first,
+            "a checkpoint of the same size keeps its device copy: nothing new is allocated");
+
+    // this context saves its whole cache, so the checkpoint grows with the sequence
+    decode(ctx.get(), {6, 7, 8}, initial_hidden(3), 3);
+    const llama_state_seq_flags grown = common_speculative_checkpoint_flags(place, ctx.get(), 0, no_room);
+    if (test_device != nullptr) {
+        require(grown == on_host && place.flags == on_host,
+                "a checkpoint that outgrew its device copy is checked against the margin again");
+        require(place.size_copy == size_first, "the context still holds the copy of the last device checkpoint");
+    } else {
+        // without a device the tensors live in host memory, which has no margin to keep
+        require(grown == on_device && place.size_copy > size_first, "a host-only model has no device to check");
+    }
+
+    require(common_speculative_checkpoint_flags(place, ctx.get(), 0, no_margin) == on_device && place.size_copy > size_first,
+            "a grown checkpoint with room goes to the device");
+    fprintf(stderr, "PASS speculative checkpoint placement flash=%d\n", flash);
 }
 
 static std::vector<uint8_t> sequence_state(llama_context * ctx, llama_seq_id seq) {
@@ -979,6 +1017,7 @@ int main(int argc, char ** argv) {
         require(close(ah.logits, bh.logits) && close(bh.logits, ch.logits), "MTP logits independent of trunk mixer");
         test_invalid_chain(head.get(), flash);
         test_on_device_state(head.get(), flash);
+        test_checkpoint_placement(head.get(), flash);
         test_masked_catchup(head.get(), flash);
         for (int depth : {1, 3, 4}) {
             for (int catchup : {0, 2}) {
