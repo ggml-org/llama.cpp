@@ -37,7 +37,8 @@ static void require(bool ok, const char * message) {
 
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
 static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
-                          bool shared_embd = true, float output_scale = 1.0f, int vocab_size = n_vocab) {
+                          bool shared_embd = true, float output_scale = 1.0f, int vocab_size = n_vocab,
+                          const char * omit_tensor = nullptr) {
     gguf_context_ptr meta(gguf_init_empty());
     llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
@@ -75,6 +76,9 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
 
     ggml_context_ptr tensors(ggml_init({8 * 1024 * 1024, nullptr, false}));
     auto add = [&](const std::string & name, std::initializer_list<int64_t> dims, float scale = 1.0f) {
+        if (omit_tensor != nullptr && name == omit_tensor) {
+            return;
+        }
         ggml_tensor * t = ggml_new_tensor(tensors.get(), GGML_TYPE_F32, dims.size(), dims.begin());
         ggml_set_name(t, name.c_str());
         // Name-based initialization leaves every other tensor unchanged when a mixer changes.
@@ -983,6 +987,11 @@ int main(int argc, char ** argv) {
     write_fixture(output_only, false, 3);
     require(!load_model(output_only), "trunk mixer does not substitute for missing draft mixer");
     require(bool(load_model(output_only, false)), "ordinary loading does not require unused draft mixers");
+    for (const char * missing : {"blk.0.hc_attn_norm.weight", "blk.1.attn_q.weight"}) {
+        const std::string holed = (dir / "holed-trunk.gguf").string();
+        write_fixture(holed, false, -1, 1.0f, true, 1.0f, n_vocab, missing);
+        require(!load_model(holed) && !load_model(holed, false), "a trunk that lacks a tensor is rejected, not run as a head");
+    }
     test_separate_head_target(output_only, head_path, target.get(), head.get());
     require(llama_model_supports_mtp_chain(head.get()), "Qwen4Exp advertises implemented chain support");
     test_ordinary_context(head.get(), target.get());

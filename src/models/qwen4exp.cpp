@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstdio>
 
 // bad metadata must be catchable: GGML_ASSERT aborts the whole process
 static void qwen4exp_require_nonzero(const llama_model_loader & ml, llm_kv kid, uint32_t value) {
@@ -162,9 +163,17 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
 
     // an MTP-only checkpoint (produced by conversion/qwen4exp.py --mtp) carries the trailing
     // NextN block plus the trunk's shared embedding/head, but none of the trunk blocks
-    // themselves; blk.0.hc_attn_norm.weight exists on every trunk layer, so its absence
-    // marks this as MTP-only.
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.hc_attn_norm.weight") == nullptr);
+    // themselves. A file with some trunk block tensors is a trunk: if it lacks others it is
+    // incomplete and has to fail to load, not run as a head.
+    bool has_trunk_blocks = false;
+    for (const auto & weight : ml.weights_map) {
+        int bid = -1;
+        if (sscanf(weight.first.c_str(), "blk.%d.", &bid) == 1 && bid < n_layer) {
+            has_trunk_blocks = true;
+            break;
+        }
+    }
+    const bool mtp_only = (hparams.n_layer_nextn > 0) && !has_trunk_blocks;
     const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, trunk_flags);
