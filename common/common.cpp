@@ -182,6 +182,18 @@ static bool is_running_on_efficiency_core(void) {
     return core_type == intel_atom;
 }
 
+// thread_siblings_list is a cpulist: "0-1" or "0,1" when HT is on, a lone index when it is off
+static bool cpu_has_smt_sibling(int cpu) {
+    std::ifstream sibling_list("/sys/devices/system/cpu/cpu"
+        + std::to_string(cpu) + "/topology/thread_siblings_list");
+    std::string line;
+    if (!std::getline(sibling_list, line)) {
+        // assume HT when topology is unreadable, so behavior stays unchanged elsewhere
+        return true;
+    }
+    return line.find_first_of(",-") != std::string::npos;
+}
+
 static int cpu_count_math_cpus(int n_cpu) {
     int result = 0;
     for (int cpu = 0; cpu < n_cpu; ++cpu) {
@@ -191,7 +203,9 @@ static int cpu_count_math_cpus(int n_cpu) {
         if (is_running_on_efficiency_core()) {
             continue; // efficiency cores harm lockstep threading
         }
-        ++cpu; // hyperthreading isn't useful for linear algebra
+        if (cpu_has_smt_sibling(cpu)) {
+            ++cpu; // hyperthreading isn't useful for linear algebra
+        }
         ++result;
     }
     return result;
