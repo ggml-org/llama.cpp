@@ -79,7 +79,7 @@ of `master`; `git fetch origin pull/90/head` retrieves them.
   the last two exclude no launch. An odd `LAUNCHES` is refused (exit 2): no
   order of an odd number of AB pairs balances the arms' mean positions. The hashes recorded per arm cover the configured binary and every
   shared library in its directory, the summary names the kernel driver bound
-  to the render node (a run whose driver cannot be read is refused), a fault line is one that names i915 or xe and a failure
+  to the render node (a run on any driver but xe or i915 is refused), a fault line is one that names i915 or xe and a failure
   term in either order (so also `Timedout job`, i915's `Fence expiration time
   out i915-...`, page faults, CAT errors, `wedged` and `banned`), the report
   counts the paired cells whose arms generated different token streams, and

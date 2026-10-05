@@ -44,7 +44,7 @@ MODE=ab is a paired A/B of two server builds under one speculative config:
                  of every launch is discarded
   OUT_TAG        suffix for the summary and log file names
 It refuses to start (exit 70) while another process holds the render node, and
-(exit 2) when it cannot tell whether xe or i915 serves the render node. It
+(exit 2) unless xe or i915 serves the render node. It
 reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt.
 It exits non-zero when a launch failed (a failed or unverified warmup fails it
 too), a response failed the target-argmax verifier, a speculative arm reported
@@ -749,9 +749,10 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
                     print(f"!! arm {arm['name']} loads {soname} from {path}, outside its build directory", flush=True)
     # numbers from one kernel driver are no baseline for the other (AGENTS.md, "Kernel Driver")
     kernel_driver = render_driver(RENDER_NODE)
-    if kernel_driver is None:
-        print(f"!! cannot tell which kernel driver serves {RENDER_NODE}; a run that is neither known xe nor "
-              "known i915 is no baseline for either", flush=True)
+    if kernel_driver not in ("xe", "i915"):
+        # the fault gate knows only these two, so another GPU's faults would pass it unseen
+        print(f"!! {RENDER_NODE} is served by {kernel_driver or 'an unknown driver'}, not xe or i915; "
+              "set RENDER_NODE to the Arc's render node", flush=True)
         return EXIT_USAGE
     print(f"kernel driver of {RENDER_NODE}: {kernel_driver}")
 

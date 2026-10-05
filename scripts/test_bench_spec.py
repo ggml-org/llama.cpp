@@ -344,15 +344,17 @@ class BenchSpecEvidenceTests(unittest.TestCase):
                                       side_effect=AssertionError("ran past the launch count check")):
                 self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE, launches)
 
-    def test_run_ab_refuses_an_unknown_kernel_driver(self) -> None:
+    def test_run_ab_refuses_a_driver_other_than_xe_or_i915(self) -> None:
         arms = [{"name": "a", "server_bin": "/nonexistent/a/llama-server"},
                 {"name": "b", "server_bin": "/nonexistent/b/llama-server"}]
-        # a run that cannot be told xe from i915 is no baseline for either (AGENTS.md, "Kernel Driver")
-        with mock.patch.object(BENCH_SPEC, "LAUNCHES", 2), \
-                mock.patch.object(BENCH_SPEC, "resolved_libraries", return_value={}), \
-                mock.patch.object(BENCH_SPEC, "render_driver", return_value=None), \
-                mock.patch.object(BENCH_SPEC, "dmesg_lines", side_effect=AssertionError("ran past the driver check")):
-            self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE)
+        # a run that cannot be told xe from i915 is no baseline for either (AGENTS.md, "Kernel Driver"), and the
+        # fault gate knows only those two drivers: another GPU's faults would pass it
+        for driver in (None, "amdgpu", "nouveau"):
+            with mock.patch.object(BENCH_SPEC, "LAUNCHES", 2), \
+                    mock.patch.object(BENCH_SPEC, "resolved_libraries", return_value={}), \
+                    mock.patch.object(BENCH_SPEC, "render_driver", return_value=driver), \
+                    mock.patch.object(BENCH_SPEC, "dmesg_lines", side_effect=AssertionError("ran past the driver check")):
+                self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE, driver)
 
     def test_launch_order_is_balanced_only_for_an_even_count(self) -> None:
         self.assertEqual(BENCH_SPEC.launch_order(4), [(0, 1), (1, 0), (0, 1), (1, 0)])
