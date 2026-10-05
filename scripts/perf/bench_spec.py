@@ -106,6 +106,7 @@ LAUNCHES = int(os.environ.get("LAUNCHES", "4"))
 OUT_TAG = os.environ.get("OUT_TAG", "")
 RENDER_NODE = os.environ.get("RENDER_NODE", "/dev/dri/renderD128")
 EXIT_GPU_BUSY = 70
+EXIT_USAGE = 2
 # both Arc kernel drivers: i915 and xe ("hang" also covers i915's "GPU HANG")
 GPU_FAULT_RE = re.compile(r"\b(?:i915|xe)\b.*(?:reset|hang|timeout|GuC|device.?lost)", re.IGNORECASE)
 # two-sided 95% Student t quantiles, index = degrees of freedom (capped at 15)
@@ -394,6 +395,11 @@ def scan_log(logpath: Path) -> dict[str, Any]:
     }
 
 
+def library_path(bin_dir: str, inherited: str) -> str:
+    """LD_LIBRARY_PATH with bin_dir first. No empty entry: the loader reads one as the current directory."""
+    return os.pathsep.join(part for part in (bin_dir, inherited) if part)
+
+
 def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
     env = dict(os.environ)
     env["ZES_ENABLE_SYSMAN"] = "1"
@@ -401,7 +407,7 @@ def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
     if "server_bin" in arm:
         # the build-tree RUNPATH points at one build dir; make each arm load its own libraries
         bin_dir = str(Path(arm["server_bin"]).resolve().parent)
-        env["LD_LIBRARY_PATH"] = f"{bin_dir}:{env.get('LD_LIBRARY_PATH', '')}"
+        env["LD_LIBRARY_PATH"] = library_path(bin_dir, env.get("LD_LIBRARY_PATH", ""))
         env.setdefault("LLAMA_TRACE", "1")
     with logpath.open("w", encoding="utf-8") as logf:
         return subprocess.Popen(
@@ -599,6 +605,9 @@ def paired_stats(a: list[float], b: list[float]) -> dict[str, Any]:
 
 
 def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
+    if LAUNCHES < 1:
+        print(f"!! LAUNCHES={LAUNCHES}: MODE=ab needs at least one launch per arm", flush=True)
+        return EXIT_USAGE
     prompt_ids = [p["id"] for p in prompts]
     suffix = f"-{OUT_TAG}" if OUT_TAG else ""
     out_path = RESULTS / f"summary_ab{suffix}.json"

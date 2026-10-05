@@ -184,6 +184,18 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         no_timing = {**good, "prompts": [{"id": "p", "tg_median": None, "all_verifier_invariants_ok": True}]}
         self.assertEqual(BENCH_SPEC.launch_problems(no_timing), ["p: no timings"])
 
+    def test_library_path_has_no_empty_entry(self) -> None:
+        self.assertEqual(BENCH_SPEC.library_path("/build/bin", "/opt/lib:/usr/lib"), "/build/bin:/opt/lib:/usr/lib")
+        # a trailing ":" would make the loader search the current directory
+        self.assertEqual(BENCH_SPEC.library_path("/build/bin", ""), "/build/bin")
+
+    def test_run_ab_refuses_a_launch_count_below_one(self) -> None:
+        arms = [{"name": "a", "server_bin": "/nonexistent/a/llama-server"},
+                {"name": "b", "server_bin": "/nonexistent/b/llama-server"}]
+        for launches in (0, -1):
+            with mock.patch.object(BENCH_SPEC, "LAUNCHES", launches):
+                self.assertEqual(BENCH_SPEC.run_ab(arms, []), BENCH_SPEC.EXIT_USAGE)
+
     def test_launch_order_is_balanced_only_for_an_even_count(self) -> None:
         self.assertEqual(BENCH_SPEC.launch_order(4), [(0, 1), (1, 0), (0, 1), (1, 0)])
         for launches, balanced in ((1, False), (2, True), (3, False), (4, True)):
