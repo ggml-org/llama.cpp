@@ -346,6 +346,8 @@ mkdir -p /tmp/tile-native-reference
 
 Omit `--pascal` for the ordinary-device native tile matrix. Recording a reference from an already modified build is not an upstream-equivalence check. The Pascal mode requires an SM61-only binary and changes only test-process CC metadata; forward-JIT checks on a newer card are not actual Pascal hardware or throughput qualification.
 
+`test-cuda-tile-spans` checks the complete-layer reader: bounded metadata, encoded tile conversion and stock/span attention outputs with one to three physical ranges. It reports table/split scratch without a context-sized F16 conversion plane. Build the target with the same CUDA options as the backend, then run it without arguments. Conversion, metadata and canaries remain byte-exact. Modern outputs are byte-exact; compiled SM61 FP32 outputs must satisfy both maximum absolute error <= 1e-8 and normalized L2 error <= eight FP32 epsilons. The summary reports every nonexact case and the maximum errors. `--policy-only` tests this comparator, including its negative cases, without initializing CUDA. Forward-JIT evidence is not actual Pascal hardware qualification or a full-model output guarantee. Live dispatch and refill/resume support are later stages in `DEVICE_MEMORY_CONSUMERS_ROADMAP.md`.
+
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 
 If you try to use an old CUDA version (e.g. v11.7) with a new glibc version you can get errors like this:
