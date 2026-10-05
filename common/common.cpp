@@ -1170,6 +1170,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_LAYA,           "laya"          },
     { COMMON_DECISION_TYPE_CLEF,           "clef"          },
     { COMMON_DECISION_TYPE_PPLX_DECIDER,   "pplx-decider"  },
+    { COMMON_DECISION_TYPE_D1,             "d1"            },
 };
 
 static common_decision_type common_decision_type_from_string(const std::string & str) {

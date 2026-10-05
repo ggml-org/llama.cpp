@@ -408,6 +408,7 @@ class Keys:
         BLOCK_COUNT           = "clip.vision.block_count"
         IMAGE_MEAN            = "clip.vision.image_mean"
         IMAGE_STD             = "clip.vision.image_std"
+        IMAGE_RESIZE_ALGO     = "clip.vision.image_resize_algo"
         SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
         SWIGLU_CLAMP          = "clip.vision.swiglu_clamp"
         EXPERT_COUNT_PER_LAYER = "clip.vision.expert_count_per_layer" # dots3note pyramid MoE, 0 = dense layer
@@ -6070,6 +6071,7 @@ class DecisionType:
     NIMBLE  = "nimble"   # same as openjev, the prompt lists all the questions of the request
     CLEF    = "clef"     # joint head over all questions, one score per option
     PPLX_DECIDER = "pplx-decider"  # same as openjev, label codes of 1 or 2 letters
+    D1      = "d1"       # same as openjev, the labels depend on the question type
 
 
 class VisionProjectorType:

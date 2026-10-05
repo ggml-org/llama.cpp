@@ -2346,6 +2346,16 @@ private:
                 GGML_ASSERT(label >= 0 && label < n_vocab);
                 res->scores.push_back(logits[label]);
             }
+            if (!decision.label_groups.empty()) {
+                std::vector<float> scores;
+                size_t i = 0;
+                for (const int32_t n : decision.label_groups) {
+                    GGML_ASSERT(n > 0 && i + n <= res->scores.size());
+                    scores.push_back(*std::max_element(res->scores.begin() + i, res->scores.begin() + i + n));
+                    i += n;
+                }
+                res->scores = std::move(scores);
+            }
         } else {
             // the outputs of this slot in this batch are the last tokens of the prompt
             std::vector<int32_t> idx;

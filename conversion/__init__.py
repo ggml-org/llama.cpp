@@ -161,6 +161,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Lfm2BidirectionalForMaskedLM": "lfm2",
     "Lfm2BidirectionalModel": "lfm2",
     "Lfm2ForCausalLM": "lfm2",
+    "D1Model": "lfm2",
     "Lfm2Model": "lfm2",
     "Lfm2MoeForCausalLM": "lfm2",
     "Llama4ForCausalLM": "llama",

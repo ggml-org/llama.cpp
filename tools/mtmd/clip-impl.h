@@ -58,6 +58,7 @@
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
+#define KEY_IMAGE_RESIZE_ALGO       "clip.vision.image_resize_algo"
 #define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
 #define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
