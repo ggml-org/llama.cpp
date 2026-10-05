@@ -82,9 +82,10 @@ of `master`; `git fetch origin pull/90/head` retrieves them.
   to the render node, a fault line is one that names i915 or xe and a failure
   term in either order (so also `Timedout job`, i915's `Fence expiration time
   out i915-...`, page faults, CAT errors, `wedged` and `banned`), the report
-  counts the paired cells whose arms generated different token streams and
-  sums per arm the response rows that carried argmax evidence (see
-  "Correctness evidence"). A warmup request that fails or whose response fails
+  counts the paired cells whose arms generated different token streams, and
+  the verifier fails a response row without the target's argmax, which the
+  server now also returns for accepted draft tokens (see "Correctness
+  evidence"). A warmup request that fails or whose response fails
   the verifier fails its launch instead of being skipped. Equal arm names and
   empty `LD_LIBRARY_PATH` entries are refused or dropped, each arm records the libraries `ldd`
   resolves for it, and flash-attention evidence is taken from runtime lines
@@ -190,7 +191,10 @@ VRAM exhaustion in the unmodified code path and is independent of the flag.
   rows with a top list since a later review pass: two single-launch runs of
   this configuration had 1 such row in 256 per response. The verifier therefore
   did not establish that the generated tokens are the target's argmax here;
-  that rests on the server's own draft verification.
+  that rests on the server's own draft verification. The server has since
+  taken the fix of upstream llama.cpp PR 27196, which fills those rows from the
+  target's logits at the verified batch index, and the verifier now fails a
+  row without a top list. The campaign above predates both and was not rerun.
 - Token streams are not a usable oracle. The same binary, prompt and seed gave
   different streams on consecutive requests in both arms, including pairs where
   every drafted token was accepted (host arm, code_edit: `7011...` and

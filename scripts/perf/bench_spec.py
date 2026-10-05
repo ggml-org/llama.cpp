@@ -48,11 +48,10 @@ reports new i915/xe fault lines from dmesg, and prints paired 95% CIs per prompt
 It exits non-zero when a launch failed (a failed or unverified warmup fails it
 too), a response failed the target-argmax verifier, a speculative arm reported
 no draft statistics, a fault line appeared, or the kernel log could not be
-compared (unreadable, wrapped or cleared during the run). The verifier has
-argmax evidence only for tokens the server sampled on its normal path: it sends
-no top list for tokens emitted from a verified draft round, where the check is
-the token id and a finite log-probability
-(verifier_rows_with_argmax counts the rows that had the evidence).
+compared (unreadable, wrapped or cleared during the run). The verifier needs
+the target's argmax on every response row, so it needs a server that returns
+the probabilities of accepted draft tokens (the port of upstream llama.cpp PR
+27196); against an older build every speculative launch fails verification.
 Both arms run with LLAMA_TRACE=1 so the log shows how many draft rounds were
 verified and how many restored a speculative checkpoint.
 Worked run and how to read the output:
@@ -272,12 +271,17 @@ def analyze_native_response(resp: dict[str, Any]) -> dict[str, Any]:
     for index, (token, row) in enumerate(zip(tokens, probs)):
         logprob = row.get("logprob") if isinstance(row, dict) else None
         top = row.get("top_logprobs") if isinstance(row, dict) else None
-        # the server sends no top list for the tokens of a verified draft round
         top_id = top[0].get("id") if isinstance(top, list) and top and isinstance(top[0], dict) else None
+        if not isinstance(top_id, int) or isinstance(top_id, bool):
+            # without the target's argmax the row proves nothing: a server that leaves the top list of
+            # accepted draft tokens empty fails here
+            top_id = None
         rows_with_argmax += top_id is not None
         if not isinstance(logprob, (int, float)) or not math.isfinite(logprob):
             failures.append({"index": index, "token": token, "reason": "nonfinite_target_logprob"})
-        elif row.get("id") != token or (top_id is not None and top_id != token):
+        elif top_id is None:
+            failures.append({"index": index, "token": token, "reason": "missing_target_argmax"})
+        elif row.get("id") != token or top_id != token:
             failures.append({
                 "index": index,
                 "token": token,
@@ -827,8 +831,8 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
               f"identical across arms: {t['identical_across_arms']}")
     print("\n## Verifier evidence\n")
     for name, ev in evidence.items():
-        print(f"  {name}: {ev['rows_with_argmax']} of {ev['rows']} response rows carried a top list, so only those "
-              "were checked against the target argmax; the rest passed on token id and a finite log-probability")
+        print(f"  {name}: {ev['rows_with_argmax']} of {ev['rows']} response rows carried the target argmax; "
+              "a row without it fails the verifier")
     if new_faults is None:
         print("\n!! dmesg unreadable, wrapped or cleared during the run: GPU fault gate NOT evaluated")
     else:

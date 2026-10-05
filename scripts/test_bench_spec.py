@@ -40,21 +40,20 @@ class BenchSpecEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["verifier_failures"], [])
         self.assertEqual(len(evidence["token_sha256"]), 64)
 
-    def test_analyze_native_response_accepts_verified_draft_without_top_logprobs(self) -> None:
-        response = {
-            "content": "draft",
-            "tokens": [17],
-            "completion_probabilities": [
-                {"id": 17, "logprob": -0.3, "top_logprobs": []},
-            ],
-        }
+    def test_analyze_native_response_rejects_rows_without_argmax_evidence(self) -> None:
+        # the server fills the top list of accepted draft tokens too, so a row without one proves nothing
+        for top in (None, [], [{"logprob": -0.3}], [{"id": "17", "logprob": -0.3}]):
+            row = {"id": 17, "logprob": -0.3}
+            if top is not None:
+                row["top_logprobs"] = top
+            response = {"content": "draft", "tokens": [17], "completion_probabilities": [row]}
 
-        evidence = BENCH_SPEC.analyze_native_response(response)
+            evidence = BENCH_SPEC.analyze_native_response(response)
 
-        self.assertTrue(evidence["verifier_invariant_ok"])
-        self.assertEqual(evidence["verifier_failures"], [])
-        # accepted, but the summary shows that the row carried no argmax evidence
-        self.assertEqual(evidence["verifier_rows_with_argmax"], 0)
+            self.assertFalse(evidence["verifier_invariant_ok"], top)
+            self.assertEqual(evidence["verifier_failures"],
+                             [{"index": 0, "token": 17, "reason": "missing_target_argmax"}], top)
+            self.assertEqual(evidence["verifier_rows_with_argmax"], 0, top)
 
     def test_analyze_native_response_rejects_non_argmax_and_nonfinite_logits(self) -> None:
         response = {
