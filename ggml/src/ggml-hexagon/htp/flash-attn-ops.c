@@ -1869,8 +1869,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.Bc             = kparams->Bc;
     factx.g_br           = kparams->u.hmx.g_br;
     factx.n_kv_blocks    = kparams->n_kv_blocks;
-    factx.is_q_fp32      = (kparams->is_q_fp32 != 0);
-    factx.is_dst_fp32    = (kparams->is_dst_fp32 != 0);
+    factx.is_q_fp32      = (q->type == HTP_TYPE_F32);
+    factx.is_dst_fp32    = (dst->type == HTP_TYPE_F32);
     factx.pipeline       = (kparams->u.hmx.pipeline != 0);
     factx.mask_broadcast = (kparams->u.hmx.mask_broadcast != 0);
     if (mask) {
@@ -1879,13 +1879,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     }
 
     factx.has_softcap   = (kparams->logit_softcap != 0.0f);
-    if (!factx.has_softcap) {
-        factx.scale = (__fp16) (kparams->scale * EXP_LOG2E_F);  // log2(e)
-    } else {
-        factx.scale = (__fp16) kparams->scale;
-    }
+    factx.scale         = (__fp16) kparams->scale;
     factx.max_bias      = kparams->max_bias;
-    factx.logit_softcap = factx.has_softcap ? (__fp16) (kparams->logit_softcap * EXP_LOG2E_F) : 0;
+    factx.logit_softcap = 0;
+    if (factx.has_softcap) {
+        factx.logit_softcap = (__fp16) kparams->logit_softcap;
+    }
 
     factx.n_head_log2 = kparams->n_head_log2;
     factx.m0          = kparams->m0;
@@ -1898,22 +1897,36 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const uint32_t n_threads = factx.n_threads;
     const uint32_t G = factx.G;
 
-    // Multi-device: split Q blocks across devices
+    // Multi-device: prefer head-parallel partitioning (each core owns a disjoint head
+    // shard), falling back to Q-block (token) split when heads don't divide evenly.
     const uint32_t n_q_blocks = (neq1 + Br - 1) / Br;
-    uint32_t q_start_min = 0;
-    uint32_t q_start_max = neq1;
+    uint32_t q_start_min  = 0;
+    uint32_t q_start_max  = neq1;
+    uint32_t kv_head_min  = 0;
+    uint32_t kv_head_max  = n_kv_heads;
 
     if (octx->ctx->mdev.count > 1) {
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(n_q_blocks, htp_tensor_mdev_data_aligned(dst) ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-        const uint32_t block_start = range.start;
-        const uint32_t block_end   = range.start + range.count;
+        const uint32_t mdev_count = octx->ctx->mdev.count;
+        const uint32_t mdev_idx   = octx->ctx->mdev.idx;
+        const uint32_t dst_e_size = (dst->type == HTP_TYPE_F32) ? sizeof(float) : sizeof(__fp16);
+        const bool can_split      = htp_tensor_can_row_partition(dst, dst_e_size);
 
-        if (block_start >= block_end) {
-            return HTP_STATUS_OK;
+        if (kparams->head_split && can_split && n_kv_heads >= mdev_count && n_kv_heads % mdev_count == 0) {
+            const uint32_t kv_per_core = n_kv_heads / mdev_count;
+            kv_head_min = mdev_idx * kv_per_core;
+            kv_head_max = kv_head_min + kv_per_core;
+        } else {
+            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(n_q_blocks, can_split ? 1 : 0, mdev_idx, mdev_count, &octx->ctx->mdev.count_div);
+            const uint32_t block_start = range.start;
+            const uint32_t block_end   = range.start + range.count;
+
+            if (block_start >= block_end) {
+                return HTP_STATUS_OK;
+            }
+
+            q_start_min = block_start * Br;
+            q_start_max = MIN(block_end * Br, neq1);
         }
-
-        q_start_min = block_start * Br;
-        q_start_max = MIN(block_end * Br, neq1);
     }
 
     // ======== VTCM allocation (GQA-aware) ========
@@ -2032,7 +2045,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
             const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);
             const size_t   n_row_tiles = g_br_actual / HMX_FP16_TILE_N_ROWS;
 
-            for (uint32_t kv_head = 0; kv_head < n_kv_heads; ++kv_head) {
+            for (uint32_t kv_head = kv_head_min; kv_head < kv_head_max; ++kv_head) {
                 const uint32_t ik2 = kv_head;
                 const uint32_t ik3 = fastdiv(ib3, &kparams->broadcast_rk3);
                 const uint32_t iv2 = kv_head;
@@ -2040,7 +2053,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 // 1. Push Q and KV DMAs for the very first iteration.
                 // Subsequent iterations are enqueued early at the end of the previous iteration.
-                if (ib3 == 0 && q_start == q_start_min && kv_head == 0) {
+                if (ib3 == 0 && q_start == q_start_min && kv_head == kv_head_min) {
                     const dma_addr_t q_ptr = q->data + q_start * q->nb[1] +
                                             (kv_head * factx.G) * q->nb[2] + ib3 * q->nb[3];
                     const size_t q_row_bytes = q_transposed ? n_rows_q * q_row_bytes_trans_factor : q_row_bytes_untransposed;
@@ -2358,8 +2371,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 uint32_t next_kv_head = kv_head + 1;
                 uint32_t next_q_start = q_start;
                 uint32_t next_ib3     = ib3;
-                if (next_kv_head >= n_kv_heads) {
-                    next_kv_head = 0;
+                if (next_kv_head >= kv_head_max) {
+                    next_kv_head = kv_head_min;
                     next_q_start = q_start + Br;
                     if (next_q_start >= q_start_max) {
                         next_q_start = q_start_min;
@@ -2478,7 +2491,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         factx.src3_div3 = kparams->src3_div3;
     }
 
-    factx.is_q_fp32 = (kparams->is_q_fp32 != 0);
+    factx.is_q_fp32 = (q->type == HTP_TYPE_F32);
     factx.size_q_row_padded = kparams->u.hvx.size_q_row_padded;
     factx.size_k_row_padded = kparams->u.hvx.size_k_row_padded;
     factx.size_v_row_padded = kparams->u.hvx.size_v_row_padded;
@@ -2488,7 +2501,10 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     factx.scale = kparams->scale;
     factx.max_bias = kparams->max_bias;
     factx.has_softcap = (kparams->logit_softcap != 0.0f);
-    factx.logit_softcap = factx.has_softcap ? (__fp16) kparams->logit_softcap : 0;
+    factx.logit_softcap = 0;
+    if (factx.has_softcap) {
+        factx.logit_softcap = (__fp16) kparams->logit_softcap;
+    }
 
     factx.n_head_log2 = kparams->n_head_log2;
     factx.m0          = kparams->m0;
@@ -2512,10 +2528,25 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     uint32_t qrows      = total_qrows;
 
     if (octx->ctx->mdev.count > 1) {
-        const bool can_split = htp_tensor_mdev_data_aligned(dst) && ((dst->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0);
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_qrows, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-        qrow_start = range.start;
-        qrows      = range.count;
+        const uint32_t mdev_count = octx->ctx->mdev.count;
+        const uint32_t mdev_idx   = octx->ctx->mdev.idx;
+        const uint32_t n_kv_heads = k->ne[2];
+        const uint32_t dst_e_size = (dst->type == HTP_TYPE_F32) ? sizeof(float) : sizeof(__fp16);
+        const bool can_split      = htp_tensor_can_row_partition(dst, dst_e_size);
+
+        // head range is contiguous in flat row space only when neq3 == 1
+        if (kparams->head_split && can_split && neq3 == 1 && n_kv_heads >= mdev_count && n_kv_heads % mdev_count == 0) {
+            const uint32_t G              = kparams->G;
+            const uint32_t kv_per_core    = n_kv_heads / mdev_count;
+            const uint32_t heads_per_core = kv_per_core * G;
+            const uint32_t head_start     = mdev_idx * heads_per_core;
+            qrow_start = head_start * neq1;
+            qrows      = heads_per_core * neq1;
+        } else {
+            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_qrows, can_split ? 1 : 0, mdev_idx, mdev_count, &octx->ctx->mdev.count_div);
+            qrow_start = range.start;
+            qrows      = range.count;
+        }
     }
 
     if (qrows == 0) {
