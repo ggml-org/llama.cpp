@@ -1127,7 +1127,7 @@ jobs:
             target: 'ggml-vulkan'
           - backend: 'vulkan'
             arch: 'arm64'
-            defines: '-DGGML_VULKAN=ON -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake'
+            defines: '-G "Ninja Multi-Config" -DGGML_VULKAN=ON -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake'
             target: 'ggml-vulkan'
           - backend: 'opencl-adreno'
             arch: 'arm64'
