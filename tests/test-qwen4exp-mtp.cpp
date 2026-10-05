@@ -766,6 +766,7 @@ struct fit_log_capture {
     ggml_log_callback previous;
     void * previous_data;
     int contexts = 0;
+    int context_errors = 0;
     bool context_error = false;
 
     fit_log_capture() {
@@ -783,7 +784,10 @@ struct fit_log_capture {
         if (message.find("constructing llama_context") != std::string::npos) {
             ++capture.contexts;
         }
-        capture.context_error |= message.find("failed to initialize the context") != std::string::npos;
+        if (message.find("failed to initialize the context") != std::string::npos) {
+            ++capture.context_errors;
+            capture.context_error = true;
+        }
     }
 };
 
@@ -948,6 +952,9 @@ static void test_fit_borrowed_head(const std::string & target_path, const std::s
         require(result && result->model(), "fit initialization loads target");
         // target, the head alone (refused), then the target again as parent and the head beside it
         require(logs.contexts == 4, "fit measures a table-less head next to its target");
+        // A failed measurement beside the parent is logged and the fit goes on without the head, so the
+        // count alone does not show that it succeeded: only the head alone may fail.
+        require(logs.context_errors == 1, "the table-less head constructs next to its target");
         fprintf(stderr, "PASS fit table-less head adaptive=%d\n", mode == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE);
     }
 }

@@ -225,6 +225,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     llama_build(test-llama-archs.cpp)
     llama_build_and_test(test-qwen4exp-mtp.cpp)
+    llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-q8 ARGS --q8-kv)
     if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
         llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-sycl-f16 LABEL sycl ARGS --backend SYCL0)
         llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-sycl-q8 LABEL sycl ARGS --backend SYCL0 --q8-kv)

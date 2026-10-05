@@ -3,8 +3,8 @@
 ## Conclusion
 
 `LLAMA_STATE_SEQ_FLAGS_ON_DEVICE` at the six speculative checkpoint sites in
-`tools/server/server-context.cpp` is a small win where the sites execute and a
-no-op where they do not:
+`tools/server/server-context.cpp` has a positive but inconclusive point
+estimate where the sites execute and no effect where they do not:
 
 - Where both contexts take full-sequence checkpoints (hybrid target and hybrid
   draft, `draft-simple`): +3.5% decode, 95% CI +/-3.6% over 4 paired launches,
