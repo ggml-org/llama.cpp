@@ -1016,6 +1016,8 @@ struct vk_device_struct {
     // Dedicated buffer/fence: do not share with sync_staging or device->fence.
     int keepalive_ms = 0;
     std::atomic<bool> keepalive_stop{false};
+    std::mutex keepalive_mutex;
+    std::condition_variable keepalive_cv;
     std::thread keepalive_thread;
     vk::Fence keepalive_fence;
     vk_buffer keepalive_buffer;

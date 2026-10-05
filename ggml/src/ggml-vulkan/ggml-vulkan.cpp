@@ -15950,9 +15950,13 @@ static void ggml_vk_device_start_keepalive(vk_device& device) {
                 return;
             }
             const int ms = device->keepalive_ms;
+            vk_device_struct * raw = device.get();
             device.reset();
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            {
+                std::unique_lock<std::mutex> lock(raw->keepalive_mutex);
+                raw->keepalive_cv.wait_for(lock, std::chrono::milliseconds(ms), [raw] { return raw->keepalive_stop.load(); });
+            }
 
             device = dev.lock();
             if (!device || device->keepalive_stop.load()) {
@@ -15971,7 +15975,11 @@ static void ggml_vk_device_start_keepalive(vk_device& device) {
 vk_device_struct::~vk_device_struct() {
     VK_LOG_DEBUG("destroy device " << name);
 
-    keepalive_stop.store(true);
+    {
+        std::lock_guard<std::mutex> lock(keepalive_mutex);
+        keepalive_stop.store(true);
+    }
+    keepalive_cv.notify_all();
     if (keepalive_thread.joinable()) {
         keepalive_thread.join();
     }
