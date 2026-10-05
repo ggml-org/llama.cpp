@@ -20,6 +20,15 @@ private:
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
 
+    // number of requests that have passed wait_until_no_sleep() but have not
+    // finished posting their tasks yet (guarded by mutex_tasks).
+    // while > 0, the server must not enter the sleeping state: the request
+    // may still be using server state (e.g. tokenizing) that the sleep
+    // callbacks would destroy, and a task posted afterwards would otherwise
+    // be stranded in the queue with nobody awake to process it.
+    // see: https://github.com/ggml-org/llama.cpp/issues/29689
+    int n_inflight = 0;
+
     // queues
     std::deque<server_task> queue_tasks;
     std::deque<server_task> queue_tasks_deferred;
@@ -67,7 +76,12 @@ public:
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
+    // marks the caller as in-flight (see n_inflight); the caller must pair
+    // this with release_inflight() once it no longer needs the server awake
     void wait_until_no_sleep();
+
+    // release a previous wait_until_no_sleep() claim
+    void release_inflight();
 
     bool is_sleeping() {
         std::unique_lock<std::mutex> lock(mutex_tasks);

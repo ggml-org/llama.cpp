@@ -115,6 +115,7 @@ void server_queue::pop_deferred_task(int id_slot) {
 void server_queue::wait_until_no_sleep() {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     if (!sleeping) {
+        n_inflight++;
         return;
     } else {
         if (!req_stop_sleeping) {
@@ -126,7 +127,16 @@ void server_queue::wait_until_no_sleep() {
         condition_tasks.wait(lock, [&]{
             return !sleeping;
         });
+        n_inflight++;
     }
+}
+
+void server_queue::release_inflight() {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    GGML_ASSERT(n_inflight > 0);
+    n_inflight--;
+    // let the main loop re-evaluate the sleeping condition promptly
+    condition_tasks.notify_one();
 }
 
 void server_queue::terminate() {
@@ -290,6 +300,12 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
     auto should_sleep = [&]() -> bool {
         // caller must hold mutex_tasks
         if (idle_sleep_ms < 0) {
+            return false;
+        }
+        if (n_inflight > 0) {
+            // a request is between wait_until_no_sleep() and posting its task:
+            // it may still be using server state that the sleep callbacks
+            // would destroy (see issue #29689)
             return false;
         }
         int64_t now = ggml_time_ms();
