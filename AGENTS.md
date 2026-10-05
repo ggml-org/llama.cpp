@@ -184,7 +184,7 @@ edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
 ```bash
 sudo systemctl stop llama-sycl.cpp.service
 fuser -v /dev/dri/renderD128               # verify sole tenancy
-dmesg | grep -iE 'xe.*(reset|hang|timeout|GuC)'
+dmesg | grep -iE '(i915|xe).*(reset|hang|timeout|GuC|device.?lost)'
 # ... run benchmark wrapped in timeout ...
 sudo systemctl start llama-sycl.cpp.service
 ```
@@ -298,9 +298,97 @@ Gate: `v->type == GGML_TYPE_TURBO{2,3,4}_0`. Three call sites: standard KV, K-on
 - **IGC**: 2.36.3+
 - **compute-runtime**: 26.22.x
 - **level-zero-loader**: 1.28.6+
-- **Kernel driver**: i915 (xe blacklisted on this host)
+- **Kernel driver**: xe since 2026-09-29; i915 before that and as the fallback. Read "Kernel Driver: xe vs i915" below before trusting a number or a log line
 - **Build**: CMake + Ninja
 - **GPU**: Arc A770 16GB (acm-g10, DG2, Xe-HPG)
+
+### Kernel Driver: xe vs i915
+
+The A770 runs on **xe** (live 2026-10-05: kernel `7.3.0-rc5`, `xe` bound to `0000:03:00.0`,
+`i915.ko` loaded with no device). i915 still works and is the fallback. Evidence labels:
+**live** = probed on this host on 2026-10-05; **doc** = dated artifact in this tree; **local** =
+maintainer-local notes outside the tree (`~/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/`,
+`~/._claude/arc-a770-xe-driver-switch-2026-09-29.md`); **kernel** = read from kernel source.
+
+**History** (local; `/etc/modprobe.d/intel-xe.conf`). xe until 2026-06-27. i915 from 2026-06-27
+to 2026-09-29: xe was blacklisted after DeviceLost, CAT engine resets and slow prefill on 6.x
+kernels; that evidence is gone and the cause was never established. xe again since 2026-09-29
+on 7.3-rc. So:
+
+- The 2026-07 and 2026-08 campaigns in `docs/research/` (P5, round-2 decode, FA occupancy) and
+  the stack pins above were measured on **i915** with compute-runtime 26.22; the 2026-09-27
+  and 09-28 notes are i915 too. None of those numbers is an xe baseline.
+- The xe stack is newer (live): icpx 2026.1.1, IGC 2.41.10, level-zero-loader 1.34.0,
+  compute-runtime git `be85a8d685` plus the read-only userptr retry patch
+  (`docs/research/patches/`), GuC 70.53.0.
+
+**Why xe.** The maintainer's reason for the move: i915 gives DG2 exactly one compute engine
+(CCS) and has no control for more. xe lists four behind a `ccs_mode` knob. **That is not in use
+yet**: `ccs_mode` reads 1 (live), so compute still runs on one engine. See "Open" below.
+
+| Aspect | i915 | xe | Evidence |
+| ------ | ------ | ------ | ------ |
+| Compute engines (CCS) | one (`ccs0`); `i915.ko` has no `ccs_mode` attribute | `ccs0`-`ccs3` in debugfs `hw_engines`, `num_cslices` = 4, `ccs_mode` = 1 | live; doc 09-28 |
+| Copy engine (BCS) beside compute | works: full copy/kernel overlap on the v1 adapter; `--prefetch-experts-slots` about +16% prefill (3 reps) | stalls, then `Engine reset: engine_class=bcs`, when the copy source is file-backed (mmap): 12 failures in 15 long-context runs, 0 in 10 with copies on the compute queue | doc 09-28, 09-30 |
+| Fork default | adapter default, copy engine on | `ggml-sycl/xe-kmd.cpp` sets `UR_L0_USE_COPY_ENGINE=0` and `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1` on DG2/xe; `--prefetch-experts-slots` is off as a result | doc 09-30; source |
+| Binding model | execbuf carries the object list and holds every object until the job completes; userptr binds of read-only file pages succeed | `VM_BIND` is decoupled from `EXEC`; compute-runtime puts every VM in LR mode; a userptr bind of a read-only mapping fails with `EPERM`; an unbind can pull a mapping from under a queued job | doc 09-30; local |
+| Timeouts | one request timeout (`i915.request_timeout_ms`, 20 s); `ccs0`/`rcs0` preempt 7.5 s | per engine class in sysfs: preempt 640 ms by default (host unit `xe-a770-tune.service` raises `ccs`/`rcs` to 7.5 s at bind, `bcs` stays at 640 ms); `job_timeout_ms` capped at 10 s by `CONFIG_DRM_XE_JOB_TIMEOUT_MAX`; LR-mode queues have no job watchdog | live; local |
+| dmesg signature | `GPU HANG`; `Fence expiration time out i915-0000:03:00.0:<process>` | `xe 0000:03:00.0: [drm] Tile0: GT0: Engine reset: engine_class=...`, then `Timedout job`; one devcoredump slot | doc 09-30; local |
+| sysfs | `/sys/class/drm/card0/engine/<name>/` | `/sys/bus/pci/devices/0000:03:00.0/tile0/gt0/` (`engines/<class>/`, `ccs_mode`, `num_cslices`, `freq0/`); no `card0/engine` | live; local |
+| Monitoring | `intel_gpu_top` | `intel_gpu_top` refuses the device; use `gputop`, fdinfo `drm-cycles-<class>`, `xe:*` tracepoints | live; local |
+| Firmware | GuC `dg2_guc_70.bin` 70.53.0, HuC running | same GuC blob and version, no HuC (VAAPI encode is CQP only) | live; local |
+
+**Speed on the same stack** (local, 2026-09-29, kernel 7.3-rc1, compute-runtime 26.35):
+
+- Dense 8B Q4_K_M, all on device: xe prefill +6.2% (pp512) and +16.7% (pp2048); decode equal
+  (60.15 vs 60.58 t/s).
+- MoE with host-resident experts (`--fit`, `llama-bench` default placement): xe prefill +55 to
+  +62%, decode -20 to -29%. That is not the production placement, and the production placement
+  has no i915 number.
+- Submission looks cheaper on xe: a kernel submit costs about 20 us on i915, and upstream
+  testers of SYCL-Graph replay on an A770 report tg128 29.12 -> 44.28 t/s on i915 against
+  41.89 -> 44.68 on xe (doc `sycl-moe-expert-paging-research-2026-09-27.md`). Expect gains
+  that were measured on i915 by cutting launch counts (graph replay, fusion) to shrink on xe.
+
+**Rules that follow:**
+
+1. Name the driver in every benchmark note
+   (`basename "$(readlink /sys/bus/pci/devices/0000:03:00.0/driver)"`). Never compare an xe
+   number with an i915-era baseline; re-bench the baseline on the same boot.
+2. On xe leave the copy-engine variables alone. An `engine_class=bcs` reset is the
+   compute-runtime defect in `docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`: not a kernel
+   regression, not a llama.cpp bug. `--prefetch-experts-slots` needs `UR_L0_USE_COPY_ENGINE=1`,
+   which brings the failure back on any runtime without the retry patch (in no release as of
+   2026-09-30).
+3. A stall on xe can be silent. LR-mode queues have no job watchdog, and the reset line appears
+   only when something later asks the engine to preempt. Keep every GPU run in `timeout` and do
+   not read a clean dmesg as proof that a run was healthy.
+4. Fault gates must match both drivers: `(i915|xe).*(reset|hang|timeout|GuC|device.?lost)`.
+   The harnesses in `scripts/` already do.
+5. Do not design for concurrent compute queues. With one CCS enabled, two SYCL queues run
+   their kernels one after another (i915: from source, doc 09-28; xe: expected with
+   `ccs_mode` = 1, not measured).
+6. Timeout writes in sysfs reach only exec queues created afterwards; restart the process.
+7. `--load-mode none` (CPU-placed weights in pinned `SYCL_Host` memory) removes the trigger of
+   the xe blitter failure and measured +12.6% prefill on the MoE fit, for an owned RAM copy
+   instead of shared page cache (doc 09-30).
+
+**Switching.** Both modules carry PCI id `56a0`; the kernel command line decides:
+`i915.force_probe=!56a0 xe.force_probe=56a0` for xe, the two values swapped for i915. Every
+switch is a reboot, because the compositor holds `card0` although the card is headless. The xe
+copy-engine hook and the tune unit do nothing under i915.
+
+**Open:**
+
+- Multi-CCS has never been exercised. A `ccs_mode` write returns `EBUSY` while any DRM client
+  holds the card (kernel; the compositor, logind and llama-server all do). compute-runtime
+  26.35 composed only the i915 sysfs path for `ZEX_NUMBER_OF_CCS` (local, from strings in the
+  library; not re-checked on the installed build). N engines get `num_cslices / N` compute
+  slices each (kernel), so whether two half-width engines beat one full-width engine is
+  unmeasured.
+- No i915 number exists for the production MoE placement, so the xe decode regression is
+  established for the `llama-bench` default placement only.
+- The June 2026 xe failures did not reappear in the 2026-09-29 dense A/B; their cause is unknown.
 
 ### Build Gotchas
 
