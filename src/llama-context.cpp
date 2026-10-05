@@ -2254,6 +2254,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain does not support backend samplers\n", __func__);
             return -1;
         }
+        // The chain graph has no embedding tensor, and embeddings would turn the catch-up rows into outputs.
+        if (cparams.embeddings) {
+            LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain does not support embeddings\n", __func__);
+            return -1;
+        }
         // Splitting a chain restarts later steps from placeholder token/hidden inputs.
         if (batch_inp.tokens.size() > std::min(cparams.n_batch, cparams.n_ubatch)) {
             LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain must fit in one batch and microbatch\n", __func__);
@@ -2279,12 +2284,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires hidden states on every row\n", __func__);
                 return -1;
             }
-            const bool output = output_all || tok.output;
-            if (seen_output && !output) {
+            if (seen_output && !tok.output) {
                 LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain outputs must form a contiguous suffix\n", __func__);
                 return -1;
             }
-            seen_output |= output;
+            seen_output |= tok.output;
         }
         if (!seen_output) {
             LLAMA_LOG_ERROR("%s: Qwen4Exp MTP chain requires at least one output row\n", __func__);
