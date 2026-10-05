@@ -897,25 +897,14 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
     return try_decode();
 }
 
-// same as process_mtmd_chunk(), but the chunk is added to the batch of the text tokens instead of being decoded on its own
-// returns 0 on success
-static int process_mtmd_chunk_mixed(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, server_batch & batch) {
-    GGML_ASSERT(slot.mctx);
-    const auto & chunk = slot.task->tokens.find_chunk(idx);
-
-    float * embd = mbatch ? mtmd_batch_get_output_embd(mbatch.get(), chunk.get()) : nullptr;
-    if (!embd) {
-        if (encode_mtmd_chunk(slot, mbatch, idx) != 0) {
-            return -1;
-        }
-        embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
-        GGML_ASSERT(embd);
-    }
-
+// add an encoded mtmd chunk to the batch of the text tokens, instead of decoding it on its own like process_mtmd_chunk()
+// embd is the output of the encoder for this chunk
+// returns false if the batch is full
+static bool add_mtmd_chunk(const server_slot & slot, const mtmd_input_chunk * chunk, const float * embd, server_batch & batch) {
     // positions are the ones of mtmd_helper_decode_image_chunk()
-    const auto * image    = mtmd_input_chunk_get_tokens_image(chunk.get());
+    const auto * image    = mtmd_input_chunk_get_tokens_image(chunk);
     const bool   is_mrope = mtmd_decode_use_mrope(slot.mctx);
-    const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+    const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
     const size_t n_embd   = batch.n_embd;
     const llama_pos pos_0 = slot.prompt.tokens.pos_next();
 
@@ -930,10 +919,10 @@ static int process_mtmd_chunk_mixed(const server_slot & slot, mtmd::batch_ptr & 
             pos[3] = rel.z;
         }
         if (!batch.add_embd(slot.id, embd + i * n_embd, pos, slot.need_embd(), /* is_prompt */ true)) {
-            return -1;
+            return false;
         }
     }
-    return 0;
+    return true;
 }
 
 //
@@ -3954,14 +3943,20 @@ private:
                 continue;
             }
 
-            // encode on the worker thread, so we can still handle metrics tasks
-            int32_t res = 0;
-            queue_tasks.yield_to_queue([&]() {
-                res = process_mtmd_chunk_mixed(slot, slot.mbatch, cur_token_idx, batch);
-            });
+            const auto & chunk = input_tokens.find_chunk(cur_token_idx);
 
-            if (res != 0) {
-                SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
+            float * embd = slot.mbatch ? mtmd_batch_get_output_embd(slot.mbatch.get(), chunk.get()) : nullptr;
+            if (!embd) {
+                // encode on the worker thread, so we can still handle metrics tasks
+                int32_t res = 0;
+                queue_tasks.yield_to_queue([&]() {
+                    res = encode_mtmd_chunk(slot, slot.mbatch, cur_token_idx);
+                });
+                embd = res == 0 ? mtmd_batch_get_output_embd(slot.mbatch.get(), chunk.get()) : nullptr;
+            }
+
+            if (!embd || !add_mtmd_chunk(slot, chunk.get(), embd, batch)) {
+                SLT_ERR(slot, "%s", "failed to process mtmd chunk\n");
                 // the batch must not keep the entries of a released slot
                 batch.truncate(n_tokens_prev);
                 send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
@@ -3969,7 +3964,6 @@ private:
                 return false;
             }
 
-            const auto & chunk = input_tokens.find_chunk(cur_token_idx);
             slot.prompt.tokens.push_back_placeholder(chunk.get());
         }
 
