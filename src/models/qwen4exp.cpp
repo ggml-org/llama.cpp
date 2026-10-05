@@ -878,8 +878,8 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
             ggml_tensor * id = ggml_argmax(ctx0, logits);
 
             // Match the sequential draft sampler: greedy over the full vocabulary,
-            // with confidence normalized over its top 10 candidates.
-            const int64_t draft_top_k = std::min<int64_t>(LLAMA_MTP_DRAFT_TOP_K, logits->ne[0]);
+            // with confidence normalized over its top LLAMA_DRAFT_TOP_K candidates.
+            const int64_t draft_top_k = std::min<int64_t>(LLAMA_DRAFT_TOP_K, logits->ne[0]);
             ggml_tensor * candidates = ggml_top_k(ctx0, logits, draft_top_k);
             ggml_tensor * top_logits = ggml_get_rows(ctx0,
                     ggml_reshape_2d(ctx0, logits, 1, logits->ne[0]), candidates);
