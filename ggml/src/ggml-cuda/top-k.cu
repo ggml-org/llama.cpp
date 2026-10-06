@@ -1,12 +1,10 @@
 #include "argsort.cuh"
 #include "top-k.cuh"
 
-// Implementation choice by shape, from the measurements in #28547: bitonic for short rows, radix select
-// for several long rows, and for a single long row DeviceTopK or CUB argsort (up to the argsort threshold).
-// The thresholds can be overridden at build time.
+// implementation thresholds from #28547, can be overridden at build time
 #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC
 #    if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-// not measured on these backends, keep their previous bitonic/radix split
+// not measured on HIP/MUSA, keep the old split
 #        define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC 1024
 #    else
 #        define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC 512
@@ -17,8 +15,7 @@
 #    define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT 4096
 #endif // GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT
 
-// Radix select costs about a dozen launches regardless of the row count, so bitonic stays faster on rows up to
-// this padded width for as long as the rows fit in one wave of blocks (nrows <= number of SMs). 0 disables it.
+// bitonic up to this padded width while nrows fits in one wave of SMs, 0 disables
 #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS
 #    if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 #        define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS 0
@@ -40,8 +37,7 @@ using namespace cub;
 #    endif  // CCCL >= 3.4.3
 #endif      // GGML_CUDA_USE_CUB
 
-// Up to this many rows a per-row DeviceTopK, or CUB argsort without it, runs instead of radix select.
-// DeviceTopK on two rows still beats radix select's fixed cost.
+// max rows for the per-row DeviceTopK / CUB argsort path before switching to radix
 #ifndef GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK
 #    ifdef CUB_TOP_K_AVAILABLE
 #        define GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK 2
@@ -86,7 +82,7 @@ static int next_power_of_2(int x) {
     return n;
 }
 
-// rows per launch that keep a per-row scratch buffer near 64 MB, the same budget as the CUB argsort chunks
+// rows per chunk to keep the scratch buffer around 64 MB
 static int64_t top_k_chunk_nrows(const size_t row_bytes, const int64_t nrows) {
     const size_t chunk_bytes = 1 << 26;
     return std::min(nrows, (int64_t) std::max(chunk_bytes / row_bytes, (size_t) 1));
@@ -227,7 +223,7 @@ static void top_k_radix_cuda(
     constexpr int NBINS = 1 << RADIX_BITS;
     const int blocks_per_row = std::min((ncols + 1023) / 1024, 64);
 
-    // the per-block histograms grow with nrows, so process the rows in chunks
+    // chunk the rows to bound the histogram memory
     const int64_t chunk_nrows = top_k_chunk_nrows((size_t) blocks_per_row * NBINS * sizeof(int), nrows);
 
     ggml_cuda_pool_alloc<top_k_radix_state> states_alloc(pool, chunk_nrows);
@@ -282,7 +278,7 @@ static void top_k_bitonic_cuda(
 }
 
 #if defined(GGML_CUDA_USE_CUB) && !defined(CUB_TOP_K_AVAILABLE)
-// same as the bitonic path, with CUB's segmented sort for rows too long for one block
+// same as above, using CUB segmented sort
 static void top_k_argsort_cub(
         ggml_cuda_pool & pool,
         const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
@@ -328,7 +324,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                                   ncols_pad <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS &&
                                   nrows <= ggml_cuda_info().devices[device].nsm;
 
-    // the padded row has to fit in shared memory, which only raised thresholds can exceed
+    // the padded row must fit in shared memory
     if ((bitonic_short || bitonic_few_rows) && ncols_pad * sizeof(int) <= ggml_cuda_info().devices[device].smpb) {
         top_k_bitonic_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
         return;

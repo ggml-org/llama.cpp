@@ -11990,7 +11990,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, 2048));
         }
     }
-    // where radix select starts to beat sorting: short-to-medium rows against the row count
+    // bitonic vs radix crossover
     for (auto cols : {520, 1000, 2048, 3000, 4096}) {
         for (auto nrows : {2, 16, 32, 48, 64, 128, 256, 512}) {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, 16));
