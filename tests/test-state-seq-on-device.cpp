@@ -131,6 +131,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    for (size_t truncated_size : { size_t(8), size_t(13), state.size() - 1 }) {
+        if (!expect_fail(ctx, state.data(), truncated_size, "truncated device metadata")) {
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
+        }
+        const size_t restored = set_on_device(ctx, state.data(), state.size(), 0, &escaped);
+        if (escaped || restored != state.size()) {
+            fprintf(stderr, "%s : valid restore failed after truncated input\n", __func__);
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
+        }
+    }
+
     {
         std::vector<uint8_t> buf = state;
         const llama_seq_id seq_id_bad = 3;

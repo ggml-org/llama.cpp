@@ -1,7 +1,7 @@
 #pragma once
 
 // Common includes for all test files
-#include <nlohmann/json.hpp>
+#include "json.h"
 #include <string>
 #include <vector>
 
@@ -11,9 +11,9 @@
 #include "simple-tokenize.h"
 
 struct bench_tool_call {
-    std::string            id;
-    std::string            name;
-    nlohmann::ordered_json args;
+    std::string id;
+    std::string name;
+    common_json args;
 };
 
 // Test function declarations

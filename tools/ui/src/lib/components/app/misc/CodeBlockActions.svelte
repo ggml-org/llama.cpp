@@ -17,17 +17,17 @@
 
 <div class="code-block-actions">
 	<ActionIconCopyToClipboard
-		text={code}
-		canCopy={!disabled}
 		ariaLabel={disabled ? 'Code incomplete' : 'Copy code'}
+		canCopy={!disabled}
+		text={code}
 	/>
 
 	{#if showPreview}
 		<ActionIcon
-			icon={Eye}
-			tooltip={disabled ? 'Code incomplete' : 'Preview code'}
 			{disabled}
+			icon={Eye}
 			onclick={() => onPreview!(code, language)}
+			tooltip={disabled ? 'Code incomplete' : 'Preview code'}
 		/>
 	{/if}
 </div>

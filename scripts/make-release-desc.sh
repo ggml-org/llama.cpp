@@ -15,7 +15,8 @@
 # tag exists.
 #
 # Env (when running in GitHub Actions):
-#   GITHUB_OUTPUT: previous_tag, changelog_title, changelog and nightly are written here
+#   GITHUB_OUTPUT: previous_tag, changelog_title, changelog, nightly and nightly_tag
+#     are written here
 #   GITHUB_REPOSITORY: owner/repo, used to build the nightly release URL (skipped when unset)
 set -euo pipefail
 
@@ -38,6 +39,15 @@ if ! git fetch --tags origin 2>/dev/null; then
     echo "Warning: could not fetch tags from origin (local run?)"
 fi
 
+# Canonical https URL of this repository (from the origin remote), used to link the previous release.
+# Left empty on local runs without an origin remote.
+if ORIGIN_URL="$(git remote get-url origin 2>/dev/null)"; then
+    REPO_URL="https://$(printf '%s' "${ORIGIN_URL}" \
+        | sed -E -e 's#^git@([^:]+):#https://\1/#' -e 's#^https?://##' -e 's#\.git$##')"
+else
+    REPO_URL=""
+fi
+
 # Release commit: the commit <version> points at when the tag exists, HEAD otherwise.
 if ! RELEASE_COMMIT="$(git rev-parse -q --verify "refs/tags/${VERSION}^{commit}" 2>/dev/null)"; then
     RELEASE_COMMIT="$(git rev-parse HEAD)"
@@ -52,10 +62,14 @@ PREV="$( { git tag --list; echo "${VERSION}"; } \
 
 if [[ -n "${PREV}" ]]; then
     CHANGELOG="$(git log --oneline "${PREV}..${RELEASE_COMMIT}")"
-    CHANGELOG_TITLE="Change log since ${PREV}"
+    if [[ -n "${REPO_URL}" ]]; then
+        CHANGELOG_TITLE="Changelog since [${PREV}](${REPO_URL}/releases/tag/${PREV})"
+    else
+        CHANGELOG_TITLE="Changelog since ${PREV}"
+    fi
 else
     CHANGELOG="(no previous release tag found)"
-    CHANGELOG_TITLE="Change log"
+    CHANGELOG_TITLE="Changelog"
 fi
 
 # Nightly release: the b* tag pointing at the release commit (|| true: no match is not an error)
@@ -80,6 +94,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         echo "previous_tag=${PREV}"
         echo "changelog_title=${CHANGELOG_TITLE}"
         echo "nightly=${NIGHTLY}"
+        echo "nightly_tag=${NIGHTLY_TAG}"
         echo "changelog<<CHANGELOG_EOF"
         echo "${CHANGELOG}"
         echo "CHANGELOG_EOF"

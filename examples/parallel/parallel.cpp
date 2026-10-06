@@ -11,6 +11,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <random>
 #include <string>
 #include <vector>
 #include <ctime>
@@ -156,7 +157,7 @@ static std::vector<std::string> split_string(const std::string& input, char deli
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
-    srand(1234);
+    std::mt19937 rng(1234);
 
     common_params params;
 
@@ -223,8 +224,6 @@ int main(int argc, char ** argv) {
 
     LOG_INF("\n\n");
 
-    const int n_ctx = llama_n_ctx(ctx);
-
     if (sseed >= 0) {
         LOG_INF("%s: initializing all samplers with the same RNG seed: %d (use a negative seed to have different seeds)\n", __func__, sseed);
     } else {
@@ -251,7 +250,7 @@ int main(int argc, char ** argv) {
 
     // the max batch size is as large as the context to handle cases where we get very long input prompt from multiple
     // users. regardless of the size, the main loop will chunk the batch into a maximum of params.n_batch tokens at a time
-    llama_batch batch = llama_batch_init(n_ctx, 0, 1);
+    common_batch batch(ctx);
 
     int32_t n_total_prompt = 0;
     int32_t n_total_gen    = 0;
@@ -267,10 +266,10 @@ int main(int argc, char ** argv) {
         LOG_INF("%s: Evaluating the system prompt ...\n", __func__);
 
         for (int32_t i = 0; i < n_tokens_system; ++i) {
-            common_batch_add(batch, tokens_system[i], i, { 0 }, false);
+            batch.add(tokens_system[i], i, 0, false);
         }
 
-        if (llama_decode(ctx, batch) != 0) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("%s: llama_decode() failed\n", __func__);
             return 1;
         }
@@ -286,7 +285,7 @@ int main(int argc, char ** argv) {
     LOG_INF("Processing requests ...\n\n");
 
     while (true) {
-        common_batch_clear(batch);
+        batch.clear();
 
         // decode any currently ongoing sequences
         for (auto & client : clients) {
@@ -294,14 +293,14 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            client.i_batch = batch.n_tokens;
+            client.i_batch = batch.size();
 
-            common_batch_add(batch, client.sampled, client.n_past++, { client.id + 1 }, true);
+            batch.add(client.sampled, client.n_past++, client.id + 1, true);
 
             client.n_decoded += 1;
         }
 
-        if (batch.n_tokens == 0) {
+        if (batch.size() == 0) {
             // all sequences have ended - clear the entire KV cache
             for (int i = 1; i <= n_clients; ++i) {
                 llama_memory_seq_rm(mem, i, -1, -1);
@@ -313,7 +312,7 @@ int main(int argc, char ** argv) {
         }
 
         // insert new sequences for decoding
-        if (cont_batching || batch.n_tokens == 0) {
+        if (cont_batching || batch.size() == 0) {
             for (auto & client : clients) {
                 if (client.seq_id == -1 && g_seq_id < n_seq) {
                     client.seq_id = g_seq_id;
@@ -321,7 +320,7 @@ int main(int argc, char ** argv) {
                     client.t_start_prompt = ggml_time_us();
                     client.t_start_gen    = 0;
 
-                    client.input    = k_prompts[rand() % k_prompts.size()];
+                    client.input    = k_prompts[rng() % k_prompts.size()];
                     client.response = "";
 
                     // construct the prompt:
@@ -334,10 +333,10 @@ int main(int argc, char ** argv) {
                         client.prompt += k_system;
                     }
 
-                    const int n_junk_cur = rand() % n_junk;
+                    const int n_junk_cur = rng() % n_junk;
 
                     for (int i = 0; i < n_junk_cur; ++i) {
-                        const int r = rand() % k_questions.size();
+                        const int r = rng() % k_questions.size();
                         client.prompt += "User:\n" + k_questions[r] + "\nAssistant:\n " + k_answers[r] + "\n";
                     }
                     client.prompt += "User:\n" + client.input + "\nAssistant:\n";
@@ -349,17 +348,17 @@ int main(int argc, char ** argv) {
                     tokens_prompt = common_tokenize(ctx, client.prompt, false);
 
                     for (size_t i = 0; i < tokens_prompt.size(); ++i) {
-                        common_batch_add(batch, tokens_prompt[i], client.n_past++, { client.id + 1 }, false);
+                        batch.add(tokens_prompt[i], client.n_past++, client.id + 1, false);
                     }
 
                     // extract the logits only for the last token
-                    if (batch.n_tokens > 0) {
-                        batch.logits[batch.n_tokens - 1] = true;
+                    if (batch.size() > 0) {
+                        batch.set_output(batch.size() - 1, true);
                     }
 
                     client.n_prompt  = tokens_prompt.size();
                     client.n_decoded = 0;
-                    client.i_batch   = batch.n_tokens - 1;
+                    client.i_batch   = batch.size() - 1;
 
                     LOG_INF("\033[31mClient %3d, seq %4d, junk = %4d, prompt = %d, started decoding ...\033[0m\n", client.id, client.seq_id, n_junk_cur, client.n_prompt);
 
@@ -373,7 +372,7 @@ int main(int argc, char ** argv) {
             }
         }
 
-        if (batch.n_tokens == 0) {
+        if (batch.size() == 0) {
             break;
         }
 
@@ -382,27 +381,17 @@ int main(int argc, char ** argv) {
 
         int32_t i_next = 0;
 
-        for (int32_t i = 0; i < batch.n_tokens; i = i_next) {
+        for (int32_t i = 0; i < batch.size(); i = i_next) {
             // experiment: process in powers of 2
-            //if (i + n_batch > (int32_t) batch.n_tokens && n_batch > 32) {
+            //if (i + n_batch > (int32_t) batch.size() && n_batch > 32) {
             //    n_batch /= 2;
             //    i -= n_batch;
             //    continue;
             //}
 
-            const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
+            const int32_t n_tokens = std::min(n_batch, batch.size() - i);
 
-            llama_batch batch_view = {
-                n_tokens,
-                batch.token    + i,
-                nullptr,
-                batch.pos      + i,
-                batch.n_seq_id + i,
-                batch.seq_id   + i,
-                batch.logits   + i,
-            };
-
-            const int ret = llama_decode(ctx, batch_view);
+            const int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(i, n_tokens));
             if (ret != 0) {
                 if (n_batch == 1 || ret < 0) {
                     // if you get here, it means the KV cache is full - try increasing it via the context size
@@ -510,7 +499,6 @@ int main(int argc, char ** argv) {
     // TODO: print sampling/grammar timings for all clients
     llama_perf_context_print(ctx);
 
-    llama_batch_free(batch);
 
     llama_backend_free();
 

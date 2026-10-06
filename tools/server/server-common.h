@@ -5,21 +5,23 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
+#include "subproc.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cinttypes>
+#include <cstdio>
 #include <functional>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_TRC(slot, fmt, ...) LOG_TRC("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
@@ -42,9 +44,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     // Fallback null to default value
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
-            return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
+            return body.at(key).get<T>();
+        } catch (const common_json_error & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s', using default value: %s\n", key.c_str(), err.what());
             return default_value;
         }
     } else {
@@ -102,6 +104,20 @@ std::string gen_tool_call_id();
 
 // get a random marker; note: each time the server restarts, the marker will be different
 const char * get_media_marker();
+
+//
+// model output modalities
+//
+
+// output modalities for architecture.output_modalities in GET /models
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type);
+
+// architecture object of GET /models; shared by the direct server and the router
+json server_model_architecture_json(
+        bool inp_image,
+        bool inp_audio,
+        bool inp_video,
+        const std::vector<std::string> & output_modalities);
 
 //
 // lora utils
@@ -268,9 +284,20 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// load a media file from an URL (http, file, data) or from raw base64 data
+void handle_media(
+        std::vector<raw_buffer> & out_files,
+        const std::string & url,
+        const std::string & media_path);
+
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
+server_tokens process_mtmd_prompt(
+                                        mtmd_context * mctx,
+                                        const std::string & prompt,
+                                        const std::vector<raw_buffer> & files,
+                                        const mtmd_helper_init_opt & init_opt,
+                                        bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -290,7 +317,17 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         mtmd_context * mctx,
                                         const json & json_prompt,
                                         bool add_special,
-                                        bool parse_special);
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
+
+// tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
+server_tokens tokenize_input_subprompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & json_prompt,
+                                        bool add_special,
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
 
 //
 // OAI utils
@@ -321,6 +358,16 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
+
+// used by /embeddings endpoint, content has the same format as a chat message content array
+server_tokens tokenize_oai_content_array(
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
+    const server_chat_params & opt,
+    json content,
+    bool add_special,
+    bool parse_special,
+    const mtmd_helper_init_opt & init_opt);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
@@ -539,7 +586,8 @@ server_tokens format_prompt_rerank(
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc);
+        const std::string & doc,
+        const mtmd_helper_init_opt & init_opt);
 
 // simple implementation of a pipe
 // used for streaming data between threads
@@ -603,4 +651,56 @@ struct server_pipe {
         cv.notify_one();
         return true;
     }
+};
+
+// a child server writes its state commands to stdout and its logs to stderr
+enum server_subproc_stream {
+    SERVER_SUBPROC_STDOUT,
+    SERVER_SUBPROC_STDERR,
+    SERVER_SUBPROC_STREAMS,
+};
+
+// gives the current stdout to the caller as a stream of its own, and sends everything else written to stdout to stderr
+FILE * server_reserve_stdout();
+
+// wrapper around common_subproc to manage a child server process
+// mainly used by router mode
+struct server_subproc {
+    common_subproc sproc;
+    std::atomic<bool> stopped{false}; // set by the monitor once the process exited and was reaped
+
+    bool is_alive() { return sproc.alive(); }
+    void terminate() { sproc.terminate(); }
+    int  join() { return sproc.join(); }
+
+    // true if both output pipes of the child are available (call after create())
+    bool has_output();
+
+    // true once both output pipes are closed
+    bool output_closed() const;
+
+    // non-blocking read from one output pipe
+    // returns the number of bytes read, 0 when nothing is available, -1 when the pipe is closed or broken
+    int read_output(server_subproc_stream stream, char * buf, size_t len);
+
+    // wait until one of a set of children has output, wake() is called, or a timeout passes
+    struct waiter {
+        waiter();
+        ~waiter();
+
+        // thread-safe; on Windows this is a no-op, wait() returns within 50 ms anyway
+        void wake();
+
+        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data on an open pipe (or a broken pipe)
+        void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
+
+    private:
+#ifndef _WIN32
+        intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
+#endif
+    };
+
+private:
+    intptr_t out_handles[SERVER_SUBPROC_STREAMS] = { -1, -1 }; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
+    bool     out_closed [SERVER_SUBPROC_STREAMS] = { false, false };
 };

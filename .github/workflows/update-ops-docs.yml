@@ -14,9 +14,13 @@ on:
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
     update-ops-docs:
-        runs-on: [self-hosted, fast, ARM64]
+        runs-on: ubuntu-slim
 
         steps:
         - name: Checkout repository

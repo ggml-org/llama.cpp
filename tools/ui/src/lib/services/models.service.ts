@@ -1,92 +1,68 @@
+/**
+ * ModelsService - Stateless model management API layer
+ *
+ * Wraps the /models endpoints (list, load, unload) and the /models/sse
+ * status feed in MODEL and ROUTER modes. No reactive state; consumed by
+ * modelsStore and its status manager.
+ */
+
 import { base } from '$app/paths';
-import {
-	API_MODELS,
-	MODEL_ID,
-	SSE_DATA_PREFIX,
-	SSE_LINE_SEPARATOR,
-	SSE_RECORD_SEPARATOR
-} from '$lib/constants';
+import { API_MODELS, MODEL_ID, type ModelSidecar } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
-import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
+import {
+	apiDelete,
+	apiFetch,
+	apiPost,
+	extractSseDataPayload,
+	normalizeModelName,
+	sidecarFromFileToken,
+	sidecarFromTag,
+	splitSseRecords
+} from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
-	/**
-	 *
-	 *
-	 * Listing
-	 *
-	 *
-	 */
+	private static readonly SSE_RECONNECT_MS = 1000;
 
 	/**
-	 * Fetch list of models from OpenAI-compatible endpoint.
-	 * Works in both MODEL and ROUTER modes.
-	 *
-	 * @returns List of available models with basic metadata
+	 * Build the `<repo>:<tag>` string POST /models expects, so callers don't need
+	 * to know the tag conventions.
 	 */
-	static async list(): Promise<ApiModelListResponse> {
-		return apiFetch<ApiModelListResponse>(API_MODELS.LIST);
+	static buildDownloadTag(
+		repoId: string,
+		quant: string | null,
+		sidecar: ModelSidecar | null
+	): string {
+		if (!quant && !sidecar) return repoId;
+
+		if (!quant) return `${repoId}:${sidecar}`;
+
+		const tag = sidecar ? `${quant}-${sidecar}` : quant;
+
+		return `${repoId}:${tag}`;
 	}
 
 	/**
-	 * Fetch list of all models with detailed metadata (ROUTER mode).
-	 * Returns models with load status, paths, and other metadata
-	 * beyond what the OpenAI-compatible endpoint provides.
-	 *
-	 * @returns List of models with detailed status and configuration info
+	 * Cancel an in-flight download, or remove a downloaded/failed entry from the
+	 * model cache (ROUTER mode only): DELETE /models?model=<repo:tag>.
 	 */
-	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		return apiFetch<ApiRouterModelsListResponse>(API_MODELS.LIST);
+	static async cancelDownload(hfRepoWithTag: string): Promise<ApiModelsDownloadResponse> {
+		return apiDelete<ApiModelsDownloadResponse>(API_MODELS.DELETE, {
+			model: hfRepoWithTag
+		});
 	}
 
 	/**
-	 *
-	 *
-	 * Load/Unload
-	 *
-	 *
+	 * Start a model download from HuggingFace (ROUTER mode only). The response
+	 * returns immediately; progress arrives over /models/sse. The server picks
+	 * the file matching the tag and also pulls the model's mmproj/draft sidecars.
 	 */
+	static async downloadModel(hfRepoWithTag: string): Promise<ApiModelsDownloadResponse> {
+		const payload: ApiModelsDownloadRequest = { model: hfRepoWithTag };
 
-	/**
-	 * Load a model (ROUTER mode only).
-	 * Sends POST request to `/models/load`. Note: the endpoint returns success
-	 * before loading completes — use polling to await actual load status.
-	 *
-	 * @param modelId - Model identifier to load
-	 * @param extraArgs - Optional additional arguments to pass to the model instance
-	 * @returns Load response from the server
-	 */
-	static async load(modelId: string, extraArgs?: string[]): Promise<ApiRouterModelsLoadResponse> {
-		const payload: { model: string; extra_args?: string[] } = { model: modelId };
-
-		if (extraArgs && extraArgs.length > 0) {
-			payload.extra_args = extraArgs;
-		}
-
-		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS.LOAD, payload);
+		return apiPost<ApiModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
 	}
-
-	/**
-	 * Unload a model (ROUTER mode only).
-	 * Sends POST request to `/models/unload`. Note: the endpoint returns success
-	 * before unloading completes — use polling to await actual unload status.
-	 *
-	 * @param modelId - Model identifier to unload
-	 * @returns Unload response from the server
-	 */
-	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
-	}
-
-	/**
-	 *
-	 *
-	 * Status
-	 *
-	 *
-	 */
 
 	/**
 	 * Check if a model is loaded based on its metadata.
@@ -98,12 +74,6 @@ export class ModelsService {
 		return model.status.value === ServerModelStatus.LOADED;
 	}
 
-	/**
-	 * Check if a model is currently loading.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADING
-	 */
 	static isModelLoading(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADING;
 	}
@@ -111,12 +81,220 @@ export class ModelsService {
 	/**
 	 *
 	 *
-	 * Status Feed
+	 * Load/Unload
 	 *
 	 *
 	 */
 
-	private static readonly SSE_RECONNECT_MS = 1000;
+	/**
+	 * True when a router entry id marks a downloaded sidecar file, e.g.
+	 * `org/model:Q4_0-mtp` or `org/model:mmproj`, not a loadable model.
+	 */
+	static isSidecarEntry(modelId: string): boolean {
+		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
+
+		if (idx === MODEL_ID.NOT_FOUND) return false;
+
+		return sidecarFromTag(modelId.slice(idx + 1)) !== null;
+	}
+
+	/**
+	 * Fetch list of models from OpenAI-compatible endpoint.
+	 * Works in both MODEL and ROUTER modes.
+	 *
+	 * @returns List of available models with basic metadata
+	 */
+	static async list(): Promise<ApiModelsListResponse> {
+		return apiFetch<ApiModelsListResponse>(API_MODELS.LIST);
+	}
+
+	/**
+	 * Load a model (ROUTER mode only).
+	 * Sends POST request to `/models/load`. Note: the endpoint returns success
+	 * before loading completes — use polling to await actual load status.
+	 *
+	 * @param modelId - Model identifier to load
+	 * @param extraArgs - Optional additional arguments to pass to the model instance
+	 * @returns Load response from the server
+	 */
+	static async load(modelId: string, extraArgs?: string[]): Promise<ApiModelsLoadResponse> {
+		const payload: { model: string; extra_args?: string[] } = { model: modelId };
+
+		if (extraArgs && extraArgs.length > 0) {
+			payload.extra_args = extraArgs;
+		}
+
+		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload);
+	}
+
+	/**
+	 * Parse a model ID string into its structured components.
+	 *
+	 * Handles conventions like:
+	 *   `<org>/<ModelName>-<Parameters>(-<ActivatedParameters>)(-<Tags>)(-<Quantization>):<Quantization>`
+	 *   `<ModelName>.<Quantization>` (dot-separated quantization, e.g. `model.Q4_K_M`)
+	 *
+	 * @param modelId - Raw model identifier string
+	 * @returns Structured {@link ParsedModelId} with all detected fields
+	 */
+	static parseModelId(modelId: string): ParsedModelId {
+		const result: ParsedModelId = {
+			activatedParams: null,
+			modelName: null,
+			orgName: null,
+			params: null,
+			quantization: null,
+			raw: modelId,
+			sidecar: null,
+			tags: []
+		};
+
+		// strip directory path and weight extension so a bare `-m /path/file.gguf`
+		// parses like a clean repo id; the HF `org/model` form is preserved
+		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
+
+		// 0. Detect sidecar prefix (mtp-, dflash-, mmproj-) before any other
+		//    splitting so the inner id parses cleanly.
+		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_REGEX);
+
+		if (prefixMatch) {
+			result.sidecar = sidecarFromFileToken(prefixMatch[1].toLowerCase());
+			source = prefixMatch[2];
+
+			// a sidecar filename's remainder may be just the quant token,
+			// e.g. `mtp-Q4_0.gguf` or `mmproj-F16.gguf`
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(source)) {
+				result.quantization = source.toUpperCase();
+				source = '';
+			}
+		} else {
+			// 0b. Detect `-<type>` suffix (`-mtp`, `-dflash`, `-dspark`, `-eagle3`).
+			//     Only strip it when the segment preceding it looks like a real quant
+			//     token, so a model literally named `MyModel-mtp` is not mistaken for a
+			//     draft one.
+			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
+
+			if (suffixMatch) {
+				const candidate = suffixMatch[1];
+				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
+
+				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(headSeg)) {
+					result.sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
+					source = candidate;
+				}
+			}
+		}
+
+		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
+		const colonIdx = source.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
+
+		let modelPath: string;
+
+		if (colonIdx !== MODEL_ID.NOT_FOUND) {
+			result.quantization = source.slice(colonIdx + 1) || null;
+			modelPath = source.slice(0, colonIdx);
+		} else {
+			modelPath = source;
+		}
+
+		// 2. Extract org name (e.g. `org/model` -> org = "org")
+		const slashIdx = modelPath.indexOf(MODEL_ID.ORG_SEPARATOR);
+
+		let modelStr: string;
+
+		if (slashIdx !== MODEL_ID.NOT_FOUND) {
+			result.orgName = modelPath.slice(0, slashIdx);
+			modelStr = modelPath.slice(slashIdx + 1);
+		} else {
+			modelStr = modelPath;
+		}
+
+		// 3. Handle dot-separated quantization (e.g. `model-name.Q4_K_M`)
+		const dotIdx = modelStr.lastIndexOf('.');
+
+		if (dotIdx !== MODEL_ID.NOT_FOUND && !result.quantization) {
+			const afterDot = modelStr.slice(dotIdx + 1);
+
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(afterDot)) {
+				result.quantization = afterDot;
+				modelStr = modelStr.slice(0, dotIdx);
+			}
+		}
+
+		const segments = modelStr.split(MODEL_ID.SEGMENT_SEPARATOR);
+
+		// 4. Detect trailing quantization from dash-separated segments
+		//    Handle UD-prefixed quantization (e.g. `UD-Q8_K_XL`) and
+		//    standalone quantization (e.g. `Q4_K_M`, `BF16`, `F16`, `MXFP4`)
+		if (!result.quantization && segments.length > 1) {
+			const last = segments[segments.length - 1];
+			const secondLast = segments.length > 2 ? segments[segments.length - 2] : null;
+
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(last)) {
+				if (secondLast && MODEL_ID.CUSTOM_QUANTIZATION_PREFIX_REGEX.test(secondLast)) {
+					result.quantization = `${secondLast}-${last}`;
+					segments.splice(segments.length - 2, 2);
+				} else {
+					result.quantization = last;
+					segments.pop();
+				}
+			}
+		}
+
+		// 5. Find params and activated params
+		let paramsIdx = MODEL_ID.NOT_FOUND;
+		let activatedParamsIdx = MODEL_ID.NOT_FOUND;
+
+		for (let i = 0; i < segments.length; i++) {
+			const seg = segments[i];
+
+			if (paramsIdx === MODEL_ID.NOT_FOUND && MODEL_ID.PARAMS_REGEX.test(seg)) {
+				paramsIdx = i;
+				result.params = seg.toUpperCase();
+			} else if (paramsIdx !== MODEL_ID.NOT_FOUND && MODEL_ID.ACTIVATED_PARAMS_REGEX.test(seg)) {
+				activatedParamsIdx = i;
+				result.activatedParams = seg.toUpperCase();
+			}
+		}
+
+		// 6. Model name = segments before params; tags = remaining segments after params
+		const pivotIdx = paramsIdx !== MODEL_ID.NOT_FOUND ? paramsIdx : segments.length;
+		const modelSegments = segments.slice(0, pivotIdx);
+
+		// strip trailing container-format segments (e.g. GGUF) from the model name
+		while (
+			modelSegments.length > 0 &&
+			MODEL_ID.IGNORED_SEGMENTS.has(modelSegments[modelSegments.length - 1].toUpperCase())
+		) {
+			modelSegments.pop();
+		}
+
+		result.modelName = modelSegments.join(MODEL_ID.SEGMENT_SEPARATOR) || null;
+
+		if (paramsIdx !== MODEL_ID.NOT_FOUND) {
+			result.tags = segments.slice(paramsIdx + 1).filter((_, relIdx) => {
+				const absIdx = paramsIdx + 1 + relIdx;
+
+				if (absIdx === activatedParamsIdx) return false;
+
+				return !MODEL_ID.IGNORED_SEGMENTS.has(segments[absIdx].toUpperCase());
+			});
+		}
+
+		return result;
+	}
+
+	/**
+	 * Unload a model (ROUTER mode only).
+	 * Sends POST request to `/models/unload`. Note: the endpoint returns success
+	 * before unloading completes — use polling to await actual unload status.
+	 *
+	 * @param modelId - Model identifier to unload
+	 * @returns Unload response from the server
+	 */
+	static async unload(modelId: string): Promise<ApiModelsUnloadResponse> {
+		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
+	}
 
 	/**
 	 * Read the /models/sse feed and invoke onEvent for each parsed envelope.
@@ -149,15 +327,14 @@ export class ModelsService {
 
 						buffer += decoder.decode(value, { stream: true });
 
-						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+						const { records, rest } = splitSseRecords(buffer);
 
-						while (boundary !== -1) {
-							const event = ModelsService.parseStatusRecord(buffer.slice(0, boundary));
+						buffer = rest;
+
+						for (const record of records) {
+							const event = ModelsService.parseStatusRecord(record);
 
 							if (event) onEvent(event);
-
-							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
-							boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
 						}
 					}
 				}
@@ -176,11 +353,7 @@ export class ModelsService {
 	 * carries no data payload or malformed JSON.
 	 */
 	private static parseStatusRecord(record: string): ApiModelsSseEvent | null {
-		const payload = record
-			.split(SSE_LINE_SEPARATOR)
-			.filter((line) => line.startsWith(SSE_DATA_PREFIX))
-			.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
-			.join(SSE_LINE_SEPARATOR);
+		const payload = extractSseDataPayload(record);
 
 		if (payload.length === 0) return null;
 
@@ -189,126 +362,5 @@ export class ModelsService {
 		} catch {
 			return null;
 		}
-	}
-
-	/**
-	 *
-	 *
-	 * Parsing
-	 *
-	 *
-	 */
-
-	/**
-	 * Parse a model ID string into its structured components.
-	 *
-	 * Handles conventions like:
-	 *   `<org>/<ModelName>-<Parameters>(-<ActivatedParameters>)(-<Tags>)(-<Quantization>):<Quantization>`
-	 *   `<ModelName>.<Quantization>` (dot-separated quantization, e.g. `model.Q4_K_M`)
-	 *
-	 * @param modelId - Raw model identifier string
-	 * @returns Structured {@link ParsedModelId} with all detected fields
-	 */
-	static parseModelId(modelId: string): ParsedModelId {
-		const result: ParsedModelId = {
-			activatedParams: null,
-			modelName: null,
-			orgName: null,
-			params: null,
-			quantization: null,
-			raw: modelId,
-			tags: []
-		};
-		// strip directory path and weight extension so a bare `-m /path/file.gguf`
-		// parses like a clean repo id; the HF `org/model` form is preserved
-		const source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
-		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
-		const colonIdx = source.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
-
-		let modelPath: string;
-
-		if (colonIdx !== MODEL_ID.NOT_FOUND) {
-			result.quantization = source.slice(colonIdx + 1) || null;
-			modelPath = source.slice(0, colonIdx);
-		} else {
-			modelPath = source;
-		}
-
-		// 2. Extract org name (e.g. `org/model` -> org = "org")
-		const slashIdx = modelPath.indexOf(MODEL_ID.ORG_SEPARATOR);
-
-		let modelStr: string;
-
-		if (slashIdx !== MODEL_ID.NOT_FOUND) {
-			result.orgName = modelPath.slice(0, slashIdx);
-			modelStr = modelPath.slice(slashIdx + 1);
-		} else {
-			modelStr = modelPath;
-		}
-
-		// 3. Handle dot-separated quantization (e.g. `model-name.Q4_K_M`)
-		const dotIdx = modelStr.lastIndexOf('.');
-
-		if (dotIdx !== MODEL_ID.NOT_FOUND && !result.quantization) {
-			const afterDot = modelStr.slice(dotIdx + 1);
-
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(afterDot)) {
-				result.quantization = afterDot;
-				modelStr = modelStr.slice(0, dotIdx);
-			}
-		}
-
-		const segments = modelStr.split(MODEL_ID.SEGMENT_SEPARATOR);
-
-		// 4. Detect trailing quantization from dash-separated segments
-		//    Handle UD-prefixed quantization (e.g. `UD-Q8_K_XL`) and
-		//    standalone quantization (e.g. `Q4_K_M`, `BF16`, `F16`, `MXFP4`)
-		if (!result.quantization && segments.length > 1) {
-			const last = segments[segments.length - 1];
-			const secondLast = segments.length > 2 ? segments[segments.length - 2] : null;
-
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(last)) {
-				if (secondLast && MODEL_ID.CUSTOM_QUANTIZATION_PREFIX_RE.test(secondLast)) {
-					result.quantization = `${secondLast}-${last}`;
-					segments.splice(segments.length - 2, 2);
-				} else {
-					result.quantization = last;
-					segments.pop();
-				}
-			}
-		}
-
-		// 5. Find params and activated params
-		let paramsIdx = MODEL_ID.NOT_FOUND;
-		let activatedParamsIdx = MODEL_ID.NOT_FOUND;
-
-		for (let i = 0; i < segments.length; i++) {
-			const seg = segments[i];
-
-			if (paramsIdx === MODEL_ID.NOT_FOUND && MODEL_ID.PARAMS_RE.test(seg)) {
-				paramsIdx = i;
-				result.params = seg.toUpperCase();
-			} else if (paramsIdx !== MODEL_ID.NOT_FOUND && MODEL_ID.ACTIVATED_PARAMS_RE.test(seg)) {
-				activatedParamsIdx = i;
-				result.activatedParams = seg.toUpperCase();
-			}
-		}
-
-		// 6. Model name = segments before params; tags = remaining segments after params
-		const pivotIdx = paramsIdx !== MODEL_ID.NOT_FOUND ? paramsIdx : segments.length;
-
-		result.modelName = segments.slice(0, pivotIdx).join(MODEL_ID.SEGMENT_SEPARATOR) || null;
-
-		if (paramsIdx !== MODEL_ID.NOT_FOUND) {
-			result.tags = segments.slice(paramsIdx + 1).filter((_, relIdx) => {
-				const absIdx = paramsIdx + 1 + relIdx;
-
-				if (absIdx === activatedParamsIdx) return false;
-
-				return !MODEL_ID.IGNORED_SEGMENTS.has(segments[absIdx].toUpperCase());
-			});
-		}
-
-		return result;
 	}
 }

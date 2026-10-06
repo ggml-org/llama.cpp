@@ -188,3 +188,182 @@ kernel void kernel_rms_norm_mul(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)];
     }
 }
+
+//------------------------------------------------------------------------------
+// rms_norm + mul (norm weight) + add (residual), fused. Mirrors
+// kernel_rms_norm_mul with an extra residual operand src2: computes
+//   y = (rmsnorm(x) * w) + g
+// in one dispatch, removing one kernel launch + one global round-trip per
+// residual block (the dominant per-layer adjacency on Gemma matformers).
+//------------------------------------------------------------------------------
+kernel void kernel_rms_norm_mul_add(
+        global char * src0,
+        ulong offset0,
+        global char * src1,
+        ulong offset1,
+        global char * src2,
+        ulong offset2,
+        global char * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne10,
+        int ne11,
+        int ne12,
+        int ne13,
+        ulong nb11,
+        ulong nb12,
+        ulong nb13,
+        int ne20,
+        int ne21,
+        int ne22,
+        int ne23,
+        ulong nb21,
+        ulong nb22,
+        ulong nb23,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3,
+        float eps,
+        local float * sum
+) {
+    src0 = src0 + offset0;
+    src1 = src1 + offset1;
+    src2 = src2 + offset2;
+    dst  = dst  + offsetd;
+
+    if (get_sub_group_id() == 0) {
+        sum[get_sub_group_local_id()] = 0.0f;
+    }
+
+    int i03 = get_group_id(2);
+    int i02 = get_group_id(1);
+    int i01 = get_group_id(0);
+
+    global float4 * x = (global float4 *) (src0 + i03*nb03 + i02*nb02 + i01*nb01);
+    global float4 * f = (global float4 *) (src1 + (i03%ne13)*nb13 + (i02%ne12)*nb12 + (i01%ne11)*nb11);
+    global float4 * g = (global float4 *) (src2 + (i03%ne23)*nb23 + (i02%ne22)*nb22 + (i01%ne21)*nb21);
+
+    float sumf = 0;
+
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        sumf += dot(x[i00], x[i00]);
+    }
+    sumf = sub_group_reduce_add(sumf);
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (get_sub_group_local_id() == 0) {
+        sum[get_sub_group_id()] = sumf;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    sumf = sum[get_sub_group_local_id()];
+    sumf = sub_group_reduce_add(sumf);
+
+    float mean  = sumf / ne00;
+    float scale = 1.0f/sqrt(mean + eps);
+
+    global float4 * y = (global float4 *) (dst + i03*nb3 + i02*nb2 + i01*nb1);
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        y[i00] = (x[i00] * scale) * f[i00%(ne10/4)] + g[i00%(ne20/4)];
+    }
+}
+
+//------------------------------------------------------------------------------
+// rms_norm + mul(norm weight) + add(residual) + mul(scalar scale), fused.
+// Computes y = ((rmsnorm(x) * w) + g) * s, where s is a broadcast SCALAR (e.g.
+// Gemma-4 layer_output_scale). Folds the trailing per-layer l_out scale-mul into
+// the residual-norm kernel: one extra dispatch + global round-trip saved per
+// layer. src3 points at the single scale value.
+//------------------------------------------------------------------------------
+kernel void kernel_rms_norm_mul_add_scale(
+        global char * src0,
+        ulong offset0,
+        global char * src1,
+        ulong offset1,
+        global char * src2,
+        ulong offset2,
+        global char * src3,
+        ulong offset3,
+        global char * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne10,
+        int ne11,
+        int ne12,
+        int ne13,
+        ulong nb11,
+        ulong nb12,
+        ulong nb13,
+        int ne20,
+        int ne21,
+        int ne22,
+        int ne23,
+        ulong nb21,
+        ulong nb22,
+        ulong nb23,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3,
+        float eps,
+        local float * sum
+) {
+    src0 = src0 + offset0;
+    src1 = src1 + offset1;
+    src2 = src2 + offset2;
+    src3 = src3 + offset3;
+    dst  = dst  + offsetd;
+
+    const float sc = *((global float *) src3);
+
+    if (get_sub_group_id() == 0) {
+        sum[get_sub_group_local_id()] = 0.0f;
+    }
+
+    int i03 = get_group_id(2);
+    int i02 = get_group_id(1);
+    int i01 = get_group_id(0);
+
+    global float4 * x = (global float4 *) (src0 + i03*nb03 + i02*nb02 + i01*nb01);
+    global float4 * f = (global float4 *) (src1 + (i03%ne13)*nb13 + (i02%ne12)*nb12 + (i01%ne11)*nb11);
+    global float4 * g = (global float4 *) (src2 + (i03%ne23)*nb23 + (i02%ne22)*nb22 + (i01%ne21)*nb21);
+
+    float sumf = 0;
+
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        sumf += dot(x[i00], x[i00]);
+    }
+    sumf = sub_group_reduce_add(sumf);
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (get_sub_group_local_id() == 0) {
+        sum[get_sub_group_id()] = sumf;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    sumf = sum[get_sub_group_local_id()];
+    sumf = sub_group_reduce_add(sumf);
+
+    float mean  = sumf / ne00;
+    float scale = 1.0f/sqrt(mean + eps);
+
+    global float4 * y = (global float4 *) (dst + i03*nb3 + i02*nb2 + i01*nb1);
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        y[i00] = ((x[i00] * scale) * f[i00%(ne10/4)] + g[i00%(ne20/4)]) * sc;
+    }
+}

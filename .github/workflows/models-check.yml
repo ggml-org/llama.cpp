@@ -1,0 +1,449 @@
+name: Models Backend Check
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/models-check.yml',
+      'ggml/**',
+      'tests/fusion/**',
+      'tests/test-fusion.cpp',
+      'tests/test-llama-archs.cpp',
+      'src/llama-graph.cpp',
+      'src/llama-model*',
+      'src/models/**'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/models-check.yml',
+      'ggml/**',
+      'tests/fusion/**',
+      'tests/test-fusion.cpp',
+      'tests/test-llama-archs.cpp',
+      'src/llama-graph.cpp',
+      'src/llama-model*',
+      'src/models/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  cuda:
+    runs-on: "hf-jobs-t4-medium:cuda13"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake time python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: models-check-cuda
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+            -DGGML_CUDA=ON
+          time cmake --build build --config Release --target test-llama-archs -j$(nproc)
+          time cmake --build build --config Release --target test-fusion -j$(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: models-check-cuda
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      # - name: Generate models
+      #   id: generate_models
+      #   run: |
+      #     rm -rf build-ci-models && mkdir -p build-ci-models
+      #     ./build/bin/test-llama-archs -o build-ci-models
+
+      # TODO: add for backends as they adopt the fusion debug API
+      # - name: Test fusion
+      #   id: test_fusion
+      #   run: |
+      #     ./build/bin/test-fusion --models build-ci-models --device CUDA0 --check tests/fusion/CUDA.csv
+
+      - name: Test archs
+        id: test_archs
+        run: |
+          GGML_CUDA_DEVICES=1 ./build/bin/test-llama-archs -s 1
+          GGML_CUDA_DEVICES=2 ./build/bin/test-llama-archs -s 1
+          GGML_CUDA_DEVICES=3 ./build/bin/test-llama-archs -s 1
+          GGML_CUDA_DEVICES=4 ./build/bin/test-llama-archs -s 1
+
+  metal:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DGGML_BLAS=OFF \
+            -DGGML_METAL=ON
+          time cmake --build build --config Release --target test-llama-archs -j $(sysctl -n hw.logicalcpu)
+          time cmake --build build --config Release --target test-fusion -j $(sysctl -n hw.logicalcpu)
+
+      - name: Generate models
+        id: generate_models
+        run: |
+          rm -rf build-ci-models && mkdir -p build-ci-models
+          ./build/bin/test-llama-archs -o build-ci-models
+
+      - name: Test fusion
+        id: test_fusion
+        run: |
+          ./build/bin/test-fusion --models build-ci-models --device MTL0 --check tests/fusion/MTL.csv
+
+      - name: Test archs
+        id: test_archs
+        run: |
+          GGML_METAL_DEVICES=1 ./build/bin/test-llama-archs -s 1
+          GGML_METAL_DEVICES=2 ./build/bin/test-llama-archs -s 1
+          GGML_METAL_DEVICES=3 ./build/bin/test-llama-archs -s 1
+          GGML_METAL_DEVICES=4 ./build/bin/test-llama-archs -s 1
+
+  rocm:
+    runs-on: [self-hosted, Linux, gfx1201, 1accel]
+    container: "rocm/dev-ubuntu-24.04:7.2.4-complete"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y build-essential jq cmake time python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: models-check-rocm
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DCMAKE_HIP_COMPILER=$(hipconfig -l)/clang \
+            -DGPU_TARGETS=gfx1201 \
+            -DGGML_HIP=ON
+          time cmake --build build --config Release --target test-llama-archs -j$(nproc)
+          time cmake --build build --config Release --target test-fusion -j$(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: models-check-rocm
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      # - name: Generate models
+      #   id: generate_models
+      #   run: |
+      #     rm -rf build-ci-models && mkdir -p build-ci-models
+      #     ./build/bin/test-llama-archs -o build-ci-models
+
+      # TODO: add for backends as they adopt the fusion debug API
+      # - name: Test fusion
+      #   id: test_fusion
+      #   run: |
+      #     ./build/bin/test-fusion --models build-ci-models --device CUDA0 --check tests/fusion/CUDA.csv
+
+      - name: Test archs
+        id: test_archs
+        run: |
+          GGML_CUDA_DEVICES=1 ./build/bin/test-llama-archs -s 1
+          GGML_CUDA_DEVICES=2 ./build/bin/test-llama-archs -s 1
+          GGML_CUDA_DEVICES=3 ./build/bin/test-llama-archs -s 1
+          GGML_CUDA_DEVICES=4 ./build/bin/test-llama-archs -s 1
+
+  vulkan-nvidia:
+    runs-on: "hf-jobs-t4-small:ubuntu26_04"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 time python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: models-check-vulkan-nvidia
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DGGML_VULKAN=ON
+          time cmake --build build --config Release --target test-llama-archs -j$(nproc)
+          time cmake --build build --config Release --target test-fusion -j$(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: models-check-vulkan-nvidia
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      # - name: Generate models
+      #   id: generate_models
+      #   run: |
+      #     rm -rf build-ci-models && mkdir -p build-ci-models
+      #     ./build/bin/test-llama-archs -o build-ci-models
+
+      # TODO: add for backends as they adopt the fusion debug API
+      # - name: Test fusion
+      #   id: test_fusion
+      #   run: |
+      #     ./build/bin/test-fusion --models build-ci-models --device Vulkan0 --check tests/fusion/Vulkan.csv
+
+      - name: Test archs
+        id: test_archs
+        run: |
+          ./build/bin/test-llama-archs -s 1
+
+  vulkan-amd:
+    runs-on: [self-hosted, Linux, gfx1201, 1accel]
+    container: "ubuntu:26.04"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y build-essential jq cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 time python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: models-check-vulkan-amd
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DGGML_VULKAN=ON
+          time cmake --build build --config Release --target test-llama-archs -j$(nproc)
+          time cmake --build build --config Release --target test-fusion -j$(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: models-check-vulkan-amd
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      # - name: Generate models
+      #   id: generate_models
+      #   run: |
+      #     rm -rf build-ci-models && mkdir -p build-ci-models
+      #     ./build/bin/test-llama-archs -o build-ci-models
+
+      # TODO: add for backends as they adopt the fusion debug API
+      # - name: Test fusion
+      #   id: test_fusion
+      #   run: |
+      #     ./build/bin/test-fusion --models build-ci-models --device Vulkan0 --check tests/fusion/Vulkan.csv
+
+      - name: Test archs
+        id: test_archs
+        run: |
+          ./build/bin/test-llama-archs -s 1
+
+  webgpu-nvidia:
+    runs-on: "hf-jobs-t4-small:ubuntu26_04"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan1 mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 time python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: models-check-webgpu-nvidia
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v20260908.214631"
+          DAWN_OWNER="google"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_SCHED_NO_REALLOC=ON \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dawn" \
+            -DDawn_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
+            -DGGML_WEBGPU=ON
+          time cmake --build build --config Release --target test-llama-archs -j$(nproc)
+          time cmake --build build --config Release --target test-fusion -j$(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: models-check-webgpu-nvidia
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      # - name: Generate models
+      #   id: generate_models
+      #   run: |
+      #     rm -rf build-ci-models && mkdir -p build-ci-models
+      #     ./build/bin/test-llama-archs -o build-ci-models
+
+      # TODO: add for backends as they adopt the fusion debug API
+      # - name: Test fusion
+      #   id: test_fusion
+      #   run: |
+      #     ./build/bin/test-fusion --models build-ci-models --device WebGPU --check tests/fusion/WebGPU.csv
+
+      - name: Test archs
+        id: test_archs
+        run: |
+          ./build/bin/test-llama-archs -s 1

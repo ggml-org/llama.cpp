@@ -35,8 +35,8 @@
 
 <div
 	bind:this={ref}
-	data-slot="alert"
 	class={cn(alertVariants({ variant }), className)}
+	data-slot="alert"
 	{...restProps}
 	role="alert"
 >

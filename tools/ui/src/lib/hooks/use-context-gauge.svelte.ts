@@ -54,10 +54,10 @@ export function useContextGauge(): UseContextGaugeReturn {
 		const modelId = contextStatsStore.activeModelId;
 
 		if (modelId && contextStatsStore.isActiveModelLoaded) {
-			const cached = modelsStore.getModelProps(modelId);
+			const cached = modelsStore.props.getModelProps(modelId);
 
 			if (!cached) {
-				void modelsStore.fetchModelProps(modelId);
+				void modelsStore.props.fetchModelProps(modelId);
 			}
 		}
 	});
@@ -80,9 +80,9 @@ export function useContextGauge(): UseContextGaugeReturn {
 		if (!modelId || contextStatsStore.isActiveModelLoading) return;
 
 		try {
-			await modelsStore.loadModel(modelId);
+			await modelsStore.status.load(modelId);
 		} catch {
-			// toast already surfaced by modelsStore.loadModel
+			// toast already surfaced by modelsStore.status.load
 		}
 	}
 
