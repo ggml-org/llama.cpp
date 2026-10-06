@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 * * * *'
 
+cache-mode: write
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -41,8 +45,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.4"
-      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Clone
@@ -69,8 +73,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.4"
-      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
+      OPENVINO_VERSION_MAJOR: "2026.4.1"
+      OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
       - name: Clone

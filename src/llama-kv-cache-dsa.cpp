@@ -168,7 +168,15 @@ void llama_kv_cache_dsa::state_write(llama_io_write_i & io, llama_seq_id seq_id,
 
 void llama_kv_cache_dsa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     kv_mla->state_read(io, seq_id, flags);
-    kv_lid->state_read(io, seq_id, flags);
+
+    try {
+        kv_lid->state_read(io, seq_id, flags);
+    } catch (...) {
+        // the MLA part is already restored - undo it, so that a failed restore leaves nothing behind
+        kv_mla->state_clear(seq_id);
+
+        throw;
+    }
 }
 
 llama_kv_cache * llama_kv_cache_dsa::get_mla() const {

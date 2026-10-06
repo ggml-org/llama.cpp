@@ -81,7 +81,7 @@ struct mtmd_cli_context {
     llama_context     * lctx;
     const llama_vocab * vocab;
     common_sampler    * smpl;
-    llama_batch         batch;
+    common_batch        batch;
     int                 n_batch;
 
     mtmd::bitmaps bitmaps;
@@ -115,7 +115,7 @@ struct mtmd_cli_context {
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, params.sampling);
         n_threads = params.cpuparams.n_threads;
-        batch = llama_batch_init(1, 0, 1); // batch for next token generation
+        batch = common_batch(lctx); // batch for next token generation
         n_batch = params.n_batch;
 
         init_vision_context(params);
@@ -148,7 +148,6 @@ struct mtmd_cli_context {
     }
 
     ~mtmd_cli_context() {
-        llama_batch_free(batch);
         common_sampler_free(smpl);
     }
 
@@ -163,6 +162,17 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        {
+            // non-causal models need the whole image in one ubatch
+            const int n_ubatch = llama_n_ubatch(lctx);
+            auto mem = mtmd_get_memory_usage(clip_path, mparams);
+            if (mem.use_non_causal && mem.image_max_tokens > n_ubatch) {
+                LOG_WRN("%s: cap image_max_tokens (original=%d) to n_ubatch (%d) because model needs non-causal attention on image\n", __func__, mem.image_max_tokens, n_ubatch);
+                LOG_WRN("%s: increase n_ubatch (-ub) to increase vision token budget\n", __func__);
+                mparams.image_max_tokens = n_ubatch;
+                mparams.image_min_tokens = std::min(mparams.image_min_tokens, n_ubatch);
+            }
+        }
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
@@ -230,9 +240,9 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         }
 
         // eval the token
-        common_batch_clear(ctx.batch);
-        common_batch_add(ctx.batch, token_id, ctx.n_past++, {0}, true);
-        if (llama_decode(ctx.lctx, ctx.batch)) {
+        ctx.batch.clear();
+        ctx.batch.add(token_id, ctx.n_past++, 0, true);
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
             LOG_ERR("failed to decode token\n");
             return 1;
         }
@@ -530,6 +540,10 @@ int main(int argc, char ** argv) {
             console::readline(line, false);
             if (g_is_interrupted) break;
             console::set_display(DISPLAY_TYPE_RESET);
+            // a submitted line always ends with a newline, an empty read is EOF
+            if (line.empty()) {
+                break;
+            }
             line = string_strip(line);
             if (line.empty()) {
                 continue;
