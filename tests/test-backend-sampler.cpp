@@ -404,6 +404,19 @@ static void test_common_filtered_greedy(const test_params & params) {
     check(sp, false);
     sp.samplers.clear();
     check(sp, false);
+
+    sp.temp = 0.8f;
+    sp.samplers = {COMMON_SAMPLER_TYPE_TEMPERATURE, COMMON_SAMPLER_TYPE_TOP_K};
+    for (bool backend : {false, true}) {
+        sp.backend_sampling = backend;
+        sp.top_k = 1;
+        check(sp, true);
+        auto probabilities = sp;
+        probabilities.n_probs = 4;
+        check(probabilities, false);
+        sp.top_k = 8;
+        check(sp, false);
+    }
 }
 
 static void test_backend_filtered_greedy(const test_params & params) {
