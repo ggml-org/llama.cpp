@@ -39,6 +39,108 @@ int main(int argc, char ** argv) {
     size_t total_mem;
     ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
     GGML_ASSERT(total_mem > 0);
+
+    // Server A caches on first use because its marker limit is zero.
+    GGML_ASSERT(ggml_backend_graph_compute(backend_a, graph) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_a, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_rpc_get_device_memory(endpoint_a, 0, &free_mem, &total_mem);
+    GGML_ASSERT(total_mem > 0);
+
+    // Exercise multi-graph caching by alternating two UIDs, then reusing the first.
+    ggml_init_params cache_params = {
+        /* .mem_size   = */ 2*ggml_tensor_overhead() + 2*ggml_graph_overhead_custom(1, false),
+        /* .mem_buffer = */ nullptr,
+        /* .no_alloc   = */ true,
+    };
+    ggml_context * cache_ctx = ggml_init(cache_params);
+    GGML_ASSERT(cache_ctx != nullptr);
+
+    ggml_tensor * cache_tensor_a = ggml_new_tensor_1d(cache_ctx, GGML_TYPE_F32, 1);
+    ggml_tensor * cache_tensor_b = ggml_new_tensor_1d(cache_ctx, GGML_TYPE_F32, 1);
+    ggml_backend_buffer_t cache_buffer = ggml_backend_alloc_ctx_tensors(cache_ctx, backend_b);
+    GGML_ASSERT(cache_buffer != nullptr);
+
+    ggml_cgraph * cache_graph_a = ggml_new_graph_custom(cache_ctx, 1, false);
+    cache_graph_a->nodes[0] = cache_tensor_a;
+    cache_graph_a->n_nodes = 1;
+    ggml_cgraph * cache_graph_b = ggml_new_graph_custom(cache_ctx, 1, false);
+    cache_graph_b->nodes[0] = cache_tensor_b;
+    cache_graph_b->n_nodes = 1;
+    const uint64_t reused_uid = cache_graph_a->uid;
+
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, cache_graph_a) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, cache_graph_b) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, cache_graph_a) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, cache_graph_b) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, cache_graph_a) == GGML_STATUS_SUCCESS);
+    ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
+
+    // Freeing a backing buffer must invalidate graphs that reference it.
+    ggml_backend_buffer_free(cache_buffer);
+    ggml_free(cache_ctx);
+
+    ggml_init_params replacement_params = {
+        /* .mem_size   = */ ggml_tensor_overhead() + ggml_graph_overhead_custom(1, false),
+        /* .mem_buffer = */ nullptr,
+        /* .no_alloc   = */ true,
+    };
+    ggml_context * replacement_ctx = ggml_init(replacement_params);
+    GGML_ASSERT(replacement_ctx != nullptr);
+    ggml_tensor * replacement_tensor = ggml_new_tensor_1d(replacement_ctx, GGML_TYPE_F32, 1);
+    ggml_backend_buffer_t replacement_buffer = ggml_backend_alloc_ctx_tensors(replacement_ctx, backend_b);
+    GGML_ASSERT(replacement_buffer != nullptr);
+    ggml_cgraph * replacement_graph = ggml_new_graph_custom(replacement_ctx, 1, false);
+    replacement_graph->nodes[0] = replacement_tensor;
+    replacement_graph->n_nodes = 1;
+    replacement_graph->uid = reused_uid;
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, replacement_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
+
+    ggml_backend_buffer_free(replacement_buffer);
+    ggml_free(replacement_ctx);
+
+    // Exceed the one MiB budget and verify that RPC remains connected after cache resets.
+    constexpr uint32_t overflow_nodes = 256;
+    ggml_init_params overflow_params = {
+        /* .mem_size   = */ overflow_nodes*ggml_tensor_overhead() +
+                            ggml_graph_overhead_custom(overflow_nodes, false),
+        /* .mem_buffer = */ nullptr,
+        /* .no_alloc   = */ true,
+    };
+    ggml_context * overflow_ctx = ggml_init(overflow_params);
+    GGML_ASSERT(overflow_ctx != nullptr);
+    ggml_cgraph * overflow_graph = ggml_new_graph_custom(overflow_ctx, overflow_nodes, false);
+    for (uint32_t i = 0; i < overflow_nodes; ++i) {
+        overflow_graph->nodes[i] = ggml_new_tensor_1d(overflow_ctx, GGML_TYPE_F32, 1);
+    }
+    overflow_graph->n_nodes = overflow_nodes;
+    ggml_backend_buffer_t overflow_buffer = ggml_backend_alloc_ctx_tensors(overflow_ctx, backend_b);
+    GGML_ASSERT(overflow_buffer != nullptr);
+
+    const uint64_t persistent_uid = 0xcafe000000000000ULL;
+    overflow_graph->uid = persistent_uid;
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+
+    for (uint64_t i = 0; i < 8; ++i) {
+        overflow_graph->uid = 0xdead000000000000ULL + i;
+        GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    }
+
+    // Marker eviction must not remove a stored graph.
+    overflow_graph->uid = persistent_uid;
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+
+    for (uint64_t i = 0; i < 32; ++i) {
+        overflow_graph->uid = 0xfeed000000000000ULL + i;
+        GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    }
+    ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
+    ggml_backend_buffer_free(overflow_buffer);
+    ggml_free(overflow_ctx);
+
     ggml_backend_buffer_free(buffer);
 
     // Two tensors with the same ne[] but different nb[] must not share a cached alloc size.
