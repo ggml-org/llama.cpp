@@ -867,6 +867,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         // The only use of the window itself, the stateful mask rebuild, reads it back from the mask, and on a full
         // mask that gives back the causal mask. Decide from the first graph, before the window shows in the mask, so
         // the graph does not change, and is not recompiled, when it does.
+        // TODO: "larger group is swa" is a model-level guess. Revisit when llama.cpp tells the backend which layers
+        // use a sliding window. Stateless graphs only need the two groups kept apart (separate mask, KV write index
+        // and attention size inputs), not the swa role itself, so the guess could be limited to stateful execution.
         if (model_params.swa_layers.empty()) {
             std::map<const ggml_tensor *, std::vector<int>> mask_layers;
             for (const auto & [layer, mask] : layer_mask) {
