@@ -190,9 +190,17 @@ ggml_tensor * llama_model_k2_horizon::graph::build_routed_value(const llama_laye
 
     // sum the selected experts; 3D views of {n_embd_gqa, 1, n_tokens} keep the strides of values,
     // which lets the tensor-parallel backend follow its split through the views
-    ggml_tensor * value_out = ggml_view_3d(ctx0, values, n_embd_gqa, 1, n_tokens, values->nb[1], values->nb[2], 0);
+    // order the views before the adds so backends can fuse the sum
+    ggml_tensor * value_views[LLAMA_MAX_EXPERTS] = { nullptr };
+    for (int64_t i = 0; i < n_used; ++i) {
+        value_views[i] = ggml_view_3d(ctx0, values, n_embd_gqa, 1, n_tokens, values->nb[1], values->nb[2], i * values->nb[1]);
+        ggml_build_forward_expand(gf, value_views[i]);
+    }
+
+    ggml_tensor * value_out = value_views[0];
     for (int64_t i = 1; i < n_used; ++i) {
-        value_out = ggml_add(ctx0, value_out, ggml_view_3d(ctx0, values, n_embd_gqa, 1, n_tokens, values->nb[1], values->nb[2], i * values->nb[1]));
+        value_out = ggml_add(ctx0, value_out, value_views[i]);
+        ggml_build_forward_expand(gf, value_out);
     }
     if (n_used == 1) {
         value_out = ggml_cont(ctx0, value_out);
