@@ -169,8 +169,8 @@ struct sched_graph {
 };
 
 struct sched_check {
-    ggml_tensor * tensor;
-    float         expected;
+    ggml_tensor * tensor;   // Tensor for which to check the data.
+    float         expected; // The expected value that the tensor data should have after graph execution.
     std::string   name;
 };
 
@@ -405,7 +405,7 @@ static bool stress_test_linked_list(const std::vector<sched_backend_caps> & back
     return ok;
 }
 
-// Same idea as stress_test_linked_list, but with the compute graph being a direct acyclic graph (DAG).
+// Same idea as stress_test_linked_list, but with the compute graph being a directed acyclic graph (DAG).
 // n_lanes independent counters run through rounds of four shapes, so that one graph covers:
 //  - lanes with different histories, so a misrouted copy shows up as a wrong count in a single lane
 //  - one split producing two values followed by two splits that each consume one of them and do not depend on each other
