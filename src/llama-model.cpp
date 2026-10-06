@@ -156,6 +156,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_gemma4_assistant(params);
         case LLM_ARCH_GEMMA_EMBEDDING:
             return new llama_model_gemma_embedding(params);
+        case LLM_ARCH_GEMMA_EMBEDDING2:
+            return new llama_model_gemma_embedding2(params);
         case LLM_ARCH_STARCODER2:
             return new llama_model_starcoder2(params);
         case LLM_ARCH_MAMBA:
@@ -2371,6 +2373,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_WAVTOKENIZER_DEC:
         case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
+        case LLM_ARCH_GEMMA_EMBEDDING2:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
@@ -3152,6 +3155,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_ASSISTANT:
         case LLM_ARCH_GEMMA_EMBEDDING:
+        case LLM_ARCH_GEMMA_EMBEDDING2:
         case LLM_ARCH_STARCODER2:
         case LLM_ARCH_OPENELM:
         case LLM_ARCH_GPTNEOX:
