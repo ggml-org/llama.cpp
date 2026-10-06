@@ -38,10 +38,12 @@ public:
     static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
             const llama_compute_workspace_plan & plan);
+    // Optional capture hook runs before a new binding snapshot; false or an exception rejects publication without device work.
     static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
             const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
-            llama_context_memory * serial_parent = nullptr, bool suspended_workspace = false);
+            llama_context_memory * serial_parent = nullptr, bool suspended_workspace = false,
+            const std::function<bool()> & before_capture = {});
     // Borrow measured scratch, or the full parent after explicit KV suspension. Return grants before resume.
     LLAMA_API static std::unique_ptr<llama_context_memory> borrow_workspace(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
@@ -89,6 +91,8 @@ public:
     size_t shared_parent_capacity() const noexcept;
     uint64_t shared_arena_generation() const noexcept;
     uint64_t phase_transition_count() const noexcept;
+    // Changes when graph bindings are replaced, including recovery after a failed transition.
+    uint64_t graph_binding_revision() const noexcept;
     LLAMA_API bool diagnostics(llama_context_memory_diagnostics & output) const noexcept;
 
 private:

@@ -414,6 +414,35 @@ int main() {
         }
     });
 
+    t.test("larger_serial_grants_require_opt_in_and_recover_transactionally", [](testing & t) {
+        fixture f;
+        auto groups = f.groups;
+        groups[0].allow_larger_grants = true;
+        llama_memory_workspace workspace(f.sched.get(),groups,{[] { return true; },[] { return true; }});
+        llama_memory_transition transition({&workspace,&f.later});
+        auto target = f.target;
+        if (!t.assert_true(workspace.register_resources(target.plan,{10,20}))) return;
+        if (!t.assert_true(transition.prepare(target).status == status::prepared)) return;
+        if (!t.assert_true(transition.activate(f.arenas).status == status::activated)) return;
+        const auto original = groups[0].workspace.size;
+        auto & requirement = target.plan.stages[0].requirements[0];
+        requirement.size_min = requirement.size_preferred = original+1;
+        t.assert_true(transition.prepare(target).status == status::consumer_failed);
+        t.assert_equal(original,ggml_backend_sched_get_buffer_size(f.sched.get(),f.first.get()));
+        requirement.size_min = requirement.size_preferred = original+groups[0].workspace.alignment;
+        if (!t.assert_true(transition.prepare(target).status == status::prepared)) return;
+        f.later.fail = true;
+        t.assert_true(transition.activate(f.arenas).status == status::activation_failed);
+        t.assert_true(transition.recover().status == status::recovered);
+        t.assert_equal(original,ggml_backend_sched_get_buffer_size(f.sched.get(),f.first.get()));
+        f.later.fail = false;
+        if (!t.assert_true(transition.prepare(target).status == status::prepared)) return;
+        t.assert_true(transition.activate(f.arenas).status == status::activated);
+        t.assert_equal(requirement.size_min,ggml_backend_sched_get_buffer_size(f.sched.get(),f.first.get()));
+        requirement.size_min = requirement.size_preferred = original-groups[0].workspace.alignment;
+        t.assert_true(transition.prepare(target).status == status::consumer_failed);
+    });
+
     t.test("zero_workspace_phase_is_valid_but_misaligned_phase_size_is_not", [](testing & t) {
         fixture f;
         auto groups = f.groups;

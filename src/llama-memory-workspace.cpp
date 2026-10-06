@@ -280,8 +280,10 @@ bool llama_memory_workspace::prepare(const llama_memory_transition_target & targ
         if (!impl->stage_size(group, target.stage, size)) return false;
         if (resource == target.plan.resources.end() || resource->domain != group.resource.domain ||
                 resource->allocation_class != group.resource.allocation_class || resource->content != llama_memory_content::discardable ||
-                requirement == stage->requirements.end() || requirement->size_min != size ||
-                requirement->size_preferred != size || requirement->alignment != group.workspace.alignment ||
+                requirement == stage->requirements.end() ||
+                (group.allow_larger_grants ? requirement->size_min < size : requirement->size_min != size) ||
+                (size == 0 && requirement->size_min != 0) ||
+                requirement->size_preferred != requirement->size_min || requirement->alignment != group.workspace.alignment ||
                 requirement->access != LLAMA_MEMORY_ACCESS_WRITE ||
                 !(requirement->capabilities & LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS)) return false;
         bool found = false;
@@ -290,7 +292,8 @@ bool llama_memory_workspace::prepare(const llama_memory_transition_target & targ
             for (const auto & region : arena.regions) {
                 if (region.id != group.resource.id) continue;
                 if (found || arena.budget.domain != group.resource.domain || arena.budget.allocation_class != group.resource.allocation_class ||
-                        region.size != size || region.alignment != group.workspace.alignment) return false;
+                        region.size != requirement->size_min || region.size % group.workspace.alignment ||
+                        region.alignment != group.workspace.alignment) return false;
                 found = true;
                 desired.push_back({i, a, region});
             }

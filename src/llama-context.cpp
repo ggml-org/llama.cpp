@@ -597,11 +597,16 @@ llama_context::~llama_context() {
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.hparams.no_alloc && !opt_ctx) {
+        llama_context_memory_diagnostics shared;
+        const bool shared_grant = compute_memory && compute_memory->diagnostics(shared);
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
 
-            const size_t size_exp = compute_memory && compute_memory->kv_device_suspended() ? 0 : backend_buf_exp_size[i];
+            size_t size_exp = compute_memory && compute_memory->kv_device_suspended() ? 0 : backend_buf_exp_size[i];
+            if (shared_grant && buft == ggml_backend_buffer_get_type(compute_memory->shared_parent())) {
+                size_exp = shared.workspace_bytes;
+            }
             const size_t size_act = ggml_backend_sched_get_buffer_size(sched.get(), backend);
             if (size_exp == size_act) {
                 LLAMA_LOG_DEBUG("%s: %10s compute buffer size is %8.4f MiB, matches expectation of %8.4f MiB\n",
@@ -731,6 +736,7 @@ static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
 
 bool llama_context::prepare_compute_arenas(
         const std::vector<size_t> & measurements, size_t n_phases) {
+    compute_memory_graph_revision = 0;
     llama_compute_workspace_plan plan;
     if (!llama_compute_workspace_plan_make(backend_buft, measurements, n_phases, plan)) {
         return false;
@@ -749,13 +755,12 @@ bool llama_context::prepare_compute_arenas(
         compute_memory = llama_context_memory::create(
             sched.get(),backend_ptrs,plan,stream,serial_parent);
         if (!compute_memory && serial_parent) {
-            // A short-context parent may have too little discardable scratch
-            // before persistent KV to hold the draft graph. Keep the ordinary
-            // separate workspace rather than aliasing live KV.
+            // Keep separate scratch if the shared budget cannot hold the draft graph and live KV scratch.
             LLAMA_LOG_INFO("%s: MTP graph does not fit target scratch; using a separate workspace\n", __func__);
             compute_memory = llama_context_memory::create(
                 sched.get(),backend_ptrs,plan,stream,nullptr);
         }
+        if (compute_memory) compute_memory_graph_revision = compute_memory->graph_binding_revision();
         return compute_memory != nullptr;
     }
     if (stream) return false;
@@ -2297,8 +2302,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     }
 
     sched_reserve();
+    const bool shared_workspace_replanned = compute_memory &&
+        compute_memory->graph_binding_revision() != compute_memory_graph_revision;
     bool draft_graph_rebuild = !reservation_was_pending && cparams.mtp_publish_host && compute_memory &&
-        compute_memory->phase_transition_count() != serial_transitions;
+        (compute_memory->phase_transition_count() != serial_transitions || shared_workspace_replanned);
     if (compute_memory && reservation_was_pending) {
         // A dirty scheduler reservation replaced the coordinator. The new
         // owner must receive the handoff as well, before graph inputs are set.
@@ -2360,7 +2367,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             LLAMA_LOG_ERROR("%s: rejected text phase transition\n", __func__);
             return -2;
         }
-        if (compute_memory->phase_transition_count() != transitions) {
+        if (compute_memory->phase_transition_count() != transitions || shared_workspace_replanned) {
             auto reserve_context = memory->init_full();
             const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
                 std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) : cparams.n_seq_max;
@@ -2377,6 +2384,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             llama_log_memory_phase(compute_memory.get());
         }
     }
+    if (compute_memory) compute_memory_graph_revision = compute_memory->graph_binding_revision();
 
     bool did_optimize = false;
 

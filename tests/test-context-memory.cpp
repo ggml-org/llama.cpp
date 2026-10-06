@@ -37,11 +37,11 @@ struct fixture {
     }
 
     // Exercise graph metadata reconstruction inside one unchanged scheduler-workspace lifetime.
-    void rebuild() {
+    void rebuild(size_t elements = 16) {
         ggml_backend_sched_synchronize(sched.get());
         ggml_backend_sched_reset(sched.get());
         ctx.reset(ggml_init({1024*1024, nullptr, true}));
-        input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 16);
+        input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, elements);
         output = ggml_scale(ctx.get(), input, 3.0f);
         ggml_set_input(input);
         ggml_set_output(input); // Preserve the input across repeated replay; otherwise GGML may reuse it in place.
@@ -270,6 +270,41 @@ int main(int argc, char ** argv) {
         t.assert_equal(bytes, ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get()));
         f.rebuild();
         f.run(t, *owner, 5);
+    });
+
+    t.test("borrowed_graph_writes_last_legal_byte_without_touching_parent_guard", [&](testing & t) {
+        fixture target(dev), draft(dev);
+        auto parent = llama_context_memory::create(target.sched.get(),target.backends,target.groups);
+        if (!t.assert_true(bool(parent))) return;
+        auto groups = draft.groups;
+        groups[0].size = 4096;
+        llama_compute_workspace_plan plan;
+        plan.groups = groups;
+        plan.phase_sizes.assign(2,std::vector<size_t>(groups.size()));
+        for (auto & phase : plan.phase_sizes)
+            for (size_t i = 0; i < groups.size(); ++i) phase[i] = groups[i].size;
+        auto child = llama_context_memory::create(draft.sched.get(),draft.backends,plan,nullptr,parent.get());
+        if (!t.assert_true(bool(child))) return;
+        auto * buffer = parent->shared_parent();
+        const size_t capacity = parent->shared_parent_capacity();
+        ggml_backend_buffer_clear(buffer,0xa5);
+        if (!t.assert_true(child->prepare_serial_draft(text_phase::prefill))) return;
+        draft.rebuild(512);
+        const auto end = std::max(reinterpret_cast<uintptr_t>(draft.input->data)+ggml_nbytes(draft.input),
+            reinterpret_cast<uintptr_t>(draft.output->data)+ggml_nbytes(draft.output));
+        t.assert_equal(reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(buffer))+4096,end);
+        std::vector<float> data(512,7.0f), result(512);
+        ggml_backend_tensor_set(draft.input,data.data(),0,data.size()*sizeof(float));
+        if (!t.assert_true(child->compute_async(draft.graph) == GGML_STATUS_SUCCESS)) return;
+        ggml_backend_tensor_get_async(draft.device.get(),draft.output,result.data(),0,result.size()*sizeof(float));
+        child->synchronize();
+        t.assert_true("borrowed graph output",std::all_of(result.begin(),result.end(),[](float value) { return value == 21.0f; }));
+        ggml_context_ptr metadata(ggml_init({16384,nullptr,true}));
+        auto * entire = ggml_new_tensor_1d(metadata.get(),GGML_TYPE_F32,capacity/sizeof(float));
+        if (!t.assert_true(ggml_backend_tensor_alloc(buffer,entire,ggml_backend_buffer_get_base(buffer)) == GGML_STATUS_SUCCESS)) return;
+        std::vector<uint8_t> guard(capacity-4096);
+        ggml_backend_tensor_get(entire,guard.data(),4096,guard.size());
+        t.assert_true("adjacent parent guard",!guard.empty() && std::all_of(guard.begin(),guard.end(),[](uint8_t value) { return value == 0xa5; }));
     });
 
     t.test("three_serial_schedulers_share_scratch_without_overlapping_admission", [&](testing & t) {

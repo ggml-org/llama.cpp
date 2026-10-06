@@ -14,6 +14,8 @@ struct llama_memory_workspace_group {
     ggml_backend_memory_workspace_group workspace;
     llama_memory_resource resource;
     std::vector<llama_memory_workspace_stage> stages;
+    // Serial consumers may need a larger shared graph grant than this scheduler's measured minimum.
+    bool allow_larger_grants = false;
 };
 
 // Hooks cover all executable graphs using this scheduler, including fallback groups.
@@ -38,7 +40,7 @@ public:
     // No backend storage is allocated; failure leaves the plan unchanged.
     LLAMA_API bool register_resources(llama_memory_execution_plan & plan, const std::vector<llama_memory_stage_id> & stages) const;
 
-    // Validate exact maximum-workspace grants and stage lease attachment without touching live bindings.
+    // Validate measured workspace minima and stage attachments; larger grants require explicit group opt-in.
     LLAMA_API bool prepare(const llama_memory_transition_target & target, const llama_memory_layout & layout,
             std::unique_ptr<llama_memory_preparation> & output) override;
 

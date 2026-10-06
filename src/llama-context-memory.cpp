@@ -75,9 +75,10 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     llama_memory_stage_id active_stage = 0, prefill_stage = 0, decode_stage = 0, suspend_stage = 0;
     uint64_t transition_count = 0, executor_revision = 0;
     uint64_t last_transition_us = 0;
+    std::function<bool()> before_capture;
 
-    // Borrowed scratch may alias discardable graph/attention bytes, never persistent KV.
-    size_t pool_offset(llama_memory_stage_id stage) const {
+    // KV gather and publication scratch stay live during draft graph execution.
+    size_t compute_limit(llama_memory_stage_id stage) const {
         if (!stage) return 0;
         if (!shared_stream) return kv_parent_capacity;
         if (!kv_pool_resource) return 0;
@@ -86,7 +87,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
                 phase_target.budgets, phase_target.fixed, layout).status !=
                 llama_memory_layout_status::success || kv_arena >= layout.arenas.size()) return 0;
         for (const auto & region : layout.arenas[kv_arena].regions) {
-            if (region.id == kv_pool_resource) return region.offset;
+            if (region.id == kv_workspace_resource && region.offset == 0) return region.size;
         }
         return 0;
     }
@@ -143,6 +144,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
         // A stage label may change while the exact scheduler lease and native
         // capture remain valid. Do not replace an executable that was not retired.
         if (executor.ready() && executor.matches(bindings,executor_revision)) return true;
+        if (before_capture && !before_capture()) return false;
 
         std::unique_ptr<llama_memory_executable> native =
             std::make_unique<context_executable>(caches);
@@ -152,16 +154,15 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
         return true;
     }
 
-    bool activate_stage(llama_memory_stage_id stage) {
-        if (!transition || !stage || invalid) return false;
-        if (stage == active_stage) return true;
+    // Replan within the existing parent; the coordinator drains, rebinds and recovers all consumers.
+    bool apply_target(const llama_memory_transition_target & target) {
+        if (!transition || !target.stage || invalid) return false;
         const int64_t started = ggml_time_us();
-        auto target = phase_target;
-        target.stage = stage;
+        bool rebound = false;
         try {
             const auto prepared = transition->prepare(target);
             if (prepared.status == llama_memory_transition_status::no_change) {
-                active_stage = stage;
+                active_stage = target.stage;
                 return true;
             }
             if (prepared.status != llama_memory_transition_status::prepared) return false;
@@ -169,23 +170,70 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
             if (activated.status != llama_memory_transition_status::activated) {
                 const auto recovered = transition->recover();
                 if (recovered.status == llama_memory_transition_status::recovered) {
+                    rebound = true;
                     if (active_stage == suspend_stage) bindings.clear();
-                    else capture_execution();
+                    else if (!capture_execution()) { invalid = true; executor.quiesce(); }
                 } else {
                     invalid = true;
                     executor.quiesce();
                 }
                 return false;
             }
-            active_stage = stage;
-            if (stage == suspend_stage) bindings.clear();
-            else if (!capture_execution()) return false;
+            rebound = true;
+            active_stage = target.stage;
+            if (target.stage == suspend_stage) bindings.clear();
+            else if (!capture_execution()) { invalid = true; executor.quiesce(); return false; }
             ++transition_count;
             last_transition_us = uint64_t(ggml_time_us()-started);
             return true;
         } catch (...) {
+            // Activated grants cannot be used with an unpublished or stale executable snapshot.
+            if (rebound) { invalid = true; executor.quiesce(); }
             return false;
         }
+    }
+
+    bool activate_stage(llama_memory_stage_id stage) {
+        if (stage == active_stage) return true;
+        auto target = phase_target;
+        target.stage = stage;
+        return apply_target(target);
+    }
+
+    // Reserve the per-phase maximum of target and serial graph work before moving KV scratch.
+    bool serial_workspace_target(size_t prefill, size_t decode, llama_memory_transition_target & target) const {
+        target = phase_target;
+        target.stage = active_stage == decode_stage ? decode_stage : prefill_stage;
+        if (!shared_stream) return prefill <= kv_parent_capacity && decode <= kv_parent_capacity;
+        for (auto & stage : target.plan.stages) {
+            const size_t requested = stage.id == suspend_stage ? 0 : stage.id == prefill_stage ? prefill :
+                stage.id == decode_stage ? decode : std::max(prefill,decode);
+            for (auto & requirement : stage.requirements) {
+                if (requirement.resource != kv_workspace_resource) continue;
+                requirement.size_min = requirement.size_preferred = std::max(requirement.size_min,requested);
+            }
+            llama_memory_layout layout;
+            if (llama_memory_layout_elastic(target.plan,stage.id,target.budgets,target.fixed,layout).status !=
+                    llama_memory_layout_status::success) return false;
+        }
+        return true;
+    }
+
+    // An inactive phase can grow without rebinding the unchanged live phase.
+    bool same_active_layout(const llama_memory_transition_target & target) const {
+        llama_memory_layout before, after;
+        if (llama_memory_layout_elastic(phase_target.plan,active_stage,phase_target.budgets,phase_target.fixed,before).status != llama_memory_layout_status::success ||
+                llama_memory_layout_elastic(target.plan,target.stage,target.budgets,target.fixed,after).status != llama_memory_layout_status::success ||
+                before.arenas.size() != after.arenas.size()) return false;
+        for (size_t i = 0; i < before.arenas.size(); ++i) {
+            const auto & a = before.arenas[i].regions;
+            const auto & b = after.arenas[i].regions;
+            if (a.size() != b.size()) return false;
+            for (size_t j = 0; j < a.size(); ++j)
+                if (a[j].id != b[j].id || a[j].offset != b[j].offset || a[j].size != b[j].size ||
+                        a[j].alignment != b[j].alignment || a[j].flags != b[j].flags) return false;
+        }
+        return true;
     }
 };
 
@@ -226,7 +274,8 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_sched_t sched,
         const std::vector<ggml_backend_t> & backends,
         const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
-        llama_context_memory * serial_parent, bool suspended_workspace) {
+        llama_context_memory * serial_parent, bool suspended_workspace,
+        const std::function<bool()> & before_capture) {
     const auto & groups = plan.groups;
     if (stream && serial_parent) return {};
     auto * borrowed_parent = serial_parent ? serial_parent->shared_parent() : nullptr;
@@ -276,6 +325,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
     }
     std::optional<serial_gate> borrowed_gate;
     if (serial_parent) borrowed_gate.emplace(serial_parent->impl->serial_busy);
+    std::optional<llama_memory_transition_target> serial_target;
 
     llama_kv_stream_memory_requirements kv;
     if (stream && (plan.phase_sizes.size() != 2 || !stream->memory_requirements(kv) ||
@@ -290,6 +340,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 
     try {
         auto state = std::make_unique<implementation>();
+        state->before_capture = before_capture;
         state->serial_suspended_borrow = suspended_workspace;
         state->sched = sched;
         for (auto * backend : backends) {
@@ -353,10 +404,17 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 capacity = serial_parent->shared_parent_capacity();
                 if (capacity < group.size) return {};
                 borrowed_group_seen = true;
-                if (!suspended_workspace && (plan.phase_sizes[0][i] > serial_parent->impl->pool_offset(
-                            serial_parent->impl->prefill_stage) ||
-                        plan.phase_sizes[1][i] > serial_parent->impl->pool_offset(
-                            serial_parent->impl->decode_stage))) return {};
+                if (!suspended_workspace) {
+                    auto & owner = *serial_parent->impl;
+                    llama_memory_transition_target candidate;
+                    if (!owner.serial_workspace_target(plan.phase_sizes[0][i],plan.phase_sizes[1][i],candidate)) return {};
+                    if (plan.phase_sizes[0][i] > owner.compute_limit(owner.prefill_stage) ||
+                            plan.phase_sizes[1][i] > owner.compute_limit(owner.decode_stage)) {
+                        // Existing borrowers retain independent captures into this prefix.
+                        if (!owner.serial_children.empty()) return {};
+                        serial_target = std::move(candidate);
+                    }
+                }
             }
             ggml_backend_buffer_ptr parent(borrowed_group ?
                 ggml_backend_buffer_retain(borrowed_parent) :
@@ -385,6 +443,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (!arena) return {};
             llama_memory_workspace_group configured{
                 group,{id,id,allocation,llama_memory_content::discardable},{}};
+            configured.allow_larger_grants = carries_kv;
             configured.stages.push_back({stages.front(),group.size});
             for (size_t phase = 0; phase < plan.phase_sizes.size(); ++phase) {
                 configured.stages.push_back({stages[phase+1],plan.phase_sizes[phase][i]});
@@ -442,9 +501,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 auto & requirements = target.plan.stages[i].requirements;
                 const size_t pool_preferred = suspended ? 0 : (kv.shared_device_memory_bytes || i == 2) ?
                     target.budgets[kv_arena].capacity : kv.pool_bytes;
-                // The serial MTP prefill workspace may extend slightly beyond
-                // target compute into discardable attention scratch. Keep the
-                // reconstructible KV pool after both, outside that alias.
+                // Graph, gather and writer grants are disjoint even for serial draft execution.
                 requirements.push_back({
                     attention_id,attention,attention,
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
@@ -535,6 +592,16 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             state->serial_borrowed = serial_parent != nullptr;
         }
         if (!state->capture_execution()) return {};
+        if (serial_target) {
+            auto & owner = *serial_parent->impl;
+            if (owner.same_active_layout(*serial_target)) owner.active_stage = serial_target->stage;
+            else if (!owner.apply_target(*serial_target)) return {};
+            owner.phase_target = std::move(*serial_target);
+            for (const auto & stage : owner.phase_target.plan.stages)
+                for (const auto & requirement : stage.requirements)
+                    if (requirement.resource == owner.kv_workspace_resource)
+                        owner.kv_workspace_max = std::max(owner.kv_workspace_max,requirement.size_min);
+        }
         state->serial_parent = serial_parent;
         std::unique_ptr<llama_context_memory> result(
             new llama_context_memory(std::move(state)));
@@ -697,7 +764,7 @@ bool llama_context_memory::prepare_serial_consumer(llama_memory_text_phase phase
         }
         const auto stage = phase == llama_memory_text_phase::decode ? impl->decode_stage : impl->prefill_stage;
         if (!impl->activate_stage(stage)) return false;
-        const size_t protected_begin = impl->serial_suspended_borrow ? parent->kv_parent_capacity : parent->pool_offset(parent->active_stage);
+        const size_t protected_begin = impl->serial_suspended_borrow ? parent->kv_parent_capacity : parent->compute_limit(parent->active_stage);
         bool found = false;
         for (auto * lease : impl->workspace->leases()) {
             auto * buffer = lease ? ggml_backend_memory_lease_buffer(lease) : nullptr;
@@ -784,6 +851,9 @@ uint64_t llama_context_memory::shared_arena_generation() const noexcept {
 }
 uint64_t llama_context_memory::phase_transition_count() const noexcept {
     return impl->transition_count;
+}
+uint64_t llama_context_memory::graph_binding_revision() const noexcept {
+    return impl->executor_revision;
 }
 
 bool llama_context_memory::diagnostics(

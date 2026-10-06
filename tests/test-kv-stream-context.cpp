@@ -5,6 +5,7 @@
 #include "../src/llama-kv-stream-logical-cache.h"
 #include "../src/llama-memory-recurrent-spill.h"
 #include "../src/llama-io.h"
+#include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
 #include <algorithm>
 #include <chrono>
@@ -25,6 +26,26 @@ static bool mtp_memory_probe = false, mtp_sustained_control = false, mtp_sustain
 static bool target_drift_control = false, target_drift_rs_control = false;
 static bool rollback_probe = false;
 static bool vision_mtp_handoff = false;
+static bool serial_workspace_growth = false;
+
+// Fail one candidate view after the draft's initial view, then permit parent recovery.
+struct serial_parent_view_failure {
+    using factory = ggml_backend_buffer_t (*)(ggml_backend_buffer_t,size_t,size_t);
+    inline static serial_parent_view_failure * active = nullptr;
+    ggml_backend_buffer_t parent;
+    factory original;
+    size_t calls = 0;
+    explicit serial_parent_view_failure(ggml_backend_buffer_t parent) : parent(parent),original(parent->view_buffer) {
+        GGML_ASSERT(original && !active);
+        active = this;
+        parent->view_buffer = [](ggml_backend_buffer_t buffer,size_t offset,size_t bytes) {
+            GGML_ASSERT(active && buffer == active->parent);
+            if (++active->calls == 2) return static_cast<ggml_backend_buffer_t>(nullptr);
+            return active->original(buffer,offset,bytes);
+        };
+    }
+    ~serial_parent_view_failure() { parent->view_buffer = original; active = nullptr; }
+};
 
 struct recurrent_snapshot : llama_io_write_i {
     std::vector<uint8_t> metadata;
@@ -352,13 +373,97 @@ int main(int argc,char ** argv) {
         target_drift_control = target_drift_control || target_drift_rs_control;
         rollback_probe = rollback_probe || !std::strcmp(argv[i],"--mtp-rs-rollback-probe");
         vision_mtp_handoff = vision_mtp_handoff || !std::strcmp(argv[i],"--vision-mtp-handoff");
+        serial_workspace_growth = serial_workspace_growth || !std::strcmp(argv[i],"--serial-workspace-growth");
     }
     embedded_mtp_control |= vision_mtp_handoff;
     ggml_backend_load_all(); llama_backend_init();
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
-    mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe;
+    mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
     if (!t.assert_true(bool(model))) return t.summary();
+    if (serial_workspace_growth) {
+        t.test("serial_draft_growth_rebuilds_target_and_preserves_long_gather", [&](testing & t) {
+            auto p = llama_context_default_params();
+            p.n_ctx = 8192; p.n_batch = p.n_ubatch = 256;
+            p.n_threads = p.n_threads_batch = 8;
+            p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
+            p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            p.shared_device_memory_bytes = size_t(2240)*1048576;
+            p.n_outputs_max = p.n_outputs_max_per_seq = 4;
+            p.kv_stream_auxiliary_layers = 1;
+            context_ptr target(llama_init_from_model(model.get(),p),llama_free);
+            if (!t.assert_true(bool(target))) return;
+            llama_token token = 1000;
+            llama_set_kv_stream_decode(target.get(),false);
+            if (!t.assert_equal(0,llama_decode(target.get(),llama_batch_get_one(&token,1)))) return;
+            auto checkpoint = std::vector<uint8_t>(llama_state_get_size(target.get()));
+            if (!t.assert_equal(checkpoint.size(),llama_state_get_data(target.get(),checkpoint.data(),checkpoint.size()))) return;
+            if (!t.assert_equal(0,llama_decode(target.get(),llama_batch_get_one(&token,1)))) return;
+            const size_t vocabulary = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
+            const auto * logits = llama_get_logits_ith(target.get(),-1);
+            std::vector<float> expected(logits,logits+vocabulary);
+            auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
+            recurrent_snapshot expected_recurrent;
+            hybrid->get_mem_recr()->state_write(expected_recurrent,0,0);
+            if (!t.assert_equal(checkpoint.size(),llama_state_set_data(target.get(),checkpoint.data(),checkpoint.size()))) return;
+            const auto before = target->get_compute_memory()->phase_transition_count();
+            auto * parent = target->get_compute_memory()->shared_parent();
+            auto dp = p;
+            dp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            dp.ctx_other = target.get();
+            dp.shared_device_memory_bytes = 0;
+            dp.kv_stream_auxiliary_layers = 0;
+            const auto old_revision = target->get_compute_memory()->graph_binding_revision();
+            {
+                serial_parent_view_failure fault(parent);
+                context_ptr fallback(llama_init_from_model(model.get(),dp),llama_free);
+                t.assert_true(fault.calls >= 2);
+                // Recovery must remain usable even if separate fallback scratch cannot fit the GPU.
+                if (fallback) t.assert_true(!fallback->get_compute_memory()->borrows_serial_parent());
+            }
+            t.assert_true(target->get_compute_memory()->valid());
+            t.assert_equal(before,target->get_compute_memory()->phase_transition_count());
+            t.assert_true(target->get_compute_memory()->graph_binding_revision() > old_revision);
+            if (!t.assert_equal(0,llama_decode(target.get(),llama_batch_get_one(&token,1)))) return;
+            logits = llama_get_logits_ith(target.get(),-1);
+            t.assert_true(std::equal(expected.begin(),expected.end(),logits));
+            recurrent_snapshot recovered_recurrent;
+            hybrid->get_mem_recr()->state_write(recovered_recurrent,0,0);
+            t.assert_true(expected_recurrent.metadata == recovered_recurrent.metadata && expected_recurrent.tensors == recovered_recurrent.tensors);
+            if (!t.assert_equal(checkpoint.size(),llama_state_set_data(target.get(),checkpoint.data(),checkpoint.size()))) return;
+            context_ptr draft(llama_init_from_model(model.get(),dp),llama_free);
+            if (!t.assert_true(bool(draft))) return;
+            t.assert_true(draft->get_compute_memory()->borrows_serial_parent());
+            t.assert_true(target->get_compute_memory()->phase_transition_count() > before);
+            t.assert_true(parent == target->get_compute_memory()->shared_parent());
+            t.assert_equal(size_t(p.shared_device_memory_bytes),target->get_compute_memory()->shared_parent_capacity());
+            if (!t.assert_equal(0,llama_decode(target.get(),llama_batch_get_one(&token,1)))) return;
+            logits = llama_get_logits_ith(target.get(),-1);
+            t.assert_true(std::equal(expected.begin(),expected.end(),logits));
+            auto batch = llama_batch_init(256,llama_model_n_embd(model.get()),1);
+            std::vector<llama_token> tokens(256,token);
+            batch.token = tokens.data();
+            struct cleanup {
+                llama_batch & batch;
+                ~cleanup() { batch.token = nullptr; llama_batch_free(batch); }
+            } guard{batch};
+            std::fill(batch.embd,batch.embd+256*llama_model_n_embd(model.get()),0.0f);
+            for (int first = 0; first < 7936; first += 256) {
+                batch.n_tokens = 256;
+                for (int row = 0; row < 256; ++row) {
+                    batch.pos[row] = first+row;
+                    batch.n_seq_id[row] = 1;
+                    batch.seq_id[row][0] = 0;
+                    batch.logits[row] = row == 255;
+                }
+                if (!t.assert_equal(0,llama_decode(draft.get(),batch))) return;
+            }
+            auto * kv = static_cast<llama_kv_cache *>(llama_get_memory(draft.get()));
+            t.assert_equal(size_t(7936),kv->mtp_auxiliary_cache()->tokens());
+            t.assert_equal(size_t(p.shared_device_memory_bytes),target->get_compute_memory()->shared_parent_capacity());
+        });
+        return t.summary();
+    }
     if (rollback_probe) {
         t.test("streamed_mtp_uses_bounded_host_spilled_recurrent_rollback", [&](testing & t) {
             auto p=llama_context_default_params();

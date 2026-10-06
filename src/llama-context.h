@@ -393,6 +393,8 @@ private:
     ggml_backend_sched_ptr sched;
     // Destroy coordinated ownership before the scheduler, including constructor-failure unwinding.
     std::unique_ptr<llama_context_memory> compute_memory;
+    // A serial child can replan the parent's grants between target decode calls.
+    uint64_t compute_memory_graph_revision = 0;
     // Validated source context outlives this MTP context; no cross-context ownership cycle.
     llama_context * mtp_target_ctx = nullptr;
 
