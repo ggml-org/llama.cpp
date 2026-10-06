@@ -1401,7 +1401,12 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
     ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
 
     ctx->tensor_extras.push_back(extra);
-    ctx->streams.push_back(&(dpct::get_current_device().default_queue()));
+    // consumers index the queues by device id, so size the vector once with one queue per device
+    if (ctx->streams.empty()) {
+        for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
+            ctx->streams.push_back(&(dpct::get_device(i).default_queue()));
+        }
+    }
 
     for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
         int64_t row_low, row_high;
