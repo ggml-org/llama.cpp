@@ -422,6 +422,9 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+
+        // number of MoE layers' worth of host-resident experts to cache on the GPU, 0 = disabled, < 0 = auto [EXPERIMENTAL]
+        int32_t moe_cache_layers;
     };
 
     struct llama_model_tensor_override {

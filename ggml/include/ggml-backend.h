@@ -326,6 +326,12 @@ extern "C" {
     // `graph` is the compute graph of the split
     typedef bool (*ggml_backend_sched_copy_callback)(ggml_backend_t backend, const struct ggml_tensor * src, struct ggml_tensor * dst, struct ggml_cgraph * graph, void * user_data);
 
+    // Callbacks of a MoE expert store (see ggml_backend_sched_set_moe_store)
+    // resolve: return true if the MUL_MAT_ID `node` with host experts can run on `backend` from the store, `cached` is the weight to use in place of node->src[0]
+    // prepare: read the routed `ids` from `ids_backend`, upload the missing experts and write the slot of each id to `ids_copy`
+    typedef bool (*ggml_backend_sched_moe_store_resolve_callback)(const struct ggml_tensor * node, ggml_backend_t backend, struct ggml_tensor ** cached, void ** handle, void * user_data);
+    typedef bool (*ggml_backend_sched_moe_store_prepare_callback)(void * handle, ggml_backend_t ids_backend, const struct ggml_tensor * ids, struct ggml_tensor * ids_copy, void * user_data);
+
     // Initialize a backend scheduler, backends with low index are given priority over backends with high index
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload);
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
@@ -366,6 +372,10 @@ extern "C" {
 
     // Set a callback to be called when the inputs weights of a split are being copied
     GGML_API void                 ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
+
+    // Run the MUL_MAT_ID ops with host experts that the store accepts on `backend`, reading the experts from the slots of the store
+    GGML_API void                 ggml_backend_sched_set_moe_store(ggml_backend_sched_t sched, ggml_backend_t backend,
+            ggml_backend_sched_moe_store_resolve_callback resolve, ggml_backend_sched_moe_store_prepare_callback prepare, void * user_data);
 
     //
     // Meta backend

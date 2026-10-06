@@ -732,6 +732,27 @@ static void common_params_fit_impl(
         return;
     }
 
+    // --moe-cache-layers auto: keep all MoE tensors in system memory and give the surplus to the MoE store
+    // a whole GPU layer also pays for its cold experts, a cache slot only holds the ones that get used
+    if (cparams->moe_cache_layers < 0 && nd == 1) {
+        int32_t n_lo = 0;
+        int32_t n_hi = int32_t(hp_ngl) + 1;
+        while (n_hi - n_lo > 1) {
+            cparams->moe_cache_layers = (n_lo + n_hi) / 2;
+            if (get_memory_for_layers(__func__, ngl_per_device, overflow_bufts)[0] <= targets[0]) {
+                n_lo = cparams->moe_cache_layers;
+            } else {
+                n_hi = cparams->moe_cache_layers;
+            }
+        }
+        cparams->moe_cache_layers = n_lo;
+        LOG_TRC("%s: --moe-cache-layers auto -> %d\n", __func__, n_lo);
+        if (n_lo > 0) {
+            set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
+            return;
+        }
+    }
+
     // step 4: for a MoE model where all dense tensors fit,
     //     convert the dense-only layers in the back to full layers in the front until all devices are full
     // essentially the same procedure as for the dense-only layers except front-to-back
