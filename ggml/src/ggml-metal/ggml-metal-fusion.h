@@ -2,8 +2,9 @@
 //
 // every fusable subgraph is declared exactly once as a ggml_metal_fusion entry in
 // the table in ggml-metal-fusion.cpp. both the graph optimizer (ggml_metal_fusion_max)
-// and the op encoders (ggml_metal_fusion_next) consult this same table, so the two
-// phases can never disagree about what can be fused.
+// and the op encoders (ggml_metal_fusion_next) consult this same table with the same device
+// properties. a check that passes in FULL mode also passes in STRUCTURAL mode, so the encoders
+// fuse only groups that the optimizer may pack.
 
 #pragma once
 
@@ -15,13 +16,15 @@
 extern "C" {
 #endif
 
+struct ggml_metal_device_props;
+
 // the maximum number of nodes that can be fused in a single kernel
 // (also the maximum length of a packed fusion group during graph optimization)
 #define GGML_METAL_FUSION_MAX 16
 
 typedef enum ggml_metal_fusion_mode {
-    // structural checks only; used by the graph optimizer, at which point the graph
-    // tensors are not allocated yet, so buffer placement cannot be verified
+    // structural checks for the graph optimizer, which runs before the graph tensors are allocated (weights
+    // already are); a check may skip conditions that differ between batch sizes, and so accept more than FULL
     GGML_METAL_FUSION_STRUCTURAL = 0,
     // full checks, including buffer placement; used by the op encoders
     GGML_METAL_FUSION_FULL,
@@ -32,33 +35,28 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_NONE = 0,
     GGML_METAL_FUSION_NORM_MUL,     // NORM/RMS_NORM + MUL
     GGML_METAL_FUSION_NORM_MUL_ADD, // NORM/RMS_NORM + MUL + ADD
+    GGML_METAL_FUSION_NORM_SCALE,   // NORM/RMS_NORM + SCALE
     GGML_METAL_FUSION_ADD_CHAIN,    // ADD x N (N in [2, 7])
     GGML_METAL_FUSION_SNAKE,        // MUL + SIN + SQR + MUL + ADD
     GGML_METAL_FUSION_GDN_CACHE,    // GATED_DELTA_NET + CPY (write snapshots into the recurrent cache)
+    GGML_METAL_FUSION_TOPK_MOE,     // SOFT_MAX + ARGSORT + GET_ROWS + norm/scale (MoE routing)
+    GGML_METAL_FUSION_MOE_REDUCE,   // MUL + expert VIEWs + ADD chain (MoE output reduction)
+    GGML_METAL_FUSION_SSM_CONV_SILU, // SSM_CONV + UNARY (silu)
+    GGML_METAL_FUSION_MUL_MAT_ADD,  // MUL_MAT + ADD (residual added in the few-row MMA store)
 } ggml_metal_fusion_id;
 
-struct ggml_metal_fusion {
-    ggml_metal_fusion_id id;
-
-    const enum ggml_op * ops;        // op sequence (fixed length)
-    int                  n_ops;      // number of ops
-
-    // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
-    // check callback below is the sole validator (used for patterns that are not elision chains,
-    // e.g. the gdn + cache-cpy write-through fusion)
-    bool unsafe;
-
-    // extra backend constraints on top of ggml_can_fuse_subgraph
-    // nodes[j] is the j-th node of the pattern
-    bool (*check)(const struct ggml_metal_fusion   * fusion,
-                  const struct ggml_tensor * const * nodes,
-                        ggml_metal_fusion_mode       mode);
-};
+struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
 
 typedef struct ggml_metal_fusion ggml_metal_fusion;
 
-// the single table of all fusions supported by the Metal backend
-const ggml_metal_fusion * ggml_metal_fusion_all(int * n);
+// access the fusion identifier without exposing the full pattern definition
+ggml_metal_fusion_id ggml_metal_fusion_get_id(const struct ggml_metal_fusion * fusion);
+
+// apply any alloc-dependencies required by the fused kernels during graph optimize
+void ggml_metal_fusion_add_alloc_deps(
+        void * user_data,
+        void (*add_alloc_dep)(void *, struct ggml_tensor *, struct ggml_tensor *),
+        struct ggml_cgraph * gf);
 
 // ---- shared fusion info ---------------------------------------------------
 
@@ -85,8 +83,8 @@ void ggml_metal_fusion_info_stats_reset(      struct ggml_metal_fusion_info * fi
 int  ggml_metal_fusion_info_stats_get  (const struct ggml_metal_fusion_info * finfo, const char ** labels, uint64_t * counts, int n);
 void ggml_metal_fusion_info_labels_init(      struct ggml_metal_fusion_info * finfo);
 
-// compute phase: longest fusion starting at idx (a position in node_idxs) that matches in `mode`.
-// returns the matching pattern (nullptr if no fusion) and sets *n_out to the number of nodes consumed.
+// compute phase: longest fusion starting at idx (a position in node_idxs) that matches in `mode` on a device with
+// props. returns the matching pattern (nullptr if no fusion) and sets *n_out to the number of nodes consumed.
 const ggml_metal_fusion * ggml_metal_fusion_next(
         const struct ggml_cgraph * gf,
         const int * node_idxs,
@@ -96,7 +94,7 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
         int * n_out);
 
 // optimize phase: maximum number of nodes starting at idx (a raw sequential graph index) that
-// could be fused, chaining patterns back-to-back. returns at least 1.
+// could be fused on a device with props, chaining patterns back-to-back. returns at least 1.
 int ggml_metal_fusion_max(const struct ggml_cgraph * gf, int idx);
 
 #ifdef __cplusplus

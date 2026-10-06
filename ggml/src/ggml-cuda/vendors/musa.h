@@ -5,6 +5,11 @@
 #include <mublas.h>
 #include <musa_bf16.h>
 #include <musa_fp16.h>
+
+#ifdef __MUSA_ARCH__
+#define __CUDA_ARCH__ 1300 // GGML_CUDA_CC_RUBIN
+#endif // __MUSA_ARCH__
+
 #define CUBLAS_COMPUTE_16F CUDA_R_16F
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
 #define CUBLAS_COMPUTE_32F_FAST_16F MUBLAS_COMPUTE_32F_FAST_16F
@@ -44,6 +49,7 @@
 #define cudaDeviceGetPCIBusId musaDeviceGetPCIBusId
 #define cudaDeviceProp musaDeviceProp
 #define cudaDeviceSynchronize musaDeviceSynchronize
+#define cudaDeviceGetAttribute musaDeviceGetAttribute
 #define cudaError_t musaError_t
 #define cudaErrorMemoryAllocation musaErrorMemoryAllocation
 #define cudaErrorPeerAccessAlreadyEnabled musaErrorPeerAccessAlreadyEnabled
@@ -114,6 +120,7 @@
 #define cuMemRelease muMemRelease
 #define cuMemSetAccess muMemSetAccess
 #define cuMemUnmap muMemUnmap
+#define cudaDevAttrCooperativeLaunch musaDevAttrCooperativeLaunch
 #define cudaFuncAttributeMaxDynamicSharedMemorySize musaFuncAttributeMaxDynamicSharedMemorySize
 #define cudaFuncSetAttribute musaFuncSetAttribute
 #define cudaMemcpy3DPeerParms musaMemcpy3DPeerParms
@@ -145,6 +152,9 @@
 #define cudaStreamCaptureModeRelaxed musaStreamCaptureModeRelaxed
 #define cudaStreamBeginCapture musaStreamBeginCapture
 #define cudaStreamEndCapture musaStreamEndCapture
+#define cudaStreamCaptureStatus musaStreamCaptureStatus
+#define cudaStreamCaptureStatusNone musaStreamCaptureStatusNone
+#define cudaStreamIsCapturing musaStreamIsCapturing
 #define cudaOccupancyMaxActiveBlocksPerMultiprocessor musaOccupancyMaxActiveBlocksPerMultiprocessor
 
 typedef __mt_bfloat16 nv_bfloat16;

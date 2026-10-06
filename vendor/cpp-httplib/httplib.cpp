@@ -169,30 +169,23 @@ void SSEClient::stop() {
 }
 
 bool SSEClient::parse_sse_line(const std::string &line, SSEMessage &msg,
-                                      int &retry_ms) {
+                                      int &retry_ms, bool &has_data) {
   // Blank line signals end of event
-  if (line.empty() || line == "\r") { return true; }
+  if (line.empty()) { return true; }
 
   // Lines starting with ':' are comments (ignored)
-  if (!line.empty() && line[0] == ':') { return false; }
+  if (line[0] == ':') { return false; }
 
   // Find the colon separator
   auto colon_pos = line.find(':');
-  if (colon_pos == std::string::npos) {
-    // Line with no colon is treated as field name with empty value
-    return false;
-  }
-
   auto field = line.substr(0, colon_pos);
   std::string value;
 
   // Value starts after colon, skip optional single space
-  if (colon_pos + 1 < line.size()) {
+  if (colon_pos != std::string::npos && colon_pos + 1 < line.size()) {
     auto value_start = colon_pos + 1;
     if (line[value_start] == ' ') { value_start++; }
     value = line.substr(value_start);
-    // Remove trailing \r if present
-    if (!value.empty() && value.back() == '\r') { value.pop_back(); }
   }
 
   // Handle known fields
@@ -200,14 +193,16 @@ bool SSEClient::parse_sse_line(const std::string &line, SSEMessage &msg,
     msg.event = value;
   } else if (field == "data") {
     // Multiple data lines are concatenated with newlines
-    if (!msg.data.empty()) { msg.data += "\n"; }
+    if (has_data) { msg.data += "\n"; }
     msg.data += value;
+    has_data = true;
   } else if (field == "id") {
     // Empty id is valid (clears the last event ID)
     msg.id = value;
   } else if (field == "retry") {
     // Parse retry interval in milliseconds
-    {
+    // Per the SSE spec, a value that is not all ASCII digits is ignored.
+    if (detail::is_numeric(value)) {
       int v = 0;
       auto res =
           detail::from_chars(value.data(), value.data() + value.size(), v);
@@ -274,6 +269,7 @@ void SSEClient::run_event_loop() {
     // Event receiving loop
     std::string buffer;
     SSEMessage current_msg;
+    bool has_data = false;
 
     while (running_.load() && result.next()) {
       buffer.append(result.data(), result.size());
@@ -287,18 +283,25 @@ void SSEClient::run_event_loop() {
         auto line = buffer.substr(line_start, newline_pos - line_start);
         line_start = newline_pos + 1;
 
+        // Strip the \r of a CRLF line ending so that every field, including
+        // one without a colon, sees the same line
+        if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+
         // Parse the line and check if event is complete
         auto event_complete =
-            parse_sse_line(line, current_msg, reconnect_interval_ms_);
+            parse_sse_line(line, current_msg, reconnect_interval_ms_, has_data);
 
-        if (event_complete && !current_msg.data.empty()) {
-          // Update last_event_id for reconnection
+        if (event_complete) {
+          // Update last_event_id for reconnection, even for an event that
+          // has no data
           if (!current_msg.id.empty()) { last_event_id_ = current_msg.id; }
 
-          // Dispatch event to appropriate handler
-          dispatch_event(current_msg);
+          // An event without a data field is not dispatched
+          if (has_data) { dispatch_event(current_msg); }
 
+          // Reset the message for the next event either way
           current_msg.clear();
+          has_data = false;
         }
       }
 
@@ -343,11 +346,15 @@ bool SSEClient::should_reconnect(int count) const {
 }
 
 void SSEClient::wait_for_reconnect() {
-  // Use small increments to check running_ flag frequently
+  // Use small increments to check running_ flag frequently.
+  // Always wait at least one increment, so that a zero interval (e.g.
+  // "retry: 0" from the server) cannot cause a busy reconnect loop.
+  const auto step_ms = 100;
+  auto interval_ms = (std::max)(reconnect_interval_ms_, step_ms);
   auto waited = 0;
-  while (running_.load() && waited < reconnect_interval_ms_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    waited += 100;
+  while (running_.load() && waited < interval_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(step_ms));
+    waited += step_ms;
   }
 }
 
@@ -408,6 +415,9 @@ bool is_peer_closed(session_t session, socket_t sock);
 
 // Certificate verification
 cert_t get_peer_cert(const_session_t session);
+// The certificates the peer sent, leaf first. Free each with free_cert(), and
+// do not use them after free_session(), as with get_peer_cert().
+size_t get_peer_certs(const_session_t session, std::vector<cert_t> &certs);
 void free_cert(cert_t cert);
 bool verify_hostname(cert_t cert, const char *hostname);
 uint64_t hostname_mismatch_code();
@@ -1115,15 +1125,15 @@ std::string encode_path(const std::string &s) {
     switch (s[i]) {
     case ' ': result += "%20"; break;
     case '+': result += "%2B"; break;
-    case '\r': result += "%0D"; break;
-    case '\n': result += "%0A"; break;
     case '\'': result += "%27"; break;
     case ',': result += "%2C"; break;
     // case ':': result += "%3A"; break; // ok? probably...
     case ';': result += "%3B"; break;
     default:
       auto c = static_cast<uint8_t>(s[i]);
-      if (c >= 0x80) {
+      // Control characters (incl. CR/LF) and non-ASCII bytes are not allowed
+      // in a request-target as-is.
+      if (c < 0x20 || c == 0x7f || c >= 0x80) {
         result += '%';
         char hex[4];
         auto len = snprintf(hex, sizeof(hex) - 1, "%02X", c);
@@ -1248,6 +1258,13 @@ bool parse_trailers(stream_line_reader &line_reader, Headers &dest,
     // to look up.
     split(trailer_header.data(), trailer_header.data() + trailer_header.size(),
           ',', [&](const char *b, const char *e) {
+            // A legitimate message declares only a handful of trailers. Cap the
+            // set so a peer cannot grow it without bound: an oversized set only
+            // arises from an attempt to force many colliding names into
+            // quadratic lookups (case_ignore::hash is unkeyed).
+            if (declared_trailers.size() >= CPPHTTPLIB_HEADER_MAX_COUNT) {
+              return;
+            }
             std::string key(b, e);
             if (prohibited_trailers.find(key) == prohibited_trailers.end()) {
               declared_trailers.insert(key);
@@ -1258,6 +1275,8 @@ bool parse_trailers(stream_line_reader &line_reader, Headers &dest,
   size_t trailer_header_count = 0;
   while (strcmp(line_reader.ptr(), "\r\n") != 0) {
     if (line_reader.size() > CPPHTTPLIB_HEADER_MAX_LENGTH) { return false; }
+    // Count every received trailer field, not only the declared ones stored in
+    // dest, so undeclared fields cannot keep this loop running past the limit.
     if (trailer_header_count >= CPPHTTPLIB_HEADER_MAX_COUNT) { return false; }
 
     constexpr auto line_terminator_len = 2;
@@ -1270,11 +1289,12 @@ bool parse_trailers(stream_line_reader &line_reader, Headers &dest,
                         if (declared_trailers.find(key) !=
                             declared_trailers.end()) {
                           dest.emplace(key, val);
-                          trailer_header_count++;
                         }
                       })) {
       return false;
     }
+
+    trailer_header_count++;
 
     if (!line_reader.getline()) { return false; }
   }
@@ -1886,18 +1906,30 @@ bool keep_alive(const std::atomic<socket_t> &svr_sock, socket_t sock,
   return false;
 }
 
-template <typename T>
-bool
-process_server_socket_core(const std::atomic<socket_t> &svr_sock, socket_t sock,
-                           size_t keep_alive_max_count,
-                           time_t keep_alive_timeout_sec, T callback) {
+// `has_buffered_request` reports whether the connection's stream already holds
+// bytes of the next request. A client may pipeline its requests (RFC 9112
+// 9.3.2), so reading one request can pull the start of the next one into the
+// stream's buffer; that request must be served without waiting for the socket
+// to become readable again, since its bytes are no longer on the socket.
+// `callback` is told whether keep_alive() has just seen the socket go readable.
+template <typename P, typename T>
+bool process_server_socket_core(const std::atomic<socket_t> &svr_sock,
+                                       socket_t sock,
+                                       size_t keep_alive_max_count,
+                                       time_t keep_alive_timeout_sec,
+                                       P has_buffered_request, T callback) {
   assert(keep_alive_max_count > 0);
   auto ret = false;
   auto count = keep_alive_max_count;
-  while (count > 0 && keep_alive(svr_sock, sock, keep_alive_timeout_sec)) {
+  while (count > 0) {
+    auto socket_readable = false;
+    if (!has_buffered_request()) {
+      if (!keep_alive(svr_sock, sock, keep_alive_timeout_sec)) { break; }
+      socket_readable = true;
+    }
     auto close_connection = count == 1;
     auto connection_closed = false;
-    ret = callback(close_connection, connection_closed);
+    ret = callback(socket_readable, close_connection, connection_closed);
     if (!ret || connection_closed) { break; }
     count--;
   }
@@ -1911,14 +1943,16 @@ process_server_socket(const std::atomic<socket_t> &svr_sock, socket_t sock,
                       time_t keep_alive_timeout_sec, time_t read_timeout_sec,
                       time_t read_timeout_usec, time_t write_timeout_sec,
                       time_t write_timeout_usec, T callback) {
+  // One stream per connection: its read buffer can already hold the start of
+  // the next, pipelined request.
+  SocketStream strm(sock, read_timeout_sec, read_timeout_usec,
+                    write_timeout_sec, write_timeout_usec);
   return process_server_socket_core(
       svr_sock, sock, keep_alive_max_count, keep_alive_timeout_sec,
-      [&](bool close_connection, bool &connection_closed) {
-        SocketStream strm(sock, read_timeout_sec, read_timeout_usec,
-                          write_timeout_sec, write_timeout_usec);
-        // process_server_socket_core() only gets here once keep_alive() has
-        // seen the socket go readable.
-        strm.set_readable_hint();
+      [&]() { return strm.is_readable(); },
+      [&](bool socket_readable, bool close_connection,
+          bool &connection_closed) {
+        if (socket_readable) { strm.set_readable_hint(); }
         return callback(strm, close_connection, connection_closed);
       });
 }
@@ -2907,7 +2941,8 @@ bool parse_quality(const char *b, const char *e, std::string &token,
 
                double v = 0.0;
                auto res = from_chars(pb + r.first, pb + r.second, v);
-               if (res.ec != std::errc{} || v < 0.0 || v > 1.0) {
+               if (res.ec != std::errc{} || res.ptr != pb + r.second ||
+                   v < 0.0 || v > 1.0) {
                  invalid = true;
                  return true;
                }
@@ -3844,12 +3879,11 @@ bool read_content(Stream &strm, T &x, size_t payload_max_length, int &status,
 
 ssize_t write_request_line(Stream &strm, const std::string &method,
                                   const std::string &path) {
-  // A request target must not carry CR/LF (or other control octets); otherwise
-  // a value smuggled into it splits the request line and injects headers or a
-  // whole request. The same field-value check already guards header values in
-  // check_and_write_headers and the request target in
-  // perform_websocket_handshake; apply it here too.
-  if (!fields::is_field_value(path)) { return -1; }
+  // Neither the method nor the request target may carry CR/LF, SP or other
+  // control octets; otherwise a value smuggled into either splits the request
+  // line and injects headers or a whole request.
+  if (!fields::is_token(method)) { return -1; }
+  if (!fields::is_request_target(path)) { return -1; }
 
   std::string s = method;
   s += ' ';
@@ -4071,9 +4105,9 @@ bool compress_content_provider(const ContentProvider &content_provider,
   return cmp.compress(nullptr, 0, true, append);
 }
 
-// Serves `m` as the response body. `set_content_provider()` clears the coding,
-// so recording it has to come after; keeping both here means a third
-// file-serving path cannot get that order wrong.
+// Serves `m` as the response body. `set_content_provider()` clears the coding
+// and the file flag, so recording them has to come after; keeping all of it
+// here means a third file-serving path cannot get that order wrong.
 void set_file_content_provider(Response &res,
                                       const std::shared_ptr<mmap> &m,
                                       const std::string &content_type,
@@ -4085,6 +4119,7 @@ void set_file_content_provider(Response &res,
         return true;
       });
 
+  res.is_file_content_provider_ = true;
   res.content_coding_ = encoding;
 }
 
@@ -5376,6 +5411,19 @@ std::string unescape_quoted_pairs(const std::string &s) {
   return out;
 }
 
+// Inverse of unescape_quoted_pairs: prepares a value to sit inside a
+// quoted-string. RFC 9110 §5.6.4 requires a literal '\' or '"' to be sent as a
+// quoted-pair, so the recipient recovers the original value.
+std::string escape_quoted_pairs(const std::string &s) {
+  std::string out;
+  out.reserve(s.size());
+  for (auto c : s) {
+    if (c == '\\' || c == '"') { out += '\\'; }
+    out += c;
+  }
+  return out;
+}
+
 bool parse_www_authenticate(const Response &res,
                                    std::map<std::string, std::string> &auth,
                                    bool is_proxy) {
@@ -5500,6 +5548,12 @@ bool is_field_value(const std::string &s) { return is_field_content(s); }
 
 bool is_field_valid(const std::string &name, const std::string &value) {
   return is_field_name(name) && is_field_value(value);
+}
+
+// RFC 9112 §2.2/§3.2: the request-target has no SP, HTAB or other control
+// characters (incl. bare CR). obs-text (raw UTF-8) is allowed.
+bool is_request_target(const std::string &s) {
+  return std::all_of(s.begin(), s.end(), is_field_vchar);
 }
 
 } // namespace fields
@@ -5826,13 +5880,16 @@ bool process_server_socket_ssl(
     socket_t sock, size_t keep_alive_max_count, time_t keep_alive_timeout_sec,
     time_t read_timeout_sec, time_t read_timeout_usec, time_t write_timeout_sec,
     time_t write_timeout_usec, T callback) {
+  // See process_server_socket(). The TLS library keeps already decrypted bytes
+  // of a pipelined request, which keep_alive() cannot see on the socket.
+  SSLSocketStream strm(sock, session, read_timeout_sec, read_timeout_usec,
+                       write_timeout_sec, write_timeout_usec);
   return process_server_socket_core(
       svr_sock, sock, keep_alive_max_count, keep_alive_timeout_sec,
-      [&](bool close_connection, bool &connection_closed) {
-        SSLSocketStream strm(sock, session, read_timeout_sec, read_timeout_usec,
-                             write_timeout_sec, write_timeout_usec);
-        // See the non-TLS path in process_server_socket().
-        strm.set_readable_hint();
+      [&]() { return strm.is_readable(); },
+      [&](bool socket_readable, bool close_connection,
+          bool &connection_closed) {
+        if (socket_readable) { strm.set_readable_hint(); }
         return callback(strm, close_connection, connection_closed);
       });
 }
@@ -5873,7 +5930,13 @@ std::pair<std::string, std::string> make_digest_authentication_header(
   }
 
   std::string algo = "MD5";
-  if (auth.find("algorithm") != auth.end()) { algo = auth.at("algorithm"); }
+  if (auth.find("algorithm") != auth.end()) {
+    // algorithm is an unquoted token (RFC 7616 §3.4). A server value that is
+    // not a token would otherwise be emitted verbatim and could carry commas
+    // or quotes that inject further auth-params into the header below.
+    const auto &a = auth.at("algorithm");
+    if (fields::is_token(a)) { algo = a; }
+  }
 
   std::string response;
   {
@@ -5896,14 +5959,23 @@ std::pair<std::string, std::string> make_digest_authentication_header(
 
   auto opaque = (auth.find("opaque") != auth.end()) ? auth.at("opaque") : "";
 
-  auto field = "Digest username=\"" + username + "\", realm=\"" +
-               auth.at("realm") + "\", nonce=\"" + auth.at("nonce") +
-               "\", uri=\"" + req.path + "\", algorithm=" + algo +
-               (qop.empty() ? ", response=\""
-                            : ", qop=" + qop + ", nc=" + nc + ", cnonce=\"" +
-                                  cnonce + "\", response=\"") +
-               response + "\"" +
-               (opaque.empty() ? "" : ", opaque=\"" + opaque + "\"");
+  // Every value placed inside a quoted-string is escaped so a '"' in it cannot
+  // close the string early. realm, nonce and opaque come straight from the
+  // server's challenge (parse_www_authenticate() already de-escaped them), so
+  // without this a crafted challenge injects extra auth-params into the header.
+  auto field =
+      "Digest username=\"" + detail::escape_quoted_pairs(username) +
+      "\", realm=\"" + detail::escape_quoted_pairs(auth.at("realm")) +
+      "\", nonce=\"" + detail::escape_quoted_pairs(auth.at("nonce")) +
+      "\", uri=\"" + detail::escape_quoted_pairs(req.path) +
+      "\", algorithm=" + algo +
+      (qop.empty() ? ", response=\""
+                   : ", qop=" + qop + ", nc=" + nc + ", cnonce=\"" + cnonce +
+                         "\", response=\"") +
+      response + "\"" +
+      (opaque.empty()
+           ? ""
+           : ", opaque=\"" + detail::escape_quoted_pairs(opaque) + "\"");
 
   auto key = is_proxy ? "Proxy-Authorization" : "Authorization";
   return std::make_pair(key, field);
@@ -5968,11 +6040,10 @@ bool match_hostname(const std::string &pattern,
 #ifdef _WIN32
 // Verify certificate using Windows CertGetCertificateChain API.
 // This provides real-time certificate validation with Windows Update
-// integration, independent of the TLS backend (OpenSSL or MbedTLS).
-bool
-verify_cert_with_windows_schannel(const std::vector<unsigned char> &der_cert,
-                                  const std::string &hostname,
-                                  bool verify_hostname, uint64_t &out_error) {
+// integration, independent of the TLS backend.
+bool verify_cert_with_windows_schannel(
+    const std::vector<unsigned char> &der_cert, const std::string &hostname,
+    bool verify_hostname, uint64_t &out_error, tls::const_session_t session) {
   if (der_cert.empty()) { return false; }
 
   out_error = 0;
@@ -5990,14 +6061,41 @@ verify_cert_with_windows_schannel(const std::vector<unsigned char> &der_cert,
   auto cert_guard =
       scope_exit([&] { CertFreeCertificateContext(cert_context); });
 
+  // Give CryptoAPI the certificates the server sent. Without them it follows
+  // the leaf's AIA URL, which may lead to an issuer under an untrusted root.
+  std::vector<tls::cert_t> peer_certs;
+  tls::get_peer_certs(session, peer_certs);
+  auto store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, nullptr);
+  auto store_guard = scope_exit([&] {
+    for (auto cert : peer_certs) {
+      tls::free_cert(cert);
+    }
+    if (store) { CertCloseStore(store, 0); }
+  });
+  for (auto cert : peer_certs) {
+    std::vector<unsigned char> der;
+    if (store && tls::get_cert_der(cert, der)) {
+      CertAddEncodedCertificateToStore(store, X509_ASN_ENCODING, der.data(),
+                                       static_cast<DWORD>(der.size()),
+                                       CERT_STORE_ADD_USE_EXISTING, nullptr);
+    }
+  }
+
   // Setup chain parameters
   CERT_CHAIN_PARA chain_para = {};
   chain_para.cbSize = sizeof(chain_para);
 
+  // Require the server authentication usage along the chain, which also
+  // rejects roots that Windows trusts only for other purposes.
+  LPSTR server_auth = const_cast<LPSTR>(szOID_PKIX_KP_SERVER_AUTH);
+  chain_para.RequestedUsage.dwType = USAGE_MATCH_TYPE_AND;
+  chain_para.RequestedUsage.Usage.cUsageIdentifier = 1;
+  chain_para.RequestedUsage.Usage.rgpszUsageIdentifier = &server_auth;
+
   // Build certificate chain with revocation checking
   PCCERT_CHAIN_CONTEXT chain_context = nullptr;
   auto chain_result = CertGetCertificateChain(
-      nullptr, cert_context, nullptr, cert_context->hCertStore, &chain_para,
+      nullptr, cert_context, nullptr, store, &chain_para,
       CERT_CHAIN_CACHE_END_CERT | CERT_CHAIN_REVOCATION_CHECK_END_CERT |
           CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT,
       nullptr, &chain_context);
@@ -6105,6 +6203,9 @@ struct ClientTlsSessionOptions {
   // The caller decides whether Schannel has anything to say about this
   // connection; see SSLClient::initialize_ssl().
   bool windows_cert_verification = false;
+  // A server certificate verifier works on the backend's chain verification,
+  // so the backend keeps deciding and Schannel only adds its own check.
+  bool server_certificate_verifier_set = false;
 #endif
 };
 
@@ -6139,12 +6240,24 @@ bool setup_client_tls_session(
     return fail(Error::SSLConnection, 0, 0);
   }
 
+  // With Windows verification on and no server certificate verifier set,
+  // Schannel is the only chain verifier. The backend's trust store is a
+  // snapshot of the Windows stores that lacks the roots Windows fetches on
+  // demand, so the backend's verdict is not used.
+  auto windows_verifies_chain = false;
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
+  windows_verifies_chain = options.windows_cert_verification &&
+                           !options.server_certificate_verifier_set;
+#endif
+
 #if defined(CPPHTTPLIB_MBEDTLS_SUPPORT) || defined(CPPHTTPLIB_WOLFSSL_SUPPORT)
   // Mbed TLS and wolfSSL need the verification mode set explicitly; OpenSSL
-  // uses SSL_VERIFY_NONE and does all verification post-handshake. Chain
-  // verification happens during the handshake even for IP hosts; the
-  // certificate identity is verified post-handshake via verify_hostname().
-  set_verify_client(ctx, server_certificate_verification);
+  // uses SSL_VERIFY_NONE and does all verification post-handshake. Unless
+  // Schannel verifies the chain instead, chain verification happens during
+  // the handshake even for IP hosts; the certificate identity is verified
+  // post-handshake via verify_hostname().
+  set_verify_client(ctx,
+                    server_certificate_verification && !windows_verifies_chain);
 #endif
 
   {
@@ -6189,10 +6302,12 @@ bool setup_client_tls_session(
 
   if (verification_status == SSLVerifierResponse::NoDecisionMade &&
       server_certificate_verification) {
-    auto verify_result = get_verify_result(session);
-    if (verify_result != 0) {
-      return fail(Error::SSLServerVerification, 0,
-                  static_cast<uint64_t>(verify_result));
+    if (!windows_verifies_chain) {
+      auto verify_result = get_verify_result(session);
+      if (verify_result != 0) {
+        return fail(Error::SSLServerVerification, 0,
+                    static_cast<uint64_t>(verify_result));
+      }
     }
 
     auto server_cert = get_peer_cert(session);
@@ -6212,18 +6327,17 @@ bool setup_client_tls_session(
     }
 
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
-    // Additional Windows Schannel verification.
-    // This provides real-time certificate validation with Windows Update
-    // integration, working with both OpenSSL and MbedTLS backends.
+    // Windows Schannel verification, which lets Windows fetch missing roots
+    // and intermediates on demand. It must not be skipped: unless a server
+    // certificate verifier is set, it is the only chain check.
     if (options.windows_cert_verification) {
       std::vector<unsigned char> der;
-      if (get_cert_der(server_cert, der)) {
-        uint64_t wincrypt_error = 0;
-        if (!verify_cert_with_windows_schannel(
-                der, host, options.server_hostname_verification,
-                wincrypt_error)) {
-          return fail(Error::SSLServerVerification, 0, wincrypt_error);
-        }
+      uint64_t wincrypt_error = 0;
+      if (!get_cert_der(server_cert, der) ||
+          !verify_cert_with_windows_schannel(
+              der, host, options.server_hostname_verification, wincrypt_error,
+              session)) {
+        return fail(Error::SSLServerVerification, 0, wincrypt_error);
       }
     }
 #endif
@@ -6985,6 +7099,7 @@ void Response::set_content_provider(
   if (in_length > 0) { content_provider_ = std::move(provider); }
   content_provider_resource_releaser_ = std::move(resource_releaser);
   is_chunked_content_provider_ = false;
+  is_file_content_provider_ = false;
   content_coding_ = detail::EncodingType::None;
 }
 
@@ -6996,6 +7111,7 @@ void Response::set_content_provider(
   content_provider_ = detail::ContentProviderAdapter(std::move(provider));
   content_provider_resource_releaser_ = std::move(resource_releaser);
   is_chunked_content_provider_ = false;
+  is_file_content_provider_ = false;
   content_coding_ = detail::EncodingType::None;
 }
 
@@ -7007,6 +7123,7 @@ void Response::set_chunked_content_provider(
   content_provider_ = detail::ContentProviderAdapter(std::move(provider));
   content_provider_resource_releaser_ = std::move(resource_releaser);
   is_chunked_content_provider_ = true;
+  is_file_content_provider_ = false;
   content_coding_ = detail::EncodingType::None;
 }
 
@@ -7688,14 +7805,10 @@ bool parse_no_proxy_entry(const std::string &token, NoProxyEntry &out) {
     struct in_addr v4;
     if (inet_pton(AF_INET, addr_part.c_str(), &v4) == 1) {
       int prefix = 32;
-      if (!prefix_part.empty()) {
-        auto r = from_chars(prefix_part.data(),
-                            prefix_part.data() + prefix_part.size(), prefix);
-        if (r.ec != std::errc{} ||
-            r.ptr != prefix_part.data() + prefix_part.size()) {
-          return false;
-        }
-        if (prefix < 0 || prefix > 32) { return false; }
+      if (!prefix_part.empty() &&
+          !parse_int_in_range(prefix_part.data(), prefix_part.size(), 0, 32,
+                              prefix)) {
+        return false;
       }
       out.kind = NoProxyKind::IPv4Cidr;
       std::memcpy(out.net.data(), &v4, sizeof(v4));
@@ -7707,14 +7820,10 @@ bool parse_no_proxy_entry(const std::string &token, NoProxyEntry &out) {
   struct in6_addr v6;
   if (inet_pton(AF_INET6, addr_part.c_str(), &v6) == 1) {
     int prefix = 128;
-    if (!prefix_part.empty()) {
-      auto r = from_chars(prefix_part.data(),
-                          prefix_part.data() + prefix_part.size(), prefix);
-      if (r.ec != std::errc{} ||
-          r.ptr != prefix_part.data() + prefix_part.size()) {
-        return false;
-      }
-      if (prefix < 0 || prefix > 128) { return false; }
+    if (!prefix_part.empty() &&
+        !parse_int_in_range(prefix_part.data(), prefix_part.size(), 0, 128,
+                            prefix)) {
+      return false;
     }
     out.kind = NoProxyKind::IPv6Cidr;
     std::memcpy(out.net.data(), &v6, sizeof(v6));
@@ -8573,6 +8682,8 @@ bool Server::parse_request_line(const char *s, Request &req) const {
     return false;
   }
 
+  if (!detail::fields::is_request_target(req.target)) { return false; }
+
   {
     // Skip URL fragment
     for (size_t i = 0; i < req.target.size(); i++) {
@@ -8626,7 +8737,10 @@ bool Server::write_response_core(Stream &strm, bool close_connection,
   // Prepare additional headers
   if (close_connection ||
       detail::has_header_token(req.headers, "Connection", "close") ||
-      400 <= res.status) { // Don't leave connections open after errors
+      400 <= res.status || // Don't leave connections open after errors
+      // The client withholds the body until `100 Continue`, which was never
+      // sent, so whether and when the body follows is unknown.
+      (req.expect_100_continue_pending_ && detail::has_framed_body(req))) {
     res.set_header("Connection", "close");
   } else {
     std::string s = "timeout=";
@@ -8657,9 +8771,27 @@ bool Server::write_response_core(Stream &strm, bool close_connection,
   if (!detail::write_response_line(bstrm, res.status)) { return false; }
   if (header_writer_(bstrm, res.headers) <= 0) { return false; }
 
-  // Combine small body with headers to reduce write syscalls
-  if (req.method != "HEAD" && !res.body.empty() && !res.content_provider_) {
-    bstrm.write(res.body.data(), res.body.size());
+  // Combine a small body with the headers so the whole response leaves in a
+  // single write. A large body is written on its own instead: a copy of it
+  // costs more than the extra write saves.
+  auto send_body = req.method != "HEAD";
+  auto body_is_separate = false;
+  auto provider_done = false;
+  if (send_body && !res.body.empty() && !res.content_provider_) {
+    if (res.body.size() < CPPHTTPLIB_SEND_BUFSIZ) {
+      bstrm.write(res.body.data(), res.body.size());
+    } else {
+      body_is_separate = true;
+    }
+  } else if (send_body && res.content_provider_ &&
+             res.is_file_content_provider_ &&
+             res.content_length_ < CPPHTTPLIB_SEND_BUFSIZ) {
+    // A small file is read into the same buffer. Other providers may produce
+    // their data over time, so they are never held back.
+    if (!write_content_with_provider(bstrm, req, res, boundary, content_type)) {
+      return false;
+    }
+    provider_done = true;
   }
 
   // Log before writing to avoid race condition with client-side code that
@@ -8670,17 +8802,20 @@ bool Server::write_response_core(Stream &strm, bool close_connection,
   auto &data = bstrm.get_buffer();
   if (!detail::write_data(strm, data.data(), data.size())) { return false; }
 
-  // Streaming body
-  auto ret = true;
-  if (req.method != "HEAD" && res.content_provider_) {
-    if (write_content_with_provider(strm, req, res, boundary, content_type)) {
-      res.content_provider_success_ = true;
-    } else {
-      ret = false;
-    }
+  if (body_is_separate) {
+    return detail::write_data(strm, res.body.data(), res.body.size());
   }
 
-  return ret;
+  // Streaming body
+  if (send_body && res.content_provider_) {
+    if (!provider_done &&
+        !write_content_with_provider(strm, req, res, boundary, content_type)) {
+      return false;
+    }
+    res.content_provider_success_ = true;
+  }
+
+  return true;
 }
 
 bool
@@ -8876,6 +9011,13 @@ bool Server::read_content_core(
     return true;
   }
 #endif
+
+  // The client is waiting for this before it sends the body.
+  if (req.expect_100_continue_pending_) {
+    req.expect_100_continue_pending_ = false;
+    detail::write_response_line(strm, StatusCode::Continue_100);
+    strm.write("\r\n");
+  }
 
   if (!detail::read_content(strm, req, payload_max_length_, res.status, nullptr,
                             out, true)) {
@@ -9604,6 +9746,13 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   // Connection has been closed on client
   if (!line_reader.getline()) { return false; }
 
+  // RFC 9112 2.2: ignore an empty line received before the request-line. Some
+  // clients send an extra CRLF after a request body, which would otherwise be
+  // parsed as the next request on a persistent connection.
+  if (strcmp(line_reader.ptr(), "\r\n") == 0 && !line_reader.getline()) {
+    return false;
+  }
+
   Request req;
   req.start_time_ = std::chrono::steady_clock::now();
   req.remote_addr = remote_addr;
@@ -9615,8 +9764,21 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   res.version = "HTTP/1.1";
   res.headers = default_headers_;
 
-  // Request line and headers
+  // RFC 9112 §9.6: a server that sends the "close" connection option must
+  // close the connection after that response, whichever path wrote it (an
+  // error status, a handler, or a rejected request). Reading on would also
+  // parse whatever the client sent next on a connection it considers done.
+  auto honor_connection_close = detail::scope_exit([&] {
+    if (detail::has_header_token(res.headers, "Connection", "close")) {
+      connection_closed = true;
+    }
+  });
+
+  // Request line and headers. A rejected message leaves the rest of it (and
+  // any body) unread, so the connection cannot be reused: the leftover bytes
+  // would be parsed as the next request.
   if (!parse_request_line(line_reader.ptr(), req)) {
+    connection_closed = true;
     res.status = StatusCode::BadRequest_400;
     output_error_log(Error::InvalidRequestLine, &req);
     return write_response(strm, close_connection, req, res);
@@ -9624,20 +9786,28 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
 
   // Request headers
   if (!detail::read_headers(strm, req.headers)) {
+    connection_closed = true;
     res.status = StatusCode::BadRequest_400;
     output_error_log(Error::InvalidHeaders, &req);
     return write_response(strm, close_connection, req, res);
   }
 
-  // RFC 9112 §6.3: Reject requests whose framing is ambiguous, which would
-  // otherwise let an intermediary and this parser disagree on where the body
-  // ends and enable request smuggling. Two cases: a non-zero Content-Length
-  // alongside any Transfer-Encoding (Content-Length: 0 is tolerated for
-  // compatibility with existing clients), and a Transfer-Encoding whose final
-  // coding is not chunked, which leaves the body length undeterminable. The
-  // latter must not fall through to the "no body" path, or the body bytes are
-  // parsed as the next request on a persistent connection.
-  if (detail::has_conflicting_content_length(req.headers) ||
+  // RFC 9112 §6.3: Reject requests whose framing is invalid or ambiguous,
+  // which would otherwise let an intermediary and this parser disagree on
+  // where the body ends and enable request smuggling. Three cases: a
+  // Content-Length that is not a valid decimal length (e.g. "42, 42", "+42"
+  // or empty), which would otherwise be read as "no body"; a non-zero
+  // Content-Length alongside any Transfer-Encoding (Content-Length: 0 is
+  // tolerated for compatibility with existing clients); and a
+  // Transfer-Encoding whose final coding is not chunked, which leaves the body
+  // length undeterminable. None of them may fall through to the "no body"
+  // path, or the body bytes are parsed as the next request on a persistent
+  // connection.
+  auto is_invalid_content_length = false;
+  detail::get_header_value_u64(req.headers, "Content-Length", 0, 0,
+                               is_invalid_content_length);
+  if (is_invalid_content_length ||
+      detail::has_conflicting_content_length(req.headers) ||
       (req.has_header("Transfer-Encoding") &&
        !detail::is_chunked_transfer_encoding(req.headers))) {
     connection_closed = true;
@@ -9714,19 +9884,20 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   // case-insensitive, and a 100-continue expectation in an HTTP/1.0 request
   // must be ignored. An expectation we do not recognize is left alone; the
   // 417 the section allows for one is a MAY, not a requirement.
+  //
+  // `100 Continue` itself is deferred until the body is actually read (see
+  // read_content_core), so a request rejected by a later handler never
+  // invites the client to send a body nobody will read.
   if (req.version != "HTTP/1.0" &&
       detail::has_header_token(req.headers, "Expect", "100-continue")) {
     int status = StatusCode::Continue_100;
     if (expect_100_continue_handler_) {
       status = expect_100_continue_handler_(req, res);
     }
-    switch (status) {
-    case StatusCode::Continue_100:
-    case StatusCode::ExpectationFailed_417:
-      detail::write_response_line(strm, status);
-      strm.write("\r\n");
-      break;
-    default:
+    if (status == StatusCode::Continue_100) {
+      req.expect_100_continue_pending_ = true;
+    } else {
+      if (res.status == -1) { res.status = status; }
       connection_closed = true;
       return write_response(strm, true, req, res);
     }
@@ -9739,18 +9910,25 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   };
 
   // WebSocket upgrade
-  // Check pre_routing_handler_ before upgrading so that authentication
-  // and other middleware can reject the request with an HTTP response
-  // (e.g., 401) before the protocol switches.
+  // Run pre_routing_handler_ and pre_request_handler_ before upgrading so
+  // that authentication and other middleware can reject the request with an
+  // HTTP response (e.g., 401) before the protocol switches.
   if (detail::is_websocket_upgrade(req)) {
     if (pre_routing_handler_ &&
         pre_routing_handler_(req, res) == HandlerResponse::Handled) {
       if (res.status == -1) { res.status = StatusCode::OK_200; }
-      return write_response(strm, close_connection, req, res);
+      return write_response_with_content(strm, close_connection, req, res);
     }
     // Find matching WebSocket handler
     for (const auto &entry : websocket_handlers_) {
       if (entry.matcher->match(req)) {
+        req.matched_route = entry.matcher->pattern();
+        if (pre_request_handler_ &&
+            pre_request_handler_(req, res) == HandlerResponse::Handled) {
+          if (res.status == -1) { res.status = StatusCode::OK_200; }
+          return write_response_with_content(strm, close_connection, req, res);
+        }
+
         // Compute accept key
         auto client_key = req.get_header_value("Sec-WebSocket-Key");
         auto accept_key = detail::websocket_accept_key(client_key);
@@ -9902,17 +10080,13 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   // keep-alive. Without framing there is no body to drain — reading would
   // consume the next request (issue #2450). If the response has committed the
   // connection to close, there is no next request to protect.
-  if (!req.body_consumed_ && detail::has_framed_body(req)) {
-    if (detail::has_header_token(res.headers, "Connection", "close")) {
+  if (!req.body_consumed_ && detail::has_framed_body(req) &&
+      !detail::has_header_token(res.headers, "Connection", "close")) {
+    int dummy_status;
+    if (!detail::read_content(
+            strm, req, payload_max_length_, dummy_status, nullptr,
+            [](const char *, size_t, size_t, size_t) { return true; }, false)) {
       connection_closed = true;
-    } else {
-      int dummy_status;
-      if (!detail::read_content(
-              strm, req, payload_max_length_, dummy_status, nullptr,
-              [](const char *, size_t, size_t, size_t) { return true; },
-              false)) {
-        connection_closed = true;
-      }
     }
   }
 
@@ -10426,16 +10600,30 @@ ClientImpl::open_stream(const std::string &method, const std::string &path,
   prepare_default_headers(req, true, content_type);
 
   auto &strm = *handle.stream_;
-  if (detail::write_request_line(strm, req.method, req.path) < 0) {
-    handle.error = Error::Write;
-    handle.response.reset();
-    return handle;
-  }
 
-  if (!detail::check_and_write_headers(strm, req.headers, header_writer_,
-                                       handle.error)) {
-    handle.response.reset();
-    return handle;
+  // Build the request line and headers in memory first, like write_request()
+  // does, so that a rejected header leaves nothing on the wire.
+  {
+    detail::BufferStream bstrm;
+
+    if (detail::write_request_line(bstrm, req.method, req.path) < 0) {
+      handle.error = Error::Write;
+      handle.response.reset();
+      return handle;
+    }
+
+    if (!detail::check_and_write_headers(bstrm, req.headers, header_writer_,
+                                         handle.error)) {
+      handle.response.reset();
+      return handle;
+    }
+
+    const auto &data = bstrm.get_buffer();
+    if (!detail::write_data(strm, data.data(), data.size())) {
+      handle.error = Error::Write;
+      handle.response.reset();
+      return handle;
+    }
   }
 
   if (!body.empty()) {
@@ -10610,22 +10798,45 @@ ssize_t ChunkedDecoder::read_payload(char *buf, size_t len,
     stream_line_reader lr(strm, line_buf, sizeof(line_buf));
     if (!lr.getline()) { return -1; }
 
+    // Everything below is bounded by eol rather than by the buffer's NUL, so
+    // the line terminator is never mistaken for line content.
+    const char *eol = lr.ptr() + lr.size();
+    if (lr.end_with_crlf()) {
+      eol -= 2;
+    } else if (eol != lr.ptr() && eol[-1] == '\n') {
+      // Only reachable under CPPHTTPLIB_ALLOW_LF_AS_LINE_TERMINATOR, where
+      // getline() ends the line on a bare LF. That LF is the terminator, so it
+      // has to come off here or the check below would reject the line.
+      eol -= 1;
+    }
+
     // RFC 9112 §7.1: chunk-size = 1*HEXDIG
     const char *p = lr.ptr();
     int v = 0;
-    if (!is_hex(*p, v)) { return -1; }
+    if (p == eol || !is_hex(*p, v)) { return -1; }
 
     size_t chunk_len = 0;
     constexpr size_t chunk_len_max = (std::numeric_limits<size_t>::max)();
-    for (; is_hex(*p, v); ++p) {
+    for (; p < eol && is_hex(*p, v); ++p) {
       if (chunk_len > (chunk_len_max >> 4)) { return -1; }
       chunk_len = (chunk_len << 4) | static_cast<size_t>(v);
     }
 
-    while (is_space_or_tab(*p)) {
+    while (p < eol && is_space_or_tab(*p)) {
       ++p;
     }
-    if (*p != '\0' && *p != ';' && *p != '\r' && *p != '\n') { return -1; }
+
+    // RFC 9112 §7.1.1: only a chunk-ext may sit between the size and the line
+    // terminator, and it is built from tokens and quoted-strings, so it never
+    // holds a CR, LF or any other control character. getline() reads up to the
+    // CRLF, so a bare LF left in here would be swallowed as extension text
+    // while an intermediary that ends the line on it delimits the chunks
+    // differently, and the two disagree on where the body ends (request
+    // smuggling).
+    if (p < eol && *p != ';') { return -1; }
+    for (; p < eol; ++p) {
+      if (!is_space_or_tab(*p) && !fields::is_field_vchar(*p)) { return -1; }
+    }
 
     if (chunk_len == 0) {
       chunk_remaining = 0;
@@ -10776,7 +10987,10 @@ bool ClientImpl::redirect(Request &req, Response &res, Error &error) {
   if (location.empty()) { return false; }
 
   detail::UrlComponents uc;
-  if (!detail::parse_url(location, uc)) { return false; }
+  if (!detail::parse_url(detail::resolve_relative_location(location, req.path),
+                         uc)) {
+    return false;
+  }
 
   // Only follow http/https redirects
   if (!uc.scheme.empty() && uc.scheme != "http" && uc.scheme != "https") {
@@ -10965,7 +11179,9 @@ bool ClientImpl::write_content_with_provider(Stream &strm,
 
 bool ClientImpl::write_request(Stream &strm, Request &req,
                                       bool close_connection, Error &error,
-                                      bool skip_body) {
+                                      bool skip_body, bool &rejected_locally) {
+  rejected_locally = false;
+
   // Prepare additional headers
   if (close_connection) {
     if (!req.has_header("Connection")) {
@@ -11054,15 +11270,18 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
 
     // Write request line and headers
     if (detail::write_request_line(bstrm, req.method, path_with_query) < 0) {
-      // A rejected target (e.g. CR/LF smuggled in via a decoded redirect
-      // Location under set_path_encode(false)) must fail the request cleanly
-      // instead of emitting a request-line-less, header-injecting request.
+      // A rejected method (not a token, e.g. carrying CR/LF) or target (e.g.
+      // CR/LF smuggled in via a decoded redirect Location under
+      // set_path_encode(false)) must fail the request cleanly instead of
+      // emitting a request-line-less, header-injecting request.
       error = Error::Write;
+      rejected_locally = true;
       output_error_log(error, &req);
       return false;
     }
     if (!detail::check_and_write_headers(bstrm, req.headers, header_writer_,
                                          error)) {
+      rejected_locally = true;
       output_error_log(error, &req);
       return false;
     }
@@ -11331,8 +11550,16 @@ bool ClientImpl::process_request(Stream &strm, Request &req,
       detail::has_header_token(req.headers, "Expect", "100-continue");
 
   // Send request (skip body if using Expect: 100-continue)
+  auto rejected_locally = false;
   auto write_request_success =
-      write_request(strm, req, close_connection, error, expect_100_continue);
+      write_request(strm, req, close_connection, error, expect_100_continue,
+                    rejected_locally);
+
+  // A failed write normally still reads the response below, since the server
+  // may have answered early (e.g. 413/414) and closed while the body was being
+  // sent. A request rejected before any byte reached the socket gets no such
+  // response, and waiting for one would block until the read timeout.
+  if (rejected_locally) { return false; }
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   if (is_ssl() && !expect_100_continue) {
@@ -13650,6 +13877,9 @@ void SSLClient::set_ca_cert_store(tls::ca_store_t ca_cert_store) {
 void
 SSLClient::set_server_certificate_verifier(tls::VerifyCallback verifier) {
   if (!ctx_) { return; }
+#ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
+  server_certificate_verifier_set_ = static_cast<bool>(verifier);
+#endif
   tls::set_verify_callback(ctx_, verifier);
 }
 
@@ -13711,6 +13941,9 @@ bool SSLClient::initialize_ssl(Socket &socket, Error &error) {
       enable_windows_cert_verification_ &&
       system_ca_mode_ != SystemCAMode::Disabled && ca_cert_file_path_.empty() &&
       ca_cert_dir_path_.empty() && ca_cert_pem_.empty() && !ca_cert_store_set_;
+  // Only a verifier set through set_server_certificate_verifier() is seen
+  // here, not one installed with tls::set_verify_callback() directly.
+  options.server_certificate_verifier_set = server_certificate_verifier_set_;
 #endif
 
   tls::session_t session = nullptr;
@@ -14650,11 +14883,11 @@ void shutdown(session_t session, bool graceful) {
 
   auto ssl = static_cast<SSL *>(session);
   if (graceful) {
-    // First call sends close_notify
-    if (SSL_shutdown(ssl) == 0) {
-      // Second call waits for peer's close_notify
-      SSL_shutdown(ssl);
-    }
+    // Send close_notify without waiting for the peer's. The connection is
+    // closed right after this, so a unidirectional shutdown is enough, and an
+    // idle peer that never answers would otherwise hold this thread until the
+    // read timeout. The other backends do not wait either.
+    SSL_shutdown(ssl);
   }
 }
 
@@ -14678,6 +14911,24 @@ cert_t get_peer_cert(const_session_t session) {
   if (!session) return nullptr;
   return static_cast<cert_t>(SSL_get1_peer_certificate(
       static_cast<SSL *>(const_cast<void *>(session))));
+}
+
+size_t get_peer_certs(const_session_t session,
+                             std::vector<cert_t> &certs) {
+  certs.clear();
+  if (!session) { return 0; }
+  auto ssl = static_cast<const SSL *>(session);
+  // On the server side, the chain leaves out the peer's own certificate
+  if (SSL_is_server(ssl)) {
+    if (auto leaf = get_peer_cert(session)) { certs.push_back(leaf); }
+  }
+  auto sk = SSL_get_peer_cert_chain(ssl);
+  for (int i = 0; sk && i < sk_X509_num(sk); i++) {
+    auto x509 = sk_X509_value(sk, i);
+    X509_up_ref(x509);
+    certs.push_back(static_cast<cert_t>(x509));
+  }
+  return certs.size();
 }
 
 void free_cert(cert_t cert) {
@@ -16024,6 +16275,18 @@ cert_t get_peer_cert(const_session_t session) {
   return const_cast<mbedtls_x509_crt *>(cert);
 }
 
+size_t get_peer_certs(const_session_t session,
+                             std::vector<cert_t> &certs) {
+  certs.clear();
+  // Mbed TLS parses the whole received chain into a list headed by the peer
+  // certificate, owned by the session like get_peer_cert()'s result
+  for (auto crt = static_cast<mbedtls_x509_crt *>(get_peer_cert(session));
+       crt && crt->raw.len > 0; crt = crt->next) {
+    certs.push_back(static_cast<cert_t>(crt));
+  }
+  return certs.size();
+}
+
 void free_cert(cert_t cert) {
   // Mbed TLS: peer certificate is owned by the SSL context.
   // No-op here, but callers should still call this for cross-backend
@@ -17179,6 +17442,24 @@ cert_t get_peer_cert(const_session_t session) {
 
   WOLFSSL_X509 *cert = wolfSSL_get_peer_certificate(wsession->ssl);
   return static_cast<cert_t>(cert);
+}
+
+size_t get_peer_certs(const_session_t session,
+                             std::vector<cert_t> &certs) {
+  certs.clear();
+  if (!session) { return 0; }
+  // wolfSSL keeps the received chain only when built with SESSION_CERTS
+#ifdef SESSION_CERTS
+  auto wsession =
+      static_cast<impl::WolfSSLSession *>(const_cast<void *>(session));
+  auto chain = wolfSSL_get_peer_chain(wsession->ssl);
+  auto count = chain ? wolfSSL_get_chain_count(chain) : 0;
+  for (int i = 0; i < count; i++) {
+    auto x509 = wolfSSL_get_chain_X509(chain, i);
+    if (x509) { certs.push_back(static_cast<cert_t>(x509)); }
+  }
+#endif
+  return certs.size();
 }
 
 void free_cert(cert_t cert) {

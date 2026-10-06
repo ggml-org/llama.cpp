@@ -43,6 +43,8 @@ add_library(${HTP_LIB} SHARED
     pad-ops.c
     argsort-ops.c
     im2col-ops.c
+    roll-ops.c
+    pool-ops.c
     allreduce-ops.c
 )
 

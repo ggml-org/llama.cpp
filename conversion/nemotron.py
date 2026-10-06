@@ -216,7 +216,7 @@ class NemotronHModel(GraniteHybridModel):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
             hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
-        llm_config = {**hparams, **(hparams.get("llm_config") or {})}
+        llm_config = {**hparams, **hparams.get("text_config", {})}
 
         has_moe_params = "num_experts_per_tok" in llm_config
         layers_block_type = llm_config.get("layers_block_type")
@@ -423,12 +423,6 @@ class NemotronHModel(GraniteHybridModel):
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
-
-        # The tokenizer _does_ add a BOS token (via post_processor type
-        # TemplateProcessing) but does not set add_bos_token to true in the
-        # config, so we need to explicitly override it here.
-        if not self.is_moe:
-            self.gguf_writer.add_add_bos_token(True)
 
     _MTP_SPECIAL_RENAMES = {
         "mtp.layers.0.enorm.weight":           "model.layers.{bid}.enorm.weight",
