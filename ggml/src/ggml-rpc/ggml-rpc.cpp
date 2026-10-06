@@ -2905,6 +2905,7 @@ static void * ggml_backend_rpc_comm_init(ggml_backend_t * backends, size_t n_bac
         ranks.push_back({rpc_ctx->endpoint, rpc_ctx->device, rpc_ctx->dispatcher});
     }
 
+    // TODO: simplify this logic
     // rank 1 connects to rank 0 on its serving host; endpoints must be mutually reachable
     // (e.g. do not bind the servers to 127.0.0.1 when they run on different machines)
     std::string host0;
