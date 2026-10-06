@@ -202,20 +202,19 @@ class Cohere2VisionModel(MmprojModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        name = name.removeprefix("model.")
-        if not name.startswith(("vision_tower.", "multi_modal_projector.")):
+        if not name.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
             return None
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         suffix = ".bias" if name.endswith(".bias") else ".weight"
-        if name.startswith("multi_modal_projector.linear_1."):
+        if name.startswith("model.multi_modal_projector.linear_1."):
             # HF: x, gate = linear_1(h).chunk(2, dim=-1); linear_2(silu(gate) * x)
             up, gate = data_torch.chunk(2, dim=0)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_UP, suffix=suffix), up)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_GATE, suffix=suffix), gate)
             return
-        if name.startswith("multi_modal_projector.linear_2."):
+        if name.startswith("model.multi_modal_projector.linear_2."):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_DOWN, suffix=suffix), data_torch)
             return
         yield from super().modify_tensors(data_torch, name, bid)
