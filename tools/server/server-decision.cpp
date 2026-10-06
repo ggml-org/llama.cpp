@@ -231,9 +231,10 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
 
 static const size_t DECISION_MAX_IMAGES = 8;
 
+// any media, mtmd tells an audio clip from an image by its content
 static void decision_load_image(const json & url, std::vector<raw_buffer> & files) {
-    if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:image/")) {
-        throw std::invalid_argument("images must be data URLs (data:image/...;base64,...)");
+    if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:")) {
+        throw std::invalid_argument("images must be data URLs (data:image/...;base64,... or data:audio/...;base64,...)");
     }
     if (files.size() >= DECISION_MAX_IMAGES) {
         throw std::invalid_argument(string_format("too many images, the maximum is %zu", DECISION_MAX_IMAGES));
@@ -241,22 +242,30 @@ static void decision_load_image(const json & url, std::vector<raw_buffer> & file
     handle_media(files, url.get<std::string>(), "");
 }
 
+// audio is base64 data, as a data URL or not (OpenAI input_audio)
+static void decision_load_audio(const json & data, std::vector<raw_buffer> & files) {
+    if (!data.is_string() || string_starts_with(data.get<std::string>(), "http") || string_starts_with(data.get<std::string>(), "file://")) {
+        throw std::invalid_argument("audio must be base64 data");
+    }
+    if (files.size() >= DECISION_MAX_IMAGES) {
+        throw std::invalid_argument(string_format("too many media files, the maximum is %zu", DECISION_MAX_IMAGES));
+    }
+    handle_media(files, data.get<std::string>(), "");
+}
+
 json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
         throw std::invalid_argument("\"videos\" is not supported");
     }
-    if (body.contains("audio") && !body.at("audio").is_null()) {
-        const json & url = body.at("audio");
-        if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:audio/")) {
-            throw std::invalid_argument("\"audio\" must be a data URL (data:audio/...;base64,...)");
+    // "files" is an alias of "images"
+    for (const char * key : {"images", "files"}) {
+        if (!body.contains(key) || body.at(key).is_null()) {
+            continue;
         }
-        handle_media(files, url.get<std::string>(), "");
-    }
-    if (body.contains("images") && !body.at("images").is_null()) {
-        if (!body.at("images").is_array()) {
-            throw std::invalid_argument("\"images\" must be an array");
+        if (!body.at(key).is_array()) {
+            throw std::invalid_argument(string_format("\"%s\" must be an array", key));
         }
-        for (const auto & url : body.at("images")) {
+        for (const auto & url : body.at(key)) {
             decision_load_image(url, files);
         }
     }
@@ -268,7 +277,7 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
         return state;
     }
 
-    // chat messages: take the image parts out of the content
+    // chat messages: take the image and audio parts out of the content
     json messages_out = json::array();
     for (const auto & msg : messages) {
         if (!msg.is_object() || !msg.contains("content") || !msg.at("content").is_array()) {
@@ -280,6 +289,9 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
             if (part.is_object() && json_value(part, "type", std::string()) == "image_url" && part.contains("image_url")) {
                 const json & image_url = part.at("image_url");
                 decision_load_image(image_url.is_object() && image_url.contains("url") ? image_url.at("url") : image_url, files);
+            } else if (part.is_object() && json_value(part, "type", std::string()) == "input_audio" && part.contains("input_audio")) {
+                const json input_audio = json_value(part, "input_audio", json::object());
+                decision_load_audio(input_audio.contains("data") ? input_audio.at("data") : json_value(input_audio, "url", json()), files);
             } else {
                 content.push_back(part);
             }
@@ -645,9 +657,13 @@ void server_decision_context::fill_task(
         const std::vector<raw_buffer> & files,
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
-        server_task & task,
-        bool is_audio) const {
-    const std::string prompt = render(state, questions, question, variant, files.size(), is_audio);
+        server_task & task) const {
+    if (type == COMMON_DECISION_TYPE_D1OMNI) {
+        fill_task_d1omni(state, questions, question, variant, files, mctx, init_opt, task);
+        return;
+    }
+
+    const std::string prompt = render(state, questions, question, variant, files.size());
 
     if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER) {
         // lev reads the ratings of a noul question at its first labels, not at the digits
@@ -667,11 +683,6 @@ void server_decision_context::fill_task(
             task.tokens = process_mtmd_prompt(mctx, prompt, files, init_opt);
             return;
         }
-    }
-
-    if (type == COMMON_DECISION_TYPE_D1OMNI) {
-        fill_task_d1omni(prompt, question, files, mctx, init_opt, is_audio, task);
-        return;
     }
 
     llama_tokens tokens = common_tokenize(vocab, prompt, false, true);
@@ -753,25 +764,43 @@ void server_decision_context::fill_task_laya(llama_tokens & tokens, const server
 // each piece is cut to its budget as the model was trained (d1-omni prompt.py: encode), the state gets the room that is left
 // the media come first, the text after them has a budget of its own
 void server_decision_context::fill_task_d1omni(
-        const std::string & prompt,
+        const json & state,
+        const std::vector<server_decision_question> & questions,
         const server_decision_question & question,
+        size_t variant,
         const std::vector<raw_buffer> & files,
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
-        bool is_audio,
         server_task & task) const {
     const auto invalid = std::runtime_error("unexpected layout of the decision prompt");
 
-    std::vector<std::string> pieces = string_split(prompt, D1OMNI_SEP);
-    if (pieces.empty() || (files.empty() && !pieces[0].empty())) {
-        throw invalid;
-    }
-
+    // the prompt depends on the kind of media, mtmd tells an audio clip from an image by its content
+    std::string markers;
     server_tokens media(llama_tokens(), false);
+    bool is_audio = false;
     if (!files.empty()) {
-        media = process_mtmd_prompt(mctx, pieces[0], files, init_opt);
+        for (size_t i = 0; i < files.size(); i++) {
+            markers += get_media_marker();
+        }
+        media = process_mtmd_prompt(mctx, markers, files, init_opt);
+        for (size_t i = 0; i < media.size(); i++) {
+            if (media[i] == LLAMA_TOKEN_NULL) {
+                const auto & chunk = media.find_chunk(i);
+                is_audio = is_audio || mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_AUDIO;
+                i += mtmd_input_chunk_get_n_tokens(chunk.get()) - 1;
+            }
+        }
+    }
+    if (is_audio && files.size() > 1) {
+        throw std::invalid_argument("a request has images or one audio clip, not both");
     }
     const size_t n_media = media.size();
+
+    const std::string prompt = render(state, questions, question, variant, files.size(), is_audio);
+    std::vector<std::string> pieces = string_split(prompt, D1OMNI_SEP);
+    if (pieces.empty() || pieces[0] != markers) {
+        throw invalid;
+    }
 
     size_t n_max = D1OMNI_MAX_TOKENS;
     if (!files.empty()) {
@@ -788,7 +817,7 @@ void server_decision_context::fill_task_d1omni(
     const int64_t n_question_max = std::max<int64_t>(16, n_budget);
 
     llama_tokens head;  // before the state
-    llama_tokens state;
+    llama_tokens body;  // the state
     llama_tokens tail;  // after the state
     bool has_state = false;
     for (size_t i_piece = 1; i_piece < pieces.size(); i_piece++) {
@@ -815,7 +844,7 @@ void server_decision_context::fill_task_d1omni(
             if (has_state) {
                 throw invalid;
             }
-            state     = std::move(tokens);
+            body      = std::move(tokens);
             has_state = true;
         } else {
             llama_tokens & dst = has_state ? tail : head;
@@ -827,10 +856,10 @@ void server_decision_context::fill_task_d1omni(
     }
 
     const size_t n_room = n_max - std::min(n_max, head.size() + tail.size());
-    state.resize(std::min(state.size(), n_room));
+    body.resize(std::min(body.size(), n_room));
 
     llama_tokens tokens = std::move(head);
-    tokens.insert(tokens.end(), state.begin(), state.end());
+    tokens.insert(tokens.end(), body.begin(), body.end());
     tokens.insert(tokens.end(), tail.begin(), tail.end());
     tokens.resize(std::min(tokens.size(), n_max));
 

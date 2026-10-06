@@ -69,17 +69,12 @@ struct server_decision_context {
         }
     }
 
-    // true if the prompt of the model has a place for an audio clip
-    bool can_use_audio() const {
-        return type == COMMON_DECISION_TYPE_D1OMNI;
-    }
-
     // throw std::invalid_argument on bad input
     std::vector<server_decision_question> parse_questions(const json & body) const;
 
     // returns the state without its images, they are appended to files in order
-    // images come from "images" and from the image_url parts of a state made of chat messages
-    // an audio clip comes from "audio", it is the first file
+    // images come from "images" (alias "files") and from the image_url and input_audio parts of a state made of chat messages
+    // an image can be an audio clip if the model supports it
     json parse_state(const json & body, std::vector<raw_buffer> & files) const;
 
     // number of prompts that are evaluated to answer this question, each one shows the options in a different order
@@ -95,8 +90,7 @@ struct server_decision_context {
             const std::vector<raw_buffer> & files,
             mtmd_context * mctx,
             const mtmd_helper_init_opt & init_opt,
-            server_task & task,
-            bool is_audio = false) const;
+            server_task & task) const;
 
     // set the prompt of all the questions, the result has the scores of all their options, in order
     // mctx is only used if there are files
@@ -144,12 +138,13 @@ private:
     void d1_labels(const server_decision_question & question, std::vector<std::string> & texts, std::vector<llama_tokens> & groups) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
     void fill_task_d1omni(
-            const std::string & prompt,
+            const json & state,
+            const std::vector<server_decision_question> & questions,
             const server_decision_question & question,
+            size_t variant,
             const std::vector<raw_buffer> & files,
             mtmd_context * mctx,
             const mtmd_helper_init_opt & init_opt,
-            bool is_audio,
             server_task & task) const;
 
     float get_temperature(const server_decision_question & question) const;

@@ -1705,9 +1705,9 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
 
 `state`: The content to evaluate. Can be a string, an object or an array. A value that is not a string is given to the model as JSON text. For lfm2-d1 and d1omni, it can be `null`, for example to ask about images only.
 
-`images`: Optional. An array of images, the maximum number may be limited depending on the model. Each one is a data URL (`data:image/...;base64,...`). See the image input section below.
+`images`: Optional. An array of images, the maximum number may be limited depending on the model. Each one is a data URL (`data:image/...;base64,...`). For d1omni, it can instead be one audio clip (`data:audio/...;base64,...`). See the image input section below.
 
-`audio`: Optional. One audio clip, as a data URL (`data:audio/...;base64,...`). Only for d1omni, a request has images or audio, not both.
+`files`: Optional. An alias of `images`.
 
 `questions`: An object that maps a question id to a question. Each question has these fields:
 
@@ -1731,7 +1731,7 @@ Image input needs a model that supports it (for example: openjev, clef, pplx-dec
 Images can be given in two ways, and both can be used in the same request:
 
 - The `images` field.
-- A `state` made of chat messages, either an array of messages or an object with a `messages` array. An `image_url` part in the `content` of a message is taken as an image, in the same format as chat completions. Only data URLs are accepted.
+- A `state` made of chat messages, either an array of messages or an object with a `messages` array. An `image_url` part in the `content` of a message is taken as an image, in the same format as chat completions. Only data URLs are accepted. For d1omni, an `input_audio` part is taken as an audio clip, as base64 data.
 
 All the images are placed before the state in the prompt, the ones from `images` first. The image parts are removed from the state.
 
@@ -1829,7 +1829,7 @@ curl http://127.0.0.1:8080/v1/systemone \
     }' | jq
 ```
 
-An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images or audio returns the error `501` if the model does not support this input, or if no multimodal projector is loaded.
+An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images returns the error `501` if the model does not support image input, or if no multimodal projector is loaded.
 
 ## Server tools
 

@@ -5601,15 +5601,7 @@ void server_routes::init_routes() {
 
         std::vector<raw_buffer> files;
         const json state = decision.parse_state(body, files);
-        const bool is_audio = body.contains("audio") && !body.at("audio").is_null();
-        if (is_audio && (!decision.can_use_audio() || !meta->has_inp_audio)) {
-            res->error(format_error_response("This server does not support audio input for decisions. For a model that supports it, start it with `--mmproj`", ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
-        if (is_audio && files.size() > 1) {
-            throw std::invalid_argument("a request has images or audio, not both");
-        }
-        if (!is_audio && !files.empty() && (!decision.can_use_images() || !meta->has_inp_image)) {
+        if (!files.empty() && (!decision.can_use_images() || !meta->has_inp_image)) {
             res->error(format_error_response("This server does not support image input for decisions. For a model that supports it, start it with `--mmproj`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
@@ -5628,7 +5620,7 @@ void server_routes::init_routes() {
                     for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
                         server_task task = server_task(SERVER_TASK_TYPE_DECISION);
                         task.id = rd.get_new_id();
-                        decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task, is_audio);
+                        decision.fill_task(state, questions, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
                         tasks.push_back(std::move(task));
                     }
                 }
