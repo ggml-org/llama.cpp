@@ -1989,7 +1989,7 @@ struct llama_vocab::impl {
 
     llama_token_attr token_get_attr(llama_token id) const;
 
-    void init_tokenizer(enum llama_vocab_type type, llm_arch arch);
+    void init_tokenizer(enum llama_vocab_type type);
 
     void tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const;
 
@@ -2201,10 +2201,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = LLAMA_TOKEN_NULL;
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
-        } else if (tokenizer_model == "plamo2") {
-            type = LLAMA_VOCAB_TYPE_PLAMO2;
+        } else if (tokenizer_model == "plamo2" || tokenizer_model == "plamo3") {
+            type = tokenizer_model == "plamo2" ? LLAMA_VOCAB_TYPE_PLAMO2 : LLAMA_VOCAB_TYPE_PLAMO3;
 
-            // PLaMo-2 default special tokens (these will be overridden by model config)
+            // PLaMo default special tokens (these will be overridden by model config)
             special_bos_id = 1;  // <|plamo:bos|>
             special_eos_id = 2;  // <|plamo:eos|>
             special_unk_id = 0;  // <|plamo:unk|>
@@ -2668,7 +2668,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         }
     }
 
-    init_tokenizer(type, ml.get_arch());
+    init_tokenizer(type);
 
     // determine the newline token: LLaMA "<0x0A>" == 10 == '\n', Falcon 193 == '\n'
     if (type == LLAMA_VOCAB_TYPE_SPM) {
@@ -3257,6 +3257,7 @@ std::string llama_vocab::impl::type_name() const{
         case LLAMA_VOCAB_TYPE_UGM:    return "UGM";
         case LLAMA_VOCAB_TYPE_RWKV:   return "RWKV";
         case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";
+        case LLAMA_VOCAB_TYPE_PLAMO3: return "PLaMo3";
         case LLAMA_VOCAB_TYPE_TEST:   return "TEST";
         default:                      return "unknown";
     }
@@ -3324,7 +3325,7 @@ llama_token_attr llama_vocab::impl::token_get_attr(llama_token id) const {
     return id_to_token.at(id).attr;
 }
 
-void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type, llm_arch arch) {
+void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
     LLAMA_LOG_DEBUG("%s: initializing tokenizer for type %d\n", __func__, type);
 
     switch (type) {
@@ -3344,7 +3345,10 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type, llm_arch arch
             tokenizer = std::make_unique<llm_tokenizer_rwkv>(vocab);
             break;
         case LLAMA_VOCAB_TYPE_PLAMO2:
-            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab, arch == LLM_ARCH_PLAMO3);
+            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab, false);
+            break;
+        case LLAMA_VOCAB_TYPE_PLAMO3:
+            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab, true);
             break;
         case LLAMA_VOCAB_TYPE_TEST:
             tokenizer = std::make_unique<llm_tokenizer>();
@@ -3706,6 +3710,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 }
             } break;
         case LLAMA_VOCAB_TYPE_PLAMO2:
+        case LLAMA_VOCAB_TYPE_PLAMO3:
             {
                 if (add_special && add_bos) {
                     GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
@@ -3877,8 +3882,9 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
                 std::string result = format("%x", token);
                 return _try_copy(result.data(), result.size());
             }
-            case LLAMA_VOCAB_TYPE_PLAMO2: {
-                // PLaMo-2 uses similar token handling as BPE/SPM
+            case LLAMA_VOCAB_TYPE_PLAMO2:
+            case LLAMA_VOCAB_TYPE_PLAMO3: {
+                // PLaMo uses similar token handling as BPE/SPM
                 if (vocab.is_byte(token)) {
                     // Handle byte tokens like <0xXX>
                     if (token_text.length() == 6 && token_text.substr(0, 3) == "<0x" && token_text.back() == '>') {
@@ -4141,8 +4147,9 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
         case LLAMA_VOCAB_TYPE_BPE: {
             return pimpl->token_to_id.at(unicode_byte_to_utf8(ch));
         }
-        case LLAMA_VOCAB_TYPE_PLAMO2: {
-            // PLaMo-2 uses byte tokens in format <0xXX>
+        case LLAMA_VOCAB_TYPE_PLAMO2:
+        case LLAMA_VOCAB_TYPE_PLAMO3: {
+            // PLaMo uses byte tokens in format <0xXX>
             char hex_str[8];
             snprintf(hex_str, sizeof(hex_str), "<0x%02X>", ch);
             return pimpl->token_to_id.at(hex_str);
