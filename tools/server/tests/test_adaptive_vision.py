@@ -65,6 +65,8 @@ def server(args, mode, extra=(), reject=False, env_extra=None):
     env.pop("GGML_CUDA_ENABLE_UNIFIED_MEMORY", None)
     if mode == "stock" and getattr(args, "stock_uvm", False):
         env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
+    if mode.startswith("arena") and getattr(args, "arena_uvm", False):
+        env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
     with log_path.open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=log, env=env, start_new_session=os.name == "posix")
         try:
@@ -196,7 +198,9 @@ def main():
     parser.add_argument("--background-tokens", type=int, default=128)
     parser.add_argument("--mode", choices=("arena", "stock", "compare"), default="compare")
     parser.add_argument("--stock-uvm", action="store_true",
-                        help="allow only the eager correctness control to oversubscribe VRAM; the arena run keeps UVM disabled")
+                        help="allow the eager correctness control to oversubscribe VRAM independently of --arena-uvm")
+    parser.add_argument("--arena-uvm", action="store_true",
+                        help="test managed model weights in the arena run; shared arena storage remains device-local")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check-rejections", action="store_true")
     parser.add_argument("--skip-budget-rejection", action="store_true",

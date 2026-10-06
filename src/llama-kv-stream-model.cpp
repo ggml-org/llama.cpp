@@ -15,6 +15,43 @@ using mtp_lease_ptr = std::unique_ptr<llama_kv_stream_complete_layer_lease,
 using model_lease_ptr = std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
 static std::atomic<uint64_t> model_cache_id{1};
 
+// Strict prefill uses native attention even when decode has a compiled streamed implementation.
+static bool native_attention_available(const llama_kv_stream_model_config & config,uint32_t & unavailable) {
+    ggml_kv_stream_layout layout;
+    if (ggml_kv_stream_layout_make(config.host.shape,config.host.context_tokens,layout).status != ggml_kv_stream_status::success ||
+            config.query_heads > INT32_MAX || config.query_heads%config.host.shape.heads) return false;
+    const uint32_t maximum = uint32_t(std::min(size_t(config.max_batch_rows),config.host.context_tokens));
+    for (uint32_t rows = 1; rows <= maximum; ++rows) {
+        ggml_tensor q{}, k{}, v{}, mask{}, op{};
+        q.type = op.type = GGML_TYPE_F32;
+        k.type = ggml_type(config.host.shape.type_k); v.type = ggml_type(config.host.shape.type_v); mask.type = GGML_TYPE_F16;
+        const int64_t tokens = int64_t((config.host.context_tokens+255)/256*256);
+        const int64_t extents[5][4] = {
+            {config.host.shape.head_dim_k,rows,config.query_heads,1},
+            {config.host.shape.head_dim_k,tokens,config.host.shape.heads,1},
+            {config.host.shape.head_dim_v,tokens,config.host.shape.heads,1},
+            {tokens,rows,1,1},
+            {config.host.shape.head_dim_v,config.query_heads,rows,1},
+        };
+        ggml_tensor * tensors[] = {&q,&k,&v,&mask,&op};
+        for (size_t i = 0; i < 5; ++i) {
+            auto * tensor = tensors[i];
+            for (int dimension = 0; dimension < 4; ++dimension) tensor->ne[dimension] = extents[i][dimension];
+            tensor->nb[0] = ggml_type_size(tensor->type);
+            tensor->nb[1] = ggml_row_size(tensor->type,tensor->ne[0]);
+            for (int dimension = 2; dimension < 4; ++dimension) {
+                if (size_t(tensor->ne[dimension-1]) > SIZE_MAX/tensor->nb[dimension-1]) return false;
+                tensor->nb[dimension] = tensor->nb[dimension-1]*size_t(tensor->ne[dimension-1]);
+            }
+        }
+        op.op = GGML_OP_FLASH_ATTN_EXT;
+        op.src[0] = &q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &mask;
+        ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+        if (!ggml_backend_supports_op(config.backend,&op)) { unavailable = rows; return false; }
+    }
+    return true;
+}
+
 struct llama_kv_stream_model::implementation {
     llama_kv_stream_model_config config;
     std::shared_ptr<llama_kv_stream_host> host;
@@ -322,7 +359,9 @@ struct llama_kv_stream_model::implementation {
     }
 };
 
-std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama_kv_stream_model_config & config) {
+std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama_kv_stream_model_config & config,
+        uint32_t * unavailable_queries) {
+    if (unavailable_queries) *unavailable_queries = 0;
     if (!config.backend || !config.pool_bytes || !config.max_batch_rows || !config.query_heads ||
             !config.host.context_tokens || config.host.context_tokens > size_t(INT32_MAX)-255 ||
             config.query_heads > SIZE_MAX/config.max_batch_rows ||
@@ -332,6 +371,11 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
     auto * type = llama_kv_stream_device_buffer_type(dev);
     auto * host_type = llama_kv_stream_host_buffer_type(dev);
     if (!type || !host_type) return {};
+    uint32_t unavailable = 0;
+    if (!native_attention_available(config,unavailable)) {
+        if (unavailable_queries) *unavailable_queries = unavailable;
+        return {};
+    }
     ggml_kv_stream_block_layout partial;
     if (ggml_kv_stream_block_layout_make(size_t(config.max_batch_rows)*config.query_heads,256,partial).status != ggml_kv_stream_partial_status::success) return {};
     try {
@@ -352,14 +396,14 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         if (llama_kv_stream_policy_initialize(s->physical_policy, initial).status !=
                 llama_kv_stream_policy_status::success) return {};
         s->host = llama_kv_stream_host::create(s->config.host,host_type);
-        if (!s->host) return {};
+        if (!s->host) { LLAMA_LOG_ERROR("%s: authoritative host KV allocation/registration failed\n",__func__); return {}; }
         s->content = std::make_shared<llama_kv_stream_content>(s->host);
         if (config.auxiliary_cache_layers) {
             auto auxiliary_host_config = s->config.host;
             auxiliary_host_config.cache_id = auxiliary_id;
             auxiliary_host_config.layers = config.auxiliary_cache_layers;
             auto auxiliary_host = llama_kv_stream_host::create(auxiliary_host_config, host_type);
-            if (!auxiliary_host) return {};
+            if (!auxiliary_host) { LLAMA_LOG_ERROR("%s: auxiliary host KV allocation/registration failed\n",__func__); return {}; }
             auto auxiliary = llama_kv_stream_logical_cache::create(std::move(auxiliary_host));
             if (!auxiliary) return {};
             s->auxiliary_cache = std::shared_ptr<llama_kv_stream_logical_cache>(std::move(auxiliary));
@@ -392,7 +436,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
                 s->decode_bytes=std::max(s->decode_bytes,mma_bytes);
             }
         }
-        if (!s->allocate_private()) return {};
+        if (!s->allocate_private()) { LLAMA_LOG_ERROR("%s: device KV grant allocation/binding failed\n",__func__); return {}; }
         const ggml_backend_execution_ops ops{
             [](void * p,const ggml_tensor * t) { return (*static_cast<std::shared_ptr<implementation> *>(p))->supports(t); },
             [](void * p,ggml_backend_t b,ggml_tensor * t) {
@@ -418,7 +462,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         result->proxy = ggml_backend_execution_buffer_new(dev,s->host->buffer(),ops,owner.get());
         if (!result->proxy) return {};
         owner.release(); return result;
-    } catch (const std::bad_alloc &) { return {}; }
+    } catch (const std::bad_alloc &) { LLAMA_LOG_ERROR("%s: host KV metadata allocation failed\n",__func__); return {}; }
 }
 
 llama_kv_stream_model::~llama_kv_stream_model() { ggml_backend_buffer_free(proxy); }

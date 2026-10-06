@@ -1,4 +1,5 @@
 #include "llama-context-memory.h"
+#include "llama-impl.h"
 #include "llama-memory-workspace.h"
 #include "llama-kv-stream-model.h"
 #include "../ggml/src/ggml-cuda-graph.h"
@@ -390,7 +391,11 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             size_t capacity = group.size;
             if (carries_kv) {
                 if (kv.shared_device_memory_bytes) {
-                    if (kv.shared_device_memory_bytes < group.size) return {};
+                    if (kv.shared_device_memory_bytes < group.size) {
+                        LLAMA_LOG_ERROR("%s: shared arena quota insufficient: requested=%zu bytes, compute minimum=%zu bytes\n",
+                            __func__,kv.shared_device_memory_bytes,group.size);
+                        return {};
+                    }
                     capacity = kv.shared_device_memory_bytes;
                 } else {
                     for (size_t bytes : {kv.pool_bytes,kv.writer_bytes,kv_attention}) {
@@ -520,9 +525,17 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (llama_memory_plan_validate(target.plan).status != llama_memory_plan_status::success) return {};
             for (const auto & stage : target.plan.stages) {
                 llama_memory_layout candidate;
-                if (llama_memory_layout_elastic(
-                        target.plan,stage.id,target.budgets,target.fixed,candidate).status !=
-                        llama_memory_layout_status::success) return {};
+                const auto layout = llama_memory_layout_elastic(target.plan,stage.id,target.budgets,target.fixed,candidate);
+                if (layout.status != llama_memory_layout_status::success) {
+                    if (layout.status == llama_memory_layout_status::placement_failed) {
+                        LLAMA_LOG_ERROR("%s: shared arena quota insufficient for phase %llu resource %llu: requested=%zu bytes; combined graph/KV/writer/attention minima do not fit\n",
+                            __func__,(unsigned long long)stage.id,(unsigned long long)layout.resource,target.budgets[kv_arena].capacity);
+                    } else {
+                        LLAMA_LOG_ERROR("%s: shared arena layout rejected for phase %llu: status=%d\n",__func__,
+                            (unsigned long long)stage.id,int(layout.status));
+                    }
+                    return {};
+                }
             }
         }
 

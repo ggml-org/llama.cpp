@@ -47,7 +47,9 @@ struct llama_kv_stream_model_config {
 // Own the host-KV execution buffer and a serial session; proxy-buffer references retain the runtime state.
 class llama_kv_stream_model {
 public:
-    static std::unique_ptr<llama_kv_stream_model> create(const llama_kv_stream_model_config & config);
+    // Report the first unsupported native query width; zero denotes other construction failures.
+    static std::unique_ptr<llama_kv_stream_model> create(const llama_kv_stream_model_config & config,
+        uint32_t * unavailable_queries = nullptr);
     ~llama_kv_stream_model();
     ggml_backend_buffer_t buffer() const noexcept;
     std::shared_ptr<llama_kv_stream_host> host() const noexcept;

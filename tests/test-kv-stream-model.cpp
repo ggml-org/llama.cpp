@@ -190,7 +190,53 @@ struct serial_workspace_child {
     }
 };
 
+// Simulate a missing native family without changing private streamed-kernel capabilities.
+struct native_attention_probe {
+    inline static native_attention_probe * active = nullptr;
+    ggml_backend_dev_t dev;
+    decltype(ggml_backend_device_i::supports_op) original;
+    uint32_t deny;
+    std::vector<uint32_t> queries;
+    std::vector<int64_t> padded_tokens;
+    native_attention_probe(ggml_backend_dev_t dev,uint32_t deny) : dev(dev),original(dev->iface.supports_op),deny(deny) {
+        GGML_ASSERT(!active); active = this;
+        dev->iface.supports_op = [](ggml_backend_dev_t dev,const ggml_tensor * op) {
+            if (op->op == GGML_OP_FLASH_ATTN_EXT) {
+                const auto rows = uint32_t(op->src[0]->ne[1]);
+                active->queries.push_back(rows);
+                active->padded_tokens.push_back(op->src[1]->ne[1]);
+                if (rows == active->deny) return false;
+            }
+            return active->original(dev,op);
+        };
+    }
+    ~native_attention_probe() { dev->iface.supports_op = original; active = nullptr; }
+};
+
+struct kv_allocation_probe {
+    using factory = ggml_backend_buffer_t (*)(ggml_backend_buffer_type_t,size_t);
+    inline static kv_allocation_probe * active = nullptr;
+    ggml_backend_buffer_type_t device, host;
+    factory device_alloc, host_alloc;
+    size_t calls = 0;
+    ggml_backend_buffer_type_t fail = nullptr;
+    explicit kv_allocation_probe(ggml_backend_dev_t dev) : device(llama_kv_stream_device_buffer_type(dev)),
+        host(llama_kv_stream_host_buffer_type(dev)),device_alloc(device->iface.alloc_buffer),host_alloc(host->iface.alloc_buffer) {
+        GGML_ASSERT(device != host && !active); active = this;
+        device->iface.alloc_buffer = host->iface.alloc_buffer = allocate;
+    }
+    static ggml_backend_buffer_t allocate(ggml_backend_buffer_type_t type,size_t bytes) {
+        GGML_ASSERT(active && (type == active->device || type == active->host));
+        ++active->calls;
+        if (type == active->fail) return nullptr;
+        return (type == active->device ? active->device_alloc : active->host_alloc)(type,bytes);
+    }
+    ~kv_allocation_probe() { device->iface.alloc_buffer = device_alloc; host->iface.alloc_buffer = host_alloc; active = nullptr; }
+};
+
 int main(int argc,char ** argv) {
+    const bool native_only = argc > 1 && std::strcmp(argv[1], "--cuda-native-admission") == 0;
+    const bool native_reduced = argc > 1 && std::strcmp(argv[1], "--cuda-native-reduced") == 0;
     const bool auxiliary_only = argc > 1 && std::strcmp(argv[1], "--cuda-auxiliary-cache") == 0;
     const bool cancel_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-cancel") == 0;
     const bool lease_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-lease") == 0;
@@ -202,6 +248,8 @@ int main(int argc,char ** argv) {
     const bool phase_loan_only = argc > 1 && std::strcmp(argv[1], "--cuda-phase-loan") == 0;
     const bool serial_scratch_only = argc > 1 && std::strcmp(argv[1], "--cuda-serial-scratch") == 0;
     testing t;
+    if (native_only) t.set_filter("native_attention_admission_.*");
+    if (native_reduced) t.set_filter("native_attention_reduced_.*");
     if (serial_scratch_only) t.set_filter("serial_draft_growth_.*");
     if (phase_loan_only) t.set_filter("suspended_parent_tracks_phase_loans_until_the_last_lease_returns");
     if (vision_suspend_only) t.set_filter("suspended_kv_parent_lends_full_capacity_and_blocks_early_restore");
@@ -212,11 +260,66 @@ int main(int argc,char ** argv) {
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
-    if (argc < 2 || (!serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    if (native_reduced) t.test("native_attention_reduced_build_rejects_mixed_pair_and_keeps_equal_pair", [&](testing & t) {
+        fixture mixed(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        {
+            kv_allocation_probe allocations(dev);
+            uint32_t unavailable = 99;
+            auto model = llama_kv_stream_model::create({backend.get(),mixed.host->config(),mixed.policy.pool_bytes,256,4},&unavailable);
+            t.assert_true(!model);
+            t.assert_equal(uint32_t(1),unavailable);
+            t.assert_equal(size_t(0),allocations.calls);
+        }
+        fixture equal(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q8_0,513,false,1);
+        uint32_t unavailable = 99;
+        auto model = llama_kv_stream_model::create({backend.get(),equal.host->config(),equal.policy.pool_bytes,256,4},&unavailable);
+        t.assert_true(bool(model));
+        t.assert_equal(uint32_t(0),unavailable);
+    });
+    t.test("native_attention_admission_rejects_missing_width_before_allocating", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        for (uint32_t rows : {1u,2u,3u,4u,8u,16u,64u,128u,256u}) {
+            native_attention_probe native(dev,rows);
+            kv_allocation_probe allocations(dev);
+            uint32_t unavailable = 99;
+            auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),f.policy.pool_bytes,256,4},&unavailable);
+            t.assert_true(!model);
+            t.assert_equal(rows,unavailable);
+            t.assert_equal(size_t(0),allocations.calls);
+        }
+    });
+    t.test("native_attention_admission_probes_only_reachable_query_widths", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        for (uint32_t maximum : {1u,2u,3u,4u,256u}) {
+            native_attention_probe native(dev,0);
+            uint32_t unavailable = 99;
+            auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),f.policy.pool_bytes,maximum,4},&unavailable);
+            if (!t.assert_true(bool(model))) return;
+            t.assert_equal(uint32_t(0),unavailable);
+            t.assert_equal(size_t(maximum),native.queries.size());
+            for (uint32_t expected = 1; expected <= maximum; ++expected)
+                t.assert_equal(expected,native.queries[expected-1]);
+            t.assert_true(std::all_of(native.queries.begin(),native.queries.end(),[&](uint32_t rows) { return rows <= maximum; }));
+            t.assert_true(std::all_of(native.padded_tokens.begin(),native.padded_tokens.end(),[](int64_t tokens) { return tokens == 768; }));
+        }
+    });
+    t.test("native_attention_admission_does_not_label_allocation_failure_as_missing_code", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        for (bool host : {true,false}) {
+            kv_allocation_probe allocations(dev);
+            allocations.fail = host ? allocations.host : allocations.device;
+            uint32_t unavailable = 99;
+            auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),f.policy.pool_bytes,256,4},&unavailable);
+            t.assert_true(!model);
+            t.assert_equal(uint32_t(0),unavailable);
+            t.assert_true(allocations.calls > 0);
+        }
+    });
     t.test("serial_draft_growth_covers_independent_phase_maxima", [&](testing & t) {
         for (const auto & sizes : {std::pair<size_t,size_t>{3,1},{2,3},{3,4},{4,2},{2,1},{3,3}}) {
             serial_workspace_fixture f(backend.get());

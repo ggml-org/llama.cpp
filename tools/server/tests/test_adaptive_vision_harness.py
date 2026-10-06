@@ -68,6 +68,15 @@ class Launch(unittest.TestCase):
         self.assertEqual(self.commands[0][1]['env']['GGML_CUDA_ENABLE_UNIFIED_MEMORY'], '1')
         self.assertNotIn('GGML_CUDA_ENABLE_UNIFIED_MEMORY', self.commands[1][1]['env'])
 
+    def test_arena_uvm_is_explicit_and_does_not_enable_stock_uvm(self):
+        self.args.arena_uvm = True
+        for mode in ('arena-reject-parallel', 'stock'):
+            with self.launch('vision arena rejects this configuration'), patch.object(harness.os, 'killpg', create=True):
+                with harness.server(self.args, mode, reject=True):
+                    pass
+        self.assertEqual(self.commands[0][1]['env']['GGML_CUDA_ENABLE_UNIFIED_MEMORY'], '1')
+        self.assertNotIn('GGML_CUDA_ENABLE_UNIFIED_MEMORY', self.commands[1][1]['env'])
+
     def test_mtp_cli_rejection_is_accepted_before_vision_admission(self):
         with self.launch('error: attached MTP KV streaming supports at most 3 draft tokens'), \
                 patch.object(harness.os, 'killpg', create=True):
