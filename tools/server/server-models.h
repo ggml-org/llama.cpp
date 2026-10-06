@@ -281,6 +281,9 @@ public:
     void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
+    // read the model files again to update the capabilities (thread-safe)
+    void update_caps(const std::string & name);
+
     // remove a cache model from disk and update the list (thread-safe)
     // note: only cache models can be removed; returns false if the model doesn't exist or is not a cache model
     bool remove(const std::string & name);
@@ -305,6 +308,7 @@ public:
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
     // called from the monitor thread
     // payload per state:
+    //     state = downloading -> payload = progress info, or {"result": "download_finished" | "download_failed" | "model_mutated"}
     //     state = loading     -> payload = {} (TODO: add progress info)
     //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
     //     state = sleeping    -> payload = {}

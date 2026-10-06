@@ -1364,6 +1364,26 @@ void server_models::update_download_progress(const std::string & name, const com
     }
 }
 
+void server_models::update_caps(const std::string & name) {
+    std::optional<server_model_meta> meta;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it == mapping.end()) {
+            return;
+        }
+        meta = it->second.meta;
+    }
+
+    meta->update_caps(base_params); // reads the model files, do not hold the lock
+
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.architecture = meta->architecture;
+    }
+}
+
 bool server_models::remove(const std::string & name) {
     // do everything under one lock acquisition; avoid get_meta() /
     // unload() because they can trigger load_models() which erases
@@ -1643,6 +1663,8 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                 } else if (result == "download_failed") {
                     update_download_progress(name, {}, true, false);
                     request_exit();
+                } else if (result == "model_mutated") {
+                    update_caps(name);
                 } else if (!url.empty()) {
                     common_download_progress p;
                     p.url        = url;

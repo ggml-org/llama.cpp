@@ -36,6 +36,19 @@ static inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+// records whether any model file was downloaded (not only read from the cache)
+struct server_download_tracker : common_download_callback {
+    std::atomic<bool> mutated = false; // files can be downloaded in different threads
+
+    void on_start (const common_download_progress &) override {}
+    void on_update(const common_download_progress &) override {}
+    void on_done  (const common_download_progress & p, bool ok) override {
+        if (ok && !p.cached) {
+            mutated = true;
+        }
+    }
+};
+
 // satisfies -Wmissing-declarations (used by llama command)
 int llama_server(int argc, char ** argv);
 
@@ -402,10 +415,17 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
         return child.run_download(params);
     } else if (!is_router_server && !is_run_by_cli) {
-        // single-model mode (NOT spawned by router)
+        // single-model mode, or a model instance spawned by the router
         // if this is invoked by CLI, model downloading should be already handled
         try {
-            common_models_handler_apply(models_handler, params);
+            server_download_tracker tracker;
+            common_models_handler_apply(models_handler, params, child.is_child() ? &tracker : nullptr);
+            if (tracker.mutated) {
+                // the router reads the model files to fill its model info, let it read them again
+                child.notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), {
+                    {"result", "model_mutated"},
+                });
+            }
         } catch (const std::exception & e) {
             SRV_ERR("failed to download model: %s\n", e.what());
             return 1;
