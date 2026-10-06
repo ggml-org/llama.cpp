@@ -96,11 +96,18 @@ void rms_norm(uint num_iters) {
     }
     barrier();
     sum = FLOAT_TYPE(0.0f);
-    // Each subgroup reads the partials, so one workgroup barrier is enough.
-    for (uint i = gl_SubgroupInvocationID; i < gl_NumSubgroups; i += gl_SubgroupSize) {
-        sum += sumsh[i];
+    if(gl_NumSubgroups <= 4) { // fast path to skip the 2nd subgroupAdd
+        for(uint i=0; i < gl_NumSubgroups; ++i) {
+            sum += sumsh[i];
+        }
     }
-    sum = subgroupAdd(sum);
+    else {
+        // Each subgroup reads the partials, so one workgroup barrier is enough.
+        for (uint i = gl_SubgroupInvocationID; i < gl_NumSubgroups; i += gl_SubgroupSize) {
+            sum += sumsh[i];
+        }
+        sum = subgroupAdd(sum);
+    }
 #else
     sumsh[tid] = sum;
     // sum up partial sums and write back result
