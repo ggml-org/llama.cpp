@@ -7924,7 +7924,9 @@ bool ggml_vk_use_mul_mat_vec_id(const ggml_backend_vk_context * ctx, const struc
         const int64_t n_tokens  = src2->ne[1];
         const int64_t n_per_tok = src2->ne[0];
         const int64_t n_experts = src0->ne[2];
-        use_vec_id = (n_tokens * n_per_tok <= 2 * n_experts) && (n_tokens <= 64);
+        // NVIDIA reaches the tiled path's crossover well before AMD/Intel does.
+        const int64_t max_tokens = ctx->device->vendor_id == VK_VENDOR_ID_NVIDIA ? 32 : 64;
+        use_vec_id = (n_tokens * n_per_tok <= 2 * n_experts) && (n_tokens <= max_tokens);
     }
 
     return use_vec_id && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
