@@ -121,9 +121,6 @@ private:
     // unique_ptr because kpool_layout is incomplete here
     std::unique_ptr<kpool_layout> kpool_lay;
 
-    // whether the current layout has cells shared between sequences (kpool_layout is incomplete here, so out of line)
-    bool kpool_layout_shared() const;
-
     // seq_id < 0 stales every sequence, p0 < 0 stales the sequence from its first position
     void mem_idx_stale_set(llama_seq_id seq_id, llama_pos p0);
 

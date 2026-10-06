@@ -192,24 +192,21 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
         const llama_pos stale = mem_idx_stale_pos(seq_id, p0);
         mem_idx->seq_rm(seq_id, p0, p1);
         mem_idx_stale_set(seq_id, stale);
-
-        // removing a sequence can free cells another sequence shared, but only this one is marked stale, so the
-        // survivor would keep shared = true and pin cache_safe off forever; stale every sequence to re-derive it
-        if (kpool_layout_shared()) {
-            mem_idx_stale_set(-1, 0);
-        }
     }
 
     return get_mem_attn()->seq_rm(seq_id, p0, p1);
 }
 
 void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    // only whole sequences are copied: the recurrent state ignores the range, and a shared cell holds a single pool grouping
+    GGML_ASSERT(p0 <= 0 && p1 < 0 && "partial seq_cp is not supported");
+
     llama_memory_hybrid::seq_cp(seq_id_src, seq_id_dst, p0, p1);
 
     if (mem_idx) {
         mem_idx->seq_cp(seq_id_src, seq_id_dst, p0, p1);
-        // the copy shares cells, which cannot hold two groupings, so both sides drop their cached keys
-        mem_idx_stale_set(seq_id_src, 0);
+        // a whole sequence copy gives the destination the source's pools, rep rows included: the source keeps its
+        // pooled keys, the destination rebuilds its layout and re-pools into the same rows
         mem_idx_stale_set(seq_id_dst, 0);
     }
 }
@@ -219,7 +216,7 @@ void llama_memory_hybrid_idx::seq_keep(llama_seq_id seq_id) {
 
     if (mem_idx) {
         mem_idx->seq_keep(seq_id);
-        // cells shared with the dropped sequences become exclusive again, their keys were never cached
+        // every other sequence loses its cells, so their layouts must rebuild
         mem_idx_stale_set(-1, 0);
     }
 }
@@ -291,10 +288,6 @@ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_
                 mem_idx->state_read_sinfo(io, seq_id, flags, nullptr, &sinfos_attn);
                 // the restore rewrites the cells behind the pool layout's back
                 mem_idx_stale_set(seq_id, 0);
-                // it can also change which cells are shared; re-derive sharing for every sequence, as seq_rm does
-                if (kpool_layout_shared()) {
-                    mem_idx_stale_set(-1, 0);
-                }
             }
         }
 
@@ -321,10 +314,6 @@ void llama_memory_hybrid_idx::state_drop(llama_seq_id seq_id) {
     if (mem_idx) {
         mem_idx->state_clear(seq_id);
         mem_idx_stale_set(seq_id, 0);
-        // clearing this sequence can end a sharing the survivor would otherwise keep flagged (see seq_rm)
-        if (kpool_layout_shared()) {
-            mem_idx_stale_set(-1, 0);
-        }
     }
 }
 
@@ -358,26 +347,22 @@ struct llama_memory_hybrid_idx::kpool_layout {
 
         // Where the pool scan stopped, so an append resumes instead of starting over.
         size_t j_next = 0;
-
-        // Whether any cell also carries another sequence, which rules out caching this sequence's pooled keys.
-        bool shared = false;
     };
 
     std::array<seq, LLAMA_MAX_SEQ> seqs;
 
     uint32_t n_pool_real = 0;
-    bool cache_safe      = true;
 };
 
 // Which pools of the layout the current ubatch must re-pool, in the layout's pool order.
 struct llama_memory_hybrid_idx_context::kpool_state {
     std::vector<uint32_t> is_new;
+    std::vector<uint32_t> rep_gen; // per global cell, the generation that last marked a pool with that rep
     uint32_t generation = 0;
 
     uint32_t n_pool_real = 0;
     uint32_t n_new       = 0;
     uint32_t n_new_g     = 1; // graph size of the new pool list, stable across decode steps
-    bool     cache_safe  = true;
 };
 
 namespace {
@@ -404,10 +389,6 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
     return *kpool_lay;
 }
 
-bool llama_memory_hybrid_idx::kpool_layout_shared() const {
-    return kpool_lay && !kpool_lay->cache_safe;
-}
-
 // Pools are fixed by the positions relative to the sequence's first one, so the layout survives a plain
 // append. A sequence edit can regroup them, and mem_idx_stale tells us it happened.
 const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_layout_update() {
@@ -424,7 +405,6 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
     const bool     unified     = n_stream_kv == 1;
 
     lay.n_pool_real = 0;
-    lay.cache_safe  = true;
 
     for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
         auto & sq = lay.seqs[s];
@@ -440,10 +420,8 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
 
         sq.strm = unified ? 0 : mem_idx->get_stream(s);
 
-        size_t n_kept = 0;
         if (mem_idx_stale[s] == POS_CLEAN && !sq.cells.empty() && !sp.empty() &&
                 sq.pos_min == sp.begin()->first) {
-            n_kept = sq.cells.size();
             for (auto it = sp.upper_bound(sq.cells.back()); it != sp.end(); ++it) {
                 sq.cells.push_back(*it);
             }
@@ -455,21 +433,7 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;
-            sq.shared  = false;
             sq.pos_min = sp.empty() ? 0 : sp.begin()->first;
-            n_kept     = 0;
-        }
-
-        // sharing starts with a seq_cp; it ends with an edit, or a seq_rm/state_drop/state_read that frees the
-        // shared cells - each stales every sequence so the rebuild above re-derives it, so once set it holds
-        // until then and the rescan can be skipped
-        if (unified && !sq.shared) {
-            for (size_t j = n_kept; j < sq.cells.size(); ++j) {
-                if (cells.seq_count(sq.cells[j].second) > 1) {
-                    sq.shared = true;
-                    break;
-                }
-            }
         }
 
         // Pools start at the first valid token
@@ -504,7 +468,6 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
         sq.j_next = j;
 
         lay.n_pool_real += (uint32_t) sq.pools.size();
-        lay.cache_safe   = lay.cache_safe && !sq.shared;
     }
 
     return lay;
@@ -681,33 +644,39 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
     const auto & lay = mem->kpool_layout_get();
     auto & st = *kpool_st;
 
+    const auto *   idx     = mem->get_mem_idx();
+    const uint32_t kv_size = idx->get_size();
+    const uint32_t kpool   = mem->get_kpool();
+
     st.n_pool_real = lay.n_pool_real;
-    st.cache_safe  = lay.cache_safe;
     st.n_new       = 0;
     if (++st.generation == 0) {
-        std::fill(st.is_new.begin(), st.is_new.end(), 0);
+        std::fill(st.is_new.begin(),  st.is_new.end(),  0);
+        std::fill(st.rep_gen.begin(), st.rep_gen.end(), 0);
         st.generation = 1;
     }
     st.is_new.resize(lay.n_pool_real, 0);
+    st.rep_gen.resize((size_t) kv_size*idx->get_n_stream(), 0);
 
-    auto mark = [&](uint32_t ip) {
-        if (st.is_new[ip] != st.generation) {
-            st.is_new[ip] = st.generation;
+    std::array<uint32_t, LLAMA_MAX_SEQ> pool_start;
+
+    // a pool is marked once per rep: sequences sharing cells (a seq_cp, or tokens decoded for several sequences)
+    // share their pools, whose single pooled row they all read through pool_cells, so the scatter rows stay unique
+    auto mark = [&](llama_seq_id s, size_t k) {
+        const auto & sq  = lay.seqs[s];
+        const size_t rep = (size_t) sq.strm*kv_size + sq.cells[sq.pools[k] + kpool - 1].second;
+        if (st.rep_gen[rep] != st.generation) {
+            st.rep_gen[rep] = st.generation;
+            st.is_new[pool_start[s] + k] = st.generation;
             ++st.n_new;
         }
     };
 
-    const uint32_t kpool = mem->get_kpool();
-    std::array<uint32_t, LLAMA_MAX_SEQ> pool_start;
     uint32_t ip = 0;
     for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
         const auto & sq = lay.seqs[s];
         pool_start[s] = ip;
         ip += (uint32_t) sq.pools.size();
-
-        if (!st.cache_safe) {
-            continue;
-        }
 
         // A sequence edit invalidates only pools ending after the edited position.
         const llama_pos stale_from = i_cur == 0 ?
@@ -719,17 +688,10 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
         auto first = std::lower_bound(sq.pools.begin(), sq.pools.end(), stale_from,
                 [&](uint32_t j, llama_pos p) { return sq.cells[j + kpool - 1].first < p; });
         for (auto it = first; it != sq.pools.end(); ++it) {
-            mark(pool_start[s] + (uint32_t) (it - sq.pools.begin()));
+            mark(s, it - sq.pools.begin());
         }
     }
     GGML_ASSERT(ip == st.is_new.size());
-
-    if (!st.cache_safe) {
-        std::fill(st.is_new.begin(), st.is_new.end(), st.generation);
-        st.n_new   = st.n_pool_real;
-        st.n_new_g = std::max(st.n_new, 1u);
-        return;
-    }
 
     // in order mode a token's cell gives its rank, and the rank its pool: positions cannot, as an image shares one
     const bool by_order = mem->get_kpool_by_order();
@@ -745,7 +707,7 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
                 const int64_t r = kpool_rank(sq.cells, p, sinfo->idxs[i / n_tps][i % n_tps]);
                 GGML_ASSERT(r >= 0);
                 if ((size_t) r / kpool < sq.pools.size()) {
-                    mark(pool_start[s] + (uint32_t) (r / kpool));
+                    mark(s, (size_t) r / kpool);
                 }
                 continue;
             }
@@ -756,15 +718,14 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
             }
             --it;
             if (p <= sq.cells[*it + kpool - 1].first) {
-                mark(pool_start[s] + (uint32_t) (it - sq.pools.begin()));
+                mark(s, it - sq.pools.begin());
             }
         }
     }
 
     // a ubatch touches at most t_s/kpool + 1 pools per sequence, pad to that bound so the graph keeps its shape
     // as the count moves; reserve sizes the list for every pool the cache can hold, so never pad past n_pool_max
-    const auto *   idx        = mem->get_mem_idx();
-    const uint32_t n_pool_max = idx->get_size() / kpool * idx->get_n_seq_max();
+    const uint32_t n_pool_max = kv_size / kpool * idx->get_n_seq_max();
     const uint32_t bound = ubatch.n_tokens/kpool + ubatch.n_seqs_unq;
     st.n_new_g = std::max({st.n_new, 1u, std::min({bound, kpool_pad(st.n_pool_real) - 1, n_pool_max})});
 }
