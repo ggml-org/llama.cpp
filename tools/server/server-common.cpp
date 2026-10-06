@@ -34,7 +34,7 @@
 #endif
 
 json format_error_response(const std::string & message, const enum error_type type) {
-    const error_info info = error_type_info(type);
+    const server_error_info info = error_type_info(type);
     return json{
         { "code",    info.code },
         { "message", message   },

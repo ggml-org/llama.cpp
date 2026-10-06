@@ -100,7 +100,7 @@ static void test_status_error_carries_its_kind() {
 // so no other kind may share its status, and its type string must stay the one the client reads.
 // 400 is shared by two kinds on purpose, so this is asserted for this kind and not for the switch
 static void test_request_too_large_is_its_own_kind() {
-    const error_info too_large = error_type_info(ERROR_TYPE_REQUEST_TOO_LARGE);
+    const server_error_info too_large = error_type_info(ERROR_TYPE_REQUEST_TOO_LARGE);
     GGML_ASSERT(too_large.code == 413);
     GGML_ASSERT(std::string(too_large.type) == "request_too_large_error");
 
@@ -108,7 +108,7 @@ static void test_request_too_large_is_its_own_kind() {
         if (i == ERROR_TYPE_REQUEST_TOO_LARGE) {
             continue;
         }
-        const error_info other = error_type_info((error_type) i);
+        const server_error_info other = error_type_info((error_type) i);
         GGML_ASSERT(other.code != too_large.code);
         GGML_ASSERT(std::string(other.type) != too_large.type);
     }
@@ -258,9 +258,9 @@ static void test_choice_confidence() {
                     confidence_of(SERVER_DECISION_QUESTION_CHOICE, distribution(3, 0, 0.88)) - 0.82) <= ROUNDING);
 
     // one option is certain, and a uniform split is not
-    GGML_ASSERT(confidence_of(SERVER_DECISION_QUESTION_CHOICE, { 1.0 }) == 1.0);
+    GGML_ASSERT(std::fabs(confidence_of(SERVER_DECISION_QUESTION_CHOICE, { 1.0 }) - 1.0) <= ROUNDING);
     GGML_ASSERT(confidence_of(SERVER_DECISION_QUESTION_CHOICE, { 0.5, 0.5 }) <= ROUNDING);
-    GGML_ASSERT(confidence_of(SERVER_DECISION_QUESTION_CHOICE, { 1.0, 0.0 }) == 1.0);
+    GGML_ASSERT(std::fabs(confidence_of(SERVER_DECISION_QUESTION_CHOICE, { 1.0, 0.0 }) - 1.0) <= ROUNDING);
 }
 
 static void test_score_confidence() {
@@ -268,7 +268,7 @@ static void test_score_confidence() {
         GGML_ASSERT(std::fabs(confidence_of(SERVER_DECISION_QUESTION_SCORE, row.probs) - row.published) <= ROUNDING);
     }
     // one option is certain, and a uniform split is not
-    GGML_ASSERT(confidence_of(SERVER_DECISION_QUESTION_SCORE, { 1.0 }) == 1.0);
+    GGML_ASSERT(std::fabs(confidence_of(SERVER_DECISION_QUESTION_SCORE, { 1.0 }) - 1.0) <= ROUNDING);
     GGML_ASSERT(confidence_of(SERVER_DECISION_QUESTION_SCORE, { 0.5, 0.5 }) <= ROUNDING);
 }
 
@@ -545,6 +545,33 @@ static void test_template_input_laya() {
 
     const json no_image = decision_template_input({ COMMON_DECISION_TYPE_LAYA, template_traits({}, marker), "state", { q }, q, 0, 0 });
     GGML_ASSERT(no_image.at("images").empty());
+}
+
+// the head window clips options and question to max_head_tokens: over budget the helper reports
+// kept below original on both, in budget it reports everything kept and no clipping
+static void test_head_clip_reports_kept_below_original() {
+    const decision_head_clip over = decision_clip_head({100, 100, 100, 100}, 51, 64, 48);
+    GGML_ASSERT(over.n_options_full == 400);
+    GGML_ASSERT(over.n_options_kept == 48);
+    GGML_ASSERT(over.n_options_kept < over.n_options_full);
+    GGML_ASSERT(over.clipped_options);
+    GGML_ASSERT(over.n_question_full == 50);
+    GGML_ASSERT(over.n_question_kept == 16);
+    GGML_ASSERT(over.n_question_kept < over.n_question_full);
+    GGML_ASSERT(over.clipped_question);
+    // the cap the helper used keeps the same total when applied per option
+    size_t resized = 0;
+    for (const size_t size : {100, 100, 100, 100}) {
+        resized += std::min(size, over.n_option_max);
+    }
+    GGML_ASSERT(resized == over.n_options_kept);
+}
+
+static void test_head_clip_is_silent_in_budget() {
+    const decision_head_clip under = decision_clip_head({10, 10}, 20, 64, 48);
+    GGML_ASSERT(!under.clipped_options && !under.clipped_question);
+    GGML_ASSERT(under.n_options_kept == under.n_options_full);
+    GGML_ASSERT(under.n_question_kept == under.n_question_full);
 }
 
 // nimble is answered one field of a schema, so its prompt carries the whole request and the key that
@@ -1039,6 +1066,60 @@ static void test_grouping_counts_the_prefix_once() {
         // the two never disagree because neither is allowed to go negative
         GGML_ASSERT(grouped.n_shared <= reported);
     }
+}
+
+// an empty prompt has no prefix to share: grouping it must yield no discount, never a wrapped size
+static void test_grouping_empty_prompt_shares_nothing() {
+    std::vector<server_task> tasks;
+    tasks.push_back(decision_task(0, 0));
+    tasks.push_back(decision_task(1, 0));
+    tasks.push_back(decision_task(2, 5));
+    const server_decision_tasks grouped = server_decision_group_tasks(std::move(tasks), 3);
+    GGML_ASSERT(grouped.n_shared == 0);
+    GGML_ASSERT(flattened_ids(grouped).size() == 3);
+    GGML_ASSERT(tokens_evaluated(grouped) == 5);
+}
+
+// saturating arithmetic used by grouping and the usage envelope: overflow clamps, never wraps
+static void test_saturating_arithmetic() {
+    const size_t max = std::numeric_limits<size_t>::max();
+    GGML_ASSERT(decision_saturating_add(max, 1) == max);
+    GGML_ASSERT(decision_saturating_add(max - 1, 2) == max);
+    GGML_ASSERT(decision_saturating_add(2, 3) == 5);
+    GGML_ASSERT(decision_saturating_mul(max, 2) == max);
+    GGML_ASSERT(decision_saturating_mul(max, max) == max);
+    GGML_ASSERT(decision_saturating_mul(3, 4) == 12);
+    GGML_ASSERT(decision_saturating_mul(0, max) == 0);
+}
+
+// the usage envelope bills the prompt sum minus the shared discount, floored at zero:
+// a discount past the sum (grouping bug or wrapped counter) must not bill negative
+static void test_usage_never_negative() {
+    GGML_ASSERT(decision_usage_input_tokens(10, 3) == 7);
+    GGML_ASSERT(decision_usage_input_tokens(10, 10) == 0);
+    GGML_ASSERT(decision_usage_input_tokens(10, 11) == 0);
+    GGML_ASSERT(decision_usage_input_tokens(0, 0) == 0);
+    GGML_ASSERT(decision_usage_input_tokens(5, std::numeric_limits<size_t>::max()) == 0);
+    GGML_ASSERT(decision_usage_input_tokens(std::numeric_limits<size_t>::max(),
+                                            std::numeric_limits<size_t>::max()) == 0);
+}
+
+// the budget and the bill disagree by exactly the shared discount: the budget counts every task
+// before grouping (work held while building), the envelope bills evaluated tokens (work done)
+static void test_budget_sees_pre_group_billing_sees_post_group() {
+    std::vector<server_task> tasks;
+    for (int i = 0; i < 3; i++) {
+        tasks.push_back(decision_task(i, 7)); // identical prompts share all but one token
+    }
+    int32_t pre_group = 0;
+    for (const auto & task : tasks) {
+        pre_group += task.n_tokens();
+    }
+    const server_decision_tasks grouped = server_decision_group_tasks(std::move(tasks), 3);
+    GGML_ASSERT(grouped.tasks.size() == 1);
+    const size_t billed = decision_usage_input_tokens((size_t) pre_group, (size_t) grouped.n_shared);
+    GGML_ASSERT(pre_group - (int32_t) billed == grouped.n_shared);
+    GGML_ASSERT(billed == (size_t) tokens_evaluated(grouped));
 }
 
 static void test_grouping_preserves_order() {
@@ -1568,6 +1649,77 @@ static void test_try_post_tasks_cleans_up_on_refusal() {
     reader.received_count = reader.id_tasks.size();
 }
 
+// a request of n noul questions, the shape the admission tests use: one task each
+static server_decision_request request_of_n_noul(size_t n) {
+    server_decision_request req;
+    req.state = "the state";
+    for (size_t i = 0; i < n; i++) {
+        server_decision_question q = shaped_question(SERVER_DECISION_QUESTION_NOUL, {"false", "true"});
+        q.id = "q" + std::to_string(i);
+        req.questions.push_back(std::move(q));
+    }
+    return req;
+}
+
+// the task bound is sized by the server: one task per token of one slot context. An explicit
+// token budget only ever raises it, never lowers it into tiny-budget range; 0 is unlimited.
+static void test_task_budget_is_a_bound() {
+    GGML_ASSERT(decision_task_budget(-1, 4, 1024) == 4096);
+    GGML_ASSERT(decision_task_budget(-1, 2, 512) == 1024);
+    // no slot or context still derives one of each, like the token budget
+    GGML_ASSERT(decision_task_budget(-1, 0, 0) == 1);
+    // a small explicit budget keeps the derived bound, so the token gate still fires first there
+    GGML_ASSERT(decision_task_budget(48, 2, 512) == 1024);
+    GGML_ASSERT(decision_task_budget(800, 4, 1024) == 4096);
+    // a large one raises it at one task per eight tokens
+    GGML_ASSERT(decision_task_budget(100000, 4, 1024) == 12500);
+    GGML_ASSERT(decision_task_budget(0, 4, 1024) == 0);
+}
+
+// the pre-render count: one task for a joint head, else one per variant, with no render involved
+static void test_task_count_is_predicted_without_rendering() {
+    server_decision_context lev;
+    lev.type = COMMON_DECISION_TYPE_LEV;
+    server_decision_request req = request_of_n_noul(3);
+    req.questions.push_back(shaped_question(SERVER_DECISION_QUESTION_CHOICE, {"a", "b", "c"}));
+    req.questions.push_back(shaped_question(SERVER_DECISION_QUESTION_CHOICE, {"a"}));
+    // lev runs a choice of several options in 2 variants, everything else in 1
+    GGML_ASSERT(lev.count_tasks(req) == 3 + 2 + 1);
+
+    server_decision_context clef;
+    clef.type = COMMON_DECISION_TYPE_CLEF;
+    GGML_ASSERT(clef.count_tasks(req) == 1);
+
+    GGML_ASSERT(request_of_n_noul(0).questions.empty());
+    GGML_ASSERT(lev.count_tasks(request_of_n_noul(0)) == 0);
+}
+
+// an over-count request is refused before any render: this context has no template or vocab,
+// so reaching fill_task would crash instead of throwing
+static void test_over_count_request_is_refused_before_render() {
+    server_decision_context ctx;
+    ctx.type = COMMON_DECISION_TYPE_OPENJEV;
+    const server_decision_request req = request_of_n_noul(10);
+
+    int next = 0;
+    const auto next_id = [&next]() { return next++; };
+    bool threw = false;
+    try {
+        ctx.build_tasks(req, next_id, nullptr, mtmd_helper_init_opt{}, 4, 1, 0); // bound is 1 task
+    } catch (const server_status_error & e) {
+        threw = true;
+        GGML_ASSERT(e.type == ERROR_TYPE_REQUEST_TOO_LARGE);
+        GGML_ASSERT(std::string(e.what()).find("10") != std::string::npos);
+        GGML_ASSERT(std::string(e.what()).find("tasks") != std::string::npos);
+    }
+    GGML_ASSERT(threw);
+    GGML_ASSERT(next == 0); // no task id was handed out, so nothing was built
+
+    // at the bound the same request is counted, not refused by this gate (render would follow)
+    GGML_ASSERT(ctx.count_tasks(req) == 10);
+    GGML_ASSERT(10 > 1);
+}
+
 // a positive cap is itself, a negative cap derives from the slots, and 0 is unlimited
 static void test_decision_queue_cap_is_a_bound() {
     GGML_ASSERT(decision_queue_cap(-1, 4) == (size_t) DECISION_QUEUE_CAP_PER_SLOT * 4);
@@ -1641,6 +1793,8 @@ int main() {
     test_template_input_kev();
     test_kev_text_golden();
     test_template_input_laya();
+    test_head_clip_reports_kept_below_original();
+    test_head_clip_is_silent_in_budget();
     test_template_input_nimble();
     test_format_answer_lev();
     test_questions_are_refused();
@@ -1656,6 +1810,10 @@ int main() {
     test_the_image_limit_spans_both_channels();
     test_state_rejects_malformed_data_url();
     test_grouping_counts_the_prefix_once();
+    test_budget_sees_pre_group_billing_sees_post_group();
+    test_grouping_empty_prompt_shares_nothing();
+    test_saturating_arithmetic();
+    test_usage_never_negative();
     test_grouping_preserves_order();
     test_grouping_respects_n_slots();
     test_grouping_needs_a_token_of_its_own();
@@ -1676,6 +1834,9 @@ int main() {
     test_try_post_tasks_cleans_up_on_refusal();
     test_decision_queue_cap_is_a_bound();
     test_decision_prompt_budget_is_a_bound();
+    test_task_budget_is_a_bound();
+    test_task_count_is_predicted_without_rendering();
+    test_over_count_request_is_refused_before_render();
     printf("test-server-decision: OK\n");
     return 0;
 }

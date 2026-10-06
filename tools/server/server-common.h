@@ -20,6 +20,7 @@
 #include <queue>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using json = common_json;
@@ -73,14 +74,13 @@ enum error_type {
 };
 
 // the wire shape of an error kind: HTTP status and "type" string
-struct error_info {
+struct server_error_info {
     int          code;
     const char * type;
 };
 
-// the one place the (code, type) pair of an error kind is written. 400 is shared on purpose;
-// a client tells the 400 kinds apart by their "type" string
-inline error_info error_type_info(error_type type) {
+// the one place the (code, type) pair of an error kind is written. 400 is shared on purpose; a client tells the 400 kinds apart by their "type" string
+inline server_error_info error_type_info(error_type type) {
     switch (type) {
         case ERROR_TYPE_INVALID_REQUEST:         return { 400, "invalid_request_error" };
         case ERROR_TYPE_AUTHENTICATION:          return { 401, "authentication_error" };
@@ -99,14 +99,14 @@ inline error_info error_type_info(error_type type) {
     return { 500, "server_error" }; // answer the caller, do not die over an unknown kind
 }
 
-// well-formed JSON the endpoint refuses, answered 422. Must not derive from std::invalid_argument,
-// which ex_wrapper maps to 400 on every route
+// well-formed JSON the endpoint refuses, answered 422. Must not derive from std::invalid_argument, which ex_wrapper maps to 400 on every route
 struct server_invalid_request : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
+static_assert(!std::is_base_of<std::invalid_argument, server_invalid_request>::value,
+    "server_invalid_request must not derive from invalid_argument");
 
-// answer the client with exactly this kind, whatever route raised it. For example an image for a
-// model without vision
+// answer the client with exactly this kind, whatever route raised it. For example an image for a model without vision
 struct server_status_error : std::runtime_error {
     server_status_error(error_type type, const std::string & message) : std::runtime_error(message), type(type) {}
 

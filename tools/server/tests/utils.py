@@ -678,18 +678,17 @@ class ServerPreset:
         return server
 
     @staticmethod
-    def lev() -> ServerProcess:
-        # NOT a test model: there is no tiny lev, and the real one is far too large to download, so
-        # the lev route tests skip unless LEV_LOCAL_MODEL points at a local copy.
+    def _decision_preset(repo_env: str, default_repo: str) -> ServerProcess:
+        # NOT a test model: no tiny exists, so the route tests skip without a local copy
         server = ServerProcess()
         server.offline = True
         server.model_hf_file = None
-        local_model = os.environ.get("LEV_LOCAL_MODEL")
+        local_model = os.environ.get(repo_env)
         if local_model:
             server.model_file = local_model
             server.model_hf_repo = None
         else:
-            server.model_hf_repo = "ggml-org/lev-GGUF:Q4_K_M"
+            server.model_hf_repo = default_repo
         server.n_ctx = 4096
         server.n_batch = 512
         server.n_slots = 1
@@ -697,22 +696,15 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def lev() -> ServerProcess:
+        # NOT a test model: there is no tiny lev, and the real one is far too large to download, so
+        # the lev route tests skip unless LEV_LOCAL_MODEL points at a local copy.
+        return ServerPreset._decision_preset("LEV_LOCAL_MODEL", "ggml-org/lev-GGUF:Q4_K_M")
+
+    @staticmethod
     def kev() -> ServerProcess:
         # NOT a test model, same reason as lev(). Kev-0.8B is the smallest published one.
-        server = ServerProcess()
-        server.offline = True
-        server.model_hf_file = None
-        local_model = os.environ.get("KEV_LOCAL_MODEL")
-        if local_model:
-            server.model_file = local_model
-            server.model_hf_repo = None
-        else:
-            server.model_hf_repo = "ggml-org/Kev-0.8B-GGUF:Q8_0"
-        server.n_ctx = 4096
-        server.n_batch = 512
-        server.n_slots = 1
-        server.seed = 42
-        return server
+        return ServerPreset._decision_preset("KEV_LOCAL_MODEL", "ggml-org/Kev-0.8B-GGUF:Q8_0")
 
     @staticmethod
     def tinygemma3() -> ServerProcess:

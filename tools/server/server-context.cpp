@@ -5767,19 +5767,17 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
 //
 // /v1/systemone
 //
-// the route owns the admission decision and the response envelope; build_tasks() renders and groups
-// the prompts, the reader posts them and waits
+// the route owns the admission decision and the response envelope; build_tasks() renders and groups the prompts, the reader posts them and waits
 //
 
-// the response body: the answers under the caller's ids, and the usage. Results are in task order,
-// one per pass of each question, or one joint result holding every option in question order
+// the response body: the answers under the caller's ids, and the usage. Results are in task order, one per pass of each question, or one joint result holding every option in question order
 static json decision_response_envelope(const std::string &                           model_name,
                                        const std::vector<server_decision_question> & questions,
                                        const server_decision_context &               decision,
                                        const std::vector<server_task_result_ptr> &   results,
                                        int32_t                                       n_shared) {
-    json    answers  = json::object();
-    int32_t n_tokens = 0;
+    json    answers      = json::object();
+    size_t  n_tokens_sum = 0;
 
     const server_task_result_decision * joint = nullptr;
     if (decision.is_joint()) {
@@ -5791,7 +5789,7 @@ static json decision_response_envelope(const std::string &                      
         if (joint == nullptr) {
             throw std::runtime_error("unexpected result type for a joint decision task");
         }
-        n_tokens = joint->n_tokens;
+        n_tokens_sum = joint->n_tokens < 0 ? 0 : (size_t) joint->n_tokens;
     }
 
     size_t i_result = 0;
@@ -5817,17 +5815,19 @@ static json decision_response_envelope(const std::string &                      
         for (size_t variant = 0; joint == nullptr && variant < decision.n_variants(question); variant++) {
             const auto * result = take_result();
             scores.push_back(result->scores);
-            n_tokens += result->n_tokens;
+            // billed work: evaluated tokens after the shared discount, where the budget counted held work before grouping. The sum saturates and the discount floors at zero, so usage never wraps or goes negative.
+            n_tokens_sum = decision_saturating_add(n_tokens_sum, result->n_tokens < 0 ? 0 : (size_t) result->n_tokens);
         }
         answers[question.id] = decision.format_answer(question, scores);
     }
 
+    const size_t n_shared_sum = n_shared < 0 ? 0 : (size_t) n_shared;
     return json{
         { "model",   model_name         },
         { "answers", std::move(answers) },
         { "usage",
          {
-              { "input_tokens", n_tokens - n_shared },
+              { "input_tokens", decision_usage_input_tokens(n_tokens_sum, n_shared_sum) },
               { "output_tokens", 0 },
           }                             },
     };
@@ -5867,8 +5867,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_systemone_impl(const
         res->error(format_error_response("The server is busy, retry later", ERROR_TYPE_RATE_LIMITED));
     };
 
-    // read-only fast path: skip the render when the queue is already at the cap. The bound is
-    // try_post_tasks(), this only avoids the work
+    // read-only fast path: skip the render when the queue is already at the cap. The bound is try_post_tasks(), this only avoids the work
     if (cap != 0) {
         const size_t n_queued = ctx_server.queue_tasks.queued_count(SERVER_TASK_TYPE_DECISION, cap);
         if (n_queued >= cap) {
@@ -5879,10 +5878,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_systemone_impl(const
 
     const size_t max_prompt_tokens = decision_prompt_budget(
         params.decision_max_prompt_tokens, params.n_parallel, meta->slot_n_ctx);
+    const size_t max_tasks = decision_task_budget(
+        params.decision_max_prompt_tokens, params.n_parallel, meta->slot_n_ctx);
 
     server_decision_tasks grouped = decision.build_tasks(
         request, [&rd = res->rd]() { return rd.get_new_id(); }, ctx_server.mctx, ctx_server.init_opt,
-        params.n_parallel, max_prompt_tokens);
+        params.n_parallel, max_tasks, max_prompt_tokens);
     const int32_t n_shared = grouped.n_shared;
 
     // the gate reads the depth under the lock that also enqueues, so the batch is admitted whole

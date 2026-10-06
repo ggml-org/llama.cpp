@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
+#include <stdexcept>
 #include <thread>
 
 #define QUE_INF(fmt, ...) LOG_INF("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -25,11 +27,12 @@ static bool task_resets_idle_timer(server_task_type type) {
     return type != SERVER_TASK_TYPE_METRICS;
 }
 
-// the weight a task adds to the queued count of counted_type: one if the task is that type, plus one
-// per matching child
+// the weight a task adds to the queued count of counted_type: one if the task is that type, plus one per matching child
+// grouping is one level only (parent with children, children have no children), so one level is exact
 static size_t task_weight(const server_task & task, server_task_type counted_type) {
     size_t weight = task.type == counted_type ? 1 : 0;
     for (const auto & child : task.child_tasks) {
+        GGML_ASSERT(child.child_tasks.empty() && "decision grouping nests one level only");
         weight += child.type == counted_type ? 1 : 0;
     }
     return weight;
@@ -61,6 +64,7 @@ void server_queue::post_locked(std::vector<server_task> && tasks, bool front) {
     bool reset_timer = false;
     for (auto & task : tasks) {
         if (task.id == -1) {
+            GGML_ASSERT(id < INT_MAX && "task id wrapped");
             task.id = id++;
         }
         // if this is cancel task make sure to clean up pending tasks
@@ -143,6 +147,7 @@ void server_queue::defer(server_task && task) {
 
 int server_queue::get_new_id() {
     std::unique_lock<std::mutex> lock(mutex_tasks);
+    GGML_ASSERT(id < INT_MAX && "task id wrapped");
     int new_id = id++;
     return new_id;
 }
@@ -584,7 +589,25 @@ void server_response_reader::post_task(server_task && task, bool front) {
 
 void server_response_reader::register_tasks(std::vector<server_task> & tasks) {
     GGML_ASSERT(id_tasks.empty() && "register_tasks() can only be called once per reader");
+    // post_locked() assigns ids for -1, but the ids must be unique before get_list_id() collapses them
+    for (auto & task : tasks) {
+        if (task.id == -1) {
+            task.id = queue_tasks.get_new_id();
+        }
+        for (auto & child : task.child_tasks) {
+            if (child.id == -1) {
+                child.id = queue_tasks.get_new_id();
+            }
+        }
+    }
     id_tasks = server_task::get_list_id(tasks);
+    size_t n_expected = tasks.size();
+    for (const auto & task : tasks) {
+        n_expected += task.child_tasks.size();
+    }
+    if (id_tasks.size() != n_expected) {
+        throw std::runtime_error("duplicate decision task id");
+    }
     states.reserve(tasks.size());
     size_t index = 0;
     for (auto & task : tasks) {

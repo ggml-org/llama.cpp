@@ -55,8 +55,7 @@ public:
     // multi-task version of post()
     int post(std::vector<server_task> && tasks, bool front = false);
 
-    // post the batch whole only if the locked depth of counted_type is below cap; cap == 0 is
-    // unlimited. *depth_at_refusal is the locked depth on refusal
+    // post the batch whole only if the locked depth of counted_type is below cap; cap == 0 is unlimited. *depth_at_refusal is the locked depth on refusal
     bool try_post(std::vector<server_task> && tasks,
                   server_task_type            counted_type,
                   size_t                      cap,
@@ -69,8 +68,7 @@ public:
     // Get the next id for creating a new task
     int get_new_id();
 
-    // Call when the state of one slot is changed, it will move one task from deferred to main queue
-    // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
+    // Call when the state of one slot is changed, it will move one task from deferred to main queue. prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
     void pop_deferred_task(int id_slot);
 
     // if sleeping, request exiting sleep state and wait until it is done
@@ -117,9 +115,8 @@ public:
         return queue_tasks_deferred.size();
     }
 
-    // queued weight of one type, a parent and each child counting one, derived from the deques so
-    // there is no second counter. The scan stops at stop_at, so a bounded query does not walk the
-    // queue behind it; stop_at == 0 counts all
+    // queued weight of one type, a parent and each child counting one, derived from the deques so there is no second counter. The scan stops at stop_at, so a bounded query does not walk the queue behind it; stop_at == 0 counts all
+    // read-only fast path only: try_post() under the same lock is the gate, so a race here only does extra render work, never admits over the cap
     size_t queued_count(server_task_type type, size_t stop_at = 0);
 
     //
@@ -246,8 +243,7 @@ struct server_response_reader {
     void post_task(server_task && task, bool front = false);
     void post_tasks(std::vector<server_task> && tasks, bool front = false);
 
-    // post_tasks(), refused when counted_type is already at cap (0 is unlimited). The ids registered
-    // before the post are removed on refusal; *depth_at_refusal is the locked depth
+    // post_tasks(), refused when counted_type is already at cap (0 is unlimited). The ids registered before the post are removed on refusal; *depth_at_refusal is the locked depth
     bool try_post_tasks(std::vector<server_task> && tasks,
                         server_task_type            counted_type,
                         size_t                      cap,
@@ -270,7 +266,6 @@ struct server_response_reader {
     void stop();
 
   private:
-    // assign an index and a state per task and child, and register every id for a result. Call
-    // before posting, no lock held
+    // assign an index and a state per task and child, and register every id for a result. Call before posting, no lock held
     void register_tasks(std::vector<server_task> & tasks);
 };

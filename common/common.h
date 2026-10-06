@@ -639,6 +639,9 @@ struct common_params {
     int32_t decision_max_queued = -1;    // queued decision tasks at which /v1/systemone answers 429, < 0 derives 8 * n_parallel, 0 is unlimited
     int32_t decision_max_prompt_tokens = -1; // prompt tokens one /v1/systemone request may total before it answers 413, < 0 derives 8 * n_parallel * slot context, 0 is unlimited
 
+    // queued decision tasks per slot the derived /v1/systemone caps start from; single source for the server derivation and the CLI help
+    static constexpr int COMMON_DECISION_QUEUE_CAP_PER_SLOT = 8;
+
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT

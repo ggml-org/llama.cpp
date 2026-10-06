@@ -128,8 +128,9 @@ class LevModel(_DecisionLoraMixin, Qwen3_5TextModel):
                 + name + ": " + description + "{{ '\\n' }}{% endif %}{% endfor %}"
             )
         scale += "{{ '\\nRespond with only a digit from 0 to 8.' }}"
-        # the criterion has no fallback to the question id: the server refuses empty instructions
-        # before rendering. Models converted earlier keep the old fallback in their embedded template
+        # the criterion has no fallback to the question id: the server owns that rule and refuses
+        # empty instructions in decision_parse_questions before rendering. Models converted earlier
+        # keep the old fallback in their embedded template
         return (
             "<|im_start|>system\n" + self._SYSTEM_PROMPT + "<|im_end|>\n"
             "<|im_start|>user\n# Evidence\n" + jinja_str_or_json("state") + "\n\n# Criterion\n"

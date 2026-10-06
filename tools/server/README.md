@@ -1714,7 +1714,7 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
 `questions`: An object that maps a question id to a question. Each question has these fields:
 
 - `type`: One of `choice`, `score`, `noul`.
-- `instructions`: The question. Can be a non-empty string, object or array. A number, a boolean, `null`, an empty string, an empty object and an empty array are all refused with `422`: no template may fall back to another value when this one is missing, so the request is refused instead. Jev lists `null` as allowed here and the check is stricter than that; the answer is the same, the request shape is not.
+- `instructions`: The question. Can be a non-empty string, object or array. A number, a boolean, `null`, an empty string, an empty object and an empty array are all refused with `422`: no template may fall back to another value when this one is missing, so the request is refused instead. Jev lists `null` as allowed here and the check is stricter than that; the answer is the same, the request shape is not. LEV models converted before this rule still carry the old `{{ id }}` fallback in their embedded template and answer empty instructions instead of refusing them; reconvert to get the refusal.
 - `criteria`: The possible answers, the shape depends on `type`:
   - `choice`: An object that maps each option to its description. The description can be `null`.
   - `score`: An array of 2 to 10 level descriptions, lowest level first.

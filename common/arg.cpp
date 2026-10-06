@@ -3603,8 +3603,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                    string_format(
                        "decision tasks queued at which POST /v1/systemone starts answering 429; "
                        "checked when the request arrives, not a bound on the queue; "
-                       "a parent and each child count one; negative for 8 x --parallel, 0 for unlimited (default: %d)",
-                       params.decision_max_queued),
+                       "a parent and each child count one; negative for %d x --parallel, 0 for unlimited (default: %d)",
+                       common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT, params.decision_max_queued),
                    [](common_params & params, int value) {
                        params.decision_max_queued = value;
                    })
@@ -3615,9 +3615,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                    string_format(
                        "rendered prompt tokens POST /v1/systemone accepts in one request before it "
                        "answers 413; counted over every task the request builds, across both image "
-                       "and text; negative for 8 x --parallel x the context of one slot, 0 for "
+                       "and text; negative for %d x --parallel x the context of one slot, 0 for "
                        "unlimited (default: %d)",
-                       params.decision_max_prompt_tokens),
+                       common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT, params.decision_max_prompt_tokens),
                    [](common_params & params, int value) {
                        params.decision_max_prompt_tokens = value;
                    })
