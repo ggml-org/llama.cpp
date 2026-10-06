@@ -7,7 +7,10 @@
 #include <limits>
 #include <cmath>
 #include <cstdlib>
+#include <new>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 static const char * decision_question_type_name(server_decision_question_type type) {
     switch (type) {
@@ -33,6 +36,94 @@ static constexpr size_t DECISION_JSON_MAX_DEPTH = 32;
 
 // a request with more questions cannot be admitted anyway, refuse it during parse before it allocates
 static constexpr size_t DECISION_QUESTIONS_MAX = 4096;
+
+// total measured JSON one request may carry, enforced even when the token budget is unlimited
+static constexpr size_t DECISION_JSON_MAX_BYTES = 8 * 1024 * 1024;
+
+// content bytes below which the byte pre-flight always passes, so a small request reaches the
+// token gate that names exact tokens. Rendering that much is cheap; the byte gate exists to skip
+// expensive renders, and without the floor a tiny budget would answer small-budget refusals with
+// a byte message where the token message belongs.
+static constexpr size_t DECISION_BYTE_GATE_FLOOR_BYTES = 4096;
+
+// iterative depth check with an explicit stack, so attacker nesting cannot overflow the call stack.
+// runs on the parsed body before any dump() or recursive walk, which are only safe once depth is bounded.
+// the tree is never mutated during the walk, so pointers into it stay valid.
+void decision_check_json_depth(const json & val, const char * field) {
+    std::vector<std::pair<const json *, size_t>> stack;
+    stack.emplace_back(&val, 0);
+    while (!stack.empty()) {
+        const auto top = stack.back();
+        stack.pop_back();
+        if (top.second > DECISION_JSON_MAX_DEPTH) {
+            throw server_invalid_request(string_format("\"%s\" is nested too deeply", field));
+        }
+        if (top.first->is_array()) {
+            for (const auto & item : *top.first) {
+                stack.emplace_back(&item, top.second + 1);
+            }
+        } else if (top.first->is_object()) {
+            for (const auto & kv : top.first->items()) {
+                stack.emplace_back(&kv.value(), top.second + 1);
+            }
+        }
+    }
+}
+
+// depth check on the raw body text before json::parse, whose own recursion is unbounded.
+// brackets inside strings do not count; an unbalanced close is left for the parser to refuse.
+void decision_check_raw_json_depth(const std::string & body) {
+    size_t depth = 0;
+    bool in_string = false;
+    for (size_t i = 0; i < body.size(); i++) {
+        const char c = body[i];
+        if (in_string) {
+            if (c == '\\') {
+                i++; // the escaped byte cannot close the string
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+        } else if (c == '[' || c == '{') {
+            if (++depth > DECISION_JSON_MAX_DEPTH) {
+                throw server_invalid_request("\"body\" is nested too deeply");
+            }
+        } else if (c == ']' || c == '}') {
+            if (depth > 0) {
+                depth--;
+            }
+        }
+    }
+}
+
+// sum of string bytes without dumping the whole value, so one huge option cannot force a big
+// allocation to learn it is huge. Under-estimates the dump size (no JSON overhead), which only
+// misses toward the token gate. The tree is never mutated during the walk, so pointers into it stay valid.
+size_t decision_json_content_bytes(const json & val) {
+    size_t n = 0;
+    std::vector<const json *> stack;
+    stack.push_back(&val);
+    while (!stack.empty()) {
+        const json * node = stack.back();
+        stack.pop_back();
+        if (node->is_string()) {
+            n = decision_saturating_add(n, node->get<std::string>().size());
+        } else if (node->is_array()) {
+            for (const auto & item : *node) {
+                stack.push_back(&item);
+            }
+        } else if (node->is_object()) {
+            for (const auto & kv : node->items()) {
+                n = decision_saturating_add(n, kv.key().size());
+                stack.push_back(&kv.value());
+            }
+        }
+    }
+    return n;
+}
 
 // LAYA reads the question and options in one max_head_tokens window and shortens the options to fit
 
@@ -265,6 +356,12 @@ std::vector<server_decision_question> decision_parse_questions(const json & body
             if (!criteria.is_object() || criteria.empty()) {
                 throw err("\"criteria\" must be a non-empty object");
             }
+            // refuse before copying, so a huge criteria cannot force an allocation to learn it is huge
+            if (criteria.size() > traits.n_options_max) {
+                throw err(string_format("\"criteria\" has %zu options, at most %zu are supported",
+                                        criteria.size(),
+                                        traits.n_options_max));
+            }
             for (const auto & [key, description] : criteria.items()) {
                 question.options.push_back({key, description});
             }
@@ -309,6 +406,8 @@ std::vector<server_decision_question> decision_parse_questions(const json & body
 }
 
 server_decision_request server_decision_context::parse_request(const json & body) const {
+    // before any dump() or recursive walk below, which are only safe once depth is bounded
+    decision_check_json_depth(body);
     server_decision_request request;
     request.questions = decision_parse_questions(body, traits);
     request.state     = decision_parse_state(body, request.files);
@@ -328,8 +427,13 @@ static void decision_load_image(const json & url, std::vector<raw_buffer> & file
     }
     try {
         handle_media(files, url.get<std::string>(), "");
-    } catch (const std::exception & e) {
+    } catch (const std::bad_alloc &) {
+        throw; // out of memory is a server fault, never a 422
+    } catch (const std::invalid_argument & e) {
         // handle_media answers 400 on every route, but here the body is valid JSON with a bad value
+        throw server_invalid_request(string_format("\"images\" entry %zu: %s", files.size() + 1, e.what()));
+    } catch (const std::runtime_error & e) {
+        // decode failures arrive as runtime_error (bad base64, unsupported input), still the caller's value
         throw server_invalid_request(string_format("\"images\" entry %zu: %s", files.size() + 1, e.what()));
     }
 }
@@ -858,25 +962,41 @@ server_decision_tasks server_decision_context::build_tasks(
                           "--decision-max-prompt-tokens",
                           n_tasks, max_tasks));
     }
-    // byte pre-flight before Jinja: one huge option must not force a render to learn it is huge
-    if (max_prompt_tokens != 0) {
-        size_t n_bytes = request.state.dump().size();
+    // byte pre-flight before Jinja: one huge option must not force a render to learn it is huge.
+    // measured without building a dump string, so the check itself cannot allocate.
+    {
+        size_t n_bytes = decision_json_content_bytes(request.state);
         for (const auto & question : request.questions) {
             n_bytes = decision_saturating_add(n_bytes, question.id.size());
-            n_bytes = decision_saturating_add(n_bytes, question.instructions.dump().size());
+            n_bytes = decision_saturating_add(n_bytes, decision_json_content_bytes(question.instructions));
             for (const auto & opt : question.options) {
                 n_bytes = decision_saturating_add(n_bytes, opt.key.size());
-                n_bytes = decision_saturating_add(n_bytes, opt.description.dump().size());
+                if (opt.description.is_string()) {
+                    n_bytes = decision_saturating_add(n_bytes, opt.description.get<std::string>().size());
+                } else {
+                    n_bytes = decision_saturating_add(n_bytes, decision_json_content_bytes(opt.description));
+                }
             }
         }
-        // 32 bytes per token bounds JSON overhead, so a request over it cannot fit the token budget
-        if (n_bytes > decision_saturating_mul(max_prompt_tokens, 32)) {
+        // always on, so an unlimited token budget cannot be forced to render unbounded input
+        if (n_bytes > DECISION_JSON_MAX_BYTES) {
             throw server_status_error(
                 ERROR_TYPE_REQUEST_TOO_LARGE,
-                string_format("The request is %zu bytes, over the %zu token budget. "
+                string_format("The request is %zu bytes, over the %zu byte maximum. "
+                              "Give a shorter \"state\" or fewer questions",
+                              n_bytes, DECISION_JSON_MAX_BYTES));
+        }
+        // 32 bytes per token bounds JSON overhead, so a request over it cannot fit the token budget.
+        // the floor keeps small requests on the token gate that names exact tokens; the message names
+        // the threshold that actually applied, not just the budget it derives from.
+        const size_t byte_threshold = std::max(DECISION_BYTE_GATE_FLOOR_BYTES, decision_saturating_mul(max_prompt_tokens, 32));
+        if (max_prompt_tokens != 0 && n_bytes > byte_threshold) {
+            throw server_status_error(
+                ERROR_TYPE_REQUEST_TOO_LARGE,
+                string_format("The request is %zu bytes, over the %zu byte threshold for the %zu token budget. "
                               "Give a shorter \"state\", fewer questions, or raise the limit with "
                               "--decision-max-prompt-tokens",
-                              n_bytes, max_prompt_tokens));
+                              n_bytes, byte_threshold, max_prompt_tokens));
         }
     }
     // an empty prompt would be answered on the completion result path, which the route cannot cast
@@ -1092,7 +1212,7 @@ static size_t decision_group_size(size_t n_tasks, size_t n_slots) {
 
 size_t decision_queue_cap(int cap, int n_parallel) {
     const size_t derived = decision_saturating_mul(
-        (size_t) DECISION_QUEUE_CAP_PER_SLOT, (size_t) std::max(n_parallel, 1));
+        (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT, (size_t) std::max(n_parallel, 1));
     return decision_resolve_cap(cap, derived); // 0 stays unlimited for try_post()
 }
 
@@ -1119,7 +1239,7 @@ size_t decision_prompt_budget(int cap, int n_parallel, int n_ctx_slot) {
     // a server with no slot, or a slot with no context, still gets one of each, so the derivation never lands on 0 and turns the gate off by accident
     const size_t slots  = (size_t) std::max(n_parallel, 1);
     const size_t ctx    = (size_t) std::max(n_ctx_slot, 1);
-    size_t       budget = decision_saturating_mul((size_t) DECISION_QUEUE_CAP_PER_SLOT, slots);
+    size_t       budget = decision_saturating_mul((size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT, slots);
     budget = decision_saturating_mul(budget, ctx);
     return decision_resolve_cap(cap, budget); // 0 stays unlimited for build_tasks()
 }
@@ -1133,7 +1253,7 @@ size_t decision_task_budget(int cap, int n_parallel, int n_ctx_slot) {
     const size_t ctx   = (size_t) std::max(n_ctx_slot, 1);
     size_t       bound = decision_saturating_mul(slots, ctx);
     if (cap > 0) {
-        bound = std::max(bound, (size_t) cap / DECISION_QUEUE_CAP_PER_SLOT);
+        bound = std::max(bound, (size_t) cap / common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT);
     }
     return bound;
 }

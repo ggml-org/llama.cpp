@@ -5843,6 +5843,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_systemone_impl(const
     }
 
     // no error handling below: the exception kind picks the status, ex_wrapper dispatches it
+    // raw depth first: the parser itself recurses without a bound, so a nested body must be
+    // refused before parsing, not only before the walks over the parsed tree
+    decision_check_raw_json_depth(req.body);
     const json body = json::parse(req.body);
 
     // Jev requires "model"; here it is accepted and ignored, the answer reports the loaded model

@@ -257,6 +257,96 @@ def test_systemone_instructions_must_carry_content():
         assert "instructions" in res.body["error"]["message"]
 
 
+def test_systemone_deeply_nested_state_is_422():
+    """nesting past the depth cap is refused before any dump or render walks it"""
+    server.start()
+    state = "x"
+    for _ in range(40):
+        state = [state]
+    res = post(state=state, questions={"q": {"type": "noul", "instructions": "Is this true?"}})
+    assert res.status_code == 422, res.body
+    assert res.body["error"]["type"] == "unprocessable_entity_error"
+    assert "nested too deeply" in res.body["error"]["message"]
+
+    # far past what the JSON parser itself could recurse through: the raw-text check fires
+    # before parsing, so this is a 422 rather than a crashed worker
+    raw = b'{"state": ' + b'[' * 5000 + b'"x"' + b']' * 5000 + b', "questions": {"q": {"type": "noul", "instructions": "Is this true?"}}}'
+    res = requests.post(server.make_url("/v1/systemone"), data=raw)
+    assert res.status_code == 422, res.status_code
+    assert res.json()["error"]["type"] == "unprocessable_entity_error"
+    assert "nested too deeply" in res.json()["error"]["message"]
+
+
+def test_systemone_too_many_questions_is_413():
+    """more questions than the server parses is a 413 naming questions, not a 422"""
+    server.start()
+    questions = {f"q{i}": {"type": "noul", "instructions": "Is this true?"} for i in range(4097)}
+    res = post(questions=questions)
+    assert res.status_code == 413, res.status_code
+    assert res.body["error"]["type"] == "request_too_large_error"
+    assert "questions" in res.body["error"]["message"]
+
+
+def test_systemone_videos_variants():
+    """absent, null, and an empty array mean no videos; anything else present is refused"""
+    server.start()
+    questions = {"q": {"type": "noul", "instructions": "Is this true?"}}
+    assert post(questions=questions).status_code == 200
+    for videos in [None, []]:
+        res = server.make_request("POST", "/v1/systemone",
+                                 data={"state": TEST_STATE, "questions": questions, "videos": videos})
+        assert res.status_code == 200, (videos, res.body)
+    for videos in ["", 0, ["x"], {"a": 1}]:
+        res = server.make_request("POST", "/v1/systemone",
+                                 data={"state": TEST_STATE, "questions": questions, "videos": videos})
+        assert res.status_code == 422, (videos, res.body)
+        assert "videos" in res.body["error"]["message"]
+
+
+BYTE_REFUSAL_MESSAGE = re.compile(
+    r'^The request is (?P<bytes>\d+) bytes, over the (?P<threshold>\d+) byte threshold'
+    r' for the (?P<budget>\d+) token budget\.'
+    r' Give a shorter "state", fewer questions, or raise the limit with'
+    r' --decision-max-prompt-tokens$')
+
+
+def byte_refusal(res) -> tuple[int, int, int]:
+    """the (bytes, threshold, budget) a byte pre-flight refusal names. Fires before any render,
+    so unlike refusal() the first number is measured content, not rendered tokens. The threshold
+    is the floor or 32x the budget, whichever applied."""
+    _assert_413(res)
+    named = BYTE_REFUSAL_MESSAGE.match(res.body["error"]["message"])
+    assert named, res.body["error"]["message"]
+    return int(named["bytes"]), int(named["threshold"]), int(named["budget"])
+
+
+def test_systemone_byte_preflight_fires_before_render():
+    """a request too wide in bytes for a small budget is refused without rendering it"""
+    global server
+    server = ServerPreset.tinyopenjev()
+    server.server_slots = True
+    server.server_metrics = True
+    server.start()
+
+    # 50 questions of long instructions: kilobytes of content under the task count bound,
+    # so the byte gate is what fires, not the count gate
+    questions = {f"q{i}": {"type": "noul", "instructions": "Is this statement about the ticket true? " * 4}
+                 for i in range(50)}
+
+    server.stop()
+    server.decision_max_prompt_tokens = 48
+    server.start()
+    counters_before = get_prompt_metrics(server)
+    n_bytes, threshold, budget = byte_refusal(post(questions=questions))
+    assert budget == 48
+    assert threshold == max(4096, 32 * budget)
+    assert n_bytes > threshold
+
+    # refused whole: nothing was evaluated, no slot kept the work
+    assert get_prompt_metrics(server) == counters_before
+    assert not any(slot_states(server))
+
+
 def test_systemone_invalid_request():
     # the instructions domain has its own table above, which also names the field in the message, so
     # it is not repeated here. A refused request never reaches a slot, so one server answers each
@@ -433,6 +523,15 @@ def test_systemone_lev():
     assert res_renamed.body["answers"]["route"]["choice"] in ("z", "y")
     assert abs(sum(res_renamed.body["answers"]["route"]["probabilities"].values()) - 1.0) < 1e-4
 
+    # reconverted models refuse empty instructions; files converted before the rule keep
+    # the old fallback in their embedded template and answer instead (see README)
+    res_empty = post(questions={"q": {"type": "noul", "instructions": ""}})
+    if res_empty.status_code == 200:
+        pytest.skip("lev file predates the empty-instructions refusal; reconvert to get the 422")
+    assert res_empty.status_code == 422, res_empty.body
+    assert res_empty.body["error"]["type"] == "unprocessable_entity_error"
+    assert "instructions" in res_empty.body["error"]["message"]
+
 
 @pytest.mark.skipif(not KEV_AVAILABLE, reason=KEV_SKIP_REASON)
 def test_systemone_kev():
@@ -544,15 +643,27 @@ def test_systemone_answers_429_when_the_queue_is_full():
     # cheap requests can drain before saturation, so widen the burst until a refusal lands
     refused = []
     responses = []
-    for n_burst in (server.n_slots * 4 + 8, server.n_slots * 8 + 16, server.n_slots * 16 + 32):
+    attempted = (server.n_slots * 4 + 8, server.n_slots * 8 + 16, server.n_slots * 16 + 32)
+    n_burst = attempted[-1]
+    for n_burst in attempted:
         responses = fire_burst(server, n_burst, questions)
         refused = [r for r in responses if r.status_code == 429]
         if refused:
             break
 
     refused = [r for r in responses if r.status_code == 429]
-    assert refused, f"no 429 in {n_burst} concurrent requests: " \
-        f"{sorted({r.status_code for r in responses})}"
+    admitted = [r for r in responses if r.status_code != 429]
+    # the calibration record prints on every run, even when the gate is missed, so a fast
+    # machine produces a diagnosable calibration miss rather than a bare flake
+    calibration = {}
+    for r in responses:
+        calibration[r.status_code] = calibration.get(r.status_code, 0) + 1
+    print(f"\n/v1/systemone admission: cap={cap} tasks, attempted_widths={list(attempted)}, "
+          f"width={n_burst}, admitted={len(admitted)}, refused={len(refused)}, "
+          f"status_histogram={dict(sorted(calibration.items()))}")
+    assert refused, f"calibration miss: no 429 in attempted widths {list(attempted)} " \
+        f"(last width {n_burst}, histogram {dict(sorted(calibration.items()))}): " \
+        f"the burst drained before saturating the queue on this machine"
     for r in refused:
         assert r.body["error"]["type"] == "rate_limit_error"
         assert r.body["error"]["code"] == 429
@@ -564,7 +675,6 @@ def test_systemone_answers_429_when_the_queue_is_full():
     assert counted == len(refused), f"{len(refused)} refusals but {counted} counted"
 
     # everything the server did accept is a real answer, not a partial body
-    admitted = [r for r in responses if r.status_code != 429]
     assert admitted, "the whole burst was refused, which means the cap is below one request"
     for r in admitted:
         assert r.status_code == 200, r.body
@@ -574,13 +684,6 @@ def test_systemone_answers_429_when_the_queue_is_full():
 
     # once the burst drains the server takes work again
     assert post(questions=TEST_QUESTIONS).status_code == 200
-
-    # the calibration record: a future change to the default shows up as a diff in this line
-    histogram = {}
-    for r in responses:
-        histogram[r.status_code] = histogram.get(r.status_code, 0) + 1
-    print(f"\n/v1/systemone admission: cap={cap} tasks, admitted={len(admitted)}, "
-          f"refused={len(refused)}, status_histogram={dict(sorted(histogram.items()))}")
 
 
 def read_log(server: ServerProcess) -> str:
@@ -1079,6 +1182,15 @@ def test_systemone_queue_cap_startup_log(tmp_path):
     assert re.search(r"max queued = unlimited", read_log(server)), read_log(server)
     server.stop()
 
+    # negative derives from the slots, spelled out so the help text and the gate cannot drift
+    server = ServerPreset.tinylaya()
+    server.log_path = str(tmp_path / "derived.log")
+    server.decision_max_queued = -1
+    server.start()
+    expected = 8 * server.n_slots
+    assert re.search(rf"max queued = {expected} tasks", read_log(server)), read_log(server)
+    server.stop()
+
 
 def test_systemone_validation_precedes_the_load_gate():
     """validation is checked before the admission gate, so a body this route refuses answers 400 or
@@ -1099,11 +1211,15 @@ def test_systemone_validation_precedes_the_load_gate():
     with ThreadPoolExecutor(max_workers=n_burst) as pool:
         futures = [pool.submit(send) for _ in range(n_burst)]
 
-        # a valid request with an empty instructions, and a malformed body. Both are refused before
-        # the cap is read, whatever the queue depth is at that moment.
-        assert post(questions={"q": {"type": "noul", "instructions": ""}}).status_code == 422
-        assert requests.post(server.make_url("/v1/systemone"),
-                             data='{"state": "unterminated').status_code == 400
+        # a well-formed body with an empty instructions, and a malformed body. Both are refused
+        # before the cap is read, whatever the queue depth is at that moment.
+        invalid = post(questions={"q": {"type": "noul", "instructions": ""}})
+        assert invalid.status_code == 422, invalid.body
+        assert invalid.body["error"]["type"] == "unprocessable_entity_error"
+        assert "instructions" in invalid.body["error"]["message"]
+        raw = requests.post(server.make_url("/v1/systemone"), data='{"state": "unterminated')
+        assert raw.status_code == 400, raw.text
+        assert raw.json()["error"]["type"] == "invalid_request_error"
 
         results = [f.result() for f in futures]
 
@@ -1190,6 +1306,7 @@ def test_systemone_wire_contract(preset: str, tmp_path):
         else:
             assert 0.0 <= answer["noul"] <= 1.0
             assert "confidence" not in answer
+            assert "probabilities" not in answer
 
     # every distribution sums to one, or the confidence above it means nothing
     for answer in res.body["answers"].values():
@@ -1239,17 +1356,26 @@ def test_systemone_wire_contract(preset: str, tmp_path):
     # of those is refused for the same reason. This mirrors test_systemone_answers_429_when_the_queue_is_full
     questions = uniform_questions(2)
     cap = server.n_slots * 4 + 8
-    responses = fire_burst(server, cap, questions)
-    refused = [r for r in responses if r.status_code == 429]
+    attempted = (cap, 2 * cap, 4 * cap)
+    responses = []
+    refused = []
+    width = attempted[-1]
     # the requests are cheap and the slots few, so a burst can drain before it saturates the queue.
     # Widen it until the gate is actually reached, or the assertion below would pass on a 200-only run
-    for n in (2 * cap, 4 * cap):
+    for width in attempted:
+        responses = fire_burst(server, width, questions)
+        refused = [r for r in responses if r.status_code == 429]
         if refused:
             break
-        responses = fire_burst(server, n, questions)
-        refused = [r for r in responses if r.status_code == 429]
-    assert refused, f"no 429 in up to {4 * cap} concurrent requests: " \
-                     f"{sorted({r.status_code for r in responses})}"
+    calibration = {}
+    for r in responses:
+        calibration[r.status_code] = calibration.get(r.status_code, 0) + 1
+    print(f"\n/v1/systemone admission (wire contract): attempted_widths={list(attempted)}, "
+          f"width={width}, refused={len(refused)}, "
+          f"status_histogram={dict(sorted(calibration.items()))}")
+    assert refused, f"calibration miss: no 429 in attempted widths {list(attempted)} " \
+        f"(last width {width}, histogram {dict(sorted(calibration.items()))}): " \
+        f"the burst drained before saturating the queue on this machine"
     for r in refused:
         assert r.body["error"]["type"] == ERROR_CONTRACT[429]
         assert int(r.headers["Retry-After"]) >= 1

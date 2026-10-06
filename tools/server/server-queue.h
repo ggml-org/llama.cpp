@@ -47,6 +47,7 @@ private:
     std::vector<std::function<void(bool)>>    callback_sleeping_state;
 
 public:
+    server_queue(int start_id = 0) : id(start_id < 0 ? 0 : start_id) {}
     ~server_queue() { worker_stop(); }
 
     // Add a new task to the end of the queue

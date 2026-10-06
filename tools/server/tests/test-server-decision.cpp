@@ -11,6 +11,7 @@
 #include <limits>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -1720,12 +1721,262 @@ static void test_over_count_request_is_refused_before_render() {
     GGML_ASSERT(10 > 1);
 }
 
+// deeply nested JSON is refused before any dump() or recursive walk, which are only safe once
+// depth is bounded. The check is iterative, so the nesting itself cannot overflow the stack.
+static void test_json_depth_guard() {
+    json deep = "leaf";
+    for (int i = 0; i < 40; i++) {
+        json next = json::array();
+        next.push_back(deep);
+        deep = next;
+    }
+    bool threw = false;
+    try {
+        decision_check_json_depth(deep);
+    } catch (const server_invalid_request & e) {
+        threw = true;
+        GGML_ASSERT(std::string(e.what()).find("nested too deeply") != std::string::npos);
+    }
+    GGML_ASSERT(threw);
+
+    json shallow = json::array({"a", "b"});
+    decision_check_json_depth(shallow); // must not throw
+
+    // the raw-text check runs before json::parse, so brackets in strings do not count but real
+    // nesting does; an unbalanced close is left for the parser, not refused here
+    std::string raw_deep;
+    for (int i = 0; i < 40; i++) {
+        raw_deep += '[';
+    }
+    threw = false;
+    try {
+        decision_check_raw_json_depth(raw_deep);
+    } catch (const server_invalid_request & e) {
+        threw = true;
+        GGML_ASSERT(std::string(e.what()).find("nested too deeply") != std::string::npos);
+    }
+    GGML_ASSERT(threw);
+    decision_check_raw_json_depth(R"({"a": "[[[[not nesting]]]]"})"); // must not throw
+    decision_check_raw_json_depth("]"); // must not throw, the parser refuses it
+
+    // the content measure counts strings and keys without building a dump string
+    json val = json{{"a", "hello"}, {"b", json::array({"world"})}};
+    GGML_ASSERT(decision_json_content_bytes(val) == 12); // keys 1 + 1, strings 5 + 5
+    GGML_ASSERT(decision_json_content_bytes(json::array()) == 0);
+}
+
+// a choice over the option limit is refused before the options are copied
+static void test_choice_option_precheck() {
+    json criteria = json::object();
+    for (int i = 0; i < 300; i++) {
+        criteria["option" + std::to_string(i)] = "x";
+    }
+    json q = question("choice");
+    q["criteria"] = criteria;
+    GGML_ASSERT(rejects(request(q), "\"criteria\" has 300 options, at most 255 are supported"));
+}
+
+// more questions than the server will ever admit is a 413, and an empty id is a 422
+static void test_questions_max_boundary() {
+    json body = json::object();
+    body["state"] = "the state";
+    json questions = json::object();
+    for (int i = 0; i < 4097; i++) {
+        questions["q" + std::to_string(i)] = question("noul");
+    }
+    body["questions"] = questions;
+    bool threw = false;
+    try {
+        decision_parse_questions(body, parse_traits());
+    } catch (const server_status_error & e) {
+        threw = true;
+        GGML_ASSERT(e.type == ERROR_TYPE_REQUEST_TOO_LARGE);
+    }
+    GGML_ASSERT(threw);
+
+    json empty_id = json::object();
+    empty_id["state"] = "the state";
+    json one = json::object();
+    one[""] = question("noul");
+    empty_id["questions"] = one;
+    GGML_ASSERT(rejects(empty_id, "empty question id"));
+}
+
+// videos: null and an empty array mean no videos, anything else present is refused
+static void test_videos_variants() {
+    std::vector<raw_buffer> files;
+    json base = json::object();
+    base["state"] = "the state";
+
+    json none = base;
+    GGML_ASSERT(decision_parse_state(none, files) == "the state");
+
+    json empty_arr = base;
+    empty_arr["videos"] = json::array();
+    GGML_ASSERT(decision_parse_state(empty_arr, files) == "the state");
+
+    json null_videos = base;
+    null_videos["videos"] = nullptr;
+    GGML_ASSERT(decision_parse_state(null_videos, files) == "the state");
+
+    for (const json & bad : {json("x"), json(0), json::array({"x"}), json::object({{"a", 1}})}) {
+        json body = base;
+        body["videos"] = bad;
+        bool threw = false;
+        try {
+            decision_parse_state(body, files);
+        } catch (const server_invalid_request & e) {
+            threw = true;
+            GGML_ASSERT(std::string(e.what()).find("videos") != std::string::npos);
+        }
+        GGML_ASSERT(threw);
+    }
+}
+
+// two tasks sharing one id cannot be told apart when results arrive, so registration refuses
+static void test_duplicate_task_id_throws() {
+    server_queue queue;
+    server_response results;
+    server_response_reader reader(queue, results, 0);
+    std::vector<server_task> tasks;
+    for (int i = 0; i < 2; i++) {
+        server_task task(SERVER_TASK_TYPE_DECISION);
+        task.id = 7;
+        tasks.push_back(std::move(task));
+    }
+    bool threw = false;
+    try {
+        reader.post_tasks(std::move(tasks), false);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+    // nothing was queued, so the failed registration leaves no ids behind to cancel
+    GGML_ASSERT(reader.id_tasks.empty());
+    GGML_ASSERT(!reader.has_next());
+}
+
+// variant and averaging guards: only variants 0 and 1 exist, and averaging needs options and a finite temperature
+static void test_variant_and_averaging_guards() {
+    const server_decision_question q = shaped_question(SERVER_DECISION_QUESTION_CHOICE, {"a", "b"});
+    bool threw = false;
+    try {
+        (void) decision_template_options(COMMON_DECISION_TYPE_LEV, template_traits(), q, 2);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+
+    threw = false;
+    try {
+        (void) decision_average_variants({{1.0f, 2.0f}}, 0, 1.0f);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+
+    threw = false;
+    try {
+        (void) decision_average_variants({{1.0f, 2.0f}}, 2, std::numeric_limits<float>::infinity());
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+}
+
+// a nested child breaks the one-level grouping the depth count assumes, so the batch
+// is refused before it is enqueued instead of under-counting later and admitting over the cap
+static void test_nested_grouping_throws() {
+    server_queue queue;
+    server_task parent(SERVER_TASK_TYPE_DECISION);
+    parent.id = queue.get_new_id();
+    parent.add_child(parent.id, queue.get_new_id());
+    parent.child_tasks[0].add_child(parent.child_tasks[0].id, queue.get_new_id());
+    bool threw = false;
+    try {
+        queue.post(std::move(parent));
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+    GGML_ASSERT(queue.queued_count(SERVER_TASK_TYPE_DECISION) == 0);
+
+    // a nested batch through the gate is refused the same way and admits nothing
+    server_queue gated;
+    server_task nested(SERVER_TASK_TYPE_DECISION);
+    nested.id = gated.get_new_id();
+    nested.add_child(nested.id, gated.get_new_id());
+    nested.child_tasks[0].add_child(nested.child_tasks[0].id, gated.get_new_id());
+    std::vector<server_task> batch;
+    batch.push_back(std::move(nested));
+    threw = false;
+    try {
+        gated.try_post(std::move(batch), SERVER_TASK_TYPE_DECISION, 0, false);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+    GGML_ASSERT(gated.queued_count(SERVER_TASK_TYPE_DECISION) == 0);
+}
+
+// an exhausted id counter refuses instead of reusing an id and misrouting results.
+// the scratch queue starts at the limit, so no global state is touched and no
+// two-billion-iteration loop is needed.
+static void test_id_exhaustion_throws() {
+    server_queue queue(std::numeric_limits<int>::max());
+    bool threw = false;
+    try {
+        queue.get_new_id();
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+
+    std::vector<server_task> batch;
+    batch.emplace_back(SERVER_TASK_TYPE_DECISION); // id == -1, needs a new id
+    threw = false;
+    try {
+        queue.post(std::move(batch));
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+    GGML_ASSERT(queue.queued_count(SERVER_TASK_TYPE_DECISION) == 0);
+
+    // a batch that needs more ids than remain is refused whole, not half-enqueued
+    server_queue almost(std::numeric_limits<int>::max() - 1);
+    std::vector<server_task> two;
+    two.emplace_back(SERVER_TASK_TYPE_DECISION);
+    two.emplace_back(SERVER_TASK_TYPE_DECISION);
+    threw = false;
+    try {
+        almost.post(std::move(two));
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+    GGML_ASSERT(almost.queued_count(SERVER_TASK_TYPE_DECISION) == 0);
+
+    // one remaining id still admits one task, then the counter is spent
+    std::vector<server_task> one;
+    one.emplace_back(SERVER_TASK_TYPE_DECISION);
+    almost.post(std::move(one));
+    GGML_ASSERT(almost.queued_count(SERVER_TASK_TYPE_DECISION) == 1);
+    threw = false;
+    try {
+        almost.get_new_id();
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    GGML_ASSERT(threw);
+}
+
 // a positive cap is itself, a negative cap derives from the slots, and 0 is unlimited
 static void test_decision_queue_cap_is_a_bound() {
-    GGML_ASSERT(decision_queue_cap(-1, 4) == (size_t) DECISION_QUEUE_CAP_PER_SLOT * 4);
-    GGML_ASSERT(decision_queue_cap(-1, 1) == (size_t) DECISION_QUEUE_CAP_PER_SLOT);
+    GGML_ASSERT(decision_queue_cap(-1, 4) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT * 4);
+    GGML_ASSERT(decision_queue_cap(-1, 1) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT);
     // a server with no slot still derives a cap of one slot's worth
-    GGML_ASSERT(decision_queue_cap(-1, 0) == (size_t) DECISION_QUEUE_CAP_PER_SLOT);
+    GGML_ASSERT(decision_queue_cap(-1, 0) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT);
 
     GGML_ASSERT(decision_queue_cap(8, 4) == 8);
     GGML_ASSERT(decision_queue_cap(1, 4) == 1);
@@ -1746,10 +1997,10 @@ static void test_decision_queue_cap_is_a_bound() {
 // itself, a negative one derives from the slots and the slot context, and 0 is unlimited, which
 // build_tasks reads as no bound. The derivation saturates rather than wrapping
 static void test_decision_prompt_budget_is_a_bound() {
-    GGML_ASSERT(decision_prompt_budget(-1, 4, 512) == (size_t) DECISION_QUEUE_CAP_PER_SLOT * 4 * 512);
-    GGML_ASSERT(decision_prompt_budget(-1, 1, 512) == (size_t) DECISION_QUEUE_CAP_PER_SLOT * 512);
+    GGML_ASSERT(decision_prompt_budget(-1, 4, 512) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT * 4 * 512);
+    GGML_ASSERT(decision_prompt_budget(-1, 1, 512) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT * 512);
     // a server with no slot still derives one slot's worth
-    GGML_ASSERT(decision_prompt_budget(-1, 0, 512) == (size_t) DECISION_QUEUE_CAP_PER_SLOT * 512);
+    GGML_ASSERT(decision_prompt_budget(-1, 0, 512) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT * 512);
 
     GGML_ASSERT(decision_prompt_budget(8, 4, 512) == 8);
     GGML_ASSERT(decision_prompt_budget(1, 4, 512) == 1);
@@ -1763,7 +2014,7 @@ static void test_decision_prompt_budget_is_a_bound() {
     // a slot context of zero must not derive 0, which build_tasks would read as unlimited: the
     // smallest budget is one slot of one context, the same way no slot still derives one slot's cap
     GGML_ASSERT(decision_prompt_budget(-1, 4, 0) != 0);
-    GGML_ASSERT(decision_prompt_budget(-1, 4, 0) == (size_t) DECISION_QUEUE_CAP_PER_SLOT * 4);
+    GGML_ASSERT(decision_prompt_budget(-1, 4, 0) == (size_t) common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT * 4);
 
     // the derivation saturates rather than wrapping: a wrapped budget would refuse every request
     const int largest = std::numeric_limits<int>::max();
@@ -1826,6 +2077,8 @@ int main() {
     test_averaging_rejects_a_mismatched_result();
     test_joint_scores_are_sliced_in_order();
     test_queue_depth_counts_decision_tasks();
+    test_nested_grouping_throws();
+    test_id_exhaustion_throws();
     test_try_post_gates_on_depth();
     test_try_post_reports_depth_at_refusal();
     test_queued_count_stops_at_cap();
@@ -1837,6 +2090,12 @@ int main() {
     test_task_budget_is_a_bound();
     test_task_count_is_predicted_without_rendering();
     test_over_count_request_is_refused_before_render();
+    test_json_depth_guard();
+    test_choice_option_precheck();
+    test_questions_max_boundary();
+    test_videos_variants();
+    test_duplicate_task_id_throws();
+    test_variant_and_averaging_guards();
     printf("test-server-decision: OK\n");
     return 0;
 }

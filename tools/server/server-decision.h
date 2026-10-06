@@ -208,6 +208,16 @@ server_decision_tasks server_decision_group_tasks(std::vector<server_task> && ta
 size_t decision_saturating_add(size_t a, size_t b);
 size_t decision_saturating_mul(size_t a, size_t b);
 
+// iterative depth check over attacker JSON with an explicit stack, so nesting cannot overflow
+// the call stack. Runs on the parsed body before any dump() or recursive walk.
+void decision_check_json_depth(const json & val, const char * field = "body");
+
+// depth check on the raw body text before json::parse, whose own recursion is unbounded
+void decision_check_raw_json_depth(const std::string & body);
+
+// sum of string bytes without building a dump string, so the pre-flight itself cannot allocate
+size_t decision_json_content_bytes(const json & val);
+
 // how much of a LAYA prompt the head window keeps: option and question tokens before and after clipping to max_head_tokens. Pure, so tests pin the warning values without a model.
 struct decision_head_clip {
     size_t n_option_max    = 0; // per-option cap both clippings agree on
@@ -223,10 +233,6 @@ decision_head_clip decision_clip_head(const std::vector<size_t> & option_sizes, 
 
 // prompt tokens billed for a prompt sum minus its shared discount, floored at zero
 size_t decision_usage_input_tokens(size_t n_tokens_sum, size_t n_shared);
-
-// how many queued decision tasks the derived admission cap allows: whole waves of slots, so a server with more slots queues proportionally more
-// alias of the common constant, so the CLI help and the server cannot drift apart
-inline constexpr int DECISION_QUEUE_CAP_PER_SLOT = common_params::COMMON_DECISION_QUEUE_CAP_PER_SLOT;
 
 // the queued decision tasks at which /v1/systemone starts refusing, a parent and each child counting one.
 size_t decision_queue_cap(int cap, int n_parallel);

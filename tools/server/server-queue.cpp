@@ -29,10 +29,20 @@ static bool task_resets_idle_timer(server_task_type type) {
 
 // the weight a task adds to the queued count of counted_type: one if the task is that type, plus one per matching child
 // grouping is one level only (parent with children, children have no children), so one level is exact
+static void server_queue_check_nesting(const server_task & task) {
+    for (const auto & child : task.child_tasks) {
+        if (!child.child_tasks.empty()) {
+            throw std::runtime_error("decision grouping nests one level only: a child task has its own children");
+        }
+    }
+}
+
 static size_t task_weight(const server_task & task, server_task_type counted_type) {
     size_t weight = task.type == counted_type ? 1 : 0;
     for (const auto & child : task.child_tasks) {
-        GGML_ASSERT(child.child_tasks.empty() && "decision grouping nests one level only");
+        if (!child.child_tasks.empty()) {
+            throw std::runtime_error("decision grouping nests one level only: a child task has its own children");
+        }
         weight += child.type == counted_type ? 1 : 0;
     }
     return weight;
@@ -41,6 +51,7 @@ static size_t task_weight(const server_task & task, server_task_type counted_typ
 int server_queue::post(server_task && task, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     GGML_ASSERT(task.id != -1);
+    server_queue_check_nesting(task);
     // if this is cancel task make sure to clean up pending tasks
     if (task.type == SERVER_TASK_TYPE_CANCEL) {
         cleanup_pending_task(task.id_target);
@@ -61,10 +72,25 @@ int server_queue::post(server_task && task, bool front) {
 }
 
 void server_queue::post_locked(std::vector<server_task> && tasks, bool front) {
+    // refuse a deeper batch before it is enqueued, so one bad batch cannot poison later counts
+    for (const auto & task : tasks) {
+        server_queue_check_nesting(task);
+    }
+    size_t need = 0;
+    for (const auto & task : tasks) {
+        if (task.id == -1) {
+            need++;
+        }
+    }
+    if (need > 0 && (int64_t) id + (int64_t) need > (int64_t) INT_MAX) {
+        throw std::runtime_error("task id exhausted: the id counter reached INT_MAX");
+    }
     bool reset_timer = false;
     for (auto & task : tasks) {
         if (task.id == -1) {
-            GGML_ASSERT(id < INT_MAX && "task id wrapped");
+            if (id >= INT_MAX) {
+                throw std::runtime_error("task id exhausted: the id counter reached INT_MAX");
+            }
             task.id = id++;
         }
         // if this is cancel task make sure to clean up pending tasks
@@ -147,7 +173,9 @@ void server_queue::defer(server_task && task) {
 
 int server_queue::get_new_id() {
     std::unique_lock<std::mutex> lock(mutex_tasks);
-    GGML_ASSERT(id < INT_MAX && "task id wrapped");
+    if (id >= INT_MAX) {
+        throw std::runtime_error("task id exhausted: the id counter reached INT_MAX");
+    }
     int new_id = id++;
     return new_id;
 }
@@ -589,6 +617,10 @@ void server_response_reader::post_task(server_task && task, bool front) {
 
 void server_response_reader::register_tasks(std::vector<server_task> & tasks) {
     GGML_ASSERT(id_tasks.empty() && "register_tasks() can only be called once per reader");
+    // refuse a deeper batch before ids are spent or results are awaited
+    for (const auto & task : tasks) {
+        server_queue_check_nesting(task);
+    }
     // post_locked() assigns ids for -1, but the ids must be unique before get_list_id() collapses them
     for (auto & task : tasks) {
         if (task.id == -1) {
@@ -625,8 +657,18 @@ void server_response_reader::register_tasks(std::vector<server_task> & tasks) {
 }
 
 void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool front) {
-    register_tasks(tasks);
-    queue_tasks.post(std::move(tasks), front);
+    try {
+        register_tasks(tasks);
+        queue_tasks.post(std::move(tasks), front);
+    } catch (...) {
+        // register_tasks can throw after populating id_tasks (duplicate id), and post can throw
+        // after registration; either way nothing was queued, so drop the whole registration.
+        // Removing ids that were never added is a no-op.
+        queue_results.remove_waiting_task_ids(id_tasks);
+        id_tasks.clear();
+        states.clear();
+        throw;
+    }
 }
 
 bool server_response_reader::try_post_tasks(std::vector<server_task> && tasks,
@@ -634,12 +676,19 @@ bool server_response_reader::try_post_tasks(std::vector<server_task> && tasks,
                                             size_t                      cap,
                                             bool                        front,
                                             size_t *                    depth_at_refusal) {
-    register_tasks(tasks);
-    if (!queue_tasks.try_post(std::move(tasks), counted_type, cap, front, depth_at_refusal)) {
+    try {
+        register_tasks(tasks);
+        if (!queue_tasks.try_post(std::move(tasks), counted_type, cap, front, depth_at_refusal)) {
+            queue_results.remove_waiting_task_ids(id_tasks);
+            id_tasks.clear();
+            states.clear();
+            return false;
+        }
+    } catch (...) {
         queue_results.remove_waiting_task_ids(id_tasks);
         id_tasks.clear();
         states.clear();
-        return false;
+        throw;
     }
     return true;
 }
