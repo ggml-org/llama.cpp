@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
+	import { ModelsSelectorDropdown } from '$lib/components/app';
+	import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
 	import { getConversationModel } from '$lib/utils';
 
 	interface Props {
@@ -143,28 +143,17 @@
 		}
 	});
 
-	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorSheet | undefined =
-		$state(undefined);
+	let selectorModelRef: ModelsSelectorDropdown | undefined = $state(undefined);
 
 	export function open() {
 		selectorModelRef?.open();
 	}
 </script>
 
-{#if deviceStore.isMobile}
-	<ModelsSelectorSheet
-		bind:this={selectorModelRef}
-		currentModel={selectorModel}
-		disabled={disabled || isOffline}
-		{forceForegroundText}
-		{useGlobalSelection}
-	/>
-{:else}
-	<ModelsSelectorDropdown
-		bind:this={selectorModelRef}
-		currentModel={selectorModel}
-		disabled={disabled || isOffline}
-		{forceForegroundText}
-		{useGlobalSelection}
-	/>
-{/if}
+<ModelsSelectorDropdown
+	bind:this={selectorModelRef}
+	currentModel={selectorModel}
+	disabled={disabled || isOffline}
+	{forceForegroundText}
+	{useGlobalSelection}
+/>

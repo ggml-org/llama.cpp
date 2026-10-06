@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Heart, HeartOff, Info } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
-	import { modelsStore, uiStore } from '$lib/stores';
+	import { deviceStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -29,7 +29,11 @@
 		class="h-5 w-5 hover:text-foreground"
 		icon={Info}
 		iconSize="h-4 w-4"
-		onclick={() => uiStore.openModelsManager(option.id)}
+		onclick={() =>
+			// a phone has no manager: its information dialog takes the icon
+			deviceStore.isMobile
+				? uiStore.openModelInformation(option)
+				: uiStore.openModelsManager(option.id)}
 		tooltip="Manage model"
 		tooltipAsTitle
 	/>

@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
+		ChatFormActionReasoning,
 		ChatFormActionRecord,
 		ChatFormActionsAdd,
 		ChatFormActionSubmit,
@@ -31,7 +32,6 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -43,7 +43,6 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
@@ -135,9 +134,6 @@
 		get onFileUpload() {
 			return onFileUpload;
 		},
-		get onMcpSettingsClick() {
-			return onMcpSettingsClick;
-		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;
 		}
@@ -160,6 +156,8 @@
 		{/if}
 
 		{#if showModelSelector}
+			<ChatFormActionReasoning />
+
 			<ChatFormActionModels
 				bind:hasAudioModality
 				bind:hasModelSelected
@@ -177,7 +175,7 @@
 
 	{#if isReasoning}
 		<Button
-			class="group h-8 w-8 rounded-full p-0"
+			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
 			title="Skip reasoning"
@@ -194,7 +192,7 @@
 
 	{#if isLoading && !canSubmit}
 		<Button
-			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
+			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9 hover:bg-destructive/10!"
 			onclick={onStop}
 			type="button"
 			variant="secondary"
