@@ -353,6 +353,8 @@ int main(int argc,char ** argv) {
         if (!std::strcmp(argv[i],"--pascal")) baseline=610;
         if (!std::strcmp(argv[i],"--sm75")) baseline=750;
         if (!std::strcmp(argv[i],"--sm86")) baseline=860;
+        if (!std::strcmp(argv[i],"--sm89")) baseline=890;
+        if (!std::strcmp(argv[i],"--sm120")) baseline=1200;
     }
 #ifdef KV_STREAM_TILE_NATIVE_TEST
     if (baseline && !kv_stream_test_is_arch_only(baseline)) return 77;

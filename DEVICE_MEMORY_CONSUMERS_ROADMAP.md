@@ -2,11 +2,27 @@
 
 Saved: 2026-09-10
 
-Last source review: 2026-10-05 for shared target/MTP workspace admission; earlier checkpoint evidence is unchanged.
+Last source review: 2026-10-06 for C5b qualification after the shared-workspace hardening rebase; earlier checkpoint evidence is unchanged.
 
 ## Status and how to resume
 
-Current focus: milestone 7 is complete through `143b3fd05`, merged into `feature/adaptive-kv-stream-v2` at `a0ddf8719`. Consumer CUDA compatibility is being developed on `compat/various-arch-support-v2`, followed by comprehensive arena-size verification. C1a is committed at `c24565acf`; C1b at `7ed51795d`; C2a at `86334e695`; C2b at `8e8f77446`; C3a at `f0b8ce2cb`; C3b at `3ec1b8841`; C4a at `386fee9dc`; C4b at `7b4d57390`; C4c at `774d22244`; C4d at `40c2ce93d`. C5a's SM75/SM86 admission/resource fixes and code-path qualification are complete for user review. The accepted SM61 tile bound is unchanged; the new consumer TG1 regression guard is 1e-8 after measuring a 7.45e-9 maximum, and consumer MMA comparisons remain byte-exact. SM61/SM75/SM86 evidence is forward-JIT on newer hardware, not actual older-device acceptance. The `C` stage identifiers below are independent of existing milestone numbers; milestone 8's encoder-free roadmap is not renumbered or started.
+Current focus: milestone 7 and shared-workspace hardening (`21ac0353c`) are merged into `feature/adaptive-kv-stream-v2` at `a44fc0e0c`. `compat/various-arch-support-v2` is rebased onto that commit; C5a is committed at `e6beee78f`, and C5b qualification is complete for user review. C6 is next after the user's commit. Comprehensive arena-size verification follows the CUDA compatibility work. The accepted SM61 tile bound and 1e-8 consumer vector regression guard are unchanged; consumer MMA comparisons remain byte-exact. Forward-JIT evidence on newer hardware is not actual older-device acceptance. The `C` stage identifiers are independent of existing milestone numbers; milestone 8 is not renumbered or started.
+
+Older evidence sections retain their original commit IDs. The rebase mapping is:
+
+| Stage | Original | Rebased |
+| --- | --- | --- |
+| C1a | c24565acf | 166121069 |
+| C1b | 7ed51795d | 5e1cd258f |
+| C2a | 86334e695 | 7901adbde |
+| C2b | 8e8f77446 | f269138b8 |
+| C3a | f0b8ce2cb | f210494a0 |
+| C3b | 3ec1b8841 | 1a573e3ac |
+| C4a | 386fee9dc | adb64391a |
+| C4b | 7b4d57390 | b9e1b35de |
+| C4c | 774d22244 | f5f791a58 |
+| C4d | 40c2ce93d | 35bc9ea73 |
+| C5a | 081193bec | e6beee78f |
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
@@ -627,7 +643,7 @@ Do not force equal launch dimensions across generations: query actual SM resourc
 
 #### C5a implementation and validation
 
-Status: development implementation complete, pending user commit. Base is `40c2ce93d`; branch is `compat/various-arch-support-v2`. Actual SM75/SM86 hardware acceptance remains pending. This qualifies the existing kernel families and fixes demonstrated admission/resource gaps, not a new attention algorithm or generation-specific throughput project.
+Status: committed at `081193bec`. Base is `40c2ce93d`; branch is `compat/various-arch-support-v2`. Actual SM75/SM86 hardware acceptance remains pending. This qualifies the existing kernel families and fixes demonstrated admission/resource gaps, not a new attention algorithm or generation-specific throughput project.
 
 - The TG2 admission helper incorrectly required CC800 for the existing Q8_0/Q4_0 MMA path. Its baseline is now CC750, with stock selection and compiled-feature checks still authoritative. TG1 vector choices and other unsupported TG2 pairs remain unchanged; other KV pairs are not automatically declared compatible with the MMA span wrapper.
 - MMA requirements and execution now resolve the same compiled streamed specialization. Preflight checks its static plus dynamic shared memory against the device's opt-in per-block limit, maximum threads, attribute setup and nonzero occupancy before descriptor upload or attention launch. Failed probes return `unsupported_launch_resources` and preserve the previous requirements/public output instead of reaching a late `CUDA_CHECK` on streamed-kernel attribute setup. Prototype padding, GQA-eligible strides and stock-family selection are also checked; nonpadded metadata sizing requests and unsupported pairs/geometries fail without silently selecting a different topology.
@@ -643,6 +659,36 @@ TDD and accepted evidence:
 - Existing modern span tests remain green (**17 / 1,603**). Host attention planning passes **12 / 603**, and the selected host regression matrix remains **37 / 37**. Compiled-feature/staging reports pass for both single-target builds and the normal SM120 Release/Debug metadata fixtures. Production is restored on its original image/arguments and `/health` is `ok`; checkpoint/cache configuration is not changed.
 
 Artifacts are `/tmp/cuda-c5a-*`, including host/resource red and green logs, compiled-feature reports, tightened memcheck matrices, real MTP/target/resume logs and the final modern/host regressions. Build directories are `build-cuda-c5a-sm75`, `build-cuda-c5a-sm86` and the existing modern/Debug profiles, all using this same source checkout. C5a changes are staged for user review without an assistant commit/push; unrelated benchmarks are untouched. C5b is next after user review/commit. Actual Turing/Ampere hardware, Windows/MSVC, other live geometries/pairs and representative throughput qualification remain unqualified; those limits are not converted into passes by forward-JIT results.
+
+#### C5b qualification resumed after shared-workspace hardening
+
+Base is rebased C5a `e6beee78f`; branch remains `compat/various-arch-support-v2`. C5b is complete for user review, with the hardware limitations below. The original pre-C5a `40c2ce93d` SM120 and SM89 binaries are retained under `/tmp/cuda-c5b-before120-IPQJLA` and `/tmp/cuda-c5b-before89-NCUuS0` for standalone operator evidence; they lack the hardening fix and are not used for resumed live comparisons. The matched live baseline is rebased C4d `35bc9ea73`, built from this same source checkout in `build-cuda-c5b-before120-hardened`. Both live variants include `21ac0353c`. `LD_LIBRARY_PATH` and process-map checks isolate each binary's libraries; no second source worktree is created.
+
+- Extended the single-target tests to SM89/SM120, retaining optimized TG1/TG2 vector and TG3/TG4 MMA selection, rather than routing modern requests onto tile. Both initial qualification matrices pass **6 / 1,285**. Unsupported `--cuda-sm...` names now fail rather than silently running only host tests. The corresponding compiled-feature reports pass; actual SM89 hardware remains unqualified.
+- Two fixed-input SM120 standalone A/B runs cover TG1/TG4, one/two/three spans and 8K/32K/64K/128K plus a final-tail context. Median streamed operator timings differ approximately -0.7% to +1.93% versus the pre-C5a baseline; no >5% operator regression is observed. These are short, warmed, eager operator timings, not full-model throughput acceptance or a speed guarantee.
+- The fixed-arena IQ4/Q8/Q4/MTP=3 8K live pilot fails during prefill at 7,424 tokens in both the baseline and current builds. This is not a C5a speed regression. Target compute occupies the first **79,978,752 bytes**, but the draft compute lease can occupy **84,172,928 bytes**. `pool_offset()` deliberately permits lending all bytes before the elastic KV pool, including attention and writer scratch. MTP prefill needs the attention scratch concurrently for its encoded KV gather. Native output/conversion storage therefore overlaps that live gather region; the existing CUDA range guard rejects input K before launching instead of permitting corruption. Temporary diagnostics established the range relation and were removed; the logs are retained under `/tmp/cuda-c5b-*-diagnostic-pilot`.
+
+Named prerequisite **C5b.P1, serial compute-prefix capacity and live auxiliary-scratch separation**, is implemented and committed on V2 at `21ac0353c`, merged at `a44fc0e0c`. The compatibility rebase incorporates its disjoint graph/gather/writer grants, per-phase target/draft maxima, graph-binding revision tracking and fail-closed publication behavior. The original failed pilot is diagnostic history, not a performance sample. The matched A/B comparison now holds the hardening code, model, corpus, Q8/Q4 KV, 256/256 batch sizes, MTP=3, no-UVM mode, 2,240 MiB arena and 256 generated tokens constant. Representative planned contexts are 8K/96K/128K/160K; actual streaming/layout state must be recorded rather than assumed from the context label.
+
+Accepted post-rebase qualification:
+
+- Each single-target SM89/SM120 matrix passes **6 tests / 1,285 assertions**, including memcheck with **zero errors**. Stock selection remains vector for quantized TG1/TG2 and MMA for TG3/TG4. Aligned complete/wrapped TG2 vector cases and MMA cases require identical float bits; unaligned regional vector reductions retain the 1e-8 guard, with a measured maximum **7.45058e-9**. This extends coverage to an existing modern vector path; it does not change kernel arithmetic or promise byte equality for all vector partitions.
+- Compiled-feature reports preserve the two-stage `cp.async` configuration for SM89 and SM120. The normal SM120 profile retains VMM/capture support; the eager SM89 build explicitly disables them, as in its retained operator baseline. SM89 execution and its scoped CC metadata override are on the RTX 5070 Ti, not actual Ada hardware. Unknown `--cuda-sm...` test names return 2 rather than silently passing host-only checks.
+- Two SM89 standalone A/B runs compare 30 TG1/TG4, one/two/three-span cases at 8K/32K/64K/128K and a final tail. Median current/baseline timing changes range from **-0.51% to +2.29%**, with no >5% regression. The retained SM120 standalone evidence remains approximately **-0.7% to +1.93%**. These are warmed operator timings, not real older-GPU throughput claims.
+- The rebuilt SM120 real-model borrowing/recovery/long-gather control passes **58 assertions** and preserves exact target logits/recurrent state. Host planning remains **12 / 603**. A complete server rebuild includes the implementation library, avoiding stale private API/ABI mixtures.
+
+Matched live A/B: IQ4_XS, Q8_0/Q4_0 target/draft KV, MTP=3, 256/256 batches, matching context capacity, 2,240 MiB arena, UVM disabled, same repository article corpus, and 256 generated tokens. Baseline/current have the same hardening fix and compiler/toolkit; startup time is excluded. Each row is one sufficiently long measured pair; sub-percent changes are not claimed as improvements. No suspicious >5% regression required a repeat.
+
+| Context capacity | Baseline prefill t/s | Current prefill t/s | Baseline decode t/s | Current decode t/s | Final resident pages/layer | Final ring slots |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8,192 | 1,578.30 | 1,577.69 | 94.31 | 95.01 | 320 | 22 |
+| 98,304 | 877.58 | 876.42 | 69.52 | 69.58 | 316 | 88 |
+| 131,072 | 733.78 | 733.23 | 51.55 | 51.59 | 307 | 240 |
+| 163,840 | 622.70 | 622.53 | 35.52 | 35.56 | 299 | 376 |
+
+Every pair has identical **256 output token IDs**, prompt-token hash, MTP acceptance, actual decode KV pool and final partition layout. Prefill changes range **-0.14% to -0.03%**; decode changes **+0.08% to +0.75%**. The 8K run is all-resident despite reserved ring capacity; 96K/128K/160K have 383/511/639 active pages and actual streaming. These distinguish no/light/moderate/heavy ring pressure without increasing the pool to hide a regression. Actual SM89 hardware, Pascal/Volta/Turing/Ampere hardware, Windows/MSVC and other configurations remain unqualified; C6 still owns consolidated live acceptance and diagnostics.
+
+Artifacts are `/tmp/cuda-c5b-hardened-*`, including numerical/feature reports, the SM89 operator pairs, `/tmp/cuda-c5b-hardened-live-sm120/context-*/repeat-0/{before,after}/results.jsonl`, logs and retained output IDs. The existing sweep performs requests; the temporary private A/B driver only selects its binary and retains outputs/library-map checks. No benchmark corpus, checkpoint/cache, arena policy or CUDA arithmetic changes are added in C5b. Production is restored on its original image/configuration. Only C5b tests and this roadmap are staged for user review; unrelated benchmark files and both saved C5b stashes are retained, and no assistant commit/push is made. The original compatibility head is recoverable as `backup/compat-before-hardening-20261006`.
 
 ### Phase C6: end-to-end acceptance and handoff
 
@@ -668,7 +714,7 @@ No mandatory full-context sweep after every tiny change. Start with targeted fai
 
 The first implementation step is **C1a**, not removing the Pascal guard or rewriting stock dispatch. Capture existing behavior, define and test the minimal stock-selection/streamed-requirements adapter, and leave live kernel choices unchanged. A development branch such as `feature/cuda-consumer-compat` may be created when implementation is explicitly started; saving this plan does not create it.
 
-Implementation status: C1a/C1b/C2a/C2b/C3a/C3b/C4a/C4b/C4c/C4d are committed. C5a is development-complete for user review under the unchanged SM61 tile bound and the tighter 1e-8 consumer TG1 regression guard; C5b-C6 remain planned. Actual-hardware acceptance remains pending: SM61/SM75/SM86 forward-JIT checks on newer hardware are not older-GPU runtime qualification. Actual GTX 10-series/Turing/Ampere access, or community testers who can run the provided fixtures, must be arranged before those devices are advertised as supported. Synthetic attention tests avoid requiring the production IQ4 weights to fit a smaller card; full-model limits are documented separately.
+Implementation status: C1a-C5a are committed and rebased onto hardened V2; C5b is complete for user review with matched fixed-budget live timings and its prerequisite resolved. C6 remains planned. Actual-hardware acceptance remains pending: SM61/SM75/SM86/SM89 forward-JIT checks on newer hardware are not older-GPU runtime qualification. Actual older-device access, or community testers who can run the provided fixtures, must be arranged before those devices are advertised as supported. Synthetic attention tests avoid requiring the production IQ4 weights to fit a smaller card; full-model limits are documented separately.
 
 ## Subsequent work, outside milestones 4-8
 

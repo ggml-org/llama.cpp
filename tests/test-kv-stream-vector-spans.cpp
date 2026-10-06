@@ -312,7 +312,10 @@ static int benchmark_spans() {
 
 int main(int argc, char ** argv) {
     const int consumer=argc > 1 && !std::strcmp(argv[1],"--cuda-sm75") ? 750 :
-        argc > 1 && !std::strcmp(argv[1],"--cuda-sm86") ? 860 : 0;
+        argc > 1 && !std::strcmp(argv[1],"--cuda-sm86") ? 860 :
+        argc > 1 && !std::strcmp(argv[1],"--cuda-sm89") ? 890 :
+        argc > 1 && !std::strcmp(argv[1],"--cuda-sm120") ? 1200 : 0;
+    if (argc > 1 && !std::strncmp(argv[1],"--cuda-sm",9) && !consumer) return 2;
     ggml_backend_ptr consumer_backend;
 #ifdef KV_STREAM_PASCAL_CUDA_TEST
     if (consumer) {
@@ -434,7 +437,8 @@ int main(int argc, char ** argv) {
                     if (!t.assert_true(ggml_kv_stream_span_plan_get_view(storage->plan,view))) return;
                     ggml_cuda_kv_stream_attention_plan plan;
                     if (!t.assert_true(query(backend.get(),&op,&view,style::spanned,plan) == status::success)) return;
-                    t.assert_true(plan.family == (queries == 1 ? family::vector : family::mma));
+                    const bool vector=queries == 1 || (consumer >= 890 && queries == 2);
+                    t.assert_true(plan.family == (vector ? family::vector : family::mma));
                     size_t bytes=0;
                     if (!t.assert_true(get()->spans_workspace(backend.get(),&op,storage->plan,bytes))) return;
                     t.assert_equal(plan.requirements.scratch_bytes,bytes);
@@ -447,8 +451,9 @@ int main(int argc, char ** argv) {
                     ggml_backend_synchronize(backend.get());
                     const auto actual=input.read();
                     t.out << "CC" << consumer << " GQA" << ratio << " TG" << queries << " active=" << active << " wrapped=" << wrapped << " exact=" << same_float_bits(expected,actual) << '\n';
-                    // Regional TG1 reductions are not bit-exact; keep the tighter observed-error regression guard.
-                    if (queries >= 2 || (!wrapped && active%256 == 0)) t.assert_true(same_float_bits(expected,actual));
+                    // Regional vector reductions can differ on unaligned tails; keep the observed-error regression guard.
+                    if (!vector || (queries == 2 && active%256 == 0) || (!wrapped && active%256 == 0))
+                        t.assert_true(same_float_bits(expected,actual));
                     else close_values(t,expected,actual,1e-8f);
                 }
             }

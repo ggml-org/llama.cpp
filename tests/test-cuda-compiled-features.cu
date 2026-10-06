@@ -12,7 +12,7 @@ int ggml_cuda_get_device() { std::abort(); }
 #error "SM61 must use the stock slow-FP16, non-MMA, non-cp.async feature set"
 #endif
 #endif
-#if __CUDA_ARCH__ == 750 || __CUDA_ARCH__ == 860
+#if __CUDA_ARCH__ == 750 || __CUDA_ARCH__ == 860 || __CUDA_ARCH__ == 890 || __CUDA_ARCH__ == 1200
 static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,2) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep stock generation-specific staging");
 static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,2,8) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG2 stock staging");
 static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,8) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG3/TG4 stock staging");
