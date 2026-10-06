@@ -193,8 +193,8 @@ struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
 
 // stretch the image to a grid of tiles, add a thumbnail if there is more than 1 tile
 // ref: https://github.com/huggingface/transformers/blob/main/src/transformers/models/cohere2_vision/image_processing_cohere2_vision.py
-struct mtmd_image_preprocessor_cohere2vision : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_cohere2vision(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
+struct mtmd_image_preprocessor_cohere2v : mtmd_image_preprocessor_llava_uhd {
+    mtmd_image_preprocessor_cohere2v(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
 };

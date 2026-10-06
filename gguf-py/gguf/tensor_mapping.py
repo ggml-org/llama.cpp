@@ -2253,17 +2253,20 @@ class TensorNameMap:
             "model.vision.linear_proj.dense_h_to_4h", # cogvlm
             "visual.merger.up_proj", # glm4v
             "model.merger.mlp.0.linear_1", # minicpmv4_6
+            "model.multi_modal_projector.linear_1_up", # cohere2v (split from fused linear_1)
         ),
 
         MODEL_TENSOR.V_MM_DOWN: (
             "model.vision.linear_proj.dense_4h_to_h", # cogvlm
             "visual.merger.down_proj", # glm4v
             "model.merger.mlp.0.linear_2", # minicpmv4_6
+            "model.multi_modal_projector.linear_2", # cohere2v
         ),
 
         MODEL_TENSOR.V_MM_GATE: (
             "model.vision.linear_proj.gate_proj", # cogvlm
             "visual.merger.gate_proj", # glm4v
+            "model.multi_modal_projector.linear_1_gate", # cohere2v (split from fused linear_1)
         ),
 
         MODEL_TENSOR.V_TOK_BOI: (

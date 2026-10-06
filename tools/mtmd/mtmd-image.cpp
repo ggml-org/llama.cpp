@@ -1143,10 +1143,10 @@ mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_i
 }
 
 //
-// mtmd_image_preprocessor_cohere2vision
+// mtmd_image_preprocessor_cohere2v
 //
 
-mtmd_image_preproc_out mtmd_image_preprocessor_cohere2vision::preprocess(const clip_image_u8 & img) const {
+mtmd_image_preproc_out mtmd_image_preprocessor_cohere2v::preprocess(const clip_image_u8 & img) const {
     const auto inst = get_slice_instructions(img.get_size());
     auto sliced = slice_image(img, inst);
 
@@ -1163,7 +1163,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_cohere2vision::preprocess(const c
     return output;
 }
 
-mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_cohere2vision::get_slice_instructions(const clip_image_size & original_size) const {
+mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_cohere2v::get_slice_instructions(const clip_image_size & original_size) const {
     const int tile = hparams.image_size;
 
     // pick the grid with the least upscale; if all grids need downscale, pick the one with the least downscale

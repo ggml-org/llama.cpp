@@ -188,7 +188,7 @@ class Cohere2MoeModel(TextModel):
 class Cohere2VisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.COHERE2VISION)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.COHERE2V)
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams["layer_norm_eps"])
         self.gguf_writer.add_vision_projector_scale_factor(self.global_config["downsample_factor"])
         self.gguf_writer.add_vision_preproc_max_tiles(self.preprocessor_config["max_patches"])
@@ -207,14 +207,10 @@ class Cohere2VisionModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        suffix = ".bias" if name.endswith(".bias") else ".weight"
         if name.startswith("model.multi_modal_projector.linear_1."):
             # HF: x, gate = linear_1(h).chunk(2, dim=-1); linear_2(silu(gate) * x)
             up, gate = data_torch.chunk(2, dim=0)
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_UP, suffix=suffix), up)
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_GATE, suffix=suffix), gate)
-            return
-        if name.startswith("model.multi_modal_projector.linear_2."):
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_DOWN, suffix=suffix), data_torch)
+            yield from super().modify_tensors(up, name.replace("linear_1", "linear_1_up"), bid)
+            yield from super().modify_tensors(gate, name.replace("linear_1", "linear_1_gate"), bid)
             return
         yield from super().modify_tensors(data_torch, name, bid)
