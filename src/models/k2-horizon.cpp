@@ -219,6 +219,9 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
 
     inpL = build_inp_embd(model.tok_embd);
 
+    // Copy the embeddings before group norm reshapes them, so the Meta backend doesn't get a view of CPU memory.
+    inpL = ggml_cont(ctx0, inpL);
+
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
