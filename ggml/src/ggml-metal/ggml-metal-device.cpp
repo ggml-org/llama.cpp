@@ -1888,6 +1888,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_bias,
         bool    has_scap,
         bool    has_kvpad,
+        bool    has_kv_rows,
         int32_t nsg,
         bool    use_kv_f16,
         int32_t ns10,
@@ -1911,13 +1912,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
             dk,
             dv);
 
-    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d",
+    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_kvrows=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d",
             base,
             has_mask,
             has_sinks,
             has_bias,
             has_scap,
             has_kvpad,
+            has_kv_rows,
             bc_mask,
             ns10,
             ns20,
@@ -1932,6 +1934,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_cv_set_bool(cv, has_bias,  FC_FLASH_ATTN_EXT + 2);
         ggml_metal_cv_set_bool(cv, has_scap,  FC_FLASH_ATTN_EXT + 3);
         ggml_metal_cv_set_bool(cv, has_kvpad, FC_FLASH_ATTN_EXT + 4);
+        ggml_metal_cv_set_bool(cv, has_kv_rows, FC_FLASH_ATTN_EXT + 5);
 
         ggml_metal_cv_set_bool(cv, bc_mask, FC_FLASH_ATTN_EXT + 10);
 
@@ -1976,6 +1979,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
         bool    has_scap,
         bool    has_kvpad,
         bool    has_sparse,
+        bool    has_kv_rows,
         int32_t nqpsg,
         int32_t ne,
         int32_t nsg,
@@ -2005,7 +2009,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
             dv,
             qne_suffix);
 
-    snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_sparse=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
+    snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_sparse=%d_kvrows=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
             base,
             has_mask,
             has_sinks,
@@ -2013,6 +2017,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
             has_scap,
             has_kvpad,
             has_sparse,
+            has_kv_rows,
             ns10,
             ns20,
             nsg, nwg);
@@ -2027,6 +2032,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
         ggml_metal_cv_set_bool(cv, has_scap,  FC_FLASH_ATTN_EXT_VEC + 3);
         ggml_metal_cv_set_bool(cv, has_kvpad,  FC_FLASH_ATTN_EXT_VEC + 4);
         ggml_metal_cv_set_bool(cv, has_sparse, FC_FLASH_ATTN_EXT_VEC + 5);
+        ggml_metal_cv_set_bool(cv, has_kv_rows, FC_FLASH_ATTN_EXT_VEC + 6);
 
         ggml_metal_cv_set_int32(cv, ns10, FC_FLASH_ATTN_EXT_VEC + 20);
         ggml_metal_cv_set_int32(cv, ns20, FC_FLASH_ATTN_EXT_VEC + 21);
