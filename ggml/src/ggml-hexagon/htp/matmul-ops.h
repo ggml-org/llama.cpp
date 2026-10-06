@@ -38,11 +38,11 @@ extern "C" {
 //   vector 2: bit g set where the hmask bit of group g is clear (quant = low 2 bits - 4)
 //   vector 3: fp16 scales per row, d * (scales[] - 32): k 0..15 in lanes 0..31, k 16..31 in lanes 32..63
 #define HTP_MM_WEIGHT_TILE_SIZE_Q3_K   512
-// Q2_K native 2-bit tile, vrmpy-ready like Q6_K
-//   vectors 0..1: unsigned 2-bit quants, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   vector 2: fp16 scales per row, d * (scales[] & 0xF), same lanes as Q3_K vector 3
-//   vector 3: fp16 offsets per row, -dmin * (scales[] >> 4), same lanes
-#define HTP_MM_WEIGHT_TILE_SIZE_Q2_K   512
+// Q2_K native 2-bit tile with the ggml scale bytes, vrmpy-ready like Q6_K (same bits per weight as block_q2_K)
+//   bytes   0..255: unsigned 2-bit quants, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
+//   bytes 256..319: scales[] bytes (min << 4 | scale), sub-block s of row r at 32 * s + r
+//   bytes 320..335: 8 fp16, tile j of a super-block: d (j < 4) or -dmin (j >= 4) of rows 8 * (j % 4) .. 8 * (j % 4) + 7
+#define HTP_MM_WEIGHT_TILE_SIZE_Q2_K   336
 
 // --- Weight Repacked Aligned Tile Sizes ---
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_0   640
@@ -53,7 +53,7 @@ extern "C" {
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q5_K   768
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q6_K   896
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q3_K   512
-#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q2_K   512
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q2_K   384
 
 // --- Activation Tiled Block Sizes (including padding) ---
 #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
