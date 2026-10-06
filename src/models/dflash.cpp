@@ -352,6 +352,10 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
         if (model.d2t) {
             // reduced draft vocab: scatter the bias to the target rows (base is -inf on the others)
             const int64_t n_draft_vocab = bias->ne[0];
+
+            GGML_ASSERT(model.d2t->type == GGML_TYPE_I64);
+            GGML_ASSERT(model.d2t->ne[0] == n_draft_vocab);
+
             ggml_tensor * full = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_blocks), 0.0f);
             bias = ggml_set_rows(ctx0, full,
                     ggml_reshape_3d(ctx0, bias,      1,             n_draft_vocab, n_blocks),
