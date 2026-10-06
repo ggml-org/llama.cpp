@@ -937,6 +937,7 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_COHERE2VISION:
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_PHI4:
@@ -1513,6 +1514,15 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
                         hparams.set_limit_image_tokens();
+                    } break;
+                case PROJECTOR_TYPE_COHERE2VISION:
+                    {
+                        hparams.image_pad_rf = PAD_NONE;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
+                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles);
+                        if (hparams.preproc_max_tiles <= 0 || hparams.preproc_max_tiles > 256) {
+                            throw std::runtime_error(string_format("%s: preproc_max_tiles (%d) must be in range [1, 256]\n", __func__, hparams.preproc_max_tiles));
+                        }
                     } break;
                 case PROJECTOR_TYPE_LFM2:
                     {
@@ -2762,6 +2772,15 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_IDEFICS3:
                 {
                     model.mm_fc_w = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
+                } break;
+            case PROJECTOR_TYPE_COHERE2VISION:
+                {
+                    model.mm_ffn_up_w   = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b   = get_tensor(string_format(TN_MM_UP,   "bias"));
+                    model.mm_ffn_gate_w = get_tensor(string_format(TN_MM_GATE, "weight"));
+                    model.mm_ffn_gate_b = get_tensor(string_format(TN_MM_GATE, "bias"));
+                    model.mm_ffn_down_w = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b = get_tensor(string_format(TN_MM_DOWN, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM2:
                 {
@@ -4226,6 +4245,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_GEMMA4V:
         case PROJECTOR_TYPE_GEMMA4UV:
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_COHERE2VISION:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
         case PROJECTOR_TYPE_LLAMA4:
@@ -5314,6 +5334,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_COHERE2VISION:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
         case PROJECTOR_TYPE_QWEN2A:
@@ -6064,6 +6085,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_GLM5V:
+        case PROJECTOR_TYPE_COHERE2VISION:
             return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_MIMO_AUDIO:
             return ctx->model.mm_2_w->ne[1];

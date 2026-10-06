@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("CohereForCausalLM")
@@ -180,3 +180,45 @@ class Cohere2MoeModel(TextModel):
         experts = [k for d in self._experts for k in d.keys()]
         if len(experts) > 0:
             raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Cohere2VisionForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] CohereLabs/command-a-vision-07-2025 is gated
+@ModelBase.example("hf-tiny-v2/tiny-random-Cohere2VisionForConditionalGeneration", "CohereLabs/command-a-plus-05-2026-bf16")
+class Cohere2VisionModel(MmprojModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.COHERE2VISION)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams["layer_norm_eps"])
+        self.gguf_writer.add_vision_projector_scale_factor(self.global_config["downsample_factor"])
+        self.gguf_writer.add_vision_preproc_max_tiles(self.preprocessor_config["max_patches"])
+        self.gguf_writer.add_vision_use_gelu(True)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".embeddings." in name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
+            return None
+        name = name.removeprefix("model.")
+        if not name.startswith(("vision_tower.vision_model.", "multi_modal_projector.")):
+            # newer transformers save the SigLIP tower without the "vision_model." level
+            name = name.replace("vision_tower.", "vision_tower.vision_model.", 1)
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        suffix = ".bias" if name.endswith(".bias") else ".weight"
+        if name.startswith("multi_modal_projector.linear_1."):
+            # HF: x, gate = linear_1(h).chunk(2, dim=-1); linear_2(silu(gate) * x)
+            up, gate = data_torch.chunk(2, dim=0)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_UP, suffix=suffix), up)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_GATE, suffix=suffix), gate)
+            return
+        if name.startswith("multi_modal_projector.linear_2."):
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_DOWN, suffix=suffix), data_torch)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
