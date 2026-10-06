@@ -70,6 +70,9 @@ struct server_http_context {
 
     std::atomic<bool> is_ready = false;
 
+    // set on an unrecoverable compute failure, every request is rejected after that
+    std::atomic<bool> has_error = false;
+
     // note: the handler should never throw exceptions
     using handler_t = std::function<server_http_res_ptr(const server_http_req & req)>;
     mutable std::unordered_map<std::string, handler_t> handlers;
