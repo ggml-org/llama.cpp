@@ -5172,6 +5172,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.DENSE_2_OUT, # LFM2-ColBert-350M
+        MODEL_TENSOR.TOKEN_TYPES, # decision head
+        MODEL_TENSOR.CLS,
+        MODEL_TENSOR.CLS_NORM,
+        MODEL_TENSOR.CLS_OUT,
     ],
     MODEL_ARCH.LFM2MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -6072,6 +6076,7 @@ class DecisionType:
     CLEF    = "clef"     # joint head over all questions, one score per option
     PPLX_DECIDER = "pplx-decider"  # same as openjev, label codes of 1 or 2 letters
     LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
+    D1OMNI  = "d1omni"   # same head as laya on a bidirectional LFM2 trunk, other prompt layout
 
 
 class VisionProjectorType:
@@ -6133,6 +6138,8 @@ class VisionProjectorType:
     GRANITE4_VISION = "granite4_vision"
     MUSE_GLIMMER   = "muse-glimmer"
     COHERE2V       = "cohere2v"
+    D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens
+    D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector
 
 
 # Items here are (block size, type size)

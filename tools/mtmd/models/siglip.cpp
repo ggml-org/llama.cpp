@@ -4,7 +4,7 @@ ggml_cgraph * clip_graph_siglip::build() {
     ggml_tensor * inp = build_inp();
 
     ggml_tensor * learned_pos_embd = model.position_embeddings;
-    if (proj_type == PROJECTOR_TYPE_LFM2 || proj_type == PROJECTOR_TYPE_PHI4) {
+    if (proj_type == PROJECTOR_TYPE_LFM2 || proj_type == PROJECTOR_TYPE_D1OMNI_V || proj_type == PROJECTOR_TYPE_PHI4) {
         learned_pos_embd = resize_position_embeddings();
     }
 
@@ -55,7 +55,7 @@ ggml_cgraph * clip_graph_siglip::build() {
         cur = build_mm(model.mm_2_w, cur);
         cur = ggml_add(ctx0, cur, model.mm_2_b);
 
-    } else if (proj_type == PROJECTOR_TYPE_LFM2) {
+    } else if (proj_type == PROJECTOR_TYPE_LFM2 || proj_type == PROJECTOR_TYPE_D1OMNI_V) {
         // pixel unshuffle block
         const int scale_factor = model.hparams.n_merge;
         cur = build_patch_merge_permute(cur, scale_factor);
@@ -70,11 +70,12 @@ ggml_cgraph * clip_graph_siglip::build() {
             cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
         }
 
+        // d1-omni uses the exact gelu in the projector
         cur = build_ffn(cur,
             model.mm_1_w, model.mm_1_b,
             nullptr, nullptr,
             model.mm_2_w, model.mm_2_b,
-            FFN_GELU,
+            proj_type == PROJECTOR_TYPE_D1OMNI_V ? FFN_GELU_ERF : FFN_GELU,
             -1);
 
     } else if (proj_type == PROJECTOR_TYPE_JANUS_PRO) {

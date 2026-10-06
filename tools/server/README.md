@@ -1703,9 +1703,11 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
 
 *Options:*
 
-`state`: The content to evaluate. Can be a string, an object or an array. A value that is not a string is given to the model as JSON text. For lfm2-d1, it can be `null`, for example to ask about images only.
+`state`: The content to evaluate. Can be a string, an object or an array. A value that is not a string is given to the model as JSON text. For lfm2-d1 and d1omni, it can be `null`, for example to ask about images only.
 
 `images`: Optional. An array of images, the maximum number may be limited depending on the model. Each one is a data URL (`data:image/...;base64,...`). See the image input section below.
+
+`audio`: Optional. One audio clip, as a data URL (`data:audio/...;base64,...`). Only for d1omni, a request has images or audio, not both.
 
 `questions`: An object that maps a question id to a question. Each question has these fields:
 
@@ -1718,13 +1720,13 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
 
 The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
 
-The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya, clef, pplx-decider and lfm2-d1. For laya, long questions and options are truncated to the token budget the model was trained with.
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya, clef, pplx-decider, lfm2-d1 and d1omni. For laya, long questions and options are truncated to the token budget the model was trained with.
 
-For laya and clef, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A server that runs clef only serves this endpoint, text generation is not available.
+For laya, clef and d1omni, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A d1omni prompt is cut to 16384 tokens. A server that runs clef only serves this endpoint, text generation is not available.
 
 *Image input:*
 
-Image input needs a model that supports it (for example: openjev, clef, pplx-decider, lfm2-d1) and its multimodal projector, see `--mmproj`.
+Image input needs a model that supports it (for example: openjev, clef, pplx-decider, lfm2-d1, d1omni) and its multimodal projector, see `--mmproj`.
 
 Images can be given in two ways, and both can be used in the same request:
 
@@ -1827,7 +1829,7 @@ curl http://127.0.0.1:8080/v1/systemone \
     }' | jq
 ```
 
-An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images returns the error `501` if the model does not support image input, or if no multimodal projector is loaded.
+An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images or audio returns the error `501` if the model does not support this input, or if no multimodal projector is loaded.
 
 ## Server tools
 

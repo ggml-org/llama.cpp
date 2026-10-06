@@ -126,6 +126,12 @@ void server_decision_context::init(const llama_model * model) {
     } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1) {
         n_options_max   = 255;
         noul_true_first = true;
+    } else if (model_type == COMMON_DECISION_TYPE_D1OMNI) {
+        token_marker = llama_vocab_mask(vocab);
+        if (token_marker == LLAMA_TOKEN_NULL) {
+            throw std::runtime_error("decision model has no mask token");
+        }
+        n_options_max = 255;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
     }
@@ -139,8 +145,8 @@ void server_decision_context::init(const llama_model * model) {
 //
 
 std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
-    // d1 accepts a null state (images only)
-    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1)) {
+    // lfm2-d1 and d1omni accept a null state, for example to ask about images only
+    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1 && type != COMMON_DECISION_TYPE_D1OMNI)) {
         throw std::invalid_argument("\"state\" must be provided");
     }
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
@@ -193,7 +199,15 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
                 throw err("\"criteria\" must be an object");
             }
             for (const char * key : {"false", "true"}) {
-                question.options.push_back({key, criteria.is_object() && criteria.contains(key) ? criteria.at(key) : json()});
+                json description;
+                if (criteria.is_object() && criteria.contains(key)) {
+                    description = criteria.at(key);
+                } else if (criteria.is_object() && type == COMMON_DECISION_TYPE_D1OMNI) {
+                    // d1omni also reads the descriptions under "no" and "yes"
+                    const char * alias = std::string(key) == "true" ? "yes" : "no";
+                    description = criteria.contains(alias) ? criteria.at(alias) : json();
+                }
+                question.options.push_back({key, description});
             }
             if (noul_true_first) {
                 std::swap(question.options[0], question.options[1]);
@@ -230,6 +244,13 @@ static void decision_load_image(const json & url, std::vector<raw_buffer> & file
 json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
         throw std::invalid_argument("\"videos\" is not supported");
+    }
+    if (body.contains("audio") && !body.at("audio").is_null()) {
+        const json & url = body.at("audio");
+        if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:audio/")) {
+            throw std::invalid_argument("\"audio\" must be a data URL (data:audio/...;base64,...)");
+        }
+        handle_media(files, url.get<std::string>(), "");
     }
     if (body.contains("images") && !body.at("images").is_null()) {
         if (!body.at("images").is_array()) {
@@ -363,6 +384,41 @@ static std::string decision_kev_text(const json & val) {
     static const std::regex re_special("<\\|([A-Za-z0-9_]+)\\|>");
     return std::regex_replace(decision_kev_render(val), re_special, "<\xC2\xA6$1\xC2\xA6>");
 }
+
+// d1omni: special tokens written in the input must not be parsed as such, in keys too (d1-omni prompt.py: escape)
+static json decision_d1omni_escape(const json & val) {
+    static const std::regex re_special("<\\|([A-Za-z0-9_]+)\\|>");
+    if (val.is_string()) {
+        return std::regex_replace(val.get<std::string>(), re_special, "<\xC2\xA6$1\xC2\xA6>");
+    }
+    if (val.is_array()) {
+        json out = json::array();
+        for (const auto & item : val) {
+            out.push_back(decision_d1omni_escape(item));
+        }
+        return out;
+    }
+    if (val.is_object()) {
+        json out = json::object();
+        for (const auto & [key, item] : val.items()) {
+            out[std::regex_replace(key, re_special, "<\xC2\xA6$1\xC2\xA6>")] = decision_d1omni_escape(item);
+        }
+        return out;
+    }
+    return val;
+}
+
+// given to the d1omni template: text between the pieces of the prompt, and at the start of the pieces that are cut to a token budget
+static const std::string D1OMNI_MARKER        = "<<d1omni:";
+static const std::string D1OMNI_SEP           = "<<d1omni:sep>>";
+static const std::string D1OMNI_MARK_STATE    = "<<d1omni:state>>";
+static const std::string D1OMNI_MARK_QUESTION = "<<d1omni:question>>";
+static const std::string D1OMNI_MARK_OPTION   = "<<d1omni:option>>";
+
+// max_length, image_text_length and audio_text_length of the model config, the converter checks them
+static const size_t D1OMNI_MAX_TOKENS       = 16384;
+static const size_t D1OMNI_MAX_TOKENS_IMAGE = 896;
+static const size_t D1OMNI_MAX_TOKENS_AUDIO = 15360;
 
 size_t server_decision_context::n_variants(const server_decision_question & question) const {
     // lev shows the options of a choice in 2 orders, to cancel the preference for the first label
@@ -515,7 +571,8 @@ std::string server_decision_context::render(
         const std::vector<server_decision_question> & questions,
         const server_decision_question & question,
         size_t variant,
-        size_t n_images) const {
+        size_t n_images,
+        bool is_audio) const {
     // the template is given raw JSON values, it serializes the ones that are not strings
     json inp = json{
         {"id",           question.id},
@@ -554,6 +611,15 @@ std::string server_decision_context::render(
         inp = decision_replace_text(inp, text_marker, " ");
     }
 
+    if (type == COMMON_DECISION_TYPE_D1OMNI) {
+        inp = decision_replace_text(decision_d1omni_escape(inp), D1OMNI_MARKER, "<<d1omni ");
+        inp["audio"]         = is_audio;
+        inp["sep"]           = D1OMNI_SEP;
+        inp["mark_state"]    = D1OMNI_MARK_STATE;
+        inp["mark_question"] = D1OMNI_MARK_QUESTION;
+        inp["mark_option"]   = D1OMNI_MARK_OPTION;
+    }
+
     // the template puts one media marker per image
     json images = json::array();
     if (n_images > 0) {
@@ -579,8 +645,9 @@ void server_decision_context::fill_task(
         const std::vector<raw_buffer> & files,
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
-        server_task & task) const {
-    const std::string prompt = render(state, questions, question, variant, files.size());
+        server_task & task,
+        bool is_audio) const {
+    const std::string prompt = render(state, questions, question, variant, files.size(), is_audio);
 
     if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER) {
         // lev reads the ratings of a noul question at its first labels, not at the digits
@@ -600,6 +667,11 @@ void server_decision_context::fill_task(
             task.tokens = process_mtmd_prompt(mctx, prompt, files, init_opt);
             return;
         }
+    }
+
+    if (type == COMMON_DECISION_TYPE_D1OMNI) {
+        fill_task_d1omni(prompt, question, files, mctx, init_opt, is_audio, task);
+        return;
     }
 
     llama_tokens tokens = common_tokenize(vocab, prompt, false, true);
@@ -676,6 +748,111 @@ void server_decision_context::fill_task_laya(llama_tokens & tokens, const server
 
     // the output has one score per question type
     task.decision.column = question.type;
+}
+
+// each piece is cut to its budget as the model was trained (d1-omni prompt.py: encode), the state gets the room that is left
+// the media come first, the text after them has a budget of its own
+void server_decision_context::fill_task_d1omni(
+        const std::string & prompt,
+        const server_decision_question & question,
+        const std::vector<raw_buffer> & files,
+        mtmd_context * mctx,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_audio,
+        server_task & task) const {
+    const auto invalid = std::runtime_error("unexpected layout of the decision prompt");
+
+    std::vector<std::string> pieces = string_split(prompt, D1OMNI_SEP);
+    if (pieces.empty() || (files.empty() && !pieces[0].empty())) {
+        throw invalid;
+    }
+
+    server_tokens media(llama_tokens(), false);
+    if (!files.empty()) {
+        media = process_mtmd_prompt(mctx, pieces[0], files, init_opt);
+    }
+    const size_t n_media = media.size();
+
+    size_t n_max = D1OMNI_MAX_TOKENS;
+    if (!files.empty()) {
+        n_max = std::min(is_audio ? D1OMNI_MAX_TOKENS_AUDIO : D1OMNI_MAX_TOKENS_IMAGE, D1OMNI_MAX_TOKENS - std::min(D1OMNI_MAX_TOKENS, n_media));
+        if (n_max < 64) {
+            throw std::invalid_argument(string_format("the media take %zu of the %zu positions, send fewer images", n_media, D1OMNI_MAX_TOKENS));
+        }
+    }
+
+    // the options get max(96, min(24 n + 32, max / 2)) tokens, shared evenly
+    const int64_t n_options      = question.options.size();
+    const int64_t n_budget       = std::max<int64_t>(96, std::min<int64_t>(24 * n_options + 32, n_max / 2));
+    const int64_t n_option_max   = std::max<int64_t>(2, (n_budget - 3 * n_options) / n_options);
+    const int64_t n_question_max = std::max<int64_t>(16, n_budget);
+
+    llama_tokens head;  // before the state
+    llama_tokens state;
+    llama_tokens tail;  // after the state
+    bool has_state = false;
+    for (size_t i_piece = 1; i_piece < pieces.size(); i_piece++) {
+        std::string piece = pieces[i_piece];
+        int64_t n_piece_max = -1;
+        bool is_state = false;
+        if (string_starts_with(piece, D1OMNI_MARK_STATE)) {
+            piece    = piece.substr(D1OMNI_MARK_STATE.size());
+            is_state = true;
+        } else if (string_starts_with(piece, D1OMNI_MARK_QUESTION)) {
+            piece = piece.substr(D1OMNI_MARK_QUESTION.size());
+            n_piece_max = n_question_max;
+        } else if (string_starts_with(piece, D1OMNI_MARK_OPTION)) {
+            piece = piece.substr(D1OMNI_MARK_OPTION.size());
+            n_piece_max = n_option_max;
+        }
+
+        llama_tokens tokens = common_tokenize(vocab, piece, false, true);
+        if (n_piece_max >= 0 && (int64_t) tokens.size() > n_piece_max) {
+            tokens.resize(n_piece_max);
+        }
+
+        if (is_state) {
+            if (has_state) {
+                throw invalid;
+            }
+            state     = std::move(tokens);
+            has_state = true;
+        } else {
+            llama_tokens & dst = has_state ? tail : head;
+            dst.insert(dst.end(), tokens.begin(), tokens.end());
+        }
+    }
+    if (!has_state) {
+        throw invalid;
+    }
+
+    const size_t n_room = n_max - std::min(n_max, head.size() + tail.size());
+    state.resize(std::min(state.size(), n_room));
+
+    llama_tokens tokens = std::move(head);
+    tokens.insert(tokens.end(), state.begin(), state.end());
+    tokens.insert(tokens.end(), tail.begin(), tail.end());
+    tokens.resize(std::min(tokens.size(), n_max));
+
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (tokens[i] == token_marker) {
+            task.decision.markers.push_back(n_media + i);
+        }
+    }
+    if ((int64_t) task.decision.markers.size() != n_options) {
+        throw std::invalid_argument("the options do not fit in the context");
+    }
+
+    // the output has one score per question type
+    task.decision.column = question.type;
+    if (files.empty()) {
+        task.tokens = server_tokens(tokens, false);
+    } else {
+        task.tokens = std::move(media);
+        for (const llama_token token : tokens) {
+            task.tokens.push_back(token);
+        }
+    }
 }
 
 //
@@ -850,14 +1027,15 @@ static double decision_confidence_score(const std::vector<double> & probs) {
     return std::max(0.0, 1.0 - dist / dist_uniform);
 }
 
-json server_decision_context::format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const {
+json server_decision_context::format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores, bool has_media) const {
     const size_t n = n_outputs(question);
     if (scores.size() != n_variants(question)) {
         throw std::runtime_error("decision result does not match the number of variants");
     }
 
     // softmax over the outputs of each variant, then the average of the variants
-    const float temperature = get_temperature(question);
+    // d1omni: image and audio answers are not calibrated
+    const float temperature = has_media && type == COMMON_DECISION_TYPE_D1OMNI ? 1.0f : get_temperature(question);
     std::vector<double> probs(n, 0.0);
     for (size_t v = 0; v < scores.size(); v++) {
         const auto & s = scores[v];

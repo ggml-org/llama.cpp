@@ -871,6 +871,11 @@ struct mtmd_context {
                     ov_img_first       = false;
                     image_preproc = std::make_unique<mtmd_image_preprocessor_lfm2>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_D1OMNI_V:
+                {
+                    // same tiles and thumbnail as lfm2, without separator tokens
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_lfm2>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_GLM4V:
                 {
                     // <|begin_of_image|> ... (image embeddings) ... <|end_of_image|>
@@ -981,6 +986,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_LFM2A:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_D1OMNI_A:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_d1omni>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
