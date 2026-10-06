@@ -1538,6 +1538,7 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
     std::vector<llama_token> encode(const std::string & text) const {
         std::vector<uint32_t> unicode_data = unicode_cpts_from_utf8(text);
+        // The PLaMo-3 tokenizer keeps a leading U+FEFF in the input.
         if (!pre_segment_) {
             if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
                 unicode_data.erase(unicode_data.begin());
@@ -1550,15 +1551,17 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
         // pass 1: <|plamo:...|>
         {
-            static const uint32_t prefix[]   = { '<', '|', 'p', 'l', 'a', 'm', 'o', ':' };
-            const size_t          prefix_len = std::size(prefix);
-            size_t                i          = 0;
+            static constexpr uint32_t prefix[]   = { '<', '|', 'p', 'l', 'a', 'm', 'o', ':' };
+            const size_t              prefix_len = std::size(prefix);
+            size_t                    i          = 0;
             while (i + prefix_len <= n) {
                 if (!std::equal(prefix, prefix + prefix_len, unicode_data.begin() + i)) {
                     i++;
                     continue;
                 }
+                // An empty body is valid.
                 size_t j = i + prefix_len;
+                // Treat U+001C..U+001F as whitespace (equivalent to Python \s).
                 while (j < n && j - (i + prefix_len) < 64 && unicode_data[j] != '|' &&
                        (unicode_data[j] < 0x1C || unicode_data[j] > 0x1F) &&
                        !unicode_cpt_flags_from_cpt(unicode_data[j]).is_whitespace) {
@@ -1599,6 +1602,7 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         std::vector<llama_token> output;
         size_t                   seg_start = 0;
         for (size_t seg_end = 0; seg_end <= n; ++seg_end) {
+            // U+EE00 is the tokenizer's private-use boundary marker; literal occurrences split segments and are not emitted.
             const bool is_boundary = seg_end < n && unicode_data[seg_end] == 0xEE00;
             if (seg_end == n || cut[seg_end] || is_boundary) {
                 if (seg_start < seg_end) {
