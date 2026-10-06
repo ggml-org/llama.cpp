@@ -2511,6 +2511,14 @@ class TextModel(ModelBase):
         with open(tokenizer_config_path, "r", encoding="utf-8") as f:
             tokenizer_config = json.load(f)
 
+        tokenizer_class = tokenizer_config.get("tokenizer_class")
+        if tokenizer_class == "Plamo2Tokenizer":
+            tokenizer_model = "plamo2"
+        elif tokenizer_class == "Plamo3Tokenizer":
+            tokenizer_model = "plamo3"
+        else:
+            raise ValueError(f"Unsupported PLaMo tokenizer class: {tokenizer_class}")
+
         # Load tokens from JSONL file (actually a list format)
         tokens = []
         scores = []
@@ -2550,7 +2558,7 @@ class TextModel(ModelBase):
                 scores.append(-1000.0)
                 toktypes.append(gguf.TokenType.UNUSED)
 
-        self.gguf_writer.add_tokenizer_model("plamo2")
+        self.gguf_writer.add_tokenizer_model(tokenizer_model)
         self.gguf_writer.add_tokenizer_pre("default")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
