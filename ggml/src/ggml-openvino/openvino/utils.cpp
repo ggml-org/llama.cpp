@@ -460,7 +460,14 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                     size_t relative_offset = view_offset >= view_src_offset ? view_offset - view_src_offset : 0;
                     int64_t split_index = static_cast<int64_t>(relative_offset / view_src_stride_v[split_dim]);
 
-                    if (split_index >= 0 && split_index < num_splits && dynamic_split) {
+                    // the view must be exactly one Split output: offset on a chunk boundary, the strides of all
+                    // other dims with more than one element equal
+                    bool exact_chunk = relative_offset % view_src_stride_v[split_dim] == 0;
+                    for (size_t i = 0; i < ndims && exact_chunk; ++i) {
+                        exact_chunk = i == static_cast<size_t>(split_dim) || view_ggml_shape[i] == 1 ||
+                                      view_stride_v[i] == view_src_stride_v[i];
+                    }
+                    if (split_index >= 0 && split_index < num_splits && dynamic_split && exact_chunk) {
                         // the Split keeps its input alive, so only keep a weak reference to it on the input
                         auto src_node = input.get_node_shared_ptr();
                         std::string rt_key =
@@ -480,7 +487,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         }
                         return split_node->output(static_cast<size_t>(split_index));
                     }
-                    if (split_index >= 0 && split_index < num_splits) {
+                    if (split_index >= 0 && split_index < num_splits && !dynamic_split) {
                         auto src_node = input.get_node_shared_ptr();
                         std::string rt_key = "split_dim_" + std::to_string(split_dim);
                         auto & rt_info = src_node->get_rt_info();
