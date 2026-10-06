@@ -202,12 +202,9 @@ class Cohere2VisionModel(MmprojModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        if not name.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
-            return None
         name = name.removeprefix("model.")
-        if not name.startswith(("vision_tower.vision_model.", "multi_modal_projector.")):
-            # newer transformers save the SigLIP tower without the "vision_model." level
-            name = name.replace("vision_tower.", "vision_tower.vision_model.", 1)
+        if not name.startswith(("vision_tower.", "multi_modal_projector.")):
+            return None
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
