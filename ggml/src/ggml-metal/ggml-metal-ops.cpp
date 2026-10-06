@@ -3618,7 +3618,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         nb23_attn = 0;
     }
 
-    if (!use_sparse && ggml_metal_op_flash_attn_ext_use_tensor(op, props_dev->has_tensor)) {
+    if (!use_sparse && !has_kv_rows && ggml_metal_op_flash_attn_ext_use_tensor(op, props_dev->has_tensor)) {
+        // TODO: can we enable the tensor path with kv_rows?
+
         // tensor API kernel
         const int nqptg = ne00 >= 512 ? OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE : OP_FLASH_ATTN_EXT_TENSOR_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_TENSOR_NCPSG; // cache values per threadgroup
