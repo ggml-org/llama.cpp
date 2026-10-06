@@ -69,6 +69,7 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_LEV:
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:
+            case COMMON_DECISION_TYPE_PPLX_DECIDER:
                 return true;
             default:
                 return false;
@@ -85,6 +86,7 @@ struct server_decision_context {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
             case COMMON_DECISION_TYPE_CLEF:
+            case COMMON_DECISION_TYPE_PPLX_DECIDER:
                 return true;
             default:
                 return false;
@@ -139,7 +141,7 @@ private:
     std::map<std::string, float> temperatures; // "<type>" or "<type>.<n_options bucket>"
     decision_model_traits        traits;
 
-    // OPENJEV, LEV, NIMBLE
+    // OPENJEV, LEV, NIMBLE, PPLX_DECIDER
     std::vector<llama_token> labels;
 
     // LAYA, KEV

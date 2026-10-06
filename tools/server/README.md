@@ -1728,15 +1728,13 @@ The number of options of a `choice` question is limited by the model, for exampl
 
 The limit is reported at startup:
 
-```
-/v1/systemone: decision model type: laya, at most 44 options per question
-```
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya, clef and pplx-decider. For laya, long questions and options are truncated to the token budget the model was trained with.
 
 For laya and clef, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A clef request that does not fit is not refused, so set `--ubatch-size` to at least the longest prompt you intend to send. A server that runs clef only serves this endpoint, text generation is not available.
 
 *Image input:*
 
-Image input needs a model that supports it (for example: openjev, clef) and its multimodal projector, see `--mmproj`.
+Image input needs a model that supports it (for example: openjev, clef, pplx-decider) and its multimodal projector, see `--mmproj`.
 
 Images can be given in two ways, and both can be used in the same request:
 
