@@ -148,8 +148,9 @@ if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
 
-llama_build(test-recurrent-state-rollback.cpp)
-llama_build(test-save-load-state.cpp)
+# consolidated llama_context state tests: KV/recurrent state save, load, copy, rollback
+# built where the former test-recurrent-state-rollback was, it uses the same internal headers
+llama_build(test-llama-context.cpp)
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
@@ -207,25 +208,17 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_SETUP generate-models
     )
 
-    # Test recurrent-state rollback across all architectures, using the generated dummy models
+    # Test context state handling across all architectures, using the generated dummy models
     llama_test(
-        test-recurrent-state-rollback
+        test-llama-context
         LABEL main
         ARGS --models "${MODEL_DIR}"
     )
     # abort on graph reallocations that the initial reserve should have covered
-    set_tests_properties(test-recurrent-state-rollback PROPERTIES
+    set_tests_properties(test-llama-context PROPERTIES
         FIXTURES_REQUIRED generate-models
         ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
     )
-
-    # Test state save/load functionality across all architectures, using the generated dummy models
-    llama_test(
-        test-save-load-state
-        LABEL main
-        ARGS --models "${MODEL_DIR}"
-    )
-    set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
 
     llama_build(test-fusion.cpp)
 endif()
@@ -295,11 +288,9 @@ llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
-# Test for state restore with fragmented KV cache
-# Requires a model, uses same args pattern as test-thread-safety
-# TODO: run on all dummy models
-llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
-set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
+# Run the consolidated context state tests against a real model
+llama_test(test-llama-context NAME test-llama-context-model LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-llama-context-model PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
