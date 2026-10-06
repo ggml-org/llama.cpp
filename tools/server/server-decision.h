@@ -42,6 +42,7 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_LEV:
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:
+            case COMMON_DECISION_TYPE_PPLX_DECIDER:
                 return true;
             default:
                 return false;
@@ -58,6 +59,7 @@ struct server_decision_context {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
             case COMMON_DECISION_TYPE_CLEF:
+            case COMMON_DECISION_TYPE_PPLX_DECIDER:
                 return true;
             default:
                 return false;
@@ -108,7 +110,7 @@ private:
     bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
     bool   choice_sorted   = false; // choice options are in the order of their keys
 
-    // OPENJEV, LEV, NIMBLE
+    // OPENJEV, LEV, NIMBLE, PPLX_DECIDER
     std::vector<llama_token> labels;
     std::vector<std::string> label_texts; // only if the label of an option is given to the template
 

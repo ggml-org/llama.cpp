@@ -155,6 +155,7 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_NIMBLE:
         case COMMON_DECISION_TYPE_LAYA:
         case COMMON_DECISION_TYPE_CLEF:
+        case COMMON_DECISION_TYPE_PPLX_DECIDER:
             return {"decisions"};
         default:
             // fallback when there is no decision type or the metadata is bad
