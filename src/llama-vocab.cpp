@@ -1551,7 +1551,7 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         // pass 1: <|plamo:...|>
         {
             static const uint32_t prefix[]   = { '<', '|', 'p', 'l', 'a', 'm', 'o', ':' };
-            const size_t          prefix_len = sizeof(prefix) / sizeof(prefix[0]);
+            const size_t          prefix_len = std::size(prefix);
             size_t                i          = 0;
             while (i + prefix_len <= n) {
                 if (!std::equal(prefix, prefix + prefix_len, unicode_data.begin() + i)) {
