@@ -144,6 +144,47 @@ const char * get_media_marker() {
 }
 
 //
+// model output modalities
+//
+
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type) {
+    switch (decision_type) {
+        case COMMON_DECISION_TYPE_OPENJEV:
+        case COMMON_DECISION_TYPE_LEV:
+        case COMMON_DECISION_TYPE_KEV:
+        case COMMON_DECISION_TYPE_NIMBLE:
+        case COMMON_DECISION_TYPE_LAYA:
+        case COMMON_DECISION_TYPE_CLEF:
+            return {"decisions"};
+        default:
+            // fallback when there is no decision type or the metadata is bad
+            return {"text"};
+    }
+}
+
+json server_model_architecture_json(
+        bool inp_image,
+        bool inp_audio,
+        bool inp_video,
+        const std::vector<std::string> & output_modalities) {
+    std::vector<std::string> input_modalities = {"text"};
+    if (inp_image) {
+        input_modalities.push_back("image");
+    }
+    if (inp_audio) {
+        input_modalities.push_back("audio");
+    }
+    if (inp_video) {
+        input_modalities.push_back("video");
+    }
+
+    return {
+        {"input_modalities",  input_modalities},
+        {"output_modalities", output_modalities},
+    };
+}
+
+//
 // lora utils
 //
 
