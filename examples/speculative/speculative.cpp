@@ -267,7 +267,7 @@ int main(int argc, char ** argv) {
             // for stochastic sampling, attempt to match the token with the drafted tokens
             {
                 bool accept = false;
-                if (params.sampling.temp > 0) {
+                if (params.sampling.temp > 0 && n_seq_dft == 1) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
 
@@ -341,13 +341,17 @@ int main(int argc, char ** argv) {
 
                             float sum_probs = 0.0f;
 
-                            for (size_t i = 0; i < dist_tgt.size; i++) {
-                                if (i < dist_dft.size) {
-                                    dist_tgt.data[i].p = std::max(0.0f, dist_tgt.data[i].p - dist_dft.data[i].p);
-                                } else {
-                                    dist_tgt.data[i].p = std::max(0.0f, dist_tgt.data[i].p);
+                            for (size_t i = 0, j = 0; i < dist_tgt.size; i++) {
+                                // try to find the current target token id in the draft distribution
+                                while (j < dist_dft.size && dist_dft.data[j].id < dist_tgt.data[i].id) {
+                                    ++j;
                                 }
 
+                                // tokens absent from the draft distribution have zero probability
+                                float p_dft = j < dist_dft.size && dist_dft.data[j].id == dist_tgt.data[i].id ?
+                                    dist_dft.data[j].p : 0.0f;
+
+                                dist_tgt.data[i].p = std::max(0.0f, dist_tgt.data[i].p - p_dft);
                                 sum_probs += dist_tgt.data[i].p;
                             }
 
@@ -370,7 +374,7 @@ int main(int argc, char ** argv) {
                                 // synchronize active status for sequences with the same drafted token
                                 drafts[i].active = drafts[i].active && accept;
                                 if (!drafts[i].active) {
-                                    active_seqs.erase(s);
+                                    active_seqs.erase(i);
                                 }
                             }
                         }
@@ -394,7 +398,7 @@ int main(int argc, char ** argv) {
                         token_str = common_token_to_piece(ctx_tgt, token_id);
                     }
                 } else {
-                    // greedy verification
+                    // verify drafts by matching tokens sampled from the target
 
                     // sample from the target model
                     LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
@@ -518,7 +522,7 @@ int main(int argc, char ** argv) {
                     continue;
                 }
 
-                common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
+                const llama_token sampled_token = common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
 
                 const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
 
@@ -567,7 +571,7 @@ int main(int argc, char ** argv) {
 
                 // add drafted token for each sequence
                 for (int is = 0; is < (int) sa.size(); ++is) {
-                    const llama_token id = cur_p->data[is].id;
+                    const llama_token id = n_seq_dft == 1 ? sampled_token : cur_p->data[is].id;
 
                     const int s = sa[is];
 
