@@ -1,6 +1,7 @@
 #include "kv-stream-block-test.h"
 #include "../ggml/src/ggml-cuda/kv-stream-attention-dispatch.h"
 #include "../ggml/src/ggml-cuda/kv-stream-attention-plan.h"
+#include "../ggml/src/ggml-cuda/kv-stream-span.h"
 #include "../ggml/src/ggml-backend-execution.h"
 #include "../src/llama-kv-stream-model.h"
 
@@ -11,6 +12,8 @@
 
 #ifdef KV_STREAM_PASCAL_CUDA_TEST
 bool kv_stream_test_is_sm61_only();
+bool kv_stream_test_is_arch_only(int cc);
+size_t kv_stream_test_shared_limit(ggml_backend_t backend, size_t limit);
 int kv_stream_test_override_cc(ggml_backend_t backend, int cc);
 int kv_stream_test_compiled_cc(ggml_backend_t backend);
 
@@ -308,6 +311,22 @@ static int benchmark_spans() {
 }
 
 int main(int argc, char ** argv) {
+    const int consumer=argc > 1 && !std::strcmp(argv[1],"--cuda-sm75") ? 750 :
+        argc > 1 && !std::strcmp(argv[1],"--cuda-sm86") ? 860 : 0;
+    ggml_backend_ptr consumer_backend;
+#ifdef KV_STREAM_PASCAL_CUDA_TEST
+    if (consumer) {
+        if (!kv_stream_test_is_arch_only(consumer)) return 77;
+        ggml_backend_load_all(); auto * dev=ggml_backend_dev_by_name("CUDA0");
+        if (!dev) return 77;
+        consumer_backend.reset(ggml_backend_dev_init(dev,nullptr));
+        if (!consumer_backend || kv_stream_test_compiled_cc(consumer_backend.get()) != consumer) return 77;
+    }
+    const int previous=consumer ? kv_stream_test_override_cc(consumer_backend.get(),consumer) : 0;
+    struct restore_arch {ggml_backend_t backend; int cc; ~restore_arch(){if (backend) kv_stream_test_override_cc(backend,cc);}} restore_consumer{consumer_backend.get(),previous};
+#else
+    if (consumer) return 77;
+#endif
     const bool tg2 = argc > 1 && (!std::strcmp(argv[1],"--cuda-pascal-tg2") || !std::strcmp(argv[1],"--cuda-tg2"));
     const bool pascal = argc > 1 && (!std::strcmp(argv[1],"--cuda-pascal-tg1") || !std::strcmp(argv[1],"--cuda-pascal-tg2"));
     if (pascal) {
@@ -323,6 +342,136 @@ int main(int argc, char ** argv) {
     }
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+#ifdef KV_STREAM_PASCAL_CUDA_TEST
+    if (consumer || (argc > 1 && !std::strcmp(argv[1],"--cuda-resource-probe"))) t.test(
+            "mma_span_resources_are_rejected_before_launch_and_requirements_are_preserved",[&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        using status=ggml_cuda_kv_stream_plan_status;
+        using style=ggml_cuda_kv_stream_execution_style;
+        using query_t=status (*)(ggml_backend_t,const ggml_tensor *,const ggml_kv_stream_span_plan_view *,style,ggml_cuda_kv_stream_attention_plan &);
+        auto * reg=ggml_backend_dev_backend_reg(dev);
+        auto query=reinterpret_cast<query_t>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_cuda_kv_stream_attention_plan"));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,768,false,2,4,16);
+        if (!t.assert_true(query && get && get() && f.attach())) return;
+        auto pin=f.binding->acquire(); block_inputs input(f,513,4,false,24);
+        auto storage=span_storage::create(f,0,513,4,{0,256,512,513},true);
+        ggml_context_ptr context(ggml_init({65536,nullptr,true}));
+        auto * node=f.resident->attention(context.get(),0,input.q,input.mask,input.active,1.0f/16);
+        if (!t.assert_true(storage && node)) return;
+        auto op=*node; op.buffer=input.output->buffer; op.data=input.output->data;
+        ggml_kv_stream_span_plan_view view;
+        if (!t.assert_true(ggml_kv_stream_span_plan_get_view(storage->plan,view))) return;
+        ggml_cuda_kv_stream_attention_plan plan;
+        if (!t.assert_true(query(backend.get(),&op,&view,style::spanned,plan) == status::success)) return;
+        if (!t.assert_true(plan.family == ggml_cuda_kv_stream_kernel_family::mma &&
+                plan.requirements.shared_bytes > 3*sizeof(ggml_cuda_kv_span))) return;
+        const auto saved=plan;
+        block_workspace workspace(f,plan.requirements.scratch_bytes);
+        const size_t previous=kv_stream_test_shared_limit(backend.get(),plan.requirements.shared_bytes-3*sizeof(ggml_cuda_kv_span));
+        struct restore {ggml_backend_t backend; size_t limit; ~restore(){kv_stream_test_shared_limit(backend,limit);}} restore_limit{backend.get(),previous};
+        t.assert_true(query(backend.get(),&op,&view,style::spanned,plan) == status::unsupported_launch_resources);
+        t.assert_equal(saved.requirements.scratch_bytes,plan.requirements.scratch_bytes);
+        size_t untouched=77;
+        t.assert_true(!get()->spans_workspace(backend.get(),&op,storage->plan,untouched));
+        t.assert_equal(size_t(77),untouched);
+        t.assert_true(!get()->spans(backend.get(),&op,storage->plan,ggml_backend_memory_lease_buffer(workspace.lease.get())));
+        const auto output=input.read();
+        t.assert_true(std::all_of(output.begin(),output.end(),[](float v){return v == -77;}));
+        ggml_cuda_kv_stream_attention_plan native;
+        t.assert_true(query(backend.get(),&op,nullptr,style::native,native) == status::success);
+        t.assert_true(native.requirements.output_extra_bytes > 0);
+        ggml_backend_execution_set_external_workspace(&op,true);
+        t.assert_true(!get()->direct(backend.get(),&op));
+    });
+    if (consumer) t.test("consumer_rejects_unsupported_mma_geometry_and_nonpadded_workspace_probes",[&](testing & t) {
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get() && get()->mma_workspace)) return;
+        size_t untouched=77;
+        for (auto pair : {std::pair{GGML_TYPE_Q5_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q8_0}}) {
+            t.assert_true(!get()->mma_workspace(backend.get(),pair.first,pair.second,12,2,768,3,untouched));
+            t.assert_equal(size_t(77),untouched);
+        }
+        t.assert_true(!get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8,2,768,3,untouched));
+        t.assert_true(!get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,12,2,767,3,untouched));
+        t.assert_equal(size_t(77),untouched);
+    });
+    if (consumer) t.test("consumer_tg1_tg4_stock_family_scratch_and_span_equivalence",[&](testing & t) {
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        using status=ggml_cuda_kv_stream_plan_status;
+        using style=ggml_cuda_kv_stream_execution_style;
+        using family=ggml_cuda_kv_stream_kernel_family;
+        using query_t=status (*)(ggml_backend_t,const ggml_tensor *,const ggml_kv_stream_span_plan_view *,style,ggml_cuda_kv_stream_attention_plan &);
+        auto * reg=ggml_backend_dev_backend_reg(dev);
+        auto query=reinterpret_cast<query_t>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_cuda_kv_stream_attention_plan"));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(query && get && get())) return;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8192,false,2,2,80);
+        if (!t.assert_true(f.attach())) return;
+        auto pin=f.binding->acquire();
+        for (size_t active : {size_t(513),size_t(768),size_t(8191),size_t(8192)})
+            for (uint32_t ratio : {2u,6u,8u}) for (uint32_t queries : {1u,2u,3u,4u}) {
+                size_t maximum=0;
+                if (!t.assert_true(get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,ratio*2,2,4,8192,maximum))) return;
+                block_inputs input(f,active,queries,false,ratio*2);
+                const auto expected=stock_attention(f,input,0);
+                for (bool wrapped : {false,true}) {
+                    const std::vector<size_t> cuts=wrapped ? std::vector<size_t>{0,256,512,active} : std::vector<size_t>{0,active};
+                    auto storage=span_storage::create(f,0,active,queries,cuts,wrapped);
+                    if (!t.assert_true(storage != nullptr)) return;
+                    ggml_context_ptr context(ggml_init({65536,nullptr,true}));
+                    auto * node=f.resident->attention(context.get(),0,input.q,input.mask,active,1.0f/16);
+                    if (!t.assert_true(node != nullptr)) return;
+                    auto op=*node; op.buffer=input.output->buffer; op.data=input.output->data;
+                    ggml_kv_stream_span_plan_view view;
+                    if (!t.assert_true(ggml_kv_stream_span_plan_get_view(storage->plan,view))) return;
+                    ggml_cuda_kv_stream_attention_plan plan;
+                    if (!t.assert_true(query(backend.get(),&op,&view,style::spanned,plan) == status::success)) return;
+                    t.assert_true(plan.family == (queries == 1 ? family::vector : family::mma));
+                    size_t bytes=0;
+                    if (!t.assert_true(get()->spans_workspace(backend.get(),&op,storage->plan,bytes))) return;
+                    t.assert_equal(plan.requirements.scratch_bytes,bytes);
+                    t.assert_true(bytes <= maximum);
+                    block_workspace exact(f,bytes,91), tiny(f,bytes-1,92);
+                    const auto before=input.read();
+                    t.assert_true(!get()->spans(backend.get(),&op,storage->plan,ggml_backend_memory_lease_buffer(tiny.lease.get())));
+                    t.assert_true(same_float_bits(before,input.read()));
+                    if (!t.assert_true(get()->spans(backend.get(),&op,storage->plan,ggml_backend_memory_lease_buffer(exact.lease.get())))) return;
+                    ggml_backend_synchronize(backend.get());
+                    const auto actual=input.read();
+                    t.out << "CC" << consumer << " GQA" << ratio << " TG" << queries << " active=" << active << " wrapped=" << wrapped << " exact=" << same_float_bits(expected,actual) << '\n';
+                    // Regional TG1 reductions are not bit-exact; keep the tighter observed-error regression guard.
+                    if (queries >= 2 || (!wrapped && active%256 == 0)) t.assert_true(same_float_bits(expected,actual));
+                    else close_values(t,expected,actual,1e-8f);
+                }
+            }
+    });
+    if (consumer) t.test("consumer_preserves_f16_mma_staging_and_masked_tails",[&](testing & t) {
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,8192,false,2,2,80);
+        if (!t.assert_true(get && get() && f.attach())) return;
+        auto pin=f.binding->acquire();
+        for (size_t active : {size_t(768),size_t(8191)}) for (uint32_t queries : {3u,4u}) {
+            block_inputs input(f,active,queries,false,12);
+            auto storage=span_storage::create(f,0,active,queries,{0,256,512,active},true);
+            if (!t.assert_true(storage != nullptr)) return;
+            bool accepted=false;
+            const auto actual=evaluate(f,get(),*storage,input,0,accepted);
+            if (!t.assert_true(accepted)) return;
+            t.assert_true(same_float_bits(stock_attention(f,input,0),actual));
+        }
+    });
+#endif
     t.test("ampere_decode_dispatch_matches_stock", [](testing & t) {
         using path = ggml_cuda_kv_stream_attention_path;
         t.assert_true(ggml_cuda_kv_stream_attention_select(860,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::vector);

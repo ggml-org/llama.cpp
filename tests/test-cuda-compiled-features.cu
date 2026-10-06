@@ -1,4 +1,5 @@
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/fattn-mma-f16.cuh"
 
 // Unused launch helpers can survive an unoptimized compile. Metadata tests must never enter them.
 int ggml_cuda_get_device() { std::abort(); }
@@ -10,6 +11,12 @@ int ggml_cuda_get_device() { std::abort(); }
 #if !defined(FP16_AVAILABLE) || defined(FAST_FP16_AVAILABLE) || defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMPERE_MMA_AVAILABLE) || defined(BLACKWELL_MMA_AVAILABLE) || defined(CP_ASYNC_AVAILABLE)
 #error "SM61 must use the stock slow-FP16, non-MMA, non-cp.async feature set"
 #endif
+#endif
+#if __CUDA_ARCH__ == 750 || __CUDA_ARCH__ == 860
+static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,2) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep stock generation-specific staging");
+static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,2,8) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG2 stock staging");
+static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,8) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG3/TG4 stock staging");
+static_assert(ggml_cuda_fattn_mma_get_nthreads(256,256,8) == (__CUDA_ARCH__ == 750 ? 128 : 64),"keep stock thread geometry");
 #endif
 #if __CUDA_ARCH__ < 750 && defined(TURING_MMA_AVAILABLE)
 #error "Turing MMA is not available on this target"
@@ -90,6 +97,16 @@ int main() {
                 device, expected, fp16_available(device), fast_fp16_available(device),
                 turing_mma_available(device), ampere_mma_available(device),
                 cp_async_available(device), blackwell_mma_available(device));
+        if (turing_mma_available(device)) {
+            for (auto columns : {8,16,32}) {
+                const auto config=ggml_cuda_fattn_mma_get_config(256,256,columns,device);
+                const int c2=columns == 8 ? 2 : 8, c1=columns/c2;
+                const int stages=ggml_cuda_fattn_mma_get_nstages(256,256,c1,c2,device);
+                if (stages != (expected >= 800 ? 2 : 0) ||
+                        config.nthreads != (expected >= 800 && columns <= 16 ? 64 : 128)) return 1;
+                printf("  head-256 columns=%d threads=%d stages=%d\n",columns,config.nthreads,stages);
+            }
+        }
     }
     printf("Compiled-feature checks passed without a GPU\n");
     return 0;

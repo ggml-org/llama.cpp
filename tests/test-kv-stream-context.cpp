@@ -15,6 +15,8 @@
 
 #ifdef KV_STREAM_TILE_NATIVE_TEST
 bool kv_stream_test_is_sm61_only();
+bool kv_stream_test_is_arch_only(int cc);
+int kv_stream_test_compiled_cc(ggml_backend_t backend);
 int kv_stream_test_override_cc(ggml_backend_t backend, int cc);
 bool kv_stream_test_native_graphs_enabled();
 #endif
@@ -346,12 +348,16 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
 }
 
 int main(int argc,char ** argv) {
-    bool pascal=false;
-    for (int i=3;i<argc;++i) pascal |= !std::strcmp(argv[i],"--pascal");
+    int baseline=0;
+    for (int i=3;i<argc;++i) {
+        if (!std::strcmp(argv[i],"--pascal")) baseline=610;
+        if (!std::strcmp(argv[i],"--sm75")) baseline=750;
+        if (!std::strcmp(argv[i],"--sm86")) baseline=860;
+    }
 #ifdef KV_STREAM_TILE_NATIVE_TEST
-    if (pascal && !kv_stream_test_is_sm61_only()) return 77;
+    if (baseline && !kv_stream_test_is_arch_only(baseline)) return 77;
 #else
-    if (pascal) return 77;
+    if (baseline) return 77;
 #endif
     testing t;
     t.test("streaming_is_disabled_by_default", [&](testing & t) {
@@ -392,13 +398,13 @@ int main(int argc,char ** argv) {
     ggml_backend_load_all(); llama_backend_init();
     ggml_backend_ptr baseline_backend;
 #ifdef KV_STREAM_TILE_NATIVE_TEST
-    if (pascal) {
+    if (baseline) {
         auto * device=ggml_backend_dev_by_name("CUDA0");
         if (!device) return 77;
         baseline_backend.reset(ggml_backend_dev_init(device,nullptr));
-        if (!baseline_backend) return 77;
+        if (!baseline_backend || kv_stream_test_compiled_cc(baseline_backend.get()) != baseline) return 77;
     }
-    const int previous=pascal ? kv_stream_test_override_cc(baseline_backend.get(),610) : 0;
+    const int previous=baseline ? kv_stream_test_override_cc(baseline_backend.get(),baseline) : 0;
     struct restore {
         ggml_backend_t backend; int previous;
         ~restore() {if (backend) kv_stream_test_override_cc(backend,previous);}

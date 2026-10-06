@@ -330,6 +330,14 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
 
 
 namespace {
+// Sizing and launch must validate the same compiled span specialization.
+template<int ncols1, int ncols2>
+static auto mma_span_kernel(bool quantized) {
+    return quantized ?
+        flash_attn_ext_f16_spans<256,256,ncols1,ncols2,false,false,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0> :
+        flash_attn_ext_f16_spans<256,256,ncols1,ncols2,false,false,GGML_TYPE_F16,GGML_TYPE_F16>;
+}
+
 struct mma_span_launch {
     dim3 blocks;
     int ncols1 = 0;
@@ -373,6 +381,13 @@ static bool mma_span_launch_make(
     float params[3];
     memcpy(params,dst->op_params,sizeof(params));
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
+    if (k->ne[1]%FATTN_KQ_STRIDE) return false;
+    for (const auto * tensor : {q,k,v,mask}) if (!ggml_is_quantized(tensor->type))
+        for (int i=1;i<4;++i) if (tensor->nb[i]%16) return false;
+    if (ggml_cuda_flash_attn_ext_kernel_family(ctx.device,dst) != ggml_cuda_kv_stream_kernel_family::mma) {
+        if (failure) *failure=status::stock_unavailable;
+        return false;
+    }
 
     constexpr int DKQ = 256, DV = 256;
     const int gqa_ratio = int(q->ne[2]/k->ne[2]);
@@ -406,6 +421,7 @@ static bool mma_span_launch_make(
     next.ncols2 = ncols2;
     next.shared_bytes = std::max(shared_combine,q_in_reg ?
         std::max(shared_q,shared_kv+shared_mask) : shared_q+shared_kv+shared_mask);
+    const size_t native_shared_bytes=next.shared_bytes;
     if (span_count <= 3) {
         next.span_shared_offset = (next.shared_bytes+15)/16*16;
         next.shared_bytes = next.span_shared_offset+3*sizeof(ggml_cuda_kv_span);
@@ -421,12 +437,35 @@ static bool mma_span_launch_make(
         flash_attn_ext_f16<DKQ,DV,2,8,false,false> :
         ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,4,8,false,false> :
         flash_attn_ext_f16<DKQ,DV,4,2,false,false>;
-    if (cudaFuncSetAttribute(ordinary,cudaFuncAttributeMaxDynamicSharedMemorySize,int(next.shared_bytes)) != cudaSuccess) {
+    auto spanned=ncols1 == 2 ? mma_span_kernel<2,8>(k->type == GGML_TYPE_Q8_0) :
+        ncols2 == 8 ? mma_span_kernel<4,8>(k->type == GGML_TYPE_Q8_0) : mma_span_kernel<4,2>(k->type == GGML_TYPE_Q8_0);
+    cudaFuncAttributes attributes{};
+    if (cudaFuncGetAttributes(&attributes,spanned) != cudaSuccess) {
+        if (failure) *failure=status::unsupported_launch_resources;
+        (void) cudaGetLastError(); return false;
+    }
+    const auto limit=ggml_cuda_info().devices[ctx.device].smpbo;
+    if (size_t(attributes.sharedSizeBytes) > limit || next.shared_bytes > limit-size_t(attributes.sharedSizeBytes) ||
+            nthreads > attributes.maxThreadsPerBlock) {
+        if (failure) *failure=status::unsupported_launch_resources;
+        return false;
+    }
+    if (cudaFuncSetAttribute(spanned,cudaFuncAttributeMaxDynamicSharedMemorySize,int(next.shared_bytes)) != cudaSuccess) {
+        if (failure) *failure=status::unsupported_launch_resources;
+        (void) cudaGetLastError(); return false;
+    }
+    int span_occupancy=0;
+    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&span_occupancy,spanned,nthreads,next.shared_bytes) != cudaSuccess || !span_occupancy) {
+        if (failure) *failure=status::unsupported_launch_resources;
+        (void) cudaGetLastError(); return false;
+    }
+    // Extra descriptor bytes may reduce streamed occupancy, but must not change stock Stream-K arithmetic.
+    if (cudaFuncSetAttribute(ordinary,cudaFuncAttributeMaxDynamicSharedMemorySize,int(native_shared_bytes)) != cudaSuccess) {
         if (failure) *failure = status::unsupported_launch_resources;
         (void) cudaGetLastError(); return false;
     }
     int max_blocks_per_sm = 0;
-    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm,ordinary,nthreads,next.shared_bytes) != cudaSuccess) {
+    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm,ordinary,nthreads,native_shared_bytes) != cudaSuccess) {
         if (failure) *failure = status::unsupported_launch_resources;
         (void) cudaGetLastError(); return false;
     }
@@ -483,12 +522,7 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         const ggml_cuda_kv_span * spans, size_t count,
         void * workspace, const mma_span_launch & plan) {
     constexpr int DKQ = 256, DV = 256;
-    constexpr bool softcap = false, v_is_k = false;
-    auto kernel = dst->src[1]->type == GGML_TYPE_Q8_0 ?
-        flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0> :
-        flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k,GGML_TYPE_F16,GGML_TYPE_F16>;
-    CUDA_CHECK(cudaFuncSetAttribute(
-        kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,int(plan.shared_bytes)));
+    auto kernel=mma_span_kernel<ncols1,ncols2>(dst->src[1]->type == GGML_TYPE_Q8_0);
     auto * device_spans = static_cast<ggml_cuda_kv_span *>(workspace);
     CUDA_CHECK(cudaMemcpyAsync(
         device_spans,spans,count*sizeof(*spans),cudaMemcpyHostToDevice,ctx.stream()));

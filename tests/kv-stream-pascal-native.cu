@@ -12,6 +12,26 @@ bool kv_stream_test_is_sm61_only() {
 #endif
 }
 
+// Never force a host architecture over a mixed-target binary with different device-side feature guards.
+bool kv_stream_test_is_arch_only(int cc) {
+#ifdef __CUDA_ARCH_LIST__
+    for (int arch : {__CUDA_ARCH_LIST__}) if (arch != cc) return false;
+    return true;
+#else
+    GGML_UNUSED(cc); return false;
+#endif
+}
+
+// Constrain metadata only; this must not change any driver/device setting.
+size_t kv_stream_test_shared_limit(ggml_backend_t backend, size_t limit) {
+    ggml_backend_synchronize(backend);
+    auto * ctx=static_cast<ggml_backend_cuda_context *>(backend->context);
+    auto & info=const_cast<ggml_cuda_device_info &>(ggml_cuda_info());
+    const size_t previous=info.devices[ctx->device].smpbo;
+    info.devices[ctx->device].smpbo=limit;
+    return previous;
+}
+
 // This single-process test restores the non-const device-info object before the borrowed backend is destroyed.
 int kv_stream_test_override_cc(ggml_backend_t backend, int cc) {
     ggml_backend_synchronize(backend);

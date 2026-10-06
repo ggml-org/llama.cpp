@@ -366,6 +366,28 @@ cmake --build build-sm61-eager --target test-kv-stream-tile-dispatch test-kv-str
 
 The test-only `--pascal` option requires an SM61-only build and restores CC metadata before teardown. The real-model tests still need sufficient VRAM for the IQ4 weights; they do not simulate a smaller card's memory or throughput. Unit fixtures cover short grants, aliases, stale layouts, one-slot refills and unpadded MTP tails. Only the causal-mask-hidden, exact rounded tail can be absent from physical spans. Numerical bounds are unchanged; matching output in these test prompts is not a universal token-equivalence guarantee. Actual Pascal/Volta hardware and Windows/MSVC acceptance remain pending, as do generation-specific performance checks and complete startup arena-size verification.
 
+#### Turing/Ampere streamed-attention development checks
+
+The existing Q8_0/Q4_0 TG2 MMA wrapper is admitted from SM75 when stock selects it. Its planner checks the actual streamed specialization's shared-memory/thread/occupancy limits before launch. Stock's block/fixup calculation uses native shared-memory requirements; the streamed descriptor cache is accounted separately. An unavailable streamed launch does not implicitly permit a native fallback with different output extras or scratch.
+
+For a single-target code-path check, replace `75` by `86` for the Ampere profile:
+
+```bash
+cmake -S . -B build-sm75 -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=75 -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA_NO_VMM=ON -DGGML_CUDA_GRAPHS=OFF -DLLAMA_BUILD_TESTS=ON
+cmake --build build-sm75 --target test-cuda-compiled-features test-kv-stream-vector-spans test-kv-stream-context -j
+./build-sm75/bin/test-cuda-compiled-features
+./build-sm75/bin/test-kv-stream-vector-spans --cuda-sm75
+./build-sm75/bin/test-kv-stream-context --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --embedded-mtp-pair --sm75
+./build-sm75/bin/test-kv-stream-context --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --target-stream-tg4 --sm75
+./build-sm75/bin/test-kv-stream-context --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --resume-only --sm75
+```
+
+The compiled checks preserve ordinary SM75 staging and stock's two-stage SM86 `cp.async` configuration. The runtime switches require the corresponding single-target binary and restore test-process CC metadata before teardown. On a newer GPU they exercise forward-JIT code, not an older card's actual resource limits, memory capacity or performance. Unit fixtures also inject a process-local shared-memory limit and require a clean rejection without modifying device/driver settings; `--cuda-resource-probe` runs that check alone on the normal CUDA build.
+
+The new consumer matrices require byte-exact TG2-TG4 MMA outputs. Optimized TG1's regional reduction can differ slightly from stock's global split distribution: the measured maximum is 7.45e-9 and the new regression guard is 1e-8. Real-model test prompts separately check matching logits/tokens; these finite test results are not universal prompt equivalence or actual Turing/Ampere hardware acceptance. See `DEVICE_MEMORY_CONSUMERS_ROADMAP.md` for the qualified pairs/geometries, evidence and pending hardware/performance checks.
+
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 
 If you try to use an old CUDA version (e.g. v11.7) with a new glibc version you can get errors like this:

@@ -71,7 +71,8 @@ int main() {
             t.assert_true(ggml_cuda_kv_stream_attention_select(610,2,pair.first,pair.second) == path::vector);
             for (uint32_t queries : {0u,3u,4u})
                 t.assert_true(ggml_cuda_kv_stream_attention_select(610,queries,pair.first,pair.second) == path::none);
-            t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,pair.first,pair.second) == path::none);
+            t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,pair.first,pair.second) ==
+                (pair.first == GGML_TYPE_Q8_0 && pair.second == GGML_TYPE_Q4_0 ? path::mma : path::none));
             for (int cc : {500,600,609})
                 t.assert_true(ggml_cuda_kv_stream_attention_select(cc,1,pair.first,pair.second) == path::none);
         }
@@ -89,6 +90,12 @@ int main() {
             for (int cc : {610,700,860,1200})
                 t.assert_equal(8u,ggml_cuda_kv_stream_vector_values_per_thread(type,cc));
         }
+    });
+    t.test("turing_has_the_existing_quantized_two_query_mma_path", [](testing & t) {
+        using path = ggml_cuda_kv_stream_attention_path;
+        t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::mma);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(750,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::vector);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(750,2,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0) == path::none);
     });
     t.test("metadata_contract_has_no_new_query_or_head_size_policy", [](testing & t) {
         fixture f;
