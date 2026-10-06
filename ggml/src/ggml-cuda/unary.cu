@@ -196,7 +196,6 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], stream);
         }
     }
-
 }
 
 void ggml_cuda_op_abs(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
