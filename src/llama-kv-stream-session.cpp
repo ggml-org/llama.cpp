@@ -29,6 +29,9 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
     auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
         ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
     const auto * ops=get ? get() : nullptr;
+    if (ops && ops->version >= 10 && ops->decode_workspace) return ops->decode_workspace(
+        backend,config.policy.shape.type_k,config.policy.shape.type_v,config.query_heads,
+        config.policy.shape.heads,std::min(4u,config.max_batch_rows),tokens,bytes);
     ggml_kv_stream_resume_plan plan;
     if (!ops || ops->version < 5 || !ops->resume_plan) return false;
     const uint32_t queries = std::min(2u,config.max_batch_rows);
@@ -662,10 +665,17 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
                     ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend)),"ggml_backend_kv_stream_partial_ops"));
                 const auto * ops=get ? get() : nullptr;
                 size_t mma_bytes=0;
+                ggml_kv_stream_resume_plan resume;
+                const bool resumable=s.config.resume_decode && ops && ops->version >= 10 && ops->resume_plan &&
+                    ops->resume_plan(s.backend,s.config.policy.shape.type_k,s.config.policy.shape.type_v,
+                        s.config.query_heads,s.config.policy.shape.heads,queries,(active+255)/256*256,resume);
                 const bool capable = s.config.native_graph_attention && s.config.resume_decode &&
-                    ops && ops->version >= 9 && ops->mma_workspace;
-                bool planned = capable && s.config.mma_workspace_bytes != 0;
-                if (planned) mma_bytes = s.config.mma_workspace_bytes;
+                    ops && ((ops->version >= 10 && ops->decode_workspace) || (ops->version >= 9 && ops->mma_workspace));
+                bool planned = capable && s.config.span_workspace_bytes != 0;
+                if (planned) mma_bytes = s.config.span_workspace_bytes;
+                else if (capable && ops->version >= 10 && ops->decode_workspace) planned=ops->decode_workspace(s.backend,
+                    s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,
+                    s.config.policy.shape.heads,std::min(4u,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
                 else if (capable) planned = ops->mma_workspace(s.backend,
                     s.config.policy.shape.type_k, s.config.policy.shape.type_v,
                     s.config.query_heads, s.config.policy.shape.heads,
@@ -683,9 +693,9 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
                 const bool laid_out = llama_kv_stream_policy_layout_make(
                     s.config.policy, decision.next, active, layout).status ==
                     llama_kv_stream_policy_status::success;
-                if (!laid_out || std::any_of(layout.layers.begin(),layout.layers.end(),[&](const auto & layer) {
+                if (!laid_out || (!resumable && std::any_of(layout.layers.begin(),layout.layers.end(),[&](const auto & layer) {
                             return layer.streamed_pages > decision.next.ring_slots;
-                        })) {
+                        }))) {
                     LLAMA_LOG_WARN("%s: TG%u KV layout rejected: valid=%d ring=%u active=%zu\n",
                         __func__, queries, int(laid_out), decision.next.ring_slots, active);
                     return false;

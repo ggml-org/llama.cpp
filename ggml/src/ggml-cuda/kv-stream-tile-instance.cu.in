@@ -1,0 +1,33 @@
+#include "ggml-cuda/kv-stream-tile.cuh"
+#include "ggml-cuda/fattn-tile.cuh"
+#include "ggml-cuda/fattn-tile-resume.cuh"
+
+template<ggml_type V>
+static fattn_kernel_t tile_kernel(uint32_t ncols1, uint32_t ncols2) {
+    using reader = ggml_cuda_fattn_tile_resume_kv<GGML_TYPE_@KV_STREAM_KEY@,V>;
+#define TILE(C1, C2) if (ncols1 == C1 && ncols2 == C2) return flash_attn_tile<256,256,C1,C2,false,reader>;
+    TILE(2,1) TILE(4,1)
+    TILE(1,2) TILE(2,2) TILE(4,2)
+    TILE(1,4) TILE(2,4) TILE(4,4)
+    TILE(1,8) TILE(2,8) TILE(4,8)
+#undef TILE
+    return nullptr;
+}
+
+// Compile the same encoded pairs as the registry; uncompiled pairs fail admission without a fallback gather.
+fattn_kernel_t ggml_cuda_kv_stream_tile_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t ncols1, uint32_t ncols2) {
+#ifdef GGML_CUDA_NO_FA
+    GGML_UNUSED_VARS(value,ncols1,ncols2); return nullptr;
+#elif defined(GGML_CUDA_FA_ALL_QUANTS)
+    switch (value) {
+#define VALUE(V) case GGML_TYPE_##V: return tile_kernel<GGML_TYPE_##V>(ncols1,ncols2);
+        VALUE(F16) VALUE(BF16) VALUE(Q4_0) VALUE(Q4_1) VALUE(Q5_0) VALUE(Q5_1) VALUE(Q8_0)
+#undef VALUE
+        default: return nullptr;
+    }
+#elif @KV_STREAM_DEFAULT_NATIVE@
+    return value == GGML_TYPE_@KV_STREAM_KEY@ ? tile_kernel<GGML_TYPE_@KV_STREAM_KEY@>(ncols1,ncols2) : nullptr;
+#else
+    GGML_UNUSED_VARS(value,ncols1,ncols2); return nullptr;
+#endif
+}

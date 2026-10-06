@@ -73,6 +73,28 @@ int main() {
         t.assert_true(ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),0,64,descriptor));
         t.assert_true(descriptor.control.reset && !descriptor.control.finish);
     });
+    t.test("masked_padding_keeps_native_extent_without_extending_physical_grants",[&](testing & t) {
+        auto grouped=geometry; grouped.kv_heads=2; grouped.ncols1=2; grouped.ncols2=2;
+        ggml_cuda_fattn_tile_resume_layout plan;
+        if (!t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(grouped,768,plan))) return;
+        ggml_backend_buffer_ptr input(ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(),2*1024*1024));
+        ggml_backend_buffer_ptr scratch(ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(),plan.bytes));
+        ggml_kv_stream_span source{input.get(),input.get(),0,529,0,1024*1024};
+        ggml_kv_stream_span_plan_view view{{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,2,256,128},&source,1,529,2};
+        ggml_cuda_fattn_tile_resume_descriptor descriptor;
+        t.assert_true(!ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),0,768,descriptor));
+        t.assert_true(ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),0,768,descriptor,true));
+        t.assert_equal(768,descriptor.table.tokens);
+        t.assert_equal(529,descriptor.table.spans[0].tokens);
+        t.assert_true(descriptor.control.reset && descriptor.control.finish);
+        source.tokens=528;
+        t.assert_true(!ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),0,768,descriptor,true));
+        source.tokens=529;
+        t.assert_true(!ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),0,704,descriptor,true));
+        t.assert_true(!ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),576,768,descriptor,true));
+        view.active_tokens=512; source.tokens=512;
+        t.assert_true(!ggml_cuda_fattn_tile_resume_wave_make(view,plan,scratch.get(),0,768,descriptor,true));
+    });
     t.test("read_completion_and_publication_are_separate_transactions",[&](testing & t) {
         ggml_cuda_fattn_tile_resume_cursor empty(0,64), invalid_tile(529,0);
         t.assert_true(!empty.ready_to_publish() && !empty.publish(true));

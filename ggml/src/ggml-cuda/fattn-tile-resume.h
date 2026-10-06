@@ -2,6 +2,7 @@
 
 #include "fattn-tile-spans.h"
 #include <cstddef>
+#include <algorithm>
 #include <utility>
 
 struct ggml_cuda_fattn_tile_resume_geometry {
@@ -76,7 +77,8 @@ static inline bool ggml_cuda_fattn_tile_resume_layout_make(
 // Reject stale sizes, incomplete windows, overlapping scratch and non-tile wave boundaries before submitting work.
 static inline bool ggml_cuda_fattn_tile_resume_wave_make(
         const ggml_kv_stream_span_plan_view & view, const ggml_cuda_fattn_tile_resume_layout & layout,
-        ggml_backend_buffer_t workspace, size_t first, size_t end, ggml_cuda_fattn_tile_resume_descriptor & output) {
+        ggml_backend_buffer_t workspace, size_t first, size_t end, ggml_cuda_fattn_tile_resume_descriptor & output,
+        bool allow_masked_padding = false) {
     ggml_cuda_fattn_tile_resume_layout checked;
     if (!ggml_cuda_fattn_tile_resume_layout_make(layout.geometry,layout.tokens,checked) ||
             checked.thread_bytes != layout.thread_bytes || checked.state_bytes != layout.state_bytes ||
@@ -84,14 +86,18 @@ static inline bool ggml_cuda_fattn_tile_resume_wave_make(
             checked.meta_offset != layout.meta_offset || checked.output_offset != layout.output_offset ||
             checked.output_bytes != layout.output_bytes || checked.bytes != layout.bytes ||
             !workspace || ggml_backend_buffer_get_size(workspace) < layout.bytes ||
-            view.active_tokens != layout.tokens || view.query_tokens != layout.geometry.queries ||
+            (view.active_tokens != layout.tokens && (!allow_masked_padding ||
+                view.active_tokens > layout.tokens || layout.tokens != (view.active_tokens+255)/256*256 ||
+                end != layout.tokens || first >= view.active_tokens)) || view.query_tokens != layout.geometry.queries ||
             view.shape.heads != layout.geometry.kv_heads || view.shape.head_dim_k != layout.geometry.width ||
             view.shape.head_dim_v != layout.geometry.width || first >= end || end > layout.tokens ||
             first%layout.geometry.nbatch_fa || (end != layout.tokens && end%layout.geometry.nbatch_fa)) return false;
     const auto base = uintptr_t(ggml_backend_buffer_get_base(workspace));
     if (!base || base%16 || layout.bytes > UINTPTR_MAX-base) return false;
     ggml_cuda_fattn_tile_resume_descriptor next;
-    if (!ggml_cuda_fattn_tile_span_window_make(view,first,end,next.table)) return false;
+    if (!ggml_cuda_fattn_tile_span_window_make(view,first,std::min(end,view.active_tokens),next.table)) return false;
+    // The caller's causal mask hides the absent padded tail; no address is formed outside a retained span.
+    next.table.tokens = int32_t(layout.tokens);
     for (int i = 0; i < next.table.count; ++i) {
         const auto & span = next.table.spans[i];
         for (auto range : {std::pair{uintptr_t(span.k),size_t(span.tokens)*size_t(span.k_token_stride)},

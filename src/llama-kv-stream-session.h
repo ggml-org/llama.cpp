@@ -18,7 +18,7 @@ struct llama_kv_stream_session_config {
     llama_memory_stage_id prefill_stage = 0;
     llama_memory_stage_id decode_stage = 0;
     // Measured before CUDA graph capture; zero retains the direct-session query.
-    size_t mma_workspace_bytes = 0;
+    size_t span_workspace_bytes = 0;
     llama_memory_stage_id suspend_stage = 0;
 };
 

@@ -1045,7 +1045,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     ggml_kv_stream_layout gathered;
     ggml_kv_stream_resume_plan resume_plan;
     const bool prefill = cross && !s.sequence->decode;
-    const bool resumed = s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 2 && !s.fallback &&
+    const bool resumed = s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 4 && !s.fallback &&
         ops->version >= 5 && ops->resume_plan && ops->resume &&
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
             uint32_t(q->ne[2]),uint32_t(s.binding.config.shape.heads),uint32_t(q->ne[1]),padded,resume_plan);
@@ -1056,7 +1056,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         q->ne[1] <= 4 && blocks <= slots && ops->version >= 8 && ops->spans && ops->spans_workspace &&
         (q->ne[1] != 2 || resumed ||
          (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0)) &&
-        (prefix == padded || !resumed);
+        (prefix == padded || !resumed) && (!resumed || !resume_plan.resume_resident);
     // Short prefills use the same encoded gather and stock kernel as longer prefills.
     const bool native = s.native_graph_attention && !resumed && (prefill || q->ne[1] != 2 || segmented || !s.resumed_decode);
     if (ggml_kv_stream_block_layout_make(size_t(q->ne[1])*size_t(q->ne[2]),size_t(output->ne[0]),work).status !=
@@ -1066,7 +1066,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         lease(ggml_backend_memory_lease_retain(workspace),ggml_backend_memory_lease_free);
     auto * wb = ggml_backend_memory_lease_buffer(lease.get());
     ggml_backend_memory_region region;
-    const size_t required_workspace = (native || resumed) && !s.fallback && prefix == padded ?
+    const size_t required_workspace = (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded ?
         0 : resumed ? resume_plan.bytes : native && !segmented ? gathered.bytes : work.bytes;
     if (!wb || !ggml_backend_memory_lease_get_region(lease.get(),&region) ||
             region.size != ggml_backend_buffer_get_size(wb) || region.size < required_workspace ||
@@ -1216,7 +1216,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return true;
     };
     if (prefetch && !cross) for (size_t block = 0; block < std::min(slots,blocks); block += width(block)) if (!enqueue(block)) return false;
-    if ((native || resumed) && !s.fallback && prefix == padded && !segmented) {
+    if ((native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded && !segmented) {
         if (!describe(0,prefix,0,true) || !ops->direct(s.backend,&op)) return false;
         ++s.attention_calls; direct_result = true; return finish();
     }
@@ -1353,8 +1353,9 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
     };
     if (resumed) {
-        if (prefix && (!describe(0,prefix,0,true) || !ops->resume(s.backend,&op,wb,resume_plan,padded,0,false))) return false;
+        if (prefix && (!describe(0,prefix,0,true) || !ops->resume(s.backend,&op,wb,resume_plan,padded,0,prefix == padded))) return false;
         s.attention_calls += prefix != 0;
+        if (prefix == padded) {direct_result=true; return finish();}
     } else if (native) {
         if (prefix && !gather(s.roots[layer].first->data,s.roots[layer].second->data,0,prefix)) return false;
         if (prefix == padded) return finish_gather();

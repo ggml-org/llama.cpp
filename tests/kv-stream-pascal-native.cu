@@ -1,5 +1,6 @@
 #include "../ggml/src/ggml-cuda/common.cuh"
 #include "../ggml/src/ggml-backend-impl.h"
+#include <cstdlib>
 
 // A simulated host CC must match the code the driver actually loads, not just one target in a fat binary.
 bool kv_stream_test_is_sm61_only() {
@@ -25,4 +26,13 @@ int kv_stream_test_override_cc(ggml_backend_t backend, int cc) {
 int kv_stream_test_compiled_cc(ggml_backend_t backend) {
     auto * ctx = static_cast<ggml_backend_cuda_context *>(backend->context);
     return ggml_cuda_highest_compiled_arch(ggml_cuda_info().devices[ctx->device].cc);
+}
+
+// Eager-only profiles must verify outputs and lifetime without expecting a native graph cache entry.
+bool kv_stream_test_native_graphs_enabled() {
+#ifdef GGML_CUDA_USE_GRAPHS
+    return std::getenv("GGML_CUDA_DISABLE_GRAPHS") == nullptr;
+#else
+    return false;
+#endif
 }

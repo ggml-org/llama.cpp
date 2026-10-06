@@ -31,7 +31,7 @@ struct llama_kv_stream_model::implementation {
     uint64_t mtp_resident_revision = 0, mtp_resident_arena_generation = 0;
     model_arena_ptr attention_arena{nullptr,ggml_backend_memory_arena_free};
     size_t decode_bytes = 0;
-    size_t mma_bytes = 0;
+    size_t span_bytes = 0;
     std::array<model_lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::unique_ptr<llama_kv_stream_session> session;
     const ggml_tensor * pending_k = nullptr;
@@ -74,7 +74,7 @@ struct llama_kv_stream_model::implementation {
             (policy.pool_bytes > config.pool_bytes ||
              ggml_backend_buffer_get_size(attention_buffer) == decode_bytes);
         session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode;
-        session_config.mma_workspace_bytes = mma_bytes;
+        session_config.span_workspace_bytes = span_bytes;
         session_config.pool_resource = pool_id;
         session_config.writer_resource = writer_id;
         session_config.attention_resource = attention_id;
@@ -378,11 +378,17 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         s->config.resume_decode = resume_capable &&
             (plan_resume(decode_rows) || (decode_rows == 2 && plan_resume(1)));
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
-        if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
+        if (s->config.resume_decode && partial_ops->version >= 10 && partial_ops->decode_workspace) {
+            size_t bytes=0;
+            if (!partial_ops->decode_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
+                    config.query_heads,config.host.shape.heads,std::min(4u,config.max_batch_rows),
+                    s->host->layout().tokens,bytes)) return {};
+            s->span_bytes=bytes; s->decode_bytes=std::max(s->decode_bytes,bytes);
+        } else if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
             size_t mma_bytes=0;
             if (get()->mma_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
                     config.query_heads,config.host.shape.heads,s->host->layout().tokens,3,mma_bytes)) {
-                s->mma_bytes = mma_bytes;
+                s->span_bytes = mma_bytes;
                 s->decode_bytes=std::max(s->decode_bytes,mma_bytes);
             }
         }

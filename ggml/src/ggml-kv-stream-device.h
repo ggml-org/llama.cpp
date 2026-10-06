@@ -42,7 +42,7 @@ struct ggml_kv_stream_partial_ops {
     bool (*convert)(ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination);
     // Version 4: ordinary attention, requiring the caller's native FA output allocation including backend extras.
     bool (*direct)(ggml_backend_t backend, const ggml_tensor * attention) = nullptr;
-    // Version 6: plan a TG1/TG2 native vector evaluation, then consume ordered logical spans.
+    // Version 6: native TG1/TG2 vector resume. Version 10 also admits the stock tile family through TG4.
     bool (*resume_plan)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads, uint32_t kv_heads,
             uint32_t queries, size_t tokens, ggml_kv_stream_resume_plan & output) = nullptr;
     // No allocation; scratch is caller-owned and retains per-thread state until the final span publishes output.
@@ -60,12 +60,19 @@ struct ggml_kv_stream_partial_ops {
     // Version 9: reserve the largest TG3/TG4 MMA span workspace for a given layout.
     bool (*mma_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
             uint32_t kv_heads, size_t tokens, size_t spans, size_t & bytes) = nullptr;
+    // Version 10: bound every admitted serial decode family before phase grants or graph capture.
+    bool (*decode_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
+            uint32_t kv_heads, uint32_t max_queries, size_t tokens, size_t & bytes) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 
 struct ggml_kv_stream_resume_plan {
     uint32_t heads = 0, queries = 0, splits = 0, values_per_thread = 0;
     size_t tokens = 0, state_bytes = 0, partial_offset = 0, meta_offset = 0, bytes = 0;
+    // Backend-private resume configuration. Zero retains the version-6 vector layout.
+    uint32_t kernel_config[5] = {};
+    // Some native families need conversion extras outside the public output; keep their full layer on the resume path.
+    bool resume_resident = false;
 };
 // Bound the native per-thread state and final partials without a context-sized KV allocation.
 GGML_API bool ggml_kv_stream_resume_layout_make(

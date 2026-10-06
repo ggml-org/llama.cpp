@@ -287,7 +287,7 @@ This stub is only for linking and GPU-independent tests. Do not install it as a 
 
 `test-cuda-compiled-features` uses the CUDA backend's actual architecture list and build definitions, but does not initialize a GPU. An SM61-only build reports compiled target `610`, slow FP16 and no Tensor Core / `cp.async` support, even when queried for a newer hypothetical GPU. The normal CUDA source guards keep newer instructions out of this target. For mixed Q8_0 K / Q4_0 V, keep `GGML_CUDA_FA_ALL_QUANTS=ON`; the default vector build compiles only matching F16/F16, BF16/BF16, Q4_0/Q4_0 and Q8_0/Q8_0 pairs. Other stock attention paths may use bounded conversion; a missing direct pair is not proof that the hardware is unsupported.
 
-This compile profile alone is not Pascal adaptive-streaming runtime qualification. The development branch admits stock-selected quantized TG1/TG2 from the SM61 baseline, but legacy TG3/TG4 and stock tile-selected shapes require later stages. No Windows/MSVC build or GTX 10-series inference result is claimed by these Linux compile tests. Modern CUDA 13 builds retain their existing target selection and optimized kernels.
+This compile profile alone is not Pascal adaptive-streaming runtime qualification. The development branch has stock-selected quantized TG1/TG2 vector resume and head-256 tile-backed TG1-TG4 target/MTP integration. Actual Pascal acceptance remains pending. No Windows/MSVC build or GTX 10-series inference result is claimed by these Linux compile tests. Modern CUDA 13 builds retain their existing target selection and optimized kernels.
 
 #### Runtime prerequisites without optional acceleration
 
@@ -319,7 +319,7 @@ cmake --build build-sm61-eager --target test-kv-stream-vector-spans -j
 ./build-sm61-eager/bin/test-kv-stream-vector-spans --cuda-pascal-tg2
 ```
 
-These modes change only the test process's host CC metadata, restore it before teardown, and reject mixed-target binaries. They check all-resident and wrapped spans, one-slot refill waves, masks/tails, exact/short scratch, canaries and phase handoffs against the stock kernel in the same binary. TG2 also tests separate causal frontiers, stale TG1 plans, changed-tail visibility, suffix invalidation and catch-up/replay. Use `--cuda-tg2` for that same matrix on an ordinary, unmodified CUDA device. These are not actual Pascal performance results or full-model support guarantees. Actual Pascal validation and tile-based TG3/TG4/MTP remain follow-up work; do not advertise complete GTX 10-series support from these tests alone.
+These modes change only the test process's host CC metadata, restore it before teardown, and reject mixed-target binaries. They check all-resident and wrapped spans, one-slot refill waves, masks/tails, exact/short scratch, canaries and phase handoffs against the stock kernel in the same binary. TG2 also tests separate causal frontiers, stale TG1 plans, changed-tail visibility, suffix invalidation and catch-up/replay. Use `--cuda-tg2` for that same matrix on an ordinary, unmodified CUDA device. These are not actual Pascal performance results or full-model support guarantees. Actual Pascal validation remains follow-up work; do not advertise complete GTX 10-series support from these tests alone.
 
 #### Native tile-access development checks
 
@@ -331,7 +331,7 @@ void load(half2 * destination, int row, int half2_column,
           bool valid, const half2 * zero_source) const;
 ```
 
-The default native tag retains the original affine pointer loads and restrict qualifiers. Custom readers use their own copy implementation and explicit zero initialization for invalid rows. This does not yet enable span-aware tile attention, accumulator resume or full Pascal MTP.
+The default native tag retains the original affine pointer loads and restrict qualifiers. Custom readers use their own copy implementation and explicit zero initialization for invalid rows. This load seam alone is not span attention or accumulator resume; the following tests qualify those layers separately.
 
 `test-cuda-tile-access` validates exact intermediate bits, float conversion, read counts, zero fill and padding/canaries on a real CUDA device. `test-kv-stream-tile` records native stock-selected tile outputs and compares a later build against those same files:
 
@@ -346,9 +346,25 @@ mkdir -p /tmp/tile-native-reference
 
 Omit `--pascal` for the ordinary-device native tile matrix. Recording a reference from an already modified build is not an upstream-equivalence check. The Pascal mode requires an SM61-only binary and changes only test-process CC metadata; forward-JIT checks on a newer card are not actual Pascal hardware or throughput qualification.
 
-`test-cuda-tile-spans` checks the complete-layer reader: bounded metadata, encoded tile conversion and stock/span attention outputs with one to three physical ranges. It reports table/split scratch without a context-sized F16 conversion plane. Build the target with the same CUDA options as the backend, then run it without arguments. Conversion, metadata and canaries remain byte-exact. Modern outputs are byte-exact; compiled SM61 FP32 outputs must satisfy both maximum absolute error <= 1e-8 and normalized L2 error <= eight FP32 epsilons. The summary reports every nonexact case and the maximum errors. `--policy-only` tests this comparator, including its negative cases, without initializing CUDA. Forward-JIT evidence is not actual Pascal hardware qualification or a full-model output guarantee. Live dispatch and refill/resume support are later stages in `DEVICE_MEMORY_CONSUMERS_ROADMAP.md`.
+`test-cuda-tile-spans` checks the complete-layer reader: bounded metadata, encoded tile conversion and stock/span attention outputs with one to three physical ranges. It reports table/split scratch without a context-sized F16 conversion plane. Build the target with the same CUDA options as the backend, then run it without arguments. Conversion, metadata and canaries remain byte-exact. Modern outputs are byte-exact; compiled SM61 FP32 outputs must satisfy both maximum absolute error <= 1e-8 and normalized L2 error <= eight FP32 epsilons. The summary reports every nonexact case and the maximum errors. `--policy-only` tests this comparator, including its negative cases, without initializing CUDA. Forward-JIT evidence is not actual Pascal hardware qualification or a full-model output guarantee. See `DEVICE_MEMORY_CONSUMERS_ROADMAP.md` for the separate live integration qualification.
 
-The C4c resume checks use `test-kv-stream-tile-resume` for metadata-only geometry, window and submission/publication contracts, plus `test-cuda-tile-spans` for the actual checkpoint/refill kernels. Build both targets with the backend's CUDA settings and run them without arguments. The device test compares one-wave versus multi-wave outputs/metadata byte-for-byte, reuses a bounded ring, poisons state before reset, and exercises pending read fences, cancellation, discarded work, publication failure and replay. Final stock comparisons retain the C4b SM61 bound; state bytes and refill equivalence do not receive a relaxed tolerance. The caller must reserve the reported resume scratch and retain every grant until the read fence completes. These are private primitives; live target/MTP integration is C4d, and actual Pascal hardware acceptance remains pending.
+The C4c resume checks use `test-kv-stream-tile-resume` for metadata-only geometry, window and submission/publication contracts, plus `test-cuda-tile-spans` for the actual checkpoint/refill kernels. Build both targets with the backend's CUDA settings and run them without arguments. The device test compares one-wave versus multi-wave outputs/metadata byte-for-byte, reuses a bounded ring, poisons state before reset, and exercises pending read fences, cancellation, discarded work, publication failure and replay. Final stock comparisons retain the C4b SM61 bound; state bytes and refill equivalence do not receive a relaxed tolerance. The caller must reserve the reported resume scratch and retain every grant until the read fence completes.
+
+#### Live tile dispatch development checks
+
+C4d connects the head-256 tile path to the existing target/MTP/session hooks. It follows stock selection instead of forcing modern vector/MMA onto a baseline kernel. Decode scratch covers descriptor, raw native accumulators, split outputs and private final publication; it is leased and reused, not a context-sized F16 cache. Registry version 10 reports the largest admitted serial decode requirement before phase transitions, including vector tail staging. Tile-backed target attention can resume over multiple ring waves; retained MTP attention reads its complete prefix/suffix spans under the existing lease. Strict prefill gathering remains unchanged.
+
+For an SM61-only binary on a newer GPU:
+
+```bash
+cmake --build build-sm61-eager --target test-kv-stream-tile-dispatch test-kv-stream-context -j
+./build-sm61-eager/bin/test-kv-stream-tile-dispatch --pascal
+./build-sm61-eager/bin/test-kv-stream-context --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --target-stream-tg4 --pascal
+./build-sm61-eager/bin/test-kv-stream-context --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --embedded-mtp-pair --pascal
+./build-sm61-eager/bin/test-kv-stream-context --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --resume-only --pascal
+```
+
+The test-only `--pascal` option requires an SM61-only build and restores CC metadata before teardown. The real-model tests still need sufficient VRAM for the IQ4 weights; they do not simulate a smaller card's memory or throughput. Unit fixtures cover short grants, aliases, stale layouts, one-slot refills and unpadded MTP tails. Only the causal-mask-hidden, exact rounded tail can be absent from physical spans. Numerical bounds are unchanged; matching output in these test prompts is not a universal token-equivalence guarantee. Actual Pascal/Volta hardware and Windows/MSVC acceptance remain pending, as do generation-specific performance checks and complete startup arena-size verification.
 
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 

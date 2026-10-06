@@ -36,6 +36,8 @@ struct tg1_only_test_ops {
     tg1_only_test_ops(ggml_backend_reg_t reg, const ggml_kv_stream_partial_ops & ops) :
         reg(reg), original(reg->iface.get_proc_address), limited(ops), original_plan(ops.resume_plan) {
         GGML_ASSERT(!active); active = this;
+        // Exercise the older vector-only provider, not the new four-width workspace capability.
+        limited.version=9; limited.decode_workspace=nullptr;
         limited.resume_plan = [](ggml_backend_t backend, int32_t k, int32_t v,
                 uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, ggml_kv_stream_resume_plan & plan) {
             return queries == 1 && active->original_plan(backend,k,v,heads,kv_heads,queries,tokens,plan);
@@ -558,17 +560,23 @@ int main(int argc, char ** argv) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,2,4,3);
         ggml_kv_stream_resume_plan plan;
         if (!t.assert_true(ops && ops->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,24,4,2,f.host->layout().tokens,plan))) return;
+        size_t required=plan.bytes;
+        if (ops->version >= 10) {
+            if (!t.assert_true(ops->decode_workspace && ops->decode_workspace(backend.get(),GGML_TYPE_Q8_0,
+                    GGML_TYPE_Q4_0,24,4,4,f.host->layout().tokens,required))) return;
+            t.assert_true(required >= plan.bytes);
+        }
         auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),f.policy.pool_bytes,256,24});
         if (!t.assert_true(model != nullptr)) return;
         llama_kv_stream_memory_requirements requirements;
         if (!t.assert_true(model->memory_requirements(requirements))) return;
-        t.assert_equal(plan.bytes,requirements.attention_decode_bytes);
+        t.assert_equal(required,requirements.attention_decode_bytes);
         if (!t.assert_true(model->begin(2,2,true))) return;
-        t.assert_equal(plan.bytes,model->attention_grant_bytes());
+        t.assert_equal(required,model->attention_grant_bytes());
         model->abort();
         t.assert_true(model->reset(false));
         t.assert_true(model->begin(1,1,true));
-        t.assert_equal(plan.bytes,model->attention_grant_bytes());
+        t.assert_equal(required,model->attention_grant_bytes());
         model->abort();
         t.assert_true(model->reset(false));
         t.assert_true(model->begin(2,2,false));
