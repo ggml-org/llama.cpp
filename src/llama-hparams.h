@@ -72,6 +72,8 @@ struct llama_hparams {
     int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_rel_attn_bkts = 0;
+    uint32_t n_value_expert      = 0; // MoVA value experts (K2 Horizon)
+    uint32_t n_value_expert_used = 0;
 
     // TODO: this needs to be reworked
     int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache

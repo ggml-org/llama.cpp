@@ -400,6 +400,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
             "model.layers.{bid}.self_attn.output_gate",  # minimax-01
             "model.layers.{bid}.self_attn.linear_gate",  # hy-v4
+            "model.layers.{bid}.self_attn.attn_gate_proj",  # k2-horizon
         ),
 
         # Feed-forward norm
@@ -2861,6 +2862,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
+        ),
+
+        MODEL_TENSOR.ATTN_V_GATE: (
+            "model.layers.{bid}.self_attn.v_router",  # k2-horizon
+        ),
+
+        MODEL_TENSOR.ATTN_V_EXP: (
+            "model.layers.{bid}.self_attn.v_experts",  # k2-horizon
         ),
     }
 

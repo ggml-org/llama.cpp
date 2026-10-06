@@ -1537,6 +1537,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & chat_template_kwargs(const std::map<std::string, std::string> & kwargs) {
+        tc_.params.chat_template_kwargs = kwargs;
+        return *this;
+    }
+
     peg_test_builder & is_partial(bool val) {
         tc_.is_partial = val;
         return *this;
@@ -4872,6 +4877,207 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
             .expect_reasoning("I'm thinking more")
             .expect_content("Hello, world!")
+            .run();
+    }
+
+    // K2 Horizon
+    {
+        auto tst = peg_tester("models/templates/IFM-K2-Horizon.jinja", detailed_debug);
+
+        tst.test("I'm\nthinking</ifm|think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("I'm\nthinking")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I'm\nthinking")
+            .run();
+
+        tst.test("I'm\nthinking</ifm|think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("<ifm|think>\nI'm\nthinking</ifm|think>Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(
+               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>special_function\n"
+               "<ifm|arg_key>arg1</ifm|arg_key>\n"
+               "<ifm|arg_value>1</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>special_function\n"
+               "<ifm|arg_key>arg1</ifm|arg_key>\n"
+               "<ifm|arg_type>integer</ifm|arg_type>\n"
+               "<ifm|arg_value>1</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .chat_template_kwargs({ { "tool_call_format", R"("xml_typed")" } })
+            .expect(message_assist_call_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .chat_template_kwargs({ { "tool_call_format", R"("json")" } })
+            .expect(message_assist_call_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>empty_args\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        tst.test(
+               "</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>get_time\n"
+               "<ifm|arg_key>city</ifm|arg_key>\n"
+               "<ifm|arg_value>Paris</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "<ifm|tool_call>get_time\n"
+               "<ifm|arg_key>city</ifm|arg_key>\n"
+               "<ifm|arg_value>Rome</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool })
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", {} },
+                { "get_time", R"({"city": "Rome"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>tool_2req_4opt\n"
+               "<ifm|arg_key>req2</ifm|arg_key>\n"
+               "<ifm|arg_value>7</ifm|arg_value>\n"
+               "<ifm|arg_key>req1</ifm|arg_key>\n"
+               "<ifm|arg_value>hello</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({ { "tool_2req_4opt", R"({"req2": 7, "req1": "hello"})", {} } })
+            .run();
+
+        for (const std::string value : { "true", "42", "null", "[]", R"("quoted")", "{not valid json" }) {
+            tst.test(
+                   "</ifm|think><ifm|tool_calls>\n"
+                   "<ifm|tool_call>set_union\n"
+                   "<ifm|arg_key>value</ifm|arg_key>\n"
+                   "<ifm|arg_value>" + value + "</ifm|arg_value>\n"
+                   "<ifm|arg_key>amount</ifm|arg_key>\n"
+                   "<ifm|arg_value>42</ifm|arg_value>\n"
+                   "</ifm|tool_call>\n"
+                   "</ifm|tool_calls>")
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .tools({ string_union_tool })
+                .expect_tool_calls({ { "set_union", json({ { "value", value }, { "amount", 42 } }).dump(), {} } })
+                .run();
+        }
+
+        tst.test(
+               "</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>set_union\n"
+               "<ifm|arg_key>value</ifm|arg_key>\n"
+               "<ifm|arg_value>{\"a\": 1}</ifm|arg_value>\n"
+               "<ifm|arg_key>amount</ifm|arg_key>\n"
+               "<ifm|arg_value>2 dollars</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ string_union_tool })
+            .expect_tool_calls({ { "set_union", R"({"value": {"a": 1}, "amount": "2 dollars"})", {} } })
+            .run();
+
+        tst.test(
+               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>special_function\n"
+               "<ifm|arg_key>arg1</ifm|arg_key>\n"
+               "<ifm|arg_value>1</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        tst.test(
+               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>special_function\n"
+               "<ifm|arg_key>arg1</ifm|arg_key>\n"
+               "<ifm|arg_value>1</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect_content("<ifm|think>\nI'm\nthinking</ifm|think>")
+            .expect_tool_calls({ { "special_function", R"({"arg1": 1})", {} } })
+            .run();
+
+        tst.test("I'm\nthinking</ifm|think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts)
+            .run();
+
+        const std::string answer_schema = R"({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]})";
+
+        tst.test("Let me calculate.</ifm|think>{\"answer\":42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(answer_schema)
+            .expect_reasoning("Let me calculate.")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test("Let me calculate.</ifm|think>{\"answer\":42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(answer_schema)
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test("42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(answer_schema)
+            .messages({ message_user, simple_assist_msg("{\"answer\":", "Calculated.") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("Calculated.")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test(" thinking</ifm|think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
 

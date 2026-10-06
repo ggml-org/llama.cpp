@@ -126,6 +126,10 @@ internlm2           ,0   ,any     ,RMS_NORM+MUL                ,      5
 jais                ,0   ,any     ,NORM+MUL+ADD                ,      5
 jais2               ,0   ,any     ,NORM+MUL+ADD                ,      5
 jamba               ,0   ,any     ,RMS_NORM+MUL                ,      8
+k2-horizon          ,0   ,any     ,RMS_NORM+MUL                ,      4
+k2-horizon          ,0   ,any     ,ADD+ADD                     ,      1
+k2-horizon          ,0   ,any     ,MUL+ADD                     ,      2
+k2-horizon          ,0   ,any     ,RMS_NORM+MUL                ,      4
 kimi-k3             ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-k3             ,0   ,any     ,MUL+ADD                     ,      2
 kimi-k3             ,0   ,any     ,RMS_NORM+MUL                ,     17
