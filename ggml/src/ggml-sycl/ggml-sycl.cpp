@@ -3604,7 +3604,8 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
         queue_ptr stream = ctx.stream(i, 0);
 
         if (src0_is_contiguous) {
-            dev[i].src0_dd = (char *) src0->data;
+            // a split tensor keeps its rows in the per-device slices of the tensor extra
+            dev[i].src0_dd = split ? (char *) src0_extra->data_device[i] : (char *) src0->data;
         } else {
             dev[i].src0_dd = dev[i].src0_dd_alloc.alloc(ctx.pool(i), ggml_nbytes(src0));
         }
@@ -3700,7 +3701,8 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                                                              src1_ncols * src1_padded_col_size * q8_1_ts / q8_1_bs)
                                                     .wait()));
                         } else {
-                            const char * src1_ddf_i_source = (const char *) src1_extra->data_device[ctx.device] +
+                            // src1 is not split, on the main device it lives at dev[ctx.device].src1_ddf
+                            const char * src1_ddf_i_source = (const char *) dev[ctx.device].src1_ddf +
                                 (i0 * ne11 + src1_col_0) * ne10 * ggml_type_size(src1->type);
 
                             SYCL_CHECK(
