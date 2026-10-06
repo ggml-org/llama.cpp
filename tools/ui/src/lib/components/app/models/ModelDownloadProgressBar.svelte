@@ -18,14 +18,14 @@
 {#if overlay}
 	<div class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden rounded-b-sm">
 		<div
-			class="h-full bg-primary transition-[width] duration-200 ease-out"
+			class="h-full animate-pulse bg-primary transition-[width] duration-200 ease-out"
 			style="width: {percent}%"
 		></div>
 	</div>
 {:else}
 	<div class="h-1 w-full overflow-hidden rounded-full bg-muted">
 		<div
-			class="h-full bg-primary transition-[width] duration-200 ease-out"
+			class="h-full animate-pulse bg-primary transition-[width] duration-200 ease-out"
 			style="width: {percent}%"
 		></div>
 	</div>

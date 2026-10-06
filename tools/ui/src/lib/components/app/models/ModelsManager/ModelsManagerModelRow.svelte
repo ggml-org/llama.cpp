@@ -11,8 +11,9 @@
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
 	import { ModelRowDownloadState } from '$lib/enums';
-	import { deviceStore, modelsStore } from '$lib/stores';
+	import { deviceStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { repoOf } from '$lib/utils';
 
 	interface Props {
 		isFavorite: (option: ModelOption) => boolean;
@@ -38,6 +39,18 @@
 				? ModelRowDownloadState.DOWNLOADING
 				: null
 	);
+
+	/** Repo of the row's model, which is what the Discover details are keyed by. */
+	function openInDiscover(): void {
+		uiStore.openModelsDiscover(repoOf(option.model));
+	}
+
+	// a tracked download has nothing to configure yet, so its row opens the Discover
+	// details, where the sizes, variants and download options live
+	function activate(): void {
+		if (download) openInDiscover();
+		else onSelect(option);
+	}
 </script>
 
 <div
@@ -51,9 +64,9 @@
 	<!-- the row holds a load control and an actions menu, so only the model itself is
 	     the button: a button nested in a role="button" row is invalid -->
 	<button
-		aria-pressed={selected}
+		aria-pressed={download ? undefined : selected}
 		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:gap-2 max-md:pr-9"
-		onclick={() => onSelect(option)}
+		onclick={activate}
 		style="padding-left: {indent}px"
 		type="button"
 	>

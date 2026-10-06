@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelId from '../../ModelId.svelte';
-	import ModelsDiscoverAvatar from '../ModelsDiscoverAvatar.svelte';
+	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import { HF_MMPROJ_FILENAME_TOKEN, HF_MODALITY_PIPELINE_TAGS } from '$lib/constants';
 	import { ModelDraftSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
@@ -101,11 +101,7 @@
 		onclick={() => onSelect?.(model.id)}
 		type="button"
 	>
-		<ModelsDiscoverAvatar
-			class="mt-1"
-			org={avatarOrg}
-			quantOrg={showBaseModelAvatar ? org : undefined}
-		/>
+		<ModelOrgAvatar class="mt-1" org={avatarOrg} quantOrg={showBaseModelAvatar ? org : undefined} />
 
 		<span class="min-w-0 flex-1">
 			<ModelId
