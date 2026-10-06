@@ -2097,8 +2097,6 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
     queue_ptr qptr;
     int       device;
 
-    inline static int counter{ 0 };
-
     struct ggml_sycl_buffer {
         void * ptr  = nullptr;
         size_t size = 0;
@@ -2108,6 +2106,7 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
     static constexpr int          MAX_POOL_SIZE{ 64 };
     std::vector<ggml_sycl_buffer> buffer_pool = std::vector<ggml_sycl_buffer>(MAX_POOL_SIZE);
     size_t                        pool_size   = 0;
+    int                           counter     = 0;
 
     explicit ggml_sycl_pool_host(queue_ptr qptr_, int device_) : qptr(qptr_), device(device_) {}
 
@@ -2121,41 +2120,55 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
                 b.size = 0;
             }
         }
-        counter = 0;
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
         if (counter == MAX_POOL_SIZE) {
-            ggml_sycl_buffer b               = buffer_pool[0];
-            void *           ptr             = b.ptr;
-            *actual_size                     = b.size;
-            counter                          = 1;
-            return ptr;
-        }
-        ggml_sycl_buffer & b = buffer_pool[counter];
-
-        if (b.ptr == nullptr) {
-            void * ptr;
-
+            // the pool wrapped around, no slot is reserved for this allocation
+            void * ptr = nullptr;
             SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, *qptr)));
             if (!ptr) {
                 GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on host\n", __func__, size);
                 return nullptr;
             }
-            pool_size += size;
+            pool_size    += size;
             *actual_size = size;
-            counter      = counter + 1;
+            counter      = 0;
             return ptr;
-        } else {
-            ++counter;
-            b.size = size;
-            return b.ptr;
         }
+        ggml_sycl_buffer & b = buffer_pool[counter];
+        ++counter;
+
+        if (b.ptr != nullptr) {
+            if (b.size >= size) {
+                // hand out the cached buffer, free() puts it back into the pool
+                void * ptr = b.ptr;
+                *actual_size = b.size;
+                b.ptr = nullptr;
+                b.size = 0;
+                return ptr;
+            }
+            // the cached buffer is too small, replace it
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
+            pool_size -= b.size;
+            b.ptr = nullptr;
+            b.size = 0;
+        }
+
+        void * ptr;
+        SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, *qptr)));
+        if (!ptr) {
+            GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on host\n", __func__, size);
+            return nullptr;
+        }
+        pool_size    += size;
+        *actual_size = size;
+        return ptr;
     }
 
     void free(void * ptr, size_t size) override {
         // if the pool is not completed add the pointer to it in place of the first nullptr found.
-        // Otherwise do nothing, pointers will be freed once the pool is deallocated.
+        // Otherwise free the buffer, all slots are cached.
         for (int i = 0; i < MAX_POOL_SIZE; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr == nullptr) {
@@ -2164,6 +2177,8 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
                 return;
             }
         }
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
+        pool_size -= size;
     }
 };
 
