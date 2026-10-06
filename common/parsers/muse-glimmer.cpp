@@ -43,9 +43,10 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
 
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-    auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
-    // Constrained grammar whenever tools are offered.
-    auto include_grammar = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    // Constrained grammar whenever tools are offered or a response format is requested.
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start = p.rule("start", p.literal("<|start|>assistant"));
@@ -65,6 +66,15 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") +
                                               p.content(p.until_one_of({ "<|eot|>", "<|eom|>" })));
 
+        if (has_response_format) {
+            auto response_json   = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
+            auto response_format = p.rule("response-format",
+                recipient + p.literal("<|message|>") +
+                ((p.literal("```json") + p.space() + response_json + p.space() + p.literal("```")) | response_json));
+
+            return p.zero_or_more(start + analysis) + start + response_format;
+        }
+
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto string_value = p.ac(
                 p.tool_arg_string_value(p.until("</atem:parameter>")) + p.tool_arg_close(p.literal("</atem:parameter>")),
@@ -74,31 +84,26 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto &      function = tool.at("function");
                 const std::string name     = function.at("name");
-                auto              params   = function.contains("parameters") ? function.at("parameters") : json::object();
+
+                std::vector<common_peg_parser> arg_rules;
+                foreach_parameter(function, [&](const common_chat_schema_property & prop, const common_chat_schema_document_ptr & doc) {
+                    auto value_parser = p.eps();
+                    if (prop.schema->may_be_string()) {
+                        value_parser = string_value;
+                    } else {
+                        value_parser = p.tool_arg_json_value(
+                                p.schema(p.json(), "tool-" + name + "-arg-" + prop.name + "-schema", doc, *prop.schema))
+                            + p.tool_arg_close(p.literal("</atem:parameter>"));
+                    }
+
+                    arg_rules.push_back(p.tool_arg(
+                        p.tool_arg_open(p.literal("<atem:parameter name=\"") + p.tool_arg_name(p.literal(prop.name)) + p.literal("\">")) +
+                        value_parser));
+                });
 
                 auto args = p.eps();
-                if (params.contains("properties") && params.at("properties").is_object() && !params.at("properties").empty()) {
-                    auto schema_info = common_schema_info();
-                    schema_info.resolve_refs(params);
-
-                    auto arg_choice = p.choice();
-                    for (const auto & [prop_name, prop_schema] : params.at("properties").items()) {
-                        auto value_parser = p.eps();
-                        if (schema_info.resolves_to_string(prop_schema)) {
-                            value_parser = string_value;
-                        } else {
-                            value_parser = p.tool_arg_json_value(
-                                    p.schema(p.json(), "tool-" + name + "-arg-" + prop_name + "-schema", prop_schema, false))
-                                + p.tool_arg_close(p.literal("</atem:parameter>"));
-                        }
-
-                        auto arg_rule = p.tool_arg(
-                            p.tool_arg_open(p.literal("<atem:parameter name=\"") + p.tool_arg_name(p.literal(prop_name)) + p.literal("\">")) +
-                            value_parser);
-
-                        arg_choice |= arg_rule;
-                    }
-                    args = p.zero_or_more(arg_choice + p.space());
+                if (!arg_rules.empty()) {
+                    args = p.zero_or_more(p.choice(arg_rules) + p.space());
                 }
 
                 auto tool_parser = p.tool(
@@ -129,18 +134,13 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
             parser.build_grammar(builder, data.grammar_lazy);
         });
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-              "<\\|start\\|>assistant( to=(?!self<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
+              "(?:^|<\\|start\\|>assistant)( to=(?!self<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
         };
     }
 

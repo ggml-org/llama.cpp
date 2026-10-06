@@ -40,6 +40,10 @@ export const VIDEO_FILE_TYPES = {
 	[FileTypeVideo.OGG]: {
 		extensions: [FileExtensionVideo.OGG],
 		mimeTypes: [MimeTypeVideo.OGG]
+	},
+	[FileTypeVideo.WEBM]: {
+		extensions: [FileExtensionVideo.WEBM],
+		mimeTypes: [MimeTypeVideo.WEBM]
 	}
 } as const;
 

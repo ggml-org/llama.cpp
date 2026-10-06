@@ -33,6 +33,10 @@ on:
       'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -56,7 +60,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: webgpu-ubuntu-24.04-arm-wasm
+          restore: false
           save: false
 
       - name: Install Emscripten
@@ -68,7 +72,7 @@ jobs:
 
       - name: Fetch emdawnwebgpu
         run: |
-          DAWN_TAG="v20260317.182325"
+          DAWN_TAG="v20260908.214631"
           EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
           echo "Downloading ${EMDAWN_PKG}"
           curl -L -o emdawn.zip \
