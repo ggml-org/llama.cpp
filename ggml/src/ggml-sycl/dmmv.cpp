@@ -1960,6 +1960,9 @@ static void dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(const void *vx, const
                                                            const int nrows,
                                                            dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
+    // the kernel does 1024-bit loads from vx and y
+    GGML_ASSERT(((uintptr_t) vx) % SYCL_BUFFER_ALIGNMENT == 0);
+    GGML_ASSERT(((uintptr_t) y)  % SYCL_BUFFER_ALIGNMENT == 0);
     const int workgroups = (nrows + 1) / 2;
     stream->submit([&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
@@ -1977,6 +1980,9 @@ static void dequantize_mul_mat_vec_q5_K_sycl_reorder_esimd(const void *vx, const
                                                            const int nrows,
                                                            dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
+    // the kernel does 1024-bit loads from vx and y
+    GGML_ASSERT(((uintptr_t) vx) % SYCL_BUFFER_ALIGNMENT == 0);
+    GGML_ASSERT(((uintptr_t) y)  % SYCL_BUFFER_ALIGNMENT == 0);
     const int workgroups = (nrows + 1) / 2;
     stream->submit([&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
@@ -1994,6 +2000,9 @@ static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const
                                                            const int nrows,
                                                            dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
+    // the kernel does 1024-bit loads from vx and y
+    GGML_ASSERT(((uintptr_t) vx) % SYCL_BUFFER_ALIGNMENT == 0);
+    GGML_ASSERT(((uintptr_t) y)  % SYCL_BUFFER_ALIGNMENT == 0);
     const int workgroups = (nrows + 1) / 2;
     stream->submit([&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
