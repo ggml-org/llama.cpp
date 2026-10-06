@@ -399,6 +399,12 @@ struct llama_moe_store::impl {
             if (!buf) {
                 throw std::runtime_error("failed to allocate the MoE store buffer");
             }
+            // not every backend initializes the view tensors when it allocates a context
+            for (const binding & b : bindings) {
+                if (b.cached->buffer == nullptr && ggml_backend_view_init(b.cached) != GGML_STATUS_SUCCESS) {
+                    throw std::runtime_error("failed to initialize the MoE store view");
+                }
+            }
             ggml_backend_buffer_clear(buf.get(), 0);
             buf_size = ggml_backend_buffer_get_size(buf.get());
         }
