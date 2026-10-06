@@ -1395,7 +1395,7 @@ private:
 };
 
 struct llm_tokenizer_plamo2 : llm_tokenizer {
-    llm_tokenizer_plamo2(const llama_vocab & vocab) {
+    llm_tokenizer_plamo2(const llama_vocab & vocab, bool pre_segment) : pre_segment_(pre_segment) {
         build(vocab);
     }
 
@@ -1538,11 +1538,83 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
     std::vector<llama_token> encode(const std::string & text) const {
         std::vector<uint32_t> unicode_data = unicode_cpts_from_utf8(text);
-        // Skip the first code point if it is a BOM (Byte Order Mark)
-        if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
-            unicode_data.erase(unicode_data.begin());
+        if (!pre_segment_) {
+            if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
+                unicode_data.erase(unicode_data.begin());
+            }
+            return encode_cpts(unicode_data);
         }
 
+        const size_t      n = unicode_data.size();
+        std::vector<bool> cut(n + 1, false);
+
+        // pass 1: <|plamo:...|>
+        {
+            static const uint32_t prefix[]   = { '<', '|', 'p', 'l', 'a', 'm', 'o', ':' };
+            const size_t          prefix_len = sizeof(prefix) / sizeof(prefix[0]);
+            size_t                i          = 0;
+            while (i + prefix_len <= n) {
+                if (!std::equal(prefix, prefix + prefix_len, unicode_data.begin() + i)) {
+                    i++;
+                    continue;
+                }
+                size_t j = i + prefix_len;
+                while (j < n && j - (i + prefix_len) < 64 && unicode_data[j] != '|' &&
+                       (unicode_data[j] < 0x1C || unicode_data[j] > 0x1F) &&
+                       !unicode_cpt_flags_from_cpt(unicode_data[j]).is_whitespace) {
+                    j++;
+                }
+                if (j + 1 < n && unicode_data[j] == '|' && unicode_data[j + 1] == '>') {
+                    cut[i]     = true;
+                    cut[j + 2] = true;
+                    i          = j + 2;
+                } else {
+                    i++;
+                }
+            }
+        }
+
+        // pass 2: runs of repeated characters / spaces (a run never crosses a boundary from pass 1)
+        {
+            size_t i = 0;
+            while (i < n) {
+                const uint32_t c   = unicode_data[i];
+                size_t         run = 1;
+                while (i + run < n && unicode_data[i + run] == c && !cut[i + run]) {
+                    run++;
+                }
+
+                const bool is_repeated_chars = c != '\n' && run >= 4;
+                const bool is_spaces         = c == ' ' && run >= 2;
+                if (is_repeated_chars || is_spaces) {
+                    cut[i]       = true;
+                    cut[i + run] = true;
+                }
+
+                // a run that does not match cannot match at any later position either (it only gets shorter)
+                i += run;
+            }
+        }
+
+        std::vector<llama_token> output;
+        size_t                   seg_start = 0;
+        for (size_t seg_end = 0; seg_end <= n; ++seg_end) {
+            const bool is_boundary = seg_end < n && unicode_data[seg_end] == 0xEE00;
+            if (seg_end == n || cut[seg_end] || is_boundary) {
+                if (seg_start < seg_end) {
+                    const std::vector<uint32_t>    segment(unicode_data.begin() + seg_start,
+                                                           unicode_data.begin() + seg_end);
+                    const std::vector<llama_token> tokens = encode_cpts(segment);
+                    output.insert(output.end(), tokens.begin(), tokens.end());
+                }
+                seg_start = seg_end + is_boundary;
+            }
+        }
+
+        return output;
+    }
+
+    std::vector<llama_token> encode_cpts(const std::vector<uint32_t> & unicode_data) const {
         if (unicode_data.empty()) {
             return {};
         }
@@ -1661,6 +1733,8 @@ private:
     // Flattened table representing the Trie structure
     // Each row contains: [piece_length, token_id, score, piece_id]
     std::vector<std::vector<int32_t>> table_;
+
+    const bool pre_segment_;
 };
 
 struct llm_tokenizer_plamo2_session {
@@ -1915,7 +1989,7 @@ struct llama_vocab::impl {
 
     llama_token_attr token_get_attr(llama_token id) const;
 
-    void init_tokenizer(enum llama_vocab_type type);
+    void init_tokenizer(enum llama_vocab_type type, llm_arch arch);
 
     void tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const;
 
@@ -2594,7 +2668,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         }
     }
 
-    init_tokenizer(type);
+    init_tokenizer(type, ml.get_arch());
 
     // determine the newline token: LLaMA "<0x0A>" == 10 == '\n', Falcon 193 == '\n'
     if (type == LLAMA_VOCAB_TYPE_SPM) {
@@ -3250,7 +3324,7 @@ llama_token_attr llama_vocab::impl::token_get_attr(llama_token id) const {
     return id_to_token.at(id).attr;
 }
 
-void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
+void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type, llm_arch arch) {
     LLAMA_LOG_DEBUG("%s: initializing tokenizer for type %d\n", __func__, type);
 
     switch (type) {
@@ -3270,7 +3344,7 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
             tokenizer = std::make_unique<llm_tokenizer_rwkv>(vocab);
             break;
         case LLAMA_VOCAB_TYPE_PLAMO2:
-            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab);
+            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab, arch == LLM_ARCH_PLAMO3);
             break;
         case LLAMA_VOCAB_TYPE_TEST:
             tokenizer = std::make_unique<llm_tokenizer>();
