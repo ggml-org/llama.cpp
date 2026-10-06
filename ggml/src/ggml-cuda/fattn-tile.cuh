@@ -966,6 +966,11 @@ static __global__ void flash_attn_tile(
 
     ggml_cuda_pdl_sync();
 
+    if constexpr (ggml_cuda_fattn_tile_resume_traits<KV>::enabled) {
+        if (kv.control().reset) kv.initialize(VKQ);
+        else kv.template checkpoint<true>(KQ_max,KQ_sum,VKQ);
+    }
+
     // Load Q data, convert to FP16 if fast:
 #pragma unroll
     for (int jc0 = 0; jc0 < cpw; ++jc0) {
@@ -1016,7 +1021,28 @@ static __global__ void flash_attn_tile(
 
     // Main loop over KV cache:
     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
-    if (ncols2 == 1) {
+    if constexpr (ggml_cuda_fattn_tile_resume_traits<KV>::enabled) {
+        const int first = kv.control().first, end = kv.control().end;
+        const int split_at_first = (first/nbatch_fa)%gridDim.y;
+        const int displacement = (int(blockIdx.y)-split_at_first+int(gridDim.y))%gridDim.y;
+        for (int64_t cursor = first+int64_t(displacement)*nbatch_fa; cursor < end && cursor < k_VKQ_max; cursor += int64_t(gridDim.y)*nbatch_fa) {
+            const int token = int(cursor);
+            // The global tail, not a transfer-wave boundary, selects stock's out-of-bounds arithmetic.
+            if (ncols2 == 1 && token >= k_VKQ_max-nbatch_fa) {
+                flash_attn_tile_iter<warp_size,nwarps,ncols1,ncols2,DKQ,DV,nbatch_fa,nbatch_K,use_logit_softcap,true>(
+                    Q_tmp,K_h2,V_h2,maskh,ne01,logit_softcap,slope,KQ,KV_tmp,
+                    stride_K2,stride_V2,stride_mask,KQ_max,KQ_sum,VKQ,token,k_VKQ_max,col_Q_0,kv);
+            } else {
+                flash_attn_tile_iter<warp_size,nwarps,ncols1,ncols2,DKQ,DV,nbatch_fa,nbatch_K,use_logit_softcap,false>(
+                    Q_tmp,K_h2,V_h2,maskh,ne01,logit_softcap,slope,KQ,KV_tmp,
+                    stride_K2,stride_V2,stride_mask,KQ_max,KQ_sum,VKQ,token,k_VKQ_max,col_Q_0,kv);
+            }
+        }
+        if (!kv.control().finish) {
+            kv.template checkpoint<false>(KQ_max,KQ_sum,VKQ);
+            return;
+        }
+    } else if (ncols2 == 1) {
         // Branch with out-of-bounds checks.
         int k_VKQ_0 = blockIdx.y*nbatch_fa;
         while (k_VKQ_0 < k_VKQ_max - nbatch_fa) {

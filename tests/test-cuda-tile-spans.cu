@@ -1,11 +1,26 @@
 #include "../ggml/src/ggml-cuda/fattn-tile.cuh"
 #include "../ggml/src/ggml-cuda/fattn-tile-spans.h"
 #include "../ggml/src/ggml-cuda/fattn-tile-span-access.cuh"
+#include "../ggml/src/ggml-cuda/fattn-tile-resume.cuh"
 #include "ggml-cpp.h"
 #include "testing.h"
 
 #include <cstring>
 #include <limits>
+#include <atomic>
+#include <thread>
+
+struct read_gate {
+    std::atomic<bool> entered{false}, released{false};
+    // This callback holds a real stream dependency and never calls CUDA itself.
+    static void CUDART_CB wait(void * opaque) {
+        auto & gate = *static_cast<read_gate *>(opaque);
+        gate.entered = true;
+        while (!gate.released.load()) std::this_thread::yield();
+    }
+};
+
+enum class resume_fault { none, cancellation, read_completion, publication };
 
 struct attention_comparison {
     bool finite = false, exact = false, accepted = false;
@@ -54,16 +69,18 @@ static void comparison_policy_tests(testing & t) {
 
 static size_t attention_cases = 0, attention_nonexact = 0;
 static double attention_max_abs = 0, attention_max_relative_l2 = 0;
+static size_t resume_cases = 0, resume_nonexact = 0;
+static double resume_max_abs = 0, resume_max_relative_l2 = 0;
 
 // Launch the same stock specialization and split grid for native and span-backed K/V.
 template<int D, int columns, int gqa, typename KV>
 static void launch_attention(const float * q, const void * k, const void * v, const half * mask, const float * sinks,
-        float * output, float2 * meta, int queries, int tokens, int splits) {
+        float * output, float2 * meta, int queries, int tokens, int splits, cudaStream_t stream = nullptr) {
     constexpr int heads = gqa > 2 ? 2*gqa : 4, kv_heads = heads/gqa;
     const int compiled = ggml_cuda_highest_compiled_arch(ggml_cuda_info().devices[ggml_cuda_get_device()].cc);
     const int nthreads = ggml_cuda_fattn_tile_get_nthreads(D,D,columns*gqa,compiled);
     const dim3 grid((queries+columns-1)/columns,splits,heads/gqa);
-    flash_attn_tile<D,D,columns,gqa,false,KV><<<grid,dim3(32,nthreads/32)>>>(
+    flash_attn_tile<D,D,columns,gqa,false,KV><<<grid,dim3(32,nthreads/32),0,stream>>>(
         reinterpret_cast<const char *>(q),reinterpret_cast<const char *>(k),reinterpret_cast<const char *>(v),
         reinterpret_cast<const char *>(mask),reinterpret_cast<const char *>(sinks),nullptr,output,meta,
         1.0f/std::sqrt(float(D)),0,1,1,2,0,
@@ -74,8 +91,9 @@ static void launch_attention(const float * q, const void * k, const void * v, co
     CUDA_CHECK(cudaGetLastError());
 }
 
-template<int D, int gqa, ggml_type K, ggml_type V>
-static void attention_case(testing & t, int queries, int tokens, const std::vector<int> & cuts, bool masked) {
+template<int D, int gqa, ggml_type K, ggml_type V, bool resumed = false>
+static void attention_case(testing & t, int queries, int tokens, const std::vector<int> & cuts, bool masked, size_t tiles_per_wave = 1,
+        resume_fault fault = resume_fault::none) {
     constexpr size_t guard = 128;
     constexpr int heads = gqa > 2 ? 2*gqa : 4, kv_heads = heads/gqa;
     const int splits = tokens < 256 ? 1 : 3;
@@ -140,16 +158,140 @@ static void attention_case(testing & t, int queries, int tokens, const std::vect
     ggml_cuda_fattn_tile_span_workspace layout;
     if (!t.assert_true(ggml_cuda_fattn_tile_span_workspace_make(heads,queries,D,splits,layout))) return;
     const size_t out_bytes = size_t(heads)*queries*D*4;
-    std::vector<float> results[2];
-    std::vector<float2> metas[2];
-    for (int spanned = 0; spanned < 2; ++spanned) {
-        auto * scratch = static_cast<uint8_t *>(allocate(layout.bytes+2*guard));
+    constexpr int modes = resumed ? 4 : 2;
+    std::vector<float> results[modes];
+    std::vector<float2> metas[modes];
+    const int device_cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const int compiled_cc = ggml_cuda_highest_compiled_arch(device_cc);
+    ggml_cuda_fattn_tile_resume_layout resume_layout;
+    if constexpr (resumed) {
+        const uint32_t columns = queries <= 2 ? 2 : 4;
+        const ggml_cuda_fattn_tile_resume_geometry geometry{D,heads,kv_heads,uint32_t(queries),columns,gqa,
+            uint32_t(ggml_cuda_fattn_tile_get_nthreads(D,D,columns*gqa,compiled_cc)),
+            uint32_t(ggml_cuda_fattn_tile_get_nbatch_fa(D,D,columns*gqa,compiled_cc)),uint32_t(splits),
+            uint32_t(fast_fp16_available(device_cc) ? sizeof(half2) : sizeof(float2))};
+        if (!t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(geometry,tokens,resume_layout))) return;
+    }
+    for (int spanned = 0; spanned < modes; ++spanned) {
+        const size_t scratch_bytes = spanned < 2 ? layout.bytes : resume_layout.bytes;
+        ggml_backend_buffer_ptr scratch_parent(ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(ggml_backend_dev_by_name("CUDA0")),scratch_bytes+2*guard));
+        auto * scratch = static_cast<uint8_t *>(ggml_backend_buffer_get_base(scratch_parent.get()));
+        ggml_backend_buffer_ptr scratch_view(ggml_backend_buffer_view(scratch_parent.get(),guard,scratch_bytes));
         auto * storage = static_cast<uint8_t *>(allocate(out_bytes+2*guard));
-        CUDA_CHECK(cudaMemset(scratch,0x5a,layout.bytes+2*guard)); CUDA_CHECK(cudaMemset(storage,0x5a,out_bytes+2*guard));
+        CUDA_CHECK(cudaMemset(scratch,0x5a,scratch_bytes+2*guard)); CUDA_CHECK(cudaMemset(storage,0x5a,out_bytes+2*guard));
         CUDA_CHECK(cudaMemcpy(scratch+guard,&table,sizeof(table),cudaMemcpyHostToDevice));
         auto * output = reinterpret_cast<float *>(storage+guard);
-        auto * parts = splits == 1 ? output : reinterpret_cast<float *>(scratch+guard+layout.partial_offset);
-        auto * meta = reinterpret_cast<float2 *>(scratch+guard+layout.meta_offset);
+        auto * parts = spanned < 2 ? (splits == 1 ? output : reinterpret_cast<float *>(scratch+guard+layout.partial_offset)) :
+            reinterpret_cast<float *>(scratch+guard+resume_layout.partial_offset);
+        auto * meta = reinterpret_cast<float2 *>(scratch+guard+(spanned < 2 ? layout.meta_offset : resume_layout.meta_offset));
+        float * final_output = spanned < 2 ? output : reinterpret_cast<float *>(scratch+guard+resume_layout.output_offset);
+        if constexpr (resumed) if (spanned >= 2) {
+            const size_t wave_tokens = spanned == 2 ? size_t(tokens) : resume_layout.geometry.nbatch_fa*tiles_per_wave;
+            const size_t capacity = std::min(size_t(tokens),wave_tokens);
+            const size_t k_plane = (capacity*kv_heads*ggml_row_size(K,D)+3*128+127)/128*128;
+            const size_t ring_bytes = k_plane+capacity*kv_heads*ggml_row_size(V,D)+3*128;
+            ggml_backend_buffer_ptr ring(ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(ggml_backend_dev_by_name("CUDA0")),ring_bytes+2*guard));
+            auto * ring_base = static_cast<uint8_t *>(ggml_backend_buffer_get_base(ring.get()));
+            cudaStream_t stream;
+            CUDA_CHECK(cudaStreamCreateWithFlags(&stream,cudaStreamNonBlocking));
+            cudaEvent_t read_done;
+            CUDA_CHECK(cudaEventCreateWithFlags(&read_done,cudaEventDisableTiming));
+            bool injected = false;
+            const int attempts = spanned == 3 && fault == resume_fault::publication ? 2 : 1;
+            CUDA_CHECK(cudaMemset(scratch+guard+resume_layout.state_offset,0xff,resume_layout.state_bytes));
+            for (int attempt = 0; attempt < attempts; ++attempt) {
+            ggml_cuda_fattn_tile_resume_cursor cursor(tokens,resume_layout.geometry.nbatch_fa);
+            while (cursor.next() < size_t(tokens)) {
+                const size_t first = cursor.next(), end = std::min(size_t(tokens),first+wave_tokens);
+                CUDA_CHECK(cudaMemset(ring_base,0xa5,ring_bytes+2*guard));
+                std::vector<size_t> boundaries{first};
+                if (end-first > 2) {boundaries.push_back(first+1); boundaries.push_back(end-1);}
+                boundaries.push_back(end);
+                std::vector<ggml_kv_stream_span> sources(boundaries.size()-1);
+                size_t ko = guard, vo = guard+k_plane;
+                for (size_t physical = 0; physical < sources.size(); ++physical) {
+                    const size_t index = sources.size()-1-physical;
+                    const size_t begin = boundaries[index], count = boundaries[index+1]-begin;
+                    const size_t kb = count*kv_heads*ggml_row_size(K,D), vb = count*kv_heads*ggml_row_size(V,D);
+                    CUDA_CHECK(cudaMemcpy(ring_base+ko,keys.data()+begin*kv_heads*ggml_row_size(K,D),kb,cudaMemcpyHostToDevice));
+                    CUDA_CHECK(cudaMemcpy(ring_base+vo,values.data()+begin*kv_heads*ggml_row_size(V,D),vb,cudaMemcpyHostToDevice));
+                    sources[index] = {ring.get(),ring.get(),begin,count,ko,vo};
+                    ko += (kb+127)/128*128; vo += (vb+127)/128*128;
+                }
+                auto window = view; window.spans = sources.data(); window.count = sources.size();
+                ggml_cuda_fattn_tile_resume_descriptor descriptor;
+                if (!t.assert_true(ggml_cuda_fattn_tile_resume_wave_make(window,resume_layout,scratch_view.get(),first,end,descriptor))) return;
+                descriptor.table.contiguous_k = descriptor.table.contiguous_v = true;
+                if (!t.assert_true(cursor.begin(end))) return;
+                CUDA_CHECK(cudaMemcpy(scratch+guard,&descriptor,sizeof(descriptor),cudaMemcpyHostToDevice));
+                read_gate gate;
+                const bool gated = spanned == 3 && fault != resume_fault::none && !injected && first == 0;
+                if (gated) CUDA_CHECK(cudaLaunchHostFunc(stream,read_gate::wait,&gate));
+                using reader = ggml_cuda_fattn_tile_resume_kv<K,V>;
+                if (queries <= 2) launch_attention<D,2,gqa,reader>(q,scratch+guard,nullptr,mask,nullptr,parts,meta,queries,tokens,splits,stream);
+                else launch_attention<D,4,gqa,reader>(q,scratch+guard,nullptr,mask,nullptr,parts,meta,queries,tokens,splits,stream);
+                CUDA_CHECK(cudaEventRecord(read_done,stream));
+                t.assert_true(!cursor.can_reuse() && !cursor.begin(end));
+                if (gated) {
+                    const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(2);
+                    while (!gate.entered.load() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+                    t.assert_true(gate.entered.load());
+                    t.assert_equal(cudaErrorNotReady,cudaEventQuery(read_done));
+                    if (fault == resume_fault::cancellation) cursor.cancel();
+                    t.assert_true(!cursor.can_reuse());
+                    gate.released = true;
+                }
+                CUDA_CHECK(cudaEventSynchronize(read_done));
+                if (gated && (fault == resume_fault::cancellation || fault == resume_fault::read_completion)) {
+                    t.assert_true(!cursor.complete(fault != resume_fault::read_completion) && cursor.can_reuse() && !cursor.publish(true));
+                    std::vector<uint8_t> public_bytes(out_bytes);
+                    CUDA_CHECK(cudaMemcpy(public_bytes.data(),output,out_bytes,cudaMemcpyDeviceToHost));
+                    t.assert_true(std::all_of(public_bytes.begin(),public_bytes.end(),[](uint8_t x){return x==0x5a;}));
+                    injected = true;
+                    cursor = ggml_cuda_fattn_tile_resume_cursor(tokens,resume_layout.geometry.nbatch_fa);
+                    CUDA_CHECK(cudaMemset(scratch+guard+resume_layout.partial_offset,0x5a,scratch_bytes-resume_layout.partial_offset));
+                    continue;
+                }
+                if (!t.assert_true(cursor.complete(true))) return;
+                std::vector<uint8_t> public_bytes(out_bytes);
+                CUDA_CHECK(cudaMemcpy(public_bytes.data(),output,out_bytes,cudaMemcpyDeviceToHost));
+                t.assert_true(std::all_of(public_bytes.begin(),public_bytes.end(),[](uint8_t x){return x==0x5a;}));
+                if (end < size_t(tokens)) {
+                    std::vector<uint8_t> untouched(scratch_bytes-resume_layout.partial_offset);
+                    CUDA_CHECK(cudaMemcpy(untouched.data(),scratch+guard+resume_layout.partial_offset,untouched.size(),cudaMemcpyDeviceToHost));
+                    t.assert_true(std::all_of(untouched.begin(),untouched.end(),[](uint8_t x){return x==0x5a;}));
+                }
+                std::vector<uint8_t> ring_data(ring_bytes+2*guard);
+                CUDA_CHECK(cudaMemcpy(ring_data.data(),ring_base,ring_data.size(),cudaMemcpyDeviceToHost));
+                t.assert_true(std::all_of(ring_data.begin(),ring_data.begin()+guard,[](uint8_t x){return x==0xa5;}));
+                t.assert_true(std::all_of(ring_data.end()-guard,ring_data.end(),[](uint8_t x){return x==0xa5;}));
+                for (const auto & source : sources) {
+                    const size_t kb = source.tokens*kv_heads*ggml_row_size(K,D), vb = source.tokens*kv_heads*ggml_row_size(V,D);
+                    t.assert_true(std::memcmp(ring_data.data()+source.k_offset,keys.data()+source.token_begin*kv_heads*ggml_row_size(K,D),kb) == 0);
+                    t.assert_true(std::memcmp(ring_data.data()+source.v_offset,values.data()+source.token_begin*kv_heads*ggml_row_size(V,D),vb) == 0);
+                }
+            }
+            if (!t.assert_true(cursor.ready_to_publish())) return;
+            if (splits > 1) {
+                flash_attn_combine_results<D><<<dim3(queries,heads,1),D,splits*sizeof(float2)>>>(parts,meta,final_output,splits);
+                CUDA_CHECK(cudaGetLastError());
+            } else CUDA_CHECK(cudaMemcpy(final_output,parts,out_bytes,cudaMemcpyDeviceToDevice));
+            if (spanned == 3 && fault == resume_fault::publication && !injected) {
+                t.assert_true(!cursor.publish(false) && !cursor.publish(true));
+                std::vector<uint8_t> public_bytes(out_bytes);
+                CUDA_CHECK(cudaMemcpy(public_bytes.data(),output,out_bytes,cudaMemcpyDeviceToHost));
+                t.assert_true(std::all_of(public_bytes.begin(),public_bytes.end(),[](uint8_t x){return x==0x5a;}));
+                CUDA_CHECK(cudaMemset(scratch+guard+resume_layout.partial_offset,0x5a,scratch_bytes-resume_layout.partial_offset));
+                injected = true;
+                continue;
+            }
+            if (!t.assert_true(cursor.publish(true))) return;
+            CUDA_CHECK(cudaMemcpy(output,final_output,out_bytes,cudaMemcpyDeviceToDevice));
+            }
+            CUDA_CHECK(cudaEventDestroy(read_done));
+            CUDA_CHECK(cudaStreamDestroy(stream));
+        }
+        if (spanned < 2) {
 #define LAUNCH(columns,KV) launch_attention<D,columns,gqa,KV>(q,spanned ? scratch+guard : static_cast<const void *>(nk),nv,mask,nullptr,parts,meta,queries,tokens,splits)
         if (spanned) {
             using reader = ggml_cuda_fattn_tile_span_kv<K,V>;
@@ -162,13 +304,14 @@ static void attention_case(testing & t, int queries, int tokens, const std::vect
             flash_attn_combine_results<D><<<dim3(queries,heads,1),D,splits*sizeof(float2)>>>(parts,meta,output,splits);
             CUDA_CHECK(cudaGetLastError());
         }
+        }
         results[spanned].resize(out_bytes/4);
         CUDA_CHECK(cudaMemcpy(results[spanned].data(),output,out_bytes,cudaMemcpyDeviceToHost));
         if (splits > 1) {
             metas[spanned].resize(size_t(heads)*queries*splits);
             CUDA_CHECK(cudaMemcpy(metas[spanned].data(),meta,metas[spanned].size()*sizeof(float2),cudaMemcpyDeviceToHost));
         }
-        for (auto bounded : {std::pair{scratch,layout.bytes},std::pair{storage,out_bytes}}) {
+        for (auto bounded : {std::pair{scratch,scratch_bytes},std::pair{storage,out_bytes}}) {
             std::vector<uint8_t> bytes(bounded.second+2*guard);
             CUDA_CHECK(cudaMemcpy(bytes.data(),bounded.first,bytes.size(),cudaMemcpyDeviceToHost));
             t.assert_true(std::all_of(bytes.begin(),bytes.begin()+guard,[](uint8_t x){return x==0x5a;}));
@@ -176,7 +319,6 @@ static void attention_case(testing & t, int queries, int tokens, const std::vect
         }
     }
     t.assert_true(std::all_of(results[0].begin(),results[0].end(),[](float x){return std::isfinite(x);}));
-    const int compiled_cc = ggml_cuda_highest_compiled_arch(ggml_cuda_info().devices[ggml_cuda_get_device()].cc);
     const auto comparison = compare_attention(results[0],results[1],compiled_cc);
     ++attention_cases; attention_nonexact += !comparison.exact;
     attention_max_abs = std::max(attention_max_abs,comparison.max_abs);
@@ -196,6 +338,18 @@ static void attention_case(testing & t, int queries, int tokens, const std::vect
             }
             t.out << "meta max mismatch=" << max_mismatch << " sum mismatch=" << sum_mismatch << '\n';
         }
+    }
+    if constexpr (resumed) {
+        t.assert_true("single-wave/multi-wave output bits",std::memcmp(results[2].data(),results[3].data(),out_bytes) == 0);
+        const auto resumed_comparison = compare_attention(results[0],results[3],compiled_cc);
+        ++resume_cases; resume_nonexact += !resumed_comparison.exact;
+        resume_max_abs = std::max(resume_max_abs,resumed_comparison.max_abs);
+        resume_max_relative_l2 = std::max(resume_max_relative_l2,resumed_comparison.relative_l2);
+        t.assert_true("stock/resumed numerical policy",resumed_comparison.accepted);
+        if (splits > 1) t.assert_true("single-wave/multi-wave metadata bits",
+            std::memcmp(metas[2].data(),metas[3].data(),metas[2].size()*sizeof(float2)) == 0);
+        if (splits > 1) t.assert_true("stock/resumed metadata bits",
+            std::memcmp(metas[0].data(),metas[3].data(),metas[0].size()*sizeof(float2)) == 0);
     }
     for (auto & grant : grants) {
         std::vector<uint8_t> bytes(grant.bytes);
@@ -365,7 +519,28 @@ int main(int argc, char ** argv) {
             attention_case<72,1,GGML_TYPE_F32,GGML_TYPE_BF16>(t,queries,tokens,{0,1,tokens-1,tokens},true);
         }
     });
+    t.test("tile_resume_preserves_split_order_across_refills",[&](testing & t) {
+        for (int queries : {1,2,3,4}) for (int tokens : {31,529,2049}) for (size_t tiles : {1,2,5}) {
+            attention_case<64,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,true>(t,queries,tokens,{0,17,tokens-1,tokens},true,tiles);
+            attention_case<256,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,true>(t,queries,tokens,{0,17,tokens-1,tokens},true,tiles);
+        }
+        for (int queries : {1,2,3,4}) {
+            attention_case<256,2,GGML_TYPE_F16,GGML_TYPE_F16,true>(t,queries,768,{0,17,511,768},true,1);
+            attention_case<256,4,GGML_TYPE_F32,GGML_TYPE_BF16,true>(t,queries,768,{0,17,511,768},true,2);
+            attention_case<256,8,GGML_TYPE_Q5_1,GGML_TYPE_Q4_1,true>(t,queries,768,{0,17,511,768},true,3);
+        }
+    });
+    t.test("tile_resume_fences_cancellation_and_failed_publication",[&](testing & t) {
+        for (int queries : {1,2,3,4}) for (auto fault : {resume_fault::cancellation,resume_fault::read_completion,resume_fault::publication}) {
+            attention_case<256,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,true>(t,queries,529,{0,17,511,529},true,1,fault);
+        }
+        attention_case<64,1,GGML_TYPE_F16,GGML_TYPE_F16,true>(t,2,529,{0,17,511,529},false,2);
+        attention_case<40,1,GGML_TYPE_F16,GGML_TYPE_F16,true>(t,3,529,{0,17,511,529},true,1);
+        attention_case<72,1,GGML_TYPE_F32,GGML_TYPE_BF16,true>(t,4,529,{0,17,511,529},true,5);
+    });
     std::printf("attention comparison: cases=%zu nonexact=%zu max_abs=%.9g max_relative_l2=%.9g\n",
         attention_cases,attention_nonexact,attention_max_abs,attention_max_relative_l2);
+    std::printf("resume comparison: cases=%zu nonexact=%zu max_abs=%.9g max_relative_l2=%.9g\n",
+        resume_cases,resume_nonexact,resume_max_abs,resume_max_relative_l2);
     return t.summary();
 }

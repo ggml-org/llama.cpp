@@ -4,6 +4,7 @@
 #include "../ggml-kv-stream.h"
 
 #include <limits>
+#include <initializer_list>
 
 // One complete layer: resident prefix, ring suffix, and optional ring wrap. The caller retains the original grants.
 struct ggml_cuda_fattn_tile_span_table {
@@ -45,19 +46,19 @@ static inline bool ggml_cuda_fattn_tile_type_supported(int32_t type) {
 }
 
 // Translate retained grants only after checking exact coverage and both buffer bounds. Failure preserves output.
-static inline bool ggml_cuda_fattn_tile_spans_make(
-        const ggml_kv_stream_span_plan_view & view, ggml_cuda_fattn_tile_span_table & output) {
+static inline bool ggml_cuda_fattn_tile_span_window_make(
+        const ggml_kv_stream_span_plan_view & view, size_t first, size_t end, ggml_cuda_fattn_tile_span_table & output) {
     if (!view.spans || !view.count || view.count > 3 || !view.query_tokens || view.query_tokens > view.active_tokens ||
             view.active_tokens > INT32_MAX || !ggml_cuda_fattn_tile_type_supported(view.shape.type_k) ||
-            !ggml_cuda_fattn_tile_type_supported(view.shape.type_v)) return false;
+            !ggml_cuda_fattn_tile_type_supported(view.shape.type_v) || first >= end || end > view.active_tokens) return false;
     ggml_cuda_fattn_tile_span_table next{};
     next.count = int32_t(view.count); next.tokens = int32_t(view.active_tokens);
     // Canonical token-major views with multiple heads use stock's strided converter.
     next.contiguous_k = next.contiguous_v = view.shape.heads == 1;
-    size_t first = 0;
+    size_t next_token = first;
     for (size_t i = 0; i < view.count; ++i) {
         const auto & span = view.spans[i];
-        if (span.token_begin != first || !span.tokens || span.tokens > view.active_tokens-first) return false;
+        if (span.token_begin != next_token || !span.tokens || span.tokens > end-next_token) return false;
         ggml_kv_stream_layout layout;
         if (ggml_kv_stream_layout_make(view.shape,span.tokens,layout).status != ggml_kv_stream_status::success ||
                 layout.k_token_bytes > INT64_MAX || layout.v_token_bytes > INT64_MAX) return false;
@@ -74,11 +75,17 @@ static inline bool ggml_cuda_fattn_tile_spans_make(
                     offset%view.shape.alignment || (base+offset)%16) return false;
             pointers[plane++] = reinterpret_cast<const char *>(base+offset);
         }
-        next.spans[i] = {pointers[0],pointers[1],int32_t(first),int32_t(span.tokens),
+        next.spans[i] = {pointers[0],pointers[1],int32_t(next_token),int32_t(span.tokens),
             int64_t(layout.k_token_bytes),int64_t(layout.v_token_bytes),int64_t(layout.k_row_bytes),int64_t(layout.v_row_bytes)};
-        first += span.tokens;
+        next_token += span.tokens;
     }
-    if (first != view.active_tokens) return false;
+    if (next_token != end) return false;
     output = next;
     return true;
+}
+
+// The ordinary complete-layer adapter is the full logical window.
+static inline bool ggml_cuda_fattn_tile_spans_make(
+        const ggml_kv_stream_span_plan_view & view, ggml_cuda_fattn_tile_span_table & output) {
+    return ggml_cuda_fattn_tile_span_window_make(view,0,view.active_tokens,output);
 }
