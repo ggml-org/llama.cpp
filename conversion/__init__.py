@@ -74,6 +74,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Dots3NoteTextForCausalLM": "dots3",
     "DotsOCRForCausalLM": "qwen",
     "DreamModel": "dream",
+    "ETETMOE_LLAMA": "etet",
     "Ernie4_5ForCausalLM": "ernie",
     "Ernie4_5_ForCausalLM": "ernie",
     "Ernie4_5_MoeForCausalLM": "ernie",
@@ -300,6 +301,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 MMPROJ_MODEL_MAP: dict[str, str] = {
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "ClefModel": "clef",
+    "ETETMOE_LLAMA_VL": "etet",
     "CogVLMForCausalLM": "cogvlm",
     "PplxDeciderModel": "pplx_decider",
     "DeepseekOCR2ForCausalLM": "deepseek",
