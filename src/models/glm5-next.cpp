@@ -650,8 +650,7 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
 
     // narrow to the output tokens, then collapse the streams
     // Unmasked nextn embeddings need all rows.
-    const bool narrow_early = inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked);
-    if (narrow_early) {
+    if (crop_before_nextn(inp_out_ids)) {
         ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
         flat = ggml_get_rows(ctx0, flat, inp_out_ids);
         inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);
@@ -666,7 +665,7 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (inp_out_ids && !narrow_early) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
     cb(cur, "result_norm", -1);

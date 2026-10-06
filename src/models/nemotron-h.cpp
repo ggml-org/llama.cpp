@@ -220,7 +220,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
             cur = build_ffn_layer(cur, model, il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked && !extract_final_inp) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids) && !extract_final_inp) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -237,7 +237,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     if (extract_final_inp) {
         res->t_layer_inp[n_layer] = cur;
 
-        if (inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (crop_before_nextn(inp_out_ids)) {
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
         }
     }
@@ -248,7 +248,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 

@@ -52,11 +52,6 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // attention fills KV over all tokens, but the MoE is position-wise: gather output rows before
-    // it to save FFN compute (unless unmasked embeddings_nextn needs the full-length hidden state)
-    const bool emit_h_nextn    = cparams.embeddings_nextn;
-    const bool crop_before_ffn = inp_out_ids && (!emit_h_nextn || cparams.embeddings_nextn_masked);
-
     auto * inp_attn = build_attn_inp_kv();
 
     ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
@@ -88,7 +83,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cb(cur, "mtp_attn_residual", il);
 
     // gather the output rows here so the MoE FFN below only runs on the positions we keep
-    if (crop_before_ffn) {
+    if (crop_before_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -149,7 +144,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!crop_before_ffn && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
