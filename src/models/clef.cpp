@@ -23,9 +23,12 @@ void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
 }
 
 void llama_model_clef::load_arch_tensors(llama_model_loader & ml) {
-    llama_model_qwen35::load_arch_tensors(ml);
-
     LLAMA_LOAD_LOCALS;
+
+    // the head reads rows of the output matrix, there is no lm_head: a buffer type made for MUL_MAT (e.g. CPU repack) cannot hold it
+    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, TENSOR_GET_ROWS);
+
+    llama_model_qwen35::load_arch_tensors(ml);
 
     const auto * w_memory = ml.get_weight(tn(LLM_TENSOR_DECISION_PROJ_MEMORY, "weight").str().c_str());
     const auto * w_ffn    = ml.get_weight(tn(LLM_TENSOR_DEC_FFN_UP, "weight", 0).str().c_str());
