@@ -88,6 +88,7 @@ For a more complete example, see `test_example_native()` in
 - **`space()`** - Matches zero or more whitespace characters (space, tab, newline)
 - **`until(delimiter)`** - Matches characters until delimiter is found (delimiter not consumed)
 - **`until_one_of(delimiters)`** - Matches characters until any delimiter in the list is found
+- **`through(content, branches, optional)`** - Matches content, then the first delimiter found and the rest of its branch (delimiter consumed). The grammar scans for the delimiters instead of following content
 - **`rest()`** - Matches everything remaining (`.*`)
 
 ### JSON Parsers
@@ -107,6 +108,7 @@ For a more complete example, see `test_example_native()` in
 - **`ref(name)`** - Creates a lightweight reference to a named rule (for recursive grammars)
 - **`rule(name, p, trigger)`** - Creates a named rule and returns a reference
 - **`trigger_rule(name, p)`** - Creates a trigger rule (entry point for lazy grammar generation)
+- **`trigger_rule(name, start, rest)`** - Creates a trigger rule matching `start` then `rest`, gating the lazy grammar on the start
 - **`schema(p, name, schema, raw)`** - Wraps parser with JSON schema metadata for grammar generation
 - **`schema(p, name, doc, node, raw)`** - Same, for a node of a `common_chat_schema_document` built earlier, e.g. one tool parameter
 
@@ -141,6 +143,15 @@ During lazy grammar generation, only rules reachable from a `trigger_rule(p)`
 are emitted in the grammar. All trigger rules are added as alternations in the
 root rule. It is still necessary to define trigger patterns, as the parser has
 no interaction with the grammar sampling.
+
+When the trigger rules are built from a start and rest, `trigger_rule(name, start, rest)`,
+the lazy grammar scans for the starts instead: the root lets anything through
+until the start of a trigger rule completes and from there only the rest of that
+rule may follow, or it may end before any start completes. The sampler runs such a
+grammar from the first token, so `grammar_lazy` is false and no trigger
+patterns are needed. A start may only be a sequence of literals, tokens, and
+choices of them, possibly wrapped in tags and atomics, so `until()` over a
+choice of the starts matches content up to any of them.
 
 ### JSON Schema
 
