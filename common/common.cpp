@@ -1680,6 +1680,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
+    mparams.moe_direct_io               = params.moe_direct_io;
+    mparams.moe_slots                   = params.moe_slots;
     mparams.load_mtp                    = params.load_mtp || std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     return mparams;
@@ -1711,6 +1713,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.attention_type    = params.attention_type;
     cparams.flash_attn_type   = params.flash_attn_type;
     cparams.cb_eval           = params.cb_eval;
+    cparams.moe_direct_io     = params.moe_direct_io;
+    cparams.moe_slots         = params.moe_slots;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.no_perf           = params.no_perf;

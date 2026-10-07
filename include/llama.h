@@ -346,6 +346,11 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // keep routed-expert weights out of the model buffers; they are streamed
+        // on demand from the GGUF file into a VRAM slot pool
+        bool    moe_direct_io;
+        int32_t moe_slots;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data
@@ -391,6 +396,10 @@ extern "C" {
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
+
+        // stream routed-expert weights via O_DIRECT into a VRAM slot pool
+        bool    moe_direct_io;  // enable sparse MoE direct-IO streaming
+        int32_t moe_slots;      // total VRAM slots shared across all MoE layers
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
