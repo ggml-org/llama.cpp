@@ -354,6 +354,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
+        bool reclaim_mmap_source; // bug fix for #16761. After CPU_REPACK copies a tensor out of mmap, drop the dormant source pages via madvise(MADV_DONTNEED). Set false to opt out. Linux-only; no-op under mlock load modes or non-mmap load modes.
     };
 
     struct llama_sampler_seq_config {
