@@ -1223,7 +1223,7 @@ private:
         vocab = llama_model_get_vocab(model_tgt);
 
         try {
-            decision.init(model_tgt);
+            decision.init(model_tgt, params.decision_type);
         } catch (const std::exception & e) {
             SRV_ERR("failed to init decision model: %s\n", e.what());
             return false;

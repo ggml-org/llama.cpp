@@ -1172,7 +1172,10 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_PPLX_DECIDER,   "pplx-decider"  },
 };
 
-static common_decision_type common_decision_type_from_string(const std::string & str) {
+common_decision_type common_decision_type_from_string(const std::string & str) {
+    if (str == "none") {
+        return COMMON_DECISION_TYPE_NONE;
+    }
     for (const auto & pair : COMMON_DECISION_TYPE_NAMES) {
         if (pair.second == str) {
             return pair.first;
@@ -1183,14 +1186,27 @@ static common_decision_type common_decision_type_from_string(const std::string &
 
 common_decision_type common_get_decision_type(const struct llama_model * model) {
     char buf[64];
-    if (llama_model_meta_val_str(model, "general.architecture", buf, sizeof(buf)) < 0) {
-        return COMMON_DECISION_TYPE_NONE;
+    if (llama_model_meta_val_str(model, "general.architecture", buf, sizeof(buf)) >= 0) {
+        const std::string key = std::string(buf) + ".decision.type";
+        if (llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf)) >= 0) {
+            return common_decision_type_from_string(buf);
+        }
     }
-    const std::string key = std::string(buf) + ".decision.type";
-    if (llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf)) < 0) {
-        return COMMON_DECISION_TYPE_NONE;
+
+    // Fallback detection for models converted without explicit .decision.type metadata
+    char name_buf[256];
+    if (llama_model_meta_val_str(model, "general.name", name_buf, sizeof(name_buf)) >= 0 ||
+        llama_model_meta_val_str(model, "general.basename", name_buf, sizeof(name_buf)) >= 0) {
+        std::string name(name_buf);
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        if (name.find("openjev") != std::string::npos ||
+            name.find("torchcast-decision") != std::string::npos ||
+            name.find("startlux") != std::string::npos) {
+            return COMMON_DECISION_TYPE_OPENJEV;
+        }
     }
-    return common_decision_type_from_string(buf);
+
+    return COMMON_DECISION_TYPE_NONE;
 }
 
 common_decision_type common_get_decision_type(const std::string & fname) {
@@ -1219,13 +1235,26 @@ common_decision_type common_get_decision_type(const std::string & fname) {
 
     const std::string key = arch + ".decision.type";
     const int64_t type_id = gguf_find_key(gguf_ctx.get(), key.c_str());
-    if (type_id < 0) {
-        return COMMON_DECISION_TYPE_NONE;
+    if (type_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), type_id) == GGUF_TYPE_STRING) {
+        return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
     }
-    if (gguf_get_kv_type(gguf_ctx.get(), type_id) != GGUF_TYPE_STRING) {
-        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+
+    // Fallback detection for models converted without explicit .decision.type metadata
+    int64_t name_id = gguf_find_key(gguf_ctx.get(), "general.name");
+    if (name_id < 0) {
+        name_id = gguf_find_key(gguf_ctx.get(), "general.basename");
     }
-    return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
+    if (name_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), name_id) == GGUF_TYPE_STRING) {
+        std::string name = gguf_get_val_str(gguf_ctx.get(), name_id);
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        if (name.find("openjev") != std::string::npos ||
+            name.find("torchcast-decision") != std::string::npos ||
+            name.find("startlux") != std::string::npos) {
+            return COMMON_DECISION_TYPE_OPENJEV;
+        }
+    }
+
+    return COMMON_DECISION_TYPE_NONE;
 }
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
@@ -1282,7 +1311,9 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     // these decision models return a score for each token via the embeddings output
     // TODO: maybe improve this in the future
-    const auto decision_type = common_get_decision_type(model);
+    const auto decision_type = params.decision_type != COMMON_DECISION_TYPE_NONE
+        ? params.decision_type
+        : common_get_decision_type(model);
     if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF) {
         params.embedding    = true;
         params.pooling_type = LLAMA_POOLING_TYPE_NONE;

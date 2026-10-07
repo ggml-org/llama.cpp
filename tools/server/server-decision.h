@@ -32,8 +32,8 @@ struct server_decision_question {
 struct server_decision_context {
     common_decision_type type = COMMON_DECISION_TYPE_NONE;
 
-    // read the "<arch>.decision.*" metadata, type stays NONE if the model has none
-    void init(const llama_model * model);
+    // read the "<arch>.decision.*" metadata or use type_override, type stays NONE if the model has none
+    void init(const llama_model * model, common_decision_type type_override = COMMON_DECISION_TYPE_NONE);
 
     // true if the questions of a request start with the same tokens, and the model can continue from them
     bool can_share_prompt() const {

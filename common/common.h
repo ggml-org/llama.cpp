@@ -450,6 +450,25 @@ struct lr_opt {
 
 struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
+enum common_decision_type {
+    COMMON_DECISION_TYPE_NONE,    // not a decision model
+    COMMON_DECISION_TYPE_OPENJEV, // logits of one label token per option, read at the last prompt token
+    COMMON_DECISION_TYPE_LEV,     // same as openjev, noul is read from a rating scale
+    COMMON_DECISION_TYPE_KEV,     // dot product of the hidden states of the last token and of one end token per option
+    COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
+    COMMON_DECISION_TYPE_LAYA,    // score of one marker token per option, read from the embeddings output
+    COMMON_DECISION_TYPE_CLEF,    // all questions in one prompt, score of option i read from the embeddings output at row i
+    COMMON_DECISION_TYPE_PPLX_DECIDER, // same as openjev, label codes of 1 or 2 letters
+    COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
+};
+
+common_decision_type common_decision_type_from_string(const std::string & str);
+common_decision_type common_get_decision_type(const struct llama_model * model);
+
+// same as above, but reads a GGUF file; it does not load the model
+// returns COMMON_DECISION_TYPE_UNKNOWN if the file is missing, unreadable, or invalid
+common_decision_type common_get_decision_type(const std::string & fname);
+
 struct common_params {
     int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
     int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
@@ -502,6 +521,7 @@ struct common_params {
     enum llama_pooling_type      pooling_type      = LLAMA_POOLING_TYPE_UNSPECIFIED; // pooling type for embeddings
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
     enum llama_flash_attn_type   flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_AUTO; // whether to use Flash Attention
+    common_decision_type         decision_type     = COMMON_DECISION_TYPE_NONE;  // decision model type for /v1/systemone
 
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
@@ -953,24 +973,6 @@ bool common_is_tty(FILE * file);
 
 struct common_sampler;
 
-// typed decision models, see "<arch>.decision.type" in the model metadata
-enum common_decision_type {
-    COMMON_DECISION_TYPE_NONE,    // not a decision model
-    COMMON_DECISION_TYPE_OPENJEV, // logits of one label token per option, read at the last prompt token
-    COMMON_DECISION_TYPE_LEV,     // same as openjev, noul is read from a rating scale
-    COMMON_DECISION_TYPE_KEV,     // dot product of the hidden states of the last token and of one end token per option
-    COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
-    COMMON_DECISION_TYPE_LAYA,    // score of one marker token per option, read from the embeddings output
-    COMMON_DECISION_TYPE_CLEF,    // all questions in one prompt, score of option i read from the embeddings output at row i
-    COMMON_DECISION_TYPE_PPLX_DECIDER, // same as openjev, label codes of 1 or 2 letters
-    COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
-};
-
-common_decision_type common_get_decision_type(const struct llama_model * model);
-
-// same as above, but reads a GGUF file; it does not load the model
-// returns COMMON_DECISION_TYPE_UNKNOWN if the file is missing, unreadable, or invalid
-common_decision_type common_get_decision_type(const std::string & fname);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
