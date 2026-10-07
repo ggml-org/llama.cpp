@@ -152,6 +152,7 @@ def main():
     parser.add_argument("--profile", help="Profiling flag (enables Hexagon profiling and OpenCL autotuning)")
     parser.add_argument("--sched-debug", action="store_true", help="Enable GGML/llama.cpp scheduler debug output (GGML_SCHED_DEBUG=2)")
     parser.add_argument("--mtmd-device", help="Specify the backend device ID for Multi-Threaded Multi-Device setup (MTMD_BACKEND_DEVICE)")
+    parser.add_argument("--no-embd-offload", action="store_true", help="Keep token embeddings and output projection on CPU (-ot token_embd.weight=CPU,output.weight=CPU)")
 
     # Hexagon specific parameters
     parser.add_argument("--hex-verbose", help="Enable verbose logging (GGML_HEXAGON_VERBOSE)")
@@ -422,6 +423,9 @@ def main():
     if basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
         if "-t" not in cmd_args and "--threads" not in cmd_args:
             cmd_args += ["-t", "6"]
+        if getattr(args, "no_embd_offload", False):
+            if not any("token_embd" in arg or "output.weight" in arg for arg in cmd_args):
+                cmd_args += ["-ot", "token_embd.weight=CPU,output.weight=CPU"]
 
     # Resolve target directory on device
     target_dir = args.target_dir
