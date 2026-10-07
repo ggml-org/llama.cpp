@@ -388,6 +388,44 @@ The compiled checks preserve ordinary SM75 staging and stock's two-stage SM86 `c
 
 The new consumer matrices require byte-exact TG2-TG4 MMA outputs. Optimized TG1's regional reduction can differ slightly from stock's global split distribution: the measured maximum is 7.45e-9 and the new regression guard is 1e-8. Real-model test prompts separately check matching logits/tokens; these finite test results are not universal prompt equivalence or actual Turing/Ampere hardware acceptance. See `DEVICE_MEMORY_CONSUMERS_ROADMAP.md` for the qualified pairs/geometries, evidence and pending hardware/performance checks.
 
+#### Adaptive KV CUDA qualification and startup errors
+
+The [README support matrix](../README.md#cuda-compatibility-and-qualification) distinguishes actual-device tests from older-target forward-JIT checks. The detailed numerical, lifecycle and representative performance evidence is in [C5/C6 of the roadmap](../DEVICE_MEMORY_CONSUMERS_ROADMAP.md#phase-c6-end-to-end-acceptance-and-handoff). Actual Pascal/Volta/Turing/Ampere/Ada hardware and Windows/MSVC qualification remain pending. CUDA 13 SM75/SM86/SM89/SM120 builds and the isolated CUDA 12.9 SM61 build do not certify other targets automatically.
+
+For community testing on a real device, start from the quick-start CUDA build and specify the card's architecture. For example, on an SM86 card:
+
+```sh
+cmake -S . -B build-v2 -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_BUILD_TESTS=ON
+cmake --build build-v2 --target llama-server test-cuda-compiled-features \
+  test-kv-stream-model test-kv-stream-context -j
+./build-v2/bin/test-cuda-compiled-features
+./build-v2/bin/test-kv-stream-model --cuda-native-admission
+./build-v2/bin/test-kv-stream-context \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --embedded-mtp-pair
+./build-v2/bin/test-kv-stream-context \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --target-stream-tg4
+./build-v2/bin/test-kv-stream-context \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --resume-only
+```
+
+Use the isolated-toolkit instructions above for SM61/SM70; CUDA 13 rejects pre-SM75 compilation. Use a separate build directory when changing toolkit or architecture. Rebuild the complete server and its libraries together after private API changes; do not mix a stale server implementation/DLL with newly built tests or CUDA libraries. The normal commands above use the real device's dispatch and do not override its compute capability. Scoped development switches such as `--pascal` or `--sm75` are only for the specifically described single-target experiments.
+
+The admission fixture needs no model, but does initialize CUDA and allocate small test buffers. Real-model fixtures need enough device and host memory for their allocations; an OOM is not a kernel-qualification pass. To qualify images/cache/cancellation, use the [HTTP vision harness](../tools/server/tests/README.md#adaptive-kv-vision-qualification). Free the GPU for testing; these commands do not stop production or download models. Report the commit, GPU, toolkit/compiler, architecture list, build options, test command and complete log, including skips and failures. Record numerical results separately from timings.
+
+Mixed Q8_0 K / Q4_0 V requires `GGML_CUDA_FA_ALL_QUANTS=ON`. The similarly named `GGML_CUDA_FA_QUANTS` setting is not a substitute in this fork. Context admission checks native Flash Attention support for **every reachable query width**, not only TG1-TG4: short cached prefills can reach intermediate widths even with 256/256 batching. A passing private span kernel alone cannot replace an absent native prefill kernel.
+
+| Failure category | Meaning and response |
+| --- | --- |
+| Native attention unavailable, with K/V types and query width | Check compiled kernels, all-quants option, backend and geometry. Increasing the arena does not add missing kernels. |
+| Shared arena quota insufficient | The graph minimum or combined graph/KV/writer/attention minima do not fit. Check the reported phase/resource; increase the quota only if device memory permits. Current logs are not yet a complete additional-byte calculation. |
+| Host KV allocation/registration or host metadata allocation | Check system/pinned-memory availability and registration errors. A larger device arena is not a host-memory fix. Disabling pinned memory is not a valid streaming fallback. |
+| Device grant allocation/binding or CUDA allocator/driver error | Check total VRAM, other processes and the lower-level CUDA diagnostic. Weights and driver/native-executable allocations can fail outside the arena. |
+| Unsupported configuration | Preserve the serial/single-GPU and qualified model/KV/projector/speculation scope; do not suppress admission to force an unvalidated execution path. |
+
+No-UVM runs qualify physical-budget behavior. Optional `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` enables supported managed model buffers, but the shared parent remains device-local; UVM neither enlarges the quota nor guarantees that driver allocations fit. The CUDA 12.9 reduced-feature profile proves that VMM/capture/PDL are optional, not that disabling them is generally faster. No driver downgrade, global toolkit replacement or numerical-tolerance change is needed for these checks.
+
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 
 If you try to use an old CUDA version (e.g. v11.7) with a new glibc version you can get errors like this:

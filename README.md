@@ -3,7 +3,7 @@
 V2 runs full-context Qwen3.8-27B on a bounded GPU KV working set. The complete KV history stays in pinned system RAM; resident GPU pages and one shared ring supply attention without dropping old tokens. V1 (`feature/kv-stream-phase-arena`) already had streaming, cross-layer prefetch, and a CUDA phase arena. V2 rebuilds those ideas on explicit memory ownership, stays closer to stock attention arithmetic, and adds long-context MTP without a second full GPU KV allocation.
 
 > [!WARNING]
-> This is experimental. The end-to-end path is qualified for one serial Qwen3.8-27B-style target on one CUDA GPU, Flash Attention and Q8_0 K / Q4_0 V. Text-only execution supports the embedded MTP head; image requests support a matching M-RoPE projector with speculation disabled. Vision plus MTP, audio/video arena execution and other accelerator streaming paths remain unqualified.
+> This is experimental. End-to-end qualification uses Unsloth Qwen3.8-27B `UD-IQ4_XS` on one RTX 5070 Ti, one serial request, Flash Attention and Q8_0 K / Q4_0 V. Text and matching M-RoPE image requests support the single embedded MTP head with draft lengths 1-3. Older CUDA architectures have the build/code-path evidence below, not actual older-card qualification. Audio/video arena execution, other models and other accelerator streaming paths remain unqualified.
 
 ## Results and quick start
 
@@ -49,6 +49,27 @@ python3 benchmarks/run-fixed-span-sweep.py \
 ```
 
 The script writes CSV, JSONL, logs, and a plot when Matplotlib is installed. `--auto-max-arena` instead probes the maximum for each context **and MTP mode**; those variable-budget results are not directly comparable to this fixed-budget figure.
+
+## CUDA compatibility and qualification
+
+Streaming follows stock's attention-family selection for the device, build and tensor shape. It does not force newer GPUs through the Pascal baseline. Optional VMM, CUDA graph capture and PDL are not prerequisites for KV storage and streaming; pinned host memory and a compiled attention path are required.
+
+| GPU family | Build/code-path evidence | Actual hardware evidence |
+| --- | --- | --- |
+| SM61: GTX 10-series / P40 | Isolated CUDA 12.9 build; vector/tile, target/MTP and recovery checks through forward-JIT on the 5070 Ti | Pending |
+| SM70: V100 | Uses the stock-selected legacy family; no dedicated SM70 runtime qualification | Pending |
+| SM75: RTX 20-series | CUDA 13 single-target build; vector/MMA and target/MTP/recovery checks through forward-JIT | Pending |
+| SM86: RTX 30-series | Same checks, preserving the existing asynchronous tile pipeline | Pending |
+| SM89: RTX 40-series | CUDA 13 single-target build; vector/MMA and operator comparisons through forward-JIT | Pending |
+| SM120: RTX 50-series | CUDA 13 build, optimized vector/MMA paths | RTX 5070 Ti: tested text/MTP/vision/cache/recovery configurations |
+
+Forward-JIT runs older-target code on a newer GPU. It does not reproduce an older card's resource limits, VRAM capacity or performance. This table is not a pass for every card in a family, Windows/MSVC or every intervening compute capability. See [build and device-check commands](docs/build.md#adaptive-kv-cuda-qualification-and-startup-errors) and the [qualification ledger](DEVICE_MEMORY_CONSUMERS_ROADMAP.md#phase-c6-end-to-end-acceptance-and-handoff).
+
+For mixed Q8_0 K / Q4_0 V, **keep `-DGGML_CUDA_FA_ALL_QUANTS=ON`**. `GGML_CUDA_FA_QUANTS=...` does not replace that option in this fork. CUDA 13 cannot compile the pre-SM75 targets; use an isolated CUDA 12.9 or earlier toolkit for those builds. A startup error naming a missing native attention query width is a kernel/build/geometry admission failure, not evidence that a larger arena will fix it.
+
+Recent compatibility checks retain stock-equivalent MMA outputs in the tested cases; regional vector reductions have a measured maximum difference of 7.45e-9 with a 1e-8 regression guard. Matched 8K/96K/128K/160K IQ4_XS, MTP=3, fixed-2,240-MiB comparisons retain all 256 output token IDs and show no material throughput regression (prefill -0.14% to -0.03%; decode +0.08% to +0.75%). These single-pair differences are not claimed as speed improvements or universal output equivalence. The opening figure is the earlier V2 MTP sweep, not this compatibility A/B test.
+
+The arena quota bounds its participating buffers, **not all process memory**. Weights, host KV, persistent recurrent storage and CUDA driver/native-executable allocations also need space. Startup admission now distinguishes missing native kernels, arena minima, host allocation/registration and device allocation/binding failures. Precise all-phase minimum sizing and additional-byte diagnostics are the next workstream; passing today's startup checks is not a guarantee against every later OOM.
 
 ## Image requests, with optional MTP
 
@@ -147,7 +168,7 @@ flowchart LR
     A["Logical tile order"] --> B["Resident tiles"] --> C["Ring tiles before wrap"] --> D["Ring tiles after wrap"] --> E["Stock-style final reduction"]
 ```
 
-TG1/TG2 extend the vector path; TG3/TG4 extend the matrix/Flash Attention path. Q8_0 K and Q4_0 V are converted in small tiles, not copied into another full FP16 cache. Wide prefill may gather a contiguous working view to keep stock-like arithmetic, which costs prefill speed. This is not a universal bit-identity claim: qualified TG3/TG4 span tests match stock, TG1/TG2 can have small floating-point differences, and matched 96 Ki/144 Ki greedy TG3 runs produced the same 256 token IDs as a separate stock build. Other configurations need their own tests.
+Small-query attention extends the stock-selected vector, tile or MMA family; the choice depends on the compiled/device capabilities and geometry, not just TG width. Q8_0 K and Q4_0 V are converted in small tiles, not copied into another full FP16 cache. Wide prefill may gather a contiguous working view to keep stock-like arithmetic, which costs prefill speed. This is not a universal bit-identity claim: qualified MMA span tests match stock, vector/tile paths can have small floating-point differences, and matched 96 Ki/144 Ki greedy TG3 runs produced the same 256 token IDs as a separate stock build. Other configurations need their own tests.
 
 ## Phase arena: give the same bytes different jobs
 

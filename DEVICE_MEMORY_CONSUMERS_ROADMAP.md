@@ -6,7 +6,7 @@ Last source review: 2026-10-06 for C5b qualification after the shared-workspace 
 
 ## Status and how to resume
 
-Current focus: milestone 7 and shared-workspace hardening (`21ac0353c`) are merged into `feature/adaptive-kv-stream-v2` at `a44fc0e0c`. `compat/various-arch-support-v2` is rebased onto that commit; C5a is committed at `e6beee78f`, C5b at `c04f4f41a`, and C6a is development-complete for user review on the available machine. Actual older-GPU qualification remains pending. C6b documentation/hardware handoff follows the user's commit. Comprehensive arena-size verification follows the CUDA compatibility work. The accepted SM61 tile bound and 1e-8 consumer vector regression guard are unchanged; consumer MMA comparisons remain byte-exact. Forward-JIT evidence on newer hardware is not actual older-device acceptance. The `C` stage identifiers are independent of existing milestone numbers; milestone 8 is not renumbered or started.
+Current focus: milestone 7 and shared-workspace hardening (`21ac0353c`) are merged into `feature/adaptive-kv-stream-v2` at `a44fc0e0c`. `compat/various-arch-support-v2` is rebased onto that commit; C5a is committed at `e6beee78f`, C5b at `c04f4f41a`, and C6a at `89e3d48fe`. C6b documents the available-machine qualification and arena-verification handoff for user review. Actual older-GPU qualification remains pending. Comprehensive arena-size verification follows the CUDA compatibility work and is not implemented by C6b. The accepted SM61 tile bound and 1e-8 consumer vector regression guard are unchanged; consumer MMA comparisons remain byte-exact. Forward-JIT evidence on newer hardware is not actual older-device acceptance. The `C` stage identifiers are independent of existing milestone numbers; milestone 8 is not renumbered or started.
 
 Older evidence sections retain their original commit IDs. The rebase mapping is:
 
@@ -699,7 +699,7 @@ Artifacts are `/tmp/cuda-c5b-hardened-*`, including numerical/feature reports, t
 
 #### C6a implementation and consolidated qualification
 
-Base is `c04f4f41a`; branch is `compat/various-arch-support-v2`. This is development-complete for review with actual SM120 and explicitly labeled forward-JIT evidence. It is not a blanket actual-device acceptance for Pascal/Volta/Turing/Ampere/Ada or Windows. C5's accepted numerical/operator and fixed-budget 256-token live measurements are retained rather than repeated as a full sweep.
+Committed at `89e3d48fe`, based on `c04f4f41a`; branch is `compat/various-arch-support-v2`. Qualification uses actual SM120 and explicitly labeled forward-JIT evidence. It is not a blanket actual-device acceptance for Pascal/Volta/Turing/Ampere/Ada or Windows. C5's accepted numerical/operator and fixed-budget 256-token live measurements are retained rather than repeated as a full sweep.
 
 **Startup admission and failure categories**
 
@@ -720,6 +720,53 @@ Artifacts are `/tmp/cuda-c6a-*`, including native/intermediate red and green tes
 
 No mandatory full-context sweep after every tiny change. Start with targeted failing tests and short live regressions. Use representative all-resident/light/moderate/heavy ring contexts and at least 256 generated tokens for final live throughput comparisons; repeat suspicious regressions rather than repeating already accepted points. Hold model, prompt, execution mode, context, b/ub, UVM and memory budget constant for A/B. Label maximum-allocatable-arena sweeps separately.
 
+#### C6b documentation and hardware handoff
+
+Base is committed C6a `89e3d48fe`. This checkpoint changes documentation only; it adds no kernels, allocation/dispatch policy, tolerance or production configuration. The [README](README.md#cuda-compatibility-and-qualification) now states the actual serial IQ4_XS/Q8/Q4 text/MTP/vision scope and corrects its obsolete vision-plus-MTP warning. [Build instructions](docs/build.md#adaptive-kv-cuda-qualification-and-startup-errors) provide real-device commands, toolkit/all-quants prerequisites and failure categories. The [HTTP harness instructions](tools/server/tests/README.md#adaptive-kv-vision-qualification) distinguish native capacity from populated history and independent eager/arena UVM controls.
+
+| Target | Toolkit/build evidence | Runtime evidence | Remaining acceptance |
+| --- | --- | --- | --- |
+| SM61 | Isolated CUDA 12.9.1, NVCC 12.9.86, GCC 13.3; complete server and eager/no-VMM profile | Vector/tile, native admission and real target/MTP/recovery through forward-JIT on SM120 | Actual GTX 10-series/P40; Windows/MSVC; device-specific resources and throughput |
+| SM70 | Stock-selected legacy family; no dedicated SM70 runtime qualification | None claimed for this target | Actual V100 and dedicated build/runtime checks |
+| SM75 | CUDA 13.0.88/GCC 13.3 single-target build; graph/VMM-disabled profile | Vector/MMA, target/MTP and recovery through forward-JIT on SM120 | Actual Turing resources, inference and throughput |
+| SM86 | Same toolchain/profile; existing asynchronous tile pipeline retained | Same classes of checks through forward-JIT on SM120 | Actual Ampere resources, inference and throughput |
+| SM89 | CUDA 13 single-target eager profile | Vector/MMA and standalone operator comparisons through forward-JIT on SM120 | Actual Ada resources, inference and throughput |
+| SM120 | CUDA 13 optimized vector/MMA, normal VMM/capture and reduced-feature profiles | Actual RTX 5070 Ti: C5b fixed-budget throughput and C6a text/MTP/vision/cache/recovery qualification | Other cards, operating systems, models/geometries and untested configurations |
+
+No extra runtime evidence is implied by publishing the table. In particular, the community's old P40/V100 failures precede this compatibility work and are not passes for it. Compiled target/selector checks, actual-device numerical/lifecycle checks and throughput measurements are separate gates. Modern operator changes remain within the retained approximately -0.7% to +2.29% range across the recorded profiles. The four matched SM120 live pairs above show no material regression; sub-percent throughput changes are not improvements. Regional vector cases retain the measured 7.45058e-9 maximum/1e-8 guard, accepted SM61 tile bounds are unchanged, and the qualified MMA cases remain byte-exact.
+
+Public reproduction uses the existing feature, model and real-context fixtures, plus the HTTP harness, with no CC metadata override on a real device. Real IQ4 fixtures still require enough memory for their weights; the native admission fixture provides a model-free check. Collect the commit, actual card, toolkit/compiler, architecture list, build options, full command, skips/failures and numerical result before promoting an older-device entry. A successful inference run alone does not qualify all widths, recovery or capacity boundaries. Rebuild the complete server/library set together; old private ABI mixtures are not acceptable controls.
+
+C6b validation: the existing host-only launch tests pass **6 / 6**, and measurement-parser tests pass **5 / 5**. Harness/sweep help and the rebuilt server help confirm the documented options; all four named build targets exist in the current build. The GPU-independent compiled-feature report passes. All **nine** added relative links/anchors resolve and `git diff --check` is clean. No inference benchmark or older-device run is repeated for this documentation-only stage; C5b/C6a evidence remains the runtime record. Production health is `ok` without stopping or redeploying it. Only the four documentation files are staged for user review.
+
+#### Handoff: precise arena-size verification (next target, not implemented)
+
+The compatibility work exposes the selected attention family and its scratch requirements and rejects absent native prefill widths. The next target should consume those existing requirements rather than introduce a parallel CC selector or a second allocator. The existing C6a startup errors are categorical checks; they do not yet prove every phase fits or report the exact additional bytes needed.
+
+**Inputs and sources of truth**
+
+- Freeze the model and projector metadata, device/backend/build features, context capacity, independent K/V types, b/ub, MTP configuration and allowed image/token limits. A configured maximum is not the same as a currently populated history.
+- Use `llama_compute_workspace_plan_make` and scheduler graph measurements for compute workspace; `llama_kv_stream_model::memory_requirements` for pool/writer/attention minima; and `llama_context_memory::serial_workspace_target` plus `llama_memory_layout_elastic` for serial target/draft and per-phase fit.
+- Use the stock-selected streamed attention requirements for resume/conversion/descriptor/output/fixup storage. If a resource-dependent fallback changes the requirements, validate that fallback before launch. A capability error must not become an unmeasured allocation path.
+- Use `mtmd_batch_measure_vision_phase` for the actual image batch's projector-weight, device-compute and host-compute requirements. Where an input limit does not provide a proven worst-case geometry, admission must measure that batch before suspending text or modifying its history. Reject or revalidate inputs outside the admitted envelope.
+
+**Accounting boundary**
+
+| Charged to the shared device parent | Outside that parent; track separately |
+| --- | --- |
+| Phase compute workspace, resident/ring KV pool, KV writer, attention gather/conversion/resume scratch, shared target/draft compute, temporary vision weight/compute grants and alignment gaps | Target/MTP weights, persistent recurrent allocations and any rollback staging not borrowed from the parent, CUDA context/native graph/BLAS/driver allocations, pinned KV/rollback/checkpoints, RAM prompt cache, CPU image preprocessing/embeddings and other host memory |
+
+Compute workspace means allocator-backed graph buffers, not CUDA driver's executable objects. Serial alternatives can share bytes, but concurrently live graph output, gather input, writer, pending transfer and retained lease resources cannot be aliased. Use the existing ownership/lifetime rules to derive maxima and sums; do not blindly add every phase or assume every phase can share everything.
+
+**Required verifier behavior and TDD gate**
+
+1. Build a checked, aligned allocation plan for initial reservation, target prefill, target verification, MTP catch-up/drafting, TG1-TG4 decode, vision borrowing and text/cache restoration. Account for complete-layer MTP admission and mutable tails as well as the target's multi-wave ring. Validate every enabled path and fallback, including cached short prefill widths.
+2. For a rejected parent quota, name the phase and live components, their minimum sizes and padding, the configured budget, the exact minimum and additional bytes required. Distinguish that quota rejection from unavailable code/geometry, pinned/system RAM failures and external device/driver OOM.
+3. An accepted plan must not expand hidden in-parent storage during an admitted request. Preserve generation checks, outstanding lease/fence pins, graph invalidation and fail-closed transition behavior. A preflight rejection must leave the previous usable text/cache state intact.
+4. Test exact-fit and one-byte-short grants, arithmetic overflow, each supported quant pair and query shape, resource-limited fallback, prefill/decode/vision/MTP transitions, changed images, short cached prefills, cancellation and failure/recovery. Reuse the existing host fixtures, sanitizer suites and real CUDA model/HTTP controls; label unavailable hardware rather than treating skips as passes.
+
+The user's desired no-mid-run-crash guarantee requires a defined scope. A proof for the shared parent cannot guarantee all process allocations or another process's VRAM usage. External driver/native-graph allocations need separate measurement/reservation or probing and recoverable failure handling; image and host-memory limits must also be explicit. Report the in-parent guarantee separately from remaining external risk rather than promising that a startup pass makes every later OOM impossible. C6b records this requirement; it does not claim to implement the verifier or start a new workstream.
+
 ### Acceptance gates and limitations
 
 - Required consumer families: SM61, SM75, SM86, SM89 and SM120. A host selector test, successful build, forced baseline run or another family passing is not an actual-device pass.
@@ -733,9 +780,9 @@ No mandatory full-context sweep after every tiny change. Start with targeted fai
 
 `M7 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6 -> arena-size verification`
 
-The first implementation step is **C1a**, not removing the Pascal guard or rewriting stock dispatch. Capture existing behavior, define and test the minimal stock-selection/streamed-requirements adapter, and leave live kernel choices unchanged. A development branch such as `feature/cuda-consumer-compat` may be created when implementation is explicitly started; saving this plan does not create it.
+The CUDA implementation sequence began with **C1a**, not removal of the Pascal guard or a rewrite of stock dispatch. C6b closes its documentation/handoff on the existing branch; the next implementation target is arena-size verification, after the user reviews this checkpoint and agrees its detailed stages. No new branch/checkpoint or verifier implementation is created by this documentation stage.
 
-Implementation status: C1a-C5b are committed and rebased onto hardened V2. C6a is development-complete for user review, including startup/failure diagnostics and consolidated available-machine qualification; C6b remains planned. Actual-hardware acceptance remains pending: SM61/SM75/SM86/SM89 forward-JIT checks on newer hardware are not older-GPU runtime qualification. Actual older-device access, or community testers who can run the provided fixtures, must be arranged before those devices are advertised as supported. Synthetic attention tests avoid requiring the production IQ4 weights to fit a smaller card; full-model limits are documented separately.
+Implementation status: C1a-C6a are committed and rebased onto hardened V2, with C6a at `89e3d48fe`. C6b documentation/support matrix and arena-verification handoff are ready for user review. Implementation and available-machine checks are complete for this workstream; the actual older-hardware acceptance gate is not. SM61/SM75/SM86/SM89 forward-JIT checks on newer hardware are not older-GPU runtime qualification, and SM70 has no dedicated runtime qualification. Actual older-device access, or community testers who can run the provided fixtures, must be arranged before those devices are advertised as supported. Synthetic attention tests avoid requiring the production IQ4 weights to fit a smaller card; full-model limits are documented separately.
 
 ## Subsequent work, outside milestones 4-8
 
