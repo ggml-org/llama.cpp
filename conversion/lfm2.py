@@ -247,7 +247,7 @@ class D1OmniModel(LFM2Model):
         self.gguf_writer.add_layer_norm_eps(1e-5)  # nn.LayerNorm of the head
         self.gguf_writer.add_causal_attention(False)
 
-        self.gguf_writer.add_decision_type(gguf.DecisionType.D1OMNI)
+        self.gguf_writer.add_decision_type(gguf.DecisionType.LFM2_D1_OMNI)
         self.gguf_writer.add_decision_block_count(n_layer_head)
         # "choice:3-5" -> "choice.3_5", "choice:11+" -> "choice.11"
         for name, value in self.hparams["temperatures"].items():

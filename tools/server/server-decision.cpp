@@ -126,7 +126,7 @@ void server_decision_context::init(const llama_model * model) {
     } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1) {
         n_options_max   = 255;
         noul_true_first = true;
-    } else if (model_type == COMMON_DECISION_TYPE_D1OMNI) {
+    } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         token_marker = llama_vocab_mask(vocab);
         if (token_marker == LLAMA_TOKEN_NULL) {
             throw std::runtime_error("decision model has no mask token");
@@ -145,8 +145,8 @@ void server_decision_context::init(const llama_model * model) {
 //
 
 std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
-    // lfm2-d1 and d1omni accept a null state, for example to ask about images only
-    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1 && type != COMMON_DECISION_TYPE_D1OMNI)) {
+    // lfm2-d1 and lfm2-d1-omni accept a null state, for example to ask about images only
+    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1 && type != COMMON_DECISION_TYPE_LFM2_D1_OMNI)) {
         throw std::invalid_argument("\"state\" must be provided");
     }
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
@@ -202,8 +202,8 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
                 json description;
                 if (criteria.is_object() && criteria.contains(key)) {
                     description = criteria.at(key);
-                } else if (criteria.is_object() && type == COMMON_DECISION_TYPE_D1OMNI) {
-                    // d1omni also reads the descriptions under "no" and "yes"
+                } else if (criteria.is_object() && type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
+                    // lfm2-d1-omni also reads the descriptions under "no" and "yes"
                     const char * alias = std::string(key) == "true" ? "yes" : "no";
                     description = criteria.contains(alias) ? criteria.at(alias) : json();
                 }
@@ -257,8 +257,8 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
         throw std::invalid_argument("\"videos\" is not supported");
     }
-    // "files" is an alias of "images"
-    for (const char * key : {"images", "files"}) {
+    // "images" is an alias of "files"
+    for (const char * key : {"files", "images"}) {
         if (!body.contains(key) || body.at(key).is_null()) {
             continue;
         }
@@ -397,7 +397,7 @@ static std::string decision_kev_text(const json & val) {
     return std::regex_replace(decision_kev_render(val), re_special, "<\xC2\xA6$1\xC2\xA6>");
 }
 
-// d1omni: special tokens written in the input must not be parsed as such, in keys too (d1-omni prompt.py: escape)
+// lfm2-d1-omni: special tokens written in the input must not be parsed as such, in keys too (d1-omni prompt.py: escape)
 static json decision_d1omni_escape(const json & val) {
     static const std::regex re_special("<\\|([A-Za-z0-9_]+)\\|>");
     if (val.is_string()) {
@@ -420,7 +420,7 @@ static json decision_d1omni_escape(const json & val) {
     return val;
 }
 
-// given to the d1omni template: text between the pieces of the prompt, and at the start of the pieces that are cut to a token budget
+// given to the lfm2-d1-omni template: text between the pieces of the prompt, and at the start of the pieces that are cut to a token budget
 static const std::string D1OMNI_MARKER        = "<<d1omni:";
 static const std::string D1OMNI_SEP           = "<<d1omni:sep>>";
 static const std::string D1OMNI_MARK_STATE    = "<<d1omni:state>>";
@@ -623,7 +623,7 @@ std::string server_decision_context::render(
         inp = decision_replace_text(inp, text_marker, " ");
     }
 
-    if (type == COMMON_DECISION_TYPE_D1OMNI) {
+    if (type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         inp = decision_replace_text(decision_d1omni_escape(inp), D1OMNI_MARKER, "<<d1omni ");
         inp["audio"]         = is_audio;
         inp["sep"]           = D1OMNI_SEP;
@@ -658,7 +658,7 @@ void server_decision_context::fill_task(
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
         server_task & task) const {
-    if (type == COMMON_DECISION_TYPE_D1OMNI) {
+    if (type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         fill_task_d1omni(state, questions, question, variant, files, mctx, init_opt, task);
         return;
     }
@@ -1063,8 +1063,8 @@ json server_decision_context::format_answer(const server_decision_question & que
     }
 
     // softmax over the outputs of each variant, then the average of the variants
-    // d1omni: image and audio answers are not calibrated
-    const float temperature = has_media && type == COMMON_DECISION_TYPE_D1OMNI ? 1.0f : get_temperature(question);
+    // lfm2-d1-omni: image and audio answers are not calibrated
+    const float temperature = has_media && type == COMMON_DECISION_TYPE_LFM2_D1_OMNI ? 1.0f : get_temperature(question);
     std::vector<double> probs(n, 0.0);
     for (size_t v = 0; v < scores.size(); v++) {
         const auto & s = scores[v];

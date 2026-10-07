@@ -6076,7 +6076,7 @@ class DecisionType:
     CLEF    = "clef"     # joint head over all questions, one score per option
     PPLX_DECIDER = "pplx-decider"  # same as openjev, label codes of 1 or 2 letters
     LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
-    D1OMNI  = "d1omni"   # same head as laya on a bidirectional LFM2 trunk, other prompt layout
+    LFM2_D1_OMNI = "lfm2-d1-omni"  # same head as laya on a bidirectional LFM2 trunk, other prompt layout
 
 
 class VisionProjectorType:

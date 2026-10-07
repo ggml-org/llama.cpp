@@ -62,7 +62,7 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_CLEF:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
             case COMMON_DECISION_TYPE_LFM2_D1:
-            case COMMON_DECISION_TYPE_D1OMNI:
+            case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
                 return true;
             default:
                 return false;
@@ -73,7 +73,7 @@ struct server_decision_context {
     std::vector<server_decision_question> parse_questions(const json & body) const;
 
     // returns the state without its images, they are appended to files in order
-    // images come from "images" (alias "files") and from the image_url and input_audio parts of a state made of chat messages
+    // images come from "files" (alias "images") and from the image_url and input_audio parts of a state made of chat messages
     // an image can be an audio clip if the model supports it
     json parse_state(const json & body, std::vector<raw_buffer> & files) const;
 
