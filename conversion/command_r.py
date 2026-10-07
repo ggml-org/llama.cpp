@@ -184,7 +184,7 @@ class Cohere2MoeModel(TextModel):
 
 @ModelBase.register("Cohere2VisionForConditionalGeneration")
 # [TAG_HF_EXAMPLE_GATED] CohereLabs/command-a-vision-07-2025 is gated
-@ModelBase.example("hf-tiny-v2/tiny-random-Cohere2VisionForConditionalGeneration", "CohereLabs/command-a-plus-05-2026-bf16")
+@ModelBase.example("CohereLabs/command-a-plus-05-2026-bf16")
 class Cohere2VisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -205,12 +205,3 @@ class Cohere2VisionModel(MmprojModel):
         if not name.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
             return None
         return super().filter_tensors((name, gen))
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.multi_modal_projector.linear_1."):
-            # HF: x, gate = linear_1(h).chunk(2, dim=-1); linear_2(silu(gate) * x)
-            up, gate = data_torch.chunk(2, dim=0)
-            yield from super().modify_tensors(up, name.replace("linear_1", "linear_1_up"), bid)
-            yield from super().modify_tensors(gate, name.replace("linear_1", "linear_1_gate"), bid)
-            return
-        yield from super().modify_tensors(data_torch, name, bid)

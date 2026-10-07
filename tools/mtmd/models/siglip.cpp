@@ -48,11 +48,12 @@ ggml_cgraph * clip_graph_siglip::build() {
     } else if (proj_type == PROJECTOR_TYPE_COHERE2V) {
         // tiles are square, so the pixel shuffle is the same as Idefics3
         cur = build_patch_merge_permute(cur, model.hparams.n_merge);
-        cur = build_ffn(cur,
-            model.mm_ffn_up_w,   model.mm_ffn_up_b,
-            model.mm_ffn_gate_w, model.mm_ffn_gate_b,
-            model.mm_ffn_down_w, model.mm_ffn_down_b,
-            FFN_SILU, -1);
+        cur = build_mm(model.mm_1_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_1_b);
+        // linear_1 output is [x, gate], HF computes silu(gate) * x
+        cur = ggml_swiglu_swapped(ctx0, cur);
+        cur = build_mm(model.mm_2_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_2_b);
 
     } else if (proj_type == PROJECTOR_TYPE_LFM2) {
         // pixel unshuffle block

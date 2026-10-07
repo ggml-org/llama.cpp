@@ -2782,12 +2782,10 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_COHERE2V:
                 {
-                    model.mm_ffn_up_w   = get_tensor(string_format(TN_MM_UP,   "weight"));
-                    model.mm_ffn_up_b   = get_tensor(string_format(TN_MM_UP,   "bias"));
-                    model.mm_ffn_gate_w = get_tensor(string_format(TN_MM_GATE, "weight"));
-                    model.mm_ffn_gate_b = get_tensor(string_format(TN_MM_GATE, "bias"));
-                    model.mm_ffn_down_w = get_tensor(string_format(TN_MM_DOWN, "weight"));
-                    model.mm_ffn_down_b = get_tensor(string_format(TN_MM_DOWN, "bias"));
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM2:
                 {
@@ -6076,6 +6074,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_YASA2:
         case PROJECTOR_TYPE_DEEPSEEK4V:
+        case PROJECTOR_TYPE_COHERE2V:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_HUNYUANVL:
             return ctx->model.mm_model_proj->ne[1];
@@ -6092,7 +6091,6 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_GLM5V:
-        case PROJECTOR_TYPE_COHERE2V:
             return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_MIMO_AUDIO:
             return ctx->model.mm_2_w->ne[1];

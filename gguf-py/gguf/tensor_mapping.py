@@ -1622,6 +1622,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ: (
             "aligner.w{bid}", # deepseek4v (w1 -> mm.1, w2 -> mm.2)
             "multi_modal_projector.linear_{bid}",
+            "model.multi_modal_projector.linear_{bid}", # cohere2v
             "mm_projector.proj.linear_{bid}", # Kimi-K2.5
             "visual.merger.mlp.{bid}", # qwen2vl
             "mlp_AR.linear_{bid}", # PaddleOCR-VL
@@ -2253,20 +2254,17 @@ class TensorNameMap:
             "model.vision.linear_proj.dense_h_to_4h", # cogvlm
             "visual.merger.up_proj", # glm4v
             "model.merger.mlp.0.linear_1", # minicpmv4_6
-            "model.multi_modal_projector.linear_1_up", # cohere2v (split from fused linear_1)
         ),
 
         MODEL_TENSOR.V_MM_DOWN: (
             "model.vision.linear_proj.dense_4h_to_h", # cogvlm
             "visual.merger.down_proj", # glm4v
             "model.merger.mlp.0.linear_2", # minicpmv4_6
-            "model.multi_modal_projector.linear_2", # cohere2v
         ),
 
         MODEL_TENSOR.V_MM_GATE: (
             "model.vision.linear_proj.gate_proj", # cogvlm
             "visual.merger.gate_proj", # glm4v
-            "model.multi_modal_projector.linear_1_gate", # cohere2v (split from fused linear_1)
         ),
 
         MODEL_TENSOR.V_TOK_BOI: (
