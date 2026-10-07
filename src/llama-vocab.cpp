@@ -558,6 +558,11 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_K2_HORIZON:
+                regex_exprs = {
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}|\\p{M}|\\u200C|\\u200D)+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -1395,7 +1400,7 @@ private:
 };
 
 struct llm_tokenizer_plamo2 : llm_tokenizer {
-    llm_tokenizer_plamo2(const llama_vocab & vocab) {
+    llm_tokenizer_plamo2(const llama_vocab & vocab, bool pre_segment) : pre_segment_(pre_segment) {
         build(vocab);
     }
 
@@ -1538,11 +1543,87 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
     std::vector<llama_token> encode(const std::string & text) const {
         std::vector<uint32_t> unicode_data = unicode_cpts_from_utf8(text);
-        // Skip the first code point if it is a BOM (Byte Order Mark)
-        if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
-            unicode_data.erase(unicode_data.begin());
+        // The PLaMo-3 tokenizer keeps a leading U+FEFF in the input.
+        if (!pre_segment_) {
+            if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
+                unicode_data.erase(unicode_data.begin());
+            }
+            return encode_cpts(unicode_data);
         }
 
+        const size_t      n = unicode_data.size();
+        std::vector<bool> cut(n + 1, false);
+
+        // pass 1: <|plamo:...|>
+        {
+            static constexpr uint32_t prefix[]   = { '<', '|', 'p', 'l', 'a', 'm', 'o', ':' };
+            const size_t              prefix_len = std::size(prefix);
+            size_t                    i          = 0;
+            while (i + prefix_len <= n) {
+                if (!std::equal(prefix, prefix + prefix_len, unicode_data.begin() + i)) {
+                    i++;
+                    continue;
+                }
+                // An empty body is valid.
+                size_t j = i + prefix_len;
+                // Treat U+001C..U+001F as whitespace (equivalent to Python \s).
+                while (j < n && j - (i + prefix_len) < 64 && unicode_data[j] != '|' &&
+                       (unicode_data[j] < 0x1C || unicode_data[j] > 0x1F) &&
+                       !unicode_cpt_flags_from_cpt(unicode_data[j]).is_whitespace) {
+                    j++;
+                }
+                if (j + 1 < n && unicode_data[j] == '|' && unicode_data[j + 1] == '>') {
+                    cut[i]     = true;
+                    cut[j + 2] = true;
+                    i          = j + 2;
+                } else {
+                    i++;
+                }
+            }
+        }
+
+        // pass 2: runs of repeated characters / spaces (a run never crosses a boundary from pass 1)
+        {
+            size_t i = 0;
+            while (i < n) {
+                const uint32_t c   = unicode_data[i];
+                size_t         run = 1;
+                while (i + run < n && unicode_data[i + run] == c && !cut[i + run]) {
+                    run++;
+                }
+
+                const bool is_repeated_chars = c != '\n' && run >= 4;
+                const bool is_spaces         = c == ' ' && run >= 2;
+                if (is_repeated_chars || is_spaces) {
+                    cut[i]       = true;
+                    cut[i + run] = true;
+                }
+
+                // a run that does not match cannot match at any later position either (it only gets shorter)
+                i += run;
+            }
+        }
+
+        std::vector<llama_token> output;
+        size_t                   seg_start = 0;
+        for (size_t seg_end = 0; seg_end <= n; ++seg_end) {
+            // U+EE00 is the tokenizer's private-use boundary marker; literal occurrences split segments and are not emitted.
+            const bool is_boundary = seg_end < n && unicode_data[seg_end] == 0xEE00;
+            if (seg_end == n || cut[seg_end] || is_boundary) {
+                if (seg_start < seg_end) {
+                    const std::vector<uint32_t>    segment(unicode_data.begin() + seg_start,
+                                                           unicode_data.begin() + seg_end);
+                    const std::vector<llama_token> tokens = encode_cpts(segment);
+                    output.insert(output.end(), tokens.begin(), tokens.end());
+                }
+                seg_start = seg_end + is_boundary;
+            }
+        }
+
+        return output;
+    }
+
+    std::vector<llama_token> encode_cpts(const std::vector<uint32_t> & unicode_data) const {
         if (unicode_data.empty()) {
             return {};
         }
@@ -1661,6 +1742,8 @@ private:
     // Flattened table representing the Trie structure
     // Each row contains: [piece_length, token_id, score, piece_id]
     std::vector<std::vector<int32_t>> table_;
+
+    const bool pre_segment_;
 };
 
 struct llm_tokenizer_plamo2_session {
@@ -2127,10 +2210,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = LLAMA_TOKEN_NULL;
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
-        } else if (tokenizer_model == "plamo2") {
-            type = LLAMA_VOCAB_TYPE_PLAMO2;
+        } else if (tokenizer_model == "plamo2" || tokenizer_model == "plamo3") {
+            type = tokenizer_model == "plamo2" ? LLAMA_VOCAB_TYPE_PLAMO2 : LLAMA_VOCAB_TYPE_PLAMO3;
 
-            // PLaMo-2 default special tokens (these will be overridden by model config)
+            // PLaMo default special tokens (these will be overridden by model config)
             special_bos_id = 1;  // <|plamo:bos|>
             special_eos_id = 2;  // <|plamo:eos|>
             special_unk_id = 0;  // <|plamo:unk|>
@@ -2458,6 +2541,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "mellum2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MELLUM2;
+            } else if (
+                tokenizer_pre == "k2-horizon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_K2_HORIZON;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -2945,6 +3032,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<|tool_response>" // gemma4
                     || t.first == "<｜end▁of▁sentence｜>" // deepseek-ocr
                     || t.first == "[e~[" // minimax-m2/m3
+                    || t.first == "<|ifm|im_end|>" // k2-horizon
                ) {
                 special_eog_ids.insert(t.second);
                 if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -3183,6 +3271,7 @@ std::string llama_vocab::impl::type_name() const{
         case LLAMA_VOCAB_TYPE_UGM:    return "UGM";
         case LLAMA_VOCAB_TYPE_RWKV:   return "RWKV";
         case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";
+        case LLAMA_VOCAB_TYPE_PLAMO3: return "PLaMo3";
         case LLAMA_VOCAB_TYPE_TEST:   return "TEST";
         default:                      return "unknown";
     }
@@ -3270,7 +3359,10 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
             tokenizer = std::make_unique<llm_tokenizer_rwkv>(vocab);
             break;
         case LLAMA_VOCAB_TYPE_PLAMO2:
-            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab);
+            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab, false);
+            break;
+        case LLAMA_VOCAB_TYPE_PLAMO3:
+            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab, true);
             break;
         case LLAMA_VOCAB_TYPE_TEST:
             tokenizer = std::make_unique<llm_tokenizer>();
@@ -3632,6 +3724,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 }
             } break;
         case LLAMA_VOCAB_TYPE_PLAMO2:
+        case LLAMA_VOCAB_TYPE_PLAMO3:
             {
                 if (add_special && add_bos) {
                     GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
@@ -3803,8 +3896,9 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
                 std::string result = format("%x", token);
                 return _try_copy(result.data(), result.size());
             }
-            case LLAMA_VOCAB_TYPE_PLAMO2: {
-                // PLaMo-2 uses similar token handling as BPE/SPM
+            case LLAMA_VOCAB_TYPE_PLAMO2:
+            case LLAMA_VOCAB_TYPE_PLAMO3: {
+                // PLaMo uses similar token handling as BPE/SPM
                 if (vocab.is_byte(token)) {
                     // Handle byte tokens like <0xXX>
                     if (token_text.length() == 6 && token_text.substr(0, 3) == "<0x" && token_text.back() == '>') {
@@ -4067,8 +4161,9 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
         case LLAMA_VOCAB_TYPE_BPE: {
             return pimpl->token_to_id.at(unicode_byte_to_utf8(ch));
         }
-        case LLAMA_VOCAB_TYPE_PLAMO2: {
-            // PLaMo-2 uses byte tokens in format <0xXX>
+        case LLAMA_VOCAB_TYPE_PLAMO2:
+        case LLAMA_VOCAB_TYPE_PLAMO3: {
+            // PLaMo uses byte tokens in format <0xXX>
             char hex_str[8];
             snprintf(hex_str, sizeof(hex_str), "<0x%02X>", ch);
             return pimpl->token_to_id.at(hex_str);

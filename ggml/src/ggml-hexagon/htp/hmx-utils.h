@@ -73,19 +73,20 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
         for (uint32_t r = start_row; r < end_row; r += 2) {
             const uint32_t   ct             = r / HMX_FP16_TILE_N_ROWS;
             const uint32_t   local_r        = r % HMX_FP16_TILE_N_ROWS;
+            const bool       row0_valid     = r < n_cols;
             const bool       next_row_valid = (r + 1) < end_row && (r + 1) < n_cols;
             const HVX_Vector v_off0         = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
             const HVX_Vector v_off1         = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
 
             __fp16 * tile_base = vtcm_dst + (size_t) ct * n_k_tiles * HMX_FP16_TILE_N_ELMS;
-            const uint8_t * p0 = (const uint8_t *) (vtcm_src + r * src_stride);
+            const uint8_t * p0 = row0_valid ? (const uint8_t *) (vtcm_src + r * src_stride) : NULL;
             const uint8_t * p1 = next_row_valid ? (const uint8_t *) (vtcm_src + (r + 1) * src_stride) : NULL;
 
-            assert(hex_is_aligned(p0, 128));
-            assert(hex_is_aligned(p1, 128));
+            assert(!p0 || hex_is_aligned(p0, 128));
+            assert(!p1 || hex_is_aligned(p1, 128));
             assert(c_byte_step % 128 == 0);
 
-            if (p1) {
+            if (p0 && p1) {
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmem(p0); p0 += c_byte_step;
                     HVX_Vector v1 = hvx_vmem(p1); p1 += c_byte_step;
@@ -96,9 +97,12 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             } else {
                 const HVX_Vector vzero = Q6_V_vzero();
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
-                    HVX_Vector v0 = hvx_vmem(p0); p0 += c_byte_step;
+                    HVX_Vector v0 = p0 ? hvx_vmem(p0) : vzero;
+                    if (p0) p0 += c_byte_step;
+                    HVX_Vector v1 = p1 ? hvx_vmem(p1) : vzero;
+                    if (p1) p1 += c_byte_step;
                     Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off0, v0);
-                    Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off1, vzero);
+                    Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off1, v1);
                     tile_base += dst_step;
                 }
             }
@@ -113,15 +117,16 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
         for (uint32_t r = start_row; r < end_row; r += 2) {
             const uint32_t   ct             = r / HMX_FP16_TILE_N_ROWS;
             const uint32_t   local_r        = r % HMX_FP16_TILE_N_ROWS;
+            const bool       row0_valid     = r < n_cols;
             const bool       next_row_valid = (r + 1) < end_row && (r + 1) < n_cols;
             const HVX_Vector v_off0         = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
             const HVX_Vector v_off1         = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
 
             __fp16 * tile_base = vtcm_dst + (size_t) ct * n_k_tiles * HMX_FP16_TILE_N_ELMS;
-            const uint8_t * p0 = (const uint8_t *) (vtcm_src + r * src_stride);
+            const uint8_t * p0 = row0_valid ? (const uint8_t *) (vtcm_src + r * src_stride) : NULL;
             const uint8_t * p1 = next_row_valid ? (const uint8_t *) (vtcm_src + (r + 1) * src_stride) : NULL;
 
-            if (p1) {
+            if (p0 && p1) {
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmemu(p0); p0 += c_byte_step;
                     HVX_Vector v1 = hvx_vmemu(p1); p1 += c_byte_step;
@@ -132,9 +137,12 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             } else {
                 const HVX_Vector vzero = Q6_V_vzero();
                 for (uint32_t i = 0; i < n_c_iters; ++i) {
-                    HVX_Vector v0 = hvx_vmemu(p0); p0 += c_byte_step;
+                    HVX_Vector v0 = p0 ? hvx_vmemu(p0) : vzero;
+                    if (p0) p0 += c_byte_step;
+                    HVX_Vector v1 = p1 ? hvx_vmemu(p1) : vzero;
+                    if (p1) p1 += c_byte_step;
                     Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off0, v0);
-                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off1, vzero);
+                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off1, v1);
                     tile_base += dst_step;
                 }
             }

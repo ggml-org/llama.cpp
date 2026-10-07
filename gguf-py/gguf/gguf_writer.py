@@ -1624,6 +1624,12 @@ class GGUFWriter:
     def add_xielu_eps(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.EPS, values)
 
+    def add_attention_value_expert_count(self, count: int):
+        self.add_uint32(Keys.Attention.VALUE_EXPERT_COUNT.format(arch=self.arch), count)
+
+    def add_attention_value_expert_used_count(self, count: int):
+        self.add_uint32(Keys.Attention.VALUE_EXPERT_USED_COUNT.format(arch=self.arch), count)
+
     # diffusion models
 
     def add_diffusion_shift_logits(self, value: bool) -> None:
