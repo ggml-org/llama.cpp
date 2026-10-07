@@ -1539,13 +1539,6 @@ static const char * slot_state_name(int state) {
 }
 
 json server_task_result_metrics::to_json() {
-    double prompt_tps = metrics.prompt_bucket.time > 0
-        ? (double)metrics.prompt_bucket.count / (double)metrics.prompt_bucket.time * 1e6
-        : 0.0;
-    double predict_tps = metrics.predict_bucket.time > 0
-        ? (double)metrics.predict_bucket.steps / (double)metrics.predict_bucket.time * 1e6
-        : 0.0;
-
     double n_busy = metrics.n_decode > 0
         ? (double)metrics.n_busy_slots / (double)metrics.n_decode
         : 0.0;
@@ -1586,12 +1579,10 @@ json server_task_result_metrics::to_json() {
     base["prompt"] = json{
         {"tokens_total",         metrics.prompt.count},
         {"tokens_cached_total",  metrics.n_prompt_cached},
-        {"tokens_per_second",    json_round1(std::round(prompt_tps * 10.0) / 10.0)},
     };
 
     base["prediction"] = json{
         {"tokens_total",         metrics.predict.count},
-        {"tokens_per_second",    json_round1(std::round(predict_tps * 10.0) / 10.0)},
     };
 
     json decode = json{
