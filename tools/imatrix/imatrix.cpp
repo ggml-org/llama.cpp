@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <climits>
+#include <clocale>
 #include <cmath>
 #include <cstring>
 #include <fstream>
