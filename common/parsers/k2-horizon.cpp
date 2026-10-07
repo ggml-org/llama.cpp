@@ -86,7 +86,7 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
         }
         auto think_body  = p.until_one_of(data.thinking_end_tags);
         auto think_block = [&](const common_peg_parser & body) {
-            return p.optional(THINK_START + p.space() + p.ac(body + think_end, data.thinking_end_tags));
+            return p.optional(THINK_START + p.space() + p.through(body, think_end));
         };
         auto reasoning = extract_reasoning ? think_block(p.reasoning(think_body)) : p.eps();
 
@@ -105,7 +105,7 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
             tool_choice = p.standard_json_tools(CALL_START, CALL_END, inputs.tools, false, true);
         } else {
             auto arg_close  = p.tool_arg_close(p.literal(ARG_VAL_END));
-            auto arg_string = p.rule("xml-arg-string", p.ac(p.tool_arg_string_value(p.until(ARG_VAL_END)) + arg_close, ARG_VAL_END));
+            auto arg_string = p.rule("xml-arg-string", p.through(p.tool_arg_string_value(p.until(ARG_VAL_END)), arg_close));
 
             // The models leave out <ifm|arg_type> even when asked for xml_typed
             auto arg_type = call_format == "xml_typed" ? p.optional(ARG_TYPE + p.until(ARG_TYPE_END) + ARG_TYPE_END + p.space()) : p.eps();
