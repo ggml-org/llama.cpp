@@ -7395,6 +7395,13 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_sigmoid(ctx, src0)));
                     }
                 } break;
+                case GGML_UNARY_OP_TANH: {
+                    if (src0_needs_grads) {
+                        struct ggml_tensor * tanh_sq  = ggml_sqr(ctx, tensor);
+                        struct ggml_tensor * one_m_sq = ggml_scale_bias(ctx, tanh_sq, -1.0f, 1.0f);
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, one_m_sq));
+                    }
+                } break;
                 default: {
                     fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n",
                         __func__, ggml_unary_op_name(ggml_get_unary_op(tensor)));
@@ -7450,6 +7457,23 @@ static void ggml_compute_backward(
                 default: {
                     GGML_ABORT("unsupported glu op for backward pass: %s", ggml_glu_op_name(ggml_get_glu_op(tensor)));
                 } //break;
+            }
+        } break;
+        case GGML_OP_CONCAT: {
+            const int32_t dim = ggml_get_op_params_i32(tensor, 0);
+            if (src0_needs_grads) {
+                size_t offset = 0;
+                struct ggml_tensor * grad_a = ggml_view_4d(ctx, grad,
+                    src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+                    grad->nb[1], grad->nb[2], grad->nb[3], offset);
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_cont(ctx, grad_a));
+            }
+            if (src1_needs_grads) {
+                size_t offset = src0->ne[dim] * grad->nb[dim];
+                struct ggml_tensor * grad_b = ggml_view_4d(ctx, grad,
+                    src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                    grad->nb[1], grad->nb[2], grad->nb[3], offset);
+                ggml_add_or_set(ctx, cgraph, isrc1, ggml_cont(ctx, grad_b));
             }
         } break;
         case GGML_OP_NONE: {

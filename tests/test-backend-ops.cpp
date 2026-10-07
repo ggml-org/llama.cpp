@@ -2117,7 +2117,8 @@ struct test_unary : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const bool grad_supported = op == GGML_UNARY_OP_ABS || op == GGML_UNARY_OP_SGN || op == GGML_UNARY_OP_NEG ||
             op == GGML_UNARY_OP_STEP || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU ||
-            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS || op == GGML_UNARY_OP_GELU;
+            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS || op == GGML_UNARY_OP_GELU ||
+            op == GGML_UNARY_OP_TANH;
 
         ggml_tensor * a;
         if (v & 1) {
@@ -7279,6 +7280,10 @@ struct test_concat : public test_case {
         return VARS_TO_STR5(type, ne_a, ne_b_d, dim, v);
     }
 
+    int64_t grad_nmax() override {
+        return 40000;
+    }
+
     test_concat(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {10, 5, 5, 5},
             int64_t ne_b_d = 5,
@@ -7293,6 +7298,7 @@ struct test_concat : public test_case {
             auto ne = ne_a; ne[0] *= 2; ne[1] *= 4; ne[2] *= 3;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(a, "a");
+            ggml_set_param(a);
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
@@ -7300,18 +7306,21 @@ struct test_concat : public test_case {
             auto ne = ne_a; ne[2] *= 2; ne[3] *= 4;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(a, "a");
+            ggml_set_param(a);
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             ggml_set_name(a, "a");
+            ggml_set_param(a);
         }
         ggml_tensor * b;
         if (v & 2) {
             auto ne = ne_b; ne[0] *= 3; ne[1] *= 2; ne[2] *= 4;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
+            ggml_set_param(b);
 
             b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
             ggml_set_name(b, "view_of_b");
@@ -7319,12 +7328,14 @@ struct test_concat : public test_case {
             auto ne = ne_b; ne[2] *= 3; ne[3] *= 2;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
+            ggml_set_param(b);
 
             b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
             ggml_set_name(b, "view_of_b");
         } else {
             b = ggml_new_tensor(ctx, type, 4, ne_b.data());
             ggml_set_name(b, "b");
+            ggml_set_param(b);
         }
 
         ggml_tensor * out = ggml_concat(ctx, a, b, dim);
