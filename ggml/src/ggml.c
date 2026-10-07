@@ -7381,6 +7381,23 @@ static void ggml_compute_backward(
                 } //break;
             }
         } break;
+        case GGML_OP_CONCAT: {
+            const int32_t dim = ggml_get_op_params_i32(tensor, 0);
+            if (src0_needs_grads) {
+                size_t offset = 0;
+                struct ggml_tensor * grad_a = ggml_view_4d(ctx, grad,
+                    src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+                    grad->nb[1], grad->nb[2], grad->nb[3], offset);
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_cont(ctx, grad_a));
+            }
+            if (src1_needs_grads) {
+                size_t offset = src0->ne[dim] * grad->nb[dim];
+                struct ggml_tensor * grad_b = ggml_view_4d(ctx, grad,
+                    src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                    grad->nb[1], grad->nb[2], grad->nb[3], offset);
+                ggml_add_or_set(ctx, cgraph, isrc1, ggml_cont(ctx, grad_b));
+            }
+        } break;
         case GGML_OP_NONE: {
             // noop
         } break;
