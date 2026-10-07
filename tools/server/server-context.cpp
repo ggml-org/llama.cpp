@@ -2699,8 +2699,7 @@ private:
         }
         // the slot file does not check the draft context - test-load one draft checkpoint, drop the draft data if it does not fit
         if (ctx_dft != nullptr && !checkpoints.empty() && !checkpoints.back().data_dft.empty()) {
-            const auto & data = checkpoints.back().data_dft;
-            const bool ok = llama_state_seq_set_data_ext(ctx_dft, data.data(), data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == data.size();
+            const bool ok = checkpoints.back().load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
             if (!ok) {
                 SLT_WRN(slot, "draft context checkpoint data in '%s' does not match the draft context - dropped\n", filepath.c_str());
@@ -3418,7 +3417,7 @@ private:
 
             if (ctx_dft) {
                 if (use_ckpt_dft) {
-                    ckpt.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    GGML_ASSERT(ckpt.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
                 }
 
                 if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, ckpt.pos_max + 1, -1)) {
@@ -3744,19 +3743,14 @@ private:
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-                                        if (it->id_task == -1) {
-                                            // restored from a slot file, not guaranteed to load - fall back to full prompt re-processing
-                                            const auto load = [&](llama_context * ctx, const std::vector<uint8_t> & data) {
-                                                return ctx == nullptr || data.empty() ||
-                                                    llama_state_seq_set_data_ext(ctx, data.data(), data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == data.size();
-                                            };
-                                            do_reset = !load(ctx_tgt, it->data_tgt) || !load(ctx_dft, it->data_dft);
-                                            if (do_reset) {
-                                                SLT_WRN(slot, "%s", "failed to load context checkpoint restored from a slot file\n");
+                                        if (!it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) ||
+                                            !it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)) {
+                                            if (it->id_task != -1) {
+                                                GGML_ABORT("failed to restore context checkpoint\n");
                                             }
-                                        } else {
-                                            it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                            it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                            // restored from a slot file, not guaranteed to load - fall back to full prompt re-processing
+                                            SLT_WRN(slot, "%s", "failed to load context checkpoint restored from a slot file\n");
+                                            do_reset = true;
                                         }
                                     }
 
@@ -4455,10 +4449,10 @@ private:
 
                         SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
-                        ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                        GGML_ASSERT(ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
 
                         if (slot.ctx_dft) {
-                            ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            GGML_ASSERT(ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
                         }
 
                         slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1);
