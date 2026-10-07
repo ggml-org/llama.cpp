@@ -24,6 +24,7 @@ static void test_prefix_tool_names(testing & t);
 static void test_tagged_peg_parser(testing & t);
 static void test_permute(testing & t);
 static void test_invalid_utf8(testing & t);
+static void test_tool_name_collisions(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -44,6 +45,7 @@ int main(int argc, char * argv[]) {
     t.test("tagged peg parser", test_tagged_peg_parser);
     t.test("permute", test_permute);
     t.test("invalid utf8", test_invalid_utf8);
+    t.test("tool name collisions", test_tool_name_collisions);
 
     return t.summary();
 }
@@ -1103,4 +1105,107 @@ static void test_invalid_utf8(testing & t) {
 
         t.assert_equal("content", "a\xEF\xBF\xBD" "b", msg.content);
     });
+}
+
+// Tool names must not clash with internal rule names, e.g. "tool-" + "call" == "tool-call"
+static void test_tool_name_collisions(testing & t) {
+    auto make_tool = [](const std::string & name) {
+        return json{
+            { "type", "function" },
+            { "function",
+              {
+                  { "name", name },
+                  { "parameters",
+                    {
+                        { "type", "object" },
+                        { "properties", { { "arg1", { { "type", "integer" } } } } },
+                        { "required", json::array({ "arg1" }) },
+                    } },
+              } }
+        };
+    };
+
+    auto assert_tool_call = [](testing & t, const common_peg_arena & parser, const std::string & input, const std::string & name) {
+        common_peg_parse_context ctx(input);
+        auto                     result = parser.parse(ctx);
+        if (!t.assert_true("success", result.success())) {
+            return;
+        }
+
+        common_chat_msg msg;
+        auto            mapper = common_chat_peg_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+
+        if (t.assert_equal("tool calls count", 1u, msg.tool_calls.size())) {
+            t.assert_equal("tool name", name, msg.tool_calls[0].name);
+        }
+    };
+
+    std::map<std::string, std::string> markers = {
+        { "tool_call_start_marker", "<tool_call>" },
+        { "tool_call_end_marker", "</tool_call>" },
+        { "function_opener", "<function=" },
+        { "function_closer", "</function>" },
+        { "function_name_suffix", ">" },
+        { "parameter_key_prefix", "<param=" },
+        { "parameter_key_suffix", ">" },
+        { "parameter_closer", "</param>" },
+    };
+
+    // hard-coded trigger_rule names
+    std::string trigger_rule_names[] = {
+        "call", "calls", "call_root", "call-first"
+    };
+    for (const auto & name : trigger_rule_names) {
+        json tools = json::array({ make_tool("special_function"), make_tool(name) });
+
+        t.test(name + " json tools", [&](testing & t) {
+            auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+                auto tool_call = p.standard_json_tools("<tool_call>", "</tool_call>", tools, false, false);
+                return p.content(p.until("<tool_call>")) + tool_call + p.end();
+            });
+            assert_tool_call(t, parser, "<tool_call>{\"name\": \"" + name + "\", \"arguments\": {\"arg1\": 1}}</tool_call>", name);
+        });
+
+        t.test(name + " json tools without markers", [&](testing & t) {
+            auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+                auto tool_call = p.standard_json_tools("", "", tools, false, false, "name", "parameters");
+                return p.content(p.until("{")) + tool_call + p.end();
+            });
+            assert_tool_call(t, parser, "{\"name\": \"" + name + "\", \"parameters\": {\"arg1\": 1}}", name);
+        });
+
+        t.test(name + " json tools function is key", [&](testing & t) {
+            auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+                auto tool_call = p.standard_json_tools("<tool_call>", "</tool_call>", tools, false, false, "", "", false, true);
+                return p.content(p.until("<tool_call>")) + tool_call + p.end();
+            });
+            assert_tool_call(t, parser, "<tool_call>{\"" + name + "\": {\"arg1\": 1}}</tool_call>", name);
+        });
+
+        t.test(name + " json tools nested keys", [&](testing & t) {
+            auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+                auto tool_call = p.standard_json_tools("<tool_call>", "</tool_call>", tools, false, false, "function.name", "function.arguments");
+                return p.content(p.until("<tool_call>")) + tool_call + p.end();
+            });
+            assert_tool_call(t, parser, "<tool_call>{\"function\": {\"name\": \"" + name + "\", \"arguments\": {\"arg1\": 1}}}</tool_call>", name);
+        });
+
+        t.test(name + " constructed tools", [&](testing & t) {
+            auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+                auto tool_call = p.standard_constructed_tools(markers, tools, false, false);
+                return p.content(p.until("<tool_call>")) + tool_call + p.end();
+            });
+            assert_tool_call(t, parser, "<tool_call><function=" + name + "><param=arg1>1</param></function></tool_call>", name);
+        });
+
+        t.test(name + " python style tools", [&](testing & t) {
+            auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+                auto tool_call = p.rule("tool-calls", p.trigger_rule("tool-call",
+                    "<|tool_call_start|>" + p.python_style_tool_calls(tools, false, true) + "<|tool_call_end|>"));
+                return p.content(p.until("<|tool_call_start|>")) + tool_call + p.end();
+            });
+            assert_tool_call(t, parser, "<|tool_call_start|>[" + name + "(arg1=1)]<|tool_call_end|>", name);
+        });
+    }
 }

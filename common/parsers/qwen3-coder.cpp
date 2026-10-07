@@ -65,7 +65,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         // Match complete <function=name> opener for Qwen3-Coder models that occasionally omit the
         // starting <tool_call>. The model may hallucinate a tool name, but it is preferable over
         // constraining on <function which may occur in valid content generation, e.g. #include <functional>
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t, const json & tool) {
             const std::string name = tool.at("function").at("name");
             tool_call_starts.push_back("<function=" + name + ">");
         });
@@ -93,7 +93,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 p.ac(p.tool_arg_string_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n"));
 
             auto tool_choice = p.choice();
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
 
@@ -150,7 +150,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                                    p.tool_args(args) +
                                    p.tool_close(p.literal("</function>\n")));
 
-                tool_choice |= p.rule("tool-" + name, func);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), func);
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;

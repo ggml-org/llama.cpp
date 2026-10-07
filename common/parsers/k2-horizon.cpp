@@ -110,7 +110,7 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
             // The models leave out <ifm|arg_type> even when asked for xml_typed
             auto arg_type = call_format == "xml_typed" ? p.optional(ARG_TYPE + p.until(ARG_TYPE_END) + ARG_TYPE_END + p.space()) : p.eps();
 
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
 
@@ -154,7 +154,7 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
                     args = args + p.zero_or_more(p.choice(optional_args));
                 }
 
-                tool_choice |= p.rule("tool-" + name, p.tool(
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(
                     p.tool_open(CALL_START + p.tool_name(p.literal(name)) + "\n") + p.tool_args(args) << p.tool_close(p.literal(CALL_END))));
             });
         }

@@ -68,7 +68,7 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
             });
 
             auto tool_choice = p.choice();
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto &      function = tool.at("function");
                 const std::string name     = function.at("name");
 
@@ -99,7 +99,7 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
                     << p.tool_args(args)
                     << p.tool_close(p.literal("</function>")));
 
-                tool_choice |= p.rule("tool-" + name, tool_parser);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_parser);
             });
 
             auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;

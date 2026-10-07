@@ -118,7 +118,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
         auto arg_string   = p.rule("ling3-arg-string",
                                    p.tool_arg_string_value(p.until(ARG_VAL_END)) + arg_close);
 
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
 
@@ -169,7 +169,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
                                p.tool_args(args) +
                                p.tool_close(p.optional(p.space()) + p.literal(CALL_END)));
 
-            tool_choices |= p.rule("ling3-tool-" + name, call);
+            tool_choices |= p.rule("ling3-tool-" + std::to_string(tool_index), call);
         });
 
         auto calls = inputs.parallel_tool_calls ?

@@ -7229,6 +7229,184 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
+
+    std::string trigger_rule_names[] = {
+        "call", "calls", "call_root"
+    };
+    // Tool names that match internal rule names, e.g. "tool-" + "call" == "tool-call"
+    for (const auto & name : trigger_rule_names) {
+        auto tool = special_function_tool;
+        tool.name = name;
+
+        const std::vector<common_chat_tool> tools  = { special_function_tool, tool };
+        const common_chat_msg               expect = message_with_tool_calls(name, R"({"arg1": 1})");
+
+        peg_tester("models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja", detailed_debug)
+            .test(R"({"name": ")" + name + R"(", "parameters": {"arg1": 1}})")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja", detailed_debug)
+            .test("<tool_call>\n{\"name\": \"" + name + "\", \"arguments\": {\"arg1\": 1}}</tool_call>")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/Qwen3.5-4B.jinja", detailed_debug)
+            .test("<tool_call>\n<function=" + name + ">\n<parameter=arg1>\n1\n</parameter>\n</function>\n</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/Qwen3-Coder.jinja", detailed_debug)
+            .test("<tool_call>\n<function=" + name + ">\n<parameter=arg1>\n1\n</parameter>\n</function>\n</tool_call>")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/mistralai-Ministral-3-14B-Reasoning-2512.jinja", detailed_debug)
+            .test("[TOOL_CALLS]" + name + R"([ARGS]{"arg1":1})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/mistralai-Mistral-Nemo-Instruct-2407.jinja", detailed_debug)
+            .test("[TOOL_CALLS][{\"name\": \"" + name + "\", \"arguments\": {\"arg1\": 1}, \"id\": \"123456789\"}]")
+            .tools(tools)
+            .expect(simple_assist_msg("", "", name, R"({"arg1": 1})", "123456789"))
+            .run();
+
+        peg_tester("models/templates/google-gemma-4-31B-it.jinja")
+            .test("<|tool_call>call:" + name + "{arg1:1}<tool_call|>")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/deepseek-ai-DeepSeek-V3.2.jinja", detailed_debug)
+            .test("<｜DSML｜function_calls>\n"
+                  "<｜DSML｜invoke name=\"" + name + "\">\n"
+                  "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+                  "</｜DSML｜invoke>\n"
+                  "</｜DSML｜function_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/moonshotai-Kimi-K2.jinja", detailed_debug)
+            .test("<|tool_calls_section_begin|><|tool_call_begin|>functions." + name + ":0<|tool_call_argument_begin|>"
+                  "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools(tools)
+            .expect(simple_assist_msg("", "", name, R"({"arg1": 1})", "functions." + name + ":0"))
+            .run();
+
+        peg_tester("models/templates/Kimi-K3.jinja", detailed_debug)
+            .test("<|open|>response<|sep|><|close|>response<|sep|>"
+                  "<|open|>tools<|sep|>"
+                  "<|open|>call tool=\"" + name + "\" index=\"1\"<|sep|>"
+                  "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                  "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/inclusionai-ling-3.0-flash.jinja", detailed_debug)
+            .test("</think>\n<tool_call>" + name + "\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/MiniMax-M3.jinja", detailed_debug)
+            .test("</mm:think>"
+                  "]<]minimax[>[<tool_call>\n"
+                  "]<]minimax[>[<invoke name=\"" + name + "\">"
+                  "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+                  "]<]minimax[>[</invoke>\n"
+                  "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/meetkai-functionary-medium-v3.2.jinja", detailed_debug)
+            .test(name + "\n{\"arg1\": 1}")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/muse-glimmer.jinja", detailed_debug)
+            .test(" to=" + name + "<|message|>"
+                  "<atem:function_calls>\n"
+                  "<atem:invoke name=\"" + name + "\">\n"
+                  "<atem:parameter name=\"arg1\">1</atem:parameter>\n"
+                  "</atem:invoke>\n"
+                  "</atem:function_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/openai-gpt-oss-120b.jinja", detailed_debug)
+            .test(" to=functions." + name + "<|channel|>analysis<|message|>{\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/llm-jp-llm-jp-4.1-8b-thinking.jinja", detailed_debug)
+            .test("<|channel|> commentary to=functions." + name + "<|message|> {\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/GigaChat3-10B-A1.8B.jinja", detailed_debug)
+            .test("<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"" + name + "\", \"arguments\": {\"arg1\": 1}}")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/GigaChat3.1-10B-A1.8B.jinja", detailed_debug)
+            .test("<|function_call|>{\"name\": \"" + name + "\", \"arguments\": {\"arg1\": 1}}")
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/LFM2.5-8B-A1B.jinja", detailed_debug)
+            .test("<|tool_call_start|>[" + name + "(arg1=1)]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/openbmb-MiniCPM5-1B.jinja", detailed_debug)
+            .test("<function name=\"" + name + "\"><param name=\"arg1\">1</param></function>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+
+        peg_tester("models/templates/IFM-K2-Horizon.jinja", detailed_debug)
+            .test("</ifm|think><ifm|tool_calls>\n"
+                  "<ifm|tool_call>" + name + "\n"
+                  "<ifm|arg_key>arg1</ifm|arg_key>\n"
+                  "<ifm|arg_value>1</ifm|arg_value>\n"
+                  "</ifm|tool_call>\n"
+                  "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools(tools)
+            .expect(expect)
+            .run();
+    }
 }
 
 static void test_template_generation_prompt() {

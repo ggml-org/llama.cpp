@@ -42,7 +42,7 @@ common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_te
 
         // Build tool call parsers for each available function
         auto tool_choice = p.choice();
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             const auto   schema   = common_chat_tool_parameters(function);
@@ -53,7 +53,7 @@ common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_te
                 p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema))
             );
 
-            tool_choice |= p.rule("tool-" + name, tool_parser);
+            tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_parser);
         });
 
         auto content_only = content_until_end;

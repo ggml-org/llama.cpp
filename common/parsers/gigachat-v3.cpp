@@ -30,7 +30,8 @@ common_chat_params common_chat_params_init_gigachat_v3(
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Build a choice of all available tools
             auto tool_choice = p.choice();
-            for (const auto & tool : inputs.tools) {
+            for (size_t i = 0; i < inputs.tools.size(); i++) {
+                const auto & tool = inputs.tools[i];
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
                 const auto  schema = common_chat_tool_parameters(function);
@@ -40,7 +41,7 @@ common_chat_params common_chat_params_init_gigachat_v3(
 
                 auto tool_open = p.tool_open(p.literal("{") << tool_name);
 
-                tool_choice |= p.rule("tool-" + name, tool_open << "," << tool_args << "}");
+                tool_choice |= p.rule("tool-" + std::to_string(i), tool_open << "," << tool_args << "}");
             }
 
             // Define the tool call structure

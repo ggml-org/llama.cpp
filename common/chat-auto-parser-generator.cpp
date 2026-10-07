@@ -291,7 +291,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](const json & tool) {
+    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
         const auto   schema = common_chat_tool_parameters(func);
@@ -318,7 +318,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
         auto atomic_peek = !arguments.start.empty() ? std::optional(p.peek(p.literal(arguments.start))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_parser, atomic_peek);
-        tool_choice |= p.rule("tool-" + name, func_parser);
+        tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
     });
 
     auto require_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -364,7 +364,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](const json & tool) {
+    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
         const auto & func = tool.at("function");
         std::string  name = func.at("name");
 
@@ -434,7 +434,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         auto atomic_peek = (!arguments.name_prefix.empty() && !required_parsers.empty()) ?
             std::optional(p.peek(p.literal(arguments.name_prefix))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_seq, atomic_peek);
-        tool_choice |= p.rule("tool-" + name, func_parser);
+        tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
     });
 
     auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;

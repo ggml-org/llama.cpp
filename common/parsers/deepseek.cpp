@@ -152,7 +152,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
         // build tool call section first since we might need it in reasoning
         auto tool_choice = p.choice();
         if (has_tool_calls) {
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
 
@@ -199,7 +199,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
                                                                    p.tool_name(p.literal(name)) + p.literal("\">\n")) +
                                                        invoke_body + p.space() + p.tool_close(p.literal(INVOKE_END)));
 
-                tool_choice |= p.rule("tool-" + name, func_parser);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
             });
         }
 

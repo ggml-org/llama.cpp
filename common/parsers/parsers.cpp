@@ -2,13 +2,14 @@
 
 #include "log.h"
 
-void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
-    for (const auto & tool : tools) {
+void foreach_function(const json & tools, const std::function<void(size_t, const json &)> & fn) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool = tools[i];
         if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
             LOG_INF("Skipping tool without function: %s", tool.dump(2).c_str());
             continue;
         }
-        fn(tool);
+        fn(i, tool);
     }
 }
 

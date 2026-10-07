@@ -95,7 +95,7 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & 
         }
 
         auto tool_choices = p.choice();
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             const json   schema   = common_chat_tool_parameters(function);
@@ -133,7 +133,7 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & 
                                            p.until(SEP) + p.literal(SEP)) +
                                p.tool_args(args) + p.tool_close(p.literal(CALL_END)));
 
-            tool_choices |= p.rule("kimi-k3-tool-" + name, call);
+            tool_choices |= p.rule("kimi-k3-tool-" + std::to_string(tool_index), call);
         });
 
         // all calls go inside one tools section, then the message is closed. the

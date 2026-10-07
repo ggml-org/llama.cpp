@@ -79,7 +79,7 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & 
         // The ID format is: functions.<name>:<index>
         // We need to match: functions.<name>:<digits>
         auto tool_choice = p.choice();
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             const auto   schema   = common_chat_tool_parameters(function);
@@ -93,7 +93,7 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & 
                 p.tool_close(p.optional((p.literal(CALL_END))))
             );
 
-            tool_choice |= p.rule("tool-" + name, tool_parser);
+            tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_parser);
         });
 
         // Tool calls section: <|tool_calls_section_begin|> tool_calls <|tool_calls_section_end|>

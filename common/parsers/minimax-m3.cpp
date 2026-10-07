@@ -85,7 +85,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         }
 
         auto tool_choice = p.choice();
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             auto         params   = common_chat_tool_parameters(function);
@@ -189,7 +189,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                 p.space() + invoke_body + p.space() +
                 p.tool_close(p.literal(INVOKE_END)));
 
-            tool_choice |= p.rule("tool-" + name, func_parser);
+            tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
         });
 
         auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
