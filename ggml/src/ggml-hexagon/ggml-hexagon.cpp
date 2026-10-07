@@ -2777,6 +2777,11 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
     }
     try {
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false);
+        // the kernel aligns an IOVA mapping to its size rounded up to a power of 2: map a large buffer now,
+        // a lazy mapping comes after the small ones and can find no aligned hole (dma64 needs the usage, not known yet)
+        if (sess && !opt_dma64 && size > ((size_t) 256 << 20)) {
+            sbuf->mmap(false);
+        }
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate device buffer context: %s\n", dev_ctx->c_name(), exc.what());
@@ -2821,7 +2826,9 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    return opt_mbuf;
+    // keep the 4 KiB guard page inside opt_mbuf: the IOMMU maps every buffer in a slot aligned to the next power of two
+    // of its size, a full chunk of opt_mbuf + 4 KiB would take a slot twice as large
+    return opt_mbuf > 4096 ? opt_mbuf - 4096 : opt_mbuf;
     GGML_UNUSED(buft);
 }
 
