@@ -2325,6 +2325,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}).set_env("LLAMA_ARG_POOLING"));
     add_opt(common_arg(
+        {"--decision-type"}, "{none,openjev,lev,kev,nimble,laya,clef,pplx-decider}",
+        "decision model type for /v1/systemone (default: none / inferred from model metadata)",
+        [](common_params & params, const std::string & value) {
+            params.decision_type = common_decision_type_from_string(value);
+            if (params.decision_type == COMMON_DECISION_TYPE_UNKNOWN) {
+                throw std::invalid_argument("invalid decision type");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DECISION_TYPE"));
+    add_opt(common_arg(
         {"--attention"}, "{causal,non-causal}",
         "attention type for embeddings, use model default if unspecified",
         [](common_params & params, const std::string & value) {

@@ -29,22 +29,84 @@ static std::string decision_meta_str(const llama_model * model, const std::strin
 // model-specific setup
 //
 
-void server_decision_context::init(const llama_model * model) {
+void server_decision_context::init(const llama_model * model, common_decision_type type_override) {
     *this = server_decision_context(); // the model can be reloaded
 
-    const common_decision_type model_type = common_get_decision_type(model);
+    const common_decision_type model_type = type_override != COMMON_DECISION_TYPE_NONE
+                                            ? type_override
+                                            : common_get_decision_type(model);
     if (model_type == COMMON_DECISION_TYPE_NONE) {
         return;
     }
 
-    const std::string prefix    = decision_meta_str(model, "general.architecture") + ".decision.";
-    const std::string type_name = decision_meta_str(model, prefix + "type");
+    const std::string prefix = decision_meta_str(model, "general.architecture") + ".decision.";
+    std::string type_name    = decision_meta_str(model, prefix + "type");
+    if (type_name.empty()) {
+        switch (model_type) {
+            case COMMON_DECISION_TYPE_OPENJEV: type_name = "openjev"; break;
+            case COMMON_DECISION_TYPE_LEV:     type_name = "lev";     break;
+            case COMMON_DECISION_TYPE_KEV:     type_name = "kev";     break;
+            case COMMON_DECISION_TYPE_NIMBLE:  type_name = "nimble";  break;
+            case COMMON_DECISION_TYPE_LAYA:         type_name = "laya";         break;
+            case COMMON_DECISION_TYPE_CLEF:         type_name = "clef";         break;
+            case COMMON_DECISION_TYPE_PPLX_DECIDER: type_name = "pplx-decider"; break;
+            default:                                type_name = "unknown";      break;
+        }
+    }
 
     vocab = llama_model_get_vocab(model);
 
     const char * tmpl_src = llama_model_chat_template(model, "systemone");
+    std::string fallback_tmpl;
     if (tmpl_src == nullptr) {
-        throw std::runtime_error("decision model has no \"systemone\" template");
+        if (model_type == COMMON_DECISION_TYPE_OPENJEV) {
+            char name_buf[256];
+            bool is_torchcast = false;
+            for (const char * meta_key : {"general.name", "general.basename"}) {
+                if (llama_model_meta_val_str(model, meta_key, name_buf, sizeof(name_buf)) >= 0) {
+                    std::string name(name_buf);
+                    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                    if (name.find("torchcast") != std::string::npos || name.find("startlux") != std::string::npos) {
+                        is_torchcast = true;
+                        break;
+                    }
+                }
+            }
+            if (is_torchcast) {
+                fallback_tmpl =
+                    "{%- set letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' -%}"
+                    "<|im_start|>system\n"
+                    "Apply the criterion to the evidence. Choose exactly one listed option. Answer with its letter only.<|im_end|>\n"
+                    "<|im_start|>user\n"
+                    "Evidence:\n"
+                    "{{ state }}\n\n"
+                    "Question: {{ instructions }}\n"
+                    "Options:\n"
+                    "{% for o in options -%}"
+                    "{{ letters[loop.index0] }}) {% if type == 'noul' %}{% if o.key == 'true' %}yes{% else %}no{% endif %}{% if o.description %}: {{ o.description }}{% endif %}{% elif type == 'score' %}{% if o.description %}{{ o.description }}{% else %}{{ o.key }}{% endif %}{% else %}{% if o.description and o.description != o.key %}{{ o.key }}: {{ o.description }}{% else %}{{ o.key }}{% endif %}{% endif %}\n"
+                    "{% endfor -%}"
+                    "<|im_end|>\n"
+                    "<|im_start|>assistant\n"
+                    "<think>\n\n</think>\n\n";
+            } else {
+                fallback_tmpl =
+                    "{% set letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' %}"
+                    "<|im_start|>user\n"
+                    "{% for image in images %}{{ image }}{% endfor %}"
+                    "{% if images %}The screenshot shows the current screen.\n{% endif %}"
+                    "State:\n"
+                    "{{ state }}\n\n"
+                    "Question: {{ instructions }}{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}\n\n"
+                    "Options:\n"
+                    "{% for o in options %}[{{ letters[loop.index0] }}] {% if type != 'noul' %}{{ o.key }}: {% if o.description %}{{ o.description }}{% endif %}{% elif o.key == 'true' %}yes: {% if o.description %}{{ o.description }}{% else %}The statement is true.{% endif %}{% else %}no: {% if o.description %}{{ o.description }}{% else %}The statement is false.{% endif %}{% endif %}\n{% endfor %}\n"
+                    "Answer with the letter of the best option only.<|im_end|>\n"
+                    "<|im_start|>assistant\n"
+                    "<think>\n\n</think>\n\n";
+            }
+            tmpl_src = fallback_tmpl.c_str();
+        } else {
+            throw std::runtime_error("decision model has no \"systemone\" template");
+        }
     }
     tmpl = std::make_shared<const common_chat_template>(tmpl_src, "", "");
 
@@ -63,6 +125,32 @@ void server_decision_context::init(const llama_model * model) {
             throw std::runtime_error(string_format("invalid decision temperature: %s = %s", key, val));
         }
         temperatures[key + prefix_temp.size()] = temp;
+    }
+
+    if (temperatures.empty()) {
+        if (model_type == COMMON_DECISION_TYPE_OPENJEV) {
+            char name_buf[256];
+            bool is_torchcast = false;
+            for (const char * meta_key : {"general.name", "general.basename"}) {
+                if (llama_model_meta_val_str(model, meta_key, name_buf, sizeof(name_buf)) >= 0) {
+                    std::string name(name_buf);
+                    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                    if (name.find("torchcast") != std::string::npos || name.find("startlux") != std::string::npos) {
+                        is_torchcast = true;
+                        break;
+                    }
+                }
+            }
+            if (is_torchcast) {
+                temperatures["noul"]   = 1.421f;
+                temperatures["choice"] = 1.2098f;
+                temperatures["score"]  = 1.2294f;
+            } else {
+                temperatures["choice"] = 0.85f;
+                temperatures["score"]  = 0.85f;
+                temperatures["noul"]   = 0.85f * 1.829074f;
+            }
+        }
     }
 
     if (model_type == COMMON_DECISION_TYPE_OPENJEV) {
