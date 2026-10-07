@@ -2321,8 +2321,7 @@ class TextModel(ModelBase):
             "lasttoken": gguf.PoolingType.LAST,
         }
 
-        # modules.json pooling wins. embedding_config.json is the fallback when
-        # that file is absent or has no Pooling module.
+        # get pooling type
         if pooling_path is not None:
             with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
                 pooling = json.load(f)
