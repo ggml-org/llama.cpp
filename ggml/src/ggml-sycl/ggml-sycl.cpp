@@ -2064,11 +2064,6 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(q
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
 }
 
-
-std::unique_ptr<ggml_sycl_fattn_kv_buffers> ggml_backend_sycl_context::new_fattn_kv_buffers(queue_ptr qptr, int device) {
-    return std::unique_ptr<ggml_sycl_fattn_kv_buffers>(new ggml_sycl_fattn_kv_buffers(qptr, device));
-}
-
 /// kernels
 typedef void (*ggml_sycl_op_mul_mat_t)(
     ggml_backend_sycl_context & ctx,

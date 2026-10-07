@@ -6,7 +6,6 @@
 #include "common.hpp"
 #include "convert.hpp"
 #include "vecdotq.hpp"
-#include "fattn-buffers.hpp"
 #include "fattn.hpp"
 
 #include "ggml.h"
@@ -933,13 +932,10 @@ void launch_fattn(
     GGML_ASSERT(!mask || mask->type == GGML_TYPE_F16);
 
     ggml_sycl_pool & pool = ctx.pool();
-    ggml_sycl_fattn_kv_buffers & fbuf = ctx.fattn_buffers();
     dpct::queue_ptr  main_stream = ctx.stream();
     const int id  = ggml_sycl_get_device();
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
-    ggml_sycl_fattn_alloc        K_f16(fbuf.K);
-    ggml_sycl_fattn_alloc        V_f16(fbuf.V);
     const ggml_sycl_fattn_extra  extra = ggml_sycl_fattn_get_extra(dst);
     ggml_sycl_pool_alloc<int>    KV_max(pool);
     ggml_sycl_pool_alloc<float>  dst_tmp(pool);
@@ -959,8 +955,8 @@ void launch_fattn(
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
-        sycl::half * K_f16_ptr = extra.K_buffer_ptr ? (sycl::half *) extra.K_buffer_ptr
-                                                    : K_f16.alloc(ggml_nelements(K));
+        GGML_ASSERT(extra.K_buffer_ptr);
+        sycl::half * K_f16_ptr = (sycl::half *) extra.K_buffer_ptr;
         if (ggml_is_contiguously_allocated(K)) {
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
             to_fp16(K_data, K_f16_ptr, ggml_nelements(K), main_stream);
@@ -993,8 +989,8 @@ void launch_fattn(
             const size_t bs = ggml_blck_size(V->type);
             const size_t ts = ggml_type_size(V->type);
 
-            sycl::half * V_f16_ptr = extra.V_buffer_ptr ? (sycl::half *) extra.V_buffer_ptr
-                                                        : V_f16.alloc(ggml_nelements(V));
+            GGML_ASSERT(extra.V_buffer_ptr);
+            sycl::half * V_f16_ptr = (sycl::half *) extra.V_buffer_ptr;
             if (ggml_is_contiguously_allocated(V)) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
                 to_fp16(V_data, V_f16_ptr, ggml_nelements(V), main_stream);
