@@ -222,6 +222,21 @@ float ComputeDelta(const in uint32_t r, const in uint32_t c, const in float ks,
     return sh_beta[r] * (vv - sh_ep[r] * ks);
 }
 
+// V prefetch: fill a coopmat with the [C x TN] V tile from global before the ks matmul so the
+// loads overlap the matmul, then feed the preloaded V element (elem1) to the delta compute,
+// keeping data_v off the deep critical path. coopmat2 extra-matrix-arg per-element (cf flash_attn_cm2).
+float LoadV(const in uint32_t r, const in uint32_t c, const in float elem,
+            const in uint32_t v_base, const in uint32_t sv2, const in uint32_t valid) {
+    return r < valid ? data_v[v_base + r * sv2 + c] : 0.0;
+}
+
+// sh_beta[r] == 0 for r >= valid (set in the prefix scan), so no valid guard is needed here;
+// that keeps the extra operand a single matrix (vmat), matching the supported per-element form.
+float ComputeDeltaV(const in uint32_t r, const in uint32_t c, const in float ks,
+                    const in float vv) {
+    return sh_beta[r] * (vv - sh_ep[r] * ks);
+}
+
 float ApplyExpPrefix(const in uint32_t r, const in uint32_t c, const in float qs) {
     return sh_ep[r] * qs;
 }
@@ -280,6 +295,18 @@ void main() {
     // whole-head via NH sequential value passes: gram/pmat/inversion once, then per pass
     // mirror [D x VH] state to shared, project, solve, out, update the pass's register tiles.
     const uint sg_pass = (sg % VT) / VTH;  // which value pass (0..NH-1) owns this sg's state tiles
+
+    // g/beta prefetched a chunk ahead into sg0 registers (like LOADQK for q/k), so the global
+    // load latency is off the critical path to the prefix-scan barrier.
+    float greg = 0.0, breg = 0.0;
+    if (sg == 0) {
+        const uint t = gl_SubgroupInvocationID;
+        const uint v = min(C, p.n_tokens);
+        const uint gb = seq_id * p.sb3 + t * p.sb2 + head_id * p.sb1;
+        greg = t < v ? data_g[gb] : 0.0;
+        breg = t < v ? data_beta[gb] : 0.0;
+    }
+
     for (uint t0 = 0; t0 < p.n_tokens; t0 += C) {
         const uint valid = min(C, p.n_tokens - t0);
 
@@ -289,13 +316,11 @@ void main() {
         barrier();
         if (sg == 0) {
             const uint t = gl_SubgroupInvocationID;
-            const uint gb = seq_id * p.sb3 + (t0 + t) * p.sb2 + head_id * p.sb1;
-            const float g = t < valid ? data_g[gb] : 0.0;
-            const float acc = subgroupInclusiveAdd(g);
+            const float acc = subgroupInclusiveAdd(greg);
             if (t < C) {
                 sh_prefix[t] = acc;
                 sh_ep[t] = exp(acc);
-                sh_beta[t] = t < valid ? data_beta[gb] : 0.0;
+                sh_beta[t] = breg;
             }
         }
         [[unroll]] for (uint j = 0; j < C * D / WGS; j++) {
@@ -308,6 +333,12 @@ void main() {
 
         const uint nvalid = t0 + C < p.n_tokens ? min(C, p.n_tokens - (t0 + C)) : 0u;
         LOADQK(t0 + C, nvalid);
+        if (sg == 0) {
+            const uint t = gl_SubgroupInvocationID;
+            const uint gbn = seq_id * p.sb3 + (t0 + C + t) * p.sb2 + head_id * p.sb1;
+            greg = t < nvalid ? data_g[gbn] : 0.0;
+            breg = t < nvalid ? data_beta[gbn] : 0.0;
+        }
 
         const float plast  = sh_prefix[valid - 1];
         const float cdecay = exp(plast);
@@ -402,6 +433,9 @@ void main() {
                 const uint ks_nsg = NSUB - (2 * CT + VTH);
                 for (uint ti = sg - (2 * CT + VTH); ti < VTH; ti += ks_nsg) {
                     const uint c_o = ti * TN;
+                    const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + voff + c_o + t0 * p.sv2;
+                    coopmat<float, SG, C, TN, MACC> vmat = coopmat<float, SG, C, TN, MACC>(0);
+                    coopMatPerElement(vmat, vmat, LoadV, v_base, p.sv2, valid);
                     coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
                     [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
                         coopmat<OPD, SG, C, KT, MUA> kh, kl;
@@ -412,9 +446,8 @@ void main() {
                         coopMatLoad(sbl, sh_sl, c_o * LDP + kk, LDP, COL);
                         PRODUCT(ks, kh, kl, sbh, sbl);
                     }
-                    const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + voff + c_o + t0 * p.sv2;
                     coopmat<float, SG, C, TN, MACC> delta;
-                    coopMatPerElement(delta, ks, ComputeDelta, v_base, p.sv2, valid);
+                    coopMatPerElement(delta, ks, ComputeDeltaV, vmat);
 #ifdef COOPMAT2
                     coopMatPerElement(delta, delta, SplitRowD, c_o, uint(VH));
 #else
