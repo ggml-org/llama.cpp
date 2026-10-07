@@ -65,7 +65,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         // Match complete <function=name> opener for Qwen3-Coder models that occasionally omit the
         // starting <tool_call>. The model may hallucinate a tool name, but it is preferable over
         // constraining on <function which may occur in valid content generation, e.g. #include <functional>
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t, const json & tool) {
             const std::string name = tool.at("function").at("name");
             tool_call_starts.push_back("<function=" + name + ">");
         });
@@ -93,15 +93,15 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 p.ac(p.tool_arg_string_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n"));
 
             auto tool_choice = p.choice();
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
 
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
 
-                foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-                    auto rule_name = "tool-" + name + "-arg-" + param.name;
+                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                    auto rule_name = "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index);
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
 
@@ -141,7 +141,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                 // Accept required arguments in any order, as Qwen does not always adhere to the
                 // order provided.
-                auto args = p.permute("tool-" + name + "-args", required_args);
+                auto args = p.permute("tool-" + std::to_string(tool_index) + "-args", required_args);
                 if (!optional_args.empty()) {
                     args = args + p.zero_or_more(p.choice(optional_args));
                 }
@@ -150,7 +150,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                                    p.tool_args(args) +
                                    p.tool_close(p.literal("</function>\n")));
 
-                tool_choice |= p.rule("tool-" + name, func);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), func);
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;

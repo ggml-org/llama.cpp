@@ -118,7 +118,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
         auto arg_string   = p.rule("ling3-arg-string",
                                    p.tool_arg_string_value(p.until(ARG_VAL_END)) + arg_close);
 
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
 
@@ -127,8 +127,8 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
             // each argument may be preceded by whitespace: the model emits
             // newlines between arguments, the template history does not
-            foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-                auto rule_name = "ling3-arg-" + name + "-" + param.name;
+            foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                auto rule_name = "ling3-arg-" + std::to_string(tool_index) + "-" + std::to_string(param_index);
 
                 auto types = param.schema->value_types();
 
@@ -159,7 +159,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
             // required arguments in any order (as Qwen3-Coder does), then
             // optional ones in any order and number
-            auto args = p.permute("ling3-" + name + "-args", required_args);
+            auto args = p.permute("ling3-" + std::to_string(tool_index) + "-args", required_args);
             if (!optional_args.empty()) {
                 args = args + p.zero_or_more(p.choice(optional_args));
             }
@@ -169,7 +169,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
                                p.tool_args(args) +
                                p.tool_close(p.optional(p.space()) + p.literal(CALL_END)));
 
-            tool_choices |= p.rule("ling3-tool-" + name, call);
+            tool_choices |= p.rule("ling3-tool-" + std::to_string(tool_index), call);
         });
 
         auto calls = inputs.parallel_tool_calls ?

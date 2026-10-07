@@ -109,13 +109,13 @@ common_chat_params common_chat_params_init_llm_jp_harmony(const common_chat_temp
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
 
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
                 const auto   params   = common_chat_tool_parameters(function);
 
                 auto func_name = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-                auto args      = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
+                auto args      = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", params));
 
                 // recipient in role header
                 //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
@@ -125,7 +125,7 @@ common_chat_params common_chat_params_init_llm_jp_harmony(const common_chat_temp
                 //   <|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
                 auto tool_in_channel = p.tool(p.tool_open(channel + func_name + constraint + message) + args);
 
-                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_in_role | tool_in_channel);
             });
 
             // parallel calls are separated by <|end|>; inside the trigger rule so the lazy grammar covers all of them
