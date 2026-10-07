@@ -64,9 +64,13 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
     const int64_t hc         = hparams.dsv4_hc_mult;
     const int64_t hc_mix_dim = (2 + hc)*hc;
 
-    // the NextN block is loaded but only used by the MTP graph.
-    // Separated trunk_only/mtp_only handling TODO with DECODER_MTP graph in the MTP follow up
-    int mtp_flags = 0;
+    // TODO: consolidate the trunk_only/mtp_only detection and flags shared with glm4-moe and qwen35moe
+    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
+    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
+    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
+    const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
+    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
+
     if (!ml.load_mtp) {
         mtp_flags |= TENSOR_SKIP;
     }
@@ -79,18 +83,19 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
     for (int i = 0; i < n_layer_all; ++i) {
         auto & layer = layers[i];
 
-        const int flags = (i >= n_layer) ? mtp_flags : 0;
+        const bool is_nextn = i >= n_layer;
+        const int flags = is_nextn ? mtp_flags : trunk_flags;
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, flags);
         layer.ffn_norm  = create_tensor(tn(LLM_TENSOR_FFN_NORM,  "weight", i), {n_embd}, flags);
 
         if (i < n_layer) {
-            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {hc*n_embd, hc_mix_dim}, 0);
-            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {hc_mix_dim}, 0);
-            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, 0);
-            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {hc*n_embd, hc_mix_dim}, 0);
-            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {hc_mix_dim}, 0);
-            layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", i), {3}, 0);
+            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {hc*n_embd, hc_mix_dim}, flags);
+            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {hc_mix_dim}, flags);
+            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, flags);
+            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {hc*n_embd, hc_mix_dim}, flags);
+            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {hc_mix_dim}, flags);
+            layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", i), {3}, flags);
         }
 
         const int64_t head_dim = hparams.n_embd_head_kda;
@@ -100,25 +105,25 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
         if (hparams.is_recr(i)) {
             auto conv = [&](llm_tensor tid) {
                 ggml_tensor * t = create_tensor(tn(tid, "weight", i), {d_conv, 1, d_inner, 1}, TENSOR_NOT_REQUIRED);
-                return t ? t : create_tensor(tn(tid, "weight", i), {d_conv, 1, d_inner}, 0);
+                return t ? t : create_tensor(tn(tid, "weight", i), {d_conv, 1, d_inner}, flags);
             };
             layer.ssm_q_conv = conv(LLM_TENSOR_SSM_CONV1D_Q);
             layer.ssm_k_conv = conv(LLM_TENSOR_SSM_CONV1D_K);
             layer.ssm_v_conv = conv(LLM_TENSOR_SSM_CONV1D_V);
 
-            create_tensor_qkv(layer, i, n_embd, d_inner, d_inner, d_inner, 0);
+            create_tensor_qkv(layer, i, n_embd, d_inner, d_inner, d_inner, flags);
 
-            layer.ssm_f_a  = create_tensor(tn(LLM_TENSOR_SSM_F_A,  "weight", i), {n_embd, head_dim}, 0);
-            layer.ssm_f_b  = create_tensor(tn(LLM_TENSOR_SSM_F_B,  "weight", i), {head_dim, d_inner}, 0);
-            layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
+            layer.ssm_f_a  = create_tensor(tn(LLM_TENSOR_SSM_F_A,  "weight", i), {n_embd, head_dim}, flags);
+            layer.ssm_f_b  = create_tensor(tn(LLM_TENSOR_SSM_F_B,  "weight", i), {head_dim, d_inner}, flags);
+            layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, flags);
 
-            layer.ssm_a    = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {n_head}, 0);
-            layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, 0);
+            layer.ssm_a    = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {n_head}, flags);
+            layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, flags);
 
-            layer.ssm_g_a    = create_tensor(tn(LLM_TENSOR_SSM_G_A,  "weight", i), {n_embd, head_dim}, 0);
-            layer.ssm_g_b    = create_tensor(tn(LLM_TENSOR_SSM_G_B,  "weight", i), {head_dim, d_inner}, 0);
-            layer.ssm_o_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {head_dim}, 0);
-            layer.wo         = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {d_inner, n_embd}, 0);
+            layer.ssm_g_a    = create_tensor(tn(LLM_TENSOR_SSM_G_A,  "weight", i), {n_embd, head_dim}, flags);
+            layer.ssm_g_b    = create_tensor(tn(LLM_TENSOR_SSM_G_B,  "weight", i), {head_dim, d_inner}, flags);
+            layer.ssm_o_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {head_dim}, flags);
+            layer.wo         = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {d_inner, n_embd}, flags);
         } else {
             const int64_t q_lora_rank      = hparams.n_lora_q;
             const int64_t kv_lora_rank     = hparams.n_lora_kv;
@@ -155,9 +160,9 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
         }
 
         if (i < (int) hparams.n_layer_dense_lead) {
-            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
-            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
-            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, flags);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, flags);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, flags);
         } else {
             const int64_t n_ff_exp        = hparams.n_ff_exp(i);
             const int64_t n_expert_shared = hparams.n_expert_shared;
