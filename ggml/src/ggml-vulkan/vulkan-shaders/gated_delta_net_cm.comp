@@ -42,11 +42,7 @@
 #define SUBGROUP_SIZE 32   // lanes per subgroup (32 = NVIDIA/wave32; 64 = RDNA wave64)
 #endif
 #define WGS (NSUB * SUBGROUP_SIZE)
-#ifdef COOPMAT2
-#define KT 32          // K-tile width for deep (K=D) matmuls (flexible dims)
-#else
-#define KT 16          // coopmat1: m16n16k16 only
-#endif
+#define KT 16          // K-tile width for deep (K=D) matmuls (bf16 cm: m16n16k16 only)
 #define PAD 8          // shared padding to break COL-load bank conflicts (keep LDP*2 a multiple of 16B)
 #define LDP (D + PAD)  // padded leading dim for q/k [CxD] and state mirror [DxV]
 
@@ -137,7 +133,7 @@ shared float sh_prefix[C], sh_beta[C], sh_ep[C], sh_carry[C];
 // Use for the bf16 hi/lo split: accumulator when a bf16 accumulator type is
 // available, otherwise an A-matrix reached through the maintenance1 relaxed
 // accumulator<->A/B conversion (stored to shared, reloaded as A/B).
-#if defined(COOPMAT2) || defined(BF16ACC)
+#if defined(BF16ACC)
 #define ACCB MACC
 #else
 #define ACCB MUA
@@ -160,6 +156,48 @@ shared float sh_prefix[C], sh_beta[C], sh_ep[C], sh_carry[C];
             kreg[j] = data_k[off]; \
         } \
     }
+
+#ifdef COOPMAT2
+// cm2 bf16 hi/lo split: NVIDIA advertises no bf16 accumulator and no subgroup-scope
+// accumulator<->A/B conversion, so split the fp32 accumulator element-wise and write the
+// bf16 hi/lo directly to shared (side-effect, like StorePmat), avoiding any bf16 accumulator.
+#ifndef GMEM_MIRROR
+float SplitColS(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
+    const uint idx = off + c * LDP + r;
+    const OPD h = OPD(elem);
+    sh_sh[idx] = h;
+    sh_sl[idx] = OPD(elem - float(h));
+    return elem;
+}
+#else
+float SplitColMir(const in uint32_t r, const in uint32_t c, const in float elem,
+                  const in uint32_t base_h, const in uint32_t base_l) {
+    const uint idx = c * LDP + r;
+    const OPD h = OPD(elem);
+    data_mirror[base_h + idx] = h;
+    data_mirror[base_l + idx] = OPD(elem - float(h));
+    return elem;
+}
+#endif
+
+float SplitRowD(const in uint32_t r, const in uint32_t c, const in float elem,
+                const in uint32_t base, const in uint32_t stride) {
+    const uint idx = base + r * stride + c;
+    const OPD h = OPD(elem);
+    sh_dh[idx] = h;
+    sh_dl[idx] = OPD(elem - float(h));
+    return elem;
+}
+
+float SplitRowSO(const in uint32_t r, const in uint32_t c, const in float elem,
+                 const in uint32_t base, const in uint32_t stride) {
+    const uint idx = base + r * stride + c;
+    const OPD h = OPD(elem);
+    sh_soh[idx] = h;
+    sh_sol[idx] = OPD(elem - float(h));
+    return elem;
+}
+#endif
 
 float StoreOut(const in uint32_t r, const in uint32_t c, const in float elem,
                const in uint32_t out_base, const in uint32_t valid) {
@@ -332,11 +370,15 @@ void main() {
                 [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
                     const uint ti = sg + j * NSUB;
                     const uint off = (TILE_C(ti) - voff) * LDP + TILE_R(ti);
+#ifdef COOPMAT2
+                    coopMatPerElement(state[j], state[j], SplitColS, off);
+#else
                     const coopmat<OPD, SG, TM, TN, ACCB> hi = coopmat<OPD, SG, TM, TN, ACCB>(state[j]);
                     const coopmat<float, SG, TM, TN, MACC> hf = coopmat<float, SG, TM, TN, MACC>(hi);
                     const coopmat<OPD, SG, TM, TN, ACCB> lo = coopmat<OPD, SG, TM, TN, ACCB>(state[j] - hf);
                     coopMatStore(hi, sh_sh, off, LDP, COL);
                     coopMatStore(lo, sh_sl, off, LDP, COL);
+#endif
                 }
             }
             barrier();
@@ -373,11 +415,15 @@ void main() {
                     const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + voff + c_o + t0 * p.sv2;
                     coopmat<float, SG, C, TN, MACC> delta;
                     coopMatPerElement(delta, ks, ComputeDelta, v_base, p.sv2, valid);
+#ifdef COOPMAT2
+                    coopMatPerElement(delta, delta, SplitRowD, c_o, uint(VH));
+#else
                     const coopmat<OPD, SG, C, TN, ACCB> dh = coopmat<OPD, SG, C, TN, ACCB>(delta);
                     const coopmat<float, SG, C, TN, MACC> df = coopmat<float, SG, C, TN, MACC>(dh);
                     const coopmat<OPD, SG, C, TN, ACCB> dl = coopmat<OPD, SG, C, TN, ACCB>(delta - df);
                     coopMatStore(dh, sh_dh, c_o, VH, ROW);
                     coopMatStore(dl, sh_dl, c_o, VH, ROW);
+#endif
                 }
             }
             barrier();
@@ -393,11 +439,15 @@ void main() {
                 coopMatLoad(dh, sh_dh, c_o, VH, ROW);
                 coopMatLoad(dl, sh_dl, c_o, VH, ROW);
                 PRODUCT(solved, ih, il, dh, dl);
+#ifdef COOPMAT2
+                coopMatPerElement(solved, solved, SplitRowSO, c_o, uint(VH));
+#else
                 const coopmat<OPD, SG, C, TN, ACCB> sh = coopmat<OPD, SG, C, TN, ACCB>(solved);
                 const coopmat<float, SG, C, TN, MACC> sf = coopmat<float, SG, C, TN, MACC>(sh);
                 const coopmat<OPD, SG, C, TN, ACCB> sl = coopmat<OPD, SG, C, TN, ACCB>(solved - sf);
                 coopMatStore(sh, sh_soh, c_o, VH, ROW);
                 coopMatStore(sl, sh_sol, c_o, VH, ROW);
+#endif
             }
             barrier();
 
@@ -470,6 +520,13 @@ void main() {
         [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
             const uint ti = sg + j * NSUB;
             const uint off = TILE_C(ti) * LDP + TILE_R(ti);
+#ifdef COOPMAT2
+#ifdef GMEM_MIRROR
+            coopMatPerElement(state[j], state[j], SplitColMir, mir_h + off, mir_l + off);
+#else
+            coopMatPerElement(state[j], state[j], SplitColS, off);
+#endif
+#else
             const coopmat<OPD, SG, TM, TN, ACCB> hi = coopmat<OPD, SG, TM, TN, ACCB>(state[j]);
             const coopmat<float, SG, TM, TN, MACC> hf = coopmat<float, SG, TM, TN, MACC>(hi);
             const coopmat<OPD, SG, TM, TN, ACCB> lo = coopmat<OPD, SG, TM, TN, ACCB>(state[j] - hf);
@@ -479,6 +536,7 @@ void main() {
 #else
             coopMatStore(hi, sh_sh, off, LDP, COL);
             coopMatStore(lo, sh_sl, off, LDP, COL);
+#endif
 #endif
         }
 #ifdef GMEM_MIRROR
@@ -609,11 +667,15 @@ void main() {
                 const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
                 coopmat<float, SG, C, TN, MACC> delta;
                 coopMatPerElement(delta, ks, ComputeDelta, v_base, p.sv2, valid);
+#ifdef COOPMAT2
+                coopMatPerElement(delta, delta, SplitRowD, c_o, uint(V));
+#else
                 const coopmat<OPD, SG, C, TN, ACCB> dh = coopmat<OPD, SG, C, TN, ACCB>(delta);
                 const coopmat<float, SG, C, TN, MACC> df = coopmat<float, SG, C, TN, MACC>(dh);
                 const coopmat<OPD, SG, C, TN, ACCB> dl = coopmat<OPD, SG, C, TN, ACCB>(delta - df);
                 coopMatStore(dh, sh_dh, c_o, V, ROW);
                 coopMatStore(dl, sh_dl, c_o, V, ROW);
+#endif
             }
         }
 #endif
@@ -650,11 +712,15 @@ void main() {
             coopMatLoad(dh, sh_dh, c_o, V, ROW);
             coopMatLoad(dl, sh_dl, c_o, V, ROW);
             PRODUCT(solved, ih, il, dh, dl);
+#ifdef COOPMAT2
+            coopMatPerElement(solved, solved, SplitRowSO, c_o, uint(V));
+#else
             const coopmat<OPD, SG, C, TN, ACCB> sh = coopmat<OPD, SG, C, TN, ACCB>(solved);
             const coopmat<float, SG, C, TN, MACC> sf = coopmat<float, SG, C, TN, MACC>(sh);
             const coopmat<OPD, SG, C, TN, ACCB> sl = coopmat<OPD, SG, C, TN, ACCB>(solved - sf);
             coopMatStore(sh, sh_soh, c_o, V, ROW);
             coopMatStore(sl, sh_sol, c_o, V, ROW);
+#endif
         }
         barrier();
 
