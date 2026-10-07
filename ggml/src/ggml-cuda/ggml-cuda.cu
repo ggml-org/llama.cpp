@@ -1851,6 +1851,30 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
+static bool ggml_cuda_mul_mat_id_uses_mmq(const ggml_tensor * tensor) {
+    const ggml_tensor * src0 = tensor->src[0];
+    const ggml_tensor * src1 = tensor->src[1];
+
+    if (tensor->op != GGML_OP_MUL_MAT_ID) {
+        return false;
+    }
+
+    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+                                   ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
+                                   src0->view_src;
+    if (bad_padding_clear || src1->type != GGML_TYPE_F32 || tensor->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const auto & dev = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    const int cc = dev.cc;
+    if (src1->ne[2] <= MMVQ_MAX_BATCH_SIZE && ggml_is_quantized(src0->type) &&
+            src1->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
+        return false;
+    }
+    return ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], src0->ne[2]);
+}
+
 static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_idx, int shared_idx) {
     if (routed_idx + 2 >= graph->n_nodes || shared_idx + 2 >= graph->n_nodes || shared_idx < routed_idx + 3) {
         return false;
@@ -3565,7 +3589,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             const int output_idx = i + match.node_count - 1;
             if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, match.node_count, &output_idx, 1)) {
                 ggml_cuda_op_moe_weighted_reduction(
-                    *cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst);
+                    *cuda_ctx, match.experts, match.expert_scale, match.weights, nullptr, nullptr, match.dst);
                 return match.node_count - 1;
             }
         }
@@ -4234,6 +4258,37 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
         ggml_cuda_mm_fusion_args_host fusion_data{};
         fusion_data.x_bias = bias_tensor;
+
+        // Fold ADD_ID into weighted reduction when it is the only consumer.
+        // This avoids the separate bias kernel and keeps MMQ's plain write-back.
+        const bool supports_bias_reduction = src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4;
+        const bool mmq_bias_ok = bias_op == GGML_OP_ADD_ID && bias_tensor->type == GGML_TYPE_F32 &&
+                                 ggml_is_contiguous(bias_tensor) && bias_tensor->ne[0] == src0->ne[1] &&
+                                 bias_tensor->ne[1] == src0->ne[2] && bias_tensor->ne[2] == 1 && bias_tensor->ne[3] == 1 &&
+                                 ids->type == GGML_TYPE_I32 && ids->nb[0] == sizeof(int32_t);
+        if (supports_bias_reduction && mmq_bias_ok && op == GGML_OP_MUL_MAT_ID && ggml_cuda_mul_mat_id_uses_mmq(mm_node) &&
+                ggml_node_has_n_uses(cgraph, i, 1) && ggml_node_has_n_uses(cgraph, i + 1, 1)) {
+            ggml_cuda_moe_weighted_reduction_match reduction_match;
+            if (ggml_cuda_match_moe_weighted_reduction(cgraph, i + 2, reduction_match) &&
+                    reduction_match.experts == bias_node) {
+                const int combined_count = 2 + reduction_match.node_count;
+                const int output_idx     = i + combined_count - 1;
+
+                // the reduction reads mm_node while it writes dst, so they must not alias
+                const char * mm_data  = (const char *) mm_node->data;
+                const char * dst_data = (const char *) reduction_match.dst->data;
+                const bool   mm_dst_overlap = mm_data < dst_data + ggml_nbytes(reduction_match.dst) &&
+                                              dst_data < mm_data + ggml_nbytes(mm_node);
+
+                if (!mm_dst_overlap && ggml_cuda_check_fusion_memory_ranges(cgraph, i, combined_count, &output_idx, 1)) {
+                    ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, mm_node);
+                    ggml_cuda_op_moe_weighted_reduction(
+                        *cuda_ctx, mm_node, reduction_match.expert_scale, reduction_match.weights,
+                        bias_tensor, ids, reduction_match.dst);
+                    return combined_count - 1;
+                }
+            }
+        }
 
         if (ggml_cuda_should_fuse_mul_mat_vec_f(mm_node)) {
             ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, bias_node, &fusion_data);
