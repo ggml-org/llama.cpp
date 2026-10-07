@@ -168,6 +168,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
 
+    bool tie_word_embeddings = false;
+    ml->get_key(LLM_KV_DFLASH_TIE_WORD_EMBEDDINGS, tie_word_embeddings, false);
+    if (output == nullptr && tie_word_embeddings) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab_draft }, TENSOR_DUPLICATED);
+    }
+
     if (hparams.dsv4_hc_mult > 0) {
         const int64_t q_lora_rank     = hparams.n_lora_q;
         const int64_t n_ff_exp        = hparams.n_ff_exp();
@@ -253,14 +259,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
             layer.dflash_ffn_conv_base  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_BASE, i), { n_embd, kernel, 2 }, 0);
             layer.dflash_ffn_conv_proj  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_PROJ,  "weight", i), { n_embd, projected }, 0);
         }
-    }
-
-    // A missing output head does not imply tied weights: some drafts borrow the target's head.
-    // Reuse embeddings only for the known Gemma DSpark layout (GELU, post norms, shared K/V).
-    if (output == nullptr && tok_embd != nullptr && n_vocab_draft == n_vocab && n_layer > 0 &&
-            hparams.llm_ffn_op == LLM_FFN_GELU && layers[0].attn_post_norm != nullptr &&
-            layers[0].ffn_post_norm != nullptr && layers[0].wv == nullptr) {
-        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab_draft }, TENSOR_DUPLICATED);
     }
 }
 

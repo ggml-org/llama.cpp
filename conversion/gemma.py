@@ -884,6 +884,7 @@ class Gemma4DSparkModel(DFlashModel):
         self.gguf_writer.add_attention_scale(1.0)
         self.gguf_writer.add_hidden_act("gelu_pytorch_tanh")
 
+        self.gguf_writer.add_tie_word_embeddings(self.hparams.get("tie_word_embeddings") is True)
         self.gguf_writer.add_sample_from_anchor(self.hparams.get("sample_from_anchor", True))
         target_layers = self.dflash_config.get("target_layer_ids", self.hparams.get("target_layer_ids"))
         if not target_layers:

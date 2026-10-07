@@ -1046,6 +1046,9 @@ class GGUFWriter:
     def add_sample_from_anchor(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SAMPLE_FROM_ANCHOR.format(arch=self.arch), value)
 
+    def add_tie_word_embeddings(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.TIE_WORD_EMBEDDINGS.format(arch=self.arch), value)
+
     def add_has_confidence_head(self, value: bool) -> None:
         self.add_bool(Keys.LLM.HAS_CONFIDENCE_HEAD.format(arch=self.arch), value)
 
