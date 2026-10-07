@@ -1532,6 +1532,29 @@ inline static void ggml_vec_gelu_backward_f16(const int n, ggml_fp16_t * dx, con
     }
 }
 
+inline static float ggml_sigmoid_backward_f32(float x, float dy) {
+    const float s = 1.0f/(1.0f + expf(-x));
+    return dy*s*(1.0f - s);
+}
+
+inline static ggml_fp16_t ggml_sigmoid_backward_f16(ggml_fp16_t x, ggml_fp16_t dy) {
+    const float v = GGML_CPU_FP16_TO_FP32(x);
+    const float s = 1.0f/(1.0f + expf(-v));
+    return GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(dy)*s*(1.0f - s));
+}
+
+inline static void ggml_vec_sigmoid_backward_f32(const int n, float * dx, const float * x, const float * dy) {
+    for (int i = 0; i < n; ++i) {
+        dx[i] = ggml_sigmoid_backward_f32(x[i], dy[i]);
+    }
+}
+
+inline static void ggml_vec_sigmoid_backward_f16(const int n, ggml_fp16_t * dx, const ggml_fp16_t * x, const ggml_fp16_t * dy) {
+    for (int i = 0; i < n; ++i) {
+        dx[i] = ggml_sigmoid_backward_f16(x[i], dy[i]);
+    }
+}
+
 inline static void ggml_vec_reglu_f32 (const int n, float * y, const float * x, const float * g) {
     for (int i = 0; i < n; ++i) {
         y[i] = (x[i] > 0.f) ? x[i] * g[i] : 0.f;

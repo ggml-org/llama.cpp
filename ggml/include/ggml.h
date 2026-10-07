@@ -518,6 +518,7 @@ extern "C" {
         GGML_OP_SILU_BACK,
         GGML_OP_GELU_BACK,
         GGML_OP_GEGLU_BACK,
+        GGML_OP_SIGMOID_BACK,
         GGML_OP_NORM, // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
@@ -1245,6 +1246,13 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * grad,
             struct ggml_tensor  * g);
+
+    // a - dy
+    // b - x
+    GGML_API struct ggml_tensor * ggml_sigmoid_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     // hardswish(x) = x * relu6(x + 3) / 6
     GGML_API struct ggml_tensor * ggml_hardswish(
