@@ -442,7 +442,6 @@ extern "C" {
     // the precision parameters are stored as ggml_tensor.op_params to the respective ops
     enum ggml_prec {
         GGML_PREC_UNDEFINED = 0,
-        GGML_PREC_DEFAULT   = 0,  // note: deprecated, use GGML_PREC_UNDEFINED
         GGML_PREC_F32       = 10,
         GGML_PREC_BF16      = 15,
         GGML_PREC_F16       = 20,
@@ -495,7 +494,6 @@ extern "C" {
         GGML_OP_DUP,
         GGML_OP_ADD,
         GGML_OP_ADD_ID,
-        GGML_OP_ADD1,
         GGML_OP_ACC,
         GGML_OP_SUB,
         GGML_OP_MUL,
@@ -760,10 +758,6 @@ extern "C" {
     GGML_API size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
     GGML_API size_t  ggml_row_size (enum ggml_type type, int64_t ne); // size in bytes for all elements in a row
 
-    GGML_DEPRECATED(
-    GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
-    "use ggml_row_size() instead");
-
     GGML_API const char * ggml_type_name(enum ggml_type type);
     GGML_API const char * ggml_op_name  (enum ggml_op   op);
     GGML_API const char * ggml_op_symbol(enum ggml_op   op);
@@ -930,18 +924,6 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
-
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_add1(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b),
-        "use ggml_add instead");
-
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_add1_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b),
-        "use ggml_add_inplace instead");
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
@@ -1484,13 +1466,6 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
-    // change the precision of a matrix multiplication
-    // set to GGML_PREC_F32 for higher precision (useful for phi-2)
-    GGML_DEPRECATED(GGML_API void ggml_mul_mat_set_prec(
-            struct ggml_tensor * a,
-            enum ggml_prec       prec),
-        "use ggml_prec_set_acc() instead");
-
     // change the hint of a matrix multiplication
     GGML_API void ggml_mul_mat_set_hint(
             struct ggml_tensor * a,
@@ -1982,36 +1957,6 @@ extern "C" {
             float                 beta_fast,
             float                 beta_slow);
 
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_rope_custom(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   n_dims,
-            int                   mode,
-            int                   n_ctx_orig,
-            float                 freq_base,
-            float                 freq_scale,
-            float                 ext_factor,
-            float                 attn_factor,
-            float                 beta_fast,
-            float                 beta_slow),
-        "use ggml_rope_ext instead");
-
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_rope_custom_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   n_dims,
-            int                   mode,
-            int                   n_ctx_orig,
-            float                 freq_base,
-            float                 freq_scale,
-            float                 ext_factor,
-            float                 attn_factor,
-            float                 beta_fast,
-            float                 beta_slow),
-        "use ggml_rope_ext_inplace instead");
-
     // compute correction dims for YaRN RoPE scaling
     GGML_API void ggml_rope_yarn_corr_dims(
         int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, float dims[2]);
@@ -2316,7 +2261,7 @@ extern "C" {
         GGML_SCALE_MODE_BILINEAR = 1,
         GGML_SCALE_MODE_BICUBIC  = 2,
 
-        GGML_SCALE_MODE_COUNT
+        GGML_SCALE_MODE_COUNT = 3
     };
 
     enum ggml_scale_flag {
@@ -2331,18 +2276,6 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   scale_factor,
             enum ggml_scale_mode  mode);
-
-    // interpolate
-    // interpolate scale to specified dimensions
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_upscale_ext(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   ne0,
-            int                   ne1,
-            int                   ne2,
-            int                   ne3,
-            enum ggml_scale_mode  mode),
-        "use ggml_interpolate instead");
 
     // Up- or downsamples the input to the specified size.
     // 2D scale modes (eg. bilinear) are applied to the first two dimensions.
@@ -2493,11 +2426,6 @@ extern "C" {
             float                 scale,
             float                 max_bias,
             float                 logit_softcap);
-
-    GGML_DEPRECATED(GGML_API void ggml_flash_attn_ext_set_prec(
-            struct ggml_tensor * a,
-            enum ggml_prec       prec),
-        "use ggml_prec_set_acc() instead");
 
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);

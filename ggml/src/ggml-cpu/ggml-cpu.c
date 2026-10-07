@@ -1762,10 +1762,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_add_id(params, tensor);
             } break;
-        case GGML_OP_ADD1:
-            {
-                ggml_compute_forward_add1(params, tensor);
-            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -2261,7 +2257,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONT:
         case GGML_OP_ADD:
         case GGML_OP_ADD_ID:
-        case GGML_OP_ADD1:
         case GGML_OP_ACC:
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:
@@ -2864,7 +2859,6 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_ADD:
                 case GGML_OP_ADD_ID:
-                case GGML_OP_ADD1:
                     {
                         if (ggml_is_quantized(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
