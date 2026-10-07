@@ -88,9 +88,10 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
         // Tool call parser
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-            auto arg_close  = p.tool_arg_close(p.literal("\n</parameter>\n"));
-            auto arg_string = p.rule("xml-arg-string",
-                p.ac(p.tool_arg_string_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n"));
+            auto arg_close     = p.tool_arg_close(p.literal("\n</parameter>\n"));
+            auto arg_raw_value = p.until("\n</parameter>\n");
+            auto arg_string    = p.rule("xml-arg-string",
+                p.ac(p.tool_arg_string_value(arg_raw_value) + arg_close, "\n</parameter>\n"));
 
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
@@ -109,7 +110,8 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                     auto arg_value = p.eps();
                     if (!types.has(common_chat_schema::TYPE_STRING)) {
-                        arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
+                        // Parse tagged values by delimiter while keeping schema-constrained generation (see #21771).
+                        arg_value = p.tool_arg_json_value(p.schema(arg_raw_value, rule_name + "-schema", doc, *param.schema)) + arg_close;
                     } else if (types.is_only(common_chat_schema::TYPE_STRING)) {
                         arg_value = arg_string;
                     } else {
