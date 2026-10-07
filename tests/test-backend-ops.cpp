@@ -7291,8 +7291,6 @@ struct test_mul_mat_add : public test_case {
             case MUL_MAT_ADD_B_INPLACE:   out = ggml_add_inplace(ctx, b, mm);   break;
             case MUL_MAT_ADD_MM_MM:
                 {
-                    // the residual is a second mat-mul of the same shape (x = W1 @ u + W2 @ v), so a backend
-                    // that finds the residual as "the ADD operand that is not a MUL_MAT" picks the wrong one
                     ggml_tensor * a2  = ggml_new_tensor_2d(ctx, type_a, k, m);
                     ggml_tensor * mm2 = ggml_mul_mat(ctx, a2, b);
                     out = ggml_add(ctx, mm2, mm);
