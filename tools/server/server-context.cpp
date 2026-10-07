@@ -2726,6 +2726,12 @@ private:
                     res->id                  = task.id;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
+
+                    if (n_prompt_queued > 0) {
+                        llama_synchronize(ctx_tgt);
+                        metrics_flush_prompt(); // ensure metrics are up-to-date for this snapshot
+                    }
+
                     res->metrics             = metrics;
 
                     if (task.metrics_reset_bucket) {
@@ -4460,6 +4466,9 @@ private:
         if (has_output) {
             // the context is already synchronized, so the timings are correct
             metrics_flush_prompt();
+        } else if (n_prompt_queued > 0) {
+            llama_synchronize(ctx_tgt);
+            metrics_flush_prompt(); // flush without output to ensure metrics are up-to-date
         }
 
         // advance the prompt timing of the slots that had tokens in this batch
