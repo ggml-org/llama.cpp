@@ -1967,6 +1967,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
+        {"--moe-direct-io"},
+        string_format("stream routed-expert weights with O_DIRECT into a VRAM slot pool instead of mmap (default: %s)", params.moe_direct_io ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.moe_direct_io = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION}));
+
+    add_opt(common_arg(
+        {"--moe-slots"},
+        "N",
+        string_format("total number of VRAM expert slots shared across layers (default: %d)", params.moe_slots),
+        [](common_params & params, int value) {
+            params.moe_slots = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION}));
+
+    add_opt(common_arg(
         {"--warmup"},
         {"--no-warmup"},
         string_format("whether to perform warmup with an empty run (default: %s)", params.warmup ? "enabled" : "disabled"),
