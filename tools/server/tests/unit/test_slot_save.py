@@ -649,7 +649,7 @@ def parse_ckpt_appendix(data):
 
 
 # a damaged appendix must be ignored, or its checkpoints dropped when they fail to load, without aborting the server
-@pytest.mark.parametrize("damage", ["oversized_blob", "corrupt_state", "many_checkpoints"])
+@pytest.mark.parametrize("damage", ["oversized_blob", "empty_target", "corrupt_state", "many_checkpoints"])
 def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
     server = swa_server
     server.start()
@@ -694,13 +694,18 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
     if damage == "oversized_blob":
         # the first target blob declares a size that cannot be allocated, it must be rejected before allocating
         data = data[:ckpts[0][0] + 16] + struct.pack("<Q", 1 << 62)
+    elif damage == "empty_target":
+        # the target blobs are removed and their size set to 0, a valid save never writes an empty target state
+        for start, end, tgt in reversed(ckpts):
+            size = struct.unpack_from("<Q", data, tgt - 8)[0]
+            data = data[:tgt - 8] + struct.pack("<Q", 0) + data[tgt + size:]
     elif damage == "corrupt_state":
         # the sizes are intact, but the target states do not load
         for _, _, tgt in ckpts:
             struct.pack_into("<I", data, tgt, 0xdeadbeef)
     else:
-        # more than 1024 entries: empty fillers that never match go first, the real checkpoints stay last
-        filler = struct.pack("<qiiQQQ", 0, 0, 1 << 30, 0, 0, 0)
+        # more than 1024 entries: one-byte fillers that never match go first, the real checkpoints stay last
+        filler = struct.pack("<qiiQBQQ", 0, 0, 1 << 30, 1, 0, 0, 0)
         data = data[:off + 12] + filler * (1025 - len(ckpts)) + data[off + 12:]
         struct.pack_into("<I", data, off + 8, 1025)
 
@@ -711,7 +716,7 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
         "filename": "ckpt_damaged.bin",
     })
     assert res.status_code == 200
-    if damage == "oversized_blob":
+    if damage in ("oversized_blob", "empty_target"):
         assert res.body["n_read"] == off
 
     res = server.make_request("POST", "/completion", data={
@@ -731,7 +736,7 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
 @pytest.mark.parametrize("ctkd_restore", ["f16", "q8_0"])
 def test_slot_restore_checkpoints_draft_kv_type_change(swa_server, ctkd_restore):
     server = swa_server
-    server.model_draft = download_file("https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/tinygemma3-Q8_0.gguf")
+    server.model_draft_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"  # same file as the target, already in the HF cache
     server.spec_type = "draft-simple"
     server.ctkd = "f16"
     server.start()

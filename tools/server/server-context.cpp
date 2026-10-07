@@ -2627,7 +2627,7 @@ private:
         }
         std::ofstream ofs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::app);
         if (!ofs) {
-            SRV_WRN("failed to append context checkpoints to '%s'\n", filepath.c_str());
+            SLT_WRN(slot, "failed to append context checkpoints to '%s'\n", filepath.c_str());
             return false;
         }
         const uint32_t magic   = SLOT_CKPT_MAGIC;
@@ -2646,10 +2646,10 @@ private:
         }
         ofs.flush();
         if (!ofs) {
-            SRV_WRN("failed to append context checkpoints to '%s' - the appendix is incomplete\n", filepath.c_str());
+            SLT_WRN(slot, "failed to append context checkpoints to '%s' - the appendix is incomplete\n", filepath.c_str());
             return false;
         }
-        SRV_INF("appended %u context checkpoint(s) (%.3f MiB) to '%s'\n",
+        SLT_INF(slot, "appended %u context checkpoint(s) (%.3f MiB) to '%s'\n",
                 count, (float) n_written / 1024 / 1024, filepath.c_str());
         return true;
     }
@@ -2671,7 +2671,7 @@ private:
         }
         if (!ckpt_read(ifs, &version, sizeof(version), n_read) || version != SLOT_CKPT_VERSION ||
             !ckpt_read(ifs, &count,   sizeof(count),   n_read)) {
-            SRV_WRN("invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
+            SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
             return 0;
         }
         std::list<common_prompt_checkpoint> checkpoints;
@@ -2684,7 +2684,12 @@ private:
                 !ckpt_read_buf(ifs, cur.data_tgt,  n_avail, n_read) ||
                 !ckpt_read_buf(ifs, cur.data_dft,  n_avail, n_read) ||
                 !ckpt_read_buf(ifs, cur.data_spec, n_avail, n_read)) {
-                SRV_WRN("truncated context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
+                SLT_WRN(slot, "truncated context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
+                return 0;
+            }
+            // a saved checkpoint always holds a target state - an empty blob would roll back without restoring anything
+            if (cur.data_tgt.empty()) {
+                SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
                 return 0;
             }
             checkpoints.push_back(std::move(cur));
@@ -2698,14 +2703,14 @@ private:
             const bool ok = llama_state_seq_set_data_ext(ctx_dft, data.data(), data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == data.size();
             llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
             if (!ok) {
-                SRV_WRN("draft context checkpoint data in '%s' does not match the draft context - dropped\n", filepath.c_str());
+                SLT_WRN(slot, "draft context checkpoint data in '%s' does not match the draft context - dropped\n", filepath.c_str());
                 for (auto & cur : checkpoints) {
                     cur.clear_dft();
                 }
             }
         }
         slot.prompt.checkpoints = std::move(checkpoints);
-        SRV_INF("restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
+        SLT_INF(slot, "restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
         return n_read;
     }
 
