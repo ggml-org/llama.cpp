@@ -864,6 +864,35 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             split_state.nr[is] = nr_s;
         }
         split_state.n_segments = segments.size();
+
+        // Whole-head split granularity can leave some devices with an empty K/V shard.
+        // Mirror K/V tensors in that case so per-row operations see complete data.
+        if (std::regex_match(tensor_name, pattern_kv_weight) ||
+                std::regex_match(tensor_name, pattern_kv_bias) ||
+                std::regex_match(tensor_name, pattern_kv_cache)) {
+            bool has_empty_device = false;
+
+            for (size_t j = 0; j < ud->n_devices; ++j) {
+                int64_t ne_device = 0;
+
+                for (size_t is = 0; is < split_state.n_segments; ++is) {
+                    ne_device += split_state.ne[is*ud->n_devices + j] *
+                                split_state.nr[is];
+                }
+
+                if (ne_device == 0) {
+                    has_empty_device = true;
+                    break;
+                }
+            }
+
+            if (has_empty_device) {
+                split_state.axis = GGML_BACKEND_SPLIT_AXIS_MIRRORED;
+                memset(split_state.ne, 0, sizeof(split_state.ne));
+                split_state.nr[0] = 1;
+                split_state.n_segments = 1;
+            }
+        }
     } else {
         memset(split_state.ne, 0, sizeof(split_state.ne));
         split_state.nr[0] = 1;
