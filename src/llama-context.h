@@ -6,10 +6,12 @@
 #include "llama-graph.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
+#include "llama-memory.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
 
+#include <array>
 #include <map>
 #include <vector>
 
@@ -84,8 +86,10 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
-    float * get_embeddings_pre_norm();
-    float * get_embeddings_pre_norm_ith(int32_t i);
+    float * get_embeddings_nextn();
+    float * get_embeddings_nextn_ith(int32_t i);
+
+    float * get_embeddings_layer_inp(uint32_t lid);
 
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
@@ -99,6 +103,8 @@ struct llama_context {
     const llama_token * get_sampled_candidates_ith(int32_t idx);
     size_t get_sampled_candidates_count(int32_t idx);
 
+    bool get_causal_attn() const;
+
     void attach_threadpool(
             ggml_threadpool_t threadpool,
             ggml_threadpool_t threadpool_batch);
@@ -110,7 +116,9 @@ struct llama_context {
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
 
     void set_embeddings (bool value);
-    void set_embeddings_pre_norm(bool value, bool masked);
+    void set_embeddings_nextn(bool value, bool masked);
+    void set_embeddings_layer_inp(uint32_t lid, bool enable);
+    void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
@@ -135,6 +143,10 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
+    int encode(const llama_batch_ext & batch_inp);
+    int decode(const llama_batch_ext & batch_inp);
+
+    // compat version
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
@@ -225,6 +237,10 @@ private:
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
 
+    // async-copy enabled layer-input tensors (per cparams.output_layer_inp)
+    // from backend into host-side embd_layer_inp buffers
+    bool extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens);
+
     //
     // graph
     //
@@ -245,6 +261,8 @@ public:
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
+    llm_graph_result * get_gf_res_prev();
+
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
@@ -252,6 +270,13 @@ private:
                           llm_graph_type   gtype) const;
 
     llm_graph_cb graph_get_cb() const;
+
+    // ggml_backend_sched copy callback, copies only the experts used by MUL_MAT_ID
+    static bool sched_copy_experts(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph, void * user_data);
+
+    // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
+    // that differs from the layer it belongs to (usually due to missing backend support)
+    void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
@@ -273,7 +298,7 @@ private:
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
-    std::unique_ptr<llama_memory_i> memory;
+    llama_memory_ptr memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
@@ -282,10 +307,15 @@ private:
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
     buffer_view<float> embd = {nullptr, 0};
 
-    // hidden state before the final output norm (2-dimensional array: [n_outputs][n_embd])
-    // populated only when cparams.embeddings_pre_norm is enabled and the model graph
-    // sets llm_graph_result::t_h_pre_norm
-    buffer_view<float> embd_pre_norm = {nullptr, 0};
+    // hidden state required by the nextn layers (2-dimensional array: [n_outputs][n_embd])
+    // populated only when cparams.embeddings_nextn is enabled and the model graph
+    // sets llm_graph_result::t_h_nextn
+    buffer_view<float> embd_nextn = {nullptr, 0};
+
+    // host buffers for output layer input embeddings, per layer
+    // populated when cparams.output_layer_inp[il] is true
+    std::vector<buffer_view<float>> embd_layer_inp;
+    std::vector<int32_t> embd_batch_idxs; // extracted index -> original batch index
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
@@ -313,6 +343,7 @@ private:
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;
 
+    uint32_t n_input_tensors = 0; // number of tensors marked as input during the last graph reserve
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
@@ -327,6 +358,21 @@ private:
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
+
+    // state of sched_copy_experts, reset before each graph compute
+    struct copy_experts_info {
+        const ggml_tensor *  ids = nullptr;
+        std::vector<int32_t> ids_data;
+        std::vector<bool>    used;
+
+        void reset() {
+            ids = nullptr;
+            ids_data.clear();
+            used.clear();
+        }
+    };
+
+    copy_experts_info copy_experts;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
@@ -347,8 +393,11 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
-    llm_graph_result_ptr gf_res_prev;
+    // Separate arenas give batches with and without outputs distinct CUDA graph cache keys.
+    std::array<llm_graph_result_ptr, 2> gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
+
+    llm_graph_result * gf_res_prev_active = nullptr;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

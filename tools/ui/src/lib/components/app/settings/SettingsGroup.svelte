@@ -6,7 +6,7 @@
 		children: Snippet;
 	}
 
-	let { title, children }: Props = $props();
+	let { children, title }: Props = $props();
 </script>
 
 <div>

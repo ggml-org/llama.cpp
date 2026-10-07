@@ -1,6 +1,5 @@
 #include "common.cuh"
 #include "fattn-tile.cuh"
-#include "fattn-wmma-f16.cuh"
 
 void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * K = dst->src[1];

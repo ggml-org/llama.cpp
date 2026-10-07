@@ -10,6 +10,8 @@
 
 build*/
 
+tools/ui/node_modules/
+
 models/*
 
 /llama-cli

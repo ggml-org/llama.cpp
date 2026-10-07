@@ -68,6 +68,9 @@ causal-run-converted-model:
 	@CONVERTED_MODEL="$(CONVERTED_MODEL)" ./scripts/causal/run-converted-model.sh
 
 causal-verify-logits: causal-run-original-model causal-run-converted-model
+	$(MAKE) causal-compare-logits
+
+causal-compare-logits:
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/compare-logits.py
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
 

@@ -97,7 +97,6 @@ int main(int argc, char ** argv) {
                     return;
                 }
 
-                llama_batch batch = {};
                 {
                     auto prompt = common_tokenize(ctx.get(), params.prompt, true);
                     if (prompt.empty()) {
@@ -105,8 +104,8 @@ int main(int argc, char ** argv) {
                         failed.store(true);
                         return;
                     }
-                    batch = llama_batch_get_one(prompt.data(), prompt.size());
-                    if (llama_decode(ctx.get(), batch)) {
+                    common_batch batch = common_batch_get_one(ctx.get(), prompt);
+                    if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                         LOG_ERR("failed to decode prompt\n");
                         failed.store(true);
                         return;
@@ -117,12 +116,7 @@ int main(int argc, char ** argv) {
                 std::string result = params.prompt;
 
                 for (int i = 0; i < params.n_predict; i++) {
-                    llama_token token;
-                    if (batch.n_tokens > 0) {
-                        token = common_sampler_sample(sampler.get(), ctx.get(), batch.n_tokens - 1);
-                    } else {
-                        token = llama_vocab_bos(vocab);
-                    }
+                    llama_token token = common_sampler_sample(sampler.get(), ctx.get(), -1);
 
                     result += common_token_to_piece(ctx.get(), token);
 
@@ -130,9 +124,9 @@ int main(int argc, char ** argv) {
                         break;
                     }
 
-                    batch = llama_batch_get_one(&token, 1);
+                    common_batch batch = common_batch_get_one(ctx.get(), &token, 1);
 
-                    int ret = llama_decode(ctx.get(), batch);
+                    int ret = llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get());
                     if (ret == 1 && i > 0) {
                         LOG_INF("Context full, stopping generation.\n");
                         break;
@@ -146,6 +140,8 @@ int main(int argc, char ** argv) {
                 }
 
                 LOG_INF("Model %d/%d, Context %d/%d: %s\n\n", m + 1, num_models, c + 1, num_contexts, result.c_str());
+
+                llama_synchronize(ctx.get());
             });
         }
     }

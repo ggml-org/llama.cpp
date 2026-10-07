@@ -2,14 +2,16 @@
 
 void llama_model_llada::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
     // LLaDA-8B has 32 layers, similar to LLaMA but for diffusion
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 32:
             type = LLM_TYPE_8B;
             break;
         default:
             type = LLM_TYPE_UNKNOWN;
     }
+
     // Set non-causal attention for diffusion models
     hparams.causal_attn = false;
 }
@@ -34,12 +36,7 @@ void llama_model_llada::load_arch_tensors(llama_model_loader &) {
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
-        // Use separate Q, K, V projections without bias, matching LLaDALlamaBlock
-        layer.wq =
-            create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, 0);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, 0);
-        // No bias for QKV projections as per config: include_bias=false, include_qkv_bias=false
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
         layer.wo =
             create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
         layer.wo_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), { n_embd }, TENSOR_NOT_REQUIRED);

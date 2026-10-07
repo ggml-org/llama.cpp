@@ -1,7 +1,7 @@
 #include "models.h"
 
 ggml_cgraph * clip_graph_conformer::build() {
-    const int n_frames   = img.nx;
+    const int n_frames   = img.nx();
     const int n_pos      = n_frames / 2;
     const int n_pos_embd = (((((n_frames + 1) / 2) + 1) / 2 + 1) / 2) * 2 - 1;
     GGML_ASSERT(model.position_embeddings->ne[1] >= n_pos);
@@ -124,8 +124,7 @@ ggml_cgraph * clip_graph_conformer::build() {
                 const auto pos_len = matrix_bd->ne[0];
                 const auto q_len   = matrix_bd->ne[1];
                 const auto h       = matrix_bd->ne[2];
-                matrix_bd          = ggml_pad(ctx0, matrix_bd, 1, 0, 0, 0);
-                matrix_bd          = ggml_roll(ctx0, matrix_bd, 1, 0, 0, 0);
+                matrix_bd          = ggml_pad_ext(ctx0, matrix_bd, 1, 0, 0, 0, 0, 0, 0, 0);
                 matrix_bd          = ggml_reshape_3d(ctx0, matrix_bd, q_len, pos_len + 1, h);
                 matrix_bd          = ggml_view_3d(ctx0, matrix_bd, q_len, pos_len, h, matrix_bd->nb[1],
                                                         matrix_bd->nb[2], matrix_bd->nb[0] * q_len);

@@ -1,6 +1,7 @@
 #include "arg.h"
 #include "common.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "log.h"
 #include "llama.h"
 
@@ -57,6 +58,11 @@ int main(int argc, char ** argv) {
     // max number of parallel drafting sequences (i.e. tree branches)
     const int n_seq_dft = params.n_parallel;
 
+    const auto output_limits = common_speculative_get_output_limits(
+            params.n_batch, params.n_parallel, params.speculative.draft.n_max);
+    params.n_outputs_max = output_limits.total;
+    params.n_outputs_max_per_seq = output_limits.per_seq;
+
     // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
     const float p_draft_split = params.speculative.draft.p_split;
 
@@ -83,6 +89,8 @@ int main(int argc, char ** argv) {
     params.devices = params.speculative.draft.devices;
     params.model = params.speculative.draft.mparams;
     params.n_gpu_layers = params.speculative.draft.n_gpu_layers;
+    params.n_outputs_max = params.n_parallel;
+    params.n_outputs_max_per_seq = 1;
     if (params.speculative.draft.cpuparams.n_threads > 0) {
         params.cpuparams.n_threads = params.speculative.draft.cpuparams.n_threads;
     }
@@ -182,9 +190,16 @@ int main(int argc, char ** argv) {
     const auto t_enc_start = ggml_time_us();
 
     // eval the prompt with both models
-    llama_decode(ctx_tgt, llama_batch_get_one( inp.data(), n_input - 1));
-    llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(),           1));
-    llama_decode(ctx_dft, llama_batch_get_one( inp.data(), n_input));
+    {
+        common_batch batch = common_batch_get_one(ctx_tgt, inp.data(), n_input - 1);
+        llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+
+        batch = common_batch_get_one(ctx_tgt, &inp.back(), 1);
+        llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+
+        batch = common_batch_get_one(ctx_dft, inp.data(), n_input);
+        llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+    }
 
     const auto t_enc_end = ggml_time_us();
 
@@ -215,8 +230,8 @@ int main(int argc, char ** argv) {
         drafts[s].smpl = common_sampler_init(model_dft, params.sampling);
     }
 
-    llama_batch batch_dft = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
-    llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, n_seq_dft);
+    common_batch batch_dft(ctx_dft);
+    common_batch batch_tgt(ctx_tgt);
 
     const auto t_dec_start = ggml_time_us();
 
@@ -457,12 +472,12 @@ int main(int argc, char ** argv) {
             drafts[0].dists.push_back(std::vector<llama_token_data>());
             drafts[0].i_batch_tgt.push_back(0);
 
-            common_batch_clear(batch_dft);
-            common_batch_add  (batch_dft, token_id, n_past_dft, { 0 }, true);
+            batch_dft.clear();
+            batch_dft.add(token_id, n_past_dft, 0, true);
 
             llama_memory_seq_rm(mem_dft, 0, n_past_dft, -1);
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
-            llama_decode(ctx_dft, batch_dft);
+            llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_dft.get());
 
             ++n_past_dft;
         }
@@ -487,12 +502,12 @@ int main(int argc, char ** argv) {
         drafts[0].drafting    = true;
         drafts[0].i_batch_dft = 0;
 
-        common_batch_clear(batch_tgt);
-        common_batch_add  (batch_tgt, drafts[0].tokens[0], n_past_tgt, { 0 }, true);
+        batch_tgt.clear();
+        batch_tgt.add(drafts[0].tokens[0], n_past_tgt, 0, true);
 
         // sample n_draft tokens from the draft model using tree-based sampling
         for (int i = 0; i < n_draft; ++i) {
-            batch_dft.n_tokens = 0;
+            batch_dft.clear();
 
             for (int s = 0; s < n_seq_dft; ++s) {
                 drafts[s].skip = false;
@@ -523,14 +538,8 @@ int main(int argc, char ** argv) {
                         llama_memory_seq_cp(mem_dft, s, n_seq_cur, -1, -1);
 
                         // all previous tokens from this branch are now also part of the new branch
-                        for (int t = 0; t < batch_tgt.n_tokens; ++t) {
-                            for (int p = 0; p < batch_tgt.n_seq_id[t]; ++p) {
-                                if (batch_tgt.seq_id[t][p] == s) {
-                                    batch_tgt.seq_id[t][batch_tgt.n_seq_id[t]] = n_seq_cur;
-                                    batch_tgt.n_seq_id[t]++;
-                                    break;
-                                }
-                            }
+                        for (int t : drafts[s].i_batch_tgt) {
+                            batch_tgt.add_seq(t, n_seq_cur);
                         }
 
                         // copy the draft state
@@ -569,32 +578,32 @@ int main(int argc, char ** argv) {
                     drafts[s].dists.push_back({cur_p->data, cur_p->data + cur_p->size});
 
                     // add unique drafted tokens to the target batch
-                    drafts[s].i_batch_tgt.push_back(batch_tgt.n_tokens);
+                    drafts[s].i_batch_tgt.push_back(batch_tgt.size());
 
-                    common_batch_add(batch_tgt, id, n_past_tgt + i + 1, { s }, true);
+                    batch_tgt.add(id, n_past_tgt + i + 1, s, true);
 
                     // add the token to the batch for batched decoding with the draft model
-                    drafts[s].i_batch_dft = batch_dft.n_tokens;
+                    drafts[s].i_batch_dft = batch_dft.size();
 
-                    common_batch_add(batch_dft, id, n_past_cur, { s }, true);
+                    batch_dft.add(id, n_past_cur, s, true);
 
-                    if (batch_tgt.n_tokens > n_draft) {
+                    if (batch_tgt.size() > n_draft) {
                         drafts[s].drafting = false;
                     }
                 }
             }
 
             // no sequence is drafting anymore
-            if (batch_dft.n_tokens == 0) {
+            if (batch_dft.size() == 0) {
                 break;
             }
 
             // evaluate the drafted tokens on the draft model
-            llama_decode(ctx_dft, batch_dft);
+            llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_dft.get());
             ++n_past_cur;
             ++n_drafted;
 
-            if (batch_tgt.n_tokens > n_draft) {
+            if (batch_tgt.size() > n_draft) {
                 break;
             }
         }
@@ -607,7 +616,7 @@ int main(int argc, char ** argv) {
             }
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
-            llama_decode(ctx_tgt, batch_tgt);
+            llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
             ++n_past_tgt;
         }
 
@@ -650,7 +659,6 @@ int main(int argc, char ** argv) {
         common_sampler_free(drafts[s].smpl);
     }
 
-    llama_batch_free(batch_dft);
 
     llama_backend_free();
 

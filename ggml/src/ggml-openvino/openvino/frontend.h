@@ -12,10 +12,9 @@ namespace ggml {
 
 class FrontEnd {
 public:
-    using Ptr = std::shared_ptr<FrontEnd>;
     FrontEnd();
 
-    static std::shared_ptr<Model> convert(const InputModel::Ptr& model, bool naive = false);
+    static std::shared_ptr<Model> convert(const InputModel::Ptr & model, bool naive = false);
 };
 
 }  // namespace ggml

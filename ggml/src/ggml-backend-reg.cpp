@@ -86,6 +86,10 @@
 #include "ggml-openvino.h"
 #endif
 
+#ifdef GGML_USE_ET
+#include "ggml-et.h"
+#endif
+
 namespace fs = std::filesystem;
 
 static std::string path_str(const fs::path & path) {
@@ -160,6 +164,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_OPENVINO
         register_backend(ggml_backend_openvino_reg());
+#endif
+#ifdef GGML_USE_ET
+        register_backend(ggml_backend_et_reg());
 #endif
 #ifdef GGML_USE_CPU
         register_backend(ggml_backend_cpu_reg());
@@ -483,7 +490,13 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 #endif
         // default search paths: executable directory, current directory
         search_paths.push_back(get_executable_path());
-        search_paths.push_back(fs::current_path());
+        std::error_code cwd_ec;
+        const fs::path cwd = fs::current_path(cwd_ec);
+        if (cwd_ec) {
+            GGML_LOG_DEBUG("%s: current_path() failure, error-message: %s\n", __func__, cwd_ec.message().c_str());
+        } else {
+            search_paths.push_back(cwd);
+        }
     } else {
         search_paths.push_back(fs::u8path(user_search_path));
     }
@@ -501,8 +514,14 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
             }
             continue;
         }
-        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
-        for (const auto & entry : dir_it) {
+        std::error_code dir_ec;
+        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied, dir_ec);
+        if (dir_ec) {
+            GGML_LOG_DEBUG("%s: failed to enumerate %s: %s\n", __func__, path_str(search_path).c_str(), dir_ec.message().c_str());
+            continue;
+        }
+        for (const fs::directory_iterator end; dir_it != end; dir_it.increment(dir_ec)) {
+            const auto & entry = *dir_it;
             if (entry.is_regular_file(ec)) {
                 auto filename = entry.path().filename();
                 auto ext = entry.path().extension();

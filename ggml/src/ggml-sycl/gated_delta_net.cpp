@@ -14,9 +14,9 @@ void gated_delta_net_sycl(const float *     q,
                           const float *     beta,
                           const float *     curr_state,
                           float *           dst,
+                          float *           state,
                           int64_t           H,
                           int64_t           n_tokens,
-                          int64_t           n_seqs,
                           int64_t           sq1,
                           int64_t           sq2,
                           int64_t           sq3,
@@ -29,6 +29,7 @@ void gated_delta_net_sycl(const float *     q,
                           const sycl::uint3 neqk1_magic,
                           const sycl::uint3 rq3_magic,
                           float             scale,
+                          int64_t           state_slot_stride,
                           int               K) {
     auto           item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     const uint32_t h_idx    = item_ct1.get_group(2);
@@ -40,15 +41,12 @@ void gated_delta_net_sycl(const float *     q,
     const uint32_t iq1 = fastmodulo(h_idx, neqk1_magic);
     const uint32_t iq3 = fastdiv(sequence, rq3_magic);
 
-    const int64_t attn_score_elems = S_v * H * n_tokens * n_seqs;
     float *       attn_data        = dst;
-    float *       state            = dst + attn_score_elems;
 
-    // input state layout (D, K, n_seqs) — seq stride is K * D = K * H * S_v * S_v.
+    // input state holds s0 only [S_v, S_v, H, n_seqs] — seq stride is D = H * S_v * S_v.
     // output state layout (per-slot D * n_seqs) — same per-(seq,head) offset as before.
-    const int64_t state_in_offset      = sequence * K * H * S_v * S_v + h_idx * S_v * S_v;
+    const int64_t state_in_offset      = sequence * H * S_v * S_v + h_idx * S_v * S_v;
     const int64_t state_out_offset     = (sequence * H + h_idx) * S_v * S_v;
-    const int64_t state_size_per_token = S_v * S_v * H * n_seqs; // per-slot stride in output
     state += state_out_offset;
     curr_state += state_in_offset + col * S_v;
     attn_data += (sequence * n_tokens * H + h_idx) * S_v;
@@ -63,9 +61,8 @@ void gated_delta_net_sycl(const float *     q,
         s_shard[r]  = curr_state[i];
     }
 
-    // slot mapping: target_slot = t - shift. When n_tokens < K only the last n_tokens slots
-    // are written; earlier slots are left untouched (caller-owned).
-    const int shift = (int) n_tokens - K;
+    // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
+    // When n_tokens < K only slots 0..n_tokens-1 are written; older slots are caller-owned.
 
     for (int t = 0; t < n_tokens; t++) {
         const float * q_t = q + iq3 * sq3 + t * sq2 + iq1 * sq1;
@@ -144,9 +141,9 @@ void gated_delta_net_sycl(const float *     q,
 
     // Write state back to global memory
         if constexpr (keep_rs_t) {
-            const int target_slot = t - shift;
+            const int target_slot = (int) n_tokens - 1 - t;
             if (target_slot >= 0 && target_slot < K) {
-                float * curr_state = (dst + attn_score_elems) + target_slot * state_size_per_token + state_out_offset;
+                float * curr_state = state + target_slot * state_slot_stride;
 #pragma unroll
                 for (int r = 0; r < rows_per_lane; r++) {
                     const int i = r * warp_size + lane;
@@ -173,6 +170,7 @@ static void launch_gated_delta_net(const float *   q_d,
                                    const float *   b_d,
                                    const float *   s_d,
                                    float *         dst_d,
+                                   float *         state_d,
                                    int64_t         S_v,
                                    int64_t         H,
                                    int64_t         n_tokens,
@@ -189,6 +187,7 @@ static void launch_gated_delta_net(const float *   q_d,
                                    int64_t         neqk1,
                                    int64_t         rq3,
                                    float           scale,
+                                   int64_t         state_slot_stride,
                                    int             K,
                                    dpct::queue_ptr stream) {
     //TODO: Add chunked kernel for even faster pre-fill
@@ -207,9 +206,9 @@ static void launch_gated_delta_net(const float *   q_d,
                 constexpr int sv = 16;
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                                      [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                         gated_delta_net_sycl<sv, KDA, keep_rs_t>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens,
-                                                                       n_seqs, sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
-                                                                       sb3, neqk1_magic, rq3_magic, scale, K);
+                                         gated_delta_net_sycl<sv, KDA, keep_rs_t>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens,
+                                                                       sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
+                                                                       sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
                                      });
             }
             break;
@@ -218,9 +217,9 @@ static void launch_gated_delta_net(const float *   q_d,
                 constexpr int sv = 32;
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                                      [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                         gated_delta_net_sycl<sv, KDA, keep_rs_t>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens,
-                                                                       n_seqs, sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
-                                                                       sb3, neqk1_magic, rq3_magic, scale, K);
+                                         gated_delta_net_sycl<sv, KDA, keep_rs_t>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens,
+                                                                       sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
+                                                                       sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
                                      });
             }
             break;
@@ -230,8 +229,8 @@ static void launch_gated_delta_net(const float *   q_d,
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                                         [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                             gated_delta_net_sycl<sv, KDA, keep_rs_t>(
-                                                q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens, n_seqs, sq1, sq2,
-                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, K);
+                                                q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens, sq1, sq2,
+                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
                                         });
             }
             break;
@@ -242,8 +241,8 @@ static void launch_gated_delta_net(const float *   q_d,
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                                         [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                             gated_delta_net_sycl<sv, KDA, keep_rs_t>(
-                                                q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens, n_seqs, sq1, sq2,
-                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, K);
+                                                q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens, sq1, sq2,
+                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
                                         });
             }
             break;
@@ -254,7 +253,8 @@ static void launch_gated_delta_net(const float *   q_d,
     }
 }
 
-void ggml_sycl_op_gated_delta_net(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+static void ggml_sycl_op_gated_delta_net_impl(ggml_backend_sycl_context & ctx, ggml_tensor * dst,
+                                              const ggml_sycl_gated_delta_net_fused_cache * cache) {
     ggml_tensor * src_q     = dst->src[0];
     ggml_tensor * src_k     = dst->src[1];
     ggml_tensor * src_v     = dst->src[2];
@@ -315,34 +315,52 @@ void ggml_sycl_op_gated_delta_net(ggml_backend_sycl_context & ctx, ggml_tensor *
 
     dpct::queue_ptr stream = ctx.stream();
 
-    // state is 3D (S_v*S_v*H, K, n_seqs); K is the snapshot slot count.
-    const int K = (int) src_state->ne[1];
+    // K (snapshot slot count) is an op param; state holds s0 only [S_v, S_v, H, n_seqs].
+    const int K = ggml_get_op_params_i32(dst, 0);
     const bool keep_rs = K > 1;
+
+    // recurrent state -> dst tail (after attention scores), or the cache when fusing
+    float * state_d           = dst_d + S_v * H * n_tokens * n_seqs;
+    int64_t state_slot_stride = S_v * S_v * H * n_seqs;
+    if (cache != nullptr) {
+        state_d           = cache->data;
+        state_slot_stride = cache->slot_stride;
+    }
 
     if (kda) {
         if (keep_rs) {
-            launch_gated_delta_net<true, true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d,
+            launch_gated_delta_net<true, true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
         } else {
-            launch_gated_delta_net<true, false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d,
+            launch_gated_delta_net<true, false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
         }
     } else {
         if (keep_rs) {
-            launch_gated_delta_net<false, true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d,
+            launch_gated_delta_net<false, true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
         } else {
-            launch_gated_delta_net<false, false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d,
+            launch_gated_delta_net<false, false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
         }
     }
+}
+
+void ggml_sycl_op_gated_delta_net(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_op_gated_delta_net_impl(ctx, dst, nullptr);
 }
 
 void ggml_sycl_gated_delta_net(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/6);
     ggml_sycl_op_gated_delta_net(ctx, dst);
+}
+
+void ggml_sycl_op_gated_delta_net_fused_cache(ggml_backend_sycl_context & ctx, ggml_tensor * dst,
+                                              ggml_sycl_gated_delta_net_fused_cache cache) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/6);
+    ggml_sycl_op_gated_delta_net_impl(ctx, dst, &cache);
 }

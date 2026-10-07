@@ -1,19 +1,9 @@
-#include "common_decls.tmpl"
 enable f16;
 
 @group(0) @binding(0)
-#if defined(INPUT_F32)
-var<storage, read_write> input: array<f32>;
-#elif defined(INPUT_F16)
-var<storage, read_write> input: array<f16>;
-#endif
-
+var<storage, read_write> input: array<INPUT_TYPE>;
 @group(0) @binding(1)
-#if defined(OUTPUT_F32)
-var<storage, read_write> output: array<f32>;
-#elif defined(OUTPUT_F16)
-var<storage, read_write> output: array<f16>;
-#endif
+var<storage, read_write> output: array<OUTPUT_TYPE>;
 
 struct Params {
     offset_i: u32,
@@ -37,22 +27,6 @@ struct Params {
 
 @group(0) @binding(2)
 var<uniform> params: Params;
-
-fn load_input(idx: u32) -> f32 {
-    #if defined(INPUT_F32)
-        return input[idx];
-    #elif defined(INPUT_F16)
-        return f32(input[idx]);
-    #endif
-}
-
-fn store_output(idx: u32, val: f32) {
-    #if defined(OUTPUT_F32)
-        output[idx] = val;
-    #elif defined(OUTPUT_F16)
-        output[idx] = f16(val);
-    #endif
-}
 
 @compute @workgroup_size(WG_SIZE)
 fn main(
@@ -90,12 +64,14 @@ fn main(
     let iw_i32 = i32(ow * params.s0 + kw * params.d0) - i32(params.p0);
     let ih_i32 = i32(oh * params.s1 + kh * params.d1) - i32(params.p1);
 
+    let output_idx = params.offset_o + k * params.so0 + ow * params.so1 + oh * params.so2 + n * params.so3;
+
     if (iw_i32 >= 0 && iw_i32 < i32(params.IW) && ih_i32 >= 0 && ih_i32 < i32(params.IH)) {
         let iw = u32(iw_i32);
         let ih = u32(ih_i32);
         let in_idx = params.offset_i + iw * params.si0 + ih * params.si1 + ic * params.si2 + n * params.si3;
-        store_output(params.offset_o + k * params.so0 + ow * params.so1 + oh * params.so2 + n * params.so3, load_input(in_idx));
+        output[output_idx] = OUTPUT_TYPE(input[in_idx]);
     } else {
-        store_output(params.offset_o + k * params.so0 + ow * params.so1 + oh * params.so2 + n * params.so3, 0.0);
+        output[output_idx] = OUTPUT_TYPE(0.0);
     }
 }

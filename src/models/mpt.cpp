@@ -5,7 +5,7 @@ void llama_model_mpt::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CLAMP_KQV,      hparams.f_clamp_kqv, false);
     ml.get_key(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, hparams.f_max_alibi_bias, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_7B; break;
         case 48: type = LLM_TYPE_30B; break;
         default: type = LLM_TYPE_UNKNOWN;

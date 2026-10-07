@@ -23,18 +23,26 @@ on:
       - 'scripts/snapdragon/**'
       - 'CMakePresets.json'
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   android-ndk-snapdragon:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
     defaults:
       run:
         shell: bash
+
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Clone
@@ -59,12 +67,16 @@ jobs:
           path: pkg-snapdragon/llama.cpp
 
   linux-iot-snapdragon:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
     defaults:
       run:
         shell: bash
+
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Clone
@@ -97,6 +109,10 @@ jobs:
       fail-fast: false
       matrix:
         device: [SM8750, SM8850, QCS9075M]
+
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout

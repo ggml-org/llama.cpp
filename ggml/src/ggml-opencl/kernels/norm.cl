@@ -24,6 +24,7 @@ kernel void kernel_norm(
         int ne01,
         int ne02,
         int ne03,
+        ulong nb00,
         ulong nb01,
         ulong nb02,
         ulong nb03,
@@ -43,7 +44,8 @@ kernel void kernel_norm(
     // parallel sum
     sum[get_local_id(0)] = 0.0f;
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
-        sum[get_local_id(0)] += x[i00];
+        // this kernel handles float, nb00/4 translates byte offset to element offset
+        sum[get_local_id(0)] += x[i00*nb00/4];
     }
     // reduce
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -60,7 +62,8 @@ kernel void kernel_norm(
     global float * y = dst + i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
     sum[get_local_id(0)] = 0.0f;
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
-        y[i00] = x[i00] - mean;
+        // this kernel handles float, nb00/4 translates byte offset to element offset
+        y[i00] = x[i00*nb00/4] - mean;
         sum[get_local_id(0)] += y[i00] * y[i00];
     }
 

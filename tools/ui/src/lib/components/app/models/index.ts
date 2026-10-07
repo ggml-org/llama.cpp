@@ -74,8 +74,7 @@ export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
  */
 export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
 
-/**
- * **ModelBadge** - Model name display badge
+/** * **ModelBadge** - Model name display badge
  *
  * Compact badge showing current model name with package icon.
  * Only visible in single model mode. Supports tooltip and copy functionality.
@@ -110,3 +109,12 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * Respects the user's `showRawModelNames` setting.
  */
 export { default as ModelId } from './ModelId.svelte';
+
+/**
+ * **ModelCapabilityIcons** - Capability and modality icon row
+ *
+ * The shared tool-use / reasoning / vision / video / audio icon cluster with
+ * tooltips, used by ModelId and the discover details header so the order and
+ * styling stay consistent across every model-id surface.
+ */
+export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';

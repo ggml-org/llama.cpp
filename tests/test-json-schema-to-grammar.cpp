@@ -6,11 +6,9 @@
 
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
-#include <fstream>
-#include <sstream>
 #include <regex>
 
 static std::string trim(const std::string & source) {
@@ -64,21 +62,8 @@ struct TestCase {
     }
 };
 
-static void write(const std::string & file, const std::string & content) {
-    std::ofstream f;
-    f.open(file.c_str());
-    f << content.c_str();
-    f.close();
-}
-
-static std::string read(const std::string & file) {
-    std::ostringstream actuals;
-    actuals << std::ifstream(file.c_str()).rdbuf();
-    return actuals.str();
-}
-
-static void test_all(const std::string & lang, std::function<void(const TestCase &)> runner) {
-    fprintf(stderr, "#\n# Testing JSON schema conversion (%s)\n#\n", lang.c_str());
+static void test_all(const std::string & title, std::function<void(const TestCase &)> runner) {
+    fprintf(stderr, "#\n# %s\n#\n", title.c_str());
     auto test = [&](const TestCase & tc) {
         fprintf(stderr, "- %s%s\n", tc.name.c_str(), tc.expected_status == FAILURE ? " (failure expected)" : "");
         runner(tc);
@@ -92,7 +77,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": 0
         })""",
         R"""(
-            root ::= ([0] | [1-9] [0-9]{0,15}) space
+            root ::= ([0] | [1-9] [0-9]{0,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -105,7 +90,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": 1
         })""",
         R"""(
-            root ::= ([1-9] [0-9]{0,15}) space
+            root ::= ([1-9] [0-9]{0,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -118,7 +103,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": 3
         })""",
         R"""(
-            root ::= ([1-2] [0-9]{1,15} | [3-9] [0-9]{0,15}) space
+            root ::= ([1-2] [0-9]{1,15} | [3-9] [0-9]{0,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -131,7 +116,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": 9
         })""",
         R"""(
-            root ::= ([1-8] [0-9]{1,15} | [9] [0-9]{0,15}) space
+            root ::= ([1-8] [0-9]{1,15} | [9] [0-9]{0,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -144,7 +129,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": 10
         })""",
         R"""(
-            root ::= ([1] ([0-9]{1,15}) | [2-9] [0-9]{1,15}) space
+            root ::= ([1] ([0-9]{1,15}) | [2-9] [0-9]{1,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -157,7 +142,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": 25
         })""",
         R"""(
-            root ::= ([1] [0-9]{2,15} | [2] ([0-4] [0-9]{1,14} | [5-9] [0-9]{0,14}) | [3-9] [0-9]{1,15}) space
+            root ::= ([1] [0-9]{2,15} | [2] ([0-4] [0-9]{1,14} | [5-9] [0-9]{0,14}) | [3-9] [0-9]{1,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -170,7 +155,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 30
         })""",
         R"""(
-            root ::= ("-" [1-9] [0-9]{0,15} | [0-9] | ([1-2] [0-9] | [3] "0")) space
+            root ::= ("-" [1-9] [0-9]{0,15} | [0-9] | ([1-2] [0-9] | [3] "0"))
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -183,7 +168,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": -5
         })""",
         R"""(
-            root ::= ("-" ([0-5]) | [0] | [1-9] [0-9]{0,15}) space
+            root ::= ("-" ([0-5]) | [0] | [1-9] [0-9]{0,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -196,7 +181,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minimum": -123
         })""",
         R"""(
-            root ::= ("-" ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-1] [0-9] | [2] [0-3])) | [0] | [1-9] [0-9]{0,15}) space
+            root ::= ("-" ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-1] [0-9] | [2] [0-3])) | [0] | [1-9] [0-9]{0,15})
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -209,7 +194,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": -5
         })""",
         R"""(
-            root ::= ("-" ([0-4] [0-9]{1,15} | [5-9] [0-9]{0,15})) space
+            root ::= ("-" ([0-4] [0-9]{1,15} | [5-9] [0-9]{0,15}))
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -222,7 +207,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 1
         })""",
         R"""(
-            root ::= ("-" [1-9] [0-9]{0,15} | [0-1]) space
+            root ::= ("-" [1-9] [0-9]{0,15} | [0-1])
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -235,7 +220,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 100
         })""",
         R"""(
-            root ::= ("-" [1-9] [0-9]{0,15} | [0-9] | ([1-8] [0-9] | [9] [0-9]) | "100") space
+            root ::= ("-" [1-9] [0-9]{0,15} | [0-9] | ([1-8] [0-9] | [9] [0-9]) | "100")
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -249,7 +234,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 23
         })""",
         R"""(
-            root ::= ([0-9] | ([1] [0-9] | [2] [0-3])) space
+            root ::= ([0-9] | ([1] [0-9] | [2] [0-3]))
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -263,7 +248,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 300
         })""",
         R"""(
-            root ::= (([1] ([5-9]) | [2-9] [0-9]) | ([1-2] [0-9]{2} | [3] "00")) space
+            root ::= (([1] ([5-9]) | [2-9] [0-9]) | ([1-2] [0-9]{2} | [3] "00"))
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -277,7 +262,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 30
         })""",
         R"""(
-            root ::= ([5-9] | ([1-2] [0-9] | [3] "0")) space
+            root ::= ([5-9] | ([1-2] [0-9] | [3] "0"))
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -291,7 +276,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 42
         })""",
         R"""(
-            root ::= ("-" ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-1] [0-9] | [2] [0-3])) | [0-9] | ([1-3] [0-9] | [4] [0-2])) space
+            root ::= ("-" ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-1] [0-9] | [2] [0-3])) | [0-9] | ([1-3] [0-9] | [4] [0-2]))
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -305,7 +290,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maximum": 10
         })""",
         R"""(
-            root ::= ("-" ([0-9] | "10") | [0-9] | "10") space
+            root ::= ("-" ([0-9] | "10") | [0-9] | "10")
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -330,20 +315,20 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
-        "empty schema (object)",
+        "empty schema (any value)",
         "{}",
         R"""(
-            array ::= "[" space ( value ("," space value)* )? "]" space
-            boolean ::= ("true" | "false") space
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            null ::= "null" space
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
-            root ::= object
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
+            root ::= value
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
         )"""
     });
@@ -361,17 +346,17 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             date ::= [0-9]{4} "-" ( "0" [1-9] | "1" [0-2] ) "-" ( "0" [1-9] | [1-2] [0-9] | "3" [0-1] )
-            date-string ::= "\"" date "\"" space
+            date-string ::= "\"" date "\""
             date-time ::= date "T" time
-            date-time-string ::= "\"" date-time "\"" space
-            root ::= "[" space tuple-0 "," space uuid "," space tuple-2 "," space tuple-3 "]" space
+            date-time-string ::= "\"" date-time "\""
+            root ::= "[" space tuple-0 "," space uuid "," space tuple-2 "," space tuple-3 space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             time ::= ([01] [0-9] | "2" [0-3]) ":" [0-5] [0-9] ":" [0-5] [0-9] ( "." [0-9]{3} )? ( "Z" | ( "+" | "-" ) ( [01] [0-9] | "2" [0-3] ) ":" [0-5] [0-9] )
-            time-string ::= "\"" time "\"" space
+            time-string ::= "\"" time "\""
             tuple-0 ::= date-string
             tuple-2 ::= time-string
             tuple-3 ::= date-time-string
-            uuid ::= "\"" [0-9a-fA-F]{8} "-" [0-9a-fA-F]{4} "-" [0-9a-fA-F]{4} "-" [0-9a-fA-F]{4} "-" [0-9a-fA-F]{12} "\"" space
+            uuid ::= "\"" [0-9a-fA-F]{8} "-" [0-9a-fA-F]{4} "-" [0-9a-fA-F]{4} "-" [0-9a-fA-F]{4} "-" [0-9a-fA-F]{12} "\""
         )"""
     });
 
@@ -383,7 +368,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "\"" char* "\"" space
+            root ::= "\"" char* "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -397,7 +382,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "\"" char+ "\"" space
+            root ::= "\"" char+ "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -411,7 +396,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "\"" char{3,} "\"" space
+            root ::= "\"" char{3,} "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -425,7 +410,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "\"" char{0,3} "\"" space
+            root ::= "\"" char{0,3} "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -440,7 +425,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "\"" char{1,4} "\"" space
+            root ::= "\"" char{1,4} "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -452,7 +437,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "type": "boolean"
         })""",
         R"""(
-            root ::= ("true" | "false") space
+            root ::= ("true" | "false")
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -465,7 +450,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            root ::= ("-"? integral-part) space
+            root ::= ("-"? integral-part)
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -477,7 +462,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "const": "foo"
         })""",
         R"""(
-            root ::= "\"foo\"" space
+            root ::= "\"foo\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -489,7 +474,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "const": 123
         })""",
         R"""(
-            root ::= "123" space
+            root ::= "123"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -501,7 +486,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "enum": ["red", "amber", "green", null, 42, ["foo"]]
         })""",
         R"""(
-            root ::= ("\"red\"" | "\"amber\"" | "\"green\"" | "null" | "42" | "[\"foo\"]") space
+            root ::= ("\"red\"" | "\"amber\"" | "\"green\"" | "null" | "42" | "[\"foo\"]")
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -515,9 +500,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "[" space (string ("," space string)*)? "]" space
+            root ::= "[" space (string ("," space string)*)? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -529,12 +514,12 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "prefixItems": { "type": "string" }
         })""",
         R"""(
-            alternative-0 ::= "[" space (string ("," space string)*)? "]" space
+            alternative-0 ::= "[" space (string ("," space string)*)? space "]"
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            null ::= "null" space
+            null ::= "null"
             root ::= alternative-0 | null
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -546,9 +531,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "[" space string "]" space
+            root ::= "[" space string space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -562,13 +547,14 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "[" space string "," space number "]" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "[" space string "," space number space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
+    // items {} constrains nothing, the same as no items at all
     test({
         SUCCESS,
         "array with empty items",
@@ -577,18 +563,17 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "items": {}
         })""",
         R"""(
-            array ::= "[" space ( value ("," space value)* )? "]" space
-            boolean ::= ("true" | "false") space
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            item ::= object
-            null ::= "null" space
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
-            root ::= "[" space (item ("," space item)*)? "]" space
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
+            root ::= "[" space ( value ("," space value)* )? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
         )"""
     });
@@ -602,18 +587,17 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "prefixItems": { "type": "string" }
         })""",
         R"""(
-            array ::= "[" space ( value ("," space value)* )? "]" space
-            boolean ::= ("true" | "false") space
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            item ::= object
-            null ::= "null" space
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
-            root ::= "[" space (item ("," space item)*)? "]" space
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
+            root ::= "[" space ( value ("," space value)* )? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
         )"""
     });
@@ -627,7 +611,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""(
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            root ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            root ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -642,8 +626,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "minItems": 2
         })""",
         R"""(
-            boolean ::= ("true" | "false") space
-            root ::= "[" space boolean ("," space boolean)+ "]" space
+            boolean ::= ("true" | "false")
+            root ::= "[" space boolean ("," space boolean)+ space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -658,8 +642,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maxItems": 0
         })""",
         R"""(
-            boolean ::= ("true" | "false") space
-            root ::= "[" space  "]" space
+            boolean ::= ("true" | "false")
+            root ::= "[" space  space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -674,8 +658,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maxItems": 1
         })""",
         R"""(
-            boolean ::= ("true" | "false") space
-            root ::= "[" space boolean? "]" space
+            boolean ::= ("true" | "false")
+            root ::= "[" space boolean? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -690,8 +674,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maxItems": 2
         })""",
         R"""(
-            boolean ::= ("true" | "false") space
-            root ::= "[" space (boolean ("," space boolean)?)? "]" space
+            boolean ::= ("true" | "false")
+            root ::= "[" space (boolean ("," space boolean)?)? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -708,11 +692,11 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             decimal-part ::= [0-9]{1,16}
-            integer ::= ("-"? integral-part) space
+            integer ::= ("-"? integral-part)
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             item ::= number | integer
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "[" space item ("," space item){2,4} "]" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "[" space item ("," space item){2,4} space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -730,8 +714,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maxItems": 5
         })""",
         R"""(
-            item ::= ("-" ([0-9] | "1" [0-2]) | [0-9] | ([1-8] [0-9] | [9] [0-9]) | ([1] [0-9]{2} | [2] "0" [0-7])) space
-            root ::= "[" space item ("," space item){2,4} "]" space
+            item ::= ("-" ([0-9] | "1" [0-2]) | [0-9] | ([1-8] [0-9] | [9] [0-9]) | ([1] [0-9]{2} | [2] "0" [0-7]))
+            root ::= "[" space item ("," space item){2,4} space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -749,8 +733,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "maxItems": 5
         })""",
         R"""(
-            item ::= (([1] ([2-9]) | [2-9] [0-9]) | ([1] [0-9]{2} | [2] "0" [0-7])) space
-            root ::= "[" space item ("," space item){2,4} "]" space
+            item ::= (([1] ([2-9]) | [2-9] [0-9]) | ([1] [0-9]{2} | [2] "0" [0-7]))
+            root ::= "[" space item ("," space item){2,4} space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -763,7 +747,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^abc?d*efg+(hij)?kl$"
         })""",
         R"""(
-            root ::= "\"" ("ab" "c"? "d"* "ef" "g"+ ("hij")? "kl") "\"" space
+            root ::= "\"" ("ab" "c"? "d"* "ef" "g"+ ("hij")? "kl") "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -776,7 +760,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^\\[\\]\\{\\}\\(\\)\\|\\+\\*\\?$"
         })""",
         R"""(
-            root ::= "\"" ("[]{}()|+*?") "\"" space
+            root ::= "\"" ("[]{}()|+*?") "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -789,7 +773,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^\"$"
         })""",
         R"""(
-            root ::= "\"" ("\"") "\"" space
+            root ::= "\"" ("\"") "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -802,7 +786,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^A|B|C|D$"
         })""",
         R"""(
-            root ::= "\"" ("A" | "B" | "C" | "D") "\"" space
+            root ::= "\"" ("A" | "B" | "C" | "D") "\""
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -816,7 +800,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             dot ::= [^\x0A\x0D]
-            root ::= "\"" (("(" root-1{1,3} ")")? root-1{3,3} "-" root-1{4,4} " " "a"{3,5} "nd" dot dot dot) "\"" space
+            root ::= "\"" (("(" root-1{1,3} ")")? root-1{3,3} "-" root-1{4,4} " " "a"{3,5} "nd" dot dot dot) "\""
             root-1 ::= [0-9]
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
@@ -845,9 +829,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             b-kv ::= "\"b\"" space ":" space string
             c-kv ::= "\"c\"" space ":" space string
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "{" space b-kv "," space c-kv "," space a-kv "}" space
+            root ::= "{" space b-kv "," space c-kv "," space a-kv space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -865,9 +849,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""(
             a-kv ::= "\"a\"" space ":" space string
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "{" space  (a-kv )? "}" space
+            root ::= "{" space  (a-kv )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -889,9 +873,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             b-rest ::= ( "," space c-kv )?
             c-kv ::= "\"c\"" space ":" space string
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            root ::= "{" space  (a-kv a-rest | b-kv b-rest | c-kv )? "}" space
+            root ::= "{" space  (a-kv a-rest | b-kv b-rest | c-kv )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -915,9 +899,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             d-kv ::= "\"d\"" space ":" space string
             d-rest ::= ( "," space c-kv )?
-            root ::= "{" space b-kv "," space a-kv ( "," space ( d-kv d-rest | c-kv ) )? "}" space
+            root ::= "{" space b-kv "," space a-kv ( "," space ( d-kv d-rest | c-kv ) )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -930,14 +914,14 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             additional-kv ::= string ":" space additional-value
-            additional-value ::= "[" space (number ("," space number)*)? "]" space
+            additional-value ::= "[" space (number ("," space number)*)? space "]"
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space  (additional-kv ( "," space additional-kv )* )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "{" space  (additional-kv ( "," space additional-kv )* )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -949,17 +933,17 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "additionalProperties": true
         })""",
         R"""(
-            array ::= "[" space ( value ("," space value)* )? "]" space
-            boolean ::= ("true" | "false") space
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            null ::= "null" space
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
             root ::= object
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
         )"""
     });
@@ -971,17 +955,17 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "type": "object"
         })""",
         R"""(
-            array ::= "[" space ( value ("," space value)* )? "]" space
-            boolean ::= ("true" | "false") space
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            null ::= "null" space
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
             root ::= object
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
         )"""
     });
@@ -994,7 +978,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "additionalProperties": false
         })""",
         R"""(
-            root ::= "{" space  "}" space
+            root ::= "{" space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1012,15 +996,15 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             a-kv ::= "\"a\"" space ":" space number
-            additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["] space
+            additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["]
             additional-kv ::= additional-k ":" space string
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space a-kv ( "," space ( additional-kv ( "," space additional-kv )* ) )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "{" space a-kv ( "," space ( additional-kv ( "," space additional-kv )* ) )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -1037,13 +1021,13 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""(
             a-kv ::= "\"a\"" space ":" space number
             a-rest ::= ( "," space additional-kv )*
-            additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["] space
+            additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["]
             additional-kv ::= additional-k ":" space number
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space  (a-kv a-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "{" space  (a-kv a-rest | additional-kv ( "," space additional-kv )* )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1061,7 +1045,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "additionalProperties": {"type": "number"}
         })""",
         R"""(
-            additional-k ::= ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["] space
+            additional-k ::= ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["]
             additional-kv ::= additional-k ":" space number
             also-kv ::= "\"also\"" space ":" space number
             also-rest ::= ( "," space additional-kv )*
@@ -1069,8 +1053,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space and-kv ( "," space ( also-kv also-rest | additional-kv ( "," space additional-kv )* ) )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "{" space and-kv ( "," space ( also-kv also-rest | additional-kv ( "," space additional-kv )* ) )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1090,13 +1074,13 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             -rest ::= ( "," space a-kv )? a-rest
             a-kv ::= "\"a\"" space ":" space integer
             a-rest ::= ( "," space additional-kv )*
-            additional-k ::= ["] ( [a] char+ | [^"a] char* ) ["] space
+            additional-k ::= ["] ( [a] char+ | [^"a] char* ) ["]
             additional-kv ::= additional-k ":" space integer
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            integer ::= ("-"? integral-part) space
+            integer ::= ("-"? integral-part)
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            root ::= ("-"? integral-part) space
-            root0 ::= "{" space  (-kv -rest | a-kv a-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            root ::= ("-"? integral-part)
+            root0 ::= "{" space  (-kv -rest | a-kv a-rest | additional-kv ( "," space additional-kv )* )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1116,12 +1100,12 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             a-rest ::= ( "," space aa-kv )? aa-rest
             aa-kv ::= "\"aa\"" space ":" space integer
             aa-rest ::= ( "," space additional-kv )*
-            additional-k ::= ["] ( [a] ([a] char+ | [^"a] char*) | [^"a] char* )? ["] space
+            additional-k ::= ["] ( [a] ([a] char+ | [^"a] char*) | [^"a] char* )? ["]
             additional-kv ::= additional-k ":" space integer
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            integer ::= ("-"? integral-part) space
+            integer ::= ("-"? integral-part)
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            root ::= "{" space  (a-kv a-rest | aa-kv aa-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            root ::= "{" space  (a-kv a-rest | aa-kv aa-rest | additional-kv ( "," space additional-kv )* )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1141,12 +1125,12 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             ab-rest ::= ( "," space ac-kv )? ac-rest
             ac-kv ::= "\"ac\"" space ":" space integer
             ac-rest ::= ( "," space additional-kv )*
-            additional-k ::= ["] ( [a] ([b] char+ | [c] char+ | [^"bc] char*) | [^"a] char* )? ["] space
+            additional-k ::= ["] ( [a] ([b] char+ | [c] char+ | [^"bc] char*) | [^"a] char* )? ["]
             additional-kv ::= additional-k ":" space integer
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            integer ::= ("-"? integral-part) space
+            integer ::= ("-"? integral-part)
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            root ::= "{" space  (ab-kv ab-rest | ac-kv ac-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            root ::= "{" space  (ab-kv ab-rest | ac-kv ac-rest | additional-kv ( "," space additional-kv )* )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1173,11 +1157,11 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            ref-definitions-foo ::= "{" space ref-definitions-foo-a-kv "}" space
+            ref-definitions-foo ::= "{" space ref-definitions-foo-a-kv space "}"
             ref-definitions-foo-a-kv ::= "\"a\"" space ":" space string
             root ::= ref-definitions-foo
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -1204,10 +1188,10 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             alternative-1 ::= ref-definitions-bar
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            ref-definitions-bar ::= "{" space  (ref-definitions-bar-b-kv )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            ref-definitions-bar ::= "{" space  (ref-definitions-bar-b-kv )? space "}"
             ref-definitions-bar-b-kv ::= "\"b\"" space ":" space number
-            ref-definitions-foo ::= "{" space  (ref-definitions-foo-a-kv )? "}" space
+            ref-definitions-foo ::= "{" space  (ref-definitions-foo-a-kv )? space "}"
             ref-definitions-foo-a-kv ::= "\"a\"" space ":" space number
             root ::= alternative-0 | alternative-1
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
@@ -1241,14 +1225,14 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             b ::= b-0 | boolean
             b-0 ::= string
             b-kv ::= "\"b\"" space ":" space b
-            boolean ::= ("true" | "false") space
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space  (a-kv a-rest | b-kv )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "{" space  (a-kv a-rest | b-kv )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
         )"""
     });
 
@@ -1290,8 +1274,8 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             d-rest ::= ( "," space c-kv )?
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space a-kv "," space b-kv ( "," space ( d-kv d-rest | c-kv ) )? "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            root ::= "{" space a-kv "," space b-kv ( "," space ( d-kv d-rest | c-kv ) )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1311,7 +1295,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             }
         })""",
         R"""(
-            root ::= ("\"a\"" | "\"b\"") space
+            root ::= ("\"a\"" | "\"b\"")
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1336,7 +1320,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             }
         })""",
         R"""(
-            root ::= ("\"b\"" | "\"c\"") space
+            root ::= ("\"b\"" | "\"c\"")
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1378,13 +1362,13 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""(
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            number- ::= "{" space number-number-kv "}" space
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            number- ::= "{" space number-number-kv space "}"
             number-kv ::= "\"number\"" space ":" space number-
-            number-number ::= "{" space number-number-root-kv "}" space
+            number-number ::= "{" space number-number-root-kv space "}"
             number-number-kv ::= "\"number\"" space ":" space number-number
             number-number-root-kv ::= "\"root\"" space ":" space number
-            root ::= "{" space number-kv "}" space
+            root ::= "{" space number-kv space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1394,17 +1378,17 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         "description only (no type) treated as unconstrained",
         R"""({"description": "The 0-based index of the last line to be retrieved (inclusive). If None, read until the end of the file."})""",
         R"""(
-            array ::= "[" space ( value ("," space value)* )? "]" space
-            boolean ::= ("true" | "false") space
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            null ::= "null" space
-            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
             root ::= value
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+            string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
         )"""
     });
@@ -1428,96 +1412,134 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "type": "object"
         })""",
         R"""(
-            code ::= "\" \\r \\n \\\" \\\\ \"" space
+            code ::= "\" \\r \\n \\\" \\\\ \""
             code-kv ::= "\"code\"" space ":" space code
-            root ::= "{" space code-kv "}" space
+            root ::= "{" space code-kv space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with non-capturing group",
+        R"""({
+            "type": "string",
+            "pattern": "^(?:foo|bar)baz$"
+        })""",
+        R"""(
+            root ::= "\"" (("foo" | "bar") "baz") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with nested non-capturing groups",
+        R"""({
+            "type": "string",
+            "pattern": "^(?:(?:ab)+c)?d$"
+        })""",
+        R"""(
+            root ::= "\"" ((("ab")+ "c")? "d") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "unanchored regexp",
+        R"""({
+            "type": "string",
+            "pattern": "[0-9]+"
+        })""",
+        R"""(
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= string
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+        )"""
+    });
+
+    // the rules of the partial conversion (here "root-0") must not leak into the grammar
+    test({
+        SUCCESS,
+        "regexp with unsupported shorthand",
+        R"""({
+            "type": "string",
+            "pattern": "^[0-9]{3}\\w$"
+        })""",
+        R"""(
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= string
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with escaped hyphen in a character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[a-z\\-]+$"
+        })""",
+        R"""(
+            root ::= "\"" ([a-z\-]+) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with escaped hyphen outside a character class",
+        R"""({
+            "type": "string",
+            "pattern": "^a\\-b$"
+        })""",
+        R"""(
+            root ::= "\"" ("a\-b") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    // a regexp that is invalid under any flavor is still an error
+    test({
+        FAILURE,
+        "regexp with unbalanced parentheses",
+        R"""({
+            "type": "string",
+            "pattern": "^(a$"
+        })""",
+        ""
+    });
+
+    // only the property with the bad pattern degrades
+    test({
+        SUCCESS,
+        "unsupported regexp in a property",
+        R"""({
+            "type": "object",
+            "properties": {
+                "a": { "type": "string", "pattern": "^(?=a)a$" }
+            },
+            "required": ["a"],
+            "additionalProperties": false
+        })""",
+        R"""(
+            a ::= string
+            a-kv ::= "\"a\"" space ":" space a
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= "{" space a-kv space "}"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
         )"""
     });
 }
 
-static void test_resolves_to_string() {
-    fprintf(stderr, "#\n# Testing resolves_to_string\n#\n");
-
-    auto test = [](const std::string & name, const std::string & schema_str, bool expected) {
-        fprintf(stderr, "- %s\n", name.c_str());
-        common_schema_info info;
-        auto schema = nlohmann::ordered_json::parse(schema_str);
-        info.resolve_refs(schema);
-        bool result = info.resolves_to_string(schema);
-        if (result != expected) {
-            fprintf(stderr, "#\n# Test '%s' failed.\n#\n", name.c_str());
-            fprintf(stderr, "Schema: %s\n", schema_str.c_str());
-            fprintf(stderr, "Expected: %s, Got: %s\n", expected ? "true" : "false", result ? "true" : "false");
-            assert(false);
-        }
-    };
-
-    // Basic type checks
-    test("type string", R"({"type": "string"})", true);
-    test("type integer", R"({"type": "integer"})", false);
-    test("type number", R"({"type": "number"})", false);
-    test("type boolean", R"({"type": "boolean"})", false);
-    test("type object", R"({"type": "object"})", false);
-    test("type array", R"({"type": "array"})", false);
-
-    // Type array (nullable string)
-    test("type array with string", R"({"type": ["string", "null"]})", true);
-    test("type array without string", R"({"type": ["integer", "null"]})", false);
-
-    // String-specific keywords
-    test("minLength implies string", R"({"minLength": 1})", true);
-    test("maxLength implies string", R"({"maxLength": 10})", true);
-    test("pattern implies string", R"({"pattern": "^[a-z]+$"})", true);
-
-    // Format
-    test("format date", R"({"format": "date"})", true);
-    test("format uuid", R"({"format": "uuid"})", true);
-    test("format email", R"({"format": "email"})", true);
-
-    // Const
-    test("const string", R"({"const": "hello"})", true);
-    test("const number", R"({"const": 123})", false);
-
-    // Enum
-    test("enum with strings", R"({"enum": ["a", "b", "c"]})", true);
-    test("enum with numbers", R"({"enum": [1, 2, 3]})", false);
-    test("enum mixed with string", R"({"enum": [1, "a", null]})", true);
-
-    // anyOf
-    test("anyOf with string", R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", true);
-    test("anyOf without string", R"({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})", false);
-
-    // oneOf
-    test("oneOf with string", R"({"oneOf": [{"type": "string"}, {"type": "number"}]})", true);
-    test("oneOf without string", R"({"oneOf": [{"type": "object"}, {"type": "array"}]})", false);
-
-    // allOf - all must be strings
-    test("allOf all strings", R"({"allOf": [{"type": "string"}, {"minLength": 1}]})", true);
-    test("allOf mixed types", R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", false);
-
-    // $ref
-    test("$ref to string",
-        R"({"$ref": "#/$defs/str", "$defs": {"str": {"type": "string"}}})", true);
-    test("$ref to integer",
-        R"({"$ref": "#/$defs/num", "$defs": {"num": {"type": "integer"}}})", false);
-
-    // Nested
-    test("nested anyOf with string",
-        R"({"anyOf": [{"anyOf": [{"type": "integer"}, {"type": "string"}]}, {"type": "boolean"}]})", true);
-
-    fprintf(stderr, "All resolves_to_string tests passed!\n");
-}
-
 int main() {
-    fprintf(stderr, "LLAMA_NODE_AVAILABLE = %s\n", getenv("LLAMA_NODE_AVAILABLE") ? "true" : "false");
-    fprintf(stderr, "LLAMA_PYTHON_AVAILABLE = %s\n", getenv("LLAMA_PYTHON_AVAILABLE") ? "true" : "false");
-
-    test_resolves_to_string();
-
-    test_all("C++", [](const TestCase & tc) {
+    test_all("JSON schema conversion", [](const TestCase & tc) {
         try {
-            tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+            tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
         } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
@@ -1525,63 +1547,58 @@ int main() {
         }
     });
 
-    // C++ only tests (features not yet supported in JS/Python implementations)
+    // a document parsed up front gives the same grammar as the JSON, recursion included
     {
-        fprintf(stderr, "#\n# Testing C++ only features\n#\n");
-        auto run = [](const TestCase & tc) {
-            fprintf(stderr, "- %s\n", tc.name.c_str());
-            try {
-                tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
-                tc.verify_status(SUCCESS);
-            } catch (const std::invalid_argument & ex) {
-                fprintf(stderr, "Error: %s\n", ex.what());
-                tc.verify_status(FAILURE);
+        fprintf(stderr, "- parsed document\n");
+        auto schema = common_json::parse(R"""({
+            "$ref": "#/$defs/node",
+            "$defs": {
+                "node": {
+                    "type": "object",
+                    "properties": {"next": {"$ref": "#/$defs/node"}, "leaf": {}},
+                    "additionalProperties": false
+                }
             }
+        })""");
+        assert(json_schema_to_grammar(common_chat_schema_from_json(schema)) == json_schema_to_grammar(schema, true));
+    }
+
+    // a property node carries its $ref target, so its grammar names the ref rule
+    {
+        fprintf(stderr, "- sub-schema $ref\n");
+        auto parameters = common_json::parse(R"""({
+            "type": "object",
+            "properties": {"item": {"$ref": "#/$defs/item"}},
+            "$defs": {
+                "item": {
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}},
+                    "required": ["a"],
+                    "additionalProperties": false
+                }
+            }
+        })""");
+        TestCase tc {
+            SUCCESS,
+            "sub-schema $ref",
+            "",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                ref-defs-item ::= "{" space ref-defs-item-a-kv space "}"
+                ref-defs-item-a-kv ::= "\"a\"" space ":" space string
+                root ::= ref-defs-item
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
         };
-
-        run({
-            SUCCESS,
-            "regexp with non-capturing group",
-            R"""({
-                "type": "string",
-                "pattern": "^(?:foo|bar)baz$"
-            })""",
-            R"""(
-                root ::= "\"" (("foo" | "bar") "baz") "\"" space
-                space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            )""",
-        });
-
-        run({
-            SUCCESS,
-            "regexp with nested non-capturing groups",
-            R"""({
-                "type": "string",
-                "pattern": "^(?:(?:ab)+c)?d$"
-            })""",
-            R"""(
-                root ::= "\"" ((("ab")+ "c")? "d") "\"" space
-                space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            )""",
-        });
+        auto doc = common_chat_schema_from_json(parameters);
+        tc.verify(build_grammar([&](const common_grammar_builder & builder) {
+            const auto & item = static_cast<const common_chat_schema_object &>(*doc.root).properties.at(0);
+            builder.add_schema("root", *item.schema);
+        }));
     }
 
-    if (getenv("LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR")) {
-        fprintf(stderr, "\033[33mWARNING: Skipping slow tests on emulator.\n\033[0m");
-    } else {
-        if (getenv("LLAMA_PYTHON_AVAILABLE") || (std::system("python -c \"import sys; exit(1) if sys.version_info < (3, 8) else print('Python version is sufficient')\"") == 0)) {
-            test_all("Python", [](const TestCase & tc) {
-                write("test-json-schema-input.tmp", tc.schema);
-                tc.verify_status(std::system(
-                    "python ./examples/json_schema_to_grammar.py test-json-schema-input.tmp > test-grammar-output.tmp") == 0 ? SUCCESS : FAILURE);
-                tc.verify(read("test-grammar-output.tmp"));
-            });
-        } else {
-            fprintf(stderr, "\033[33mWARNING: Python not found (min version required is 3.8), skipping Python JSON schema -> grammar tests.\n\033[0m");
-        }
-    }
-
-    test_all("Check Expectations Validity", [](const TestCase & tc) {
+    test_all("Check the expectations parse", [](const TestCase & tc) {
         if (tc.expected_status == SUCCESS) {
             tc.verify_expectation_parseable();
         }

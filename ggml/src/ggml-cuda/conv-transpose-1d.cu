@@ -11,30 +11,32 @@ static  __global__ void conv_transpose_1d_kernel(
         return;
     }
 
-    int out_index = global_index / dst_ne0;
+    int out_t = global_index % dst_ne0;
+    int out_ch = (global_index / dst_ne0) % dst_ne1;
+    int plane = global_index / (dst_ne0 * dst_ne1);
 
     float accumulator = 0;
 
     for (int c = 0; c < src0_ne2; c++) {
-        int idx = global_index % dst_ne0;
+        int kernel_offset = src0_ne0 * (out_ch + src0_ne1 * c);
+        int input_offset = src1_ne0 * (c + src1_ne1 * plane);
 
-        int kernel_offset = (src0_ne0 * src0_ne1 * c) + (out_index * src0_ne0);
-        int input_offset = src1_ne0 * c;
-
-        for (int i = 0; i < src1_ne0; i++) {
-            if (!(idx >= i*s0 && idx < i*s0 + src0_ne0)) {
+        for (int k = 0; k < src0_ne0; k++) {
+            int input_numer = out_t + p0 - k*d0;
+            if (input_numer < 0 || input_numer % s0 != 0) {
                 continue;
             }
-            int weight_idx = idx - i*s0;
 
-            float kernel_weight = src0[kernel_offset + weight_idx];
-            float input_value =  src1[input_offset+i];
+            int input_t = input_numer / s0;
+            if (input_t >= src1_ne0) {
+                continue;
+            }
 
-            accumulator += kernel_weight * input_value;
+            accumulator += src0[kernel_offset + k] * src1[input_offset + input_t];
         }
     }
     dst[global_index] = accumulator;
-    GGML_UNUSED_VARS(p0, d0, src0_ne3, src1_ne3, dst_ne3, src1_ne1, dst_ne1, src1_ne2, dst_ne2);
+    GGML_UNUSED_VARS(src0_ne3, src1_ne2, src1_ne3, dst_ne2, dst_ne3);
 }
 
 static void conv_transpose_1d_f32_f32_cuda(

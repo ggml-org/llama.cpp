@@ -1,7 +1,9 @@
-import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
-import { config } from '$lib/stores/settings.svelte';
+import { base } from '$app/paths';
+import { HEADERS } from '$lib/constants';
+import { MimeTypeApplication } from '$lib/enums';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 
 /**
  * Validates API key by making a request to the server props endpoint
@@ -12,20 +14,19 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 		return;
 	}
 
-	const apiKey = config().apiKey;
-
-	// No API key configured — server doesn't require auth, skip the request entirely.
-	// The /props endpoint is only protected when the server has API keys configured,
-	// and in that case the client always has one set (from settings).
-	if (!apiKey) {
-		return;
-	}
+	const apiKey = settingsStore.config.apiKey;
 
 	try {
 		const headers: Record<string, string> = {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${apiKey}`
+			[HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON
 		};
+
+		// Probe /props even without a stored key: on a server started with
+		// --api-key the unauthenticated request returns 401 and surfaces the
+		// API key splash, which is the onboarding path for entering the key.
+		if (apiKey) {
+			headers[HEADERS.AUTHORIZATION] = `${HEADERS.BEARER}${apiKey}`;
+		}
 
 		const response = await fetch(`${base}/props`, { headers });
 
@@ -35,6 +36,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			}
 
 			console.warn(`Server responded with status ${response.status} during API key validation`);
+
 			return;
 		}
 	} catch (err) {

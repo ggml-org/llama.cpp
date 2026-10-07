@@ -1,6 +1,6 @@
+import { getAuthHeaders, getJsonHeaders } from './api-headers';
 import { base } from '$app/paths';
-import { getJsonHeaders, getAuthHeaders } from './api-headers';
-import { UrlProtocol } from '$lib/enums';
+import { API_ABSOLUTE_URL_PROTOCOLS, ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
 
 /**
  * API Fetch Utilities
@@ -10,6 +10,21 @@ import { UrlProtocol } from '$lib/enums';
  * - Error handling with proper error messages
  * - Base path resolution
  */
+
+/**
+ * Error thrown when an API request fails, carrying the HTTP status code
+ * so callers can distinguish e.g. a 503 "still loading" response from a
+ * genuine failure.
+ */
+export class ApiError extends Error {
+	status: number;
+
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+	}
+}
 
 export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
 	/**
@@ -34,7 +49,7 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
  * @example
  * ```typescript
  * // GET request
- * const models = await apiFetch<ApiModelListResponse>('/v1/models');
+ * const models = await apiFetch<ApiModelsListResponse>('/v1/models');
  *
  * // POST request
  * const result = await apiFetch<ApiResponse>('/models/load', {
@@ -45,23 +60,26 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
 	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
+	// absolute URLs with an allowed protocol pass through untouched; relative paths get the base prefix
+	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : `${base}${path}`;
 
-	const url =
-		path.startsWith(UrlProtocol.HTTP) || path.startsWith(UrlProtocol.HTTPS)
-			? path
-			: `${base}${path}`;
+	let response;
 
-	const response = await fetch(url, {
-		...fetchOptions,
-		headers
-	});
+	try {
+		response = await fetch(url, {
+			...fetchOptions,
+			headers
+		});
+	} catch (e) {
+		throw new Error(beautifyNetworkError(e));
+	}
 
 	if (!response.ok) {
 		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
+
+		throw new ApiError(errorMessage, response.status);
 	}
 
 	return response.json() as Promise<T>;
@@ -96,22 +114,7 @@ export async function apiFetchWithParams<T>(
 		}
 	}
 
-	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-
-	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
-	const headers = { ...baseHeaders, ...customHeaders };
-
-	const response = await fetch(url.toString(), {
-		...fetchOptions,
-		headers
-	});
-
-	if (!response.ok) {
-		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
-	}
-
-	return response.json() as Promise<T>;
+	return apiFetch<T>(url.toString(), options);
 }
 
 /**
@@ -128,10 +131,44 @@ export async function apiPost<T, B = unknown>(
 	options: ApiFetchOptions = {}
 ): Promise<T> {
 	return apiFetch<T>(path, {
-		method: 'POST',
 		body: JSON.stringify(body),
+		method: 'POST',
 		...options
 	});
+}
+
+/**
+ * Send a DELETE request to an API endpoint, optionally with query parameters.
+ *
+ * @param path - API path (query string is appended if `params` is provided)
+ * @param params - Optional record of query parameters
+ * @param options - Additional fetch options
+ * @returns Parsed JSON response
+ */
+export async function apiDelete<T>(
+	path: string,
+	params?: Record<string, string>,
+	options: ApiFetchOptions = {}
+): Promise<T> {
+	// the query is appended to the path so `apiFetch` applies its base-path prefix;
+	// `apiFetchWithParams` resolves an absolute URL and would bypass it
+	let query = '';
+
+	if (params) {
+		const search = new URLSearchParams();
+
+		for (const [key, value] of Object.entries(params)) {
+			if (value !== undefined && value !== null) {
+				search.set(key, value);
+			}
+		}
+
+		const qs = search.toString();
+
+		if (qs) query = `?${qs}`;
+	}
+
+	return apiFetch<T>(`${path}${query}`, { ...options, method: 'DELETE' });
 }
 
 /**
@@ -141,12 +178,15 @@ export async function apiPost<T, B = unknown>(
 async function parseErrorMessage(response: Response): Promise<string> {
 	try {
 		const errorData = await response.json();
+
 		if (errorData?.error?.message) {
 			return errorData.error.message;
 		}
+
 		if (errorData?.error && typeof errorData.error === 'string') {
 			return errorData.error;
 		}
+
 		if (errorData?.message) {
 			return errorData.message;
 		}
@@ -154,5 +194,40 @@ async function parseErrorMessage(response: Response): Promise<string> {
 		// JSON parsing failed, use status text
 	}
 
-	return `Request failed: ${response.status} ${response.statusText}`;
+	const httpErrorStr = HTTP_CODE_TO_STRING[response.status];
+
+	if (httpErrorStr) {
+		return httpErrorStr;
+	}
+
+	return `${ERROR_MESSAGES.HTTP.GENERIC}: ${response.status} ${response.statusText}`;
+}
+
+/**
+ * Converts a network issue into a human-readable message.
+ * @param throwable - The throwable raised during fetch operation
+ * @returns Error in an human-readable format
+ */
+function beautifyNetworkError(throwable: unknown): string {
+	let message;
+
+	if (throwable instanceof Error) {
+		message = throwable.message;
+
+		if (throwable.name === 'TypeError' && message.includes('fetch')) {
+			return ERROR_MESSAGES.NETWORK.UNREACHABLE;
+		}
+	} else {
+		message = String(throwable);
+	}
+
+	if (message.includes('ECONNREFUSED')) {
+		return ERROR_MESSAGES.NETWORK.REFUSED;
+	} else if (message.includes('ENOTFOUND')) {
+		return ERROR_MESSAGES.NETWORK.NXDOMAIN;
+	} else if (message.includes('ETIMEDOUT')) {
+		return ERROR_MESSAGES.NETWORK.TIMEOUT;
+	}
+
+	return `${ERROR_MESSAGES.NETWORK.GENERIC} (${message})`;
 }

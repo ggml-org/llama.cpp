@@ -54,6 +54,29 @@ static inline dst_t llama_cast(src_t v) {
     }
 }
 
+static inline ggml_tensor * llama_mul_mat_hadamard(
+        ggml_context * ctx,
+        ggml_tensor * cur,
+        ggml_tensor * rot) {
+    const auto n = rot->ne[0];
+
+    ggml_tensor * res;
+
+    if (!ggml_is_contiguous(cur)) {
+        res = ggml_cont_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    } else {
+        res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    }
+    res = ggml_mul_mat(ctx, rot, res);
+    ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
+    res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+    return res;
+}
+
+// Prefetch the host pages needed to gather these rows.
+void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows);
+
 struct time_meas {
     time_meas(int64_t & t_acc, bool disable = false);
     ~time_meas();
@@ -73,6 +96,8 @@ struct buffer_view {
     }
 };
 
+void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size);
+
 void replace_all(std::string & s, const std::string & search, const std::string & replace);
 
 // TODO: rename to llama_format ?
@@ -83,7 +108,3 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string llama_format_tensor_shape(const struct ggml_tensor * t);
 
 std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
-
-#define LLAMA_TENSOR_NAME_FATTN   "__fattn__"
-#define LLAMA_TENSOR_NAME_FGDN_AR "__fgdn_ar__"
-#define LLAMA_TENSOR_NAME_FGDN_CH "__fgdn_ch__"

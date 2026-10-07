@@ -17,7 +17,8 @@ static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, g
     return apir_backend_graph_compute(gpu, cgraph);
 }
 
-static void ggml_backend_remoting_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
+static void ggml_backend_remoting_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
+    UNUSED(params);
     virtgpu * gpu = DEV_TO_GPU(backend->device);
 #if true
     UNUSED(gpu);

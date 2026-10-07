@@ -47,6 +47,7 @@ CMD_ARGS+=("../../convert_hf_to_gguf.py" "--verbose")
 CMD_ARGS+=("${MODEL_PATH}")
 CMD_ARGS+=("--outfile" "${CONVERTED_MODEL}")
 CMD_ARGS+=("--outtype" "${TYPE}")
+CMD_ARGS+=("--model-name" "${MODEL_NAME}")
 [[ -n "$METADATA_OVERRIDE" ]] && CMD_ARGS+=("--metadata" "${METADATA_OVERRIDE}")
 [[ -n "$MMPROJ" ]] && CMD_ARGS+=("${MMPROJ}")
 

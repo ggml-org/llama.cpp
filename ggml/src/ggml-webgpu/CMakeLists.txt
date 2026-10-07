@@ -10,8 +10,11 @@ file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
 
 message(STATUS "Shader output dir: ${SHADER_OUTPUT_DIR}")
 
-# Find all WGSL files
-file(GLOB WGSL_SHADER_FILES "${SHADER_DIR}/*.wgsl")
+# Find all WGSL sources
+file(GLOB WGSL_SHADER_FILES
+    "${SHADER_DIR}/*.wgsl"
+    "${SHADER_DIR}/*.tmpl"
+)
 
 # Generate the header using a Python script
 add_custom_command(
@@ -35,6 +38,12 @@ ggml_add_backend_library(ggml-webgpu
 )
 
 add_dependencies(ggml-webgpu generate_shaders)
+
+# Dawn needs C++20 (https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md#prerequisites)
+target_compile_features(ggml-webgpu PRIVATE cxx_std_20)
+
+# Disable C++20 module scanning since emscan-deps fails to find webgpu_cpp.h
+set_target_properties(ggml-webgpu PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 
 if(EMSCRIPTEN)
     set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")

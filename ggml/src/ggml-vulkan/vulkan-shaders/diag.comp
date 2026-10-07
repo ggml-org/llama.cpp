@@ -12,11 +12,11 @@ void main() {
         return;
     }
 
-    const uint i13 = fastdiv(idx, p.ne1_012mp, p.ne1_012L);
+    const uint i13 = fastdiv(idx, p.ne1_012mp, fastdiv_L(p.ne1_Ls, 0));
     const uint i13_offset = i13 * p.ne12*p.ne11*p.ne10;
-    const uint i12 = fastdiv(idx - i13_offset, p.ne1_01mp, p.ne1_01L);
+    const uint i12 = fastdiv(idx - i13_offset, p.ne1_01mp, fastdiv_L(p.ne1_Ls, 1));
     const uint i12_offset = i12*p.ne11*p.ne10;
-    const uint i11 = fastdiv(idx - i13_offset - i12_offset, p.ne1_0mp, p.ne1_0L);
+    const uint i11 = fastdiv(idx - i13_offset - i12_offset, p.ne1_0mp, fastdiv_L(p.ne1_Ls, 2));
     const uint i10 = idx - i13_offset - i12_offset - i11*p.ne10;
 
     if (i10 == i11) {

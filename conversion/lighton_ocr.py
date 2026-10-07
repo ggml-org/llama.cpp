@@ -11,6 +11,7 @@ from .llava import LlavaVisionModel
 
 
 @ModelBase.register("LightOnOCRForConditionalGeneration")
+@ModelBase.example("lightonai/LightOnOCR-1B-1025")
 class LightOnOCRVisionModel(LlavaVisionModel):
     is_mistral_format = False
     use_break_tok = False

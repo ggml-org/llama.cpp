@@ -1,5 +1,6 @@
 #include "common.h"
 #include "log.h"
+#include "json.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -11,15 +12,7 @@
 #include <sstream>
 #include <thread>
 #include <vector>
-
-#if defined(_WIN32)
-#    include <io.h>
-#    include <windows.h>
-#    define isatty _isatty
-#    define fileno _fileno
-#else
-#    include <unistd.h>
-#endif // defined(_WIN32)
+#include <algorithm>
 
 int common_log_verbosity_thold = LOG_DEFAULT_LLAMA;
 
@@ -29,6 +22,16 @@ int common_log_get_verbosity_thold(void) {
 
 void common_log_set_verbosity_thold(int verbosity) {
     common_log_verbosity_thold = verbosity;
+}
+
+static bool common_log_jsonl = false;
+
+bool common_log_get_jsonl(void) {
+    return common_log_jsonl;
+}
+
+void common_log_set_jsonl(bool jsonl) {
+    common_log_jsonl = jsonl;
 }
 
 static int64_t t_us() {
@@ -61,17 +64,29 @@ static const char* g_col[] = {
     "",
 };
 
+static const char * level_str(enum ggml_log_level level) {
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG: return "debug";
+        case GGML_LOG_LEVEL_INFO:  return "info";
+        case GGML_LOG_LEVEL_WARN:  return "warn";
+        case GGML_LOG_LEVEL_ERROR: return "error";
+        case GGML_LOG_LEVEL_CONT:  return "cont";
+        default:                   return "none";
+    }
+}
+
 struct common_log_entry {
-    enum ggml_log_level level;
-
-    bool prefix;
-
-    int64_t timestamp;
+    enum ggml_log_level level {GGML_LOG_LEVEL_INFO};
 
     std::vector<char> msg;
 
-    // signals the worker thread to stop
-    bool is_end;
+    int64_t timestamp { 0 };
+    bool is_end       { false }; // signals the worker thread to stop
+    bool prefix       { false };
+    bool jsonl        { false };
+    bool is_json      { false }; // msg already holds a serialized JSON object
+
+    common_log_entry(size_t size = 256) : msg(size) { }
 
     void print(FILE * file = nullptr) const {
         FILE * fcur = file;
@@ -84,9 +99,27 @@ struct common_log_entry {
 
             fcur = stdout;
 
-            if (level != GGML_LOG_LEVEL_NONE) {
+            if (level != GGML_LOG_LEVEL_NONE && !jsonl) {
                 fcur = stderr;
             }
+        }
+
+        if (jsonl) {
+            if (is_json) {
+                fprintf(fcur, "%s\n", msg.data());
+                fflush(fcur);
+                return;
+            }
+
+            common_json obj = {
+                {"type",  "log"},
+                {"time",  timestamp},
+                {"level", level_str(level)},
+                {"msg",   msg.data()},
+            };
+            fprintf(fcur, "%s\n", obj.dump_safe().c_str());
+            fflush(fcur);
+            return;
         }
 
         if (level != GGML_LOG_LEVEL_NONE && level != GGML_LOG_LEVEL_CONT && prefix) {
@@ -111,33 +144,31 @@ struct common_log_entry {
             }
         }
 
-        fprintf(fcur, "%s", msg.data());
+        // the reset goes before the trailing newlines, so that every line carries its own colors
+        const bool reset = level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG;
 
-        if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG) {
-            fprintf(fcur, "%s", g_col[COMMON_LOG_COL_DEFAULT]);
+        size_t end = strlen(msg.data());
+        while (end > 0 && msg[end - 1] == '\n') {
+            end--;
         }
+
+        fprintf(fcur, "%.*s%s%s", (int) end, msg.data(), reset ? g_col[COMMON_LOG_COL_DEFAULT] : "", msg.data() + end);
 
         fflush(fcur);
     }
 };
 
 struct common_log {
-    // default capacity - will be expanded if needed
-    common_log() : common_log(256) {}
-
-    common_log(size_t capacity) {
-        file = nullptr;
-        prefix = false;
+    // default capacity
+    common_log(size_t capacity = 512) {
+        file       = nullptr;
+        colors     = false;
+        prefix     = false;
         timestamps = false;
-        running = false;
-        t_start = t_us();
+        running    = false;
+        t_start    = t_us();
 
-        // initial message size - will be expanded if longer messages arrive
-        entries.resize(capacity);
-        for (auto & entry : entries) {
-            entry.msg.resize(256);
-        }
-
+        queue.resize(capacity, common_log_entry(256));
         head = 0;
         tail = 0;
 
@@ -152,36 +183,67 @@ struct common_log {
     }
 
 private:
-    std::mutex mtx;
-    std::thread thrd;
-    std::condition_variable cv;
+    std::mutex              mtx;
+    std::thread             thrd;
+    std::condition_variable cv_new;  // new entry
+    std::condition_variable cv_full; // wait on full
 
     FILE * file;
 
+    bool colors;
     bool prefix;
     bool timestamps;
     bool running;
 
     int64_t t_start;
 
-    // ring buffer of entries
-    std::vector<common_log_entry> entries;
+    // queue of entries
+    std::vector<common_log_entry> queue;
     size_t head;
     size_t tail;
 
-    // worker thread copies into this
-    common_log_entry cur;
+    bool print_entry(const common_log_entry & e) const {
+        if (e.is_end) return true;
+
+        e.print();
+        if (file) {
+            e.print(file);
+        }
+        return false;
+    }
+
+    bool flush_queue(size_t start_head, size_t end_tail, size_t & out_head) const {
+        bool stop = false;
+        size_t h = start_head;
+        while (h != end_tail && !stop) {
+            stop = print_entry(queue[h]);
+            h = (h + 1) % queue.size();
+        }
+        out_head = h;
+        return stop;
+    }
 
 public:
+    bool is_full() const {
+        return ((tail + 1) % queue.size()) == head;
+    }
+
+    bool is_empty() const {
+        return head == tail;
+    }
+
     void add(enum ggml_log_level level, const char * fmt, va_list args) {
-        std::lock_guard<std::mutex> lock(mtx);
+        std::unique_lock<std::mutex> lock(mtx);
+
+        // block if the queue is full
+        cv_full.wait(lock, [this]() { return !running || !is_full(); });
 
         if (!running) {
             // discard messages while the worker thread is paused
             return;
         }
 
-        auto & entry = entries[tail];
+        auto & entry = queue[tail];
 
         {
             // cannot use args twice, so make a copy in case we need to expand the buffer
@@ -216,38 +278,54 @@ public:
             va_end(args_copy);
         }
 
-        entry.level = level;
-        entry.prefix = prefix;
+        entry.is_end    = false;
+        entry.level     = level;
+        entry.prefix    = prefix;
+        entry.jsonl     = common_log_jsonl;
+        entry.is_json   = false;
         entry.timestamp = 0;
         if (timestamps) {
             entry.timestamp = t_us() - t_start;
         }
-        entry.is_end = false;
 
-        tail = (tail + 1) % entries.size();
-        if (tail == head) {
-            // expand the buffer
-            std::vector<common_log_entry> new_entries(2*entries.size());
+        tail = (tail + 1) % queue.size();
+        cv_new.notify_one();
+    }
 
-            size_t new_tail = 0;
+    void add_json(const char * type, const common_json & obj) {
+        const common_json full = {
+            {"type", type},
+            {"data", obj},
+        };
 
-            do {
-                new_entries[new_tail] = std::move(entries[head]);
+        const std::string text = full.dump_safe();
 
-                head     = (head     + 1) % entries.size();
-                new_tail = (new_tail + 1);
-            } while (head != tail);
+        std::unique_lock<std::mutex> lock(mtx);
 
-            head = 0;
-            tail = new_tail;
+        // block if the queue is full
+        cv_full.wait(lock, [this]() { return !running || !is_full(); });
 
-            for (size_t i = tail; i < new_entries.size(); i++) {
-                new_entries[i].msg.resize(256);
-            }
-
-            entries = std::move(new_entries);
+        if (!running) {
+            // discard messages while the worker thread is paused
+            return;
         }
-        cv.notify_one();
+
+        auto & entry = queue[tail];
+
+        if (entry.msg.size() < text.size() + 1) {
+            entry.msg.resize(text.size() + 1);
+        }
+        memcpy(entry.msg.data(), text.c_str(), text.size() + 1);
+
+        entry.is_end    = false;
+        entry.level     = GGML_LOG_LEVEL_NONE;
+        entry.prefix    = false;
+        entry.jsonl     = true;
+        entry.is_json   = true;
+        entry.timestamp = 0;
+
+        tail = (tail + 1) % queue.size();
+        cv_new.notify_one();
     }
 
     void resume() {
@@ -261,22 +339,23 @@ public:
 
         thrd = std::thread([this]() {
             while (true) {
-                {
-                    std::unique_lock<std::mutex> lock(mtx);
-                    cv.wait(lock, [this]() { return head != tail; });
-                    cur = entries[head];
+                std::unique_lock<std::mutex> lock(mtx);
+                cv_new.wait(lock, [this]() { return !is_empty(); });
 
-                    head = (head + 1) % entries.size();
-                }
+                size_t cached_head = head;
+                size_t cached_tail = tail;
 
-                if (cur.is_end) {
+                lock.unlock(); // drop the lock during flush
+
+                size_t next_head;
+                bool stop = flush_queue(cached_head, cached_tail, next_head);
+
+                lock.lock();
+                head = next_head;
+                cv_full.notify_all();
+
+                if (stop) {
                     break;
-                }
-
-                cur.print(); // stdout and stderr
-
-                if (file) {
-                    cur.print(file);
                 }
             }
         });
@@ -293,13 +372,13 @@ public:
             running = false;
 
             // push an entry to signal the worker thread to stop
-            {
-                auto & entry = entries[tail];
-                entry.is_end = true;
+            auto & entry = queue[tail];
+            entry.is_end = true;
+            tail = (tail + 1) % queue.size();
 
-                tail = (tail + 1) % entries.size();
-            }
-            cv.notify_one();
+            // wakeup everyone
+            cv_new.notify_one();
+            cv_full.notify_all();
         }
 
         thrd.join();
@@ -321,10 +400,16 @@ public:
         resume();
     }
 
+    bool get_colors() const {
+        return colors;
+    }
+
     void set_colors(bool colors) {
         pause();
 
-        if (colors) {
+        this->colors = colors && tty_enable_ansi();
+
+        if (this->colors) {
             g_col[COMMON_LOG_COL_DEFAULT] = LOG_COL_DEFAULT;
             g_col[COMMON_LOG_COL_BOLD]    = LOG_COL_BOLD;
             g_col[COMMON_LOG_COL_RED]     = LOG_COL_RED;
@@ -400,6 +485,14 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
     va_end(args);
 }
 
+void common_log_add_json(struct common_log * log, const char * type, const common_json & obj) {
+    if (!common_log_jsonl) {
+        return;
+    }
+
+    log->add_json(type, obj);
+}
+
 void common_log_set_file(struct common_log * log, const char * file) {
     log->set_file(file);
 }
@@ -419,6 +512,10 @@ void common_log_set_colors(struct common_log * log, log_colors colors) {
     log->set_colors(true);
 }
 
+bool common_log_get_colors(struct common_log * log) {
+    return log->get_colors();
+}
+
 void common_log_set_prefix(struct common_log * log, bool prefix) {
     log->set_prefix(prefix);
 }
@@ -432,7 +529,7 @@ void common_log_flush(struct common_log * log) {
     log->resume();
 }
 
-static int common_get_verbosity(enum ggml_log_level level) {
+int common_log_get_verbosity(enum ggml_log_level level) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG: return LOG_LEVEL_DEBUG;
         case GGML_LOG_LEVEL_INFO:  return LOG_LEVEL_TRACE;
@@ -446,7 +543,7 @@ static int common_get_verbosity(enum ggml_log_level level) {
 }
 
 void common_log_default_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
-    auto verbosity = common_get_verbosity(level);
+    auto verbosity = common_log_get_verbosity(level);
     if (verbosity <= common_log_verbosity_thold) {
         common_log_add(common_log_main(), level, "%s", text);
     }

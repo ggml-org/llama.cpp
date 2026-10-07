@@ -4,13 +4,10 @@
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
 #include <cctype>
 #include <numeric>
-
-using json = nlohmann::ordered_json;
 
 std::string trim_whitespace(const std::string & str) {
     size_t start = 0;

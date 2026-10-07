@@ -23,9 +23,8 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
 
 option(GGML_HEXAGON_HTP_DEBUG  "ggml-hexagon: enable HTP debug output" OFF)
-option(GGML_HEXAGON_FA_EXP2_HF "ggml-hexagon: use FP16 exp2 polynomial in FA softmax instead of F32 exp round-trip" OFF)
+set(GGML_HEXAGON_HTP_BUILD_TYPE "Release" CACHE STRING "ggml-hexagon: HTP skel build type (Release, RelWithDebInfo, Debug)")
 set(GGML_HEXAGON_HTP_CERT  "$ENV{HEXAGON_HTP_CERT}" CACHE PATH "ggml-hexagon: enable HTP library signing using certificate")
-set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml-hexagon: quantize group size (32, 64, or 128)")
 
 add_library(htp_iface OBJECT
     ${CMAKE_CURRENT_BINARY_DIR}/htp_iface_stub.c)
@@ -61,26 +60,25 @@ target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ht
 
 # Build HTP skels
 set(HTP_SKELS)
+set(HTP_PROJECTS)
 function(build_htp_skel V)
     ExternalProject_Add(htp-${V}
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/htp BUILD_ALWAYS ON
-        BUILD_BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so
         CMAKE_ARGS
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=${GGML_HEXAGON_HTP_BUILD_TYPE}
             -DCMAKE_TOOLCHAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/htp/cmake-toolchain.cmake
             -DCMAKE_INSTALL_LIBDIR=${CMAKE_CURRENT_BINARY_DIR}
             -DHEXAGON_SDK_ROOT=${HEXAGON_SDK_ROOT}
             -DHEXAGON_TOOLS_ROOT=${HEXAGON_TOOLS_ROOT}
             -DHEXAGON_HTP_DEBUG=${GGML_HEXAGON_HTP_DEBUG}
-            -DGGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE}
             -DDSP_VERSION=${V}
             -DPREBUILT_LIB_DIR="toolv19_${V}")
     list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
+    list(APPEND HTP_PROJECTS htp-${V})
     set(HTP_SKELS ${HTP_SKELS} PARENT_SCOPE)
+    set(HTP_PROJECTS ${HTP_PROJECTS} PARENT_SCOPE)
 endfunction()
 
-build_htp_skel(v68)
-build_htp_skel(v69)
 build_htp_skel(v73)
 build_htp_skel(v75)
 build_htp_skel(v79)
@@ -105,7 +103,7 @@ if (CMAKE_SYSTEM_NAME MATCHES Windows AND GGML_HEXAGON_HTP_CERT)
     set(LIBGGML_HTP_CAT ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp.cat)
     add_custom_target(libggml-htp-cat
         BYPRODUCTS ${LIBGGML_HTP_CAT}
-        DEPENDS libggml-htp.inf ${HTP_SKELS}
+        DEPENDS libggml-htp.inf ${HTP_PROJECTS}
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/libggml-htp.inf ${CMAKE_CURRENT_BINARY_DIR}
         COMMAND ${INF2CAT} /driver:${CMAKE_CURRENT_BINARY_DIR} /os:10_25H2_ARM64
         COMMAND ${SIGNTOOL} sign /fd sha256 /f ${GGML_HEXAGON_HTP_CERT} ${LIBGGML_HTP_CAT}

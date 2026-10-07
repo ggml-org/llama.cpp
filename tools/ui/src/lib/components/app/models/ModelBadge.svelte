@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { Package } from '@lucide/svelte';
-	import { BadgeInfo, ActionIconCopyToClipboard } from '$lib/components/app';
 	import ModelId from './ModelId.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { serverStore } from '$lib/stores/server.svelte';
+	import { Package } from '@lucide/svelte';
+	import { ActionIconCopyToClipboard, BadgeInfo } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -27,8 +26,8 @@
 	let shouldShow = $derived(model && (modelProp !== undefined || isModelMode));
 </script>
 
-{#snippet badgeContent()}
-	<BadgeInfo class={className} {onclick}>
+{#snippet badgeContent(triggerProps?: Record<string, unknown>)}
+	<BadgeInfo {...triggerProps ?? {}} class={className} {onclick}>
 		{#snippet icon()}
 			<Package class="h-3 w-3" />
 		{/snippet}
@@ -38,7 +37,7 @@
 		{/if}
 
 		{#if showCopyIcon}
-			<ActionIconCopyToClipboard text={model || ''} ariaLabel="Copy model name" />
+			<ActionIconCopyToClipboard ariaLabel="Copy model name" text={model || ''} />
 		{/if}
 	</BadgeInfo>
 {/snippet}
@@ -47,7 +46,10 @@
 	{#if showTooltip}
 		<Tooltip.Root>
 			<Tooltip.Trigger>
-				{@render badgeContent()}
+				<!-- prevent another nested button element -->
+				{#snippet child({ props })}
+					{@render badgeContent(props)}
+				{/snippet}
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>

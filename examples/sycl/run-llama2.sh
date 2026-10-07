@@ -18,7 +18,7 @@ CONTEXT=4096
 #support malloc device memory more than 4GB.
 export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
 
-LOAD_MODE='--mmap'
+LOAD_MODE='--load-mode auto'
 if [ $# -gt 0 ]; then
     GGML_SYCL_DEVICE=$1
     echo "use $GGML_SYCL_DEVICE as main GPU"

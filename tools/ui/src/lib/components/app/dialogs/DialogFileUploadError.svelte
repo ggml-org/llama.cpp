@@ -12,7 +12,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), fileErrorData, onOpenChange }: Props = $props();
+	let { fileErrorData, onOpenChange, open = $bindable() }: Props = $props();
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;
@@ -21,7 +21,7 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Portal>
 		<AlertDialog.Overlay />
 

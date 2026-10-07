@@ -1,12 +1,12 @@
-import { describe, expect, it } from 'vitest';
 import {
-	getRequestUrl,
-	getRequestMethod,
-	getRequestBody,
-	summarizeRequestBody,
+	extractJsonRpcMethods,
 	formatDiagnosticErrorMessage,
-	extractJsonRpcMethods
+	getRequestBody,
+	getRequestMethod,
+	getRequestUrl,
+	summarizeRequestBody
 } from '$lib/utils/request-helpers';
+import { describe, expect, it } from 'vitest';
 
 describe('getRequestUrl', () => {
 	it('returns a plain string input as-is', () => {
@@ -19,6 +19,7 @@ describe('getRequestUrl', () => {
 
 	it('returns url from a Request object', () => {
 		const req = new Request('https://example.com/mcp');
+
 		expect(getRequestUrl(req)).toBe('https://example.com/mcp');
 	});
 });
@@ -30,6 +31,7 @@ describe('getRequestMethod', () => {
 
 	it('falls back to Request.method', () => {
 		const req = new Request('https://example.com', { method: 'PUT' });
+
 		expect(getRequestMethod(req)).toBe('PUT');
 	});
 
@@ -67,6 +69,7 @@ describe('summarizeRequestBody', () => {
 
 	it('returns blob kind with size', () => {
 		const blob = new Blob(['abc']);
+
 		expect(summarizeRequestBody(blob)).toEqual({ kind: 'blob', size: 3 });
 	});
 
@@ -98,14 +101,16 @@ describe('formatDiagnosticErrorMessage', () => {
 describe('extractJsonRpcMethods', () => {
 	it('extracts methods from a JSON-RPC array', () => {
 		const body = JSON.stringify([
-			{ jsonrpc: '2.0', id: 1, method: 'initialize' },
+			{ id: 1, jsonrpc: '2.0', method: 'initialize' },
 			{ jsonrpc: '2.0', method: 'notifications/initialized' }
 		]);
+
 		expect(extractJsonRpcMethods(body)).toEqual(['initialize', 'notifications/initialized']);
 	});
 
 	it('extracts method from a single JSON-RPC message', () => {
-		const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+		const body = JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
+
 		expect(extractJsonRpcMethods(body)).toEqual(['tools/list']);
 	});
 

@@ -111,6 +111,7 @@ uint32_t backend_device_get_props(apir_encoder * enc, apir_decoder * dec, virgl_
     apir_encode_bool_t(enc, &props.caps.host_buffer);
     apir_encode_bool_t(enc, &props.caps.buffer_from_host_ptr);
     apir_encode_bool_t(enc, &props.caps.events);
+    apir_encode_bool_t(enc, &props.caps.mmap_support);
 
     return 0;
 }

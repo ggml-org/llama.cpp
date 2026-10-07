@@ -262,7 +262,11 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32(
     // 2 outputs per fiber in wave 0
     if (groupId == 0) {
         dst = (global float*)((global char*)dst + offsetd);
-        vstore2(totalSum, 0, &(dst[gid * 2]));
+        // Guard the two output rows against the padded x-grid tail overrunning dst.
+        // The current shape specializations are all ne01 % 128 == 0 (no padding), so
+        // this is a no-op / byte-identical today; keep it in lockstep with the base kernel.
+        if (gid * 2 + 0 < ne01) dst[gid * 2 + 0] = totalSum.s0;
+        if (gid * 2 + 1 < ne01) dst[gid * 2 + 1] = totalSum.s1;
     }
 
 }

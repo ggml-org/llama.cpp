@@ -11,9 +11,9 @@ void llama_model_falcon_h1::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-    std::fill(hparams.recurrent_layer_arr.begin(), hparams.recurrent_layer_arr.end(), true);
+    std::fill(hparams.is_recr_impl.begin(), hparams.is_recr_impl.end(), true);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 36:
             type = LLM_TYPE_0_5B; break;
         case 24:

@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("WavTokenizerDec")
+@ModelBase.example("novateur/WavTokenizer-large-speech-75token")
 class WavTokenizerDecModel(TextModel):
     model_arch = gguf.MODEL_ARCH.WAVTOKENIZER_DEC
 

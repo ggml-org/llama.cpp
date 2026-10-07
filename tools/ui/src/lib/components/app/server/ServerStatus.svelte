@@ -2,8 +2,8 @@
 	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { serverProps, serverLoading, serverError } from '$lib/stores/server.svelte';
-	import { singleModelName } from '$lib/stores/models.svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -12,14 +12,16 @@
 
 	let { class: className = '', showActions = false }: Props = $props();
 
-	let error = $derived(serverError());
-	let loading = $derived(serverLoading());
-	let model = $derived(singleModelName());
-	let serverData = $derived(serverProps());
+	let error = $derived(serverStore.error);
+	let loading = $derived(serverStore.loading);
+	let model = $derived(modelsStore.singleModelName);
+	let serverData = $derived(serverStore.props);
 
 	function getStatusColor() {
 		if (loading) return 'bg-yellow-500';
+
 		if (error) return 'bg-red-500';
+
 		if (serverData) return 'bg-green-500';
 
 		return 'bg-gray-500';
@@ -27,7 +29,9 @@
 
 	function getStatusText() {
 		if (loading) return 'Connecting...';
+
 		if (error) return 'Connection Error';
+
 		if (serverData) return 'Connected';
 
 		return 'Unknown';
@@ -42,22 +46,22 @@
 	</div>
 
 	{#if serverData && !error}
-		<Badge variant="outline" class="text-xs">
+		<Badge class="text-xs" variant="outline">
 			<Server class="mr-1 h-3 w-3" />
 
 			{model || 'Unknown Model'}
 		</Badge>
 
 		{#if serverData?.default_generation_settings?.n_ctx}
-			<Badge variant="secondary" class="text-xs">
+			<Badge class="text-xs" variant="secondary">
 				ctx: {serverData.default_generation_settings.n_ctx.toLocaleString()}
 			</Badge>
 		{/if}
 	{/if}
 
 	{#if showActions && error}
-		<Button variant="outline" size="sm" class="text-destructive">
-			<AlertTriangle class="h-4 w-4" />
+		<Button class="text-destructive" size="sm" variant="outline">
+			<AlertTriangle class={ICON_CLASS_DEFAULT} />
 
 			{error}
 		</Button>

@@ -17,9 +17,13 @@ on:
       'scripts/sync_vendor.py'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   check-vendor:
-    runs-on: [self-hosted, fast]
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout

@@ -10,7 +10,7 @@
 # ggml-org/ggml-rpc         : rgerganov
 # ggml-org/ggml-sycl        : arthw
 # ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
-# ggml-org/ggml-webgpu      : reeselevine
+# ggml-org/ggml-webgpu      : reeselevine, yomaytk
 # ggml-org/ggml-zdnn        : taronaeo
 # ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
 # ggml-org/llama-mtmd       : ngxson
@@ -57,12 +57,13 @@
 /ggml/src/ggml-cann/                    @ggml-org/ggml-cann
 /ggml/src/ggml-common.h                 @ggerganov
 /ggml/src/ggml-cpu/                     @ggerganov
+/ggml/src/ggml-cpu/tiled/               @jbooth @bartowski1182
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
-/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
 /ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
 /ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-et/                      @marty1885
 /ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggml-org/ggml-metal
 /ggml/src/ggml-opencl/                  @ggml-org/ggml-opencl
@@ -76,7 +77,7 @@
 /ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
 /ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
-/ggml/src/ggml-zendnn/                  @avinashcpandey @Jiten1parmar @z-vishal
+/ggml/src/ggml-zendnn/                  @avinashcpandey @Jiten1parmar
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
@@ -96,7 +97,6 @@
 /src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
-/tests/test-llama-archs.cpp             @JohannesGaessler
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
@@ -119,3 +119,4 @@
 /SECURITY.md                            @ggerganov
 /build-xcframework.sh                   @danbev
 requirements*.txt                       @CISC
+/skills                                 @ngxson

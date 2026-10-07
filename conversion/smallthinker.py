@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("SmallThinkerForCausalLM")
+@ModelBase.example("PowerInfer/SmallThinker-4BA0.6B-Instruct")
 class SmallThinkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SMALLTHINKER
 

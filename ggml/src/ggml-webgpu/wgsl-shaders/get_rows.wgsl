@@ -27,6 +27,12 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 }
 #endif
 
+#ifdef BF16
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[dst_base + offset] = bf16_word_to_f32(src[(src_base + offset) / 2u], (src_base + offset) & 1u);
+}
+#endif
+
 #ifdef Q1_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_byte_base = (src_base + offset) * 18;
@@ -667,6 +673,27 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
             let dst_offset = dst_base + offset * 32 + j * 4 + k;
             dst[dst_offset] = q_lo;
             dst[dst_offset + 16u] = q_hi;
+        }
+    }
+}
+#endif
+
+#ifdef NVFP4
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    let block_byte_base = (src_base + offset) * 36;
+    let d_word = load_u32_at_src(block_byte_base);
+    for (var sub: u32 = 0u; sub < 4; sub++) {
+        let d = ue4m3_to_fp32(get_byte(d_word, sub)) * 0.5;
+        for (var j: u32 = 0u; j < 2; j++) {
+            let q_packed = load_u32_at_src(block_byte_base + 4 + sub * 8 + j * 4);
+            for (var k: u32 = 0; k < 4; k++) {
+                let q_byte = get_byte(q_packed, k);
+                let q_lo = f32(kvalues_mxfp4[q_byte & 0xFu]) * d;
+                let q_hi = f32(kvalues_mxfp4[(q_byte >> 4) & 0xF]) * d;
+                let dst_offset = dst_base + offset * 64 + sub * 16 + j * 4 + k;
+                dst[dst_offset] = q_lo;
+                dst[dst_offset + 8u] = q_hi;
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
+import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '$lib/constants';
+import type { Break, Content, Paragraph, PhrasingContent, Root, Text } from 'mdast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
-import type { Break, Content, Paragraph, PhrasingContent, Root, Text } from 'mdast';
-import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '$lib/constants';
 
 /**
  * remark plugin that rewrites raw HTML nodes into plain-text equivalents.
@@ -23,12 +23,14 @@ function preserveIndent(line: string): string {
 		if (char === ' ') {
 			output += NBSP;
 			index += 1;
+
 			continue;
 		}
 
 		if (char === '\t') {
 			output += TAB_AS_SPACES;
 			index += 1;
+
 			continue;
 		}
 
@@ -71,12 +73,12 @@ export const remarkLiteralHtml: Plugin<[], Root> = () => {
 
 			if (!PHRASE_PARENTS.has(parent.type as string)) {
 				const paragraph: Paragraph = {
-					type: 'paragraph',
 					children: replacement as Paragraph['children'],
-					data: { literalHtml: true }
+					data: { literalHtml: true },
+					type: 'paragraph'
 				};
-
 				const siblings = parent.children as unknown as Content[];
+
 				siblings.splice(index, 1, paragraph as unknown as Content);
 
 				if (index > 0) {

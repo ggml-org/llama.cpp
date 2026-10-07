@@ -11,7 +11,11 @@ enable f16;
 #define DST_TYPE vec4<DST_INNER_TYPE>
 #define VEC_SIZE 4
 #else
+#ifdef TYPE_F16
+#define SRC_TYPE f16
+#else
 #define SRC_TYPE f32
+#endif
 #define DST_TYPE DST_INNER_TYPE
 #define VEC_SIZE 1
 #endif

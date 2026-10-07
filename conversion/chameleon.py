@@ -12,6 +12,8 @@ from .llama import LlamaModel
 
 @ModelBase.register("ChameleonForConditionalGeneration")
 @ModelBase.register("ChameleonForCausalLM")  # obsolete
+# [TAG_HF_EXAMPLE_GATED] facebook/chameleon-7b is gated
+# [TAG_HF_EXAMPLE_MISSING]
 class ChameleonModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHAMELEON
 

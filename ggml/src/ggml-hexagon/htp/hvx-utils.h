@@ -8,6 +8,7 @@
 #include "hvx-repl.h"
 #include "hvx-scale.h"
 #include "hvx-exp.h"
+#include "hvx-erf.h"
 #include "hvx-inverse.h"
 #include "hvx-reduce.h"
 #include "hvx-sigmoid.h"
@@ -17,5 +18,8 @@
 #include "hvx-floor.h"
 #include "hvx-sin-cos.h"
 #include "hvx-base.h"
+#include "hvx-pow.h"
+#include "hvx-log.h"
+#include "hvx-norm.h"
 
 #endif /* HVX_UTILS_H */

@@ -1,6 +1,6 @@
-import { onMount } from 'svelte';
 import { afterNavigate, beforeNavigate } from '$app/navigation';
-import { draftMessagesStore } from '$lib/stores/draft-messages.svelte';
+import { draftMessagesStore } from '$lib/stores';
+import { onMount } from 'svelte';
 
 interface UseDraftMessagesOptions {
 	getChatId: () => string | undefined;
@@ -24,6 +24,7 @@ export function useDraftMessages(options: UseDraftMessagesOptions) {
 
 	beforeNavigate(() => {
 		const chatId = options.getChatId();
+
 		draftMessagesStore.saveDraftMessage(chatId, options.getMessage(), options.getFiles());
 	});
 
@@ -31,6 +32,7 @@ export function useDraftMessages(options: UseDraftMessagesOptions) {
 		if (navigation?.from != null) {
 			const chatId = options.getChatId();
 			const draft = draftMessagesStore.getDraftMessage(chatId);
+
 			options.setMessage(draft.message);
 			options.setFiles(draft.files);
 		}
@@ -38,6 +40,7 @@ export function useDraftMessages(options: UseDraftMessagesOptions) {
 
 	function clearDraft() {
 		const chatId = options.getChatId();
+
 		draftMessagesStore.clearDraftMessage(chatId);
 	}
 

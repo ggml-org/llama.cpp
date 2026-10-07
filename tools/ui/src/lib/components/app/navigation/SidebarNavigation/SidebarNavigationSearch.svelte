@@ -9,11 +9,13 @@
 	}
 
 	let {
-		value = $bindable(''),
-		placeholder = 'Search conversations...',
+		class: className,
 		onInput,
-		class: className
+		placeholder = 'Search conversations...',
+		value = $bindable('')
 	}: Props = $props();
 </script>
 
-<SearchInput bind:value {placeholder} {onInput} class="mb-4 {className}" />
+<div class="mb-4 px-2 {className}">
+	<SearchInput bind:value {onInput} {placeholder} />
+</div>

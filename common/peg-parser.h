@@ -1,10 +1,11 @@
 #pragma once
 
-#include <nlohmann/json_fwd.hpp>
+#include "json-schema.h"
+#include "json.h"
 
 #include <memory>
+#include <set>
 #include <unordered_map>
-#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -71,6 +72,12 @@ enum common_peg_parse_result_type {
 
 const char * common_peg_parse_result_type_name(common_peg_parse_result_type type);
 
+// A run of input bytes that does not decode as UTF-8
+struct common_peg_invalid_utf8 {
+    size_t pos;
+    size_t len;
+};
+
 struct common_peg_ast_node {
     common_peg_ast_id id;
     std::string rule;
@@ -81,6 +88,12 @@ struct common_peg_ast_node {
     std::vector<common_peg_ast_id> children;
 
     bool is_partial = false;
+
+    // Invalid UTF-8 inside the node, in ascending order
+    std::vector<common_peg_invalid_utf8> invalid_utf8;
+
+    // Returns the text with every invalid run replaced by U+FFFD
+    std::string sanitized_text() const;
 };
 
 struct common_peg_parse_result;
@@ -97,10 +110,11 @@ class common_peg_ast_arena {
         size_t end,
         std::string_view text,
         std::vector<common_peg_ast_id> children,
-        bool is_partial = false
+        bool is_partial = false,
+        std::vector<common_peg_invalid_utf8> invalid_utf8 = {}
     ) {
         common_peg_ast_id id = nodes_.size();
-        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial});
+        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial, std::move(invalid_utf8)});
         return id;
     }
 
@@ -126,6 +140,9 @@ struct common_peg_parse_result {
 
     std::vector<common_peg_ast_id> nodes;
 
+    // Invalid UTF-8 consumed by this result, carried up to the enclosing AST nodes
+    std::vector<common_peg_invalid_utf8> invalid_utf8;
+
     common_peg_parse_result() = default;
 
     common_peg_parse_result(common_peg_parse_result_type type, size_t start)
@@ -134,8 +151,8 @@ struct common_peg_parse_result {
     common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes)
-        : type(type), start(start), end(end), nodes(std::move(nodes)) {}
+    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes, std::vector<common_peg_invalid_utf8> invalid_utf8 = {})
+        : type(type), start(start), end(end), nodes(std::move(nodes)), invalid_utf8(std::move(invalid_utf8)) {}
 
     bool fail() const { return type == COMMON_PEG_PARSE_RESULT_FAIL; }
     bool need_more_input() const { return type == COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT; }
@@ -245,7 +262,8 @@ struct common_peg_until_parser {
 struct common_peg_schema_parser {
     common_peg_parser_id child;
     std::string name;
-    std::shared_ptr<nlohmann::ordered_json> schema;
+    common_chat_schema_document_ptr doc;  // owns node
+    const common_chat_schema * node = nullptr;
 
     // Indicates if the GBNF should accept a raw string that matches the schema.
     bool raw;
@@ -275,6 +293,11 @@ struct common_peg_gbnf_parser {
     std::string grammar;
 };
 
+struct common_peg_ac_parser {
+    common_peg_parser_id child;
+    std::vector<std::string> delimiters;
+};
+
 // Variant holding all parser types
 using common_peg_parser_variant = std::variant<
     common_peg_epsilon_parser,
@@ -296,7 +319,8 @@ using common_peg_parser_variant = std::variant<
     common_peg_ref_parser,
     common_peg_atomic_parser,
     common_peg_tag_parser,
-    common_peg_gbnf_parser
+    common_peg_gbnf_parser,
+    common_peg_ac_parser
 >;
 
 class common_peg_arena {
@@ -326,8 +350,8 @@ class common_peg_arena {
 
     std::string dump(common_peg_parser_id id) const;
 
-    nlohmann::json to_json() const;
-    static common_peg_arena from_json(const nlohmann::json & j);
+    common_json to_json() const;
+    static common_peg_arena from_json(const common_json & j);
 
     std::string save() const;
     void load(const std::string & data);
@@ -335,7 +359,7 @@ class common_peg_arena {
     friend class common_peg_parser_builder;
 
   private:
-    std::string dump_impl(common_peg_parser_id id, std::unordered_set<common_peg_parser_id> & visited) const;
+    std::string dump_impl(common_peg_parser_id id, std::set<common_peg_parser_id> & visited) const;
 
     common_peg_parser_id add_parser(common_peg_parser_variant parser);
     void add_rule(const std::string & name, common_peg_parser_id id);
@@ -422,6 +446,7 @@ class common_peg_parser_builder {
     common_peg_parser space() { return add(common_peg_space_parser{}); }
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
+    // Invalid UTF-8 is consumed and recorded on the AST nodes.
     //   S -> (!delim .)*
     common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
 
@@ -482,9 +507,11 @@ class common_peg_parser_builder {
     // A marker, i.e. text delimited by a pair of <> or []
     common_peg_parser marker();
 
-    // Wraps a parser with JSON schema metadata for grammar generation.
-    // Used internally to convert JSON schemas to GBNF grammar rules.
-    common_peg_parser schema(const common_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);
+    // Wraps a parser with the schema its GBNF is generated from, a node of the document that owns it
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw = false);
+
+    // Parses the JSON schema into a document of its own
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw = false);
 
     // Creates a named rule, stores it in the grammar, and returns a ref.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
@@ -513,6 +540,13 @@ class common_peg_parser_builder {
     // Wraps a child parser but emits a custom GBNF grammar string instead of
     // the child's grammar. Parsing delegates entirely to the child.
     common_peg_parser gbnf(const common_peg_parser & p, const std::string & grammar) { return add(common_peg_gbnf_parser{p, grammar}); }
+
+    // Wraps a child parser but emits a GBNF grammar built from the Aho-Corasick
+    // automaton of `delimiters`, matching everything up to and including the
+    // first delimiter. Parsing delegates entirely to the child, which is
+    // responsible for consuming the delimiter (e.g. until(D) + literal(D)).
+    common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters);
+    common_peg_parser ac(const common_peg_parser & p, const std::string & delimiter) { return ac(p, std::vector<std::string>{delimiter}); }
 
     void set_root(const common_peg_parser & p);
 

@@ -15,6 +15,10 @@ struct socket_t {
 
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
+    // Must be called at every message boundary: the RDMA transport coalesces
+    // writes into fixed-size frames and posts the trailing partial frame only
+    // here. No-op on TCP.
+    bool flush();
 
     socket_ptr accept();
 

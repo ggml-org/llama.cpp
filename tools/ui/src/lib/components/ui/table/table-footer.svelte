@@ -3,17 +3,17 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
-		ref = $bindable(null),
-		class: className,
 		children,
+		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLTableSectionElement>> = $props();
 </script>
 
 <tfoot
 	bind:this={ref}
-	data-slot="table-footer"
 	class={cn('border-t bg-muted/50 font-medium [&>tr]:last:border-b-0', className)}
+	data-slot="table-footer"
 	{...restProps}
 >
 	{@render children?.()}

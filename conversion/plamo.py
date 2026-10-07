@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("PlamoForCausalLM")
+@ModelBase.example("pfnet/plamo-13b")
 class PlamoModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO
 
@@ -58,6 +59,7 @@ class PlamoModel(TextModel):
 
 
 @ModelBase.register("Plamo2ForCausalLM", "PLaMo2ForCausalLM")
+@ModelBase.example("pfnet/plamo-2-1b")
 class Plamo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO2
 
@@ -147,8 +149,25 @@ class Plamo2Model(TextModel):
 
 
 @ModelBase.register("Plamo3ForCausalLM", "PLaMo3ForCausalLM")
+# [TAG_HF_EXAMPLE_GATED] pfnet/plamo-3-nict-2b-base is gated
+@ModelBase.example("midorin-Linux/plamo-3-12b-self-merged-base")
 class Plamo3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # PLaMo-3 builds rope_parameters from flat config keys at runtime; mirror the YaRN settings for GGUF.
+        rope_scaling_factor = self.hparams.get("rope_scaling_factor", 1)
+        if rope_scaling_factor != 1 and "rope_type" not in self.rope_parameters:
+            self.rope_parameters.update({
+                "rope_type": "yarn",
+                "factor": float(rope_scaling_factor),
+                "original_max_position_embeddings": int(self.hparams["initial_context_length"]),
+                "beta_fast": 32.0,
+                "beta_slow": 1.0,
+                "truncate": False,
+            })
 
     def set_vocab(self):
         self._set_vocab_plamo()

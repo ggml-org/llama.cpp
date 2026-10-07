@@ -13,9 +13,29 @@ export enum ServerRole {
  * Used as the `value` field in the status object from /models endpoint
  */
 export enum ServerModelStatus {
-	UNLOADED = 'unloaded',
-	LOADING = 'loading',
+	DOWNLOAD_FAILED = 'download_failed',
+	DOWNLOAD_FINISHED = 'download_finished',
+	DOWNLOADED = 'downloaded',
+	DOWNLOADING = 'downloading',
+	FAILED = 'failed',
 	LOADED = 'loaded',
+	LOADING = 'loading',
 	SLEEPING = 'sleeping',
-	FAILED = 'failed'
+	UNLOADED = 'unloaded'
+}
+
+/**
+ * /models/sse event type enum - discriminates the records broadcast on the
+ * model status feed in ROUTER mode. Matches the event names emitted by
+ * tools/server/server-models.cpp from the C++ server.
+ */
+export enum ServerModelsSseEventType {
+	DOWNLOAD_FAILED = 'download_failed',
+	DOWNLOAD_FINISHED = 'download_finished',
+	DOWNLOAD_PROGRESS = 'download_progress',
+	MODEL_REMOVE = 'model_remove',
+	MODEL_STATUS = 'model_status',
+	MODELS_RELOAD = 'models_reload',
+	STATUS_CHANGE = 'status_change',
+	STATUS_UPDATE = 'status_update'
 }

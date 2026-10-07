@@ -1,5 +1,11 @@
-import type { ContentPartType, FileTypeAudio, ServerModelStatus, ServerRole } from '$lib/enums';
 import type { ChatMessagePromptProgress, ChatRole } from './chat';
+import type {
+	ContentPartType,
+	FileTypeAudio,
+	ServerModelsSseEventType,
+	ServerModelStatus,
+	ServerRole
+} from '$lib/enums';
 
 export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
 
@@ -92,8 +98,86 @@ export interface ApiModelDataEntry {
 	aliases?: string[];
 	/** Informational tags for this model */
 	tags?: string[];
+	/** Modality capabilities, reported by the router for every model regardless of load state */
+	architecture?: ApiModelArchitecture;
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
+}
+
+/**
+ * Modality capabilities of a model, as advertised by the ROUTER /models endpoint.
+ * Read from the model manifest, so it is available before the model is loaded.
+ */
+export interface ApiModelArchitecture {
+	/** Accepted input modalities, always contains "text" */
+	input_modalities: string[];
+}
+
+/**
+ * Load stage reported by the /models/sse feed, in load order.
+ */
+export type ApiModelLoadStage = 'text_model' | 'spec_model' | 'mmproj_model';
+
+/**
+ * Load progress snapshot: the full ordered stage plan, the active stage,
+ * and its fractional value (0.0 -> 1.0).
+ */
+export interface ApiModelsSseProgress {
+	stages: ApiModelLoadStage[];
+	current: ApiModelLoadStage;
+	value: number;
+}
+
+/**
+ * Status payload carried by a /models/sse envelope.
+ * exit_code appears on unload.
+ */
+export interface ApiModelsSseData {
+	status: ServerModelStatus;
+	progress?: ApiModelsSseProgress;
+	exit_code?: number;
+}
+
+/**
+ * Per-file size snapshot reported by the download_progress SSE envelope.
+ * Keys are file URLs, values are byte counters (done <= total).
+ */
+export interface ApiModelsSseDownloadProgressData {
+	progress: Record<string, { done: number; total: number }>;
+}
+
+/**
+ * Event kind multiplexed on the /models/sse feed.
+ * Only the status_* events carry a status payload, models_reload signals a
+ * full list refresh, model_remove drops a row, download_* drive download UI.
+ */
+/**
+ * One /models/sse record. event discriminates the kind, model names the
+ * target instance, data carries the status payload when present.
+ */
+export interface ApiModelsSseEvent {
+	model: string;
+	event: ServerModelsSseEventType;
+	data?: ApiModelsSseData | ApiModelsSseDownloadProgressData;
+}
+
+/**
+ * Request body for POST /models (model download).
+ * `model` is a HuggingFace repo id, optionally suffixed with `:<tag>` to
+ * pin a quantization or sidecar file (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`).
+ */
+export interface ApiModelsDownloadRequest {
+	model: string;
+}
+
+/**
+ * Response from POST /models and DELETE /models. The POST endpoint returns
+ * immediately; the download itself runs in the background and emits events
+ * on /models/sse.
+ */
+export interface ApiModelsDownloadResponse {
+	success: boolean;
+	error?: { code: number; message: string; type: string };
 }
 
 export interface ApiModelDetails {
@@ -115,12 +199,6 @@ export interface ApiModelDetails {
 		parameter_size?: string;
 		quantization_level?: string;
 	};
-}
-
-export interface ApiModelListResponse {
-	object: string;
-	data: ApiModelDataEntry[];
-	models?: ApiModelDetails[];
 }
 
 export interface ApiLlamaCppServerProps {
@@ -219,6 +297,7 @@ export interface ApiChatCompletionRequest {
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	sse_ping_interval?: number;
 	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
@@ -271,6 +350,7 @@ export interface ApiChatCompletionToolCall extends ApiChatCompletionToolCallDelt
 }
 
 export interface ApiChatCompletionStreamChunk {
+	id?: string;
 	object?: string;
 	model?: string;
 	choices: Array<{
@@ -389,79 +469,47 @@ export interface ApiProcessingState {
 }
 
 /**
- * Router model metadata - extended from ApiModelDataEntry with additional router-specific fields
- * @deprecated Use ApiModelDataEntry instead - the /models endpoint returns this structure directly
+ * Response from POST /models/load
  */
-export interface ApiRouterModelMeta {
-	/** Model identifier (e.g., "ggml-org/Qwen2.5-Omni-7B-GGUF:latest") */
-	name: string;
-	/** Path to model file or manifest */
-	path: string;
-	/** Optional path to multimodal projector */
-	path_mmproj?: string;
-	/** Whether model is in HuggingFace cache */
-	in_cache: boolean;
-	/** Port where model instance is running (0 if not loaded) */
-	port?: number;
-	/** Current status of the model */
-	status: ApiModelStatus;
-	/** Error message if status is FAILED */
-	error?: string;
-}
-
-/**
- * Request to load a model
- */
-export interface ApiRouterModelsLoadRequest {
-	model: string;
-}
-
-/**
- * Response from loading a model
- */
-export interface ApiRouterModelsLoadResponse {
+export interface ApiModelsLoadResponse {
 	success: boolean;
 	error?: string;
 }
 
 /**
- * Request to check model status
+ * Response with list of all models from /v1/models and /models endpoints
+ * (same structure regardless of server mode)
  */
-export interface ApiRouterModelsStatusRequest {
-	model: string;
-}
-
-/**
- * Response with model status
- */
-export interface ApiRouterModelsStatusResponse {
-	model: string;
-	status: ModelStatus;
-	port?: number;
-	error?: string;
-}
-
-/**
- * Response with list of all models from /models endpoint
- * Note: This is the same as ApiModelListResponse - the endpoint returns the same structure
- * regardless of server mode (MODEL or ROUTER)
- */
-export interface ApiRouterModelsListResponse {
+export interface ApiModelsListResponse {
 	object: string;
 	data: ApiModelDataEntry[];
+	/**
+	 * Optional details aligned by index with `data`: `models[i]` describes
+	 * `data[i]`. The server fills both arrays in one pass, so the pairing only
+	 * holds while neither array is filtered independently.
+	 */
+	models?: ApiModelDetails[];
 }
 
 /**
- * Request to unload a model
+ * Response from POST /models/unload
  */
-export interface ApiRouterModelsUnloadRequest {
-	model: string;
-}
-
-/**
- * Response from unloading a model
- */
-export interface ApiRouterModelsUnloadResponse {
+export interface ApiModelsUnloadResponse {
 	success: boolean;
 	error?: string;
+}
+
+/**
+ * Entry returned by POST /v1/streams/lookup. The client passes the conv ids it owns in the body
+ * and the server returns one entry per matching live or recently completed background streaming
+ * session, keyed by conversation_id. The WebUI uses this at mount and on visibilitychange to
+ * populate sidebar spinners and to reattach to an ongoing inference for the active conversation.
+ * The server never lists ids the client did not ask about, so foreign random UUIDs stay private.
+ */
+export interface ApiStreamSession {
+	conversation_id: string;
+	is_done: boolean;
+	total_bytes: number;
+	started_at: number;
+	completed_at: number;
 }

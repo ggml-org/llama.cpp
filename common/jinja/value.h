@@ -86,7 +86,7 @@ struct context; // forward declaration
 // marking input can be useful for tracking data provenance
 // and preventing template injection attacks
 //
-// Note: T_JSON can be nlohmann::ordered_json
+// Note: T_JSON can be common_json
 template<typename T_JSON>
 void global_from_json(context & ctx, const T_JSON & json_obj, bool mark_input);
 
@@ -432,6 +432,12 @@ struct value_array_t : public value_t {
             throw std::runtime_error("Index " + std::to_string(index) + " out of bounds for array of size " + std::to_string(val_arr.size()));
         }
         return val_arr[index];
+    }
+    virtual value & at(const value & index, value & default_val) override {
+        if (!is_val<value_int>(index) && !is_val<value_bool>(index)) {
+            return default_val;
+        }
+        return at(index->as_int(), default_val);
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {

@@ -10,6 +10,7 @@ static void ssm_scan_f32_group(
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
         const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok,
+        const int64_t K,
         const sycl::nd_item<2> & item) {
 
     const int lane     = item.get_local_id(1) % WARP_SIZE;
@@ -64,6 +65,15 @@ static void ssm_scan_f32_group(
         if (lane == 0) {
             y_warp[i * stride_y] = state_sum;
         }
+
+        const int64_t slot = n_tok - 1 - i;
+        if (K > 1 && slot > 0 && slot < K) {
+            float * s_snapshot_warp = (float *) ((char *) dst + s_off + (slot * item.get_group_range(0) + seq_idx) * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
+#pragma unroll
+            for (int j = 0; j < c_factor; j++) {
+                s_snapshot_warp[WARP_SIZE * j + lane] = state[j];
+            }
+        }
     }
 
 #pragma unroll
@@ -79,6 +89,7 @@ static void ssm_scan_f32_sycl(
         const int src2_nb2, const int src3_nb1, const int src4_nb2, const int src4_nb3, const int src5_nb2,
         const int src5_nb3, const int64_t s_off, const int64_t d_state, const int64_t head_dim,
         const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq,
+        const int64_t K,
         dpct::queue_ptr stream) {
 
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
@@ -94,7 +105,7 @@ static void ssm_scan_f32_sycl(
                 ssm_scan_f32_group<128 / WARP_SIZE, 128>(
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, item);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K, item);
             });
     } else if (d_state == 256) {
         constexpr int threads   = 256;
@@ -107,7 +118,7 @@ static void ssm_scan_f32_sycl(
                 ssm_scan_f32_group<256 / WARP_SIZE, 256>(
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, item);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K, item);
             });
     } else {
         GGML_ABORT("ssm_scan: unsupported d_state (must be 128 or 256)");
@@ -133,9 +144,12 @@ inline void ggml_sycl_op_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int64_t ng  = src4->ne[1];
     const int64_t n_t = src1->ne[2];
     const int64_t n_s = src1->ne[3];
+    const int64_t K   = ggml_get_op_params_i32(dst, 0);
     const int64_t s_off = ggml_nelements(src1) * sizeof(float);
 
-    GGML_ASSERT(ggml_nelements(src1) + nc * nr * nh * n_s == ggml_nelements(dst));
+    GGML_ASSERT(K >= 1);
+    GGML_ASSERT(ggml_nelements(src1) + K * nc * nr * nh * n_s == ggml_nelements(dst));
+    GGML_ASSERT(src3->ne[0] == 1 || K == 1);
 
     dpct::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
@@ -147,7 +161,7 @@ inline void ggml_sycl_op_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor *
         static_cast<const int32_t *>(src6->data), static_cast<float *>(dst->data),
         src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
         src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
-        s_off, nc, nr, nh, ng, n_t, n_s, stream);
+        s_off, nc, nr, nh, ng, n_t, n_s, K, stream);
 }
 
 void ggml_sycl_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {

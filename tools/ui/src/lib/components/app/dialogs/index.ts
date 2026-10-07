@@ -19,6 +19,23 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
+ * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ *
+ * Shows the same MCP server list as the `/mcp-servers` route inside a modal
+ * dialog.
+ */
+export { default as DialogMcpServers } from './DialogMcpServers.svelte';
+
+/**
+ * **DialogSettingsChat** - Chat settings shown in a modal dialog
+ *
+ * Wraps the full SettingsChat layout (sidebar, mobile header, fields, footer)
+ * inside a ShadCN Dialog instead of a dedicated route. Section switching is
+ * handled in-app via `onSectionChange` rather than URL navigation.
+ */
+export { default as DialogSettingsChat } from './DialogSettingsChat.svelte';
+
+/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude
@@ -92,33 +109,47 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**
- * **DialogConversationTitleUpdate** - Conversation rename confirmation
+ * **DialogConfirmDownload** - Confirm a destructive download action
  *
- * Confirmation dialog shown when editing the first user message in a conversation.
- * Asks user whether to update the conversation title to match the new message content.
+ * Shared confirmation for stopping/cancelling an in-flight download or deleting
+ * a downloaded model, used by the discover quant chips and the model selector's
+ * download rows so both word the action identically. Owns the copy and the
+ * default store removal; render one instance per surface keyed by the acted-on
+ * repo:tag.
+ */
+export { default as DialogConfirmDownload } from './DialogConfirmDownload.svelte';
+
+/**
+ * **DialogConversationRename** - Rename a conversation
+ *
+ * Modal dialog for renaming a conversation. Replaces the prior
+ * `window.prompt()`-based flow with a styled, accessible AlertDialog
+ * containing an editable input. Triggered from the sidebar conversation
+ * item's "Edit" action.
  *
  * **Architecture:**
  * - Uses ShadCN AlertDialog
- * - Shows current vs proposed title comparison
- * - Triggered by ChatMessages when first message is edited
+ * - Bindable `value` keeps the new title in sync with parent state
+ * - Submit is gated on a non-empty trimmed value that differs from the current title
  *
  * **Features:**
- * - Side-by-side display of current and new title
- * - "Keep Current Title" and "Update Title" action buttons
- * - Styled title previews in muted background boxes
+ * - Autofocus on open with text selected for quick overwrite
+ * - Disabled Save button when value is empty or unchanged
+ * - Trim-on-submit normalization
+ * - Cancel via AlertDialog.Cancel or `onOpenChange(false)`
  *
  * @example
  * ```svelte
- * <DialogConversationTitleUpdate
- *   bind:open={showTitleUpdate}
+ * <DialogConversationRename
+ *   bind:open={showRename}
  *   currentTitle={conversation.name}
- *   newTitle={truncatedMessageContent}
- *   onConfirm={updateTitle}
- *   onCancel={() => showTitleUpdate = false}
+ *   bind:value={renameDraft}
+ *   onConfirm={handleRenameConfirm}
+ *   onCancel={() => (showRename = false)}
  * />
  * ```
  */
-export { default as DialogConversationTitleUpdate } from './DialogConversationTitleUpdate.svelte';
+export { default as DialogConversationRename } from './DialogConversationRename.svelte';
 
 /**
  *
@@ -474,3 +505,35 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
  * ```
  */
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
+
+/**
+ * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan
+ *
+ * Full-screen dialog for previewing Mermaid diagrams with interactive controls.
+ * Supports mouse wheel zoom, drag-to-pan, and toolbar buttons for zoom in/out,
+ * fit to view, and reset.
+ *
+ * **Architecture:**
+ * - Uses UI dialog components (`Dialog.Root`, `Dialog.Overlay`, `Dialog.Content`)
+ *   for consistent styling, animations, and accessibility
+ * - CSS transform-based zoom and pan (no external dependencies)
+ * - Pointer events for cross-device drag support (mouse + touch)
+ * - Wheel events for zoom-to-cursor functionality
+ *
+ * **Features:**
+ * - Scroll wheel zoom centered on cursor position
+ * - Click and drag to pan the diagram
+ * - Toolbar with zoom in, zoom out, fit to view, reset controls
+ * - Zoom percentage indicator
+ * - Keyboard accessible close button
+ * - Dark/light theme support
+ *
+ * @example
+ * ```svelte
+ * <DialogMermaidPreview
+ *   bind:open={showMermaidPreview}
+ *   svgHtml={mermaidSvgContent}
+ * />
+ * ```
+ */
+export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';

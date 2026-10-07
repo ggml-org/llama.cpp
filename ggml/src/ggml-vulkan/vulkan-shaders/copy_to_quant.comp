@@ -10,7 +10,7 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 32;
 #endif
 
-layout (binding = 0) readonly buffer S {float data_s[];};
+layout (binding = 0) readonly buffer S {S_TYPE data_s[];};
 
 #if defined(SET_ROWS)
 #include "generic_binary_head.glsl"
@@ -35,7 +35,7 @@ void quantize(uint dst_idx, uint src_idx)
     float vmax = 0.0;
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q4_0; ++j) {
-        const float v = data_s[src_idx + j];
+        const float v = float(data_s[src_idx + j]);
         if (amax < abs(v)) {
             amax = abs(v);
             vmax = v;
@@ -48,8 +48,8 @@ void quantize(uint dst_idx, uint src_idx)
     data_q[dst_idx].d = float16_t(d);
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q4_0/2; ++j) {
-        const float x0 = data_s[src_idx + 0              + j]*id;
-        const float x1 = data_s[src_idx + QUANT_K_Q4_0/2 + j]*id;
+        const float x0 = float(data_s[src_idx + 0              + j])*id;
+        const float x1 = float(data_s[src_idx + QUANT_K_Q4_0/2 + j])*id;
 
         const uint xi0 = min(15, int(x0 + 8.5));
         const uint xi1 = min(15, int(x1 + 8.5));
@@ -66,7 +66,7 @@ void quantize(uint dst_idx, uint src_idx)
     float vmax = -vmin;
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q4_1; ++j) {
-        const float v = data_s[src_idx + j];
+        const float v = float(data_s[src_idx + j]);
 
         if (v < vmin) vmin = v;
         if (v > vmax) vmax = v;
@@ -79,8 +79,8 @@ void quantize(uint dst_idx, uint src_idx)
     data_q[dst_idx].m = float16_t(vmin);
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q4_1/2; ++j) {
-        const float x0 = (data_s[src_idx + 0              + j] - vmin)*id;
-        const float x1 = (data_s[src_idx + QUANT_K_Q4_1/2 + j] - vmin)*id;
+        const float x0 = (float(data_s[src_idx + 0              + j]) - vmin)*id;
+        const float x1 = (float(data_s[src_idx + QUANT_K_Q4_1/2 + j]) - vmin)*id;
 
         const uint xi0 = min(15, int(x0 + 0.5));
         const uint xi1 = min(15, int(x1 + 0.5));
@@ -97,7 +97,7 @@ void quantize(uint dst_idx, uint src_idx)
     float vmax = 0.0;
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q5_0; ++j) {
-        const float v = data_s[src_idx + j];
+        const float v = float(data_s[src_idx + j]);
         if (amax < abs(v)) {
             amax = abs(v);
             vmax = v;
@@ -111,8 +111,8 @@ void quantize(uint dst_idx, uint src_idx)
 
     uint32_t qh = 0;
     [[unroll]] for (int j = 0; j < QUANT_K_Q5_0/2; ++j) {
-        const float x0 = data_s[src_idx + 0              + j]*id;
-        const float x1 = data_s[src_idx + QUANT_K_Q5_0/2 + j]*id;
+        const float x0 = float(data_s[src_idx + 0              + j])*id;
+        const float x1 = float(data_s[src_idx + QUANT_K_Q5_0/2 + j])*id;
 
         const uint xi0 = min(31, int(x0 + 16.5));
         const uint xi1 = min(31, int(x1 + 16.5));
@@ -129,11 +129,11 @@ void quantize(uint dst_idx, uint src_idx)
 #if defined(DATA_A_Q5_1)
 void quantize(uint dst_idx, uint src_idx)
 {
-    float min = data_s[src_idx + 0];
+    float min = float(data_s[src_idx + 0]);
     float max = min;
 
     [[unroll]] for (int j = 1; j < QUANT_K_Q5_1; ++j) {
-        const float v = data_s[src_idx + j];
+        const float v = float(data_s[src_idx + j]);
         min = v < min ? v : min;
         max = v > max ? v : max;
     }
@@ -146,8 +146,8 @@ void quantize(uint dst_idx, uint src_idx)
 
     uint32_t qh = 0;
     [[unroll]] for (int j = 0; j < QUANT_K_Q5_1/2; ++j) {
-        const float x0 = (data_s[src_idx + 0              + j] - min)*id;
-        const float x1 = (data_s[src_idx + QUANT_K_Q5_1/2 + j] - min)*id;
+        const float x0 = (float(data_s[src_idx + 0              + j]) - min)*id;
+        const float x1 = (float(data_s[src_idx + QUANT_K_Q5_1/2 + j]) - min)*id;
 
         const uint xi0 = uint(x0 + 0.5);
         const uint xi1 = uint(x1 + 0.5);
@@ -166,7 +166,7 @@ void quantize(uint dst_idx, uint src_idx)
     float amax = 0.0; // absolute max
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q8_0; j++) {
-        const float v = data_s[src_idx + j];
+        const float v = float(data_s[src_idx + j]);
         amax = max(amax, abs(v));
     }
 
@@ -176,7 +176,7 @@ void quantize(uint dst_idx, uint src_idx)
     data_q[dst_idx].d = float16_t(d);
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q8_0; ++j) {
-        const float x0 = data_s[src_idx + j]*id;
+        const float x0 = float(data_s[src_idx + j])*id;
 
         data_q[dst_idx].qs[j] = int8_t(round(x0));
     }
@@ -189,7 +189,7 @@ void quantize(uint dst_idx, uint src_idx)
     float sum_abs = 0.0;
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q1_0; j++) {
-        sum_abs += abs(data_s[src_idx + j]);
+        sum_abs += abs(float(data_s[src_idx + j]));
     }
 
     const float d = sum_abs / QUANT_K_Q1_0;
@@ -201,9 +201,39 @@ void quantize(uint dst_idx, uint src_idx)
     }
 
     [[unroll]] for (int j = 0; j < QUANT_K_Q1_0; ++j) {
-        if (data_s[src_idx + j] >= 0.0) {
+        if (float(data_s[src_idx + j]) >= 0.0) {
             data_q[dst_idx].qs[j / 8] |= uint8_t(1 << (j % 8));
         }
+    }
+}
+#endif
+
+#if defined(DATA_A_Q2_0)
+uint quantize_q2_0(float x)
+{
+    const int q = int(x >= 0.0f ? floor(x + 0.5f) : ceil(x - 0.5f)) + 1;
+    return uint(clamp(q, 0, 3));
+}
+
+void quantize(uint dst_idx, uint src_idx)
+{
+    float amax = 0.0f;
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q2_0; ++j) {
+        amax = max(amax, abs(float(data_s[src_idx + j])));
+    }
+
+    const float d = amax;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+
+    data_q[dst_idx].d = float16_t(d);
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q2_0 / 4; ++j) {
+        const uint q0 = quantize_q2_0(float(data_s[src_idx + 4*j    ]) * id);
+        const uint q1 = quantize_q2_0(float(data_s[src_idx + 4*j + 1]) * id);
+        const uint q2 = quantize_q2_0(float(data_s[src_idx + 4*j + 2]) * id);
+        const uint q3 = quantize_q2_0(float(data_s[src_idx + 4*j + 3]) * id);
+        data_q[dst_idx].qs[j] = uint8_t(q0 | (q1 << 2u) | (q2 << 4u) | (q3 << 6u));
     }
 }
 #endif
@@ -226,7 +256,7 @@ void quantize(uint dst_idx, uint src_idx)
     float vmax = 0.0;
 
     [[unroll]] for (int j = 0; j < QUANT_K_IQ4_NL; ++j) {
-        const float v = data_s[src_idx + j];
+        const float v = float(data_s[src_idx + j]);
         if (amax < abs(v)) {
             amax = abs(v);
             vmax = v;
@@ -238,16 +268,16 @@ void quantize(uint dst_idx, uint src_idx)
 
     float sumqx = 0, sumq2 = 0;
     [[unroll]] for (int j = 0; j < QUANT_K_IQ4_NL/2; ++j) {
-        const float x0 = data_s[src_idx + 0                + j]*id;
-        const float x1 = data_s[src_idx + QUANT_K_IQ4_NL/2 + j]*id;
+        const float x0 = float(data_s[src_idx + 0                + j])*id;
+        const float x1 = float(data_s[src_idx + QUANT_K_IQ4_NL/2 + j])*id;
         const uint xi0 = best_index(x0);
         const uint xi1 = best_index(x1);
         data_q[dst_idx].qs[j] = uint8_t(xi0 | (xi1 << 4));
         const float v0 = kvalues_iq4nl[xi0];
         const float v1 = kvalues_iq4nl[xi1];
-        const float w0 = data_s[src_idx + 0                + j]*data_s[src_idx + 0                + j];
-        const float w1 = data_s[src_idx + QUANT_K_IQ4_NL/2 + j]*data_s[src_idx + QUANT_K_IQ4_NL/2 + j];
-        sumqx += w0*v0*data_s[src_idx + j] + w1*v1*data_s[src_idx + QUANT_K_IQ4_NL/2 + j];
+        const float w0 = float(data_s[src_idx + 0                + j])*float(data_s[src_idx + 0                + j]);
+        const float w1 = float(data_s[src_idx + QUANT_K_IQ4_NL/2 + j])*float(data_s[src_idx + QUANT_K_IQ4_NL/2 + j]);
+        sumqx += w0*v0*float(data_s[src_idx + j]) + w1*v1*float(data_s[src_idx + QUANT_K_IQ4_NL/2 + j]);
         sumq2 += w0*v0*v0 + w1*v1*v1;
     }
 
@@ -259,14 +289,14 @@ void quantize(uint dst_idx, uint src_idx)
 #if defined(DATA_A_F32) || defined(DATA_A_F16)
 void quantize(uint dst_idx, uint src_idx)
 {
-    data_q[dst_idx] = A_TYPE(data_s[src_idx]);
+    data_q[dst_idx] = A_TYPE(float(data_s[src_idx]));
 }
 #endif
 
 #if defined(DATA_A_BF16)
 void quantize(uint dst_idx, uint src_idx)
 {
-    data_q[dst_idx] = A_TYPE(fp32_to_bf16(data_s[src_idx]));
+    data_q[dst_idx] = A_TYPE(fp32_to_bf16(float(data_s[src_idx])));
 }
 #endif
 

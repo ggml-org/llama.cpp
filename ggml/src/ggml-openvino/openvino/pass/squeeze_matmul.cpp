@@ -2,6 +2,7 @@
 
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/rt_info.hpp>
+#include <openvino/core/type.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/matmul.hpp>
 #include <openvino/op/squeeze.hpp>
@@ -26,7 +27,7 @@ SqueezeMatmul::SqueezeMatmul() {
     const auto callback = [=](ov::pass::pattern::Matcher & m) {
         const auto & pattern_map = m.get_pattern_value_map();
         auto matmul_node =
-            std::dynamic_pointer_cast<ov::op::v0::MatMul>(pattern_map.at(m_matmul).get_node_shared_ptr());
+            ov::as_type_ptr<ov::op::v0::MatMul>(pattern_map.at(m_matmul).get_node_shared_ptr());
         auto act = pattern_map.at(m_act);
         auto wei = pattern_map.at(m_wei);
         auto act_shape = act.get_partial_shape();
