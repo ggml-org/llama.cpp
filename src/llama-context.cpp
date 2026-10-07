@@ -9,6 +9,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-moe-store.h"
 #include "llama-ext.h"
 #include "llama-sampler.h"
 #include "llama.h"
@@ -275,6 +276,8 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
+    cparams.moe_cache_layers = params.moe_cache_layers;
+
     // initialized later
     cparams.pipeline_parallel = false;
     cparams.training = false;
@@ -462,6 +465,36 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
+        // --fit measures with no_alloc, so there is no real free memory to size auto from. --fit resolves auto itself
+        if (cparams.moe_cache_layers < 0 && model.hparams.no_alloc) {
+            cparams.moe_cache_layers = 0;
+        }
+
+        if (cparams.moe_cache_layers != 0) {
+            if (!cparams.op_offload) {
+                LLAMA_LOG_WARN("%s: --moe-cache-layers requires op offload, disabling MoE store\n", __func__);
+            } else {
+                for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+                    const auto type = ggml_backend_dev_type(ggml_backend_get_device(backend_ptrs[i]));
+                    if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                        // auto that --fit did not resolve (e.g. -ncmoe set): free memory now minus the --fit default margin
+                        size_t budget_bytes = 0;
+                        if (cparams.moe_cache_layers < 0) {
+                            size_t free = 0, total = 0;
+                            ggml_backend_dev_memory(ggml_backend_get_device(backend_ptrs[i]), &free, &total);
+                            const size_t margin = 1024ull*1024*1024;
+                            budget_bytes = free > margin ? free - margin : 0;
+                        }
+                        moe_store = std::make_unique<llama_moe_store>(model, backend_ptrs[i], backend_buft[i], cparams.moe_cache_layers, budget_bytes);
+                        break;
+                    }
+                }
+                if (!moe_store) {
+                    LLAMA_LOG_WARN("%s: --moe-cache-layers requested but no GPU backend is available, disabling MoE store\n", __func__);
+                }
+            }
+        }
+
         sched_reserve();
 
         if (!cparams.flash_attn) {
@@ -642,6 +675,9 @@ void llama_context::sched_reserve() {
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
     ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
+    if (moe_store) {
+        moe_store->attach(sched.get());
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -682,6 +718,9 @@ void llama_context::sched_reserve() {
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
                 ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
+                if (moe_store) {
+                    moe_store->attach(sched.get());
+                }
                 gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
             }
             if (!gf) {
@@ -2633,6 +2672,9 @@ ggml_status llama_context::graph_compute(
     }
 
     copy_experts.reset();
+    if (moe_store) {
+        moe_store->begin();
+    }
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
@@ -2679,6 +2721,11 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         }
 
         st.ids = ids;
+    }
+
+    const auto & moe_store = static_cast<llama_context *>(user_data)->moe_store;
+    if (moe_store && moe_store->copy_experts(backend, src, dst, st.used)) {
+        return true;
     }
 
     // group consecutive experts and copy them together
@@ -3562,6 +3609,11 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
             ret[buft].context += size;
         }
     }
+    if (moe_store) {
+        for (const auto & [buft, size] : moe_store->memory_breakdown()) {
+            ret[buft].context += size;
+        }
+    }
     if (model.hparams.no_alloc) {
         for (size_t i = 0; i < backends.size(); ++i) {
             ggml_backend_t             backend = backends[i].get();
@@ -3760,6 +3812,9 @@ void llama_context::opt_epoch_iter(
                 }
             }
             copy_experts.reset();
+            if (moe_store) {
+                moe_store->begin();
+            }
             ggml_opt_eval(opt_ctx, result);
             if (callback) {
                 callback(train, opt_ctx, dataset, result, idata_in_loop + (pos_ctx + pos_batch)/n_ubatch + 1, ndata_in_loop, t_loop_start);
@@ -3862,6 +3917,7 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
+        /*.moe_cache_layers            =*/ 0,
     };
 
     return result;

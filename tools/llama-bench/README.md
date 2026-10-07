@@ -75,6 +75,7 @@ test parameters:
   -ot --override-tensor <tensor name pattern>=<buffer type>;...
                                             (default: disabled)
   -nopo, --no-op-offload <0|1>              (default: 0)
+  --moe-cache-layers <n>                    (default: 0, -1 = auto)
   --no-host <0|1>                           (default: 0)
   --repack <0|1>                            (default: 1)
 

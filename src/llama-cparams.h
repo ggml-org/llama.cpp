@@ -55,6 +55,8 @@ struct llama_cparams {
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()
 
+    int32_t moe_cache_layers; // number of MoE layers' worth of experts to cache on the GPU, < 0 = auto, 0 = disabled
+
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
     enum llama_context_type ctx_type;

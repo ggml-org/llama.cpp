@@ -923,6 +923,15 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+// a host-expert MUL_MAT_ID that reads its experts from the slots of the MoE store
+struct ggml_backend_sched_moe_store_entry {
+    int split_id;
+    struct ggml_tensor * ids;
+    struct ggml_tensor * ids_copy; // slot of each routed expert, written by the store before the split runs
+    void * handle;
+    bool shared; // ids_copy belongs to a previous entry of the split
+};
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -952,6 +961,10 @@ struct ggml_backend_sched {
     int n_splits;
     int splits_capacity;
 
+    struct ggml_backend_sched_moe_store_entry * moe_store_entries;
+    int n_moe_store_entries;
+    int moe_store_entries_capacity;
+
     // pipeline parallelism support
     int n_copies;
     int cur_copy;
@@ -968,6 +981,11 @@ struct ggml_backend_sched {
 
     ggml_backend_sched_copy_callback callback_copy;
     void * callback_copy_user_data;
+
+    ggml_backend_t moe_store_backend;
+    ggml_backend_sched_moe_store_resolve_callback callback_moe_store_resolve;
+    ggml_backend_sched_moe_store_prepare_callback callback_moe_store_prepare;
+    void * callback_moe_store_user_data;
 
     char * context_buffer;
     size_t context_buffer_size;
@@ -1061,6 +1079,20 @@ static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML
 #endif
 
 // returns the backend that should be used for the node based on the current locations
+static bool ggml_backend_sched_moe_store_resolve(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend, struct ggml_tensor ** cached, void ** handle) {
+    struct ggml_tensor * c = NULL;
+    void * h = NULL;
+    if (sched->moe_store_backend == NULL || sched->n_copies > 1 || node->op != GGML_OP_MUL_MAT_ID ||
+        !sched->callback_moe_store_resolve(node, backend, &c, &h, sched->callback_moe_store_user_data)) {
+        return false;
+    }
+    if (cached != NULL) {
+        *cached = c;
+        *handle = h;
+    }
+    return true;
+}
+
 static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, struct ggml_tensor * tensor) {
     // assign pre-allocated nodes to their backend
     int cur_backend_id = ggml_backend_sched_backend_from_buffer(sched, tensor, tensor);
@@ -1111,6 +1143,12 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
                 int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
                 // check if a backend with higher prio wants to offload the op
                 if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
+                    // host experts that the store manages run on the store backend
+                    if (i == 0 && ggml_backend_sched_moe_store_resolve(sched, tensor, sched->moe_store_backend, NULL, NULL) &&
+                        ggml_backend_supports_op(sched->moe_store_backend, tensor)) {
+                        SET_CAUSE(tensor, "1.moe");
+                        return ggml_backend_sched_backend_id(sched, sched->moe_store_backend);
+                    }
                     for (int b = 0; b < src_backend_id; b++) {
                         if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                             SET_CAUSE(tensor, "1.off");
@@ -1205,11 +1243,59 @@ static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, stru
     }
 }
 
+static struct ggml_backend_sched_moe_store_entry * ggml_backend_sched_moe_store_find(ggml_backend_sched_t sched, int split_id, const struct ggml_tensor * ids) {
+    for (int i = 0; i < sched->n_moe_store_entries; i++) {
+        struct ggml_backend_sched_moe_store_entry * entry = &sched->moe_store_entries[i];
+        if (entry->split_id == split_id && entry->ids == ids) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+// let the store run node with the experts in its slots, node->src[0] is replaced with the cached weight
+// the projections of a layer use the same ids, they share one ids_copy
+static struct ggml_backend_sched_moe_store_entry * ggml_backend_sched_moe_store_add(ggml_backend_sched_t sched, int split_id, struct ggml_tensor * node, ggml_backend_t backend) {
+    struct ggml_tensor * cached = NULL;
+    void * handle = NULL;
+    if (!ggml_backend_sched_moe_store_resolve(sched, node, backend, &cached, &handle)) {
+        return NULL;
+    }
+    GGML_ASSERT(cached->buffer != NULL && cached->ne[0] == node->src[0]->ne[0] && cached->ne[1] == node->src[0]->ne[1]);
+
+    struct ggml_tensor * ids = node->src[2];
+    const struct ggml_backend_sched_moe_store_entry * prev = ggml_backend_sched_moe_store_find(sched, split_id, ids);
+    struct ggml_tensor * ids_copy = prev != NULL ? prev->ids_copy : NULL;
+    if (ids_copy == NULL) {
+        ids_copy = ggml_new_tensor_2d(sched->ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1]);
+        ggml_format_name(ids_copy, "%s#%s#moe_store", ggml_backend_name(backend), ids->name);
+        ggml_set_output(ids); // keep the routed ids alive until the store reads them
+    }
+
+    if (sched->n_moe_store_entries >= sched->moe_store_entries_capacity) {
+        sched->moe_store_entries_capacity = sched->moe_store_entries_capacity > 0 ? 2*sched->moe_store_entries_capacity : 16;
+        sched->moe_store_entries = (struct ggml_backend_sched_moe_store_entry *)
+            realloc(sched->moe_store_entries, sched->moe_store_entries_capacity * sizeof(struct ggml_backend_sched_moe_store_entry));
+        GGML_ASSERT(sched->moe_store_entries != NULL);
+    }
+    struct ggml_backend_sched_moe_store_entry * entry = &sched->moe_store_entries[sched->n_moe_store_entries++];
+    entry->split_id = split_id;
+    entry->ids      = ids;
+    entry->ids_copy = ids_copy;
+    entry->handle   = handle;
+    entry->shared   = prev != NULL;
+
+    SET_CAUSE(cached, "4.moe");
+    node->src[0] = cached;
+    return entry;
+}
+
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     // reset splits
     sched->n_splits = 0;
     sched->n_graph_inputs = 0;
+    sched->n_moe_store_entries = 0;
     sched->is_reset = false;
 
     struct ggml_init_params params = {
@@ -1466,7 +1552,10 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
-            if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
+            if (node_backend_id == cur_backend_id && ggml_backend_sched_moe_store_resolve(sched, node, sched->backends[cur_backend_id], NULL, NULL)) {
+                // the store reads the routed ids before the split runs, so the first projection of a layer starts a split and the others stay in it
+                need_new_split = ggml_backend_sched_moe_store_find(sched, i_split, node->src[2]) == NULL;
+            } else if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     struct ggml_tensor * src = node->src[j];
                     if (src == NULL) {
@@ -1505,6 +1594,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             }
 
             // find inputs that are not on the same backend
+            struct ggml_backend_sched_moe_store_entry * moe_store_entry = NULL;
             for (int j = 0; j < GGML_MAX_SRC; j++) {
                 struct ggml_tensor * src = node->src[j];
                 if (src == NULL) {
@@ -1516,6 +1606,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 GGML_ASSERT(src_backend_id != -1); // all inputs should be assigned by now
 
                 if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                    if (j == 0) {
+                        moe_store_entry = ggml_backend_sched_moe_store_add(sched, i_split, node, sched->backends[cur_backend_id]);
+                        if (moe_store_entry != NULL) {
+                            continue;
+                        }
+                    }
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
@@ -1537,6 +1633,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
+            }
+            if (moe_store_entry != NULL) {
+                node->src[2] = moe_store_entry->ids_copy;
             }
         }
         split->i_end = graph->n_nodes;
@@ -1631,7 +1730,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     for (int i = 0; i < sched->n_splits; i++) {
         total_inputs += sched->splits[i].n_inputs;
     }
-    int graph_size = std::max(graph->n_nodes, graph->n_leafs) + total_inputs * 2 * sched->n_copies + n_dep_nodes;
+    int graph_size = std::max(graph->n_nodes, graph->n_leafs) + total_inputs * 2 * sched->n_copies + n_dep_nodes + sched->n_moe_store_entries;
 
     // remember the actual graph_size for performing reallocation checks later [GGML_SCHED_DEBUG_REALLOC]
     sched->debug_prev_graph_size = sched->debug_graph_size;
@@ -1653,6 +1752,14 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     for (int i = 0; i < sched->n_splits; i++) {
         struct ggml_backend_sched_split * split = &sched->splits[i];
+
+        for (int j = 0; j < sched->n_moe_store_entries; j++) {
+            const struct ggml_backend_sched_moe_store_entry * entry = &sched->moe_store_entries[j];
+            if (entry->split_id == i && !entry->shared) {
+                sched->node_backend_ids[graph_copy->n_nodes] = split->backend_id;
+                graph_copy->nodes[graph_copy->n_nodes++] = entry->ids_copy;
+            }
+        }
 
         // add inputs to the graph copy so that they are allocated by ggml-alloc at the start of the split
         for (int j = 0; j < split->n_inputs; j++) {
@@ -1884,6 +1991,19 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
+        // the uploads of the store run in order after the previous work of the split backend
+        for (int i = 0; i < sched->n_moe_store_entries; i++) {
+            const struct ggml_backend_sched_moe_store_entry * entry = &sched->moe_store_entries[i];
+            if (entry->split_id != split_id || entry->shared) {
+                continue;
+            }
+            ggml_backend_t ids_backend = ggml_backend_sched_get_tensor_backend(sched, entry->ids);
+            if (!sched->callback_moe_store_prepare(entry->handle, ids_backend, entry->ids, entry->ids_copy, sched->callback_moe_store_user_data)) {
+                GGML_LOG_ERROR("%s: failed to prepare the MoE store\n", __func__);
+                return GGML_STATUS_FAILED;
+            }
+        }
+
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
@@ -2022,6 +2142,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
         free(sched->splits[i].inputs);
     }
     free(sched->splits);
+    free(sched->moe_store_entries);
     free(sched->graph_inputs);
     free(sched->hv_tensor_backend_ids);
     free(sched->hv_tensor_copies);
@@ -2141,6 +2262,18 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backe
     GGML_ASSERT(sched);
     sched->callback_copy = callback;
     sched->callback_copy_user_data = user_data;
+}
+
+void ggml_backend_sched_set_moe_store(ggml_backend_sched_t sched, ggml_backend_t backend,
+        ggml_backend_sched_moe_store_resolve_callback resolve, ggml_backend_sched_moe_store_prepare_callback prepare, void * user_data) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT((backend == NULL) == (resolve == NULL) && (backend == NULL) == (prepare == NULL));
+    const int backend_id = backend == NULL ? -1 : ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend == NULL || (backend_id >= 0 && backend_id < sched->n_backends - 1));
+    sched->moe_store_backend            = backend;
+    sched->callback_moe_store_resolve   = resolve;
+    sched->callback_moe_store_prepare   = prepare;
+    sched->callback_moe_store_user_data = user_data;
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
