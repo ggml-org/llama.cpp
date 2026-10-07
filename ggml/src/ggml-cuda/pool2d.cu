@@ -100,7 +100,7 @@ static __global__ void pool2d_nchw_kernel_warp(
 
 #pragma unroll
     for (int offset = WARP_SIZE/2; offset > 0; offset >>= 1) {
-        const To other = __shfl_down_sync(0xFFFFFFFF, res, offset);
+        const To other = __shfl_xor_sync(0xFFFFFFFF, res, offset, WARP_SIZE);
         res = (op == GGML_OP_POOL_MAX) ? max(res, other) : res + other;
     }
 
@@ -116,7 +116,7 @@ static void pool2d_nchw_kernel_f32_f32_cuda(
         const float * src, float * dst, const enum ggml_op_pool op,
         cudaStream_t stream) {
 
-    if (kh * kw >= POOL2D_WARP_KERNEL_MIN_WINDOW) {
+    if (kh * kw >= CUDA_POOL2D_WARP_KERNEL_MIN_WINDOW) {
         const int warps_per_block = CUDA_POOL2D_BLOCK_SIZE / WARP_SIZE;
         const int num_blocks = (parallel_elements + warps_per_block - 1) / warps_per_block;
         pool2d_nchw_kernel_warp<<<num_blocks, CUDA_POOL2D_BLOCK_SIZE, 0, stream>>>(ih, iw, oh, ow, kh, kw, sh, sw, ph, pw, parallel_elements, src, dst, op);
