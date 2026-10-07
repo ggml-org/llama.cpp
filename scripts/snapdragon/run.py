@@ -166,7 +166,7 @@ def main():
     parser.add_argument("--hex-opfilter", help="Regex pattern to filter/select which operators are offloaded to NPU (GGML_HEXAGON_OPFILTER)")
     parser.add_argument("--hex-opfusion", help="NPU graph node fusion optimization level (0: disabled, 1: enabled) (GGML_HEXAGON_OPFUSION)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
-    parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 128,1024,0) (GGML_HEXAGON_MBUF)")
+    parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 512,1024,0) (GGML_HEXAGON_MBUF)")
     parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-head-split", help="Enable (1) or disable (0) head-parallel flash_attn partitioning (GGML_HEXAGON_FA_HEAD_SPLIT)")
