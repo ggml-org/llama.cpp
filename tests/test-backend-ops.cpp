@@ -7233,6 +7233,7 @@ enum mul_mat_add_mode {
     MUL_MAT_ADD_ROW,        // mm + a one-row res, which a same-shape fusion must leave alone
     MUL_MAT_ADD_RES_INPLACE, // res += mm
     MUL_MAT_ADD_B_INPLACE,   // b += mm: the sum overwrites the mat-mul input (m == k)
+    MUL_MAT_ADD_MM_MM,       // mm2 + mm: the residual is itself a mat-mul output, so both operands are MUL_MAT
 };
 
 static std::string var_to_str(mul_mat_add_mode mode) {
@@ -7242,6 +7243,7 @@ static std::string var_to_str(mul_mat_add_mode mode) {
         case MUL_MAT_ADD_ROW:         return "mm+row";
         case MUL_MAT_ADD_RES_INPLACE: return "res+=mm";
         case MUL_MAT_ADD_B_INPLACE:   return "b+=mm";
+        case MUL_MAT_ADD_MM_MM:       return "mm2+mm";
     }
     return "unknown";
 }
@@ -7287,6 +7289,14 @@ struct test_mul_mat_add : public test_case {
             case MUL_MAT_ADD_RES_MM:      out = ggml_add(ctx, res, mm);         break;
             case MUL_MAT_ADD_RES_INPLACE: out = ggml_add_inplace(ctx, res, mm); break;
             case MUL_MAT_ADD_B_INPLACE:   out = ggml_add_inplace(ctx, b, mm);   break;
+            case MUL_MAT_ADD_MM_MM:
+                {
+                    // the residual is a second mat-mul of the same shape (x = W1 @ u + W2 @ v), so a backend
+                    // that finds the residual as "the ADD operand that is not a MUL_MAT" picks the wrong one
+                    ggml_tensor * a2  = ggml_new_tensor_2d(ctx, type_a, k, m);
+                    ggml_tensor * mm2 = ggml_mul_mat(ctx, a2, b);
+                    out = ggml_add(ctx, mm2, mm);
+                } break;
         }
         ggml_set_name(out, "out");
 
@@ -10409,7 +10419,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
         for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q5_K, GGML_TYPE_F16}) {
-            for (mul_mat_add_mode mode : {MUL_MAT_ADD_MM_RES, MUL_MAT_ADD_RES_MM, MUL_MAT_ADD_ROW, MUL_MAT_ADD_RES_INPLACE}) {
+            for (mul_mat_add_mode mode : {MUL_MAT_ADD_MM_RES, MUL_MAT_ADD_RES_MM, MUL_MAT_ADD_ROW, MUL_MAT_ADD_RES_INPLACE, MUL_MAT_ADD_MM_MM}) {
                 test_cases.emplace_back(new test_mul_mat_add(type_a, 1000, n, 1024, mode));
             }
             test_cases.emplace_back(new test_mul_mat_add(type_a, 2048, n, 2048, MUL_MAT_ADD_B_INPLACE));
