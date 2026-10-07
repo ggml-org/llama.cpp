@@ -64,7 +64,9 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
     const int64_t qk_head_dim = hparams.n_embd_head_k_mla();
     const int64_t v_head_dim = hparams.n_embd_head_v_mla();
 
-    const auto [trunk_flags, mtp_flags] = nextn_flags(ml);
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     for (int il = 0; il < n_layer; ++il) {
         auto & layer = layers[il];

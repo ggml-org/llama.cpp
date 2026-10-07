@@ -49,7 +49,9 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const auto [trunk_flags, mtp_flags] = nextn_flags(ml);
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     // mamba2 Mixer SSM params
     // NOTE: int64_t for tensor dimensions

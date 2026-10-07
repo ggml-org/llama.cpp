@@ -46,7 +46,9 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_deepseek32::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const auto [trunk_flags, mtp_flags] = nextn_flags(ml);
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     const bool is_mla = hparams.is_mla();
     if (!is_mla) {
