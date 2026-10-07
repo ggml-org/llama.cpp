@@ -5236,6 +5236,117 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax =
     init_mul_mat_id_ids(ctx, n_mats);
 }
 
+struct test_mul_mat_id_bias_reduce : public test_case {
+    const ggml_type type;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_mats;
+    const int n_used;
+    const bool prec_q8;     // request 8-bit src1 on the mul_mat
+    const bool bias_as_output;
+    std::vector<ggml_tensor *> test_nodes;
+
+    test_mul_mat_id_bias_reduce(ggml_type type, int64_t m, int64_t n, int64_t k,
+                                int n_mats = 16, int n_used = 4, bool prec_q8 = false, bool bias_as_output = false)
+        : type(type), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used), prec_q8(prec_q8), bias_as_output(bias_as_output) {
+        GGML_ASSERT(n_used <= n_mats);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR8(type, m, n, k, n_mats, n_used, prec_q8, bias_as_output);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ID_BIAS_REDUCE";
+    }
+
+    bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return true; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return test_nodes; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        if ((type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) && !prec_q8 &&
+                backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+            return 2e-2;
+        }
+        return max_nmse_err();
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        test_nodes.clear();
+        GGML_ASSERT(ctx_weights);
+        ggml_tensor * weights = ggml_new_tensor_3d(ctx_weights, type, k, n, n_mats);
+        ggml_tensor * input   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, m);
+        ggml_tensor * ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+        if (n_used != n_mats) {
+            ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+        }
+
+        ggml_tensor * out = ggml_mul_mat_id(ctx, weights, input, ids);
+        if (prec_q8) {
+            ggml_prec_set_src(out, GGML_PREC_Q8, 1);
+        }
+        ggml_tensor * bias = ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, n, n_mats);
+        ggml_set_name(bias, "expert_bias");
+        out = ggml_add_id(ctx, out, bias, ids);
+        if (bias_as_output) {
+            ggml_set_output(out);
+            test_nodes.push_back(out);
+        }
+        // same node order as the MoE FFN output: all views first, then the adds
+        ggml_tensor * router = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_used, m);
+        ggml_tensor * weighted = ggml_mul(ctx, out, router);
+
+        std::vector<ggml_tensor *> views(n_used);
+        for (int expert = 0; expert < n_used; ++expert) {
+            views[expert] = ggml_view_2d(ctx, weighted, n, m, weighted->nb[2], expert * weighted->nb[1]);
+            if (mode == MODE_TEST) {
+                ggml_build_forward_expand(gf, views[expert]);
+            }
+        }
+        out = views[0];
+        for (int expert = 1; expert < n_used; ++expert) {
+            out = ggml_add(ctx, out, views[expert]);
+            if (mode == MODE_TEST) {
+                ggml_build_forward_expand(gf, out);
+            }
+        }
+        if (bias_as_output) {
+            test_nodes.push_back(out);
+        }
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
+            if (strcmp(t->name, "expert_bias") == 0) {
+                std::vector<float> data(ggml_nelements(t));
+                for (int64_t j = 0; j < t->ne[1]; ++j) {
+                    for (int64_t row = 0; row < t->ne[0]; ++row) {
+                        data[j*t->ne[0] + row] = 0.01f * (j + 1) + 0.0001f * (row + 1);
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+            }
+        }
+    }
+};
+
 // GGML_OP_MUL_MAT_ID
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
@@ -10328,6 +10439,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+
+    test_cases.emplace_back(new test_mul_mat_id_bias_reduce(GGML_TYPE_MXFP4, 11, 64, 2048));
+    test_cases.emplace_back(new test_mul_mat_id_bias_reduce(GGML_TYPE_MXFP4, 11, 64, 2048, 16, 4, true, true));
+    test_cases.emplace_back(new test_mul_mat_id_bias_reduce(GGML_TYPE_NVFP4, 11, 64, 2048));
+    test_cases.emplace_back(new test_mul_mat_id_bias_reduce(GGML_TYPE_NVFP4, 11, 64, 2048, 16, 4, true));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.
