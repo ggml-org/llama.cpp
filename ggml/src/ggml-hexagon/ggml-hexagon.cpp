@@ -5243,8 +5243,8 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
         return false;
     }
 
-    // HMX paths require K aligned to 32.
-    if (ne00 % 32 != 0) {
+    // HMX paths require K aligned to 32, the plain 2D kernel pads the K of F16/F32 weights (not repacked).
+    if (ne00 % 32 != 0 && (ggml_hexagon_is_repack_type((ggml_type) wtype) || is_matmul_id || is_batched)) {
         return false;
     }
 
@@ -5550,7 +5550,7 @@ static void ggml_hexagon_precompute_matmul_params_impl(
 
     const int wtype = src0->type;
     const bool is_repack = ggml_hexagon_is_repack_type((ggml_type) wtype);
-    const int ne00_padded = is_repack ? hex_round_up(ne00, 32) : ne00;
+    const int ne00_padded = hex_round_up(ne00, 32);
     const int ne01_padded = is_repack ? hex_round_up(ne01, 32) : ne01;
     const int ne11_padded = hex_round_up(ne11, 32);
     // VTCM has to hold whole 32-row weight tiles, so size for the rounded-up N
@@ -7761,7 +7761,8 @@ static bool mm_is_hmx_eligible(const ggml_tensor * t) {
 
 static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
     if (kparams->n_hmx) {
-        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D;
+        // only the plain 2D kernel pads a K that is not a multiple of 32
+        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D && src0->ne[0] % 32 == 0;
     }
 
     if (!ggml_hexagon_is_repack_type(src0->type) || src0->type == GGML_TYPE_Q6_K) {
@@ -7773,7 +7774,7 @@ static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struc
 
 static bool is_supported_mul_mat_id_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
     if (kparams->n_hmx) {
-        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D;
+        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D && src0->ne[0] % 32 == 0;
     }
 
     if (!ggml_hexagon_is_repack_type(src0->type)) {
