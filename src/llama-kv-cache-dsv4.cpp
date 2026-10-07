@@ -83,6 +83,7 @@ static llama_ubatch dsv4_build_raw_write_ubatch(const llama_ubatch & ubatch) {
     if (!dsv4_ubatch_has_coupled(ubatch)) {
         return ubatch;
     }
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         throw std::runtime_error("DSV4 coupled embedding ubatches are not supported");
     }
@@ -164,6 +165,8 @@ static llama_ubatch dsv4_build_raw_write_ubatch(const llama_ubatch & ubatch) {
         /*.seq_id_unq   =*/ data->seq_id_unq.data(),
         /*.seq_idx      =*/ data->seq_idx.data(),
         /*.output       =*/ data->output.data(),
+        /*.type         =*/ nullptr,
+        /*.decision_order =*/ nullptr,
         /*.data         =*/ data,
     };
 

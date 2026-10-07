@@ -22,6 +22,8 @@ enum htp_data_type {
     HTP_TYPE_Q4_0   = 2,
     HTP_TYPE_Q4_1   = 3,
     HTP_TYPE_Q8_0   = 8,
+    HTP_TYPE_Q2_K   = 10,
+    HTP_TYPE_Q3_K   = 11,
     HTP_TYPE_Q4_K   = 12,
     HTP_TYPE_Q5_K   = 13,
     HTP_TYPE_Q6_K   = 14,
@@ -113,6 +115,8 @@ enum htp_op_code {
     HTP_OP_ARGMAX,
     HTP_OP_UNARY_GELU_ERF,
     HTP_OP_GLU_GEGLU_ERF,
+    HTP_OP_POOL_2D,
+    HTP_OP_POOL_1D,
 
     HTP_OP_INVALID
 };

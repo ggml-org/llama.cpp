@@ -12,12 +12,7 @@ struct htp_ssm_conv_kernel_params {
     uint32_t d_inner;
     uint32_t n_t;
     uint32_t n_s;
-    uint32_t d_inner_per_thread;
     uint32_t d_inner_tile;
-
-    uint32_t src0_row_size_aligned;
-    uint32_t src1_row_size_aligned;
-    uint32_t dst_row_size_aligned;
 
     uint32_t vtcm_src0_size_per_thread;
     uint32_t vtcm_src1_size_per_thread;
@@ -27,8 +22,6 @@ struct htp_ssm_conv_kernel_params {
     uint32_t vtcm_src1_size;
     uint32_t vtcm_dst_size;
     uint32_t vtcm_size;
-
-    struct fastdiv_values div_n_threads;
 };
 
 #if defined(__cplusplus)

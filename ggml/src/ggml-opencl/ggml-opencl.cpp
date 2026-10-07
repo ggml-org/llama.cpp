@@ -12886,12 +12886,14 @@ static size_t ggml_backend_opencl_buffer_type_get_alloc_size(ggml_backend_buffer
 }
 
 static ggml_backend_buffer_type_i ggml_backend_opencl_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_opencl_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_opencl_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_opencl_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_opencl_buffer_type_get_max_size,
-    /* .get_alloc_size   = */ ggml_backend_opencl_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .get_name            = */ ggml_backend_opencl_buffer_type_get_name,
+    /* .alloc_buffer        = */ ggml_backend_opencl_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ NULL,
+    /* .get_alignment       = */ ggml_backend_opencl_buffer_type_get_alignment,
+    /* .get_max_size        = */ ggml_backend_opencl_buffer_type_get_max_size,
+    /* .get_alloc_size      = */ ggml_backend_opencl_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ NULL,
 };
 
 //
@@ -14799,6 +14801,9 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         kernel = backend_ctx->kernel_sigmoid_f32;
     } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+        kernel = backend_ctx->kernel_sigmoid_f16;
+    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+        // bf16 converted to f16
         kernel = backend_ctx->kernel_sigmoid_f16;
     } else {
         GGML_ASSERT(false && "Unsupported data types for sigmoid (input and output must be both f32 or f16)");
@@ -18859,9 +18864,11 @@ static void ggml_cl_mul_mat_f16_f32_adreno_xmem(
     const int kpack = K / 4;
     const int npack = CEIL_DIV(M, 4);
     const int os = 8;
+    // Pad weights to the 32-row tiles read by the xmem kernel.
+    const int npack_padded = CEIL_DIV(npack, os)*os;
 
     const size_t xmem_bytes = 6144;
-    const size_t weight_bytes = static_cast<size_t>(kpack) * static_cast<size_t>(npack) * 4u * sizeof(cl_half4);
+    const size_t weight_bytes = static_cast<size_t>(kpack) * static_cast<size_t>(npack_padded) * 4u * sizeof(cl_half4);
 
     backend_ctx->prealloc_adreno_xmem_const.allocate(backend_ctx->context, xmem_bytes);
 
@@ -18894,14 +18901,14 @@ static void ggml_cl_mul_mat_f16_f32_adreno_xmem(
     CL_CHECK(clSetKernelArg(prepack, 3, sizeof(int),      &K));
     CL_CHECK(clSetKernelArg(prepack, 4, sizeof(int),      &M));
     CL_CHECK(clSetKernelArg(prepack, 5, sizeof(int),      &kpack));
-    CL_CHECK(clSetKernelArg(prepack, 6, sizeof(int),      &npack));
+    CL_CHECK(clSetKernelArg(prepack, 6, sizeof(int),      &npack_padded));
     CL_CHECK(clSetKernelArg(prepack, 7, sizeof(int),      &os));
     size_t lws = 256;
     size_t max_wg = backend_ctx->get_kernel_workgroup_size(prepack);
     if (lws > max_wg) {
         lws = max_wg;
     }
-    size_t gws = CEIL_DIV(static_cast<size_t>(kpack) * static_cast<size_t>(npack), lws) * lws;
+    size_t gws = CEIL_DIV(static_cast<size_t>(kpack) * static_cast<size_t>(npack_padded), lws) * lws;
     backend_ctx->enqueue_ndrange_kernel(prepack, 1, &gws, &lws, dst);
 
     cl_kernel pack_src = backend_ctx->kernel_adreno_xmem_pack_src_f32;

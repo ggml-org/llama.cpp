@@ -26,7 +26,6 @@
 #include "presets.hpp"
 #include "type.hpp"
 #include "sycl_hw.hpp"
-#include "fattn-buffers.hpp"
 #include "memtrace.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
@@ -64,6 +63,7 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
+extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
@@ -214,6 +214,7 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 //////////////////////
 struct optimize_feature {
     bool reorder=false;
+    bool onednn_optimized_gemm=false;
 };
 
 struct sycl_device_info {
@@ -406,8 +407,6 @@ struct ggml_backend_sycl_context {
     // pool
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
 
-    std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
-
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
@@ -415,8 +414,6 @@ struct ggml_backend_sycl_context {
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
-
-    static std::unique_ptr<ggml_sycl_fattn_kv_buffers> new_fattn_kv_buffers(queue_ptr qptr, int device);
 
     ggml_sycl_pool & pool(int device) {
         if (pools[device] == nullptr) {
@@ -427,17 +424,6 @@ struct ggml_backend_sycl_context {
 
     ggml_sycl_pool & pool() {
         return pool(device);
-    }
-
-    ggml_sycl_fattn_kv_buffers & fattn_buffers(int device) {
-        if (fattn_bufs[device] == nullptr) {
-            fattn_bufs[device] = new_fattn_kv_buffers(stream(device, 0), device);
-        }
-        return *fattn_bufs[device];
-    }
-
-    ggml_sycl_fattn_kv_buffers & fattn_buffers() {
-        return fattn_buffers(device);
     }
 
 #ifdef GGML_SYCL_GRAPH
@@ -636,6 +622,14 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+#if GGML_SYCL_DNNL
+// oneDNN builds JIT kernels only for some GPU architectures. On the rest it falls back to
+// reference kernels, which are much slower than the SYCL kernels here.
+inline bool ggml_sycl_dnnl_has_optimized_gemm(int device) {
+    return ggml_sycl_info().devices[device].opt_feature.onednn_optimized_gemm;
+}
+#endif
 
 int ggml_sycl_get_env(const char *env_name, int default_val);
 

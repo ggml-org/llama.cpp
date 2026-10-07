@@ -161,9 +161,9 @@ bool dma_queue_push_fallback_contig(dma_queue * q, dma_data ddata, size_t total)
     while (rem_bytes > 0) {
         const uint32_t cur_bytes = MIN(rem_bytes, DMA_SAFE_CHUNK_SIZE);
         dma_data cur_data = dma_make_data(cur_dst, cur_src);
-        if (!dma_ring_push_single_1d(r1, cur_data, cur_bytes)) {
+        if (!dma_ring_push_single_contig(r1, cur_data, cur_bytes)) {
             dma_ring_flush(r1);
-            dma_ring_push_single_1d(r1, cur_data, cur_bytes);
+            dma_ring_push_single_contig(r1, cur_data, cur_bytes);
         }
         cur_dst   += cur_bytes;
         cur_src   += cur_bytes;

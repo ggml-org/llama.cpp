@@ -682,7 +682,10 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
             params.models_preset_hf = params.model.hf_repo; // only for showing a warning
             params.models_preset    = hf_cache::finalize_file(plan.preset);
-            params.model = common_params_model{}; // make sure to clear model, so server starts in router mode
+            // clear the model so the server starts in router mode
+            params.model.path.clear();
+            params.model.hf_repo.clear();
+            params.model.docker_repo.clear();
         });
     }
 
@@ -2774,6 +2777,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
+        {"--moe-cache-mib"}, "N",
+        "GPU cache size in MiB for the MoE experts kept in the CPU (default: 0, disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_cache_size = (size_t) value*1024*1024;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
+    add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
         "(dense models; for MoE expert weights use --n-cpu-moe)",
@@ -3178,6 +3191,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("collect data for the output tensor (default: %s)", params.process_output ? "true" : "false"),
         [](common_params & params) {
             params.process_output = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--nextn"},
+        string_format("collect data for MTP/NextN layers (default: %s)", params.load_mtp ? "true" : "false"),
+        [](common_params & params) {
+            params.load_mtp = true;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -4210,6 +4230,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING"));
     add_opt(common_arg(
+        {"--spec-draft-sampling"}, "{greedy,probabilistic}",
+        string_format("how the draft is sampled: greedy takes its argmax, probabilistic samples it and has "
+                      "the target verify by rejection sampling (default: %s)",
+                      params.speculative.draft.probabilistic ? "probabilistic" : "greedy"),
+        [](common_params & params, const std::string & value) {
+            if (value == "greedy") {
+                params.speculative.draft.probabilistic = false;
+            } else if (value == "probabilistic") {
+                params.speculative.draft.probabilistic = true;
+            } else {
+                throw std::invalid_argument("invalid value, must be one of: greedy, probabilistic");
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_SAMPLING"));
+    add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
@@ -4244,7 +4279,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.mparams.path = value;
             params.speculative.draft.mparams.hf_file = value; // will be used if --spec-draft-hf is set
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_IMATRIX}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
         {"--spec-type"}, common_speculative_all_types_str(),
         string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",

@@ -19,6 +19,7 @@ struct server_context_meta {
     std::set<std::string> model_aliases;
     std::set<std::string> model_tags;
     std::string model_path;
+    std::vector<std::string> model_output_modalities; // output modalities for GET /models
     bool has_mtmd;
     bool has_inp_image;
     bool has_inp_audio;
@@ -152,6 +153,7 @@ struct server_routes {
     server_http_context::handler_t post_embeddings;
     server_http_context::handler_t post_embeddings_oai;
     server_http_context::handler_t post_rerank;
+    server_http_context::handler_t post_systemone;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
 

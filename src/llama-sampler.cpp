@@ -1086,6 +1086,12 @@ static void llama_sampler_greedy_backend_apply(
     struct ggml_tensor * curl = ggml_argmax(ctx, logits);
     ggml_set_name(curl, "greedy_argmax");
 
+    if (data->candidates != nullptr) {
+        struct ggml_tensor * candidates = ggml_reshape_2d(ctx, data->candidates, 1, ggml_nelements(data->candidates));
+        curl = ggml_get_rows(ctx, candidates, curl);
+        ggml_set_name(curl, "greedy_sampled_token");
+    }
+
     data->sampled = curl;
 }
 
@@ -1162,7 +1168,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
 
     if (cur_p->size == 1) {
         // keep the RNG state aligned with backend sampling, which draws once per output
-        dist(ctx->rng);
+        (void) dist(ctx->rng);
         cur_p->data[0].p = 1.0f;
         return;
     }
@@ -1377,7 +1383,7 @@ static void llama_sampler_dist_accept(struct llama_sampler * smpl, llama_token t
     }
 
     std::uniform_real_distribution<double> dist(0.0f, 1.0f);
-    dist(sctx->rng);
+    (void) dist(sctx->rng);
     ++sctx->n_backend_draws_committed;
 }
 

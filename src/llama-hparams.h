@@ -65,12 +65,15 @@ struct llama_hparams {
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+    uint32_t n_layer_decision = 0; // trailing blocks that form the decision head
 
     // granite-switch: index of the single-head "router" KV layer that encodes
     // per-token adapter selection. -1 when the model has no such layer.
     int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_rel_attn_bkts = 0;
+    uint32_t n_value_expert      = 0; // MoVA value experts (K2 Horizon)
+    uint32_t n_value_expert_used = 0;
 
     // TODO: this needs to be reworked
     int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
@@ -284,6 +287,10 @@ struct llama_hparams {
     uint32_t indexer_top_k     = 0;
     uint32_t indexer_kpool     = 0; // k-pool size
     bool     indexer_kpool_select_tail = true;
+    // head-size slots per cached indexer row, the last one holds the pooled key
+    uint32_t indexer_kpool_row = 3;
+    // pools are consecutive cells in sequence order, not runs of consecutive positions
+    bool     indexer_kpool_by_order = false;
     // MSA
     uint32_t indexer_block_size  = 0;
     uint32_t indexer_local_blocks = 0;
