@@ -1,4 +1,5 @@
 #include "parsers.h"
+#include "log.h"
 
 // TranslateGemma does not support tools or reasoning, it only needs user messages in its own content schema
 common_chat_params common_chat_params_init_translate_gemma(
@@ -10,6 +11,11 @@ common_chat_params common_chat_params_init_translate_gemma(
     // default to chat_template_kwargs, or en-GB if not specified
     std::string src_lang = inputs.extra_context.value("source_lang_code", "en-GB");
     std::string tgt_lang = inputs.extra_context.value("target_lang_code", "en-GB");
+    for (const char * key : { "source_lang_code", "target_lang_code" }) {
+        if (!inputs.extra_context.contains(key)) {
+            LOG_WRN("TranslateGemma: %s not set in chat_template_kwargs, defaulting to en-GB\n", key);
+        }
+    }
 
     json messages = inputs.messages;
     for (auto & message : messages) {
