@@ -529,18 +529,25 @@ void main() {
         }
     }
 #else
+    // g/beta prefetched a chunk ahead into sg0 registers (like LOADQK for q/k).
+    float greg = 0.0, breg = 0.0;
+    if (sg == 0) {
+        const uint t = gl_SubgroupInvocationID;
+        const uint v = min(C, p.n_tokens);
+        const uint gb = seq_id * p.sb3 + t * p.sb2 + head_id * p.sb1;
+        greg = t < v ? data_g[gb] : 0.0;
+        breg = t < v ? data_beta[gb] : 0.0;
+    }
     for (uint t0 = 0; t0 < p.n_tokens; t0 += C) {
         const uint valid = min(C, p.n_tokens - t0);
 
         if (sg == 0) {
             const uint t = gl_SubgroupInvocationID;
-            const uint gb = seq_id * p.sb3 + (t0 + t) * p.sb2 + head_id * p.sb1;
-            const float g = t < valid ? data_g[gb] : 0.0;
-            const float acc = subgroupInclusiveAdd(g);
+            const float acc = subgroupInclusiveAdd(greg);
             if (t < C) {
                 sh_prefix[t] = acc;
                 sh_ep[t] = exp(acc);
-                sh_beta[t] = t < valid ? data_beta[gb] : 0.0;
+                sh_beta[t] = breg;
             }
         }
         [[unroll]] for (uint j = 0; j < C * D / WGS; j++) {
@@ -585,6 +592,12 @@ void main() {
         // prefetch next chunk's q/k into registers, overlapping the deep phase
         const uint nvalid = t0 + C < p.n_tokens ? min(C, p.n_tokens - (t0 + C)) : 0u;
         LOADQK(t0 + C, nvalid);
+        if (sg == 0) {
+            const uint t = gl_SubgroupInvocationID;
+            const uint gbn = seq_id * p.sb3 + (t0 + C + t) * p.sb2 + head_id * p.sb1;
+            greg = t < nvalid ? data_g[gbn] : 0.0;
+            breg = t < nvalid ? data_beta[gbn] : 0.0;
+        }
 
         const float plast  = sh_prefix[valid - 1];
         const float cdecay = exp(plast);
@@ -627,6 +640,9 @@ void main() {
             // mma critical path so the split below is used when mma-product-bound (NV).
             const uint ti  = sg - 2 * CT;
             const uint c_o = ti * TN;
+            const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
+            coopmat<float, SG, C, TN, MACC> vmat = coopmat<float, SG, C, TN, MACC>(0);
+            coopMatPerElement(vmat, vmat, LoadV, v_base, p.sv2, valid);
             coopmat<float, SG, C, TN, MACC> qs = coopmat<float, SG, C, TN, MACC>(0);
             coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
             [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
@@ -647,9 +663,8 @@ void main() {
                 PRODUCT(ks, kh, kl, sbh, sbl);
             }
             coopMatPerElement(base_r, qs, ApplyExpPrefix);
-            const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
             coopmat<float, SG, C, TN, MACC> delta;
-            coopMatPerElement(delta, ks, ComputeDelta, v_base, p.sv2, valid);
+            coopMatPerElement(delta, ks, ComputeDeltaV, vmat);
             const coopmat<OPD, SG, C, TN, ACCB> dh = coopmat<OPD, SG, C, TN, ACCB>(delta);
             const coopmat<float, SG, C, TN, MACC> df = coopmat<float, SG, C, TN, MACC>(dh);
             const coopmat<OPD, SG, C, TN, ACCB> dl = coopmat<OPD, SG, C, TN, ACCB>(delta - df);
