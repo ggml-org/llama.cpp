@@ -1432,6 +1432,9 @@ class GGUFWriter:
     def add_vision_image_mean(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
 
+    def add_vision_image_resize_algo(self, value: str) -> None:
+        self.add_string(Keys.ClipVision.IMAGE_RESIZE_ALGO, value)
+
     def add_vision_image_std(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_STD, values)
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -7,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
+from .base import MmprojModel, ModelBase, TextModel, gguf, jinja_str_or_json, logger
 
 from .gemma import ConformerAudioModel
 
@@ -63,6 +66,68 @@ class LFM2Model(TextModel):
             data_torch = data_torch.squeeze(1)
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+def _is_d1_checkpoint(dir_model: Path) -> bool:
+    if not (dir_model / "config.json").is_file():
+        return False
+    with open(dir_model / "config.json", encoding="utf-8") as f:
+        return json.load(f).get("auto_map", {}).get("AutoModel", "").endswith(".D1Model")
+
+
+@ModelBase.register_hparams_loader(_is_d1_checkpoint)
+def _load_d1_hparams(dir_model: Path) -> dict[str, Any]:
+    logger.info("gguf: detected d1 checkpoint")
+    hparams = ModelBase.load_hparams(dir_model, False, guess=False)
+    # the mmproj stays LFM2-VL
+    hparams["text_config"]["architectures"] = ["D1Model"]
+    return hparams
+
+
+@ModelBase.register("D1Model")
+@ModelBase.example("LiquidAI/d1-3b")
+class D1Model(LFM2Model):
+    model_arch = gguf.MODEL_ARCH.LFM2
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    @staticmethod
+    def _systemone_template() -> str:
+        # follows prompt.py of the model repo
+        description = jinja_str_or_json("o.description")
+        choice = (
+            "{{ '\\n\\nOptions:\\n' }}"
+            "{% for o in options %}{{ o.label }} {% if o.description %}" + description + "{% else %}{{ o.key | replace('_', ' ') }}{% endif %}"
+            "{% if not loop.last %}{{ '\\n' }}{% endif %}{% endfor %}"
+            "{{ '\\n\\nReply with the option code only.' }}"
+        )
+        # with criteria, a missing description is written as None
+        noul = (
+            "{% set ns = namespace(criteria=false) %}{% for o in options %}{% if o.description is not none %}{% set ns.criteria = true %}{% endif %}{% endfor %}"
+            "{% if ns.criteria %}"
+            "{% for o in options %}{{ '\\nYes: ' if o.key == 'true' else '\\nNo: ' }}"
+            "{% if o.description is none %}None{% else %}" + description + "{% endif %}{% endfor %}{% endif %}"
+            "{{ '\\n\\nReply with yes or no only.' }}"
+        )
+        score = (
+            "{{ '\\n\\n' }}{% for o in options %}{{ o.key }} " + description + "{{ '\\n' }}{% endfor %}"
+            "{{ '\\nReply with a single digit 0-' }}{{ options | length - 1 }}{{ ' only.' }}"
+        )
+        return (
+            "<|startoftext|><|im_start|>user\n"
+            "{% for image in images %}{{ image }}{% endfor %}"
+            "{% if state is not none %}{% if state is string %}{{ state }}{% else %}{{ state | tojson(indent=2) }}{% endif %}"
+            "{{ '\\n\\n\\nQUESTION:\\n' }}{% endif %}"
+            + jinja_str_or_json("instructions")
+            + "{% if type == 'choice' %}" + choice + "{% elif type == 'noul' %}" + noul + "{% else %}" + score + "{% endif %}"
+            "{{ '<|im_end|>\\n<|im_start|>assistant\\n' }}"
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_decision_type(gguf.DecisionType.LFM2_D1)
 
 
 @ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")
@@ -188,6 +253,12 @@ class LFM2VLModel(MmprojModel):
         # python notation, e.g. for vision_feature_layer == -1, we pick last layer -> vision_feature_layers_to_drop = 0
         vision_feature_layers_to_drop = -(self.global_config.get("vision_feature_layer", -1) + 1)
         self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys) - vision_feature_layers_to_drop)
+        # PIL resample enum
+        if (resample := self.preprocessor_config.get("resample")) is not None:
+            resize_algo = {1: "lanczos", 2: "bilinear", 3: "bicubic"}.get(resample)
+            if resize_algo is None:
+                raise ValueError(f"unsupported resample: {resample}")
+            self.gguf_writer.add_vision_image_resize_algo(resize_algo)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

@@ -43,6 +43,7 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
+            case COMMON_DECISION_TYPE_LFM2_D1:
                 return true;
             default:
                 return false;
@@ -60,6 +61,7 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_OPENJEV:
             case COMMON_DECISION_TYPE_CLEF:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
+            case COMMON_DECISION_TYPE_LFM2_D1:
                 return true;
             default:
                 return false;
@@ -129,6 +131,8 @@ private:
             size_t n_images) const;
     json render_options(const server_decision_question & question, size_t variant) const;
     size_t n_outputs(const server_decision_question & question) const;
+    // LFM2_D1: label text and tokens of each option
+    void d1_labels(const server_decision_question & question, std::vector<std::string> & texts, std::vector<llama_tokens> & groups) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
 
     float get_temperature(const server_decision_question & question) const;

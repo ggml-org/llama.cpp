@@ -1526,9 +1526,20 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_LFM2:
                     {
-                        hparams.image_resize_algo    = RESIZE_ALGO_BILINEAR;
-                        hparams.image_resize_algo_rf = RESIZE_ALGO_BILINEAR;
-                        hparams.image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
+                        // default for older GGUFs
+                        std::string resize_algo = "bilinear";
+                        get_string(KEY_IMAGE_RESIZE_ALGO, resize_algo, false);
+                        if (resize_algo == "bilinear") {
+                            hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
+                        } else if (resize_algo == "bicubic") {
+                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        } else if (resize_algo == "lanczos") {
+                            hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
+                        } else {
+                            throw std::runtime_error(string_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
+                        }
+                        hparams.image_resize_algo_rf = hparams.image_resize_algo;
+                        hparams.image_resize_algo_ov = hparams.image_resize_algo;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
                         hparams.set_limit_image_tokens(64, 256);
