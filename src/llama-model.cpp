@@ -156,6 +156,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_gemma4_assistant(params);
         case LLM_ARCH_GEMMA_EMBEDDING:
             return new llama_model_gemma_embedding(params);
+        case LLM_ARCH_GEMMA_EMBEDDING2:
+            return new llama_model_gemma_embedding2(params);
         case LLM_ARCH_STARCODER2:
             return new llama_model_starcoder2(params);
         case LLM_ARCH_MAMBA:
@@ -348,6 +350,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_step35(params);
         case LLM_ARCH_SPARK2_5:
             return new llama_model_spark2_5(params);
+        case LLM_ARCH_K2_HORIZON:
+            return new llama_model_k2_horizon(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -385,6 +389,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
     static const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
     static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
+    static const std::regex pattern_v_exps_weight   ("blk\\.\\d*\\.attn_v_exps.weight"); // K2 Horizon MoVA
     static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
     static const std::regex pattern_q_bias          ("blk\\.\\d*\\.attn_q\\.bias");
     static const std::regex pattern_kv_bias         ("blk\\.\\d*\\.attn_(k|v)\\.bias");
@@ -522,6 +527,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         // standard attention
         if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight", "ssm_out.weight");
+        }
+        // routed value experts {n_embd, n_embd_v_gqa, n_expert} produce V, so they split like attn_v
+        if (std::regex_match(tensor_name, pattern_v_exps_weight)) {
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
         }
         if (std::regex_match(tensor_name, pattern_q_bias) || std::regex_match(tensor_name, pattern_kv_bias)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight", "ssm_out.weight");
@@ -788,6 +797,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             // three stay in lockstep per device
             const int64_t granularity_v  = (granularity_kv / hparams.n_embd_head_k(il)) * hparams.n_embd_head_v(il);
             if (std::regex_match(tensor_name, pattern_kv_weight) ||
+                std::regex_match(tensor_name, pattern_v_exps_weight) ||
                 std::regex_match(tensor_name, pattern_kv_bias) ||
                 std::regex_match(tensor_name, pattern_kv_cache)) {
                 GGML_ASSERT(segments.size() == 1);
@@ -2371,6 +2381,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_WAVTOKENIZER_DEC:
         case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
+        case LLM_ARCH_GEMMA_EMBEDDING2:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
@@ -3152,6 +3163,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_ASSISTANT:
         case LLM_ARCH_GEMMA_EMBEDDING:
+        case LLM_ARCH_GEMMA_EMBEDDING2:
         case LLM_ARCH_STARCODER2:
         case LLM_ARCH_OPENELM:
         case LLM_ARCH_GPTNEOX:
@@ -3187,6 +3199,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_SPARK2_5:
         case LLM_ARCH_TALKIE:
+        case LLM_ARCH_K2_HORIZON:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_HRM_TEXT:
