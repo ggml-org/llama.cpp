@@ -5236,6 +5236,133 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax =
     init_mul_mat_id_ids(ctx, n_mats);
 }
 
+struct test_mul_mat_mmq_epilogue : public test_case {
+    const ggml_type type;
+    const bool use_id;
+    const bool with_scale;
+    const bool with_bias;
+    const bool broadcast_input;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_mats;
+    const int n_used;
+    const bool prec_q8;     // request 8-bit src1 on the mul_mat
+    const bool scale_by_token;
+
+    test_mul_mat_mmq_epilogue(
+            ggml_type type, bool use_id, bool with_scale, bool with_bias,
+            int64_t m, int64_t n, int64_t k, bool broadcast_input = false,
+            int n_mats = 16, int n_used = 8, bool prec_q8 = false, bool scale_by_token = false)
+        : type(type), use_id(use_id), with_scale(with_scale), with_bias(with_bias), broadcast_input(broadcast_input),
+          m(m), n(n), k(k), n_mats(n_mats), n_used(n_used), prec_q8(prec_q8),
+          scale_by_token(scale_by_token) {
+        GGML_ASSERT(with_scale || with_bias);
+        GGML_ASSERT(use_id || !with_bias);
+        GGML_ASSERT(use_id || !broadcast_input);
+        GGML_ASSERT(n_used <= n_mats);
+        GGML_ASSERT(!scale_by_token || (use_id && with_scale && n_mats % 2 == 0 && m % 2 == 0));
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR12(type, use_id, with_scale, with_bias, broadcast_input, m, n, k, n_mats, n_used, prec_q8, scale_by_token);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_MMQ_EPILOGUE";
+    }
+
+    bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return use_id; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        if ((type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) && !prec_q8 &&
+                backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+            return 2e-2;
+        }
+        return max_nmse_err();
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        if (!use_id) {
+            ggml_tensor * weights = ggml_new_tensor_2d(ctx, type, k, n);
+            ggml_tensor * input   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, m);
+            ggml_tensor * out     = ggml_mul_mat(ctx, weights, input);
+            if (prec_q8) {
+                ggml_prec_set_src(out, GGML_PREC_Q8, 1);
+            }
+            ggml_tensor * scale   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+            ggml_set_name(scale, "epilogue_scale");
+            return ggml_mul(ctx, out, scale);
+        }
+
+        GGML_ASSERT(ctx_weights);
+        ggml_tensor * weights = ggml_new_tensor_3d(ctx_weights, type, k, n, n_mats);
+        ggml_tensor * input   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, broadcast_input ? 1 : n_used, m);
+        ggml_tensor * ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+        if (n_used != n_mats) {
+            ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+        }
+
+        ggml_tensor * out = ggml_mul_mat_id(ctx, weights, input, ids);
+        if (prec_q8) {
+            ggml_prec_set_src(out, GGML_PREC_Q8, 1);
+        }
+        if (with_scale) {
+            ggml_tensor * scale = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_mats);
+            ggml_set_name(scale, "epilogue_scale");
+            ggml_tensor * selected_scale = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
+            selected_scale = ggml_repeat_4d(ctx, selected_scale, 1, n_mats, m, 1);
+            selected_scale = ggml_get_rows(ctx, selected_scale, ids);
+            out = ggml_mul(ctx, out, selected_scale);
+        }
+        if (with_bias) {
+            ggml_tensor * bias = ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, n, n_mats);
+            ggml_set_name(bias, "epilogue_bias");
+            out = ggml_add_id(ctx, out, bias, ids);
+        }
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (use_id) {
+            init_mul_mat_id_tensors(ctx, n_mats);
+        }
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
+            if (strcmp(t->name, "epilogue_scale") == 0) {
+                std::vector<float> data(ggml_nelements(t));
+                for (int64_t j = 0; j < ggml_nelements(t); ++j) {
+                    data[j] = 0.5f + 0.03125f * (j + 1);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+            } else if (strcmp(t->name, "epilogue_bias") == 0) {
+                std::vector<float> data(ggml_nelements(t));
+                for (int64_t j = 0; j < t->ne[1]; ++j) {
+                    for (int64_t row = 0; row < t->ne[0]; ++row) {
+                        data[j*t->ne[0] + row] = 0.01f * (j + 1) + 0.0001f * (row + 1);
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+            } else if (!use_id) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_MUL_MAT_ID
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
@@ -10313,6 +10440,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+
+    // MMQ epilogue fusion: mul_mat(_id) + scale/bias, Q4_K checks that unsupported types are left unfused
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_Q4_K,  false, true,  false, 11, 256, 4096));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_MXFP4, false, true,  false, 12, 512, 2048));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_NVFP4, false, true,  false, 11,  64, 2048));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_NVFP4, false, true,  false, 11,  64, 2048, false, 16, 8, true));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_MXFP4, true,  false, true,  11,  64, 2048));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_NVFP4, true,  true,  true,  12, 512, 2048, true));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_NVFP4, true,  true,  false, 11,  64, 2048, false, 16, 8, true));
+    test_cases.emplace_back(new test_mul_mat_mmq_epilogue(GGML_TYPE_MXFP4, true,  true,  false, 12,  64, 2048, false, 16, 4, true, true));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.
