@@ -117,6 +117,7 @@ enum htp_op_code {
     HTP_OP_GLU_GEGLU_ERF,
     HTP_OP_POOL_2D,
     HTP_OP_POOL_1D,
+    HTP_OP_UNARY_GELU_QUICK,
 
     HTP_OP_INVALID
 };
