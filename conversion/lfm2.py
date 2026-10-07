@@ -127,7 +127,7 @@ class D1Model(LFM2Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_decision_type(gguf.DecisionType.D1)
+        self.gguf_writer.add_decision_type(gguf.DecisionType.LFM2_D1)
 
 
 @ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")

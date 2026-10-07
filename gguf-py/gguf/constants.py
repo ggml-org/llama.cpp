@@ -6071,7 +6071,7 @@ class DecisionType:
     NIMBLE  = "nimble"   # same as openjev, the prompt lists all the questions of the request
     CLEF    = "clef"     # joint head over all questions, one score per option
     PPLX_DECIDER = "pplx-decider"  # same as openjev, label codes of 1 or 2 letters
-    D1      = "d1"       # same as openjev, the labels depend on the question type
+    LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
 
 
 class VisionProjectorType:

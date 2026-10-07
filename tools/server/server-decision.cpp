@@ -123,7 +123,7 @@ void server_decision_context::init(const llama_model * model) {
         n_options_max   = 255;
         noul_true_first = true;
         choice_sorted   = true;
-    } else if (model_type == COMMON_DECISION_TYPE_D1) {
+    } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1) {
         n_options_max   = 255;
         noul_true_first = true;
     } else {
@@ -140,7 +140,7 @@ void server_decision_context::init(const llama_model * model) {
 
 std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
     // d1 accepts a null state (images only)
-    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_D1)) {
+    if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1)) {
         throw std::invalid_argument("\"state\" must be provided");
     }
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
@@ -481,7 +481,7 @@ json server_decision_context::render_options(const server_decision_question & qu
 
     std::vector<std::string>  d1_texts;
     std::vector<llama_tokens> d1_groups;
-    if (type == COMMON_DECISION_TYPE_D1) {
+    if (type == COMMON_DECISION_TYPE_LFM2_D1) {
         d1_labels(question, d1_texts, d1_groups);
     }
 
@@ -586,7 +586,7 @@ void server_decision_context::fill_task(
         // lev reads the ratings of a noul question at its first labels, not at the digits
         task.decision.labels.assign(labels.begin(), labels.begin() + n_outputs(question));
     }
-    if (type == COMMON_DECISION_TYPE_D1) {
+    if (type == COMMON_DECISION_TYPE_LFM2_D1) {
         std::vector<std::string>  texts;
         std::vector<llama_tokens> groups;
         d1_labels(question, texts, groups);
@@ -595,7 +595,7 @@ void server_decision_context::fill_task(
             task.decision.label_groups.push_back(group.size());
         }
     }
-    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_D1) {
+    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE || type == COMMON_DECISION_TYPE_PPLX_DECIDER || type == COMMON_DECISION_TYPE_LFM2_D1) {
         if (!files.empty()) {
             task.tokens = process_mtmd_prompt(mctx, prompt, files, init_opt);
             return;
