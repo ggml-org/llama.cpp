@@ -35,3 +35,5 @@ private:
     struct impl;
     std::unique_ptr<impl> pimpl;
 };
+
+using llama_moe_cache_ptr = std::unique_ptr<llama_moe_cache>;
