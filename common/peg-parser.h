@@ -2,6 +2,7 @@
 
 #include "json-schema.h"
 #include "json.h"
+#include "llama.h"
 
 #include <memory>
 #include <set>
@@ -182,7 +183,8 @@ inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
 }
 
 struct common_peg_parse_context {
-    std::string input;
+    std::string input;               // [h,   e,  l,  l,  o,  _,  w,  o,  r,  l,  d]
+    std::vector<llama_token> tokens; // [id, -1, -1, -1, -1, id, -1, -1, -1, -1, -1]
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
@@ -193,6 +195,11 @@ struct common_peg_parse_context {
 
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : input(input), flags(flags), parse_depth(0) {}
+
+    common_peg_parse_context(std::string input, std::vector<llama_token> tokens, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(std::move(input)), tokens(std::move(tokens)), flags(flags), parse_depth(0) {
+        GGML_ASSERT(this->tokens.empty() || this->tokens.size() == this->input.size());
+    }
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }

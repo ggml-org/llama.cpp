@@ -1105,7 +1105,7 @@ struct make_peg_parser {
     common_chat_msg parse(const std::string & msg, bool is_partial) const {
         common_chat_parser_params parser_params(params_);
         parser_params.debug = detailed_debug_;
-        return common_chat_peg_parse(arena_, msg, is_partial, parser_params);
+        return common_chat_peg_parse(arena_, common_chat_input(msg), is_partial, parser_params);
     }
 };
 
@@ -4643,7 +4643,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             bool got_out_of_range = false;
             std::string error_msg;
             try {
-                common_chat_peg_parse(arena, bad_input, /*is_partial=*/false, pp);
+                common_chat_peg_parse(arena, common_chat_input(bad_input), /*is_partial=*/false, pp);
             } catch (const std::out_of_range & e) {
                 got_out_of_range = true;
                 error_msg = e.what();
