@@ -49,9 +49,7 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const bool mtp_only    = hparams.n_layer_nextn > 0 && ml.get_weight("blk.0.attn_norm.weight") == nullptr;
-    const int  trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
-    const int  mtp_flags   = !ml.load_mtp ? TENSOR_SKIP : 0;
+    const auto [trunk_flags, mtp_flags] = nextn_flags(ml);
 
     // mamba2 Mixer SSM params
     // NOTE: int64_t for tensor dimensions
