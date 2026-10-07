@@ -58,6 +58,13 @@ void dist_nd_free(dist_nd_conn *) {}
 //
 // Here both ranks send and receive on the same connection, so each side runs both halves of
 // that protocol; the two directions are independent and the invariant holds per direction.
+//
+// The receiver acks only while it consumes, inside nd_recv_raw. When both ends of a link send a
+// message longer than the window before either receives (full duplex, or the edge an odd ring
+// cannot 2-colour), both block at the window for an ack neither will send. That is why payloads
+// above one chunk stayed on TCP. LLAMA_DIST_TP_RDMA_MULTICHUNK=1 lets a sender blocked at the
+// window keep taking chunks off every connection's receive ring into a side buffer and acking
+// them, so a message may span any number of 256 KiB chunks (see nd_wait_ack_progressing).
 // ---------------------------------------------------------------------------------------
 
 static constexpr uint32_t ND_MSG_MAGIC   = 0x4E444D31; // 'NDM1'
@@ -106,11 +113,28 @@ struct nd_hello {
 static inline void * nd_ctx_recv(int slot) { return (void *)(uintptr_t)(slot + 1); }
 static inline int    nd_ctx_slot(void * ctx) { return (int)(uintptr_t)ctx - 1; }
 static void * const  ND_CTX_SEND = (void *)(uintptr_t)(ND_RX_DEPTH + 2);
+// an ack posted from the dedicated ack slot (multi-chunk mode), retired outside the tx ring
+static void * const  ND_CTX_ACK  = (void *)(uintptr_t)(ND_RX_DEPTH + 3);
+// the dedicated ack slot sits after the tx ring in the same registered buffer
+static constexpr size_t ND_ACK_SLOT_BYTES = 64;
 
 static bool nd_debug() {
     static const bool on = []() {
         const char * v = std::getenv("LLAMA_DIST_TP_RDMA_DEBUG");
         return v && v[0] != '\0' && v[0] != '0';
+    }();
+    return on;
+}
+
+// Opt-in, LLAMA_DIST_TP_RDMA_MULTICHUNK=1: see the flow-control note above. Unset, nothing changes.
+static bool nd_multichunk() {
+    static const bool on = []() {
+        const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MULTICHUNK");
+        const bool r = v && v[0] != '\0' && v[0] != '0';
+        if (r) {
+            std::fprintf(stderr, "[dist-tp][nd] multi-chunk messages: a blocked sender keeps receiving\n");
+        }
+        return r;
     }();
     return on;
 }
@@ -196,12 +220,22 @@ struct dist_nd_conn {
     int      tx_slot_cur  = 0;   // ring index currently being staged into
     int      tx_inflight  = 0;   // sends posted whose completion has not been reaped yet
 
+    // Multi-chunk mode: payload taken off the receive ring while this rank was blocked at its
+    // own send window. It precedes everything still in rx_ready, and nd_recv_raw reads it first.
+    std::vector<uint8_t> rx_spill;
+    size_t   rx_spill_off = 0;
+    int      ack_inflight = 0;   // acks posted from the dedicated slot and not yet retired
+
     uint8_t * tx_slot(int i) const {
         return tx_buf + (size_t)i * ND_SLOT;
     }
 
     uint8_t * rx_slot(int i) const {
         return rx_buf + (size_t)i * ND_SLOT;
+    }
+
+    uint8_t * ack_slot() const {
+        return tx_buf + (size_t)ND_TX_DEPTH * ND_SLOT;
     }
 
     bool post_rx(int i) {
@@ -360,7 +394,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
         return false;
     }
 
-    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_TX_DEPTH, 4096);
+    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_TX_DEPTH + ND_ACK_SLOT_BYTES, 4096);
     c->rx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_RX_DEPTH, 4096);
     if (!c->tx_buf || !c->rx_buf) {
         return false;
@@ -374,7 +408,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
     if (FAILED(hr)) {
         return false;
     }
-    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT * ND_TX_DEPTH, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
+    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT * ND_TX_DEPTH + ND_ACK_SLOT_BYTES, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
     if (!nd_done(hr, c->tx_mr, &c->ov.ov)) {
         ND_LOG_DBG("tx Register failed: 0x%08lx\n", (unsigned long)hr);
         return false;
@@ -604,25 +638,45 @@ static bool nd_connect(std::unique_ptr<dist_nd_conn> & conn, const struct sockad
 // data path
 // ---------------------------------------------------------------------------------------
 
+static bool nd_completion_ok(const ND2_RESULT * res) {
+    if (FAILED(res->Status)) {
+        // the provider reports every error event as a failed send, so the request
+        // context is the only reliable way to tell what actually failed
+        const int slot = nd_ctx_slot(res->RequestContext);
+        ND_LOG_ERR("completion failed: status=0x%08lx type=%d on %s (bytes=%lu)\n",
+                   (unsigned long)res->Status, (int)res->RequestType,
+                   (res->RequestContext == ND_CTX_SEND || res->RequestContext == ND_CTX_ACK) ? "send" :
+                   (slot >= 0 && slot < ND_RX_DEPTH) ? "recv" : "unknown request",
+                   (unsigned long)res->BytesTransferred);
+        if (slot >= 0 && slot < ND_RX_DEPTH) {
+            ND_LOG_ERR("  failing recv slot %d of %d\n", slot, ND_RX_DEPTH);
+        }
+        return false;
+    }
+    return true;
+}
+
+static int64_t nd_qpc() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+
+// ND_POLL_TICK_MS in QueryPerformanceCounter ticks
+static int64_t nd_tick_ticks() {
+    static const int64_t ticks = []() {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return (int64_t)f.QuadPart * ND_POLL_TICK_MS / 1000;
+    }();
+    return ticks;
+}
+
 static bool nd_poll(dist_nd_conn * c, ND2_RESULT * res) {
     uint32_t ready_no_result = 0;
     for (uint64_t s = 0; ; s++) {
         if (c->cq->GetResults(res, 1) == 1) {
-            if (FAILED(res->Status)) {
-                // the provider reports every error event as a failed send, so the request
-                // context is the only reliable way to tell what actually failed
-                const int slot = nd_ctx_slot(res->RequestContext);
-                ND_LOG_ERR("completion failed: status=0x%08lx type=%d on %s (bytes=%lu)\n",
-                           (unsigned long)res->Status, (int)res->RequestType,
-                           res->RequestContext == ND_CTX_SEND ? "send" :
-                           (slot >= 0 && slot < ND_RX_DEPTH) ? "recv" : "unknown request",
-                           (unsigned long)res->BytesTransferred);
-                if (slot >= 0 && slot < ND_RX_DEPTH) {
-                    ND_LOG_ERR("  failing recv slot %d of %d\n", slot, ND_RX_DEPTH);
-                }
-                return false;
-            }
-            return true;
+            return nd_completion_ok(res);
         }
         if (s < ND_POLL_SPIN) {
             YieldProcessor();
@@ -672,11 +726,11 @@ static bool nd_poll(dist_nd_conn * c, ND2_RESULT * res) {
     }
 }
 
-// consumes exactly one completion and routes it to the send, ack or data path
-static bool nd_step(dist_nd_conn * c) {
-    ND2_RESULT res = {};
-    if (!nd_poll(c, &res)) {
-        return false;
+// routes one completion to the send, ack or data path
+static bool nd_route(dist_nd_conn * c, const ND2_RESULT & res) {
+    if (res.RequestContext == ND_CTX_ACK) {
+        c->ack_inflight--;   // the dedicated ack slot is free again
+        return true;
     }
     if (res.RequestContext == ND_CTX_SEND) {
         c->send_done++;
@@ -711,6 +765,27 @@ static bool nd_step(dist_nd_conn * c) {
     }
     c->rx_ready.push_back({ slot, hdr.len, 0 });
     return true;
+}
+
+// consumes exactly one completion, waiting for it
+static bool nd_step(dist_nd_conn * c) {
+    ND2_RESULT res = {};
+    if (!nd_poll(c, &res)) {
+        return false;
+    }
+    return nd_route(c, res);
+}
+
+// Consumes one completion if one is ready: 1 consumed, 0 none ready, -1 failed.
+static int nd_try_step(dist_nd_conn * c) {
+    ND2_RESULT res = {};
+    if (c->cq->GetResults(&res, 1) != 1) {
+        return 0;
+    }
+    if (!nd_completion_ok(&res)) {
+        return -1;
+    }
+    return nd_route(c, res) ? 1 : -1;
 }
 
 static bool nd_flush(dist_nd_conn * c);
@@ -796,14 +871,140 @@ static bool nd_send_bye(dist_nd_conn * c) {
     return nd_post_hdr_only(c, hdr);
 }
 
+// ---------------------------------------------------------------------------------------
+// multi-chunk messages (opt-in, LLAMA_DIST_TP_RDMA_MULTICHUNK)
+// ---------------------------------------------------------------------------------------
+
+// Every live connection of this process. A rank blocked at one edge's window must keep the other
+// edge's receive side moving too: on a 3-rank ring each rank waits for an ack from next while
+// prev waits for an ack from it, which is the same deadlock one hop around.
+static std::mutex                   g_nd_conns_mu;
+static std::vector<dist_nd_conn *>  g_nd_conns;
+
+static void nd_register(dist_nd_conn * c) {
+    std::lock_guard<std::mutex> lk(g_nd_conns_mu);
+    g_nd_conns.push_back(c);
+}
+
+static void nd_unregister(dist_nd_conn * c) {
+    std::lock_guard<std::mutex> lk(g_nd_conns_mu);
+    g_nd_conns.erase(std::remove(g_nd_conns.begin(), g_nd_conns.end(), c), g_nd_conns.end());
+}
+
+// An ack from its own slot, so it can leave while a data chunk is staged in the ring slot, which
+// is exactly the state of a sender blocked at its window. Acks still go out one per ND_WINDOW
+// chunks freed, so at most one is in flight per direction and the spare receive slot covers it.
+static bool nd_post_ack_direct(dist_nd_conn * c) {
+    while (c->ack_inflight > 0) {   // the previous ack still owns the slot
+        if (!nd_step(c)) {
+            return false;
+        }
+    }
+    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_ACK, 0, c->tx_seq++ };
+    memcpy(c->ack_slot(), &hdr, sizeof(hdr));
+    ND2_SGE sge = {};
+    sge.Buffer            = c->ack_slot();
+    sge.BufferLength      = (ULONG)sizeof(hdr);
+    sge.MemoryRegionToken = c->tx_token;
+    if (FAILED(c->qp->Send(ND_CTX_ACK, &sge, 1, 0))) {
+        ND_LOG_ERR("ack post failed\n");
+        return false;
+    }
+    c->ack_inflight++;
+    return true;
+}
+
+// Moves every chunk that has arrived into rx_spill, reposts its receive and acks as nd_recv_raw
+// would have. rx_ready only ever holds bytes that come after rx_spill, so order is kept.
+static bool nd_spill_rx(dist_nd_conn * c) {
+    while (!c->rx_ready.empty()) {
+        const nd_rx_item it = c->rx_ready.front();
+        c->rx_ready.pop_front();
+        const uint8_t * p = c->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off;
+        c->rx_spill.insert(c->rx_spill.end(), p, p + (it.len - it.off));
+        if (!c->post_rx(it.slot)) {
+            return false;
+        }
+        if (++c->rx_since_ack >= ND_WINDOW) {
+            c->rx_since_ack = 0;
+            if (!nd_post_ack_direct(c)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Waits for an ack on c while draining every connection's receive side. With one connection
+// (2 ranks) everything arrives on c's queue, so a blocking step is enough; with more, no single
+// queue can be slept on, so the queues are polled in turn.
+static bool nd_wait_ack_progressing(dist_nd_conn * c) {
+    std::vector<dist_nd_conn *> all;
+    {
+        std::lock_guard<std::mutex> lk(g_nd_conns_mu);
+        all = g_nd_conns;
+    }
+    if (std::find(all.begin(), all.end(), c) == all.end()) {
+        all.push_back(c);
+    }
+    const int64_t tick = nd_tick_ticks();
+    int64_t last_check = nd_qpc();
+    for (;;) {
+        for (dist_nd_conn * o : all) {
+            if (!nd_spill_rx(o)) {
+                return false;
+            }
+        }
+        if (c->ack_pending > 0) {
+            return true;
+        }
+        if (all.size() == 1) {
+            if (!nd_step(c)) {
+                return false;
+            }
+            continue;
+        }
+        bool any = false;
+        for (dist_nd_conn * o : all) {
+            const int r = nd_try_step(o);
+            if (r < 0) {
+                return false;
+            }
+            any = any || r > 0;
+        }
+        if (any) {
+            continue;
+        }
+        YieldProcessor();
+        const int64_t now = nd_qpc();
+        if (now - last_check >= tick) {
+            last_check = now;
+            for (dist_nd_conn * o : all) {
+                if (nd_tcp_peer_closed(o->tcp_in) || nd_tcp_peer_closed(o->tcp_out)) {
+                    ND_LOG_DBG("peer dropped the ring socket\n");
+                    o->peer_gone = true;
+                    c->peer_gone = true;
+                    return false;
+                }
+            }
+        }
+    }
+}
+
 static bool nd_flush(dist_nd_conn * c) {
     if (c->tx_fill == 0) {
         return true;
     }
     if (c->tx_since_ack >= ND_WINDOW) {
-        while (c->ack_pending == 0) {
-            if (!nd_step(c)) {
+        if (nd_multichunk()) {
+            if (!nd_wait_ack_progressing(c)) {
                 return false;
+            }
+        } else {
+            while (c->ack_pending == 0) {
+                if (!nd_step(c)) {
+                    return false;
+                }
             }
         }
         c->ack_pending--;
@@ -853,6 +1054,19 @@ static bool nd_recv_raw(dist_nd_conn * c, void * data, size_t size) {
     uint8_t * dst = (uint8_t *)data;
     size_t rem = size;
     while (rem > 0) {
+        // bytes spilled while this rank was blocked sending come before anything in rx_ready
+        if (c->rx_spill_off < c->rx_spill.size()) {
+            const size_t take = std::min(c->rx_spill.size() - c->rx_spill_off, rem);
+            memcpy(dst, c->rx_spill.data() + c->rx_spill_off, take);
+            dst += take;
+            rem -= take;
+            c->rx_spill_off += take;
+            if (c->rx_spill_off == c->rx_spill.size()) {
+                c->rx_spill.clear();   // keeps the capacity for the next prompt batch
+                c->rx_spill_off = 0;
+            }
+            continue;
+        }
         uint32_t idle_steps = 0;
         while (c->rx_ready.empty()) {
             if (!nd_step(c)) {
@@ -1038,6 +1252,7 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
     }
 
     err.clear();
+    nd_register(conn.get());
     return conn.release();
 }
 
@@ -1090,6 +1305,7 @@ void dist_nd_free(dist_nd_conn * c) {
     if (!c) {
         return;
     }
+    nd_unregister(c);
     if (c->connected && !c->peer_gone) {
         // Retire outstanding sends around the bye, so teardown never frees a staging slot that
         // still has a transfer against it.
