@@ -1539,10 +1539,6 @@ static const char * slot_state_name(int state) {
 }
 
 json server_task_result_metrics::to_json() {
-    double utilization = metrics.kvcache_capacity_tokens > 0
-        ? (double)metrics.kvcache_used_tokens / (double)metrics.kvcache_capacity_tokens * 100.0
-        : 0.0;
-
     double prompt_tps = metrics.prompt_bucket.time > 0
         ? (double)metrics.prompt_bucket.count / (double)metrics.prompt_bucket.time * 1e6
         : 0.0;
@@ -1554,20 +1550,34 @@ json server_task_result_metrics::to_json() {
         ? (double)metrics.n_busy_slots / (double)metrics.n_decode
         : 0.0;
 
+    // per-slot context ceiling (all slots share the context window equally)
+    double context_max_slot = 0.0;
+    if (metrics.kvcache_capacity_tokens > 0 && !metrics.kvcache_slots.empty()) {
+        context_max_slot = (double)metrics.kvcache_capacity_tokens / (double)metrics.kvcache_slots.size();
+    }
+
+    // kvcache: active tokens only
     json kvcache = json::object();
-    kvcache["capacity_tokens"] = metrics.kvcache_capacity_tokens;
     kvcache["active_tokens"] = metrics.kvcache_used_tokens;
-    kvcache["utilization"]    = json_round1(std::round(utilization * 10.0) / 10.0);
-    kvcache["slots"]          = json::array();
+
+    // slots: moved out of kvcache, each slot reports its own utilization
+    json slots = json::array();
     for (const auto & slot : metrics.kvcache_slots) {
-        kvcache["slots"].push_back(json{
-            {"slot",   slot.slot_id},
-            {"state",  std::to_string(slot.state) + " - " + slot_state_name(slot.state)},
-            {"tokens", slot.n_tokens},
+        double ctx_util = 0.0;
+        if (context_max_slot > 0) {
+            ctx_util = (double)slot.n_tokens / context_max_slot * 100.0;
+        }
+        slots.push_back(json{
+            {"slot",            slot.slot_id},
+            {"state",           std::to_string(slot.state) + " - " + slot_state_name(slot.state)},
+            {"tokens",          slot.n_tokens},
+            {"context_max",     (int)std::round(context_max_slot)},
+            {"context_utilization", json_round1(std::round(ctx_util * 10.0) / 10.0)},
         });
     }
 
     json base = json::object();
+    base["context_max"] = metrics.kvcache_capacity_tokens;
     base["tasks"] = json{
         {"processing", n_processing_slots},
         {"queued",     n_tasks_deferred},
@@ -1604,8 +1614,8 @@ json server_task_result_metrics::to_json() {
     }
 
     base["decode"] = decode;
-
     base["kvcache"] = kvcache;
+    base["slots"]   = slots;
     base["memory"] = json{
         {"context_bytes", metrics.memory_context_bytes},
         {"model_bytes",   metrics.memory_model_bytes},

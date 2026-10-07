@@ -2059,11 +2059,13 @@ void server_models_routes::init_routes() {
                 // helper: placeholder metrics JSON skeleton
                 auto placeholder_metrics = []() {
                     return json{
+                        {"context_max", 0},
                         {"tasks", json{{"processing", 0}, {"queued", 0}}},
                         {"prompt", json{{"tokens_total", 0}, {"tokens_cached_total", 0}, {"tokens_per_second", 0.0}}},
                         {"prediction", json{{"tokens_total", 0}, {"tokens_per_second", 0.0}}},
                         {"decode", json{{"total", 0}, {"n_tokens_max", 0}, {"busy_slots_per_decode", 0.0}, {"speculative", json{{"draft_tokens_total", 0}, {"verification_steps_total", 0}, {"accepted_tokens", json{{"total", 0}}}}}}},
-                        {"kvcache", json{{"capacity_tokens", 0}, {"active_tokens", 0}, {"utilization", 0.0}, {"slots", json::array()}}},
+                        {"kvcache", json{{"active_tokens", 0}}},
+                        {"slots", json::array()},
                         {"memory", json{{"context_bytes", 0}, {"model_bytes", 0}}},
                     };
                 };
