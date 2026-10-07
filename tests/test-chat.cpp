@@ -7159,6 +7159,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // TranslateGemma
+    {
+        // no reconstruction check, the template adds whitespace around assistant content
+        auto tst = peg_tester("models/templates/google-translategemma-4b-it.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+    }
+
     // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
     {
         auto tst = peg_tester("models/templates/openbmb-MiniCPM5-1B.jinja", detailed_debug);
@@ -7575,6 +7582,43 @@ static void test_developer_role_to_system_workaround() {
     }
 }
 
+// TranslateGemma raises on plain string user content, the specialized handler must rewrite it
+static void test_translate_gemma() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/google-translategemma-4b-it.jinja");
+
+    // server startup renders this example, it must not throw
+    auto example = common_chat_format_example(tmpls.get(), /* use_jinja= */ true, {});
+    assert_contains(example, "English (en-GB) to English (en-GB) translator");
+    assert_contains(example, "How are you?");
+
+    common_chat_templates_inputs inputs;
+    inputs.messages                                 = { message_user };
+    inputs.add_generation_prompt                    = true;
+    inputs.chat_template_kwargs["source_lang_code"] = R"("en")";
+    inputs.chat_template_kwargs["target_lang_code"] = R"("fr")";
+
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+    assert_contains(params.prompt, "English (en) to French (fr) translator");
+    assert_contains(params.prompt, "into French:\n\n\nHey there!<end_of_turn>\n");
+    assert_equals(std::string("<start_of_turn>model\n"), params.generation_prompt);
+    assert_ends_with(params.prompt, params.generation_prompt);
+
+    // typed text parts are joined into one item
+    inputs.messages = { message_user_parts };
+    params = common_chat_templates_apply(tmpls.get(), inputs);
+    assert_contains(params.prompt, "into French:\n\n\nHey\nthere<end_of_turn>\n");
+
+    // assistant prefill is appended after the generation prompt
+    inputs.messages               = { message_user, message_assist_prefill_content };
+    inputs.add_generation_prompt  = false;
+    inputs.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+    params = common_chat_templates_apply(tmpls.get(), inputs);
+    assert_equals(std::string("<start_of_turn>model\nHello, "), params.generation_prompt);
+    assert_ends_with(params.prompt, "Hey there!<end_of_turn>\n<start_of_turn>model\nHello, ");
+}
+
 // Verify reasoning-trace retention rules in the DeepSeek-V4 template:
 // all traces are retained unless drop_thinking is true AND the conversation
 // has no tool calls, in which case only the last (after-final-user) trace is
@@ -7952,6 +7996,7 @@ int main(int argc, char ** argv) {
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
+        test_translate_gemma();
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
