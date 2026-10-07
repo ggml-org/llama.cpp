@@ -70,7 +70,14 @@ static void case_end(test_result res) {
         case_len = printf("  %s", case_label);
     }
 
-    printf("%*s%s\n", std::max(1, status_column - case_len), "", res == TEST_OK ? "OK" : res == TEST_SKIP ? "SKIP" : "FAIL");
+    const char * status = "FAIL";
+    if (res == TEST_OK) {
+        status = "OK";
+    } else if (res == TEST_SKIP) {
+        status = "SKIP";
+    }
+
+    printf("%*s%s\n", std::max(1, status_column - case_len), "", status);
     case_len = 0;
 }
 
