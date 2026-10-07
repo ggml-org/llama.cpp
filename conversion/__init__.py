@@ -303,6 +303,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "ClefModel": "clef",
     "CogVLMForCausalLM": "cogvlm",
+    "Cohere2VisionForConditionalGeneration": "command_r",
     "PplxDeciderModel": "pplx_decider",
     "DeepseekOCR2ForCausalLM": "deepseek",
     "DeepseekOCRForCausalLM": "deepseek",

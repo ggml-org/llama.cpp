@@ -798,6 +798,16 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_internvl>(ctx_v);
                     ov_img_first = false;
                 } break;
+            case PROJECTOR_TYPE_COHERE2V:
+                {
+                    // <|START_OF_IMG|> (tile embeddings) <|IMG_LINE_BREAK|> ... <|END_OF_IMG|>
+                    img_beg = "<|START_OF_IMG|>";
+                    img_end = "<|END_OF_IMG|>";
+                    tok_sli_img_end = {lookup_token("<|IMG_LINE_BREAK|>")};
+                    tok_ov_img_end  = tok_sli_img_end;
+                    ov_img_first = false;
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_cohere2v>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_KIMIVL:
                 {
                     // <|media_start|> ... (image embeddings) ... <|media_end|>

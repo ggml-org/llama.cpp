@@ -45,6 +45,16 @@ ggml_cgraph * clip_graph_siglip::build() {
         cur = build_patch_merge_permute(cur, scale_factor);
         cur = build_mm(model.mm_fc_w, cur);
 
+    } else if (proj_type == PROJECTOR_TYPE_COHERE2V) {
+        // tiles are square, so the pixel shuffle is the same as Idefics3
+        cur = build_patch_merge_permute(cur, model.hparams.n_merge);
+        cur = build_mm(model.mm_1_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_1_b);
+        // linear_1 output is [x, gate], HF computes silu(gate) * x
+        cur = ggml_swiglu_swapped(ctx0, cur);
+        cur = build_mm(model.mm_2_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_2_b);
+
     } else if (proj_type == PROJECTOR_TYPE_LFM2) {
         // pixel unshuffle block
         const int scale_factor = model.hparams.n_merge;
