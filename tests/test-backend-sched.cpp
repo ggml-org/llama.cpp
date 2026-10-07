@@ -24,8 +24,16 @@
 #include <vector>
 
 
-// global counters for pass/fail
+
+enum test_result {
+    TEST_FAIL = 0,
+    TEST_OK   = 1,
+    TEST_SKIP = 2, // in case a backend does not support a required OP (e.g. OP_SLEEP)
+};
+
+// global counters for pass/fail/skip
 static int n_ok   = 0;
+static int n_skip = 0;
 static int n_test = 0;
 
 // default silent on success; --verbose / -v prints progress
@@ -48,11 +56,12 @@ static constexpr int status_column = 82; // for ok/fail column alignment
 static int  case_len = 0;
 static char case_label[256]; // max length of a case label
 
-static void case_end(bool ok) {
-    n_ok += ok;
+static void case_end(test_result res) {
+    n_ok   += res == TEST_OK;
+    n_skip += res == TEST_SKIP;
     n_test++;
 
-    if (ok && !print_log) {
+    if (res != TEST_FAIL && !print_log) {
         case_len = 0;
         return;
     }
@@ -61,7 +70,7 @@ static void case_end(bool ok) {
         case_len = printf("  %s", case_label);
     }
 
-    printf("%*s%s\n", std::max(1, status_column - case_len), "", ok ? "OK" : "FAIL");
+    printf("%*s%s\n", std::max(1, status_column - case_len), "", res == TEST_OK ? "OK" : res == TEST_SKIP ? "SKIP" : "FAIL");
     case_len = 0;
 }
 
@@ -89,7 +98,7 @@ static void note(const char * fmt, ...) {
 }
 
 GGML_ATTRIBUTE_FORMAT(1, 2)
-static bool fail(const char * fmt, ...) {
+static test_result fail(const char * fmt, ...) {
     if (case_len == 0) {
         case_len = printf("  %s", case_label);
     }
@@ -99,7 +108,19 @@ static bool fail(const char * fmt, ...) {
     vnote(fmt, args);
     va_end(args);
 
-    return false;
+    return TEST_FAIL;
+}
+
+GGML_ATTRIBUTE_FORMAT(1, 2)
+static test_result skip(const char * fmt, ...) {
+    if (print_log) {
+        va_list args;
+        va_start(args, fmt);
+        vnote(fmt, args);
+        va_end(args);
+    }
+
+    return TEST_SKIP;
 }
 
 GGML_ATTRIBUTE_FORMAT(1, 2)
@@ -133,7 +154,6 @@ static ggml_backend_buffer_type_t sched_cpu_buft(ggml_backend_t backend_gpu, ggm
 struct sched_backend_caps {
     ggml_backend_t backend               = nullptr;
     bool           have_device_host_buft = false;
-    bool           have_sleep            = false;
 };
 
 static ggml_backend_sched_t create_test_scheduler(const std::vector<sched_backend_caps> & backends_w_caps, size_t graph_size,
@@ -175,8 +195,16 @@ struct sched_check {
 };
 
 // executes the graph, then checks the number of splits and the results
-static bool run_and_check(ggml_backend_sched_t sched, const sched_graph & g,
+static test_result run_and_check(ggml_backend_sched_t sched, const sched_graph & g,
         const std::vector<sched_backend_caps> & backends_w_caps, const std::vector<sched_check> & checks, int64_t ne) {
+
+    // ggml_backend_sched_set_tensor_backend does not validate the op, an unsupported one would abort inside the backend
+    for (size_t i = 0; i < g.nodes.size(); i++) {
+        ggml_backend_t backend = backends_w_caps[g.backend_id[i]].backend;
+        if (!ggml_backend_supports_op(backend, g.nodes[i])) {
+            return skip("%s does not support %s", ggml_backend_name(backend), ggml_op_name(g.nodes[i]->op));
+        }
+    }
 
     // to later check if any further graph logic alters the number of splits
     int n_splits_expected = g.nodes.empty() ? 0 : 1;
@@ -212,24 +240,7 @@ static bool run_and_check(ggml_backend_sched_t sched, const sched_graph & g,
         }
     }
 
-    return true;
-}
-
-static bool backend_supports(ggml_backend_t backend, ggml_tensor * (*build)(ggml_context *, ggml_tensor *)) {
-    ggml_init_params params = {
-        /*.mem_size   =*/ 4*ggml_tensor_overhead(),
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-    ggml_context * ctx = ggml_init(params);
-
-    ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
-
-    const bool ok = ggml_backend_supports_op(backend, build(ctx, a));
-
-    ggml_free(ctx);
-
-    return ok;
+    return TEST_OK;
 }
 
 // helper struct for inputless splits, and constants like 0 and 1
@@ -294,7 +305,7 @@ static std::vector<int> create_all_to_all_chain(int n_backends) {
 
 // stress test: a tensor is incremented and sent back and forth between the backends in a ping-pong pattern.
 // One lap tests data transfers from any backend to any other backend, with and without user inputs.
-static bool stress_test_linked_list(const std::vector<sched_backend_caps> & backends_w_caps, int n_laps,
+static test_result stress_test_linked_list(const std::vector<sched_backend_caps> & backends_w_caps, int n_laps,
         int64_t tensor_len, bool use_device_host_buft) {
     const int n_backends = (int) backends_w_caps.size();
 
@@ -388,9 +399,9 @@ static bool stress_test_linked_list(const std::vector<sched_backend_caps> & back
     }
     ggml_set_output(out);
 
-    bool ok = sum < (1 << 24); // the counter has to stay exact in f32
-    if (!ok) {
-        fail("expected result %" PRId64 " does not fit into the f32 mantissa, lower n_laps", sum);
+    test_result ok;
+    if (sum >= (1 << 24)) { // the counter has to stay exact in f32
+        ok = fail("expected result %" PRId64 " does not fit into the f32 mantissa, lower n_laps", sum);
     } else {
         ok = run_and_check(sched, g, backends_w_caps, {{ out, float(sum), "out" }}, tensor_len);
     }
@@ -411,7 +422,7 @@ static bool stress_test_linked_list(const std::vector<sched_backend_caps> & back
 //  - one split producing two values followed by two splits that each consume one of them and do not depend on each other
 //  - splits with no inputs at all, from lanes re-seeded out of constants that already live on the split's backend
 //  - splits taking one activation per lane from the previous split, one of them from an older split instead
-static bool stress_test_dag(const std::vector<sched_backend_caps> & backends_w_caps, int n_lanes, int n_rounds,
+static test_result stress_test_dag(const std::vector<sched_backend_caps> & backends_w_caps, int n_lanes, int n_rounds,
         int64_t tensor_len, bool use_device_host_buft) {
 
     const int n_backends = (int) backends_w_caps.size();
@@ -521,7 +532,7 @@ static bool stress_test_dag(const std::vector<sched_backend_caps> & backends_w_c
 
     check_lanes();
 
-    bool ok = true;
+    test_result ok = TEST_OK;
     for (const sched_check & c : checks) {
         if (c.expected >= float(1 << 24)) { // the counts have to stay exact in f32
             ok = fail("expected result %.0f does not fit into the f32 mantissa, lower n_rounds", c.expected);
@@ -529,7 +540,7 @@ static bool stress_test_dag(const std::vector<sched_backend_caps> & backends_w_c
         }
     }
 
-    if (ok) {
+    if (ok == TEST_OK) {
         ok = run_and_check(sched, g, backends_w_caps, checks, tensor_len);
     }
 
@@ -551,7 +562,7 @@ static bool stress_test_dag(const std::vector<sched_backend_caps> & backends_w_c
 //   GPU: increment both {99} and {66} -> {100} and {67}
 //   Correct result is thus {100}, incorrect output is {111} when {55} was overwritten by {66} before the copy started.
 // Note: currently only reproducible on async H2D copy (=pinned memory).
-static bool test_inputless_splits_scheduling(const sched_backend_caps & gpu, const sched_backend_caps & cpu, int64_t tensor_len, int32_t sleep_us, bool use_device_host_buft) {
+static test_result test_inputless_splits_scheduling(const sched_backend_caps & gpu, const sched_backend_caps & cpu, int64_t tensor_len, int32_t sleep_us, bool use_device_host_buft) {
 
     const int GPU = 0;
     const int CPU = 1;
@@ -644,7 +655,7 @@ static bool test_inputless_splits_scheduling(const sched_backend_caps & gpu, con
     ggml_set_output(out99);
     ggml_set_output(out66);
 
-    const bool ok = run_and_check(sched, g, backends_w_caps, {
+    const test_result ok = run_and_check(sched, g, backends_w_caps, {
         { delayed, 1.0f,   "delayed" },
         { out99,   100.0f, "out99"   },
         { out66,   67.0f,  "out66"   },
@@ -664,7 +675,7 @@ static bool test_inputless_splits_scheduling(const sched_backend_caps & gpu, con
 }
 
 // Test that all async backends transmit their activations to the following async backend correctly. No user inputs tested.
-static bool test_chain_all_backends(const std::vector<sched_backend_caps> & backends_w_caps, int64_t tensor_len, bool use_device_host_buft) {
+static test_result test_chain_all_backends(const std::vector<sched_backend_caps> & backends_w_caps, int64_t tensor_len, bool use_device_host_buft) {
 
     const int n_backends = (int) backends_w_caps.size();
 
@@ -709,7 +720,7 @@ static bool test_chain_all_backends(const std::vector<sched_backend_caps> & back
     }
     ggml_set_output(out);
 
-    const bool ok = run_and_check(sched, g, backends_w_caps, {{ out, float(n_nodes), "out" }}, tensor_len);
+    const test_result ok = run_and_check(sched, g, backends_w_caps, {{ out, float(n_nodes), "out" }}, tensor_len);
 
     ggml_backend_sched_free(sched);
     ggml_free(ctx_compute);
@@ -719,7 +730,7 @@ static bool test_chain_all_backends(const std::vector<sched_backend_caps> & back
 
 // Tests data transfer between all combinations of backend pairs
 // The receiving split takes one activation from the sender plus n_inputs user inputs
-static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backends_w_caps, int b_send, int b_recv, int64_t tensor_len,
+static test_result test_pair_user_inputs(const std::vector<sched_backend_caps> & backends_w_caps, int b_send, int b_recv, int64_t tensor_len,
         int n_inputs, bool inputs_on_sender, bool parallel, bool use_device_host_buft) {
 
     const size_t graph_size = 64;
@@ -772,10 +783,10 @@ static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backen
     }
     ggml_set_output(out);
 
-    bool ok = run_and_check(sched, g, backends_w_caps, {{ out, float(1 + n_inputs), "out" }}, tensor_len);
+    test_result ok = run_and_check(sched, g, backends_w_caps, {{ out, float(1 + n_inputs), "out" }}, tensor_len);
 
     for (ggml_tensor * in : inputs) {
-        if (!ok) {
+        if (ok != TEST_OK) {
             break;
         }
         ggml_backend_tensor_get(in, data.data(), 0, ggml_nbytes(in));
@@ -797,7 +808,7 @@ static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backen
 
 // Tests Y-shaped scheduling: two parallel lanes merging into 1. Lane A and B, merging into a single split.
 // The lanes join in a final split on backend_a that receives one activation from each of the two backend_b splits.
-static bool test_y_shaped_graph(const std::vector<sched_backend_caps> & backends_w_caps, int backend_a, int backend_b, int64_t tensor_len,
+static test_result test_y_shaped_graph(const std::vector<sched_backend_caps> & backends_w_caps, int backend_a, int backend_b, int64_t tensor_len,
         bool use_device_host_buft) {
 
     const size_t graph_size = 64;
@@ -832,7 +843,7 @@ static bool test_y_shaped_graph(const std::vector<sched_backend_caps> & backends
     ggml_set_name(out, "out");
     ggml_set_output(out);
 
-    const bool ok = run_and_check(sched, g, backends_w_caps, {{ out, 4.0f, "out" }}, tensor_len);
+    const test_result ok = run_and_check(sched, g, backends_w_caps, {{ out, 4.0f, "out" }}, tensor_len);
 
     ggml_backend_sched_free(sched);
     ggml_free(ctx_compute);
@@ -889,10 +900,9 @@ static bool initialize_backends(std::vector<sched_backend_caps> & backends_w_cap
         ggml_backend_dev_t dev = ggml_backend_get_device(sched_back_caps.backend);
 
         sched_back_caps.have_device_host_buft = ggml_backend_dev_host_buffer_type(dev) != nullptr;
-        sched_back_caps.have_sleep = backend_supports(sched_back_caps.backend, [](ggml_context * ctx, ggml_tensor * a) { return ggml_sleep(ctx, a, 0); });
 
-        log_maybe("backend: %-10s host_buft = %d, sleep = %d (%s)\n", ggml_backend_name(sched_back_caps.backend),
-                sched_back_caps.have_device_host_buft, sched_back_caps.have_sleep, ggml_backend_dev_description(dev));
+        log_maybe("backend: %-10s host_buft = %d (%s)\n", ggml_backend_name(sched_back_caps.backend),
+                sched_back_caps.have_device_host_buft, ggml_backend_dev_description(dev));
     }
     log_maybe("\n");
     return true;
@@ -937,16 +947,14 @@ int main(int argc, char ** argv) {
 
             log_maybe("=== Backend: %s, CPU sched buft: %s ===\n\n", name_backend, use_device_host_buft ? "device_host" : "pageable");
 
-            if (backend_w_caps.have_sleep) {
-                for (int32_t sleep_us : {50, 60, 70, 80,  400, 500, 600, 700, 1000, 10000}) {
-                    for (int tensor_len : { 2, 2048, 4096, 8192, 1600}) {
-                        case_begin("test_inputless_splits_scheduling      %-8s sleep_us = %6d, tensor_len = %4d", name_backend, sleep_us, tensor_len);
-                        case_end(test_inputless_splits_scheduling(backend_w_caps, cpu, tensor_len, sleep_us, use_device_host_buft));
-                    }
+            for (int32_t sleep_us : {50, 60, 70, 80,  400, 500, 600, 700, 1000, 10000}) {
+                for (int tensor_len : { 2, 2048, 4096, 8192, 1600}) {
+                    case_begin("test_inputless_splits_scheduling      %-8s sleep_us = %6d, tensor_len = %4d", name_backend, sleep_us, tensor_len);
+                    case_end(test_inputless_splits_scheduling(backend_w_caps, cpu, tensor_len, sleep_us, use_device_host_buft));
                 }
-
-                log_maybe("\n");
             }
+
+            log_maybe("\n");
         }
     }
 
@@ -1021,9 +1029,13 @@ int main(int argc, char ** argv) {
         ggml_backend_free(caps.backend);
     }
 
-    if (print_log || n_ok != n_test) {
-        printf("%d/%d tests passed\n", n_ok, n_test);
+    if (print_log || n_ok + n_skip != n_test) {
+        printf("%d/%d tests passed", n_ok, n_test);
+        if (n_skip > 0) {
+            printf(", %d skipped", n_skip);
+        }
+        printf("\n");
     }
 
-    return n_ok == n_test ? 0 : 1;
+    return n_ok + n_skip == n_test ? 0 : 1;
 }
