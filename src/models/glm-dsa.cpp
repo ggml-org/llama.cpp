@@ -75,19 +75,9 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
-    // MTP-only: the GGUF carries only the NextN/MTP block(s) (user split target/draft).
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    // Trunk-only: the GGUF declares MTP layers in metadata but the actual MTP
-    // tensors live in a separate file (or were stripped at conversion). Mark
-    // MTP tensors NOT_REQUIRED so the trunk loads cleanly.
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only   ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     const bool is_mla = hparams.is_mla();
     if (!is_mla) {
