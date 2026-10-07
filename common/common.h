@@ -960,10 +960,15 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
     COMMON_DECISION_TYPE_LAYA,    // score of one marker token per option, read from the embeddings output
     COMMON_DECISION_TYPE_CLEF,    // all questions in one prompt, score of option i read from the embeddings output at row i
+    COMMON_DECISION_TYPE_PPLX_DECIDER, // same as openjev, label codes of 1 or 2 letters
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
 common_decision_type common_get_decision_type(const struct llama_model * model);
+
+// same as above, but reads a GGUF file; it does not load the model
+// returns COMMON_DECISION_TYPE_UNKNOWN if the file is missing, unreadable, or invalid
+common_decision_type common_get_decision_type(const std::string & fname);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {

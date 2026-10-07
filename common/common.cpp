@@ -1,4 +1,5 @@
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "gguf.h"
 
 #include "build-info.h"
@@ -1162,12 +1163,13 @@ struct common_init_result::impl {
 };
 
 static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NAMES = {
-    { COMMON_DECISION_TYPE_OPENJEV, "openjev" },
-    { COMMON_DECISION_TYPE_LEV,     "lev"     },
-    { COMMON_DECISION_TYPE_KEV,     "kev"     },
-    { COMMON_DECISION_TYPE_NIMBLE,  "nimble"  },
-    { COMMON_DECISION_TYPE_LAYA,    "laya"    },
-    { COMMON_DECISION_TYPE_CLEF,    "clef"    },
+    { COMMON_DECISION_TYPE_OPENJEV,        "openjev"       },
+    { COMMON_DECISION_TYPE_LEV,            "lev"           },
+    { COMMON_DECISION_TYPE_KEV,            "kev"           },
+    { COMMON_DECISION_TYPE_NIMBLE,         "nimble"        },
+    { COMMON_DECISION_TYPE_LAYA,           "laya"          },
+    { COMMON_DECISION_TYPE_CLEF,           "clef"          },
+    { COMMON_DECISION_TYPE_PPLX_DECIDER,   "pplx-decider"  },
 };
 
 static common_decision_type common_decision_type_from_string(const std::string & str) {
@@ -1189,6 +1191,41 @@ common_decision_type common_get_decision_type(const struct llama_model * model) 
         return COMMON_DECISION_TYPE_NONE;
     }
     return common_decision_type_from_string(buf);
+}
+
+common_decision_type common_get_decision_type(const std::string & fname) {
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(fname.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // missing or unreadable file
+    }
+
+    std::string arch;
+    const int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+    if (arch_id < 0) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // no architecture in the metadata
+    }
+    if (gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+    }
+    arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    if (arch.empty()) {
+        return COMMON_DECISION_TYPE_UNKNOWN;
+    }
+
+    const std::string key = arch + ".decision.type";
+    const int64_t type_id = gguf_find_key(gguf_ctx.get(), key.c_str());
+    if (type_id < 0) {
+        return COMMON_DECISION_TYPE_NONE;
+    }
+    if (gguf_get_kv_type(gguf_ctx.get(), type_id) != GGUF_TYPE_STRING) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+    }
+    return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
 }
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
