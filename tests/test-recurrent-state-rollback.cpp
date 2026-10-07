@@ -131,7 +131,7 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
 
     constexpr uint32_t  n_seqs     = 2;
     constexpr uint32_t  n_ubatch   = 16;
-    constexpr uint32_t  n_prompt   = 19;
+    constexpr uint32_t  n_prompt   = 20;
     constexpr uint32_t  n_rollback = 3;
     constexpr uint32_t  n_replay   = 40; // > n_ubatch so each seq spans multiple ubatches
     constexpr llama_pos p0         = n_prompt - n_rollback;
@@ -174,13 +174,13 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
         return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
     };
 
-    // both contexts decode the identical [0, p0) prefill; only ctx_roll decodes
-    // the tail, which is then rolled back so its restore is pending at replay
+    // Keep the anchor at p0 - 1 when rolling back the tail.
     for (uint32_t s = 0; s < n_seqs && ok; ++s) {
-        ok = ok && decode_range(ctx_roll.get(), s, 0, (llama_pos) p0);
-        ok = ok && decode_range(ctx_ref.get(),  s, 0, (llama_pos) p0);
+        ok = ok && decode_range(ctx_roll.get(), s, 0, (llama_pos) p0 - 1);
+        ok = ok && decode_range(ctx_ref.get(),  s, 0, (llama_pos) p0 - 1);
 
-        ok = ok && decode_range(ctx_roll.get(), s, (llama_pos) p0, (llama_pos) n_prompt);
+        ok = ok && decode_range(ctx_roll.get(), s, (llama_pos) p0 - 1, (llama_pos) n_prompt);
+        ok = ok && decode_range(ctx_ref.get(),  s, (llama_pos) p0 - 1, (llama_pos) p0);
 
         ok = ok && llama_memory_seq_rm(llama_get_memory(ctx_roll.get()), (llama_seq_id) s, p0, -1);
 
