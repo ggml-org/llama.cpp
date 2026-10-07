@@ -32,7 +32,7 @@ auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         const auto   schema = common_chat_tool_parameters(function);
 
         auto tool_name = p.json_member("name", "\"" + p.literal(name) + "\"");
-        auto tool_args = p.json_member("arguments", p.schema(p.json(), "tool-" + name + "-schema", schema));
+        auto tool_args = p.json_member("arguments", p.schema(p.json(), "tool-" + std::to_string(i) + "-schema", schema));
 
         tool_choice |= p.rule("tool-" + std::to_string(i), "{" << tool_name << "," << tool_args << "}");
     }

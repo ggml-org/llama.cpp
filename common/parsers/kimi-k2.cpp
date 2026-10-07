@@ -89,7 +89,7 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & 
             auto tool_id = p.tool_id(p.literal("functions.") + p.tool_name(p.literal(name)) + p.literal(":") + p.chars("[0-9]", 1, -1));
             auto tool_parser = p.tool(
                 p.tool_open(tool_id + p.literal(ARGS_BEGIN)) +
-                p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)) +
+                p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", schema)) +
                 p.tool_close(p.optional((p.literal(CALL_END))))
             );
 

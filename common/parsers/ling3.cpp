@@ -127,8 +127,8 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
             // each argument may be preceded by whitespace: the model emits
             // newlines between arguments, the template history does not
-            foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-                auto rule_name = "ling3-arg-" + name + "-" + param.name;
+            foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                auto rule_name = "ling3-arg-" + std::to_string(tool_index) + "-" + std::to_string(param_index);
 
                 auto types = param.schema->value_types();
 
@@ -159,7 +159,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
             // required arguments in any order (as Qwen3-Coder does), then
             // optional ones in any order and number
-            auto args = p.permute("ling3-" + name + "-args", required_args);
+            auto args = p.permute("ling3-" + std::to_string(tool_index) + "-args", required_args);
             if (!optional_args.empty()) {
                 args = args + p.zero_or_more(p.choice(optional_args));
             }

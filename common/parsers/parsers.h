@@ -17,12 +17,11 @@
 
 using json = common_json;
 
-// iterate over the function tools of an OpenAI-style tools array
-// fn takes (tool_index, tool)
+// iterate over the function tools of an OpenAI-style tools array, passing each tool with its index in the array
 void foreach_function(const json & tools, const std::function<void(size_t, const json &)> & fn);
 
-// iterate over the parameters of a function tool, with the document that owns them
-void foreach_parameter(const json & function, const std::function<void(const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn);
+// iterate over the parameters of a function tool, passing each parameter with its index and the document that owns it
+void foreach_parameter(const json & function, const std::function<void(size_t, const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn);
 
 // render a template; the override arguments let a parser feed in messages, tools or context it has rewritten
 std::string common_chat_template_direct_apply_impl(

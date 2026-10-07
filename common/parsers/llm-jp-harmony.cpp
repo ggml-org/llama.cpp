@@ -115,7 +115,7 @@ common_chat_params common_chat_params_init_llm_jp_harmony(const common_chat_temp
                 const auto   params   = common_chat_tool_parameters(function);
 
                 auto func_name = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-                auto args      = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
+                auto args      = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", params));
 
                 // recipient in role header
                 //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS

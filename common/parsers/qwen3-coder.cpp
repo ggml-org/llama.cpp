@@ -100,8 +100,8 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
 
-                foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-                    auto rule_name = "tool-" + name + "-arg-" + param.name;
+                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                    auto rule_name = "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index);
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
 
@@ -141,7 +141,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                 // Accept required arguments in any order, as Qwen does not always adhere to the
                 // order provided.
-                auto args = p.permute("tool-" + name + "-args", required_args);
+                auto args = p.permute("tool-" + std::to_string(tool_index) + "-args", required_args);
                 if (!optional_args.empty()) {
                     args = args + p.zero_or_more(p.choice(optional_args));
                 }

@@ -106,6 +106,7 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & 
             auto args = p.eps();
             if (schema.contains("properties") && !schema.at("properties").empty()) {
                 auto arg_choices = p.choice();
+                size_t param_index = 0;
                 for (const auto & prop : schema.at("properties").items()) {
                     const std::string & key = prop.key();
 
@@ -119,7 +120,7 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & 
                                                     p.tool_arg_value(p.until(ARG_END));
 
                     // skip the trailing type="..." attribute: anything up to <|sep|>
-                    arg_choices |= p.rule("kimi-k3-arg-" + name + "-" + key,
+                    arg_choices |= p.rule("kimi-k3-arg-" + std::to_string(tool_index) + "-" + std::to_string(param_index++),
                                           p.tool_arg(p.tool_arg_open(p.literal(ARG_START)) +
                                                      p.tool_arg_name(p.literal(key)) + p.literal("\"") +
                                                      p.until(SEP) + p.literal(SEP) + value +

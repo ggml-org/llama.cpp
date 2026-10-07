@@ -93,7 +93,7 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
 
                 tool_choice |=
                     p.rule("tool-" + std::to_string(tool_index), p.tool_open(p.tool_name(p.literal(name)) + "[ARGS]") +
-                                               p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
+                                               p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", schema)));
             });
 
             auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;

@@ -154,8 +154,9 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
             members_of = [&](const common_chat_schema_object & object, const std::string & rule_prefix) -> common_peg_parser {
                 std::vector<common_peg_parser> required_elements;
                 std::vector<common_peg_parser> optional_elements;
-                for (const auto & prop : object.properties) {
-                    auto element = element_of(prop.name, *prop.schema, rule_prefix + "-" + prop.name);
+                for (size_t i = 0; i < object.properties.size(); i++) {
+                    const auto & prop    = object.properties[i];
+                    auto         element = element_of(prop.name, *prop.schema, rule_prefix + "-" + std::to_string(i));
                     (prop.required ? required_elements : optional_elements).push_back(element);
                 }
 
@@ -180,7 +181,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
 
             common_peg_parser invoke_body = p.eps();
             if (doc->root->kind() == common_chat_schema::KIND_OBJECT) {
-                invoke_body = members_of(static_cast<const common_chat_schema_object &>(*doc->root), "tool-" + name + "-arg");
+                invoke_body = members_of(static_cast<const common_chat_schema_object &>(*doc->root), "tool-" + std::to_string(tool_index) + "-arg");
             }
 
             auto func_parser = p.tool(

@@ -308,7 +308,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
             }
             have_call_id = true;
         }
-        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema));
+        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", schema));
         if (!arguments.start.empty()) {
             args_parser = p.literal(arguments.start) + args_parser;
         }
@@ -371,7 +371,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
-        foreach_parameter(func, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+        foreach_parameter(func, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
@@ -380,10 +380,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                 p.ac(p.tool_arg_string_value(until_suffix) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param.name + "-schema", doc, *param.schema)) +
+                                    p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema", doc, *param.schema)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
-            auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
+            auto named_arg = p.rule("tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index), arg);
             if (param.required) {
                 required_parsers.push_back(named_arg);
             } else {

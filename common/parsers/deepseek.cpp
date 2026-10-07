@@ -158,7 +158,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
 
                 std::vector<common_peg_parser> required_parsers;
                 std::vector<common_peg_parser> optional_parsers;
-                foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
                     bool is_string = param.schema->may_be_string();
 
                     auto arg = p.tool_arg(
@@ -166,11 +166,11 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
                                         p.literal("\" string=\"" + std::string(is_string ? "true" : "false") + "\">")) +
                         (is_string ?
                              p.tool_arg_string_value(p.until(PARAM_END)) :
-                             p.tool_arg_json_value(p.schema(p.json(), "tool-" + name + "-arg-" + param.name + "-schema",
+                             p.tool_arg_json_value(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema",
                                                             doc, *param.schema))) +
                         p.tool_arg_close(p.literal(PARAM_END)));
 
-                    auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
+                    auto named_arg = p.rule("tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index), arg);
                     if (param.required) {
                         required_parsers.push_back(named_arg);
                     } else {
