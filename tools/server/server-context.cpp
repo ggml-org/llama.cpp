@@ -2603,7 +2603,8 @@ private:
         return true;
     }
 
-    static bool ckpt_read_buf(std::ifstream & ifs, std::vector<uint8_t> & buf, size_t n_avail, size_t & n_read) {
+    template <typename Buf>
+    static bool ckpt_read_buf(std::ifstream & ifs, Buf & buf, size_t n_avail, size_t & n_read) {
         uint64_t n = 0;
         // check the size against the bytes left in the file before allocating, the size field may be corrupted
         if (!ckpt_read(ifs, &n, sizeof(n), n_read) || n > n_avail - n_read) {
@@ -2618,7 +2619,8 @@ private:
         n_written += size;
     }
 
-    static void ckpt_write_buf(std::ofstream & ofs, const std::vector<uint8_t> & buf, size_t & n_written) {
+    template <typename Buf>
+    static void ckpt_write_buf(std::ofstream & ofs, const Buf & buf, size_t & n_written) {
         const uint64_t n = buf.size();
         ckpt_write(ofs, &n, sizeof(n), n_written);
         if (n > 0) {
@@ -2643,7 +2645,8 @@ private:
         ckpt_write(ofs, &magic,   sizeof(magic),   n_written);
         ckpt_write(ofs, &version, sizeof(version), n_written);
         ckpt_write(ofs, &count,   sizeof(count),   n_written);
-        for (const auto & cur : slot.prompt.checkpoints) {
+        for (const auto & ckpt : slot.prompt.checkpoints) {
+            const auto & cur = *ckpt;
             ckpt_write(ofs, &cur.n_tokens, sizeof(cur.n_tokens), n_written);
             ckpt_write(ofs, &cur.pos_min,  sizeof(cur.pos_min),  n_written);
             ckpt_write(ofs, &cur.pos_max,  sizeof(cur.pos_max),  n_written);
@@ -2681,9 +2684,10 @@ private:
             SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
             return 0;
         }
-        std::list<common_prompt_checkpoint> checkpoints;
+        std::list<std::shared_ptr<common_prompt_checkpoint>> checkpoints;
         for (uint32_t i = 0; i < count; ++i) {
-            common_prompt_checkpoint cur;
+            auto ckpt = std::make_shared<common_prompt_checkpoint>();
+            auto & cur = *ckpt;
             cur.id_task = -1; // not created by a task - marks a checkpoint restored from a slot file
             if (!ckpt_read(ifs, &cur.n_tokens, sizeof(cur.n_tokens), n_read) ||
                 !ckpt_read(ifs, &cur.pos_min,  sizeof(cur.pos_min),  n_read) ||
@@ -2699,23 +2703,23 @@ private:
                 SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
                 return 0;
             }
-            checkpoints.push_back(std::move(cur));
+            checkpoints.push_back(std::move(ckpt));
             if (checkpoints.size() > (size_t) params_base.n_ctx_checkpoints) {
                 checkpoints.pop_front();
             }
         }
         // the slot file does not check the draft context - test-load one draft checkpoint, drop the draft data if it does not fit
-        if (ctx_dft != nullptr && !checkpoints.empty() && !checkpoints.back().data_dft.empty()) {
-            const bool ok = checkpoints.back().load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (ctx_dft != nullptr && !checkpoints.empty() && !checkpoints.back()->data_dft.empty()) {
+            const bool ok = checkpoints.back()->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
             if (!ok) {
                 SLT_WRN(slot, "draft context checkpoint data in '%s' does not match the draft context - dropped\n", filepath.c_str());
                 for (auto & cur : checkpoints) {
-                    cur.clear_dft();
+                    cur->clear_dft();
                 }
             }
         }
-        slot.prompt.checkpoints = std::move(checkpoints);
+        slot.prompt.checkpoints.assign(checkpoints.begin(), checkpoints.end());
         SLT_INF(slot, "restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
         return n_read;
     }
