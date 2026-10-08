@@ -744,6 +744,7 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_PROFILING`         | Integer   | `0`        | `1` logs execution timing; `2` or higher also enables OpenVINO and OpenCL profiling.                        |
 | `GGML_OPENVINO_DEBUG_NODE`       | String    | `not set`  | Add the named graph nodes as compiled outputs for debugging. Separate multiple names with commas.          |
 | `GGML_OPENVINO_MOE_OP`           | Boolean   | `1`        | On GPU, set to `0` to keep the unfused GatherMatmul path.                                                  |
+| `GGML_OPENVINO_EXACT_ZERO_POINT`  | Boolean   | `0`        | Keep the exact zero point (`min / scale`, f16) of asymmetric weights that are not requantized (Q4_1, Q4_K, Q5_1, Q5_K) instead of rounding it to an integer. Improves accuracy. On GPU, use it only with an OpenVINO version whose oneDNN fully-connected path accepts f16 zero points; older versions run these weights on a slower kernel. MoE expert weights always use the exact zero point. |
 | `GGML_OPENVINO_DUMP_CGRAPH`       | Boolean   | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
 | `GGML_OPENVINO_DUMP_IR`           | Boolean   | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |
 | `GGML_OPENVINO_DEBUG_INPUT`       | Boolean   | `0`        | Enable input debugging and print input tensor info.                                                         |
