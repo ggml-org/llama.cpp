@@ -417,7 +417,9 @@ static void assert_msg_equals(const common_chat_msg & expected,
         const auto & expected_tool_call = expected.tool_calls[i];
         const auto & actual_tool_call   = actual.tool_calls[i];
         assert_equals(expected_tool_call.name, actual_tool_call.name);
-        assert_equals(renormalize_json(expected_tool_call.arguments), renormalize_json(actual_tool_call.arguments));
+        if (expected_tool_call.arguments != actual_tool_call.arguments) {
+            assert_equals(renormalize_json(expected_tool_call.arguments), renormalize_json(actual_tool_call.arguments));
+        }
         assert_equals(expected_tool_call.id, actual_tool_call.id);
     }
 }
