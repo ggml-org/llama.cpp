@@ -134,6 +134,220 @@ enum slot_state {
 
 struct server_slot; // forward declaration
 
+// context checkpoints are the only way the server can roll back non-rewindable
+// memory (SWA windows, recurrent/hybrid state) to a prefix reuse point. the slot save
+// file does not carry them, so the ledger is persisted next to it and rebuilt at
+// restore - keeping prefix reuse alive across the save/restore round-trip (#25913).
+// sidecar format (all integers native-endian), fixed header then one record per checkpoint:
+//   magic(4) as "LCKP", version(u32), n_checkpoints(u32), desc_tgt_len(u32), desc_dft_len(u32)
+//   desc_tgt bytes + desc_dft bytes
+//   record: n_tokens(i64) id_task(i32) pos_min(i32) pos_max(i32)
+//           data_tgt_size(u64) + bytes, data_dft_size(u64) + bytes, data_spec_size(u64) + bytes
+// the model descriptions identify the topology that produced the opaque state blobs; a
+// restore against a different topology rejects the sidecar and reprocesses the prompt.
+// the sidecar is published via tmp + rename so it never pairs with a half-written save.
+static constexpr uint32_t SERVER_CKPT_MAGIC    = 0x504B434C; // u32 native-endian; the bytes spell "LCKP"
+static constexpr uint32_t SERVER_CKPT_VERSION  = 1;
+static constexpr uint64_t SERVER_CKPT_RECORD_MIN_SIZE = sizeof(int64_t) + 3 * sizeof(int32_t) + 3 * sizeof(uint64_t);
+
+static std::string server_checkpoint_sidecar_path(const std::string & filepath) {
+    return filepath + ".ckpt";
+}
+
+static std::string server_model_desc(llama_context * ctx) {
+    if (ctx == nullptr) {
+        return "";
+    }
+    char buf[256] = "";
+    llama_model_desc(llama_get_model(ctx), buf, sizeof(buf));
+    return std::string(buf);
+}
+
+static std::string server_serialize_checkpoints_sidecar(const std::list<common_prompt_checkpoint> & checkpoints,
+        const std::string & desc_tgt, const std::string & desc_dft) {
+    std::string buf;
+    auto append = [&buf] (const void * data, size_t size) {
+        buf.append((const char *) data, size);
+    };
+
+    const uint32_t magic    = SERVER_CKPT_MAGIC;
+    const uint32_t version  = SERVER_CKPT_VERSION;
+    const uint32_t n_ckpt   = (uint32_t) checkpoints.size();
+    const uint32_t tgt_desc_len = (uint32_t) desc_tgt.size();
+    const uint32_t dft_desc_len = (uint32_t) desc_dft.size();
+
+    append(&magic,         sizeof(magic));
+    append(&version,       sizeof(version));
+    append(&n_ckpt,        sizeof(n_ckpt));
+    append(&tgt_desc_len,  sizeof(tgt_desc_len));
+    append(&dft_desc_len,  sizeof(dft_desc_len));
+    append(desc_tgt.data(), desc_tgt.size());
+    append(desc_dft.data(), desc_dft.size());
+
+    for (const auto & ckpt : checkpoints) {
+        const int64_t  n_tokens  = ckpt.n_tokens;
+        const int32_t  id_task   = ckpt.id_task;
+        const int32_t  pos_min   = ckpt.pos_min;
+        const int32_t  pos_max   = ckpt.pos_max;
+        const uint64_t tgt_size  = ckpt.data_tgt.size();
+        const uint64_t dft_size  = ckpt.data_dft.size();
+        const uint64_t spec_size = ckpt.data_spec.size();
+
+        append(&n_tokens,   sizeof(n_tokens));
+        append(&id_task,    sizeof(id_task));
+        append(&pos_min,    sizeof(pos_min));
+        append(&pos_max,    sizeof(pos_max));
+        append(&tgt_size,   sizeof(tgt_size));
+        append(ckpt.data_tgt.data(),  tgt_size);
+        append(&dft_size,   sizeof(dft_size));
+        append(ckpt.data_dft.data(),  dft_size);
+        append(&spec_size,  sizeof(spec_size));
+        append(ckpt.data_spec.data(), spec_size);
+    }
+
+    return buf;
+}
+
+static bool server_save_checkpoints_sidecar(const std::string & filepath, const std::list<common_prompt_checkpoint> & checkpoints,
+        const std::string & desc_tgt, const std::string & desc_dft) {
+    const std::string sidecar_path = server_checkpoint_sidecar_path(filepath);
+    const std::string buf = server_serialize_checkpoints_sidecar(checkpoints, desc_tgt, desc_dft);
+
+    const std::string tmp_path = sidecar_path + ".tmp";
+    {
+        std::ofstream out(tmp_path, std::ios::binary);
+        if (!out.is_open()) {
+            return false;
+        }
+        out.write(buf.data(), (std::streamsize) buf.size());
+        out.flush();
+        if (!out.good()) {
+            std::filesystem::remove(tmp_path);
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmp_path, sidecar_path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp_path);
+        return false;
+    }
+    return true;
+}
+
+static bool server_load_checkpoints_sidecar(const std::string & filepath, std::list<common_prompt_checkpoint> & checkpoints,
+        const std::string & desc_tgt, const std::string & desc_dft) {
+    std::ifstream in(server_checkpoint_sidecar_path(filepath), std::ios::binary);
+    if (!in.is_open()) {
+        return false;
+    }
+
+    in.seekg(0, std::ios::end);
+    const uint64_t file_size = (uint64_t) in.tellg();
+    in.seekg(0, std::ios::beg);
+
+    uint32_t magic       = 0;
+    uint32_t version     = 0;
+    uint32_t n_ckpt      = 0;
+    uint32_t tgt_desc_len = 0;
+    uint32_t dft_desc_len = 0;
+
+    in.read((char *) &magic,        sizeof(magic));
+    in.read((char *) &version,      sizeof(version));
+    in.read((char *) &n_ckpt,       sizeof(n_ckpt));
+    in.read((char *) &tgt_desc_len, sizeof(tgt_desc_len));
+    in.read((char *) &dft_desc_len, sizeof(dft_desc_len));
+
+    if (!in.good() || magic != SERVER_CKPT_MAGIC || version != SERVER_CKPT_VERSION) {
+        return false;
+    }
+
+    // clamp the header against the file size before trusting it to allocate
+    constexpr uint64_t header_size = 5 * sizeof(uint32_t);
+    if (file_size < header_size + tgt_desc_len + dft_desc_len) {
+        return false;
+    }
+
+    std::string file_desc_tgt(tgt_desc_len, '\0');
+    std::string file_desc_dft(dft_desc_len, '\0');
+    if (tgt_desc_len) { in.read(file_desc_tgt.data(), tgt_desc_len); }
+    if (dft_desc_len) { in.read(file_desc_dft.data(), dft_desc_len); }
+    if (!in.good()) {
+        return false;
+    }
+
+    // the blobs are opaque state of the topology that saved them; replaying them onto a
+    // different model can corrupt the KV cache, so reject any topology mismatch
+    if (file_desc_tgt != desc_tgt || file_desc_dft != desc_dft) {
+        return false;
+    }
+
+    if (n_ckpt > (file_size - header_size - tgt_desc_len - dft_desc_len) / SERVER_CKPT_RECORD_MIN_SIZE) {
+        return false;
+    }
+
+    auto remaining = [&] (std::ifstream & f) -> uint64_t {
+        return file_size - (uint64_t) f.tellg();
+    };
+
+    // blobs are interleaved with their sizes, matching the write order
+    for (uint32_t i = 0; i < n_ckpt; ++i) {
+        common_prompt_checkpoint ckpt;
+
+        int64_t  n_tokens  = 0;
+        int32_t  id_task   = -1;
+        int32_t  pos_min   = 0;
+        int32_t  pos_max   = 0;
+        uint64_t tgt_size  = 0;
+        uint64_t dft_size  = 0;
+        uint64_t spec_size = 0;
+
+        in.read((char *) &n_tokens, sizeof(n_tokens));
+        in.read((char *) &id_task,  sizeof(id_task));
+        in.read((char *) &pos_min,  sizeof(pos_min));
+        in.read((char *) &pos_max,  sizeof(pos_max));
+        if (!in.good()) {
+            return false;
+        }
+
+        // clamp each size against the remaining bytes before allocating
+        in.read((char *) &tgt_size, sizeof(tgt_size));
+        if (!in.good() || tgt_size > remaining(in)) {
+            return false;
+        }
+        ckpt.data_tgt.resize(tgt_size);
+        in.read((char *) ckpt.data_tgt.data(), tgt_size);
+
+        in.read((char *) &dft_size, sizeof(dft_size));
+        if (!in.good() || dft_size > remaining(in)) {
+            return false;
+        }
+        ckpt.data_dft.resize(dft_size);
+        in.read((char *) ckpt.data_dft.data(), dft_size);
+
+        in.read((char *) &spec_size, sizeof(spec_size));
+        if (!in.good() || spec_size > remaining(in)) {
+            return false;
+        }
+        ckpt.data_spec.resize(spec_size);
+        in.read((char *) ckpt.data_spec.data(), spec_size);
+
+        if (!in.good()) {
+            return false;
+        }
+
+        ckpt.n_tokens = n_tokens;
+        ckpt.id_task  = id_task;
+        ckpt.pos_min  = pos_min;
+        ckpt.pos_max  = pos_max;
+
+        checkpoints.push_back(std::move(ckpt));
+    }
+
+    return remaining(in) == 0;
+}
+
 struct server_batch {
     common_batch view; // the rendered sub-batch [off, off + n_tokens), see render()
 
@@ -2792,6 +3006,13 @@ private:
                         break;
                     }
 
+                    // persist the checkpoint ledger alongside the KV state; the main save
+                    // already succeeded, so a sidecar failure is a warning, not an error
+                    if (!server_save_checkpoints_sidecar(filepath, slot->prompt.checkpoints,
+                            server_model_desc(ctx_tgt), server_model_desc(ctx_dft))) {
+                        SRV_WRN("%s: failed to write checkpoint sidecar for slot %d\n", __func__, id_slot);
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
@@ -2851,6 +3072,17 @@ private:
 
                         slot->prompt.clear();
                         slot->prompt.tokens = std::move(restored);
+
+                        // rebuild the checkpoint ledger from the sidecar so the prefix
+                        // reuse guard can roll back non-rewindable memory to a checkpoint
+                        // position (#25913). a missing, stale or invalid sidecar leaves the
+                        // ledger empty; the slot degrades to full re-processing.
+                        if (server_load_checkpoints_sidecar(filepath, slot->prompt.checkpoints,
+                                server_model_desc(ctx_tgt), server_model_desc(ctx_dft))) {
+                            SLT_INF(*slot, "restored %zu context checkpoint(s) from sidecar\n", slot->prompt.checkpoints.size());
+                        } else {
+                            SLT_DBG(*slot, "%s", "no valid checkpoint sidecar, restored slot has no checkpoints");
+                        }
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
