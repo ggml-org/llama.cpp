@@ -408,11 +408,11 @@ static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict
 // Byte l of q as int8_t. On sm_100+ nvcc 12.8 puts the byte-pointer read in local memory, so use shifts there and
 // keep the pointer read elsewhere, where it compiles well.
 static __device__ __forceinline__ int8_t get_int8(const int & q, const int l) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1000
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= 1000
     return (int8_t) (q >> (8*l));
 #else
     return ((const int8_t *) &q)[l];
-#endif // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1000
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= 1000
 }
 
 template <typename T, int ne>
