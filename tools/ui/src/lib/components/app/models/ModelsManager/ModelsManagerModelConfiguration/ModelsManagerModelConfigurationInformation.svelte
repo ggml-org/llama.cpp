@@ -10,6 +10,8 @@
 	import type { ApiLlamaCppServerProps } from '$lib/types/api';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils/formatters';
 
 	interface Props {
@@ -22,6 +24,9 @@
 	let { hub = null, option, serverProps }: Props = $props();
 
 	let meta = $derived(option.meta);
+	// a compat backend reads the template from /props or the gguf metadata; a
+	// remote provider serves its own, so the section says nothing useful there
+	let showsChatTemplate = $derived(getBackendCapabilities(getBackend(option.backendId)).props);
 	let gguf = $derived(hub?.gguf ?? null);
 	let quant = $derived(option.parsedId?.quantization ?? null);
 	// a GGUF carries the count in its metadata, a transformers repo in its SafeTensors index
@@ -183,15 +188,17 @@
 	</p>
 {/if}
 
-<div class="mt-4">
-	<CollapsibleSection triggerClass={sectionTrigger}>
-		{#snippet trigger()}
-			<span class="text-sm font-medium">Chat Template</span>
-		{/snippet}
+{#if showsChatTemplate}
+	<div class="mt-4">
+		<CollapsibleSection triggerClass={sectionTrigger}>
+			{#snippet trigger()}
+				<span class="text-sm font-medium">Chat Template</span>
+			{/snippet}
 
-		<pre
-			class="mt-1 rounded-md bg-muted/50 p-2 text-xs whitespace-pre-wrap">{serverProps?.chat_template ??
-				gguf?.chat_template ??
-				'Shown once the model is loaded.'}</pre>
-	</CollapsibleSection>
-</div>
+			<pre
+				class="mt-1 rounded-md bg-muted/50 p-2 text-xs whitespace-pre-wrap">{serverProps?.chat_template ??
+					gguf?.chat_template ??
+					'Shown once the model is loaded.'}</pre>
+		</CollapsibleSection>
+	</div>
+{/if}
