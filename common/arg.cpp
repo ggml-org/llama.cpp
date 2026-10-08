@@ -682,7 +682,10 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
             params.models_preset_hf = params.model.hf_repo; // only for showing a warning
             params.models_preset    = hf_cache::finalize_file(plan.preset);
-            params.model = common_params_model{}; // make sure to clear model, so server starts in router mode
+            // clear the model so the server starts in router mode
+            params.model.path.clear();
+            params.model.hf_repo.clear();
+            params.model.docker_repo.clear();
         });
     }
 
@@ -2773,6 +2776,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             llm_add_n_cpu_ffn_overrides(value, LLM_FFN_EXPS_REGEX, params.tensor_buft_overrides);
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--moe-cache-mib"}, "N",
+        "GPU cache size in MiB for the MoE experts kept in the CPU. with multiple GPUs, it is split among them like the layers (--tensor-split) (default: 0, disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_cache_size = (size_t) value*1024*1024;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
     add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"

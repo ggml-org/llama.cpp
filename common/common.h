@@ -593,6 +593,8 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
+    size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)
@@ -940,6 +942,7 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
 
 // Auto-detect if colors can be enabled based on terminal and environment
 bool tty_can_use_colors();
+bool tty_enable_ansi(); // false when stdout or stderr is a console that cannot render ANSI sequences
 
 // Check if the given file is attached to a terminal
 bool common_is_tty(FILE * file);
@@ -959,10 +962,17 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
     COMMON_DECISION_TYPE_LAYA,    // score of one marker token per option, read from the embeddings output
     COMMON_DECISION_TYPE_CLEF,    // all questions in one prompt, score of option i read from the embeddings output at row i
+    COMMON_DECISION_TYPE_PPLX_DECIDER, // same as openjev, label codes of 1 or 2 letters
+    COMMON_DECISION_TYPE_LFM2_D1, // same as openjev, the labels depend on the question type
+    COMMON_DECISION_TYPE_LFM2_D1_OMNI, // same as laya, other prompt layout
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
 common_decision_type common_get_decision_type(const struct llama_model * model);
+
+// same as above, but reads a GGUF file; it does not load the model
+// returns COMMON_DECISION_TYPE_UNKNOWN if the file is missing, unreadable, or invalid
+common_decision_type common_get_decision_type(const std::string & fname);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
@@ -1286,12 +1296,13 @@ struct common_prompt_checkpoint {
             llama_seq_id seq_id,
             llama_state_seq_flags flags);
 
-    void load_tgt(
+    // return false if the state could not be restored
+    bool load_tgt(
             llama_context * ctx,
             llama_seq_id seq_id,
             llama_state_seq_flags flags) const;
 
-    void load_dft(
+    bool load_dft(
             llama_context * ctx,
             llama_seq_id seq_id,
             llama_state_seq_flags flags) const;

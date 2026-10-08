@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.59.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003b00"
+#define CPPHTTPLIB_VERSION "0.60.1"
+#define CPPHTTPLIB_VERSION_NUM "0x003c01"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -4377,7 +4377,7 @@ public:
 
 private:
   bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms,
-                      bool &has_data);
+                      bool &has_data, bool &has_id);
   void run_event_loop();
   void dispatch_event(const SSEMessage &msg);
   bool should_reconnect(int count) const;
@@ -4411,6 +4411,8 @@ private:
 } // namespace sse
 
 namespace ws {
+
+class WebSocketClient;
 
 enum class Opcode : uint8_t {
   Continuation = 0x0,
@@ -4513,7 +4515,7 @@ public:
 
 private:
   friend class httplib::Server;
-  friend class WebSocketClient;
+  friend class httplib::ws::WebSocketClient;
 
   WebSocket(
       Stream &strm, const Request &req, bool is_server,

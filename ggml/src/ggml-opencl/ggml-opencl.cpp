@@ -18865,9 +18865,11 @@ static void ggml_cl_mul_mat_f16_f32_adreno_xmem(
     const int kpack = K / 4;
     const int npack = CEIL_DIV(M, 4);
     const int os = 8;
+    // Pad weights to the 32-row tiles read by the xmem kernel.
+    const int npack_padded = CEIL_DIV(npack, os)*os;
 
     const size_t xmem_bytes = 6144;
-    const size_t weight_bytes = static_cast<size_t>(kpack) * static_cast<size_t>(npack) * 4u * sizeof(cl_half4);
+    const size_t weight_bytes = static_cast<size_t>(kpack) * static_cast<size_t>(npack_padded) * 4u * sizeof(cl_half4);
 
     backend_ctx->prealloc_adreno_xmem_const.allocate(backend_ctx->context, xmem_bytes);
 
@@ -18900,14 +18902,14 @@ static void ggml_cl_mul_mat_f16_f32_adreno_xmem(
     CL_CHECK(clSetKernelArg(prepack, 3, sizeof(int),      &K));
     CL_CHECK(clSetKernelArg(prepack, 4, sizeof(int),      &M));
     CL_CHECK(clSetKernelArg(prepack, 5, sizeof(int),      &kpack));
-    CL_CHECK(clSetKernelArg(prepack, 6, sizeof(int),      &npack));
+    CL_CHECK(clSetKernelArg(prepack, 6, sizeof(int),      &npack_padded));
     CL_CHECK(clSetKernelArg(prepack, 7, sizeof(int),      &os));
     size_t lws = 256;
     size_t max_wg = backend_ctx->get_kernel_workgroup_size(prepack);
     if (lws > max_wg) {
         lws = max_wg;
     }
-    size_t gws = CEIL_DIV(static_cast<size_t>(kpack) * static_cast<size_t>(npack), lws) * lws;
+    size_t gws = CEIL_DIV(static_cast<size_t>(kpack) * static_cast<size_t>(npack_padded), lws) * lws;
     backend_ctx->enqueue_ndrange_kernel(prepack, 1, &gws, &lws, dst);
 
     cl_kernel pack_src = backend_ctx->kernel_adreno_xmem_pack_src_f32;

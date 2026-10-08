@@ -167,9 +167,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
-    if (output == nullptr && tok_embd != nullptr) {
-        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab_draft }, TENSOR_DUPLICATED);
-    }
 
     if (hparams.dsv4_hc_mult > 0) {
         const int64_t q_lora_rank     = hparams.n_lora_q;
@@ -604,6 +601,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     };
 
     // KV cache injection
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
@@ -870,6 +868,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
 
     // KV cache injection: fused target features from the encoder
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 

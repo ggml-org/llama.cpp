@@ -169,7 +169,8 @@ void SSEClient::stop() {
 }
 
 bool SSEClient::parse_sse_line(const std::string &line, SSEMessage &msg,
-                                      int &retry_ms, bool &has_data) {
+                                      int &retry_ms, bool &has_data,
+                                      bool &has_id) {
   // Blank line signals end of event
   if (line.empty()) { return true; }
 
@@ -199,6 +200,7 @@ bool SSEClient::parse_sse_line(const std::string &line, SSEMessage &msg,
   } else if (field == "id") {
     // Empty id is valid (clears the last event ID)
     msg.id = value;
+    has_id = true;
   } else if (field == "retry") {
     // Parse retry interval in milliseconds
     // Per the SSE spec, a value that is not all ASCII digits is ignored.
@@ -269,7 +271,8 @@ void SSEClient::run_event_loop() {
     // Event receiving loop
     std::string buffer;
     SSEMessage current_msg;
-    bool has_data = false;
+    auto has_data = false;
+    auto has_id = false;
 
     while (running_.load() && result.next()) {
       buffer.append(result.data(), result.size());
@@ -288,13 +291,13 @@ void SSEClient::run_event_loop() {
         if (!line.empty() && line.back() == '\r') { line.pop_back(); }
 
         // Parse the line and check if event is complete
-        auto event_complete =
-            parse_sse_line(line, current_msg, reconnect_interval_ms_, has_data);
+        auto event_complete = parse_sse_line(
+            line, current_msg, reconnect_interval_ms_, has_data, has_id);
 
         if (event_complete) {
           // Update last_event_id for reconnection, even for an event that
-          // has no data
-          if (!current_msg.id.empty()) { last_event_id_ = current_msg.id; }
+          // has no data. An empty id clears it.
+          if (has_id) { last_event_id_ = current_msg.id; }
 
           // An event without a data field is not dispatched
           if (has_data) { dispatch_event(current_msg); }
@@ -302,6 +305,7 @@ void SSEClient::run_event_loop() {
           // Reset the message for the next event either way
           current_msg.clear();
           has_data = false;
+          has_id = false;
         }
       }
 
@@ -3550,9 +3554,11 @@ struct WebSocketUpgradeResponse {
   std::string selected_subprotocol;
 };
 
-bool read_websocket_upgrade_response(Stream &strm,
-                                            const std::string &expected_accept,
-                                            WebSocketUpgradeResponse &upgrade) {
+bool
+read_websocket_upgrade_response(Stream &strm,
+                                const std::string &expected_accept,
+                                const std::string &offered_subprotocols,
+                                WebSocketUpgradeResponse &upgrade) {
   // Read status line
   const auto bufsiz = 2048;
   char buf[bufsiz];
@@ -3607,6 +3613,22 @@ bool read_websocket_upgrade_response(Stream &strm,
   auto proto_it = headers.find("Sec-WebSocket-Protocol");
   if (proto_it != headers.end()) {
     upgrade.selected_subprotocol = proto_it->second;
+  }
+
+  // Verify the subprotocol is one the client offered (RFC 6455 4.1)
+  if (!upgrade.selected_subprotocol.empty()) {
+    auto was_offered = false;
+    split(offered_subprotocols.data(),
+          offered_subprotocols.data() + offered_subprotocols.size(), ',',
+          [&](const char *b, const char *e) {
+            if (std::string(b, e) == upgrade.selected_subprotocol) {
+              was_offered = true;
+            }
+          });
+    if (!was_offered) {
+      upgrade.error = Error::WebSocketHandshake;
+      return false;
+    }
   }
 
   return true;
@@ -4254,6 +4276,9 @@ bool redirect(T &cli, Request &req, Response &res,
     new_req.method = "GET";
     new_req.body.clear();
     new_req.headers.clear();
+    new_req.content_length_ = 0;
+    new_req.content_provider_ = nullptr;
+    new_req.is_chunked_content_provider_ = false;
   }
 
   Response new_res;
@@ -5167,8 +5192,10 @@ bool range_error(Request &req, Response &res) {
         last_pos = content_len;
       }
 
+      // RFC 9110 14.1.2: a suffix-length longer than the representation
+      // selects the entire representation.
       if (first_pos == -1) {
-        first_pos = content_len - last_pos;
+        first_pos = (std::max)(static_cast<ssize_t>(0), content_len - last_pos);
         last_pos = content_len - 1;
       }
 
@@ -5603,7 +5630,10 @@ bool perform_websocket_handshake(Stream &strm, Request &req,
 
   // Verify 101 response and Sec-WebSocket-Accept header
   auto expected_accept = websocket_accept_key(client_key);
-  return read_websocket_upgrade_response(strm, expected_accept, upgrade);
+  auto offered_subprotocols =
+      get_combined_header_value(req.headers, "Sec-WebSocket-Protocol");
+  return read_websocket_upgrade_response(strm, expected_accept,
+                                         offered_subprotocols, upgrade);
 }
 
 bool is_ip_address(const std::string &host) {
@@ -6107,12 +6137,6 @@ bool verify_cert_with_windows_schannel(
 
   auto chain_guard =
       scope_exit([&] { CertFreeCertificateChain(chain_context); });
-
-  // Check if chain has errors
-  if (chain_context->TrustStatus.dwErrorStatus != CERT_TRUST_NO_ERROR) {
-    out_error = chain_context->TrustStatus.dwErrorStatus;
-    return false;
-  }
 
   // Verify SSL policy
   SSL_EXTRA_CERT_CHAIN_POLICY_PARA extra_policy_para = {};
@@ -9946,6 +9970,12 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
                             protocols.emplace_back(b, e);
                           });
             selected_subprotocol = entry.sub_protocol_selector(protocols);
+
+            // Ignore a selection the client did not offer (RFC 6455 4.2.2)
+            if (std::find(protocols.begin(), protocols.end(),
+                          selected_subprotocol) == protocols.end()) {
+              selected_subprotocol.clear();
+            }
           }
         }
 
@@ -11016,7 +11046,7 @@ bool ClientImpl::redirect(Request &req, Response &res, Error &error) {
   if (next_host.empty()) { next_host = host_; }
   if (next_path.empty()) { next_path = "/"; }
 
-  auto path = decode_path_component(next_path) + next_query;
+  auto path = std::move(next_path) + next_query;
 
   // Same host redirect - use current client
   if (next_scheme == scheme && next_host == host_ && next_port == port_) {
@@ -11271,9 +11301,9 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
     // Write request line and headers
     if (detail::write_request_line(bstrm, req.method, path_with_query) < 0) {
       // A rejected method (not a token, e.g. carrying CR/LF) or target (e.g.
-      // CR/LF smuggled in via a decoded redirect Location under
-      // set_path_encode(false)) must fail the request cleanly instead of
-      // emitting a request-line-less, header-injecting request.
+      // CR/LF in a caller-supplied path under set_path_encode(false)) must
+      // fail the request cleanly instead of emitting a request-line-less,
+      // header-injecting request.
       error = Error::Write;
       rejected_locally = true;
       output_error_log(error, &req);
@@ -16304,29 +16334,24 @@ bool verify_hostname(cert_t cert, const char *hostname) {
   auto ip_len = impl::parse_ip_address(host_str, ip_bytes);
   auto is_ip = ip_len > 0;
 
-  // Check Subject Alternative Names (SAN)
-  // In Mbed TLS 3.x, subject_alt_names contains raw values without ASN.1 tags
-  // - DNS names: raw string bytes
-  // - IP addresses: raw IP bytes (4 for IPv4, 16 for IPv6)
+  // Check Subject Alternative Names (SAN). Mbed TLS keeps the GeneralName type
+  // in buf.tag and the raw value in buf.p / buf.len.
   const mbedtls_x509_sequence *san = &mcert->subject_alt_names;
   while (san != nullptr && san->buf.p != nullptr && san->buf.len > 0) {
     const unsigned char *p = san->buf.p;
     size_t len = san->buf.len;
+    auto san_type = san->buf.tag & MBEDTLS_ASN1_TAG_VALUE_MASK;
 
     if (is_ip) {
       // For an IP host, only a matching iPAddress SAN of the same family
       // (4 bytes for IPv4, 16 bytes for IPv6) may authenticate it.
-      if (len == ip_len && memcmp(p, ip_bytes, ip_len) == 0) { return true; }
-    } else {
-      // Check if this SAN is a DNS name (printable ASCII string)
-      bool is_dns = len > 0;
-      for (size_t i = 0; i < len && is_dns; i++) {
-        if (p[i] < 32 || p[i] > 126) { is_dns = false; }
+      if (san_type == MBEDTLS_X509_SAN_IP_ADDRESS && len == ip_len &&
+          memcmp(p, ip_bytes, ip_len) == 0) {
+        return true;
       }
-      if (is_dns) {
-        std::string san_name(reinterpret_cast<const char *>(p), len);
-        if (detail::match_hostname(san_name, host_str)) { return true; }
-      }
+    } else if (san_type == MBEDTLS_X509_SAN_DNS_NAME) {
+      std::string san_name(reinterpret_cast<const char *>(p), len);
+      if (detail::match_hostname(san_name, host_str)) { return true; }
     }
     san = san->next;
   }
@@ -16405,65 +16430,45 @@ bool get_cert_sans(cert_t cert, std::vector<SanEntry> &sans) {
   const mbedtls_x509_sequence *cur = &x509->subject_alt_names;
   while (cur != nullptr) {
     if (cur->buf.len > 0) {
-      // Mbed TLS stores SAN as ASN.1 sequences
-      // The tag byte indicates the type
       const unsigned char *p = cur->buf.p;
-      size_t len = cur->buf.len;
+      size_t value_len = cur->buf.len;
 
-      // First byte is the tag
-      unsigned char tag = *p;
-      p++;
-      len--;
-
-      // Parse length (simple single-byte length assumed)
-      if (len > 0 && *p < 0x80) {
-        size_t value_len = *p;
-        p++;
-        len--;
-
-        if (value_len <= len) {
-          SanEntry entry;
-          // ASN.1 context tags for GeneralName
-          switch (tag & 0x1F) {
-          case 2: // dNSName
-            entry.type = SanType::DNS;
-            entry.value =
-                std::string(reinterpret_cast<const char *>(p), value_len);
-            break;
-          case 7: // iPAddress
-            entry.type = SanType::IP;
-            if (value_len == 4) {
-              // IPv4
-              char buf[16];
-              snprintf(buf, sizeof(buf), "%d.%d.%d.%d", p[0], p[1], p[2], p[3]);
-              entry.value = buf;
-            } else if (value_len == 16) {
-              // IPv6
-              char buf[64];
-              snprintf(buf, sizeof(buf),
-                       "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
-                       "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
-                       p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
-                       p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
-              entry.value = buf;
-            }
-            break;
-          case 1: // rfc822Name (email)
-            entry.type = SanType::EMAIL;
-            entry.value =
-                std::string(reinterpret_cast<const char *>(p), value_len);
-            break;
-          case 6: // uniformResourceIdentifier
-            entry.type = SanType::URI;
-            entry.value =
-                std::string(reinterpret_cast<const char *>(p), value_len);
-            break;
-          default: entry.type = SanType::OTHER; break;
-          }
-
-          if (!entry.value.empty()) { sans.push_back(std::move(entry)); }
+      SanEntry entry;
+      switch (cur->buf.tag & MBEDTLS_ASN1_TAG_VALUE_MASK) {
+      case MBEDTLS_X509_SAN_DNS_NAME:
+        entry.type = SanType::DNS;
+        entry.value = std::string(reinterpret_cast<const char *>(p), value_len);
+        break;
+      case MBEDTLS_X509_SAN_IP_ADDRESS:
+        entry.type = SanType::IP;
+        if (value_len == 4) {
+          // IPv4
+          char buf[16];
+          snprintf(buf, sizeof(buf), "%d.%d.%d.%d", p[0], p[1], p[2], p[3]);
+          entry.value = buf;
+        } else if (value_len == 16) {
+          // IPv6
+          char buf[64];
+          snprintf(buf, sizeof(buf),
+                   "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+                   "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+                   p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9],
+                   p[10], p[11], p[12], p[13], p[14], p[15]);
+          entry.value = buf;
         }
+        break;
+      case MBEDTLS_X509_SAN_RFC822_NAME:
+        entry.type = SanType::EMAIL;
+        entry.value = std::string(reinterpret_cast<const char *>(p), value_len);
+        break;
+      case MBEDTLS_X509_SAN_UNIFORM_RESOURCE_IDENTIFIER:
+        entry.type = SanType::URI;
+        entry.value = std::string(reinterpret_cast<const char *>(p), value_len);
+        break;
+      default: entry.type = SanType::OTHER; break;
       }
+
+      if (!entry.value.empty()) { sans.push_back(std::move(entry)); }
     }
     cur = cur->next;
   }
@@ -18105,9 +18110,9 @@ void WebSocket::start_heartbeat() {
   if (ping_interval_sec_ == 0) { return; }
   ping_thread_ = std::thread([this]() {
     std::unique_lock<std::mutex> lock(ping_mutex_);
-    while (!closed_) {
-      ping_cv_.wait_for(lock, std::chrono::seconds(ping_interval_sec_));
-      if (closed_) { break; }
+    // The predicate keeps a spurious wakeup from sending a ping early
+    while (!ping_cv_.wait_for(lock, std::chrono::seconds(ping_interval_sec_),
+                              [this]() { return closed_.load(); })) {
       // If the peer has failed to respond to the previous pings, give up.
       // RFC 6455 does not define a pong-timeout mechanism; this is an
       // opt-in liveness check controlled by max_missed_pongs_.
