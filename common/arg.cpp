@@ -2777,6 +2777,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_OVERRIDE_TENSOR"));
     add_opt(common_arg(
+        {"--moe-direct-io"},
+        "keep routed-expert (MoE) weights off device buffers so they can be "
+        "streamed on demand from the GGUF into a VRAM slot pool",
+        [](common_params & params) {
+            params.moe_direct_io = true;
+            // Same mechanism as --cpu-moe: route the fused expert tensors to the
+            // CPU buffer so they are never offloaded to VRAM. They stay
+            // mmap-backed, so this costs no RAM and keeps tensor metadata valid.
+            params.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
+        }
+    ).set_env("LLAMA_ARG_MOE_DIRECT_IO"));
+    add_opt(common_arg(
         {"-cmoe", "--cpu-moe"},
         "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
