@@ -2890,3 +2890,39 @@ struct llama_model_k2_horizon : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
+struct llama_model_berrylm : public llama_model_base {
+    llama_model_berrylm(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+    private:
+        // gated block AttnRes: softmax-over-depth mix of the committed block streams and the current stream
+        ggml_tensor * build_attn_res(
+                    ggml_tensor * cur,
+                    ggml_tensor * blocks_t,
+                    ggml_tensor * blocks_n,
+                            int   il);
+
+        ggml_tensor * build_layer_attn(
+        llm_graph_input_attn_kv * inp_attn,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                            int   il);
+
+        ggml_tensor * build_layer_kda(
+             llm_graph_input_rs * inp,
+                    ggml_tensor * cur,
+                            int   il);
+
+        ggml_tensor * build_layer_ffn(
+                    ggml_tensor * cur,
+                            int   il);
+
+        const llama_model & model;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};

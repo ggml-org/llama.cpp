@@ -20,6 +20,13 @@ bailingmoe3         ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
 bailingmoe3         ,1   ,any     ,MUL+ADD                     ,      2
 bailingmoe3         ,1   ,any     ,RMS_NORM+MUL                ,      8
 bailingmoe3         ,1   ,any     ,RMS_NORM+SCALE              ,      2
+berrylm             ,0   ,any     ,ADD+ADD                     ,     10
+berrylm             ,0   ,any     ,GATED_DELTA_NET+CPY         ,      7
+berrylm             ,0   ,any     ,MUL+ADD                     ,     20
+berrylm             ,0   ,any     ,RMS_NORM+MUL                ,     44
+berrylm             ,0   ,any     ,RMS_NORM+SCALE              ,     14
+berrylm             ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,     10
+berrylm             ,0   ,any     ,SSM_CONV+UNARY              ,      7
 bloom               ,0   ,any     ,NORM+MUL+ADD                ,      6
 chatglm             ,0   ,any     ,RMS_NORM+MUL                ,      5
 codeshell           ,0   ,any     ,NORM+MUL+ADD                ,      5
