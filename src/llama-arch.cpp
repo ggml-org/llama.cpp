@@ -370,6 +370,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_CLASSIFIER_OUTPUT_LABELS, "%s.classifier.output_labels" },
     { LLM_KV_CLASSIFIER_POOLING_TYPE,  "%s.classifier.pooling_type"  },
+    { LLM_KV_CLASSIFIER_ACTIVATION,    "%s.classifier.activation"    },
 
     { LLM_KV_DECISION_BLOCK_COUNT,         "%s.decision.block_count"         },
     { LLM_KV_DECISION_ROUTING_BLOCK_COUNT, "%s.decision.routing_block_count" },

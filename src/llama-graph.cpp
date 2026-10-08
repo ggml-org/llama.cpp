@@ -3903,11 +3903,7 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    if (arch == LLM_ARCH_MODERN_BERT) {
-                        cur = ggml_gelu(ctx0, cur);
-                    } else {
-                        cur = ggml_tanh(ctx0, cur);
-                    }
+                    cur = ggml_unary(ctx0, cur, hparams.act_cls);
                     if (cls_norm) {
                         // head norm
                         cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
