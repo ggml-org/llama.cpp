@@ -13,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,7 +23,15 @@ struct common_chat_templates;
 
 namespace autoparser {
 struct generation_params;
+struct autoparser;
 }  // namespace autoparser
+
+struct common_chat_params;
+struct common_chat_template;
+
+// Builds the prompt and parser for a template that has a dedicated handler (see common/parsers)
+using common_chat_params_init_fn = common_chat_params (*)(const common_chat_template & tmpl,
+                                                          const autoparser::generation_params & inputs);
 
 struct common_chat_tool_call {
     std::string name;
@@ -54,19 +63,15 @@ struct common_chat_template {
     std::string eos_tok;
     std::string src;
     chat_template_caps caps;
+    // Dedicated handler picked once from the source, null when the differential autoparser is used
+    common_chat_params_init_fn params_init = nullptr;
 
-    common_chat_template(const std::string & src, const std::string & bos_token, const std::string & eos_token) {
-        jinja::lexer lexer;
-        auto lexer_res = lexer.tokenize(src);
-        this->prog = jinja::parse_from_tokens(lexer_res);
+    // Differential analysis, run once here when there is no dedicated handler. Null when there
+    // is one, or when the analysis failed, in which case analysis_error says why.
+    std::shared_ptr<const autoparser::autoparser> analysis;
+    std::string analysis_error;
 
-        this->src = lexer_res.source;
-        this->bos_tok = bos_token;
-        this->eos_tok = eos_token;
-
-        this->caps = jinja::caps_get(prog);
-        // LOG_INF("%s: caps:\n%s\n", __func__, this->caps.to_string().c_str());
-    }
+    common_chat_template(const std::string & src, const std::string & bos_token, const std::string & eos_token);
 
     const std::string & source() const { return src; }
     const std::string & bos_token() const { return bos_tok; }
@@ -401,8 +406,7 @@ std::string common_chat_template_generation_prompt(
 
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
-        const std::string &                   src,
-        autoparser::generation_params & params);
+        const autoparser::generation_params & params);
 
 
 // specialized per-task preset
