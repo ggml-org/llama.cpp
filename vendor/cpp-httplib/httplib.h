@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.60.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003c00"
+#define CPPHTTPLIB_VERSION "0.60.1"
+#define CPPHTTPLIB_VERSION_NUM "0x003c01"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -4412,6 +4412,8 @@ private:
 
 namespace ws {
 
+class WebSocketClient;
+
 enum class Opcode : uint8_t {
   Continuation = 0x0,
   Text = 0x1,
@@ -4513,7 +4515,7 @@ public:
 
 private:
   friend class httplib::Server;
-  friend class WebSocketClient;
+  friend class httplib::ws::WebSocketClient;
 
   WebSocket(
       Stream &strm, const Request &req, bool is_server,
