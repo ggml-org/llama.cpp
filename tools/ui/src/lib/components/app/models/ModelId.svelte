@@ -183,7 +183,9 @@
 		{title}
 		{...rest}
 	>
-		<span class="flex min-w-0 items-center gap-1.5 max-md:gap-0.5 {wrap || stackId ? 'flex-wrap' : ''}">
+		<span
+			class="flex min-w-0 items-center gap-1.5 max-md:gap-0.5 {wrap || stackId ? 'flex-wrap' : ''}"
+		>
 			{#if showRawTooltip}
 				<Tooltip.Root>
 					<Tooltip.Trigger class="flex min-w-0 items-center gap-1.5">
