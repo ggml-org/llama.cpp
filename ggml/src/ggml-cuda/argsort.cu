@@ -2,8 +2,8 @@
 
 #ifdef GGML_CUDA_USE_CUB
 #    include <cub/cub.cuh>
-    // CCCL_VERSION is packed MMMmmmpp: 3.4.3 -> 3004003
-#    if (CCCL_VERSION >= 3001000)
+    // strided_iterator was added in CCC 3.1
+#    if (CCCL_MAJOR_VERSION > 3 || (CCCL_MAJOR_VERSION == 3 && CCCL_MINOR_VERSION >= 1))
 #        define STRIDED_ITERATOR_AVAILABLE
 #        include <cuda/iterator>
 #    endif
