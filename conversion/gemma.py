@@ -849,8 +849,8 @@ class Gemma4DSparkModel(DFlashModel):
             raise ValueError("Gemma4 DSpark attention bias and MoE are not supported")
         if (self.hparams.get("draft_vocab_size") or self.hparams["vocab_size"]) != self.hparams["vocab_size"]:
             raise ValueError("Gemma4 DSpark currently requires a full draft vocabulary")
-        if "model.lm_head.weight" not in self.model_tensors and self.hparams.get("tie_word_embeddings") is not True:
-            raise ValueError("Gemma4 DSpark requires lm_head.weight unless tie_word_embeddings is true")
+        if "model.lm_head.weight" not in self.model_tensors:
+            raise ValueError("Gemma4 DSpark requires lm_head.weight")
 
         self.dflash_config = self.hparams.get("dflash_config", {})
         markov_type = self.dflash_config.get("markov_head_type", self.hparams.get("markov_head_type", "vanilla"))

@@ -283,10 +283,12 @@ class SettingsStore {
 	 */
 	syncWithServerDefaults(): void {
 		const propsDefaults = this.getServerDefaults();
-
-		if (Object.keys(propsDefaults).length === 0) return;
-
 		const uiSettings = serverStore.uiSettings;
+
+		// a router main instance reports no sampling defaults, but its
+		// ui_settings still need the first visit pass below
+		if (Object.keys(propsDefaults).length === 0 && !(uiSettings && this.isFirstVisit)) return;
+
 		const uiSettingsKeys = new Set(uiSettings ? Object.keys(uiSettings) : []);
 
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
