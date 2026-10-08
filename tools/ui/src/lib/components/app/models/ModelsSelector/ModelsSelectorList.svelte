@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { Heart, Power } from '@lucide/svelte';
+	import { CheckCircle2, Heart, Power } from '@lucide/svelte';
 	import {
 		GroupedList,
 		ModelAvatar,
@@ -36,6 +36,8 @@
 		favorites?: ModelItem[];
 		/** Loaded models of every llama-compat backend, leading the list. */
 		loaded?: ModelItem[];
+		/** The selected model of a compat backend, shown above the loaded ones. */
+		selected?: ModelItem[];
 		/** Show the organization name in every model id of the list. */
 		showOrgName?: boolean;
 		/** Open one provider's full list, offered when a section is cut short. */
@@ -55,6 +57,7 @@
 		onSelect,
 		renderOption,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
+		selected = [],
 		showOrgName = true
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
@@ -172,6 +175,24 @@
 		{option}
 	/>
 {/snippet}
+
+{#if selected.length > 0}
+	<ModelsSection
+		count={selected.length}
+		label="Selected model"
+		persistKey="selected"
+		revealChevronOnHover
+		sticky
+	>
+		{#snippet icon()}
+			<CheckCircle2 class="h-3.5 w-3.5 shrink-0" />
+		{/snippet}
+
+		{#each selected as item (item.option.id)}
+			{@render render(item, !showOrgName)}
+		{/each}
+	</ModelsSection>
+{/if}
 
 {#if loaded.length > 0}
 	<ModelsSection

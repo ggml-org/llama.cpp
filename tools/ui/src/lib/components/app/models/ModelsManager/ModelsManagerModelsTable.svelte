@@ -15,6 +15,7 @@
 	import {
 		ArrowDown,
 		ArrowUp,
+		CheckCircle2,
 		ChevronDown,
 		ChevronUp,
 		Download,
@@ -412,6 +413,8 @@
 						<Heart class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOADED}
 						<Power class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === ModelsTableGroupKind.SELECTED}
+						<CheckCircle2 class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.HIDDEN}
 						<EyeOff class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOCAL}

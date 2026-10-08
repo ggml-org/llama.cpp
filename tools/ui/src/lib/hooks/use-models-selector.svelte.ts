@@ -58,6 +58,8 @@ export interface UseModelsSelectorReturn {
 	readonly isCurrentModelInCache: boolean;
 	readonly favoriteItems: ModelItem[];
 	readonly loadedItems: ModelItem[];
+	/** The selected model of a compat backend, which cannot report a load state. */
+	readonly selectedItems: ModelItem[];
 	readonly filteredOptions: ModelOption[];
 	readonly isEmpty: boolean;
 	readonly isProviderView: boolean;
@@ -160,6 +162,21 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const isLoadedLlamaCompat = (option: ModelOption) =>
 		modelsStore.isModelLoaded(option.model) &&
 		getBackendCapabilities(getBackend(option.backendId)).loadUnload;
+	// a compat backend cannot load or unload: the selection is its state, so the
+	// selected model leads the list in its own section
+	const selectedItems = $derived.by(() => {
+		if (isProviderView) return [];
+
+		const option = activeId
+			? allOptions.find((item) => item.id === activeId)
+			: currentModel
+				? allOptions.find((item) => item.model === currentModel)
+				: undefined;
+
+		if (!option || getBackendCapabilities(getBackend(option.backendId)).loadUnload) return [];
+
+		return [{ option }];
+	});
 	const loadedItems = $derived.by(() => {
 		if (isProviderView) return [];
 
@@ -168,18 +185,23 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			.map((option) => ({ option }));
 	});
 	const loadedIds = $derived(new SvelteSet(loadedItems.map((item) => item.option.id)));
-	// loaded models lead the list: their own sections list them once, so a
-	// loaded favorite shows there and not twice
+	const selectedIds = $derived(new SvelteSet(selectedItems.map((item) => item.option.id)));
+	// loaded, selected and favorite models are listed once, at the top: the
+	// sections and the favorites skip all three
 	const favoriteItems = $derived(
 		groupFavoriteOptions(
-			filteredAllOptions.filter((option) => !loadedIds.has(option.id)),
+			filteredAllOptions.filter(
+				(option) => !loadedIds.has(option.id) && !selectedIds.has(option.id)
+			),
 			modelsStore.favoriteModelIds
 		)
 	);
-	// loaded models and favorites are listed once, at the top: the sections skip both
 	const sectionOptions = $derived(
 		filteredOptions.filter(
-			(option) => !modelsStore.favoriteModelIds.has(option.model) && !loadedIds.has(option.id)
+			(option) =>
+				!modelsStore.favoriteModelIds.has(option.model) &&
+				!loadedIds.has(option.id) &&
+				!selectedIds.has(option.id)
 		)
 	);
 	const providerSections = $derived(
@@ -431,7 +453,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		get loadedItems() {
 			return loadedItems;
 		},
-
 		get loading() {
 			return loading;
 		},
@@ -444,6 +465,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get searchTerm() {
 			return searchTerm;
+		},
+
+		get selectedItems() {
+			return selectedItems;
 		},
 
 		get serverModel() {

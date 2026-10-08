@@ -79,7 +79,8 @@ export enum ModelsTableGroupKind {
 	FAVORITES = 'favorites',
 	HIDDEN = 'hidden',
 	LOADED = 'loaded',
-	LOCAL = 'local'
+	LOCAL = 'local',
+	SELECTED = 'selected'
 }
 
 /** Download state a manager row reports in place of its load state. */

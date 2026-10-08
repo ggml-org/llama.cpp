@@ -203,13 +203,27 @@
 		const isDownload = (option: ModelOption) =>
 			modelsStore.status.isDownloadInProgress(option.model) ||
 			modelsStore.status.isDownloadPaused(option.model);
+		// a compat backend serves the selection itself: its selected model is a
+		// section of its own, since it never reports a load state
+		const isProviderSelected = (option: ModelOption) =>
+			option.id === modelsStore.selectedModelId &&
+			!getBackendCapabilities(getBackend(option.backendId)).loadUnload;
+		const selected: ModelQuantGroup[] = [];
 		const loaded: ModelQuantGroup[] = [];
 		const rest: ModelQuantGroup[] = [];
 
 		for (const entry of entries) {
-			const remaining = entry.quants.filter((quant) => !isLoaded(quant) && !isDownload(quant));
+			const remaining = entry.quants.filter(
+				(quant) => !isLoaded(quant) && !isDownload(quant) && !isProviderSelected(quant)
+			);
 
 			for (const quant of entry.quants) {
+				if (isProviderSelected(quant)) {
+					selected.push({ ...entry, base: quant, key: quant.id, quants: [quant] });
+
+					continue;
+				}
+
 				if (!isLoaded(quant)) continue;
 
 				loaded.push({ ...entry, base: quant, key: quant.id, quants: [quant] });
@@ -240,7 +254,8 @@
 		}
 
 		const ordered: ModelsTableGroup[] = [];
-		// loaded models lead the table, then favorites, then one block per backend
+		// the selected compat model leads the table, then the loaded models, then
+		// favorites, then one block per backend
 		const pushSection = (
 			kind: ModelsTableGroup['kind'],
 			items: ModelQuantGroup[],
@@ -260,6 +275,7 @@
 			});
 		};
 
+		pushSection(ModelsTableGroupKind.SELECTED, selected);
 		pushSection(ModelsTableGroupKind.LOADED, loaded);
 		pushSection(ModelsTableGroupKind.DOWNLOADING, downloads);
 		pushSection(ModelsTableGroupKind.FAVORITES, favorites);
