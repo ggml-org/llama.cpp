@@ -223,9 +223,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		// a single-model desktop server has no list: the trigger opens the manager
-		// instead. a phone has no manager, so its drawer opens with the one model
-		if (!isRouter && !deviceStore.isMobile) {
+		// a lone llama.cpp server without a router has no list: the trigger opens
+		// the manager instead. router mode and external backends both expose a
+		// selectable list, so their role does not decide here, and a phone has no
+		// manager at all: its drawer opens either way
+		if (!isMultiModel && !deviceStore.isMobile) {
 			if (open) uiStore.openModelsManager();
 
 			return;
