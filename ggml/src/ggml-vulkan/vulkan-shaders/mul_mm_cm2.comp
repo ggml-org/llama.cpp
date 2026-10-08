@@ -45,6 +45,7 @@ const uint BNover2 = BN / 2;
 const uint BNover4 = enable_smaller_matrices ? (BN / 4) : (BN / 2);
 layout (constant_id = 5) const uint ALIGNED = 0;
 layout (constant_id = 6) const uint subgroup_size = 32;
+#define GROUP_A_BUDGET (8u * 1024u * 1024u)
 
 #ifdef MULMAT_QUANT
 
@@ -328,9 +329,9 @@ void load_row_ids_hoisted(uint expert_idx, uint ic) {
 
 void main() {
     const uint tid = gl_LocalInvocationIndex;
-    const uint ic = gl_WorkGroupID.y;
 
 #ifdef MUL_MAT_ID
+    const uint ic = gl_WorkGroupID.y;
     const uint expert_idx = gl_WorkGroupID.z;
     if (ic * BN >= data_expert_count[expert_idx]) {
         return;
@@ -361,8 +362,32 @@ void main() {
 #endif
 
     const uint blocks_m = (p.M + BM - 1) / BM;
-    const uint ir = gl_WorkGroupID.x % blocks_m;
     const uint ik = gl_WorkGroupID.x / blocks_m;
+
+#ifdef MUL_MAT_ID
+    const uint ir = gl_WorkGroupID.x % blocks_m;
+#else
+    // L2-friendly workgroup scheduling
+    const uint blocks_n = (p.N + BN - 1) / BN;
+#if defined(MULMAT_QUANT)
+    const uint a_panel_bytes = (BM * p.K / mm_quant_k()) * MmABlockBytes;
+#elif defined(DATA_A_F32)
+    const uint a_panel_bytes = BM * p.K * 4;
+#elif QUANT_K == 1
+    const uint a_panel_bytes = BM * p.K * 2;
+#else
+    const uint a_panel_bytes = (BM * p.K) / 2 + (BM * p.K) / 16;
+#endif
+    const uint group_m = clamp(GROUP_A_BUDGET / max(a_panel_bytes, 1u), 1u, min(blocks_m, 32u));
+    const uint tiles_per_group = group_m * blocks_n;
+    const uint lin = gl_WorkGroupID.y * blocks_m + (gl_WorkGroupID.x % blocks_m);
+    const uint group_id = lin / tiles_per_group;
+    const uint first_m = group_id * group_m;
+    const uint gsize = min(blocks_m - first_m, group_m);
+    const uint in_group = lin - group_id * tiles_per_group;
+    const uint ir = first_m + in_group % gsize;
+    const uint ic = in_group / gsize;
+#endif
 
 #ifdef MUL_MAT_ID
     if (p.hoist_row_ids != 0) {
