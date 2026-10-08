@@ -356,6 +356,7 @@ class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     bool _dotall;
+    bool _unordered_properties = false;
     std::map<std::string, std::string> _rules;
     std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
@@ -710,7 +711,7 @@ private:
     std::string _resolve_ref(const common_chat_schema_ref & schema) {
         auto it = schema.ref.find('#');
         std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
-        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment);
+        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment) + (_unordered_properties ? "-unordered" : "");
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
             if (!schema.target) {
                 _errors.push_back("Unresolved $ref " + schema.ref);
@@ -765,6 +766,53 @@ private:
 
         if (required_props.empty() && optional_props.empty()) {
             return "\"{\" space \"}\"";
+        }
+
+        // one rule per set of seen keys (2^n rules), so above this limit keep the declared order
+        constexpr size_t max_unordered_props = 6;
+        if (_unordered_properties && prop_names.size() <= max_unordered_props) {
+            const size_t n = prop_names.size();
+            size_t required_mask = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (required.count(prop_names[i])) {
+                    required_mask |= size_t(1) << i;
+                }
+            }
+            std::string additional_kvs;
+            if (prop_kv_rule_names.count("*")) {
+                additional_kvs = "( \",\" space " + prop_kv_rule_names["*"] + " )*";
+            }
+
+            // rest of the object after the keys in `seen`: each key at most once, close only when all required keys are seen
+            std::map<size_t, std::string> rest_rules;
+            std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
+                auto it = rest_rules.find(seen);
+                if (it != rest_rules.end()) {
+                    return it->second;
+                }
+                std::vector<std::string> alts;
+                for (size_t i = 0; i < n; i++) {
+                    if (!(seen & (size_t(1) << i))) {
+                        alts.push_back("\",\" space " + prop_kv_rule_names[prop_names[i]] + " " + get_rest(seen | (size_t(1) << i)));
+                    }
+                }
+                std::string body = additional_kvs;
+                if (!alts.empty()) {
+                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )" + ((seen & required_mask) == required_mask ? "?" : "");
+                }
+                std::string res = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
+                rest_rules[seen] = res;
+                return res;
+            };
+
+            std::vector<std::string> firsts;
+            for (size_t i = 0; i < n; i++) {
+                firsts.push_back(prop_kv_rule_names[prop_names[i]] + " " + get_rest(size_t(1) << i));
+            }
+            if (prop_kv_rule_names.count("*")) {
+                firsts.push_back(prop_kv_rule_names["*"] + " " + get_rest(0));
+            }
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (required_mask == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
@@ -846,6 +894,14 @@ public:
 
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
         return visit(schema, name);
+    }
+
+    std::string add_schema_unordered(const std::string & name, const common_chat_schema & schema) {
+        bool prev = _unordered_properties;
+        _unordered_properties = true;
+        auto rule = visit(schema, name);
+        _unordered_properties = prev;
+        return rule;
     }
 
     static std::string _generate_constant_rule(const json & value) {
@@ -1022,24 +1078,25 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf, bool unordered_properties) {
 #ifdef LLAMA_USE_LLGUIDANCE
-    if (!force_gbnf) {
+    // llguidance %json keeps the declared order, so use GBNF for unordered
+    if (!force_gbnf && !unordered_properties) {
         return "%llguidance {}\nstart: %json " + schema.dump();
     }
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     try {
-        return json_schema_to_grammar(common_chat_schema_from_json(schema));
+        return json_schema_to_grammar(common_chat_schema_from_json(schema), unordered_properties);
     } catch (const std::runtime_error & e) {
         throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
     }
 }
 
-std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
+std::string json_schema_to_grammar(const common_chat_schema_document & schema, bool unordered_properties) {
     common_chat_schema_converter converter(false);
-    converter.visit(*schema.root, "");
+    (unordered_properties ? converter.add_schema_unordered("", *schema.root) : converter.add_schema("", *schema.root));
     converter.check_errors();
     return converter.format_grammar();
 }
@@ -1052,6 +1109,9 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
         },
         /* .add_schema = */ [&](const std::string & name, const common_chat_schema & schema) {
             return converter.add_schema(name == "root" ? "" : name, schema);
+        },
+        /* .add_schema_unordered = */ [&](const std::string & name, const common_chat_schema & schema) {
+            return converter.add_schema_unordered(name == "root" ? "" : name, schema);
         },
     };
     cb(builder);
