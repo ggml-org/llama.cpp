@@ -84,8 +84,15 @@ if (BLAS_FOUND)
         add_compile_definitions(GGML_BLAS_USE_OPENBLAS)
     endif()
 
+    # Vendors with the BLIS API take GGML_BLAS_USE_BLIS (blis.h, bli_thread_set_num_threads).
+    # AOCL also takes GGML_BLAS_USE_AOCL so its device label is AOCL-BLAS, not BLIS.
+    # Neither flag selects the linked library; FindBLAS does that from GGML_BLAS_VENDOR.
     if ("${GGML_BLAS_VENDOR}" MATCHES "FLAME" OR "${GGML_BLAS_VENDOR}" MATCHES "AOCL" OR "${GGML_BLAS_VENDOR}" MATCHES "AOCL_mt")
         add_compile_definitions(GGML_BLAS_USE_BLIS)
+    endif()
+
+    if ("${GGML_BLAS_VENDOR}" MATCHES "AOCL" OR "${GGML_BLAS_VENDOR}" MATCHES "AOCL_mt")
+        add_compile_definitions(GGML_BLAS_USE_AOCL)
     endif()
 
     if ("${GGML_BLAS_VENDOR}" MATCHES "NVPL")

@@ -35,50 +35,13 @@
 #endif
 #endif
 
-// isatty
-#if defined(_WIN32)
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-
 //
 // downloader
 //
 
-// validate repo name format: owner/repo
-static void write_file(const std::string & fname, const std::string & content) {
-    const std::string fname_tmp = fname + ".tmp";
-    std::ofstream     file(fname_tmp);
-    if (!file) {
-        throw std::runtime_error(string_format("error: failed to open file '%s'\n", fname.c_str()));
-    }
-
-    try {
-        file << content;
-        file.close();
-
-        // Makes write atomic
-        if (rename(fname_tmp.c_str(), fname.c_str()) != 0) {
-            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, fname_tmp.c_str(), fname.c_str());
-            // If rename fails, try to delete the temporary file
-            if (remove(fname_tmp.c_str()) != 0) {
-                LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, fname_tmp.c_str());
-            }
-        }
-    } catch (...) {
-        // If anything fails, try to delete the temporary file
-        if (remove(fname_tmp.c_str()) != 0) {
-            LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, fname_tmp.c_str());
-        }
-
-        throw std::runtime_error(string_format("error: failed to write file '%s'\n", fname.c_str()));
-    }
-}
-
 static void write_etag(const std::string & path, const std::string & etag) {
     const std::string etag_path = path + ".etag";
-    write_file(etag_path, etag);
+    fs_write_atomic(std::filesystem::u8path(etag_path), etag);
     LOG_DBG("%s: file etag saved: %s\n", __func__, etag_path.c_str());
 }
 
@@ -127,11 +90,7 @@ class ProgressBar : public common_download_callback {
     }
 
     static bool is_output_a_tty() {
-#if defined(_WIN32)
-        return _isatty(_fileno(stdout));
-#else
-        return isatty(1);
-#endif
+        return common_is_tty(stdout);
     }
 
 public:
@@ -274,6 +233,12 @@ static bool common_pull_file(httplib::Client & cli,
         return false;
     }
 
+    ofs.close();
+    if (!ofs) {
+        LOG_ERR("%s: error closing file: %s\n", __func__, path_tmp.c_str());
+        return false;
+    }
+
     return true;
 }
 
@@ -286,7 +251,7 @@ static int common_download_file_single_online(const std::string & url,
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
-    const bool file_exists = std::filesystem::exists(path);
+    const bool file_exists = std::filesystem::exists(std::filesystem::u8path(path));
 
     if (file_exists && skip_etag) {
         LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
@@ -477,7 +442,7 @@ int common_download_file_single(const std::string & url,
         return common_download_file_single_online(url, path, online_opts, skip_etag);
     }
 
-    if (!std::filesystem::exists(path)) {
+    if (!std::filesystem::exists(std::filesystem::u8path(path))) {
         LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
         return -1;
     }
@@ -943,7 +908,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string model_filename = repo;
         std::replace(model_filename.begin(), model_filename.end(), '/', '_');
         model_filename += "_" + tag + ".gguf";
-        std::string local_path = fs_get_cache_file(model_filename);
+        std::string local_path = fs_path_to_utf8(fs_get_cache_file(model_filename));
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
         common_download_opts opts;

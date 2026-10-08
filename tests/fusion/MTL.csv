@@ -83,6 +83,12 @@ glm4                ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 glm4moe             ,1   ,any     ,ADD+ADD                     ,      1
 glm4moe             ,1   ,any     ,MUL+ADD                     ,      2
 glm4moe             ,1   ,any     ,RMS_NORM+MUL                ,      9
+glm5-next           ,0   ,any     ,ADD+ADD+ADD                 ,      1
+glm5-next           ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
+glm5-next           ,0   ,any     ,MUL+ADD                     ,      2
+glm5-next           ,0   ,any     ,NORM+MUL+ADD                ,      1
+glm5-next           ,0   ,any     ,RMS_NORM+MUL                ,      8
+glm5-next           ,0   ,any     ,RMS_NORM+SCALE              ,      2
 gpt-oss             ,0   ,any     ,MUL+ADD                     ,      4
 gpt-oss             ,0   ,any     ,RMS_NORM+MUL                ,      5
 gpt2                ,0   ,any     ,NORM+MUL+ADD                ,      5
@@ -120,6 +126,10 @@ internlm2           ,0   ,any     ,RMS_NORM+MUL                ,      5
 jais                ,0   ,any     ,NORM+MUL+ADD                ,      5
 jais2               ,0   ,any     ,NORM+MUL+ADD                ,      5
 jamba               ,0   ,any     ,RMS_NORM+MUL                ,      8
+k2-horizon          ,0   ,any     ,RMS_NORM+MUL                ,      4
+k2-horizon          ,0   ,any     ,ADD+ADD                     ,      1
+k2-horizon          ,0   ,any     ,MUL+ADD                     ,      2
+k2-horizon          ,0   ,any     ,RMS_NORM+MUL                ,      4
 kimi-k3             ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-k3             ,0   ,any     ,MUL+ADD                     ,      2
 kimi-k3             ,0   ,any     ,RMS_NORM+MUL                ,     17
@@ -240,7 +250,7 @@ qwen3vl             ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,MUL+ADD                     ,      4
 qwen3vlmoe          ,1   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
-qwen4exp            ,0   ,any     ,ADD+ADD+ADD                 ,      1
+qwen4exp            ,0   ,any     ,ADD+ADD+ADD                 ,      2
 qwen4exp            ,0   ,any     ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,      9
 qwen4exp            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen4exp            ,0   ,any     ,MUL+ADD                     ,      4
