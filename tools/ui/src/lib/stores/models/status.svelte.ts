@@ -232,7 +232,9 @@ export class ModelStatusManager {
 	async cancelLoad(modelId: string): Promise<void> {
 		const backendId = this.backendIdFor(modelId);
 
-		if (!serverStore.isRouterMode) return;
+		// the local server takes unload requests in router mode only; a remote
+		// backend cancels on its own
+		if (backendId === LOCAL_BACKEND_ID && !serverStore.localIsRouter) return;
 
 		this.subscribe();
 
@@ -478,7 +480,9 @@ export class ModelStatusManager {
 	subscribe(): void {
 		if (this.statusReaderActive) return;
 
-		if (!serverStore.isRouterMode) return;
+		// the feed reports the local server's models, so the local server's role
+		// decides, not the active backend's
+		if (!serverStore.localIsRouter) return;
 
 		this.statusReaderActive = true;
 		this.statusAbort = new AbortController();

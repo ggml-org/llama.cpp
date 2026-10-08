@@ -12,7 +12,6 @@ import {
 	BackendProtocol,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
-	LOCAL_BACKEND_ID,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY,
@@ -461,17 +460,21 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * feed, so an external backend answers from its own model listing.
 	 */
 	getModelStatus(modelId: string): ServerModelStatus | null {
-		const backendId = this.models.find((model) => model.model === modelId)?.backendId;
-
-		if (backendId && backendId !== LOCAL_BACKEND_ID) {
-			const option = backendsModelsStore.get(backendId).models.find((m) => m.model === modelId);
-
-			return (option?.status?.value as ServerModelStatus) ?? null;
-		}
-
+		// the local feed reports the models its router serves: a same-named entry
+		// on a remote provider must not shadow it
 		const model = this.routerModels.find((m) => m.id === modelId);
 
-		return (model?.status?.value as ServerModelStatus) ?? null;
+		if (model) return (model.status?.value as ServerModelStatus) ?? null;
+
+		// a model the local router does not serve belongs to a backend, and the
+		// first enabled backend listing it owns the state
+		for (const backend of backendsStore.enabled) {
+			const option = backendsModelsStore.get(backend.id).models.find((m) => m.model === modelId);
+
+			if (option) return (option.status?.value as ServerModelStatus) ?? null;
+		}
+
+		return null;
 	}
 
 	hasModel(modelName: string): boolean {
