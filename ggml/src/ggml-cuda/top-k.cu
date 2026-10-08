@@ -1,7 +1,7 @@
 #include "argsort.cuh"
 #include "top-k.cuh"
 
-// implementation thresholds from #28547, can be overridden at build time
+// Adjusted implementation thresholds from #28547, can be overridden at build time
 #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC
 #    if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 // not measured on HIP/MUSA, keep the old split
@@ -217,7 +217,7 @@ static void top_k_radix_cuda(
     constexpr int NBINS = 1 << RADIX_BITS;
     const int blocks_per_row = (int) std::min<int64_t>(((int64_t) ncols + 1023) / 1024, 64);
 
-    // chunk the rows to bound the histogram memory
+    // chunk the rows to bound the histogram memory to 64 MB
     const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) blocks_per_row * NBINS * sizeof(int), nrows);
 
     ggml_cuda_pool_alloc<top_k_radix_state> states_alloc(pool, chunk_nrows);
@@ -321,8 +321,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
 
 #ifdef CUB_TOP_K_AVAILABLE
-    // TODO: Switch to `DeviceBatchedTopK` for multi-row TopK once implemented
-    // https://github.com/NVIDIA/cccl/issues/7585
+    // TODO: Assess perf of `DeviceBatchedTopK` for multi-row TopK & CCCL >= 3.5.0, re-running perf sweep of https://github.com/ggml-org/llama.cpp/pull/28713
     for (int64_t i = 0; i < nrows; i++) {
         top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
     }
