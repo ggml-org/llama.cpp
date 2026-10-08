@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { canLoadOption } from '../utils';
 	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
 	import ModelsManagerModelConfigurationHeader from './ModelsManagerModelConfigurationHeader.svelte';
 	import ModelsManagerModelConfigurationInformation from './ModelsManagerModelConfigurationInformation.svelte';
@@ -92,6 +93,7 @@
 	{#if deviceStore.isMobile}
 		<div class="shrink-0 border-t border-border/40 px-4 py-3">
 			<ModelsManagerModelConfigurationActions
+				canToggleLoad={canLoadOption(option)}
 				{isLoaded}
 				isLoading={status === ServerModelStatus.LOADING}
 				{onToggleLoad}
