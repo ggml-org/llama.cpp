@@ -1659,6 +1659,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
 
     templated   = true;
     prompt_text = std::move(applied.prompt);
+    cur.role    = "assistant";
 
     sampling_params.grammar            = std::move(applied.grammar);
     sampling_params.grammar_lazy       = applied.grammar_lazy;

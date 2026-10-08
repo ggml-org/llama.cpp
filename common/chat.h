@@ -393,7 +393,7 @@ struct common_chat_session_params {
 class common_chat_session {
   public:
     // plain content, no chat template
-    common_chat_session() = default;
+    common_chat_session() { cur.role = "assistant"; }
 
     // applies the chat template and keeps everything needed to parse its output
     common_chat_session(const common_chat_templates *        tmpls,
@@ -405,6 +405,7 @@ class common_chat_session {
     const common_chat_sampling & sampling() const { return sampling_params; }
     common_chat_format           format()   const { return parser_params.format; }
     const common_chat_msg &      msg()      const { return cur; }
+    const common_peg_arena &     parser()   const { return parser_params.parser; }
 
     // false for a default session, which parses its output as plain content
     bool has_template() const { return templated; }
