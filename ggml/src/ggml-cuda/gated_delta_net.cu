@@ -1,7 +1,7 @@
 #include "gated_delta_net.cuh"
 #include "ggml-cuda/common.cuh"
 
-template <int S_v, bool KDA, bool keep_rs_t, int cols_per_warp = 2>
+template <int S_v, bool KDA, bool keep_rs_t, int cols_per_warp = 4>
 __global__ void __launch_bounds__((ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v) * 4, 2)
 gated_delta_net_cuda(const float * q,
                                      const float * k,
@@ -187,10 +187,10 @@ static void launch_gated_delta_net(
         float scale, int64_t state_slot_stride, int K, cudaStream_t stream) {
     //TODO: Add chunked kernel for even faster pre-fill
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
-    // 4 columns per warp at S_v=128, 2 elsewhere (see the kernel); shrink the CTA when the
-    // wider CTA would leave SMs without a CTA, so small head counts keep the device filled
+    // four columns per warp (see the kernel); shrink the CTA when the wider CTA would leave
+    // SMs without a CTA, so small head counts keep the device filled
     const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
-    const int cols_per_warp = S_v == 128 ? 4 : 2;
+    const int cols_per_warp = 4;
     int num_warps = 4;
     while (num_warps > 1 && H*n_seqs*(S_v / (cols_per_warp * num_warps)) < nsm) {
         num_warps /= 2;
@@ -224,7 +224,7 @@ static void launch_gated_delta_net(
             break;
         }
         case 128: {
-            ggml_cuda_kernel_launch(gated_delta_net_cuda<128, KDA, keep_rs_t, 4>, launch_params,
+            ggml_cuda_kernel_launch(gated_delta_net_cuda<128, KDA, keep_rs_t>, launch_params,
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
