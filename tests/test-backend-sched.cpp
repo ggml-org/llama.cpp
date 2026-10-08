@@ -20,7 +20,6 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <vector>
 
 
@@ -188,7 +187,6 @@ struct sched_graph {
 struct sched_check {
     ggml_tensor * tensor;   // Tensor for which to check the data.
     float         expected; // The expected value that the tensor data should have after graph execution.
-    std::string   name;
 };
 
 // executes the graph, then checks the number of splits and the results
@@ -232,7 +230,7 @@ static test_result run_and_check(ggml_backend_sched_t sched, const sched_graph &
         ggml_backend_tensor_get(c.tensor, data.data(), 0, ggml_nbytes(c.tensor));
         for (int64_t i = 0; i < ne; i++) {
             if (data[i] != c.expected) {
-                return fail("%s[%" PRId64 "] = %f, expected %f", c.name.c_str(), i, data[i], c.expected);
+                return fail("%s[%" PRId64 "] = %f, expected %f", ggml_get_name(c.tensor), i, data[i], c.expected);
             }
         }
     }
@@ -394,13 +392,14 @@ static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & b
 
         g.add(out, b);
     }
+    ggml_set_name(out, "out");
     ggml_set_output(out);
 
     test_result ok;
     if (sum >= (1 << 24)) { // the counter has to stay exact in f32
         ok = fail("expected result %" PRId64 " does not fit into the f32 mantissa, lower n_laps", sum);
     } else {
-        ok = run_and_check(sched, g, backends, {{ out, float(sum), "out" }}, tensor_len);
+        ok = run_and_check(sched, g, backends, {{ out, float(sum) }}, tensor_len);
     }
 
     ggml_backend_sched_free(sched);
@@ -458,7 +457,7 @@ static test_result stress_test_dag(const std::vector<ggml_backend_t> & backends,
     auto check_lanes = [&]() {
         for (int l = 0; l < n_lanes; l++) {
             ggml_set_output(lane[l]);
-            checks.push_back({ lane[l], float(value[l]), ggml_get_name(lane[l]) });
+            checks.push_back({ lane[l], float(value[l]) });
         }
     };
 
@@ -633,29 +632,37 @@ static test_result test_inputless_splits_scheduling(ggml_backend_t gpu, ggml_bac
 
     // GPU: add then sleep - occupies the GPU while later splits run
     ggml_tensor * delayed = g.add(ggml_add(ctx_compute, zero_gpu, one_gpu), GPU);
+    ggml_set_name(delayed, "to_delay");
     delayed = g.add(ggml_sleep(ctx_compute, delayed, sleep_us), GPU);
+    ggml_set_name(delayed, "delayed");
 
     // CPU: 0 + 55 -> 55
     ggml_tensor * v55 = g.add(ggml_add(ctx_compute, zero_cpu, val55_cpu), CPU);
+    ggml_set_name(v55, "v55");
 
     // GPU: 55 + 44 -> 99
     ggml_tensor * v99 = g.add(ggml_add(ctx_compute, v55, val44_gpu), GPU);
+    ggml_set_name(v99, "v99");
 
     // CPU: 0 + 66 -> 66
     ggml_tensor * v66 = g.add(ggml_add(ctx_compute, zero_cpu, val66_cpu), CPU);
+    ggml_set_name(v66, "v66");
 
     // GPU: increment both of the previous split outputs
     ggml_tensor * out99 = g.add(ggml_add(ctx_compute, v99, one_gpu), GPU);
+    ggml_set_name(out99, "out99");
+
     ggml_tensor * out66 = g.add(ggml_add(ctx_compute, v66, one_gpu), GPU);
+    ggml_set_name(out66, "out66");
 
     ggml_set_output(delayed);
     ggml_set_output(out99);
     ggml_set_output(out66);
 
     const test_result ok = run_and_check(sched, g, backends, {
-        { delayed, 1.0f,   "delayed" },
-        { out99,   100.0f, "out99"   },
-        { out66,   67.0f,  "out66"   },
+        { delayed, 1.0f   },
+        { out99,   100.0f },
+        { out66,   67.0f  },
     }, tensor_len);
 
     // the race needs the allocator to reuse the memory of the first CPU split for the second one
@@ -715,9 +722,10 @@ static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & b
 
         out = g.add(ggml_add(ctx_compute, k == 0 ? consts.zero[b] : out, consts.one[b]), b);
     }
+    ggml_set_name(out, "out");
     ggml_set_output(out);
 
-    const test_result ok = run_and_check(sched, g, backends, {{ out, float(n_nodes), "out" }}, tensor_len);
+    const test_result ok = run_and_check(sched, g, backends, {{ out, float(n_nodes) }}, tensor_len);
 
     ggml_backend_sched_free(sched);
     ggml_free(ctx_compute);
@@ -778,9 +786,10 @@ static test_result test_pair_user_inputs(const std::vector<ggml_backend_t> & bac
     for (ggml_tensor * in : inputs) {
         out = g.add(ggml_add(ctx_compute, out, in), b_recv);
     }
+    ggml_set_name(out, "out");
     ggml_set_output(out);
 
-    test_result ok = run_and_check(sched, g, backends, {{ out, float(1 + n_inputs), "out" }}, tensor_len);
+    test_result ok = run_and_check(sched, g, backends, {{ out, float(1 + n_inputs) }}, tensor_len);
 
     for (ggml_tensor * in : inputs) {
         if (ok != TEST_OK) {
@@ -840,7 +849,7 @@ static test_result test_y_shaped_graph(const std::vector<ggml_backend_t> & backe
     ggml_set_name(out, "out");
     ggml_set_output(out);
 
-    const test_result ok = run_and_check(sched, g, backends, {{ out, 4.0f, "out" }}, tensor_len);
+    const test_result ok = run_and_check(sched, g, backends, {{ out, 4.0f }}, tensor_len);
 
     ggml_backend_sched_free(sched);
     ggml_free(ctx_compute);
