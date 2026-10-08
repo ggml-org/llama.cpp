@@ -736,6 +736,21 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
 
     if (!opt_ctx->static_graphs) {
         ggml_opt_build(opt_ctx);
+
+        // Graphs built per step keep their gradient accumulators in ctx_static across graphs,
+        // and the reset above found no graph to reset (gb_grad is rebuilt every step). Without
+        // this, a period's step applied the SUM of every gradient since the run began, since
+        // each backward adds into the accumulator in place (test-opt-dynamic-accum).
+        if (backward && opt_ctx->opt_i == 0) {
+            // grad_accs is indexed by the FIRST graph's nodes: a later graph may hold fewer (Fable)
+            const size_t n = std::min(opt_ctx->grad_accs.size(), (size_t) opt_ctx->gf->n_nodes);
+            for (size_t i = 0; i < n; ++i) {
+                ggml_tensor * acc = opt_ctx->grad_accs[i];
+                if (acc && (opt_ctx->gf->nodes[i]->flags & GGML_TENSOR_FLAG_PARAM)) {
+                    ggml_set_zero(acc);
+                }
+            }
+        }
     }
 
     struct ggml_cgraph * graph = nullptr;
