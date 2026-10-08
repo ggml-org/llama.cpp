@@ -1503,11 +1503,11 @@ static void test_json_schema_unordered_properties() {
             R"""({"n": 1, "dtype": "int", "expr": "0"})""",
             R"""({"dtype": "int", "other": 1, "expr": "0"})""",
             R"""({"other": 1, "more": 2})""",
+            R"""({"expr": "0", "expr": "1"})""",
         },
         {
             R"""({"n": "x"})""",
             R"""({"expr": "0",})""",
-            R"""({"expr": "0", "expr": "1"})""",
         });
 
     test_schema_unordered(
@@ -1520,7 +1520,6 @@ static void test_json_schema_unordered_properties() {
         {
             R"""({"dtype": "int", "other": 1})""",
             R"""({"expr": 0})""",
-            R"""({"expr": "0", "dtype": "int", "expr": "0"})""",
         });
 
     test_schema_unordered(
@@ -1540,7 +1539,7 @@ static void test_json_schema_unordered_properties() {
         });
 
     test_schema_unordered(
-        "many properties: required tracked, the rest in any order",
+        "many properties: required exactly once, the rest in any order",
         R"""({
             "type": "object",
             "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},

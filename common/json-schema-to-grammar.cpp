@@ -741,39 +741,23 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        // track which of up to max_tracked keys were seen (2^n rules), required keys first;
-        // the other properties and additional keys are "free": any order, repeats allowed
-        // with more required keys than that, keep the declared order so all of them are enforced
-        constexpr size_t max_tracked = 6;
-        if (_unordered_properties && required_props.size() <= max_tracked) {
-            std::vector<std::string> tracked = required_props;
-            for (const auto & prop_name : prop_names) {
-                if (!required.count(prop_name) && tracked.size() < max_tracked) {
-                    tracked.push_back(prop_name);
-                }
-            }
-            const size_t n = tracked.size();
-            size_t required_mask = 0;
-            std::vector<std::string> free_kvs;
-            for (const auto & prop_name : prop_names) {
-                auto it = std::find(tracked.begin(), tracked.end(), prop_name);
-                if (it == tracked.end()) {
-                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
-                } else if (required.count(prop_name)) {
-                    required_mask |= size_t(1) << (it - tracked.begin());
-                }
-            }
-            if (prop_kv_rule_names.count("*")) {
-                free_kvs.push_back(prop_kv_rule_names["*"]);
-            }
+        // required keys: exactly once, in any order (2^n rules, so above max_required keep the declared order)
+        // optional and additional keys: anywhere, repeats allowed
+        constexpr size_t max_required = 6;
+        if (_unordered_properties && required_props.size() <= max_required) {
+            const size_t n = required_props.size();
             std::string free_kv;
             std::string free_loop;
-            if (!free_kvs.empty()) {
+            if (!optional_props.empty()) {
+                std::vector<std::string> free_kvs;
+                for (const auto & prop_name : optional_props) {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
+                }
                 free_kv = _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
                 free_loop = "( \",\" space " + free_kv + " )*";
             }
 
-            // rest of the object after the keys in `seen`: tracked keys at most once, close only when all required keys are seen
+            // rest of the object after the required keys in `seen`
             std::map<size_t, std::string> rest_rules;
             std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
                 auto it = rest_rules.find(seen);
@@ -783,12 +767,12 @@ private:
                 std::vector<std::string> alts;
                 for (size_t i = 0; i < n; i++) {
                     if (!(seen & (size_t(1) << i))) {
-                        alts.push_back("\",\" space " + prop_kv_rule_names[tracked[i]] + " " + get_rest(seen | (size_t(1) << i)));
+                        alts.push_back("\",\" space " + prop_kv_rule_names[required_props[i]] + " " + get_rest(seen | (size_t(1) << i)));
                     }
                 }
                 std::string body = free_loop;
                 if (!alts.empty()) {
-                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )" + ((seen & required_mask) == required_mask ? "?" : "");
+                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )";
                 }
                 std::string res = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
                 rest_rules[seen] = res;
@@ -797,12 +781,12 @@ private:
 
             std::vector<std::string> firsts;
             for (size_t i = 0; i < n; i++) {
-                firsts.push_back(prop_kv_rule_names[tracked[i]] + " " + get_rest(size_t(1) << i));
+                firsts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(size_t(1) << i));
             }
-            if (!free_kvs.empty()) {
+            if (!free_kv.empty()) {
                 firsts.push_back(free_kv + " " + get_rest(0));
             }
-            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (required_mask == 0 ? "?" : "") + " space \"}\"";
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
