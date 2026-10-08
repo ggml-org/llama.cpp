@@ -2519,7 +2519,19 @@ private:
                         for (const server_slot & slot : slots) {
                             if (slot.is_processing()) {
                                 n_used += slot.prompt.n_tokens();
-                                metrics.kvcache_slots.push_back({slot.id, (int)slot.state, (uint32_t)slot.prompt.n_tokens()});
+                                metrics.kvcache_slots.push_back({
+                                    slot.id,
+                                    (int)slot.state,
+                                    (uint32_t)slot.prompt.n_tokens(),
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+                                    (uint32_t)slot.stats.n_prompt_cached,
+                                    (uint32_t)slot.stats.n_prompt_processed,
+                                    (uint32_t)slot.stats.n_gen,
+                                    (int64_t)slot.stats.t_start,
+                                    (int64_t)slot.stats.t_prompt_last,
+                                    (int64_t)slot.stats.t_gen_last,
+#endif
+                                });
                             }
                         }
                         // cap at capacity since per-slot sum can exceed it in unified KV mode

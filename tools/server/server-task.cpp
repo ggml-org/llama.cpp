@@ -1566,6 +1566,12 @@ json server_task_result_metrics::to_json() {
             {"tokens",          slot.n_tokens},
             {"context_max",     (int)std::round(context_max_slot)},
             {"context_utilization", json_round1(std::round(ctx_util * 10.0) / 10.0)},
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+            {"prompt_cached_tokens",    slot.n_prompt_cached},
+            {"prompt_new_tokens",       slot.n_prompt_processed - slot.n_prompt_cached},
+            {"generated_tokens",        slot.n_gen},
+            {"elapsed_seconds",         json_round1(std::max(0.0, (ggml_time_us() - slot.t_start) / 1e6))},
+#endif
         });
     }
 
@@ -1576,13 +1582,35 @@ json server_task_result_metrics::to_json() {
         {"queued",     n_tasks_deferred},
     };
 
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+    // aggregate in-flight token counts from active slots
+    // prompt processing: only count tokens for slots still in prompt phase (STARTED, PROCESSING_PROMPT)
+    // generation: count tokens for slots actively generating (GENERATING)
+    uint32_t n_prompt_processing = 0;
+    uint32_t n_gen_processing    = 0;
+    for (const auto & s : metrics.kvcache_slots) {
+        if (s.state == 2 || s.state == 3) { // STARTED or PROCESSING_PROMPT
+            n_prompt_processing += s.n_prompt_processed;
+        }
+        if (s.state == 5) { // GENERATING
+            n_gen_processing += s.n_gen;
+        }
+    }
+#endif
+
     base["prompt"] = json{
         {"tokens_total",         metrics.prompt.count},
         {"tokens_cached_total",  metrics.n_prompt_cached},
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+        {"tokens_processed",     metrics.prompt.count + n_prompt_processing},
+#endif
     };
 
     base["prediction"] = json{
         {"tokens_total",         metrics.predict.count},
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+        {"tokens_processed",     metrics.predict.count + n_gen_processing},
+#endif
     };
 
     json decode = json{

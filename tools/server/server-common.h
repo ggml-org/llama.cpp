@@ -498,9 +498,17 @@ struct server_metrics {
     uint32_t kvcache_used_tokens     = 0;  // sum of slot.prompt.n_tokens() for processing slots
 
     struct kvcache_slot {
-        int    slot_id    = -1;
-        int    state      = 0;
-        uint32_t n_tokens = 0;
+        int    slot_id            = -1;
+        int    state              = 0;
+        uint32_t n_tokens         = 0;
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+        uint32_t n_prompt_cached  = 0;
+        uint32_t n_prompt_processed = 0;
+        uint32_t n_gen            = 0;
+        int64_t  t_start          = 0;
+        int64_t  t_prompt_last    = 0;
+        int64_t  t_gen_last       = 0;
+#endif
     };
     std::vector<kvcache_slot> kvcache_slots;
 

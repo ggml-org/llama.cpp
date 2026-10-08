@@ -32,6 +32,9 @@ endif()
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+if(ENABLE_EXPERIMENTAL_METRICS)
+    target_compile_definitions(${TARGET} PRIVATE ENABLE_EXPERIMENTAL_METRICS)
+endif()
 
 # llama-server-impl: server logic, reusable by app
 
