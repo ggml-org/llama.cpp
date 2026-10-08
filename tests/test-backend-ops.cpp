@@ -4899,10 +4899,75 @@ struct test_ssm_conv : public test_case {
             std::array<int64_t, 4> ne_b = {3, 3, 1, 1})
         : type(type), ne_a(ne_a), ne_b(ne_b) {}
 
+    float grad_eps() override { return 1.0f; }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a   = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
         ggml_tensor * b   = ggml_new_tensor(ctx, type, 4, ne_b.data());
+        ggml_set_param(b);
+        ggml_set_name(b, "b");
         ggml_tensor * out = ggml_ssm_conv(ctx, a, b);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// GGML_OP_SSM_CONV_BACK_SX
+struct test_ssm_conv_back_sx : public test_case {
+    const ggml_type type;
+    const int64_t d_conv;
+    const int64_t d_inner;
+    const int64_t n_t;
+    const int64_t n_s;
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, d_conv, d_inner, n_t, n_s);
+    }
+
+    test_ssm_conv_back_sx(ggml_type type = GGML_TYPE_F32,
+            int64_t d_conv = 4, int64_t d_inner = 1024, int64_t n_t = 1, int64_t n_s = 1)
+        : type(type), d_conv(d_conv), d_inner(d_inner), n_t(n_t), n_s(n_s) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * grad_out = ggml_new_tensor_3d(ctx, type, d_inner, n_t, n_s);
+        ggml_set_name(grad_out, "grad_out");
+        ggml_tensor * c = ggml_new_tensor_2d(ctx, type, d_conv, d_inner);
+        ggml_set_name(c, "c");
+        ggml_tensor * sx_like = ggml_new_tensor_3d(ctx, type, d_conv - 1 + n_t, d_inner, n_s);
+        ggml_set_name(sx_like, "sx_like");
+        ggml_tensor * out = ggml_ssm_conv_back_sx(ctx, grad_out, c, sx_like);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// GGML_OP_SSM_CONV_BACK_C
+struct test_ssm_conv_back_c : public test_case {
+    const ggml_type type;
+    const int64_t d_conv;
+    const int64_t d_inner;
+    const int64_t n_t;
+    const int64_t n_s;
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, d_conv, d_inner, n_t, n_s);
+    }
+
+    test_ssm_conv_back_c(ggml_type type = GGML_TYPE_F32,
+            int64_t d_conv = 4, int64_t d_inner = 1024, int64_t n_t = 1, int64_t n_s = 1)
+        : type(type), d_conv(d_conv), d_inner(d_inner), n_t(n_t), n_s(n_s) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * grad_out = ggml_new_tensor_3d(ctx, type, d_inner, n_t, n_s);
+        ggml_set_name(grad_out, "grad_out");
+        ggml_tensor * sx = ggml_new_tensor_3d(ctx, type, d_conv - 1 + n_t, d_inner, n_s);
+        ggml_set_name(sx, "sx");
+        ggml_tensor * c_like = ggml_new_tensor_2d(ctx, type, d_conv, d_inner);
+        ggml_set_name(c_like, "c_like");
+        ggml_tensor * out = ggml_ssm_conv_back_c(ctx, grad_out, sx, c_like);
+        ggml_set_name(out, "out");
         return out;
     }
 };
@@ -11311,6 +11376,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             // long token (n_t > 32, exercises the long_token kernel path)
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
+        }
+    }
+    // small ssm_conv cases that fit within grad_nmax, to exercise the finite-difference backward check
+    for (int64_t d_conv : {3, 4}) {
+        for (int64_t n_t : {1, 6}) {
+            for (int64_t n_s : {1, 2}) {
+                test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + n_t, 8, n_s, 1}, {d_conv, 8, 1, 1}));
+            }
+        }
+    }
+
+    // backward of ssm_conv: grad w.r.t. sx and grad w.r.t. the conv weight
+    for (int64_t d_conv : {3, 4, 9}) {
+        for (int64_t d_inner : {1024, 1536, 2048}) {
+            for (int64_t n_t : {1, 4, 64}) {
+                for (int64_t n_s : {1, 2}) {
+                    test_cases.emplace_back(new test_ssm_conv_back_sx(GGML_TYPE_F32, d_conv, d_inner, n_t, n_s));
+                    test_cases.emplace_back(new test_ssm_conv_back_c(GGML_TYPE_F32, d_conv, d_inner, n_t, n_s));
+                }
+            }
         }
     }
 

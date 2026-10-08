@@ -10518,6 +10518,123 @@ void ggml_compute_forward_ssm_conv(
     }
 }
 
+// ggml_compute_forward_ssm_conv_back_sx
+
+static void ggml_compute_forward_ssm_conv_back_sx_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0]; // grad_out {d_inner, n_t, n_s}
+    const ggml_tensor * src1 = dst->src[1]; // conv1d.weight {d_conv, d_inner}
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc  = src1->ne[0]; // d_conv
+    const int ncs =  dst->ne[0]; // d_conv - 1 + n_t
+    const int nr  =  dst->ne[1]; // d_inner
+    const int n_t = src0->ne[1]; // tokens per sequence
+    const int n_s =  dst->ne[2]; // number of sequences in the batch
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    // rows per thread
+    const int dr  = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    // grad_sx[p,k,s] = sum_t g[k,t,s] * c[p-t,k], over t with 0 <= p-t < d_conv
+    for (int i3 = 0; i3 < n_s; ++i3) {
+        for (int i1 = ir0; i1 < ir1; ++i1) {
+            const float * c = (const float *) ((const char *) src1->data + i1*src1->nb[1]); // {d_conv}
+            for (int p = 0; p < ncs; ++p) {
+                const int t0 = MAX(0, p - (nc - 1));
+                const int t1 = MIN(n_t - 1, p);
+
+                float sumf = 0.0f;
+                for (int i2 = t0; i2 <= t1; ++i2) {
+                    const float g = *(const float *) ((const char *) src0->data + i1*src0->nb[0] + i2*src0->nb[1] + i3*src0->nb[2]);
+                    sumf += g * c[p - i2];
+                }
+
+                float * d = (float *) ((char *) dst->data + p*dst->nb[0] + i1*dst->nb[1] + i3*dst->nb[2]);
+                *d = sumf;
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_ssm_conv_back_sx(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_ssm_conv_back_sx_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_ssm_conv_back_c
+
+static void ggml_compute_forward_ssm_conv_back_c_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0]; // grad_out {d_inner, n_t, n_s}
+    const ggml_tensor * src1 = dst->src[1]; // conv_x {d_conv - 1 + n_t, d_inner, n_s}
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc  =  dst->ne[0]; // d_conv
+    const int nr  =  dst->ne[1]; // d_inner
+    const int n_t = src0->ne[1]; // tokens per sequence
+    const int n_s = src0->ne[2]; // number of sequences in the batch
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    // rows per thread
+    const int dr  = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    // grad_c[j,k] = sum_{t,s} g[k,t,s] * sx[t+j,k,s]
+    for (int i1 = ir0; i1 < ir1; ++i1) {
+        float * gc = (float *) ((char *) dst->data + i1*dst->nb[1]); // {d_conv}
+        for (int i0 = 0; i0 < nc; ++i0) {
+            float sumf = 0.0f;
+            for (int i3 = 0; i3 < n_s; ++i3) {
+                for (int i2 = 0; i2 < n_t; ++i2) {
+                    const float g  = *(const float *) ((const char *) src0->data + i1*src0->nb[0] + i2*src0->nb[1] + i3*src0->nb[2]);
+                    const float sx = *(const float *) ((const char *) src1->data + (i2 + i0)*src1->nb[0] + i1*src1->nb[1] + i3*src1->nb[2]);
+                    sumf += g * sx;
+                }
+            }
+            gc[i0] = sumf;
+        }
+    }
+}
+
+void ggml_compute_forward_ssm_conv_back_c(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_ssm_conv_back_c_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_ssm_scan
 
 static void ggml_compute_forward_ssm_scan_f32(
