@@ -15,7 +15,7 @@
 #    define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT 4096
 #endif // GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT
 
-// bitonic up to this padded width while nrows fits in one wave of SMs, 0 disables
+// bitonic up to this width while nrows fits in one wave of SMs, 0 disables
 #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS
 #    if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 #        define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS 0
@@ -316,8 +316,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
 
-    const int ncols_pad = next_power_of_2(ncols);
-    const int device    = ggml_cuda_get_device();
+    const int device = ggml_cuda_get_device();
 
 #ifdef CUB_TOP_K_AVAILABLE
     // a single row always uses DeviceTopK if available
@@ -326,13 +325,16 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const bool bitonic_short    = ncols <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC;
 #endif // CUB_TOP_K_AVAILABLE
     const bool bitonic_few_rows = nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK &&
-                                  ncols_pad <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS &&
+                                  ncols <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS &&
                                   nrows <= ggml_cuda_info().devices[device].nsm;
 
-    // the padded row must fit in shared memory
-    if ((bitonic_short || bitonic_few_rows) && ncols_pad * sizeof(int) <= ggml_cuda_info().devices[device].smpb) {
-        top_k_bitonic_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
-        return;
+    if (bitonic_short || bitonic_few_rows) {
+        // the padded row must fit in shared memory
+        const int ncols_pad = next_power_of_2(ncols);
+        if (ncols_pad * sizeof(int) <= ggml_cuda_info().devices[device].smpb) {
+            top_k_bitonic_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
+            return;
+        }
     }
 
     if (nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK) {
