@@ -15878,8 +15878,7 @@ struct ggml_backend_vk_comm_context {
     std::vector<vk_command_pool>            cmd_pool;
     std::vector<uint64_t>                   pool_max_val;
     std::vector<void*>                      host_ptr;
-    std::vector<std::vector<vk_buffer>>     host_buf;
-    std::vector<ggml_backend_buffer_t>      tmp_buffer;
+    std::vector<std::vector<ggml_backend_buffer_t>> host_buf;
     std::vector<ggml_tensor*>               tmp_tensor;
     ggml_context *                          tctx = nullptr;
     bool                                    ring_ok = false;
@@ -15998,7 +15997,6 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
     comm->fast = ok;
     comm->host_ptr.resize(n_backends, nullptr);
     comm->host_buf.resize(n_backends);
-    comm->tmp_buffer.resize(n_backends, nullptr);
     comm->tmp_tensor.resize(n_backends, nullptr);
     for (size_t k = 0; k < n_backends; k++) {
         comm->host_buf[k].resize(n_backends);
@@ -16112,16 +16110,11 @@ static void ggml_backend_vk_comm_free(void * comm_ctx) {
     }
     for (auto & row : comm->host_buf) {
         for (auto & b : row) {
-            b.reset();
+            ggml_backend_buffer_free(b);
         }
     }
     for (void * p : comm->host_ptr) {
         ggml_vk_comm_aligned_free(p);
-    }
-    for (ggml_backend_buffer_t b : comm->tmp_buffer) {
-        if (b) {
-            ggml_backend_buffer_free(b);
-        }
     }
     for (ggml_backend_buffer_t b : comm->up16_buffer) {
         if (b) {
@@ -16165,16 +16158,13 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
 
     for (size_t k = 0; k < n; k++) {
         for (size_t i = 0; i < n; i++) {
-            comm->host_buf[k][i].reset();
+            ggml_backend_buffer_free(comm->host_buf[k][i]);
+            comm->host_buf[k][i] = nullptr;
         }
         ggml_vk_comm_aligned_free(comm->host_ptr[k]);
         comm->host_ptr[k] = nullptr;
     }
     for (size_t i = 0; i < n; i++) {
-        if (comm->tmp_buffer[i]) {
-            ggml_backend_buffer_free(comm->tmp_buffer[i]);
-            comm->tmp_buffer[i] = nullptr;
-        }
         if (comm->up16_buffer[i]) {
             ggml_backend_buffer_free(comm->up16_buffer[i]);
             comm->up16_buffer[i] = nullptr;
@@ -16192,7 +16182,8 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
             return false;
         }
         for (size_t i = 0; i < n; i++) {
-            comm->host_buf[k][i] = ggml_vk_buffer_from_host_ptr(comm->device[i], comm->host_ptr[k], slotcap);
+            comm->host_buf[k][i] = ggml_backend_vk_device_buffer_from_host_ptr(
+                ggml_backend_get_device(comm->backends[i]), comm->host_ptr[k], slotcap, newcap);
             if (!comm->host_buf[k][i]) {
                 return false;
             }
@@ -16200,15 +16191,9 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
     }
     for (size_t i = 0; i < n; i++) {
         ggml_backend_buffer_type_t bt = ggml_backend_get_default_buffer_type(comm->backends[i]);
-        comm->tmp_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
-        if (!comm->tmp_buffer[i]) {
-            return false;
-        }
         if (!comm->tmp_tensor[i]) {
             comm->tmp_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1);
         }
-        comm->tmp_tensor[i]->buffer = comm->tmp_buffer[i];
-        comm->tmp_tensor[i]->data   = ggml_backend_buffer_get_base(comm->tmp_buffer[i]);
         comm->up16_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
         comm->dn16_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
         if (!comm->up16_buffer[i] || !comm->dn16_buffer[i]) {
@@ -16284,6 +16269,8 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
         {
             ggml_backend_vk_buffer_context * ubc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
             ggml_backend_vk_buffer_context * dbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
+            ggml_backend_vk_buffer_context * hbc = (ggml_backend_vk_buffer_context *) comm->host_buf[i][i]->context;
+            ggml_backend_vk_buffer_context * pbc = (ggml_backend_vk_buffer_context *) comm->host_buf[prevd][i]->context;
             ggml_tensor * up16t = comm->up16_tensor[i];
             ggml_tensor * dn16t = comm->dn16_tensor[i];
             char *        ubase = (char *) ggml_backend_buffer_get_base(comm->up16_buffer[i]);
@@ -16320,7 +16307,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
                     tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 1 });
                 }
                 if (scels) {
-                    ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], hoff, ubc->dev_buffer, uoff, (size_t) scels * xsz);
+                    ggml_vk_buffer_copy_async(tctx, hbc->dev_buffer, hoff, ubc->dev_buffer, uoff, (size_t) scels * xsz);
                 }
                 ggml_vk_ctx_end(tctx);
                 tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
@@ -16328,7 +16315,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
                 ggml_vk_ctx_begin(comm->device[i], cctx);
                 cctx->s->wait_semaphores.push_back({ comm->peer_up[i][prevd], up_base[prevd] + t + 1 });
                 if (rcels) {
-                    ggml_vk_buffer_copy_async(cctx, dbc->dev_buffer, 0, comm->host_buf[prevd][i], hoff, (size_t) rcels * xsz);
+                    ggml_vk_buffer_copy_async(cctx, dbc->dev_buffer, 0, pbc->dev_buffer, hoff, (size_t) rcels * xsz);
                     ggml_vk_sync_buffers(comm->vkctx[i], cctx);
                     set_view(dn16t, comm->dn16_buffer[i], dbase,                                 rcels, xsz);
                     set_view(rview, tensors[i]->buffer,   tbase + (size_t) c_recv * cels * esz,  rcels, esz);
@@ -16415,7 +16402,7 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
         for (int d = 1; d < GGML_MAX_DIMS; d++) {
             tmp->nb[d] = tmp->nb[d - 1] * tmp->ne[d - 1];
         }
-        ggml_backend_vk_buffer_context * tbc = (ggml_backend_vk_buffer_context *) comm->tmp_buffer[i]->context;
+        ggml_backend_vk_buffer_context * hbc = (ggml_backend_vk_buffer_context *) comm->host_buf[i][i]->context;
         vk_context c = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
 
         ggml_vk_ctx_begin(comm->device[i], c);
@@ -16427,10 +16414,10 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
         }
         if (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) {
             ggml_backend_vk_buffer_context * bc = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
-            ggml_vk_buffer_copy_async(c, comm->host_buf[i][i], 0, bc->dev_buffer,
+            ggml_vk_buffer_copy_async(c, hbc->dev_buffer, 0, bc->dev_buffer,
                                       vk_tensor_offset(tensors[i]) + tensors[i]->view_offs, nbytes);
         } else {
-            ggml_vk_buffer_memset_async(c, comm->host_buf[i][i], 0, 0, nbytes);
+            ggml_vk_buffer_memset_async(c, hbc->dev_buffer, 0, 0, nbytes);
         }
         ggml_vk_ctx_end(c);
         c->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], gather_val[i] });
@@ -16446,8 +16433,8 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
             if (k == i) {
                 continue;
             }
-            ggml_vk_buffer_copy_async(c, tbc->dev_buffer, 0, comm->host_buf[k][i], 0, nbytes);
-            ggml_vk_sync_buffers(comm->vkctx[i], c);
+            tmp->buffer = comm->host_buf[k][i];
+            tmp->data   = ggml_backend_buffer_get_base(tmp->buffer);
             ggml_vk_add(comm->vkctx[i], c, tensors[i], tmp, tensors[i]);
             ggml_vk_sync_buffers(comm->vkctx[i], c);
         }
