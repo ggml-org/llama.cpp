@@ -798,6 +798,16 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_internvl>(ctx_v);
                     ov_img_first = false;
                 } break;
+            case PROJECTOR_TYPE_COHERE2V:
+                {
+                    // <|START_OF_IMG|> (tile embeddings) <|IMG_LINE_BREAK|> ... <|END_OF_IMG|>
+                    img_beg = "<|START_OF_IMG|>";
+                    img_end = "<|END_OF_IMG|>";
+                    tok_sli_img_end = {lookup_token("<|IMG_LINE_BREAK|>")};
+                    tok_ov_img_end  = tok_sli_img_end;
+                    ov_img_first = false;
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_cohere2v>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_KIMIVL:
                 {
                     // <|media_start|> ... (image embeddings) ... <|media_end|>
@@ -859,6 +869,11 @@ struct mtmd_context {
                     sli_img_start_tmpl = "<|img_row_%d_col_%d|>";
                     tok_ov_img_start   = {lookup_token("<|img_thumbnail|>")};
                     ov_img_first       = false;
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_lfm2>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_D1OMNI_V:
+                {
+                    // same tiles and thumbnail as lfm2, without separator tokens
                     image_preproc = std::make_unique<mtmd_image_preprocessor_lfm2>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_GLM4V:
@@ -971,6 +986,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_LFM2A:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_D1OMNI_A:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_d1omni>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {

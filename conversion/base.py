@@ -2336,12 +2336,26 @@ class TextModel(ModelBase):
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
+        else:
+            embedding_config_path = self.dir_model / "embedding_config.json"
+            if embedding_config_path.is_file():
+                with open(embedding_config_path, encoding="utf-8") as f:
+                    embedding_config = json.load(f)
+                pooling = embedding_config.get("pooling")
+                if pooling == "last_token":
+                    self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+                elif pooling is not None:
+                    raise NotImplementedError(f"unsupported embedding_config.json pooling {pooling!r}")
 
         # pooling before a classification head (e.g. ModernBertForSequenceClassification)
         if (classifier_pooling := self.hparams.get("classifier_pooling")) is not None:
             if classifier_pooling not in ("cls", "mean"):
                 raise NotImplementedError(f"Unsupported classifier_pooling: {classifier_pooling}")
             self.gguf_writer.add_classifier_pooling_type(mode_mapping[classifier_pooling])
+        if (classifier_activation := self.hparams.get("classifier_activation")) is not None:
+            if classifier_activation not in ("gelu", "silu", "tanh"):
+                raise NotImplementedError(f"Unsupported classifier_activation: {classifier_activation}")
+            self.gguf_writer.add_classifier_activation(classifier_activation)
 
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer
