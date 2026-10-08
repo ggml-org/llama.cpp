@@ -460,3 +460,8 @@ size_t ggml_sycl_flash_attn_ext_get_alloc_size(const ggml_tensor * dst) {
     const ggml_sycl_fattn_extra extra = ggml_sycl_fattn_get_extra(dst);
     return (size_t) (extra.end - (uintptr_t) dst->data);
 }
+
+bool ggml_sycl_flash_attn_ext_uses_library(int device, const ggml_tensor * dst) {
+    const best_fattn_kernel kernel = ggml_sycl_get_best_fattn_kernel(device, dst);
+    return kernel == BEST_FATTN_KERNEL_ONEDNN || kernel == BEST_FATTN_KERNEL_MKL;
+}

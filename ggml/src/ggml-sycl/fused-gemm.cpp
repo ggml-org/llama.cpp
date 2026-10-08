@@ -745,7 +745,7 @@ static void fused_dequant_gemm_tile(
     const int b0, const int n0, const int n1,
     sycl::local_accessor<typename S::tsa, 1> tile_a,
     sycl::local_accessor<float, 1> tile_c,
-    const sycl::nd_item<2> & item) {
+    const sycl::nd_item<2> & item, ggml_sycl_gg_rows dst_rows = {}) {
     if constexpr (fg_built<S::SG>()) {
         using EA = typename S::EA;
         using TA = typename S::ta;
@@ -854,7 +854,13 @@ static void fused_dequant_gemm_tile(
                 for (int s = 0; s < FG_KSPLIT; ++s) {
                     sum += tile_c[s * S::SG_ROWS * S::BN + r * S::BN + c];
                 }
-                dst[(size_t) n * ldd + m] = sum;
+                if (dst_rows.map) {
+                    const mmid_row_mapping row = dst_rows.map[n];
+                    float * out = (float *) (dst_rows.base + (row.i1 % dst_rows.ne1) * dst_rows.nb1 + row.i2 * dst_rows.nb2);
+                    out[m] = sum;
+                } else {
+                    dst[(size_t) n * ldd + m] = sum;
+                }
             }
         }
     }
@@ -882,7 +888,7 @@ template <typename S, typename block_q_t, bool reordered>
 static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t expert_stride,
                                         const ggml_sycl_gg_tile * tiles_ptr, const typename S::tsb * packed, float * dst,
                                         const int M, const int Npad, const int K, const int64_t n_tiles,
-                                        const int64_t groups_m, dpct::queue_ptr stream) {
+                                        const int64_t groups_m, dpct::queue_ptr stream, ggml_sycl_gg_rows dst_rows = {}) {
     stream->submit([&](sycl::handler & cgh) {
         sycl::local_accessor<typename S::tsa, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
@@ -891,9 +897,12 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(S::SG)]] {
                 const int               t    = item.get_group(0);
                 const ggml_sycl_gg_tile tile = tiles_ptr[t];
+                if (tile.n0 == tile.n1) {
+                    return;
+                }
                 const block_q_t *       x    = (const block_q_t *) (src0_dd + (size_t) tile.expert * expert_stride);
                 fused_dequant_gemm_tile<S, block_q_t, reordered>(x, packed, dst, M, Npad, K, M, t * S::BN, tile.n0,
-                                                                 tile.n1, tile_a, tile_c, item);
+                                                                 tile.n1, tile_a, tile_c, item, dst_rows);
             });
     });
 }
@@ -1088,6 +1097,220 @@ bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const v
     fg_visit_combo(combo, [&](auto s) {
         launched = fg_grouped_run<decltype(s)>(src0_type, reordered, src0_base, expert_stride, src1, dst,
                                                expert_row_offsets, n_as, M, K, tiles, pool, stream);
+    });
+    return launched;
+}
+
+// One work-group sorts routes by expert and builds the tile table.
+static constexpr int MMID_SCHED_WG = 256;
+
+using mmid_sched_atomic = sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed,
+                                           sycl::memory_scope::work_group,
+                                           sycl::access::address_space::local_space>;
+
+bool ggml_sycl_build_mmid_schedule(const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
+                                   int64_t n_tokens, int64_t n_tiles_max, mmid_row_mapping * row_mapping,
+                                   ggml_sycl_gg_tile * tiles, uint32_t * expert_offsets, dpct::queue_ptr stream) {
+    if (n_as <= 0 || n_as > GGML_SYCL_MMID_SCHED_MAX_EXPERTS || n_ids <= 0 || n_tokens <= 0 || n_ids > INT32_MAX / n_tokens) {
+        return false;
+    }
+    const int64_t n_routes = n_tokens * n_ids;
+    if (n_tiles_max < grouped_gemm_max_tiles(n_routes, n_as, GGML_SYCL_FG_BN)) {
+        return false;
+    }
+
+    stream->submit([&](sycl::handler & cgh) {
+        // l_cnt is reused: route counts, then the write cursors, then the tile count per expert
+        sycl::local_accessor<uint32_t, 1> l_cnt(n_as + 1, cgh);
+        sycl::local_accessor<uint32_t, 1> l_off(n_as + 1, cgh);
+        sycl::local_accessor<uint32_t, 1> l_toff(n_as + 1, cgh);
+        cgh.parallel_for(
+            sycl::nd_range<1>(MMID_SCHED_WG, MMID_SCHED_WG),
+            [=](sycl::nd_item<1> item) {
+                const auto     grp = item.get_group();
+                const int64_t  tid = item.get_local_id(0);
+                uint32_t * cnt  = l_cnt.get_multi_ptr<sycl::access::decorated::no>().get();
+                uint32_t * off  = l_off.get_multi_ptr<sycl::access::decorated::no>().get();
+                uint32_t * toff = l_toff.get_multi_ptr<sycl::access::decorated::no>().get();
+
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    cnt[e] = 0;
+                }
+                // a dropped route must leave a row that names (0, 0) rather than stale memory
+                for (int64_t r = tid; r < n_routes; r += MMID_SCHED_WG) {
+                    row_mapping[r] = { 0, 0 };
+                }
+                sycl::group_barrier(grp);
+
+                for (int64_t r = tid; r < n_routes; r += MMID_SCHED_WG) {
+                    const int64_t   token  = r / n_ids;
+                    const int64_t   slot   = r - token * n_ids;
+                    const int32_t * id_row = (const int32_t *) ((const char *) ids_dev + token * ids_token_stride);
+                    const int32_t   e      = id_row[slot];
+                    if (e >= 0 && e < n_as) {
+                        mmid_sched_atomic(cnt[e]).fetch_add(1u);
+                    }
+                }
+                sycl::group_barrier(grp);
+
+                sycl::joint_exclusive_scan(grp, cnt, cnt + n_as, off, 0u, sycl::plus<uint32_t>());
+                sycl::group_barrier(grp);
+                if (tid == 0) {
+                    off[n_as] = off[n_as - 1] + cnt[n_as - 1];
+                }
+                sycl::group_barrier(grp);
+
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    cnt[e] = off[e];
+                }
+                sycl::group_barrier(grp);
+
+                // Atomic arrival order can differ from the host sort; each expert gets the same rows.
+                for (int64_t r = tid; r < n_routes; r += MMID_SCHED_WG) {
+                    const int64_t   token  = r / n_ids;
+                    const int64_t   slot   = r - token * n_ids;
+                    const int32_t * id_row = (const int32_t *) ((const char *) ids_dev + token * ids_token_stride);
+                    const int32_t   e      = id_row[slot];
+                    if (e >= 0 && e < n_as) {
+                        const uint32_t pos = mmid_sched_atomic(cnt[e]).fetch_add(1u);
+                        row_mapping[pos]   = { (int32_t) slot, (int32_t) token };
+                    }
+                }
+                sycl::group_barrier(grp);
+
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    cnt[e] = (off[e + 1] - off[e] + GGML_SYCL_FG_BN - 1) / GGML_SYCL_FG_BN;
+                }
+                sycl::group_barrier(grp);
+
+                sycl::joint_exclusive_scan(grp, cnt, cnt + n_as, toff, 0u, sycl::plus<uint32_t>());
+                sycl::group_barrier(grp);
+                if (tid == 0) {
+                    toff[n_as] = toff[n_as - 1] + cnt[n_as - 1];
+                }
+                sycl::group_barrier(grp);
+
+                const uint32_t n_tiles = toff[n_as];
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    const uint32_t base = off[e];
+                    const uint32_t end  = off[e + 1];
+                    for (uint32_t j = 0; j < cnt[e]; ++j) {
+                        const uint32_t n0 = base + j * GGML_SYCL_FG_BN;
+                        const uint32_t n1 = n0 + GGML_SYCL_FG_BN < end ? n0 + GGML_SYCL_FG_BN : end;
+                        tiles[toff[e] + j] = { (int32_t) e, (int32_t) n0, (int32_t) n1 };
+                    }
+                }
+                // the launch is bounded, so the unused tail must be tiles the GEMM skips
+                for (int64_t t = n_tiles + tid; t < n_tiles_max; t += MMID_SCHED_WG) {
+                    tiles[t] = { 0, 0, 0 };
+                }
+                for (int64_t e = tid; e <= n_as; e += MMID_SCHED_WG) {
+                    expert_offsets[e] = off[e];
+                }
+            });
+    });
+    return true;
+}
+
+template <typename S>
+static bool fg_grouped_device_run(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
+                                   ggml_sycl_gg_rows src1, ggml_sycl_gg_rows dst, const int32_t * ids_dev,
+                                   size_t ids_token_stride, int64_t n_as, int64_t n_ids, int64_t n_tokens,
+                                   int64_t M, int64_t K, ggml_sycl_pool & pool, dpct::queue_ptr stream) {
+    if constexpr (S::BN != GGML_SYCL_FG_BN) {
+        return false;
+    } else {
+        const int64_t total_rows = n_tokens * n_ids;
+        const int64_t max_tiles = grouped_gemm_max_tiles(total_rows, n_as, S::BN);
+        if (max_tiles > INT32_MAX / S::BN) {
+            return false;
+        }
+        const int Npad = (int) (max_tiles * S::BN);
+        ggml_sycl_pool_alloc<mmid_row_mapping> rows(pool, total_rows);
+        ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles(pool, max_tiles);
+        ggml_sycl_pool_alloc<uint32_t> offsets(pool, n_as + 1);
+        if (!ggml_sycl_build_mmid_schedule(ids_dev, ids_token_stride, n_as, n_ids, n_tokens, max_tiles,
+                                           rows.get(), tiles.get(), offsets.get(), stream)) {
+            return false;
+        }
+        src1.map = rows.get();
+        dst.map = rows.get();
+        ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * Npad);
+        const ggml_sycl_gg_tile * tile_ptr = tiles.get();
+        typename S::tsb * packed = packed_b.get();
+        using E = typename S::EB;
+        constexpr int V = S::VNNI;
+        stream->parallel_for(sycl::range<1>((size_t) Npad * (K / V)), [=](sycl::id<1> id) {
+            const size_t idx = id[0];
+            const int kq = idx / Npad;
+            const int n = idx - (size_t) kq * Npad;
+            const ggml_sycl_gg_tile tile = tile_ptr[n / S::BN];
+            const int row = tile.n0 + n % S::BN;
+            typename S::tsb vals[V] = {};
+            if (row < tile.n1) {
+                const mmid_row_mapping mapping = src1.map[row];
+                const float * in = (const float *) (src1.base + (mapping.i1 % src1.ne1) * src1.nb1 + mapping.i2 * src1.nb2) + V * kq;
+#pragma unroll
+                for (int v = 0; v < V; ++v) {
+                    vals[v] = E::cvt(in[v]);
+                }
+            }
+            typename S::tsb * out = packed + ((size_t) kq * Npad + n) * V;
+#pragma unroll
+            for (int v = 0; v < V; ++v) {
+                out[v] = vals[v];
+            }
+        });
+        const int64_t groups_m = (M + S::SG_ROWS - 1) / S::SG_ROWS;
+        return fg_visit_type(src0_type, reordered, [&](auto tag) {
+            using T = decltype(tag);
+            grouped_dequant_gemm_launch<S, typename T::type, T::reordered>((const char *) src0_base, expert_stride,
+                tile_ptr, packed, (float *) dst.base, (int) M, Npad, (int) K, max_tiles, groups_m, stream, dst);
+        });
+    }
+}
+
+bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool reordered, int32_t src1_prec,
+                                                      int64_t n_as, int64_t n_ids, int64_t n_tokens,
+                                                      int64_t M, int64_t K, dpct::queue_ptr stream) {
+    if (n_as <= 0 || n_as > GGML_SYCL_MMID_SCHED_MAX_EXPERTS || n_ids <= 0 || n_tokens <= 0 ||
+        n_ids > INT32_MAX / n_tokens) {
+        return false;
+    }
+    const int64_t total_rows = n_ids * n_tokens;
+    // The active expert count is unknown until the GPU builds the schedule.
+    if (g_ggml_sycl_dynamic_precision == GGML_SYCL_DYNAMIC_PRECISION_F32 ||
+        !ggml_sycl_xmx_gather_type_enabled(src0_type) || !fg_visit_type(src0_type, reordered, [](auto) {}) ||
+        !ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, std::min(n_as, total_rows))) {
+        return false;
+    }
+    const sycl::device device = stream->get_device();
+    if (device.get_info<sycl::info::device::max_work_group_size>() < MMID_SCHED_WG ||
+        device.get_info<sycl::info::device::local_mem_size>() < 3 * (n_as + 1) * sizeof(uint32_t)) {
+        return false;
+    }
+    if (grouped_gemm_max_tiles(total_rows, n_as, GGML_SYCL_FG_BN) > INT32_MAX / GGML_SYCL_FG_BN ||
+        fg_pick_combo(stream, GGML_TYPE_F32, src1_prec) < 0) {
+        return false;
+    }
+    return true;
+}
+
+bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, const void * src0_base,
+                                           size_t expert_stride, const ggml_sycl_gg_rows & src1, int32_t src1_prec,
+                                           const ggml_sycl_gg_rows & dst, const int32_t * ids_dev,
+                                           size_t ids_token_stride, int64_t n_as, int64_t n_ids, int64_t n_tokens,
+                                           int64_t M, int64_t K, ggml_sycl_pool & pool, dpct::queue_ptr stream) {
+    if (src1.ne1 <= 0 || dst.ne1 <= 0 ||
+        !ggml_sycl_grouped_dequant_gemm_device_supported(src0_type, reordered, src1_prec, n_as, n_ids,
+                                                        n_tokens, M, K, stream)) {
+        return false;
+    }
+    const int combo = fg_pick_combo(stream, GGML_TYPE_F32, src1_prec);
+    bool launched = false;
+    fg_visit_combo(combo, [&](auto s) {
+        launched = fg_grouped_device_run<decltype(s)>(src0_type, reordered, src0_base, expert_stride, src1, dst,
+            ids_dev, ids_token_stride, n_as, n_ids, n_tokens, M, K, pool, stream);
     });
     return launched;
 }
