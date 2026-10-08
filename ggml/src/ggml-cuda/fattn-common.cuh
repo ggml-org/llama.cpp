@@ -405,6 +405,16 @@ static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict
     }
 }
 
+// Byte l of q as int8_t. On sm_100+ nvcc 12.8 puts the byte-pointer read in local memory, so use shifts there and
+// keep the pointer read elsewhere, where it compiles well.
+static __device__ __forceinline__ int8_t get_int8(const int & q, const int l) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1000
+    return (int8_t) (q >> (8*l));
+#else
+    return ((const int8_t *) &q)[l];
+#endif // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1000
+}
+
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
@@ -431,7 +441,7 @@ static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict
 
 #pragma unroll
         for (int l0 = 0; l0 < ne; l0 += 2) {
-            ((half2 *) dst)[l0/2] = d * make_half2((int8_t) (q >> (8*l0)), (int8_t) (q >> (8*l0 + 8)));
+            ((half2 *) dst)[l0/2] = d * make_half2(get_int8(q, l0 + 0), get_int8(q, l0 + 1));
         }
     } else
 #endif // FP16_AVAILABLE
@@ -440,7 +450,7 @@ static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict
 
 #pragma unroll
         for (int l = 0; l < ne; ++l) {
-            ((float *) dst)[l] = d * (int8_t) (q >> (8*l));
+            ((float *) dst)[l] = d * get_int8(q, l);
         }
     } else {
         static_assert(std::is_same_v<T, void>, "bad type");
@@ -519,7 +529,7 @@ static __device__ __forceinline__ void dequantize_V_q5_0(const void * __restrict
 
 #pragma unroll
         for (int l0 = 0; l0 < ne; l0 += 2) {
-            ((half2 *) dst)[l0/2] = d * make_half2((int8_t) (q >> (8*l0)), (int8_t) (q >> (8*l0 + 8)));
+            ((half2 *) dst)[l0/2] = d * make_half2(get_int8(q, l0 + 0), get_int8(q, l0 + 1));
         }
     } else
 #endif // FP16_AVAILABLE
@@ -528,7 +538,7 @@ static __device__ __forceinline__ void dequantize_V_q5_0(const void * __restrict
 
 #pragma unroll
         for (int l = 0; l < ne; ++l) {
-            ((float *) dst)[l] = d * (int8_t) (q >> (8*l));
+            ((float *) dst)[l] = d * get_int8(q, l);
         }
     } else {
         static_assert(std::is_same_v<T, void>, "bad type");
