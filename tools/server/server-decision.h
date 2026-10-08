@@ -43,6 +43,7 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
+            case COMMON_DECISION_TYPE_LFM2_D1:
                 return true;
             default:
                 return false;
@@ -60,6 +61,8 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_OPENJEV:
             case COMMON_DECISION_TYPE_CLEF:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
+            case COMMON_DECISION_TYPE_LFM2_D1:
+            case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
                 return true;
             default:
                 return false;
@@ -70,7 +73,8 @@ struct server_decision_context {
     std::vector<server_decision_question> parse_questions(const json & body) const;
 
     // returns the state without its images, they are appended to files in order
-    // images come from "images" and from the image_url parts of a state made of chat messages
+    // images come from "files" (alias "images") and from the image_url and input_audio parts of a state made of chat messages
+    // an image can be an audio clip if the model supports it
     json parse_state(const json & body, std::vector<raw_buffer> & files) const;
 
     // number of prompts that are evaluated to answer this question, each one shows the options in a different order
@@ -99,7 +103,7 @@ struct server_decision_context {
             server_task & task) const;
 
     // scores: the raw model outputs of each variant
-    json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const;
+    json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores, bool has_media = false) const;
 
 private:
     const llama_vocab * vocab = nullptr;
@@ -126,10 +130,22 @@ private:
             const std::vector<server_decision_question> & questions,
             const server_decision_question & question,
             size_t variant,
-            size_t n_images) const;
+            size_t n_images,
+            bool is_audio = false) const;
     json render_options(const server_decision_question & question, size_t variant) const;
     size_t n_outputs(const server_decision_question & question) const;
+    // LFM2_D1: label text and tokens of each option
+    void d1_labels(const server_decision_question & question, std::vector<std::string> & texts, std::vector<llama_tokens> & groups) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
+    void fill_task_d1omni(
+            const json & state,
+            const std::vector<server_decision_question> & questions,
+            const server_decision_question & question,
+            size_t variant,
+            const std::vector<raw_buffer> & files,
+            mtmd_context * mctx,
+            const mtmd_helper_init_opt & init_opt,
+            server_task & task) const;
 
     float get_temperature(const server_decision_question & question) const;
 };

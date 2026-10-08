@@ -311,8 +311,14 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Generation prompt appended to the chat template output")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             std::string s = data.at("generation_prompt").get<std::string>();
-            ctx.params.chat_parser_params.generation_prompt = s;
             ctx.params.sampling.generation_prompt = s;
+
+            if (ctx.vocab == nullptr) {
+                ctx.params.chat_parser_params.generation_prompt = common_chat_input(s);
+                return;
+            }
+
+            ctx.params.chat_parser_params.generation_prompt = common_chat_input_tokenize(ctx.vocab, s);
         }));
 
     add((new field_bool("parse_tool_calls", params.chat_parser_params.parse_tool_calls))

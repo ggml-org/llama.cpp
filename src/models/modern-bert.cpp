@@ -28,6 +28,12 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
         hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
     }
 
+    // GGUFs without a classifier activation use gelu, the transformers default
+    std::string act_cls;
+    if (!ml.get_key(LLM_KV_CLASSIFIER_ACTIVATION, act_cls, false)) {
+        hparams.act_cls = GGML_UNARY_OP_GELU_ERF;
+    }
+
     ml.get_key(LLM_KV_DECISION_BLOCK_COUNT, hparams.n_layer_decision, false);
     if (hparams.n_layer_decision > 0) {
         if (hparams.n_layer_decision >= hparams.n_layer()) {

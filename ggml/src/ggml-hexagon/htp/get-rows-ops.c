@@ -225,18 +225,25 @@ static inline HVX_Vector get_rows_gather4(HVX_Vector v, uint32_t row) {
     return Q6_V_vmux_QVV(Q6_Q_vsetq_R(3), packed, Q6_V_vror_VR(v, 93));
 }
 
-static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const uint8_t * tile, uint32_t row, bool q4) {
+// q5_k: the Q4_K tile followed by the plane of 5th bits, see HTP_MM_WEIGHT_TILE_SIZE_Q5_K
+static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const uint8_t * tile, uint32_t row, bool q4, bool q4_k, bool q5_k) {
     const HVX_VectorPred first2 = Q6_Q_vsetq_R(2);
     const HVX_VectorPred first4 = Q6_Q_vsetq_R(4);
     HVX_Vector vq = Q6_V_vzero();
     if (q4) {
+        const HVX_Vector p5 = q5_k ? get_rows_gather4(hvx_vmem(tile + 640), row) : Q6_V_vzero();
+        HVX_Vector vh = Q6_V_vzero();
         for (int group = 3; group >= 0; --group) {
             vq = Q6_V_vmux_QVV(first4, get_rows_gather4(hvx_vmem(tile + group * VLEN), row), Q6_V_vror_VR(vq, VLEN - 4));
+            vh = Q6_V_vmux_QVV(first4, Q6_Vub_vlsr_VubR(p5, 2 * group), Q6_V_vror_VR(vh, VLEN - 4));
         }
-        const HVX_Vector lo = Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F));
-        const HVX_Vector hi = Q6_Vub_vlsr_VubR(vq, 4);
+        const HVX_Vector one = Q6_Vb_vsplat_R(1);
+        const HVX_Vector lo = Q6_V_vor_VV(Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F)), Q6_Vw_vasl_VwR(Q6_V_vand_VV(vh, one), 4));
+        const HVX_Vector hi = Q6_V_vor_VV(Q6_Vub_vlsr_VubR(vq, 4), Q6_Vw_vasl_VwR(Q6_V_vand_VV(Q6_Vub_vlsr_VubR(vh, 1), one), 4));
         vq = Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -1));
-        vq = Q6_Vb_vsub_VbVb(vq, Q6_Vb_vsplat_R(8));
+        if (!q4_k) {
+            vq = Q6_Vb_vsub_VbVb(vq, Q6_Vb_vsplat_R(8));
+        }
     } else {
         for (int group = 7; group >= 0; --group) {
             const HVX_Vector v = Q6_V_vror_VR(hvx_vmem(tile + group * VLEN), 2 * row);
@@ -246,64 +253,44 @@ static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const 
         }
     }
     const HVX_Vector scales = hvx_vmem(tile + (q4 ? 512 : 1024));
-    const HVX_Vector scale_hf = hvx_vec_repl_f16(Q6_V_vror_VR(scales, 2 * row));
+    const HVX_Vector scale_hf = hvx_vec_repl_f16(Q6_V_vror_VR(scales, (q4_k ? 4 : 2) * row));
     const HVX_Vector scale = Q6_V_lo_W(hvx_vec_f16_to_f32(scale_hf));
     const HVX_VectorPair p16 = Q6_Wh_vunpack_Vb(vq);
     const HVX_VectorPair p32 = Q6_Ww_vunpack_Vh(Q6_V_lo_W(p16));
-    const HVX_Vector values = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_V_lo_W(p32)), scale);
+    HVX_Vector values = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_V_lo_W(p32)), scale);
+    if (q4_k) {
+        const HVX_Vector offset_hf = hvx_vec_repl_f16(Q6_V_vror_VR(scales, 4 * row + 2));
+        const HVX_Vector offset = Q6_V_lo_W(hvx_vec_f16_to_f32(offset_hf));
+        values = hvx_vec_add_f32_f32(values, offset);
+    }
     *(HVX_Vector *) dst = values;
 }
 
-// Q6_K tile, see HTP_MM_WEIGHT_TILE_SIZE_Q6_K: k-group g (4 k) of row r is at bytes 4r..4r+3 of the group planes.
-// Unpack each group like unpack_q6_k_group() of the matmul and keep the 4 bytes of the row; k 0..15 and k 16..31 have their own scale.
-static __attribute__((noinline)) void compute_get_rows_tiled_q6_k(float * dst, const uint8_t * tile, uint32_t row) {
-    const HVX_Vector * vptr = (const HVX_Vector *) tile;
+static __attribute__((noinline)) void compute_get_rows_q6_k(float * dst, const uint8_t * tile, uint32_t row) {
+    const HVX_VectorPred first4 = Q6_Q_vsetq_R(4);
+    const HVX_VectorPred first16 = Q6_Q_vsetq_R(16 * sizeof(float));
     const HVX_Vector mask_0f = Q6_Vb_vsplat_R(0x0F);
     const HVX_Vector mask_03 = Q6_Vb_vsplat_R(0x03);
-    const HVX_Vector i32     = Q6_Vb_vsplat_R(32);
-    const HVX_VectorPred first4 = Q6_Q_vsetq_R(4);
     HVX_Vector vq = Q6_V_vzero();
-    for (int g = 7; g >= 0; --g) {
-        const HVX_Vector v_lo = (g & 1) ? Q6_Vub_vlsr_VubR(vptr[g >> 1], 4) : Q6_V_vand_VV(vptr[g >> 1], mask_0f);
-        const HVX_Vector v_hi = (g & 3) ? Q6_Vub_vlsr_VubR(vptr[4 + (g >> 2)], 2 * (g & 3)) : vptr[4 + (g >> 2)];
-        const HVX_Vector v_q  = Q6_V_vor_VV(v_lo, Q6_Vw_vasl_VwR(Q6_V_vand_VV(v_hi, mask_03), 4));
-        const HVX_Vector v    = Q6_V_vror_VR(Q6_Vb_vsub_VbVb(v_q, i32), 4 * row);
-        vq = Q6_V_vmux_QVV(first4, v, Q6_V_vror_VR(vq, VLEN - 4));
+
+    for (int group = 7; group >= 0; --group) {
+        const HVX_Vector lo_plane = Q6_V_vror_VR(hvx_vmem(tile + (group >> 1) * VLEN), 4 * row);
+        const HVX_Vector hi_plane = Q6_V_vror_VR(hvx_vmem(tile + 512 + (group >> 2) * VLEN), 4 * row);
+        const HVX_Vector lo = (group & 1) ? Q6_Vub_vlsr_VubR(lo_plane, 4) : Q6_V_vand_VV(lo_plane, mask_0f);
+        const HVX_Vector hi = Q6_Vub_vlsr_VubR(hi_plane, 2 * (group & 3));
+        const HVX_Vector packed = Q6_V_vor_VV(lo, Q6_Vw_vasl_VwR(Q6_V_vand_VV(hi, mask_03), 4));
+        vq = Q6_V_vmux_QVV(first4, packed, Q6_V_vror_VR(vq, VLEN - 4));
     }
-    const HVX_Vector scales   = vptr[6];
-    const HVX_Vector scale_lo = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vec_repl_f16(Q6_V_vror_VR(scales, 2 * row))));
-    const HVX_Vector scale_hi = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vec_repl_f16(Q6_V_vror_VR(scales, 2 * (32 + row)))));
-    const HVX_Vector scale    = Q6_V_vmux_QVV(Q6_Q_vsetq_R(64), scale_lo, scale_hi);
-    const HVX_VectorPair p16 = Q6_Wh_vunpack_Vb(vq);
+
+    const HVX_Vector scales = hvx_vmem(tile + 768);
+    const HVX_Vector scale_lo_hf = hvx_vec_repl_f16(Q6_V_vror_VR(scales, 2 * row));
+    const HVX_Vector scale_hi_hf = hvx_vec_repl_f16(Q6_V_vror_VR(scales, 64 + 2 * row));
+    const HVX_Vector scale_lo = Q6_V_lo_W(hvx_vec_f16_to_f32(scale_lo_hf));
+    const HVX_Vector scale_hi = Q6_V_lo_W(hvx_vec_f16_to_f32(scale_hi_hf));
+    const HVX_Vector scale = Q6_V_vmux_QVV(first16, scale_lo, scale_hi);
+    const HVX_VectorPair p16 = Q6_Wh_vunpack_Vb(Q6_Vb_vsub_VbVb(vq, Q6_Vb_vsplat_R(32)));
     const HVX_VectorPair p32 = Q6_Ww_vunpack_Vh(Q6_V_lo_W(p16));
     *(HVX_Vector *) dst = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_V_lo_W(p32)), scale);
-}
-
-// Q4_K and Q5_K tiles, see HTP_MM_WEIGHT_TILE_SIZE_Q5_K: nibbles as in Q4_0, then (D, M) per row with x = D * q + M.
-// Q5_K adds the 5th bits: byte 32 * (cp % 4) + row of the plane, bit 2 * (cp / 4) for the low nibble of cp, +1 for the high one.
-static __attribute__((noinline)) void compute_get_rows_tiled_q4_k(float * dst, const uint8_t * tile, uint32_t row, bool q5) {
-    const HVX_VectorPred first4 = Q6_Q_vsetq_R(4);
-    const HVX_Vector p5 = q5 ? get_rows_gather4(hvx_vmem(tile + 640), row) : Q6_V_vzero();
-    HVX_Vector vq = Q6_V_vzero();
-    HVX_Vector vh = Q6_V_vzero();
-    for (int group = 3; group >= 0; --group) {
-        vq = Q6_V_vmux_QVV(first4, get_rows_gather4(hvx_vmem(tile + group * VLEN), row), Q6_V_vror_VR(vq, VLEN - 4));
-        vh = Q6_V_vmux_QVV(first4, Q6_Vub_vlsr_VubR(p5, 2 * group), Q6_V_vror_VR(vh, VLEN - 4));
-    }
-    HVX_Vector lo = Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F));
-    HVX_Vector hi = Q6_Vub_vlsr_VubR(vq, 4);
-    if (q5) {
-        const HVX_Vector one = Q6_Vb_vsplat_R(1);
-        lo = Q6_V_vor_VV(lo, Q6_Vw_vasl_VwR(Q6_V_vand_VV(vh, one), 4));
-        hi = Q6_V_vor_VV(hi, Q6_Vw_vasl_VwR(Q6_V_vand_VV(Q6_Vub_vlsr_VubR(vh, 1), one), 4));
-    }
-    vq = Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -1));
-    const HVX_Vector scales = Q6_V_vror_VR(hvx_vmem(tile + 512), 4 * row);
-    const HVX_Vector d = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vec_repl_f16(scales)));
-    const HVX_Vector m = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vec_repl_f16(Q6_V_vror_VR(scales, 2))));
-    const HVX_VectorPair p16 = Q6_Wh_vunpack_Vb(vq);
-    const HVX_VectorPair p32 = Q6_Ww_vunpack_Vh(Q6_V_lo_W(p16));
-    *(HVX_Vector *) dst = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_V_lo_W(p32)), d), m);
 }
 
 struct get_rows_tiled_task {
@@ -368,8 +355,10 @@ static void get_rows_thread_tiled(unsigned int nth, unsigned int ith, void * dat
     const uint32_t tile_size   = grctx->tile_size;
     const uint32_t tile_stride = grctx->tile_stride;
     const uint32_t dst_bytes   = ne00 * sizeof(float);
-    const int  src0_type = octx->src[0]->type;
-    const bool is_q4 = (src0_type == HTP_TYPE_Q4_0);
+    const bool is_q5_k = octx->src[0]->type == HTP_TYPE_Q5_K;
+    const bool is_q4_k = octx->src[0]->type == HTP_TYPE_Q4_K || is_q5_k;
+    const bool is_q4 = octx->src[0]->type == HTP_TYPE_Q4_0 || is_q4_k;
+    const bool is_q6_k = octx->src[0]->type == HTP_TYPE_Q6_K;
 
     for (uint32_t step = 0, spad_idx = 0; step < ir1 - ir0 && spad_idx < 2; ++step, ++spad_idx) {
         const uint32_t i = ir0 + step;
@@ -397,12 +386,10 @@ static void get_rows_thread_tiled(unsigned int nth, unsigned int ith, void * dat
         for (uint32_t k_tile = 0; k_tile < n_k_tiles; ++k_tile) {
             const uint8_t * tile = src_spad + k_tile * tile_stride;
             float * dst_block = dst_spad + k_tile * HTP_MM_HMX_TILE_N_COLS;
-            if (src0_type == HTP_TYPE_Q6_K) {
-                compute_get_rows_tiled_q6_k(dst_block, tile, task.row);
-            } else if (src0_type == HTP_TYPE_Q4_K || src0_type == HTP_TYPE_Q5_K) {
-                compute_get_rows_tiled_q4_k(dst_block, tile, task.row, src0_type == HTP_TYPE_Q5_K);
+            if (is_q6_k) {
+                compute_get_rows_q6_k(dst_block, tile, task.row);
             } else {
-                compute_get_rows_tiled(dst_block, tile, task.row, is_q4);
+                compute_get_rows_tiled(dst_block, tile, task.row, is_q4, is_q4_k, is_q5_k);
             }
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
@@ -429,19 +416,13 @@ int op_get_rows(struct htp_ops_context * octx) {
     const struct htp_get_rows_kernel_params * kparams = (const struct htp_get_rows_kernel_params *) octx->kernel_params;
 
     if (octx->src[0]->type != HTP_TYPE_F32 &&
-         octx->src[0]->type != HTP_TYPE_F16 &&
-         octx->src[0]->type != HTP_TYPE_Q4_0 &&
-         octx->src[0]->type != HTP_TYPE_Q8_0 &&
-         octx->src[0]->type != HTP_TYPE_Q4_K &&
-         octx->src[0]->type != HTP_TYPE_Q5_K &&
-         octx->src[0]->type != HTP_TYPE_Q6_K &&
-         octx->src[0]->type != HTP_TYPE_I32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    // K-quant rows are only read from the tiled layout
-    const bool is_k = octx->src[0]->type == HTP_TYPE_Q4_K || octx->src[0]->type == HTP_TYPE_Q5_K || octx->src[0]->type == HTP_TYPE_Q6_K;
-    if (is_k && kparams->kernel_type != HTP_GET_ROWS_KERNEL_TILED) {
+        octx->src[0]->type != HTP_TYPE_F16 &&
+        octx->src[0]->type != HTP_TYPE_Q4_0 &&
+        octx->src[0]->type != HTP_TYPE_Q4_K &&
+        octx->src[0]->type != HTP_TYPE_Q5_K &&
+        octx->src[0]->type != HTP_TYPE_Q6_K &&
+        octx->src[0]->type != HTP_TYPE_Q8_0 &&
+        octx->src[0]->type != HTP_TYPE_I32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 

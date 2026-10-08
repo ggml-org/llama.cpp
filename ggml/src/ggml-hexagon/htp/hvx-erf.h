@@ -27,6 +27,7 @@ static __attribute__((noinline)) HVX_Vector hvx_vec_erf_f32(HVX_Vector x) {
     return result;
 }
 
+// GELU_ERF uses the erf definition.
 static inline HVX_Vector hvx_vec_gelu_erf_f32(HVX_Vector x) {
     const HVX_Vector scale = hvx_vec_splat_f32(0.7071067811865475f);
     const HVX_Vector half  = hvx_vec_splat_f32(0.5f);
