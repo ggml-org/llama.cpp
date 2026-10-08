@@ -5454,9 +5454,9 @@ void server_routes::init_routes() {
         json body = json::parse(req.body);
         std::optional<common_chat_session> session;
         json body_parsed = oaicompat_chat_params_parse(
+            ctx_server.vocab,
             body,
             meta->chat_params,
-            ctx_server.vocab,
             files,
             session);
         return handle_completions_impl(
@@ -5517,9 +5517,9 @@ void server_routes::init_routes() {
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         std::optional<common_chat_session> session;
         json body_parsed = oaicompat_chat_params_parse(
+            ctx_server.vocab,
             body,
             meta->chat_params,
-            ctx_server.vocab,
             files,
             session);
         return handle_completions_impl(
@@ -5553,9 +5553,9 @@ void server_routes::init_routes() {
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         std::optional<common_chat_session> session;
         json body_parsed = oaicompat_chat_params_parse(
+            ctx_server.vocab,
             body,
             meta->chat_params,
-            ctx_server.vocab,
             files,
             session);
         return handle_completions_impl(
@@ -5575,9 +5575,9 @@ void server_routes::init_routes() {
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         std::optional<common_chat_session> session;
         json body_parsed = oaicompat_chat_params_parse(
+            ctx_server.vocab,
             body,
             meta->chat_params,
-            ctx_server.vocab,
             files,
             session);
         return handle_completions_impl(
@@ -5600,9 +5600,9 @@ void server_routes::init_routes() {
         std::optional<common_chat_session> session; // dummy, unused
         json body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(
+            ctx_server.vocab,
             body,
             meta->chat_params,
-            ctx_server.vocab,
             files,
             session);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
@@ -6158,9 +6158,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const s
 
     std::optional<common_chat_session> session; // dummy, unused
     json body_parsed = oaicompat_chat_params_parse(
+            ctx_server.vocab,
             body,
             meta->chat_params,
-            ctx_server.vocab,
             files,
             session);
     json prompt = body_parsed.at("prompt");

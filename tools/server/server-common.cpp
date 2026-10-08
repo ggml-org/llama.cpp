@@ -1266,9 +1266,9 @@ server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    const llama_vocab * vocab,
     std::vector<raw_buffer> & out_files,
     std::optional<common_chat_session> & out_session)
 {
