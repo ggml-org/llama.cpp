@@ -24,8 +24,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
     const dpct::queue_ptr &stream);
 
-// Fused dense-FFN mat-vec: writes glu(gate . y, up . y) for same-type reordered K-quant
-// weights (Q2_K..Q6_K) and a single F32 activation column, using the ESIMD DMMV kernels.
+// Fused dense-FFN mat-vec: writes glu(gate . y, up . y) for same-type reordered
+// weights (Q2_K..Q6_K, Q8_0) and a single F32 activation column, using the ESIMD DMMV kernels.
 // vx is the up weight, vgate the gate weight. Only defined when GGML_SYCL_DMMV_HAS_ESIMD;
 // returns false if the type is unhandled.
 bool ggml_sycl_dequantize_mul_mat_vec_glu_reorder_esimd(

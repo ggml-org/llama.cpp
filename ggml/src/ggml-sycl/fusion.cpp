@@ -32,20 +32,22 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
         return false;
     }
 
-    // fused GEMVs walk whole QK_K super-blocks: the reorder kernel covers same-type
+    // fused K-quant GEMVs walk whole QK_K super-blocks: the reorder kernel covers same-type
     // q4_K, the plain-layout kernel covers q5_K / iq4_xs pairs incl. mixed gate/up types
     const bool reorder_pair = wu->type == GGML_TYPE_Q4_K && wg->type == GGML_TYPE_Q4_K;
     const bool plain_pair   = (wu->type == GGML_TYPE_Q5_K || wu->type == GGML_TYPE_IQ4_XS) &&
                             (wg->type == GGML_TYPE_Q5_K || wg->type == GGML_TYPE_IQ4_XS);
-    // the ESIMD kernel covers same-type q2_K..q6_K, single column only (as unfused DMMV)
+    // the ESIMD kernel covers same-type q2_K..q6_K and q8_0, single column only (as unfused DMMV)
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
     const bool esimd_pair   = g_ggml_sycl_enable_esimd && wu->type == wg->type && act->ne[1] == 1 &&
                             (wu->type == GGML_TYPE_Q2_K || wu->type == GGML_TYPE_Q3_K || wu->type == GGML_TYPE_Q4_K ||
-                             wu->type == GGML_TYPE_Q5_K || wu->type == GGML_TYPE_Q6_K);
+                             wu->type == GGML_TYPE_Q5_K || wu->type == GGML_TYPE_Q6_K || wu->type == GGML_TYPE_Q8_0);
 #else
     const bool esimd_pair   = false;
 #endif
-    if ((!reorder_pair && !plain_pair && !esimd_pair) || wu->ne[0] % QK_K != 0) {
+    // q8_0 rows are walked in 32-wide blocks, so they only need to be a multiple of QK8_0
+    const int64_t row_align = esimd_pair && wu->type == GGML_TYPE_Q8_0 ? QK8_0 : QK_K;
+    if ((!reorder_pair && !plain_pair && !esimd_pair) || wu->ne[0] % row_align != 0) {
         return false;
     }
 
