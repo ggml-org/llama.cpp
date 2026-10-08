@@ -1314,8 +1314,11 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/0cb67a0d-67f6-410b-868b-f4a0a17ff0cf/intel-oneapi-toolkit-2026.1.1.32_offline.exe
-      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      WINDOWS_DLE_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/a51104eb-6f4a-4a0e-9dae-1b81b0c81ae1/intel-deep-learning-essentials-2026.1.4.16_offline.exe
+      WINDOWS_ONEDNN_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/34e28083-d04b-46a3-826c-8c1d00bf1e1c/intel-onednn-2026.0.2.47_offline.exe
+      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.tbb.devel
+      WINDOWS_DNNL: intel.oneapi.win.dnnl
+
       LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.33.1/level-zero-win-sdk-1.33.1.zip
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
       ONEAPI_INSTALLER_VERSION: "2026.1"
@@ -1328,7 +1331,8 @@ jobs:
       - name: Download & Install oneAPI
         shell: bash
         run: |
-          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+          scripts/install-oneapi.bat $WINDOWS_DLE_URL $WINDOWS_DPCPP_MKL
+          scripts/install-oneapi.bat $WINDOWS_ONEDNN_URL $WINDOWS_DNNL
 
       - name: Install Level Zero SDK
         shell: pwsh
@@ -1439,8 +1443,15 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/5996e26b-f48a-42b1-8db0-b002ad0bd8d7/intel-oneapi-toolkit-2026.1.1.33_offline.sh -O intel-oneapi-toolkit_offline.sh
-          sudo bash intel-oneapi-toolkit_offline.sh -s -a --silent --eula accept
+          echo "Download oneAPI Deep Learning Essentials installation package"
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b5c100a7-8052-4e88-90e2-63d9916a998b/intel-deep-learning-essentials-2026.1.4.17_offline.sh -O intel-deep-learning-essentials_offline.sh
+          echo "Install oneAPI Deep Learning Essentials components"
+          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+
+          echo "Download oneDNN installation package"
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh
+          echo "Install oneDNN components"
+          sudo bash intel-onednn_offline.sh -s -a --silent --eula accept
 
       - name: Install Level Zero SDK
         shell: bash
