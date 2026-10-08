@@ -2448,10 +2448,10 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
     // the slot map is a host weight, so the scheduler starts a new split here and copies it with the copy callback
     // the callback reads the selected experts, uploads the missing ones and updates the slot map
     ggml_tensor * slots = ggml_get_rows(ctx0, slot_map, ids); // [1, n_expert_used*n_tokens]
-    if (!ggml_backend_supports_op(moe_cache->backend(), slots)) {
+    if (!ggml_backend_supports_op(moe_cache->backend(il), slots)) {
         return nullptr;
     }
-    ggml_backend_sched_set_tensor_backend(sched, slots, moe_cache->backend());
+    ggml_backend_sched_set_tensor_backend(sched, slots, moe_cache->backend(il));
     cb(slots, "ffn_moe_slots", il);
 
     return ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]); // [n_expert_used, n_tokens]
