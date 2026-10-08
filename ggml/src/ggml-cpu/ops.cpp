@@ -6571,6 +6571,7 @@ static void ggml_compute_forward_conv_transpose_1d_f16_f32(
     ggml_barrier(params->threadpool);
 
     const int32_t s0 = ((const int32_t*)(dst->op_params))[0];
+    GGML_ASSERT(s0 >= 0);
 
     // total rows in dst
     const int nr = ne1;
@@ -6659,6 +6660,7 @@ static void ggml_compute_forward_conv_transpose_1d_f32(
     ggml_barrier(params->threadpool);
 
     const int32_t s0 = ((const int32_t*)(dst->op_params))[0];
+    GGML_ASSERT(s0 >= 0);
 
     // total rows in dst
     const int nr = ne1;
@@ -7654,6 +7656,7 @@ static void ggml_compute_forward_conv_transpose_2d_impl(
     ggml_barrier(params->threadpool);
 
     const int32_t stride = ggml_get_op_params_i32(dst, 0);
+    GGML_ASSERT(stride >= 0);
 
     // total patches in dst
     const int np = ne2;
