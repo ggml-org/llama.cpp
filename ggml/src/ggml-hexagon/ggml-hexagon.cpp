@@ -2851,8 +2851,14 @@ static size_t parse_size(const char * str, size_t default_unit = 1024 * 1024) {
     return (size_t) (val * default_unit);
 }
 
+// the IOMMU maps a buffer in a slot aligned to the next power of two of its size: keep the 4 KiB guard page of
+// ggml_hexagon_shared_buffer inside the limit, a full chunk of limit + 4 KiB would take a slot twice as large
+static size_t ggml_hexagon_chunk_limit(size_t limit) {
+    return limit > 4096 ? limit - 4096 : limit;
+}
+
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    return opt_mbuf_dyn;
+    return ggml_hexagon_chunk_limit(opt_mbuf_dyn);
     GGML_UNUSED(buft);
 }
 
@@ -2896,7 +2902,7 @@ static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buf
     ggml_backend_hexagon_alloc_buffer_n_plan_t plan;
 
     const size_t alignment = ggml_backend_buft_get_alignment(buft);
-    const size_t max_size  = opt_mbuf_static > 0 ? opt_mbuf_static : SIZE_MAX;
+    const size_t max_size  = opt_mbuf_static > 0 ? ggml_hexagon_chunk_limit(opt_mbuf_static) : SIZE_MAX;
 
     std::vector<ggml_backend_hexagon_alloc_unit> units;
 
