@@ -1523,6 +1523,28 @@ static void test_json_schema_unordered_properties() {
         });
 
     test_schema_unordered(
+        "optional keys: repeats are capped",
+        make_schema(R"""(, "additionalProperties": false)"""),
+        {
+            R"""({"expr": "0", "expr": "1"})""",
+            R"""({"expr": "0", "dtype": "int", "expr": "1", "n": 1})""",
+        },
+        {
+            R"""({"expr": "0", "expr": "1", "expr": "2", "expr": "3", "expr": "4"})""",
+        });
+
+    test_schema_unordered(
+        "additional keys stay unbounded, optional repeats still capped",
+        make_schema(R"""(, "additionalProperties": true)"""),
+        {
+            R"""({"a1": 1, "expr": "0", "a2": 2, "dtype": "int", "a3": 3})""",
+            R"""({"a1": 1, "a2": 2, "a3": 3, "a4": 4, "a5": 5, "a6": 6, "a7": 7, "a8": 8, "a9": 9, "a10": 10})""",
+        },
+        {
+            R"""({"expr": "0", "expr": "1", "expr": "2", "expr": "3", "expr": "4", "expr": "5", "expr": "6", "expr": "7"})""",
+        });
+
+    test_schema_unordered(
         "required properties in any order",
         make_schema(R"""(, "required": ["expr", "n"], "additionalProperties": false)"""),
         {
