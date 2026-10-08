@@ -3,7 +3,7 @@
 #
 # The lib branch is a generated artifact - never edit it by hand. All
 # enablement (LLAMA_DOWNLOAD option, EXISTS guards in CMake) lives on the
-# source branch; this script only deletes directories and commits the result.
+# source branch; this script only removes paths and commits the result.
 # Re-run after every upstream sync to refresh the branch.
 #
 # Usage: scripts/prune-to-lib.sh [--from <ref>] [--branch <name>] [--no-check]
@@ -43,7 +43,7 @@ if git worktree list --porcelain | grep -qx "branch refs/heads/${LIB_BRANCH}"; t
     exit 1
 fi
 
-# directories removed from the SDK tree; paths absent in a given tree are skipped
+# paths removed from the SDK tree; absent paths are skipped
 PRUNE_PATHS=(
     tools/batched-bench
     tools/cli
@@ -68,6 +68,7 @@ PRUNE_PATHS=(
     models
     requirements
     skills
+    # Root guidance and agent runbooks require development docs removed from the SDK.
     bench-a770
     benches
     sweep-logs

@@ -1,10 +1,9 @@
 #include "fused-gemm.hpp"
 
+// Build policy and target selection: docs/backend/SYCL.md (XMX gather GEMMs).
+#ifndef GGML_SYCL_NO_XMX_GATHER
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
-
 #include <limits>
-#include <mutex>
-#include <unordered_map>
 
 namespace mx = sycl::ext::oneapi::experimental::matrix;
 
@@ -122,15 +121,15 @@ static __dpct_inline__ void fg_stage_a(const block_iq3_s * __restrict__ xrow, co
 
 // values per stored block, so a row of K values is K/qk blocks
 template <typename block_q_t> struct fg_block_traits;
-template <> struct fg_block_traits<block_iq4_nl> { static constexpr int qk = QK4_NL; };
-template <> struct fg_block_traits<block_iq3_s>  { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq3_xxs> { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq4_xs>  { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq2_xxs> { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq2_xs>  { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq2_s>   { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq1_s>   { static constexpr int qk = QK_K; };
-template <> struct fg_block_traits<block_iq1_m>   { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq4_nl> { static constexpr ggml_type type = GGML_TYPE_IQ4_NL; static constexpr int qk = QK4_NL; };
+template <> struct fg_block_traits<block_iq3_s>  { static constexpr ggml_type type = GGML_TYPE_IQ3_S; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq3_xxs> { static constexpr ggml_type type = GGML_TYPE_IQ3_XXS; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq4_xs>  { static constexpr ggml_type type = GGML_TYPE_IQ4_XS; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq2_xxs> { static constexpr ggml_type type = GGML_TYPE_IQ2_XXS; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq2_xs>  { static constexpr ggml_type type = GGML_TYPE_IQ2_XS; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq2_s>   { static constexpr ggml_type type = GGML_TYPE_IQ2_S; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq1_s>   { static constexpr ggml_type type = GGML_TYPE_IQ1_S; static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_iq1_m>   { static constexpr ggml_type type = GGML_TYPE_IQ1_M; static constexpr int qk = QK_K; };
 
 // The A stages below are the dequantize_block_iq* kernels rewritten for one k step. There a
 // work-item handled one quarter (il) of one 32-wide sub-block (ib); here one lane produces the
@@ -420,6 +419,8 @@ static void grouped_dequant_gemm(
     fused_dequant_gemm_tile<block_q_t>(x, packed_b, dst, M, Npad, K, M, t * FG_BN, tile.n0, tile.n1, tile_a, tile_c, item);
 }
 
+template <int type> class fused_dequant_gemm_kernel;
+
 template <typename block_q_t>
 static void fused_dequant_gemm_launch(const void * src0, const sycl::half * packed, float * dst, const int M,
                                       const int N, const int Npad, const int K, const int ldd,
@@ -427,7 +428,7 @@ static void fused_dequant_gemm_launch(const void * src0, const sycl::half * pack
     stream->submit([&](sycl::handler & cgh) {
         sycl::local_accessor<sycl::half, 1> tile_a(FG_KSPLIT * FG_SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>      tile_c(FG_KSPLIT * FG_SG_ROWS * FG_BN, cgh);
-        cgh.parallel_for(
+        cgh.parallel_for<fused_dequant_gemm_kernel<fg_block_traits<block_q_t>::type>>(
             sycl::nd_range<2>(sycl::range<2>(groups_n, groups_m * FG_WG_SIZE), sycl::range<2>(1, FG_WG_SIZE)),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 fused_dequant_gemm<block_q_t>((const block_q_t *) src0, packed, dst, M, N, Npad, K, ldd,
@@ -477,24 +478,37 @@ static void grouped_gemm_pack_b(const float * y, sycl::half * packed, const ggml
     });
 }
 
+#endif // GGML_SYCL_NO_XMX_GATHER
+
 bool ggml_sycl_fused_dequant_gemm_f16_device_ok(dpct::queue_ptr stream) {
-    // Cached per device, not once: on a mixed box the first caller's verdict is not the others'.
-    static std::mutex                        mtx;
-    static std::unordered_map<sycl::device, bool> known;
-    const sycl::device                       dev = stream->get_device();
-    std::lock_guard<std::mutex>              lock(mtx);
-    const auto                               it = known.find(dev);
-    if (it != known.end()) {
-        return it->second;
+#ifdef GGML_SYCL_NO_XMX_GATHER
+    (void) stream;
+    return false;
+#else
+    // Worker-local, per-device results avoid a global lock on every eligible matmul.
+    thread_local std::vector<std::pair<sycl::device, bool>> known;
+    const auto dev = stream->get_device();
+    for (const auto & entry : known) {
+        if (entry.first == dev) {
+            return entry.second;
+        }
     }
-    const bool ok = fused_gemm_f16_supported(stream);
-    known.emplace(dev, ok);
+    const bool ok = fused_gemm_f16_supported(stream) &&
+        sycl::has_kernel_bundle<sycl::bundle_state::executable>(stream->get_context(), {dev},
+            {sycl::get_kernel_id<fused_dequant_gemm_kernel<GGML_TYPE_IQ4_NL>>()});
+    known.emplace_back(dev, ok);
     return ok;
+#endif
 }
 
 bool ggml_sycl_fused_dequant_gemm_f16(ggml_type src0_type, const void * src0, const sycl::half * src1_f16, float * dst,
                                       int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool,
                                       dpct::queue_ptr stream) {
+#ifdef GGML_SYCL_NO_XMX_GATHER
+    (void) src0_type; (void) src0; (void) src1_f16; (void) dst;
+    (void) M; (void) N; (void) K; (void) ldd; (void) pool; (void) stream;
+    return false;
+#else
     // every FG_BN columns dequantize A again, so wide N is left to the library GEMM
     if (!ggml_sycl_xmx_gather_type_enabled(src0_type)) {
         return false;
@@ -555,6 +569,7 @@ bool ggml_sycl_fused_dequant_gemm_f16(ggml_type src0_type, const void * src0, co
             return false;
     }
     return true;
+#endif
 }
 
 bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_base, size_t expert_stride,
@@ -562,6 +577,12 @@ bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_b
                                         int64_t n_as, int64_t M, int64_t K, int64_t total_rows,
                                         std::vector<ggml_sycl_gg_tile> & tiles, ggml_sycl_pool & pool,
                                         dpct::queue_ptr stream) {
+#ifdef GGML_SYCL_NO_XMX_GATHER
+    (void) src0_type; (void) src0_base; (void) expert_stride; (void) src1; (void) dst;
+    (void) expert_row_offsets; (void) n_as; (void) M; (void) K; (void) total_rows;
+    (void) tiles; (void) pool; (void) stream;
+    return false;
+#else
     int64_t n_active = 0;
     for (int64_t e = 0; e < n_as; ++e) {
         n_active += expert_row_offsets[e + 1] > expert_row_offsets[e];
@@ -638,4 +659,5 @@ bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_b
             return false;
     }
     return true;
+#endif
 }

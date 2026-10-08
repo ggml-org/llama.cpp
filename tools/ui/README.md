@@ -747,5 +747,5 @@ tools/ui/
 ## Related Documentation
 
 - [llama.cpp Server README](../server/README.md) - Full server documentation
-- [Multimodal Documentation](../../docs/multimodal.md) - Image and audio support
-- [Function Calling](../../docs/function-calling.md) - Tool use capabilities
+- [Multimodal Documentation](../../docs/features/multimodal.md) - Image and audio support
+- [Function Calling](../../docs/features/function-calling.md) - Tool use capabilities

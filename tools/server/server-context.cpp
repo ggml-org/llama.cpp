@@ -3399,7 +3399,7 @@ private:
                         // slot.spec_ckpt updates below pick their flags with spec_ckpt_place(), and the three
                         // loads reuse them through spec_ckpt_flags().
                         // A770 A/B, which sites execute, and limits:
-                        // docs/research/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
+                        // docs/research/speculative/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
                         if (use_ckpt_dft) {
                             slot.spec_ckpt.update_dft(ctx_dft, slot.id, spec_ckpt_place(slot, true));
                         }

@@ -1,6 +1,6 @@
 # Merge upstream into the Raudbjorn llama.cpp fork
 
-This runbook updates `/mnt/mrgr/llama-resync` from `ggml-org/llama.cpp` while preserving the fork's deliberately smaller backend surface and its TurboQuant/SYCL implementation. It is written for an agent operating the repository, but every command can also be run by a human.
+This runbook updates a clean checkout or worktree of the fork from `ggml-org/llama.cpp` while preserving the fork's deliberately smaller backend surface and its TurboQuant/SYCL implementation. It is written for an agent operating the repository, but every command can also be run by a human.
 
 The default procedure is a sanitized snapshot merge, not a direct merge or rebase. Upstream is first copied into a scratch tree, backends excluded by fork policy are removed, and that tree is committed with the real merge base as its parent. Merging the synthetic commit gives Git a correct three-way base without importing thousands of incompatible backend files.
 
@@ -26,9 +26,9 @@ This runbook does not restore removed backends, run destructive GPU probes, esta
 Read these before editing:
 
 - [`AGENTS.md`](../../AGENTS.md): current repository policy, supported backend set, TurboQuant architecture, build commands, and verification rules.
-- [`docs/build.md`](../build.md): current build options.
+- [`docs/build/build.md`](../build/build.md): current build options.
 - [`docs/backend/SYCL.md`](../backend/SYCL.md): SYCL toolchain and runtime details.
-- [`TURBOQUANT_UPSTREAM_MERGE.md`](../../TURBOQUANT_UPSTREAM_MERGE.md): historical merge notes only. It describes an older fork shape and is not current backend policy.
+- [`docs/development/turboquant-upstream-merge-notes.md`](turboquant-upstream-merge-notes.md): historical merge notes only. It describes an older fork shape and is not current backend policy.
 
 When these disagree, current code and `AGENTS.md` win. Never copy stale line numbers or old conflict choices without re-reading the current files.
 
@@ -115,9 +115,29 @@ src/llama-turbo-innerq-runtime.cpp
 
 Also preserve TurboQuant template instances under `ggml/src/ggml-sycl/template-instances/`, graph-side WHT calls in `src/llama-graph.cpp`, and auto-asymmetric/layer-adaptive policy in `src/llama-kv-cache.cpp`.
 
-Treat `CONTRIBUTING.md`, `.github/`, `ci/run.sh`, `scripts/`, `vendor/CMakeLists.txt`, and the server proxy policy as fork-owned review surfaces. In particular, preserve `tools/server/server-cors-proxy.h`, its routing in `tools/server/server.cpp`, and `tools/server/tests/unit/test_proxy.py`. Upstream versions may be useful inputs, but they must not restore removed backend automation, weaken private reporting, or remove proxy destination policy.
+Treat `scripts/`, `vendor/CMakeLists.txt`, and the server proxy policy as fork-owned review surfaces. In particular, preserve `tools/server/server-cors-proxy.h`, its routing in `tools/server/server.cpp`, and `tools/server/tests/unit/test_proxy.py`. Upstream versions may be useful inputs, but they must not restore removed backend automation, weaken private reporting, or remove proxy destination policy.
 
 The list is a floor, not a substitute for comparing the current fork against the merge base. New fork-owned files added after this guide must be inventoried before each merge.
+
+`.github/` and `ci/` are deleted from the fork (owner decision, recorded in merge `181a4a8fb` of PR #55), and so is `CONTRIBUTING.md` (owner decision, 2026-10-05; its security-reporting paragraph moved to the README). Upstream snapshots still carry all three, so any of them the merge brings back is a defect.
+
+`docs/` uses the fork's own layout (2026-10-05). Upstream's flat docs live under `docs/build/`, `docs/user/`, `docs/features/` and `docs/development/`. The fork-only docs are:
+
+- `docs/turboquant/`, `docs/research/` and `docs/plans/`;
+- `docs/backend/MOE-CACHE.md`, `docs/SDK.md`;
+- `docs/development/upstream-merge.md`, `docs/development/turboquant-upstream-merge-notes.md` and `docs/development/agents.md`;
+- the indexes `docs/README.md` and `docs/research/README.md`.
+
+The project subagents in `.claude/agents/` and `.codex/agents/` are fork-owned as well;
+upstream has none. Preserve both: Codex definitions reference the shared Markdown runbooks.
+
+`docs/ops.md` and `docs/ops/` keep upstream's paths because `scripts/create_ops_docs.py` and `examples/sycl/update-ops-doc.sh` write there.
+
+What the merge should do with these docs is expected git behavior and has not yet been seen on a real merge here:
+
+- Rename detection should carry an upstream edit of a moved doc to its new path.
+- Upstream files added to a wholly moved directory (`docs/multimodal/`, `docs/android/`) should follow it.
+- A new top-level upstream doc lands at upstream's path and needs moving by hand.
 
 ## Phase 1: establish immutable inputs
 
@@ -126,10 +146,10 @@ Do not start from a dirty checkout. Do not stash unrelated user work to make the
 ```bash
 set -euo pipefail
 
-REPO=/mnt/mrgr/llama-resync
-BASE_BRANCH=resync
+REPO=${REPO:?set to a clean checkout or worktree of the fork}
+BASE_BRANCH=${BASE_BRANCH:-master}
 UPSTREAM_URL=https://github.com/ggml-org/llama.cpp
-EXPECTED_UPSTREAM_TIP=3466812d1
+EXPECTED_UPSTREAM_TIP=${EXPECTED_UPSTREAM_TIP:?set to the upstream commit chosen for this merge}
 MERGE_BRANCH="merge/upstream-$(date +%F)"
 
 cd "$REPO"
@@ -165,10 +185,7 @@ The merge base, not memory, defines fork-owned work:
 ```bash
 source .git/upstream-merge.env
 
-git diff --name-status "$MERGE_BASE..$FORK_TIP" -- \
-  .github ci scripts vendor CONTRIBUTING.md docs/development/upstream-merge.md \
-  ggml/include ggml/src src common tests tools CMakeLists.txt cmake \
-  > /tmp/llama-fork-delta.txt
+git diff --name-status "$MERGE_BASE..$FORK_TIP" > /tmp/llama-fork-delta.txt
 
 git diff --stat "$MERGE_BASE..$FORK_TIP"
 ```
@@ -181,6 +198,8 @@ Classify changed paths into four groups:
 4. Historical edits already superseded by upstream.
 
 Record the classification before merging. Completion means every fork-changed path has an explicit disposition; "probably upstream" is not a disposition.
+The inventory is deliberately unfiltered: include all docs and plans, the shared agent contract,
+and both `.claude/agents/` and `.codex/agents/`, including files added since the last sync.
 
 ## Phase 2: create the sanitized upstream tree
 
@@ -365,6 +384,7 @@ If the harness exposes conflicts as `conflict://N`, resolve one ID per write. Ne
 | `common/arg.cpp` and `common/common.h` | Union declarations and options. Reject duplicate flags, orphaned structs, and flags whose implementation was removed. |
 | Tests | Preserve upstream coverage and fork gates. Remove duplicate cases and ensure every loop/block has one owner. |
 | UI source | Prefer upstream barrel imports and component APIs. Remove duplicated props/imports introduced by unioning old and new forms. |
+| `docs/` | Keep the fork layout. Move new upstream docs into the matching folder, list them in `docs/README.md`, and drop docs for deleted backends. |
 
 ### ABI and API checks during resolution
 
@@ -453,15 +473,11 @@ FORK_FILES=(
   ggml/src/ggml-sycl/sycl-mutable-command-list-probe.cpp
   ggml/src/ggml-sycl/sycl-mutable-command-list-probe.cl
   src/llama-turbo-innerq-runtime.cpp
-  .github/labeler.yml
-  .github/ISSUE_TEMPLATE/010-bug-compilation.yml
-  .github/ISSUE_TEMPLATE/011-bug-results.yml
-  ci/run.sh
-  CONTRIBUTING.md
   vendor/CMakeLists.txt
   scripts/check-required-targets.sh
   scripts/check-upstream-sync-invariants.sh
   docs/development/upstream-merge.md
+  docs/development/agents.md
   tools/server/server-cors-proxy.h
   tools/server/server.cpp
   tools/server/tests/unit/test_proxy.py
@@ -471,9 +487,24 @@ for path in "${FORK_FILES[@]}"; do
   test -f "$path" || { echo "missing: $path"; exit 1; }
 done
 
-test ! -e .github/workflows/build-wasm.yml
+# Derive the roster and plans from the pre-merge fork, not a stale filename list.
+set -o pipefail
+git ls-tree -r --name-only "$FORK_TIP" -- docs/plans .claude/agents .codex/agents |
+while IFS= read -r path; do
+  test -f "$path" || { echo "missing fork file: $path"; exit 1; }
+done || exit 1
+
+git diff --name-status "$FORK_TIP" -- \
+  docs/plans docs/development/agents.md .claude/agents .codex/agents
+
+test ! -e .github
+test ! -e ci
+test ! -e CONTRIBUTING.md
 test ! -d scripts/snapdragon
 ```
+
+Review every reported plan, contract or agent change against the fork tip; explain any deliberate
+retirement. File presence alone does not prove that the instructions or plan content survived.
 
 Then verify symbols and wiring, not only file presence:
 
@@ -563,12 +594,11 @@ cmake \
   -DHF_BUCKET=ggml-org/llama-ui \
   -DHF_ENABLED=OFF \
   -DBUILD_UI=ON \
-  -DLLAMA_UI_EMBED="$CPU_BUILD/tools/ui/llama-ui-embed" \
   -DLLAMA_UI_GZIP=OFF \
   -P scripts/ui-assets.cmake
 ```
 
-Required evidence includes `UI: npm build succeeded` and successful generation of `ui.cpp`/`ui.h`. A downloaded archive is not acceptable evidence.
+Required evidence includes `UI: npm build succeeded` and `UI: embedded <n> assets` (the script writes `ui.cpp`/`ui.h` itself; there is no separate embed tool). A downloaded archive is not acceptable evidence.
 
 ### 4. CLI parser and metadata smoke
 
@@ -627,14 +657,13 @@ fuser -v /dev/dri/renderD128 || true
 
 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
 SYCL_CACHE_PERSISTENT=1 \
-  "$SYCL_BUILD/bin/test-sycl-turbo-correctness"
+  timeout 600 "$SYCL_BUILD/bin/test-sycl-turbo-correctness"
 ```
 
-The binding summary is:
+The binding summary line must report zero gate failures and zero XPASS:
 
 ```text
-0 GATE-FAIL
-0 XPASS
+== summary: 0 GATE-FAIL, 0 XPASS (promote to GATE!), <n> xfail (expected-broken), <n> SKIP ==
 ```
 
 Do not set `LLAMA_TEST_TURBO_FA`, `LLAMA_TEST_FA256`, or `LLAMA_TEST_INNERQ` as part of the default merge gate. Turbo FA and d=256 have explicit A770 hang risk; opt-in runs need their own authorization, timeout, and recovery plan.
@@ -782,7 +811,7 @@ A verification statement must name the exact command or observable result. "Buil
 
 ## Completion checklist
 
-- [ ] Upstream tip is exactly `3466812d1` and resolves to the recorded full object ID.
+- [ ] Upstream tip is exactly `EXPECTED_UPSTREAM_TIP` and resolves to the recorded full object ID.
 - [ ] Clean fork tip, upstream tip, and merge base recorded before editing.
 - [ ] Current fork delta classified from the merge base.
 - [ ] Sanitized upstream tree excludes all policy-removed backends.
@@ -791,9 +820,9 @@ A verification statement must name the exact command or observable result. "Buil
 - [ ] Snapshot differs from upstream only by intentional sanitization.
 - [ ] Snapshot tree matches the sanitized tree object and its sole parent is the real merge base.
 - [ ] All conflicts resolved by behavior, not blanket side selection.
-- [ ] TurboQuant numeric type ABI remains 43-47 with count 48.
+- [ ] TurboQuant numeric type ABI remains 43-50 with count 51.
 - [ ] Fork-owned sources, graph wiring, KV policy, and SYCL dispatch remain present.
-- [ ] Fork governance, `.github` automation, `ci/run.sh`, `scripts`, vendor policy, and server proxy policy survived with explicit dispositions.
+- [ ] Fork governance, `scripts`, vendor policy, and server proxy policy survived with explicit dispositions; `.github/`, `ci/` and `CONTRIBUTING.md` remain absent.
 - [ ] No excluded backend is compiled, registered, or required at runtime.
 - [ ] Removed backend workflows, labels, issue choices, CI branches, and Snapdragon scripts are absent.
 - [ ] Proxy allowlist consumption and private/metadata rejection tests remain present.

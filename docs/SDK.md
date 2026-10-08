@@ -9,6 +9,10 @@ quality gate.
 The branch is produced by `scripts/prune-to-lib.sh` from `master`. Never commit
 to it by hand - changes belong on `master`, then regenerate.
 
+Root guidance (`AGENTS.md`, `CLAUDE.md`) and project agent definitions in `.claude/agents/`
+and `.codex/agents/` are pruned with the development docs and skills they require. Use the full
+development checkout for those roles and instructions.
+
 ## What LLAMA_DOWNLOAD=OFF means
 
 SDK builds default to providing models as local GGUF files. With
@@ -89,8 +93,10 @@ separate archive, so static consumption of the helpers is unsupported.
 - First GPU launch pays a one-time cold-JIT (~37 s on Arc A770), cached under
   `~/.cache`. AOT (`-DGGML_SYCL_DEVICE_ARCH=acm-g10`) avoids it at the cost of
   a ~45 min build.
-- Head dims must be multiples of 128 for turbo KV types; see the repository
-  CLAUDE.md / AGENTS.md architecture notes.
+- Turbo KV types use 128-element blocks. For head dims that are not a multiple
+  of 128, the KV cache zero-pads each head up to the next multiple of 128
+  (`src/llama-kv-cache.cpp`), which costs extra cache memory; see the
+  full development checkout's CLAUDE.md / AGENTS.md architecture notes.
 
 ## Runtime env knobs
 

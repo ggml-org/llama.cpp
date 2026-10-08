@@ -2,7 +2,7 @@
 
 ## History
 
-Please refer to [multimodal.md](../../docs/multimodal.md) for a broader context.
+Please refer to [multimodal.md](../../docs/features/multimodal.md) for a broader context.
 
 In short:
 - `libmtmd` started as a wrapper around `libllava` / `clip.cpp`

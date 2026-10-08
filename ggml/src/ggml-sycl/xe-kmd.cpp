@@ -261,7 +261,7 @@ bool ggml_sycl_apply_xe_kmd_defaults_in(const std::string & drm_sysfs_root) {
 #else
     g_xe_kmd_defaults_applied.store(false);
     // Kill switch until a compute-runtime release carries the read-only userptr
-    // retry (docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch);
+    // retry (docs/research/software-stack/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch);
     // revisit the default when that happens.
     if (ggml_sycl_get_env(GGML_XE_DEFAULT_SW, 1) == 0) {
         log_later(GGML_LOG_LEVEL_DEBUG, fmt("%s: disabled by %s=0\n", __func__, GGML_XE_DEFAULT_SW));

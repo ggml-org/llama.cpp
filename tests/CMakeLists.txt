@@ -140,6 +140,11 @@ function(llama_build_mtmd_tests)
     endif()
 endfunction()
 
+llama_test_cmd(${CMAKE_COMMAND} NAME test-sycl-xmx-gather
+               ARGS -P ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-xmx-gather.cmake)
+llama_test_cmd(${CMAKE_COMMAND} NAME test-sycl-build-metadata
+               ARGS -P ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-build-metadata.cmake)
+
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)
 
@@ -635,4 +640,14 @@ if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
         add_test(NAME test-dsv4-async-failure COMMAND test-dsv4-async-failure -m "${MODEL_DIR}/deepseek4-moe.gguf")
         set_tests_properties(test-dsv4-async-failure PROPERTIES LABELS sycl FIXTURES_REQUIRED generate-models)
     endif()
+endif()
+
+if (TARGET test-sycl-xmx-gather-stubs)
+    add_test(NAME test-sycl-xmx-gather-stubs COMMAND test-sycl-xmx-gather-stubs)
+    set_tests_properties(test-sycl-xmx-gather-stubs PROPERTIES LABELS "sycl-build" TIMEOUT 30)
+endif()
+
+if (TARGET test-sycl-xmx-gather-images)
+    add_test(NAME test-sycl-xmx-gather-images COMMAND test-sycl-xmx-gather-images)
+    set_tests_properties(test-sycl-xmx-gather-images PROPERTIES LABELS "sycl-build" TIMEOUT 30)
 endif()
