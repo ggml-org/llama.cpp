@@ -1,0 +1,264 @@
+// Dense F32 projection from hidden activations to MoE router logits.
+//
+// Two matrix-vector schedules cover the measured shape classes. Decode assigns
+// one expert row to each wave64, matching the llama.cpp Vulkan geometry and
+// maximizing independent waves for one token. Prefill assigns four adjacent
+// expert rows to each wave32 and reuses every activation packet across their
+// dot products. The latter reduces activation traffic once token parallelism
+// already fills the device.
+//
+// gfx1151 uses descriptor-backed MUBUF accesses for the decode schedule. The
+// generic gfx11 provider retains global addressing where descriptor setup costs
+// more than it saves.
+amdgpu.target<gfx11-generic> @qwen3_moe_router_projection_gfx11_wave32 {subgroup_size = 32}
+
+amdgpu.target<gfx11-generic> @qwen3_moe_router_projection_gfx11_wave64 {subgroup_size = 64}
+
+amdgpu.target<gfx1151> @qwen3_moe_router_projection_gfx1151
+
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+
+// Selects the target's preferred storage contract without exposing addressing
+// policy at the projection call site.
+func.template<qwen3_moe.router_projection.storage> target(@qwen3_moe_router_projection_gfx1151) priority(20) @qwen3_moe_router_projection_descriptor_storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer) {
+  %input_descriptor = buffer.assume.memory_space<descriptor> %input : buffer
+  %weight_descriptor = buffer.assume.memory_space<descriptor> %weight : buffer
+  %output_descriptor = buffer.assume.memory_space<descriptor> %output : buffer
+  func.return %input_descriptor, %weight_descriptor, %output_descriptor : buffer, buffer, buffer
+}
+
+func.template<qwen3_moe.router_projection.storage> priority(1) @qwen3_moe_router_projection_global_storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer) {
+  func.return %input, %weight, %output : buffer, buffer, buffer
+}
+
+// Scalar differential oracle. It is reachable only from check cases and keeps
+// production validation independent of the packetized wave schedule.
+kernel.def target(@qwen3_moe_router_projection_gfx11_wave32) @qwen3_moe_router_projection_f32_reference(%token_count: index) {
+  %expert_count = config.get @qwen3_moe.router.expert_count : index
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%expert_count, %token_count, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %expert_count0 = config.get @qwen3_moe.router.expert_count : index
+  %hidden_size, %expert_count = index.assume %hidden_size0, %expert_count0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128), range(%expert_count0, 32, 512), mul(%expert_count0, 32)] : index, index
+  %expert0 = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %expert = index.assume %expert0 [lt(%expert0, %expert_count)] : index
+  %valid_token = index.cmp ult, %token0, %token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%expert_count]x[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%expert_count]xf32>
+  %sum = scf.for %channel = [%c0 to %hidden_size step %c1](%accumulator = %c0_f32 : f32) -> (f32) {
+    %input_value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> f32
+    %weight_value = view.load %weight_view[%expert, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> f32
+    %next_accumulator = scalar.fmaf %input_value, %weight_value, %accumulator : f32
+    scf.yield %next_accumulator : f32
+  }
+  scf.if %valid_token {
+    view.store %sum, %output_view[%token, %expert] : f32, view<[%launch_token_count]x[%expert_count]xf32>
+  }
+  kernel.return
+}
+
+// One wave64 owns one output row. This schedule is selected for decode.
+kernel.def target(@qwen3_moe_router_projection_gfx11_wave64) @qwen3_moe_router_projection_f32_one_row_wave64(%token_count: index) {
+  %expert_count = config.get @qwen3_moe.router.expert_count : index
+  %c1 = index.constant 1 : index
+  %wave_size = target.subgroup.size : index
+  kernel.launch.config workgroups(%expert_count, %token_count, %c1) workgroup_size(%wave_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %expert_count0 = config.get @qwen3_moe.router.expert_count : index
+  %hidden_size, %expert_count = index.assume %hidden_size0, %expert_count0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128), range(%expert_count0, 32, 512), mul(%expert_count0, 32)] : index, index
+  %expert0 = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %valid_token = index.cmp ult, %token0, %token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
+  %expert = index.assume %expert0 [lt(%expert0, %expert_count)] : index
+  %lane_channel = index.mul %lane, %c4 : index
+  %input_storage, %weight_storage, %output_storage = func.apply<qwen3_moe.router_projection.storage>(%input, %weight, %output) : (buffer, buffer, buffer) -> (buffer, buffer, buffer)
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input_storage, %weight_storage, %output_storage : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%expert_count]x[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%expert_count]xf32>
+  %full_channel_limit = index.sub %hidden_size, %c3 : index
+  %unroll_remainder = index.rem %hidden_size, %c1024 : index
+  %uses_unrolled_schedule = index.cmp eq, %unroll_remainder, %c0 : index
+  %lane_sum = scf.if %uses_unrolled_schedule -> (f32) {
+    %unrolled_sum = scf.for %channel = [%lane_channel to %full_channel_limit step %c256](%accumulator = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
+      %input_values = vector.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+      %weight_values = vector.load %weight_view[%expert, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+      %next_accumulator = vector.dotf %input_values, %weight_values, %accumulator : vector<4xf32>, vector<4xf32>, f32
+      scf.yield %next_accumulator : f32
+    }
+    scf.yield %unrolled_sum : f32
+  } else {
+    %general_sum = scf.for %channel = [%lane_channel to %full_channel_limit step %c256](%accumulator = %c0_f32 : f32) -> (f32) {
+      %input_values = vector.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+      %weight_values = vector.load %weight_view[%expert, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+      %next_accumulator = vector.dotf %input_values, %weight_values, %accumulator : vector<4xf32>, vector<4xf32>, f32
+      scf.yield %next_accumulator : f32
+    }
+    scf.yield %general_sum : f32
+  }
+  %sum = kernel.subgroup.reduce<addf> %lane_sum : f32
+  %lane_i32 = index.cast %lane : index to i32
+  %writes_output = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %publishes_output = scalar.andi %valid_token, %writes_output : i1
+  scf.if %publishes_output {
+    view.store %sum, %output_view[%token, %expert] : f32, view<[%launch_token_count]x[%expert_count]xf32>
+  }
+  kernel.return
+}
+
+// One wave32 owns four adjacent output rows and reuses each input packet across
+// their contractions. This schedule is selected once token parallelism can
+// populate the device independently.
+kernel.def target(@qwen3_moe_router_projection_gfx11_wave32) @qwen3_moe_router_projection_f32_four_row_wave32(%token_count: index) {
+  %expert_count = config.get @qwen3_moe.router.expert_count : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %wave_size = target.subgroup.size : index
+  %expert_tiles = index.div %expert_count, %c4 : index
+  kernel.launch.config workgroups(%expert_tiles, %token_count, %c1) workgroup_size(%wave_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %expert_count0 = config.get @qwen3_moe.router.expert_count : index
+  %hidden_size, %expert_count = index.assume %hidden_size0, %expert_count0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128), range(%expert_count0, 32, 512), mul(%expert_count0, 32)] : index, index
+  %expert_tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c1024 = index.constant 1024 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %valid_token = index.cmp ult, %token0, %token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
+  %expert_base = index.mul %expert_tile, %c4 : index
+  %expert1 = index.add %expert_base, %c1 : index
+  %expert2 = index.add %expert_base, %c2 : index
+  %expert3 = index.add %expert_base, %c3 : index
+  %lane_channel = index.mul %lane, %c4 : index
+  %c0_f32x4 = vector.splat %c0_f32 : vector<4xf32>
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%expert_count]x[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%expert_count]xf32>
+  %full_channel_limit = index.sub %hidden_size, %c3 : index
+  %unroll_remainder = index.rem %hidden_size, %c1024 : index
+  %uses_unrolled_schedule = index.cmp eq, %unroll_remainder, %c0 : index
+  %unroll_count = scf.select %uses_unrolled_schedule, %c4, %c1 : index
+  %lane_sums = scf.for %channel = [%lane_channel to %full_channel_limit step %c128](%accumulators = %c0_f32x4 : vector<4xf32>) -> (vector<4xf32>) unroll(%unroll_count) schedule(interleaved) {
+    %input_values = vector.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values0 = vector.load %weight_view[%expert_base, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values1 = vector.load %weight_view[%expert1, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values2 = vector.load %weight_view[%expert2, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values3 = vector.load %weight_view[%expert3, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %accumulator0 = vector.extract %accumulators[0] : vector<4xf32> -> f32
+    %accumulator1 = vector.extract %accumulators[1] : vector<4xf32> -> f32
+    %accumulator2 = vector.extract %accumulators[2] : vector<4xf32> -> f32
+    %accumulator3 = vector.extract %accumulators[3] : vector<4xf32> -> f32
+    %next0 = vector.dotf %input_values, %weight_values0, %accumulator0 : vector<4xf32>, vector<4xf32>, f32
+    %next1 = vector.dotf %input_values, %weight_values1, %accumulator1 : vector<4xf32>, vector<4xf32>, f32
+    %next2 = vector.dotf %input_values, %weight_values2, %accumulator2 : vector<4xf32>, vector<4xf32>, f32
+    %next3 = vector.dotf %input_values, %weight_values3, %accumulator3 : vector<4xf32>, vector<4xf32>, f32
+    %next_accumulators = vector.from_elements %next0, %next1, %next2, %next3 : vector<4xf32>
+    scf.yield %next_accumulators : vector<4xf32>
+  }
+  %sums = kernel.subgroup.reduce<addf> %lane_sums : vector<4xf32>
+  %lane_i32 = index.cast %lane : index to i32
+  %writes_output = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %publishes_output = scalar.andi %valid_token, %writes_output : i1
+  scf.if %publishes_output {
+    vector.store %sums, %output_view[%token, %expert_base] : vector<4xf32>, view<[%launch_token_count]x[%expert_count]xf32>
+  }
+  kernel.return
+}
+
+// Nonuniform inputs and weights compare both production schedules against an
+// independently structured scalar contraction. The shape crosses every lane
+// and all eight production output tiles.
+check.case public @qwen3_moe_router_projection_f32_differential_case {
+  %token_count = check.literal value(2) : index
+  %input = check.generate.iota offset(-0.25) step(0.0078125) period(17) : tensor<2x512xf32>
+  %weight = check.generate.iota offset(-0.5) step(0.015625) period(31) : tensor<32x512xf32>
+  %expected = check.generate.fill value(0.0) : tensor<2x32xf32>
+  %decode_actual = check.generate.fill value(1.0) : tensor<2x32xf32>
+  %prefill_actual = check.generate.fill value(1.0) : tensor<2x32xf32>
+  kernel.launch @qwen3_moe_router_projection_f32_reference[%token_count](%token_count, %input, %weight, %expected) : [index](index, tensor<2x512xf32>, tensor<32x512xf32>, tensor<2x32xf32>)
+  kernel.launch @qwen3_moe_router_projection_f32_one_row_wave64[%token_count](%token_count, %input, %weight, %decode_actual) : [index](index, tensor<2x512xf32>, tensor<32x512xf32>, tensor<2x32xf32>)
+  kernel.launch @qwen3_moe_router_projection_f32_four_row_wave32[%token_count](%token_count, %input, %weight, %prefill_actual) : [index](index, tensor<2x512xf32>, tensor<32x512xf32>, tensor<2x32xf32>)
+  check.expect.close actual(%decode_actual) expected(%expected) atol(0.0001) rtol(0.0001) nan(same) : tensor<2x32xf32>
+  check.expect.close actual(%prefill_actual) expected(%expected) atol(0.0001) rtol(0.0001) nan(same) : tensor<2x32xf32>
+  check.return
+}
+
+// Binary-exact values give every production row the analytic result 0.125,
+// retaining correctness checks in each measured runtime token bucket. Both
+// schedule cases expose the full shape sweep so routing decisions remain
+// directly measurable.
+check.case public @qwen3_moe_router_projection_f32_decode_benchmark_case {
+  %token_count = check.param.choice values([1, 32, 128, 512]) name("token_count") : index
+  %input = check.generate.fill value(0.00390625) : tensor<[%token_count]x2048xf32>
+  %weight = check.generate.fill value(0.015625) : tensor<128x2048xf32>
+  %output = check.generate.fill value(1.0) : tensor<[%token_count]x128xf32>
+  %expected = check.generate.fill value(0.125) : tensor<[%token_count]x128xf32>
+  kernel.launch @qwen3_moe_router_projection_f32_one_row_wave64[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<128x2048xf32>, tensor<[%token_count]x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0001) rtol(0.0001) nan(same) : tensor<[%token_count]x128xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_router_projection_f32_prefill_benchmark_case {
+  %token_count = check.param.choice values([1, 32, 128, 512]) name("token_count") : index
+  %input = check.generate.fill value(0.00390625) : tensor<[%token_count]x2048xf32>
+  %weight = check.generate.fill value(0.015625) : tensor<128x2048xf32>
+  %output = check.generate.fill value(1.0) : tensor<[%token_count]x128xf32>
+  %expected = check.generate.fill value(0.125) : tensor<[%token_count]x128xf32>
+  kernel.launch @qwen3_moe_router_projection_f32_four_row_wave32[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<128x2048xf32>, tensor<[%token_count]x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0001) rtol(0.0001) nan(same) : tensor<[%token_count]x128xf32>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_router_projection_f32_differential_case> @qwen3_moe_router_projection_f32_differential
+
+check.benchmark<@qwen3_moe_router_projection_f32_decode_benchmark_case> @qwen3_moe_router_projection_f32_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_router_projection_f32_prefill_benchmark_case> @qwen3_moe_router_projection_f32_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_router_projection_f32_prefill_benchmark_case> @qwen3_moe_router_projection_f32_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_router_projection_f32_prefill_benchmark_case> @qwen3_moe_router_projection_f32_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_router_projection_f32_prefill_benchmark_case> @qwen3_moe_router_projection_f32_prefill_schedule_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_router_projection_f32_decode_benchmark_case> @qwen3_moe_router_projection_f32_decode_schedule_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_router_projection_f32_decode_benchmark_case> @qwen3_moe_router_projection_f32_decode_schedule_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_router_projection_f32_decode_benchmark_case> @qwen3_moe_router_projection_f32_decode_schedule_prefill_512 {token_count = 512}

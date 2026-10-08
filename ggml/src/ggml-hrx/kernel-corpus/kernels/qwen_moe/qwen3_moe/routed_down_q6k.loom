@@ -1,0 +1,737 @@
+// Fuses the Qwen3 MoE Q6_K down projection with route weighting, top-8
+// reduction, and residual publication. The input contains one Q8_1 x4 row per
+// [token, route], while weights remain in GGUF's raw
+// [expert, output, K / 256, 210 bytes] layout.
+//
+// Route IDs retain an independent physical stride because llama.cpp selects a
+// top-8 view from its 128-entry argsort storage. Normalized route weights are
+// compact [token, route]. The output enters containing the residual and is
+// updated in place, so the fused boundary never materializes an unweighted or
+// route-indexed [token, route, hidden] down-projection tensor.
+//
+// The Q8_1 provider assigns one output channel to a wave and reduces all routes
+// in registers. The direct-F32 provider mirrors llama.cpp's gfx1151 Vulkan
+// decode algorithm: four wave64 subgroups compute four channels, each subgroup
+// contracts four raw Q6_K blocks at a time, and route weighting and residual
+// publication remain fused. A grouped prefill provider can reuse the same raw
+// Q6_K row primitive while staging each expert row across multiple tokens.
+amdgpu.target<gfx11-generic> @qwen3_moe_routed_down_q6k_gfx11_wave64 {subgroup_size = 64}
+
+target.decl @qwen3_moe_attention_prepare_gfx11_wave32
+
+config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+
+config.decl @qwen3_moe.routed_down.route_count : %value: index where [range(%value, 1, 8)]
+
+config.decl @qwen3_moe.routed_down.expert_count : %value: index where [range(%value, 1, 512)]
+
+config.decl @qwen3_moe.routed_down.output_size : %value: index where [range(%value, 1, 4096)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+
+func.decl @ggml_q6k_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+
+func.decl @ggml_q6k_stage_f32_scales(%input_size: index, %row: index, %block: index, %frame_count: index, %frame: index, %lane: index, %weight: buffer, %scale_stage: buffer)
+
+func.decl @ggml_q6k_load_f32_block(%token_count: index, %input_size: index, %token: index, %block: index, %lane: index, %input: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+
+func.decl @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block: index, %frame_count: index, %frame: index, %lane: index, %weight: buffer, %scale_stage: buffer, %input0: vector<4xf32>, %input1: vector<4xf32>, %input2: vector<4xf32>, %input3: vector<4xf32>) -> (f32)
+
+kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count: index) launch(%token_count: index, %input: buffer, %weight: buffer, %q8_output: buffer)
+
+// Shared Q6_K contraction and residual publication used by ordinary and
+// completion-fused exports with identical launch geometry.
+func.template<qwen3_moe.routed_down.q6k_q8_1_x4.body> device @qwen3_moe_routed_down_q6k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c144_bytes = index.constant 144 : offset
+  %c210_bytes = index.constant 210 : offset
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %channel_base = index.mul %channel_tile, %c8 : index
+  %channel = index.add %channel_base, %subgroup : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %q6_block_count = index.div %bounded_input_size, %c256 : index
+  %weight_row_bytes = index.scale %q6_block_count, %c210_bytes : index, offset -> offset
+  %q8_group_count = index.div %bounded_input_size, %c128 : index
+  %q8_row_bytes = index.scale %q8_group_count, %c144_bytes : index, offset -> offset
+  %q8_noalias, %route_id_noalias, %route_weight_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %q8_input, %route_ids, %route_weights, %weight, %output : buffer, buffer, buffer, buffer, buffer
+  %route_id_view = buffer.view %route_id_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_route_id_stride]xi32>
+  %route_weight_view = buffer.view %route_weight_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_route_count]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_output_size]xf32>
+  %lane_has_route = index.cmp ult, %lane, %bounded_route_count : index
+  %lane_within_route_stride = index.cmp ult, %lane, %bounded_route_id_stride : index
+  %loads_active_route = scalar.andi %publish_output, %lane_has_route : i1
+  %loads_route_metadata = scalar.andi %loads_active_route, %lane_within_route_stride : i1
+  %lane_expert_i32, %lane_route_weight = scf.if %loads_route_metadata -> (i32, f32) {
+    %route_lane0, %metadata_route_count = index.assume %lane, %bounded_route_count [lt(%lane, %bounded_route_count)] : index, index
+    %route_lane, %metadata_route_id_stride = index.assume %route_lane0, %bounded_route_id_stride [lt(%route_lane0, %bounded_route_id_stride)] : index, index
+    %expert_i32 = view.load %route_id_view[%bounded_token, %route_lane] : view<[%body_token_count]x[%bounded_route_id_stride]xi32> -> i32
+    %route_weight = view.load %route_weight_view[%bounded_token, %route_lane0] : view<[%body_token_count]x[%bounded_route_count]xf32> -> f32
+    scf.yield %expert_i32, %route_weight : i32, f32
+  } else {
+    scf.yield %c0_i32, %c0_f32 : i32, f32
+  }
+  %computes_channel = scalar.andi %publish_output, %valid_channel : i1
+  %routed_lane_sum = scf.if %computes_channel -> (f32) {
+    %sum = scf.for %route = [%c0 to %bounded_route_count step %c1](%route_acc = %c0_f32 : f32) -> (f32) unroll {
+      %route_i32 = index.cast %route : index to i32
+      %expert_i32 = kernel.subgroup.broadcast %lane_expert_i32 from %route_i32 : i32, i32
+      %expert0 = index.cast %expert_i32 : i32 to index
+      %expert1 = index.assume %expert0 [range(%expert0, 0, 511)] : index
+      %expert, %weight_expert_count = index.assume %expert1, %bounded_expert_count [lt(%expert1, %bounded_expert_count)] : index, index
+      %expert_output_base = index.mul %expert, %bounded_output_size : index
+      %expert_channel = index.add %expert_output_base, %channel : index
+      %weight_row_byte_base = index.scale %expert_channel, %weight_row_bytes : index, offset -> offset
+      %q8_row_base0 = index.mul %bounded_token, %bounded_route_count : index
+      %q8_row = index.add %q8_row_base0, %route : index
+      %q8_row_byte_base = index.scale %q8_row, %q8_row_bytes : index, offset -> offset
+      %lane_acc = func.call @ggml_q6k_q8_1_x4_row_lane(%bounded_input_size, %weight_noalias, %weight_row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+      %route_weight = kernel.subgroup.broadcast %lane_route_weight from %route_i32 : f32, i32
+      %weighted_lane = scalar.mulf<reassoc|nnan|ninf|nsz> %lane_acc, %route_weight : f32
+      %next = scalar.addf<reassoc|nnan|ninf|nsz> %route_acc, %weighted_lane : f32
+      scf.yield %next : f32
+    }
+    scf.yield %sum : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %routed_sum = kernel.subgroup.reduce<addf> %routed_lane_sum : f32
+  %writes_active_channel = scalar.andi %publish_output, %valid_channel : i1
+  %writes_output = scalar.andi %writes_active_channel, %is_lane_zero : i1
+  scf.if %writes_output {
+    %bounded_channel, %body_output_size = index.assume %channel, %bounded_output_size [lt(%channel, %bounded_output_size)] : index, index
+    %residual = view.load %output_view[%bounded_token, %bounded_channel] : view<[%body_token_count]x[%bounded_output_size]xf32> -> f32
+    %result = scalar.addf %residual, %routed_sum : f32
+    view.store %result, %output_view[%bounded_token, %bounded_channel] : f32, view<[%body_token_count]x[%bounded_output_size]xf32>
+  }
+  func.return
+}
+
+kernel.def @qwen3_moe_routed_down_q6k_q8_1_x4(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) {
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %configured_output_size = config.get @qwen3_moe.routed_down.output_size : index
+  %c8 = index.constant 8 : index
+  %c7 = index.constant 7 : index
+  %c1 = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  %padded_output_size = index.add %configured_output_size, %c7 : index
+  %output_tiles = index.div %padded_output_size, %c8 : index
+  kernel.launch.config workgroups(%output_tiles, %token_capacity, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %configured_input_size0 = config.get @qwen3_moe.routed_down.input_size : index
+  %configured_route_count0 = config.get @qwen3_moe.routed_down.route_count : index
+  %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
+  %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 1, 4096), eq(%output_size, %configured_output_size0)] : index, index
+  %token0 = kernel.workgroup.id<y> : index
+  %c0 = index.constant 0 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %safe_token, %body_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
+  func.apply<qwen3_moe.routed_down.q6k_q8_1_x4.body>(%valid_token, %body_token_count, %safe_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Decode-only route that also publishes the normalized Q8_1 x4 row consumed by
+// the next projection boundary.
+kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) {
+  %configured_output_size = config.get @qwen3_moe.routed_down.output_size : index
+  %c8 = index.constant 8 : index
+  %c7 = index.constant 7 : index
+  %c1 = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  %padded_output_size = index.add %configured_output_size, %c7 : index
+  %output_tiles = index.div %padded_output_size, %c8 : index
+  kernel.launch.config workgroups(%output_tiles, %c1, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer, %norm_weight: buffer, %completion_counter: buffer, %next_q8_output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %configured_input_size0 = config.get @qwen3_moe.routed_down.input_size : index
+  %configured_route_count0 = config.get @qwen3_moe.routed_down.route_count : index
+  %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
+  %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %c8 = index.constant 8 : index
+  %publishes_output = scalar.constant true : i1
+  %body_token = index.constant 0 : index
+  func.apply<qwen3_moe.routed_down.q6k_q8_1_x4.body>(%publishes_output, %bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  func.apply<qwen3_moe.routed_down.next_q8_completion>(%c8, %c8, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// The production hidden width requires all 256 output tiles to arrive before
+// normalization. Compare both residual and packed Q8 publication with the
+// ordinary two-dispatch composition, then reuse the same completion word.
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_differential_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(2) : index
+  %route_id_stride = check.literal value(4) : index
+  %expert_count = check.literal value(2) : index
+  %output_size = check.literal value(2048) : index
+  %routed_row_count = check.literal value(2) : index
+  %routed_input = check.generate.fill value(0.00390625) : tensor<2x768xf32>
+  %q8_input = check.generate.fill value(0) : tensor<2x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(2) : tensor<1x4xi32>
+  %route_weights = check.generate.fill value(0.5) : tensor<1x2xf32>
+  %weight = check.generate.fill value(-86) : tensor<2x2048x3x210xi8>
+  %norm_weight = check.generate.iota offset(-1.0) step(0.0009765625) : tensor<2048xf32>
+  %expected_output = check.generate.iota offset(-0.5) step(0.00048828125) period(2048) : tensor<1x2048xf32>
+  %actual_output0 = check.generate.iota offset(-0.5) step(0.00048828125) period(2048) : tensor<1x2048xf32>
+  %actual_output1 = check.generate.iota offset(-0.5) step(0.00048828125) period(2048) : tensor<1x2048xf32>
+  %expected_q8 = check.generate.fill value(0) : tensor<2304xi8>
+  %actual_q8_0 = check.generate.fill value(1) : tensor<2304xi8>
+  %actual_q8_1 = check.generate.fill value(1) : tensor<2304xi8>
+  %completion_counter = check.generate.fill value(0) : tensor<1xi32>
+  %expected_counter = check.generate.fill value(0) : tensor<1xi32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%routed_row_count, %input_size](%routed_row_count, %input_size, %routed_input, %q8_input) : [index, index](index, index, tensor<2x768xf32>, tensor<2x864xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %expected_output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x2048x3x210xi8>, tensor<1x2048xf32>)
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %expected_output, %norm_weight, %expected_q8) : [index](index, tensor<1x2048xf32>, tensor<2048xf32>, tensor<2304xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %actual_output0, %norm_weight, %completion_counter, %actual_q8_0) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x2048x3x210xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %actual_output1, %norm_weight, %completion_counter, %actual_q8_1) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x2048x3x210xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
+  check.expect.close actual(%actual_output0) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
+  check.expect.close actual(%actual_output1) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
+  check.expect.equal actual(%actual_q8_0) expected(%expected_q8) : tensor<2304xi8>
+  check.expect.equal actual(%actual_q8_1) expected(%expected_q8) : tensor<2304xi8>
+  check.expect.equal actual(%completion_counter) expected(%expected_counter) : tensor<1xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_benchmark_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(8) : index
+  %route_id_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %output_size = check.literal value(2048) : index
+  %q8_input = check.generate.fill value(0) : tensor<1x8x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(128) : tensor<1x8xi32>
+  %route_weights = check.generate.fill value(0.125) : tensor<1x8xf32>
+  %weight = check.generate.fill value(0) : tensor<128x2048x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<1x2048xf32>
+  %norm_weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %completion_counter = check.generate.fill value(0) : tensor<1xi32>
+  %next_q8_output = check.generate.fill value(0) : tensor<2304xi8>
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %output, %norm_weight, %completion_counter, %next_q8_output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<1x8x864xi8>, tensor<1x8xi32>, tensor<1x8xf32>, tensor<128x2048x3x210xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_composed_benchmark_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(8) : index
+  %route_id_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %output_size = check.literal value(2048) : index
+  %q8_input = check.generate.fill value(0) : tensor<1x8x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(128) : tensor<1x8xi32>
+  %route_weights = check.generate.fill value(0.125) : tensor<1x8xf32>
+  %weight = check.generate.fill value(0) : tensor<128x2048x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<1x2048xf32>
+  %norm_weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %next_q8_output = check.generate.fill value(0) : tensor<2304xi8>
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<1x8x864xi8>, tensor<1x8xi32>, tensor<1x8xf32>, tensor<128x2048x3x210xi8>, tensor<1x2048xf32>)
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %output, %norm_weight, %next_q8_output) : [index](index, tensor<1x2048xf32>, tensor<2048xf32>, tensor<2304xi8>)
+  check.return
+}
+
+// Shared direct-F32 decode schedule. Every subgroup owns one scale frame and
+// one output channel. Providers specialize how many Q6_K blocks a subgroup
+// covers per pass from the target subgroup width.
+func.template<qwen3_moe.routed_down.q6k_f32.body> device @qwen3_moe_routed_down_q6k_f32_body(%publish_output: i1, %subgroup_count: index, %block_step: index, %scale_stage_bytes: offset, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
+  %c210 = index.constant 210 : index
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %channel_tile_base = index.mul %channel_tile, %subgroup_count : index
+  %channel = index.add %channel_tile_base, %subgroup : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %safe_channel = scf.select %valid_channel, %channel, %c0 : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %assignment_count = index.mul %body_token_count, %bounded_route_count : index
+  %q6_block_count = index.div %bounded_input_size, %c256 : index
+  %weight_row_byte_count = index.mul %q6_block_count, %c210 : index
+  %cohort = index.div %lane, %c16 : index
+  %input_noalias, %route_id_noalias, %route_weight_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %route_ids, %route_weights, %weight, %output : buffer, buffer, buffer, buffer, buffer
+  %route_id_view = buffer.view %route_id_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_route_id_stride]xi32>
+  %route_weight_view = buffer.view %route_weight_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_route_count]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_output_size]xf32>
+  %scale_stage = buffer.alloca<workgroup> align(16) %scale_stage_bytes : buffer
+  %routed_sum0 = scf.if %publish_output -> (f32) {
+    %active_sum = scf.for %route = [%c0 to %bounded_route_count step %c1](%route_acc = %c0_f32 : f32) -> (f32) unroll {
+      // Route metadata is uniform across all channels. Keeping the access in
+      // the unrolled route body exposes that uniformity directly to target
+      // lowering instead of materializing a dynamic subgroup broadcast.
+      %bounded_route, %body_route_count = index.assume %route, %bounded_route_count [lt(%route, %bounded_route_count)] : index, index
+      %route_for_stride, %body_route_id_stride = index.assume %bounded_route, %bounded_route_id_stride [lt(%bounded_route, %bounded_route_id_stride)] : index, index
+      %expert_i32 = view.load %route_id_view[%bounded_token, %route_for_stride] : view<[%body_token_count]x[%bounded_route_id_stride]xi32> -> i32
+      %route_weight = view.load %route_weight_view[%bounded_token, %bounded_route] : view<[%body_token_count]x[%bounded_route_count]xf32> -> f32
+      %expert0 = index.cast %expert_i32 : i32 to index
+      %expert1 = index.assume %expert0 [range(%expert0, 0, 511)] : index
+      %expert, %weight_expert_count = index.assume %expert1, %bounded_expert_count [lt(%expert1, %bounded_expert_count)] : index, index
+      %expert_output_base = index.mul %expert, %bounded_output_size : index
+      %expert_channel = index.add %expert_output_base, %safe_channel : index
+      %input_row_base = index.mul %bounded_token, %bounded_route_count : index
+      %input_row = index.add %input_row_base, %bounded_route : index
+      %lane_sum = scf.for %block_base = [%c0 to %q6_block_count step %block_step](%block_acc = %c0_f32 : f32) -> (f32) {
+        %block = index.add %block_base, %cohort : index
+        func.call @ggml_q6k_stage_f32_scales(%bounded_input_size, %expert_channel, %block, %subgroup_count, %subgroup, %lane, %weight_noalias, %scale_stage) : (index, index, index, index, index, index, buffer, buffer)
+        %input0, %input1, %input2, %input3 = func.call @ggml_q6k_load_f32_block(%assignment_count, %bounded_input_size, %input_row, %block, %lane, %input_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+        %contribution = func.call @ggml_q6k_f32_block_row(%bounded_input_size, %expert_channel, %block, %subgroup_count, %subgroup, %lane, %weight_noalias, %scale_stage, %input0, %input1, %input2, %input3) : (index, index, index, index, index, index, buffer, buffer, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (f32)
+        %next = scalar.addf<reassoc|nnan|ninf|nsz> %block_acc, %contribution : f32
+        scf.yield %next : f32
+      }
+      %route_sum = kernel.subgroup.reduce<addf> %lane_sum : f32
+      %weighted = scalar.mulf<reassoc|nnan|ninf|nsz> %route_sum, %route_weight : f32
+      %next = scalar.addf<reassoc|nnan|ninf|nsz> %route_acc, %weighted : f32
+      scf.yield %next : f32
+    }
+    scf.yield %active_sum : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %routed_sum = scf.select %valid_channel, %routed_sum0, %c0_f32 : f32
+  %writes_active_channel = scalar.andi %publish_output, %valid_channel : i1
+  %writes_output = scalar.andi %writes_active_channel, %is_lane_zero : i1
+  scf.if %writes_output {
+    %bounded_channel, %body_output_size = index.assume %channel, %bounded_output_size [lt(%channel, %bounded_output_size)] : index, index
+    %residual = view.load %output_view[%bounded_token, %bounded_channel] : view<[%body_token_count]x[%bounded_output_size]xf32> -> f32
+    %result = scalar.addf %residual, %routed_sum : f32
+    view.store %result, %output_view[%bounded_token, %bounded_channel] : f32, view<[%body_token_count]x[%bounded_output_size]xf32>
+  }
+  func.return
+}
+
+// Decode schedule matching the Vulkan oracle's two adjacent output rows per
+// wave. Four wave64 subgroups publish eight channels per workgroup. Keeping the
+// route loop rolled prevents its eight iterations from multiplying the two-row
+// contraction's register pressure and instruction footprint.
+func.template<qwen3_moe.routed_down.q6k_f32.pair_body> device @qwen3_moe_routed_down_q6k_f32_pair_body(%token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 2, 4096)] : index
+  %pair_tile = kernel.workgroup.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c256 = index.constant 256 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %scale_stage_bytes = index.constant 2048 : offset
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %pair_tile_base = index.mul %pair_tile, %c4 : index
+  %pair = index.add %pair_tile_base, %subgroup : index
+  %row00 = index.mul %pair, %c2 : index
+  %row0, %body_output_size = index.assume %row00, %bounded_output_size [lt(%row00, %bounded_output_size)] : index, index
+  %row1 = index.add %row0, %c1 : index
+  %row1_valid = index.cmp ult, %row1, %body_output_size : index
+  %safe_row1 = scf.select %row1_valid, %row1, %c0 : index
+  %assignment_count = index.mul %body_token_count, %bounded_route_count : index
+  %q6_block_count = index.div %bounded_input_size, %c256 : index
+  %cohort = index.div %lane, %c16 : index
+  %scale_frame0 = index.mul %subgroup, %c2 : index
+  %scale_frame1 = index.add %scale_frame0, %c1 : index
+  %input_noalias, %route_id_noalias, %route_weight_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %route_ids, %route_weights, %weight, %output : buffer, buffer, buffer, buffer, buffer
+  %route_id_view = buffer.view %route_id_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_route_id_stride]xi32>
+  %route_weight_view = buffer.view %route_weight_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%bounded_route_count]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%body_token_count]x[%body_output_size]xf32>
+  %scale_stage = buffer.alloca<workgroup> align(16) %scale_stage_bytes : buffer
+  %routed_sum0, %routed_sum1 = scf.for %route = [%c0 to %bounded_route_count step %c1](%route_acc0 = %c0_f32 : f32, %route_acc1 = %c0_f32 : f32) -> (f32, f32) {
+    %bounded_route, %body_route_count = index.assume %route, %bounded_route_count [lt(%route, %bounded_route_count)] : index, index
+    %route_for_stride, %body_route_id_stride = index.assume %bounded_route, %bounded_route_id_stride [lt(%bounded_route, %bounded_route_id_stride)] : index, index
+    %expert_i32 = view.load %route_id_view[%bounded_token, %route_for_stride] : view<[%body_token_count]x[%bounded_route_id_stride]xi32> -> i32
+    %route_weight = view.load %route_weight_view[%bounded_token, %bounded_route] : view<[%body_token_count]x[%bounded_route_count]xf32> -> f32
+    %expert0 = index.cast %expert_i32 : i32 to index
+    %expert1 = index.assume %expert0 [range(%expert0, 0, 511)] : index
+    %expert, %body_expert_count = index.assume %expert1, %bounded_expert_count [lt(%expert1, %bounded_expert_count)] : index, index
+    %expert_output_base = index.mul %expert, %body_output_size : index
+    %expert_row0 = index.add %expert_output_base, %row0 : index
+    %expert_row1 = index.add %expert_output_base, %safe_row1 : index
+    %input_row_base = index.mul %bounded_token, %body_route_count : index
+    %input_row = index.add %input_row_base, %bounded_route : index
+    %lane_sum0, %lane_sum1 = scf.for %block_base = [%c0 to %q6_block_count step %c4](%block_acc0 = %c0_f32 : f32, %block_acc1 = %c0_f32 : f32) -> (f32, f32) {
+      %block = index.add %block_base, %cohort : index
+      func.call @ggml_q6k_stage_f32_scales(%bounded_input_size, %expert_row0, %block, %c8, %scale_frame0, %lane, %weight_noalias, %scale_stage) : (index, index, index, index, index, index, buffer, buffer)
+      %input00, %input01, %input02, %input03 = func.call @ggml_q6k_load_f32_block(%assignment_count, %bounded_input_size, %input_row, %block, %lane, %input_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+      %contribution0 = func.call @ggml_q6k_f32_block_row(%bounded_input_size, %expert_row0, %block, %c8, %scale_frame0, %lane, %weight_noalias, %scale_stage, %input00, %input01, %input02, %input03) : (index, index, index, index, index, index, buffer, buffer, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (f32)
+      %contribution1 = scf.if %row1_valid -> (f32) {
+        func.call @ggml_q6k_stage_f32_scales(%bounded_input_size, %expert_row1, %block, %c8, %scale_frame1, %lane, %weight_noalias, %scale_stage) : (index, index, index, index, index, index, buffer, buffer)
+        // Reloading the shared activations lets the first row's vectors die
+        // before the second scale stage. Carrying them across that stage
+        // increases register pressure and is slower on gfx1151.
+        %input10, %input11, %input12, %input13 = func.call @ggml_q6k_load_f32_block(%assignment_count, %bounded_input_size, %input_row, %block, %lane, %input_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+        %row1_contribution = func.call @ggml_q6k_f32_block_row(%bounded_input_size, %expert_row1, %block, %c8, %scale_frame1, %lane, %weight_noalias, %scale_stage, %input10, %input11, %input12, %input13) : (index, index, index, index, index, index, buffer, buffer, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (f32)
+        scf.yield %row1_contribution : f32
+      } else {
+        scf.yield %c0_f32 : f32
+      }
+      %next0 = scalar.addf<reassoc|nnan|ninf|nsz> %block_acc0, %contribution0 : f32
+      %next1 = scalar.addf<reassoc|nnan|ninf|nsz> %block_acc1, %contribution1 : f32
+      scf.yield %next0, %next1 : f32, f32
+    }
+    %route_sum0 = kernel.subgroup.reduce<addf> %lane_sum0 : f32
+    %route_sum1 = kernel.subgroup.reduce<addf> %lane_sum1 : f32
+    %weighted0 = scalar.mulf<reassoc|nnan|ninf|nsz> %route_sum0, %route_weight : f32
+    %weighted1 = scalar.mulf<reassoc|nnan|ninf|nsz> %route_sum1, %route_weight : f32
+    %next0 = scalar.addf<reassoc|nnan|ninf|nsz> %route_acc0, %weighted0 : f32
+    %next1 = scalar.addf<reassoc|nnan|ninf|nsz> %route_acc1, %weighted1 : f32
+    scf.yield %next0, %next1 : f32, f32
+  }
+  %is_lane_zero = index.cmp eq, %lane, %c0 : index
+  scf.if %is_lane_zero {
+    %residual0 = view.load %output_view[%bounded_token, %row0] : view<[%body_token_count]x[%body_output_size]xf32> -> f32
+    %result0 = scalar.addf %residual0, %routed_sum0 : f32
+    view.store %result0, %output_view[%bounded_token, %row0] : f32, view<[%body_token_count]x[%body_output_size]xf32>
+    scf.if %row1_valid {
+      %residual1 = view.load %output_view[%bounded_token, %row1] : view<[%body_token_count]x[%body_output_size]xf32> -> f32
+      %result1 = scalar.addf %residual1, %routed_sum1 : f32
+      view.store %result1, %output_view[%bounded_token, %row1] : f32, view<[%body_token_count]x[%body_output_size]xf32>
+    }
+  }
+  func.return
+}
+
+// Wave64 matches llama.cpp's Vulkan subgroup width and contracts four Q6_K
+// blocks per subgroup pass.
+kernel.def target(@qwen3_moe_routed_down_q6k_gfx11_wave64) @qwen3_moe_routed_down_q6k_f32_wave64(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) {
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %configured_output_size = config.get @qwen3_moe.routed_down.output_size : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %padded_output_size = index.add %configured_output_size, %c3 : index
+  %output_tiles = index.div %padded_output_size, %c4 : index
+  kernel.launch.config workgroups(%output_tiles, %token_capacity, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %configured_input_size0 = config.get @qwen3_moe.routed_down.input_size : index
+  %configured_route_count0 = config.get @qwen3_moe.routed_down.route_count : index
+  %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
+  %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 1, 4096), eq(%output_size, %configured_output_size0)] : index, index
+  %token0 = kernel.workgroup.id<y> : index
+  %c0 = index.constant 0 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %safe_token, %body_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
+  %c4 = index.constant 4 : index
+  %scale_stage_bytes = index.constant 1024 : offset
+  func.apply<qwen3_moe.routed_down.q6k_f32.body>(%valid_token, %c4, %c4, %scale_stage_bytes, %body_token_count, %safe_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, offset, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Decode-only direct-F32 route that publishes the normalized Q8_1 x4 row
+// consumed by the next projection boundary. Each wave64 subgroup owns two
+// adjacent output channels, so four subgroups publish eight channels while the
+// completion epilogue still reduces four subgroup sums.
+kernel.def target(@qwen3_moe_routed_down_q6k_gfx11_wave64) @qwen3_moe_routed_down_q6k_f32_wave64_next_q8(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) {
+  %configured_output_size = config.get @qwen3_moe.routed_down.output_size : index
+  %c1 = index.constant 1 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %padded_output_size = index.add %configured_output_size, %c7 : index
+  %output_tiles = index.div %padded_output_size, %c8 : index
+  kernel.launch.config workgroups(%output_tiles, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer, %norm_weight: buffer, %completion_counter: buffer, %next_q8_output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %configured_input_size0 = config.get @qwen3_moe.routed_down.input_size : index
+  %configured_route_count0 = config.get @qwen3_moe.routed_down.route_count : index
+  %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
+  %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %body_token = index.constant 0 : index
+  func.apply<qwen3_moe.routed_down.q6k_f32.pair_body>(%bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %input, %route_ids, %route_weights, %weight, %output) : (index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  func.apply<qwen3_moe.routed_down.next_q8_completion>(%c8, %c4, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Two selected experts exercise the noncompact route-ID stride, normalized
+// weighted reduction, in-place residual update, K=768, and the output tile
+// tail. Uniform 0xaa Q6_K bytes decode to a deterministic nonzero row with
+// negative signed group scales.
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_nonzero_residual_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(2) : index
+  %route_id_stride = check.literal value(4) : index
+  %expert_count = check.literal value(2) : index
+  %output_size = check.literal value(9) : index
+  %routed_input = check.generate.fill value(0.00390625) : tensor<2x768xf32>
+  %q8_input = check.generate.fill value(0) : tensor<2x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(2) : tensor<1x4xi32>
+  %route_weights = check.generate.fill value(0.5) : tensor<1x2xf32>
+  %weight = check.generate.fill value(-86) : tensor<2x9x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<1x9xf32>
+  %expected = check.generate.fill value(135.31431579589844) : tensor<1x9xf32>
+  %routed_row_count = check.literal value(2) : index
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%routed_row_count, %input_size](%routed_row_count, %input_size, %routed_input, %q8_input) : [index, index](index, index, tensor<2x768xf32>, tensor<2x864xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x9x3x210xi8>, tensor<1x9xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.25) rtol(9.9999999999999995e-07) nan(same) : tensor<1x9xf32>
+  check.return
+}
+
+// Two tokens use different route-weight sums so token, route, packed-row, and
+// output addressing cannot collapse to the single-token case.
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_nonzero_prefill_case {
+  %token_count = check.literal value(2) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(2) : index
+  %route_id_stride = check.literal value(4) : index
+  %expert_count = check.literal value(2) : index
+  %output_size = check.literal value(1) : index
+  %routed_row_count = check.literal value(4) : index
+  %routed_input = check.generate.fill value(0.00390625) : tensor<2x2x768xf32>
+  %q8_input = check.generate.fill value(0) : tensor<2x2x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(2) : tensor<2x4xi32>
+  %route_weights = check.generate.iota offset(0.25) step(0.25) period(4) : tensor<2x2xf32>
+  %weight = check.generate.fill value(-86) : tensor<2x1x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<2x1xf32>
+  %expected = check.generate.iota offset(101.73573684692383) step(134.31431579589844) : tensor<2x1xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%routed_row_count, %input_size](%routed_row_count, %input_size, %routed_input, %q8_input) : [index, index](index, index, tensor<2x2x768xf32>, tensor<2x2x864xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x2x864xi8>, tensor<2x4xi32>, tensor<2x2xf32>, tensor<2x1x3x210xi8>, tensor<2x1xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.25) rtol(9.9999999999999995e-07) nan(same) : tensor<2x1xf32>
+  check.return
+}
+
+// The exact-representable routed inputs make direct-F32 and Q8_1 contraction
+// comparable while preserving noncompact route IDs and an output-channel tail.
+check.case public @qwen3_moe_routed_down_q6k_f32_wave64_differential_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(2) : index
+  %route_id_stride = check.literal value(4) : index
+  %expert_count = check.literal value(2) : index
+  %output_size = check.literal value(9) : index
+  %routed_row_count = check.literal value(2) : index
+  %routed_input = check.generate.fill value(0.00390625) : tensor<2x768xf32>
+  %q8_input = check.generate.fill value(0) : tensor<2x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(2) : tensor<1x4xi32>
+  %route_weights = check.generate.fill value(0.5) : tensor<1x2xf32>
+  %weight = check.generate.fill value(-86) : tensor<2x9x3x210xi8>
+  %expected = check.generate.fill value(1.0) : tensor<1x9xf32>
+  %actual_wave64 = check.generate.fill value(1.0) : tensor<1x9xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%routed_row_count, %input_size](%routed_row_count, %input_size, %routed_input, %q8_input) : [index, index](index, index, tensor<2x768xf32>, tensor<2x864xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %expected) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x9x3x210xi8>, tensor<1x9xf32>)
+  kernel.launch @qwen3_moe_routed_down_q6k_f32_wave64[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %routed_input, %route_ids, %route_weights, %weight, %actual_wave64) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x768xf32>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x9x3x210xi8>, tensor<1x9xf32>)
+  check.expect.close actual(%actual_wave64) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<1x9xf32>
+  check.return
+}
+
+// Wave64 reference for the row producer used by the fused completion path.
+kernel.def target(@qwen3_moe_routed_down_q6k_gfx11_wave64) @qwen3_moe_rmsnorm_quantize_q8_1_x4_wave64_production_check() {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%input: buffer, %norm_weight: buffer, %q8_output: buffer) {
+  %publish_normalized = scalar.constant false : i1
+  %reduction_subgroup_count = index.constant 4 : index
+  %token_count = index.constant 1 : index
+  %token = index.constant 0 : index
+  func.apply<qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input, %norm_weight, %q8_output, %q8_output) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// The production hidden width requires every direct-F32 output tile to arrive
+// before normalization. Nonzero Q6_K data compares the paired-row producer
+// against the ordinary wave64 producer and standalone normalization, then
+// reuses the completion word so stale completion state is observable.
+check.case public @qwen3_moe_routed_down_q6k_f32_wave64_next_q8_differential_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(8) : index
+  %route_id_stride = check.literal value(8) : index
+  %expert_count = check.literal value(8) : index
+  %output_size = check.literal value(2048) : index
+  %input = check.generate.iota offset(-0.5) step(0.00016276041666666666) period(6144) : tensor<8x768xf32>
+  %route_ids = check.generate.iota offset(0) step(1) period(8) : tensor<8xi32>
+  %route_weights = check.generate.iota offset(0.027777777777777776) step(0.027777777777777776) : tensor<8xf32>
+  %weight = check.generate.fill value(-86) : tensor<8x2048x3x210xi8>
+  %norm_weight = check.generate.iota offset(-1.0) step(0.0009765625) : tensor<2048xf32>
+  %expected_output = check.generate.iota offset(-0.5) step(0.00048828125) period(2048) : tensor<2048xf32>
+  %actual_output0 = check.generate.iota offset(-0.5) step(0.00048828125) period(2048) : tensor<2048xf32>
+  %actual_output1 = check.generate.iota offset(-0.5) step(0.00048828125) period(2048) : tensor<2048xf32>
+  %expected_q8 = check.generate.fill value(0) : tensor<2304xi8>
+  %actual_q8_0 = check.generate.fill value(1) : tensor<2304xi8>
+  %actual_q8_1 = check.generate.fill value(1) : tensor<2304xi8>
+  %completion_counter = check.generate.fill value(0) : tensor<1xi32>
+  %expected_counter = check.generate.fill value(0) : tensor<1xi32>
+  kernel.launch @qwen3_moe_routed_down_q6k_f32_wave64[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %input, %route_ids, %route_weights, %weight, %expected_output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<8x768xf32>, tensor<8xi32>, tensor<8xf32>, tensor<8x2048x3x210xi8>, tensor<2048xf32>)
+  kernel.launch @qwen3_moe_rmsnorm_quantize_q8_1_x4_wave64_production_check(%expected_output, %norm_weight, %expected_q8) : (tensor<2048xf32>, tensor<2048xf32>, tensor<2304xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_f32_wave64_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %input, %route_ids, %route_weights, %weight, %actual_output0, %norm_weight, %completion_counter, %actual_q8_0) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<8x768xf32>, tensor<8xi32>, tensor<8xf32>, tensor<8x2048x3x210xi8>, tensor<2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_f32_wave64_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %input, %route_ids, %route_weights, %weight, %actual_output1, %norm_weight, %completion_counter, %actual_q8_1) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<8x768xf32>, tensor<8xi32>, tensor<8xf32>, tensor<8x2048x3x210xi8>, tensor<2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
+  check.expect.close actual(%actual_output0) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<2048xf32>
+  check.expect.close actual(%actual_output1) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<2048xf32>
+  check.expect.equal actual(%actual_q8_0) expected(%expected_q8) : tensor<2304xi8>
+  check.expect.equal actual(%actual_q8_1) expected(%expected_q8) : tensor<2304xi8>
+  check.expect.equal actual(%completion_counter) expected(%expected_counter) : tensor<1xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case {
+  %token_count = check.param.choice values([1, 2, 4, 8, 16, 17, 32, 63, 128, 129, 512]) name("token_count") : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(8) : index
+  %route_id_stride = check.literal value(128) : index
+  %expert_count = check.literal value(128) : index
+  %output_size = check.literal value(2048) : index
+  %q8_input = check.generate.fill value(0) : tensor<[%token_count]x8x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(127) : tensor<[%token_count]x128xi32>
+  %route_weights = check.generate.fill value(0.125) : tensor<[%token_count]x8xf32>
+  %weight = check.generate.fill value(0) : tensor<128x2048x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %expected = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<[%token_count]x8x864xi8>, tensor<[%token_count]x128xi32>, tensor<[%token_count]x8xf32>, tensor<128x2048x3x210xi8>, tensor<[%token_count]x2048xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_benchmark_case {
+  %token_count = check.param.choice values([1, 2, 4, 8, 16, 17, 32, 63, 128, 129, 512]) name("token_count") : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(8) : index
+  %route_id_stride = check.literal value(128) : index
+  %expert_count = check.literal value(128) : index
+  %output_size = check.literal value(2048) : index
+  // Each 768-element route contains six complete Q8_1 x4 groups, so packing
+  // the eight contiguous routes as one 6,144-element token row preserves the
+  // exact per-route physical layout without a derived testbench scalar.
+  %routed_input_size = check.literal value(6144) : index
+  %routed_input = check.generate.fill value(0.0) : tensor<[%token_count]x8x768xf32>
+  %q8_input = check.generate.fill value(1) : tensor<[%token_count]x8x864xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(127) : tensor<[%token_count]x128xi32>
+  %route_weights = check.generate.fill value(0.125) : tensor<[%token_count]x8xf32>
+  %weight = check.generate.fill value(0) : tensor<128x2048x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %expected = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %routed_input_size](%token_count, %routed_input_size, %routed_input, %q8_input) : [index, index](index, index, tensor<[%token_count]x8x768xf32>, tensor<[%token_count]x8x864xi8>)
+  kernel.launch @qwen3_moe_routed_down_q6k_q8_1_x4[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<[%token_count]x8x864xi8>, tensor<[%token_count]x128xi32>, tensor<[%token_count]x8xf32>, tensor<128x2048x3x210xi8>, tensor<[%token_count]x2048xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_q6k_f32_wave64_benchmark_case {
+  %token_count = check.param.choice values([1, 2, 4, 8, 16, 17, 32, 63, 128, 129, 512]) name("token_count") : index
+  %input_size = check.literal value(768) : index
+  %route_count = check.literal value(8) : index
+  %route_id_stride = check.literal value(128) : index
+  %expert_count = check.literal value(128) : index
+  %output_size = check.literal value(2048) : index
+  %routed_input = check.generate.fill value(0.0) : tensor<[%token_count]x8x768xf32>
+  %route_ids = check.generate.iota offset(0) step(1) period(127) : tensor<[%token_count]x128xi32>
+  %route_weights = check.generate.fill value(0.125) : tensor<[%token_count]x8xf32>
+  %weight = check.generate.fill value(0) : tensor<128x2048x3x210xi8>
+  %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %expected = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  kernel.launch @qwen3_moe_routed_down_q6k_f32_wave64[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %routed_input, %route_ids, %route_weights, %weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<[%token_count]x8x768xf32>, tensor<[%token_count]x128xi32>, tensor<[%token_count]x8xf32>, tensor<128x2048x3x210xi8>, tensor<[%token_count]x2048xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_nonzero_residual_case> @qwen3_moe_routed_down_q6k_q8_1_x4_small
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_small_batch_2 {token_count = 2}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_small_batch_4 {token_count = 4}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_small_batch_8 {token_count = 8}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_small_batch_16 {token_count = 16}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_pipeline_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_f32_wave64_benchmark_case> @qwen3_moe_routed_down_q6k_f32_wave64_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_f32_wave64_benchmark_case> @qwen3_moe_routed_down_q6k_f32_wave64_small_batch_2 {token_count = 2}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_f32_wave64_benchmark_case> @qwen3_moe_routed_down_q6k_f32_wave64_small_batch_4 {token_count = 4}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_f32_wave64_benchmark_case> @qwen3_moe_routed_down_q6k_f32_wave64_small_batch_8 {token_count = 8}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_f32_wave64_benchmark_case> @qwen3_moe_routed_down_q6k_f32_wave64_small_batch_16 {token_count = 16}
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_decode
+
+check.benchmark<@qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_composed_benchmark_case> @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_composed_decode
