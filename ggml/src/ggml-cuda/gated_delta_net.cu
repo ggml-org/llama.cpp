@@ -1,7 +1,9 @@
 #include "gated_delta_net.cuh"
 #include "ggml-cuda/common.cuh"
 
-template <int S_v, bool KDA, bool keep_rs_t, int cols_per_warp = 4>
+constexpr int gdn_cols_per_warp = 4;
+
+template <int S_v, bool KDA, bool keep_rs_t, int cols_per_warp = gdn_cols_per_warp>
 __global__ void __launch_bounds__((ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v) * 4, 2)
 gated_delta_net_cuda(const float * q,
                                      const float * k,
@@ -33,12 +35,11 @@ gated_delta_net_cuda(const float * q,
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v;
     static_assert(S_v % warp_size == 0, "S_v must be a multiple of warp_size");
-    // each column is owned by lanes_per_col lanes and reduced within that segment; compared to
-    // one column per warp this divides shuffle instructions and loop overhead per column by
-    // cols_per_warp, including the scalar gate evaluation for non-KDA
+    // the warp is split into cols_per_warp segments of lanes_per_col lanes; each segment owns
+    // one state column and reduces within itself
     constexpr int lanes_per_col = warp_size / cols_per_warp;
     constexpr int rows_per_lane = S_v / lanes_per_col;
-    static_assert(S_v % lanes_per_col == 0, "S_v must be a multiple of warp_size/2");
+    static_assert(S_v % lanes_per_col == 0, "S_v must be a multiple of lanes_per_col");
 
     const int lane        = threadIdx.x;
     const int col_in_warp = lane / lanes_per_col;              // column slot within the warp
@@ -190,7 +191,7 @@ static void launch_gated_delta_net(
     // four columns per warp (see the kernel); shrink the CTA when the wider CTA would leave
     // SMs without a CTA, so small head counts keep the device filled
     const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
-    const int cols_per_warp = 4;
+    const int cols_per_warp = gdn_cols_per_warp;
     int num_warps = 4;
     while (num_warps > 1 && H*n_seqs*(S_v / (cols_per_warp * num_warps)) < nsm) {
         num_warps /= 2;
