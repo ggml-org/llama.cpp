@@ -1728,9 +1728,6 @@ std::string server_task_result_metrics::to_metrics() {
     add_items("counter", counters);
     add_items("gauge",   gauges);
 
-    // new integer-valued metrics (kvcache / memory)
-    prometheus << to_metrics_int();
-
     // labeled counter: one time series per draft position
     if (!metrics.n_accepted_per_pos.empty()) {
         prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
@@ -1741,50 +1738,6 @@ std::string server_task_result_metrics::to_metrics() {
                        << i << "\"} " << metrics.n_accepted_per_pos[i] << "\n";
         }
     }
-
-    return prometheus.str();
-}
-
-std::string server_task_result_metrics::to_metrics_int() {
-    std::stringstream prometheus;
-
-    auto add_metric = [&prometheus](const char * name, const char * help, double value) {
-        prometheus << "# HELP llamacpp:" << name << " " << help << "\n"
-                   << "# TYPE llamacpp:" << name << " gauge\n";
-        if (value == std::floor(value) && std::isfinite(value)) {
-            prometheus << "llamacpp:" << name << " " << std::to_string((int64_t)value) << "\n";
-        } else {
-            std::stringstream ss;
-            ss << std::fixed << std::setprecision(6) << value;
-            std::string s = ss.str();
-            size_t dot = s.find('.');
-            if (dot != std::string::npos) {
-                s.erase(s.find_last_not_of('0') + 1, std::string::npos);
-                if (s.back() == '.') {
-                    s += '0';
-                }
-            }
-            prometheus << "llamacpp:" << name << " " << s << "\n";
-        }
-    };
-
-    add_metric("kvcache_capacity_tokens",
-               "Total KV cache token capacity (llama_n_ctx)",
-               (double)metrics.kvcache_capacity_tokens);
-    add_metric("kvcache_used_tokens",
-               "Approximate KV cache tokens in use (sum of slot prompts, may double-count in unified KV mode)",
-               (double)metrics.kvcache_used_tokens);
-    add_metric("kvcache_utilization",
-               "KV cache utilization percentage",
-               metrics.kvcache_capacity_tokens > 0
-                   ? (double)metrics.kvcache_used_tokens / (double)metrics.kvcache_capacity_tokens * 100.0
-                   : 0.0);
-    add_metric("memory_context_bytes",
-               "Total RAM consumed by context/KV cache buffers across all devices",
-               (double)metrics.memory_context_bytes);
-    add_metric("memory_model_bytes",
-               "Total RAM consumed by model weights across all devices",
-               (double)metrics.memory_model_bytes);
 
     return prometheus.str();
 }

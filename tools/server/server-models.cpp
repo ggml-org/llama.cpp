@@ -13,7 +13,9 @@
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
+#ifdef ENABLE_EXPERIMENTAL_METRICS
 #include <unordered_map>
+#endif
 
 #include <functional>
 #include <optional>
@@ -1975,14 +1977,17 @@ void server_models_routes::init_routes() {
     this->proxy_get = [this](const server_http_req & req) {
         // server-global endpoints (not per-model); skip model name validation
         if (req.path == "/metrics" || req.path == "/slots") {
-            std::string name = req.get_param("model");
+#ifdef ENABLE_EXPERIMENTAL_METRICS
             // detect JSON accept header
             bool json_output = is_json_accept(req.headers);
 
-            // /metrics JSON aggregation for router mode
+            // /metrics JSON aggregation for router mode (JSON-only feature)
             if (req.path == "/metrics" && json_output) {
+#endif
+                std::string name = req.get_param("model");
+
+                // no model param: reject with 400
                 if (name.empty()) {
-                    // no model param: reject with 400
                     auto error_res = std::make_unique<server_http_res>();
                     error_res->status = 400;
                     error_res->data = json{{"error", json{{"code", 400}, {"type", "invalid_request_error"}, {"message", "multiple models configured; specify a model parameter for /metrics, or use model=all to aggregate all"}}}}.dump();
@@ -2162,16 +2167,18 @@ void server_models_routes::init_routes() {
                 res->content_type = "application/json";
                 res->data = wrapped.dump();
                 return res;
+#ifdef ENABLE_EXPERIMENTAL_METRICS
             }
+#endif
 
-            // proxy to the first running child so the child's handler decides what to return
+            // Prometheus fallback: route to first available model (single output format)
+            std::string name = req.get_param("model");
             if (name.empty()) {
                 for (const auto & [n, inst] : models.mapping) {
                     if (inst.meta.is_running()) {
                         return models.proxy_request(req, "GET", n, false);
                     }
                 }
-                // no running model — return 503
                 auto error_res = std::make_unique<server_http_res>();
                 error_res->status = 503;
                 error_res->data = json{{"error", json{{"code", 503}, {"type", "server_error"}, {"message", "no running model"}}}}.dump();
@@ -2179,6 +2186,7 @@ void server_models_routes::init_routes() {
             }
             return models.proxy_request(req, "GET", name, false);
         }
+
         std::string name = req.get_param("model");
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();

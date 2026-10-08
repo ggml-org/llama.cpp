@@ -11,7 +11,9 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#ifdef ENABLE_EXPERIMENTAL_METRICS
 #include "../src/llama-ext.h"
+#endif
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -2510,6 +2512,7 @@ private:
                     }
                     SRV_DBG("n_processing_slots = %d\n", n_processing_slots);
 
+#ifdef ENABLE_EXPERIMENTAL_METRICS
                     // KV cache utilization metrics (approximate)
                     if (!slots.empty() && slots[0].ctx_tgt) {
                         metrics.kvcache_capacity_tokens = llama_n_ctx(slots[0].ctx_tgt);
@@ -2523,14 +2526,12 @@ private:
                                     slot.id,
                                     (int)slot.state,
                                     (uint32_t)slot.prompt.n_tokens(),
-#ifdef ENABLE_EXPERIMENTAL_METRICS
                                     (uint32_t)slot.stats.n_prompt_cached,
                                     (uint32_t)slot.stats.n_prompt_processed,
                                     (uint32_t)slot.stats.n_gen,
                                     (int64_t)slot.stats.t_start,
                                     (int64_t)slot.stats.t_prompt_last,
                                     (int64_t)slot.stats.t_gen_last,
-#endif
                                 });
                             }
                         }
@@ -2549,6 +2550,7 @@ private:
                             metrics.memory_model_bytes   += mb.model;
                         }
                     }
+#endif
 
                     auto res = std::make_unique<server_task_result_metrics>();
                     res->id                  = task.id;
@@ -4713,7 +4715,9 @@ void server_routes::init_routes() {
         }
 
         // detect JSON accept header (case-insensitive)
+#ifdef ENABLE_EXPERIMENTAL_METRICS
         bool json_output = is_json_accept(req.headers);
+#endif
 
         // render response using cached_metrics
         auto use_cached_metrics = [&]() {
@@ -4722,6 +4726,7 @@ void server_routes::init_routes() {
             server_task_result_metrics tmp;
             tmp.metrics = cached_metrics;
             res->status = 200;
+#ifdef ENABLE_EXPERIMENTAL_METRICS
             if (json_output) {
                 res->content_type = "application/json";
                 res->data = tmp.to_json().dump();
@@ -4729,6 +4734,10 @@ void server_routes::init_routes() {
                 res->content_type = "text/plain; version=0.0.4";
                 res->data = tmp.to_metrics();
             }
+#else
+            res->content_type = "text/plain; version=0.0.4";
+            res->data = tmp.to_metrics();
+#endif
             // the gauges are averaged over the window between two scrapes
             cached_metrics.reset_bucket();
             should_reset_buckets = true;
@@ -4768,6 +4777,7 @@ void server_routes::init_routes() {
 
             res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
             res->status = 200;
+#ifdef ENABLE_EXPERIMENTAL_METRICS
             if (json_output) {
                 res->content_type = "application/json";
                 res->data = res_task->to_json().dump();
@@ -4775,6 +4785,10 @@ void server_routes::init_routes() {
                 res->content_type = "text/plain; version=0.0.4";
                 res->data = res_task->to_metrics();
             }
+#else
+            res->content_type = "text/plain; version=0.0.4";
+            res->data = res_task->to_metrics();
+#endif
         }
 
         return res;

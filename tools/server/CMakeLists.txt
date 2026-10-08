@@ -55,6 +55,10 @@ target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMA
 
 add_dependencies(${TARGET} llama-ui-assets)
 
+if(ENABLE_EXPERIMENTAL_METRICS)
+    target_compile_definitions(${TARGET} PRIVATE ENABLE_EXPERIMENTAL_METRICS)
+endif()
+
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)
 endif()
@@ -68,3 +72,5 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+
