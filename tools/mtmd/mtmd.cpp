@@ -1556,7 +1556,7 @@ struct mtmd_tokenizer {
                 // add overview image (first)
                 if (ctx->ov_img_first) {
                     if (ctx->use_image_id) {
-                        add_text(string_format("<image_id>%u</image_id>", n_images_added), true);
+                        add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
                     }
                     add_text(ctx->tok_ov_img_start);
                     if (use_canvas) {
