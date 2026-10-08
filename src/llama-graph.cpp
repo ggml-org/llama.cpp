@@ -2506,11 +2506,13 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 
     // select one of the 3 inputs, based on the batch contents
     // ref: https://github.com/ggml-org/llama.cpp/pull/18550
-    std::vector<ggml_tensor *> inps;
-    int idx = 0;
+    std::array<ggml_tensor *, 3> inps = {};
+
+    // token embeddings path (ubatch.token != nullptr)
+    inps[0] = build_tok(inp->tokens);
 
     // vector embeddings path (ubatch.embd != nullptr)
-    inps.push_back(inp->embd);
+    inps[1] = inp->embd;
 
     // mixed path (ubatch.is_mixed()): set_rows the token rows into a copy of the embd rows, with its own inputs as select branches must not share tensors
     // TODO: use inp->tokens and inp->embd once ggml_build_forward_select allows it
@@ -2530,27 +2532,16 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
         cb(inp->mixed_embd, "inp_mixed_embd", -1);
         ggml_set_input(inp->mixed_embd);
 
-        if (ubatch.is_mixed()) {
-            idx = inps.size();
-        }
-
         // note: set_rows writes into its destination, so it gets a copy of the input
-        inps.push_back(ggml_set_rows(ctx0, ggml_dup(ctx0, inp->mixed_embd), build_tok(inp->mixed_tokens), inp->mixed_slots));
+        inps[2] = ggml_set_rows(ctx0, ggml_dup(ctx0, inp->mixed_embd), build_tok(inp->mixed_tokens), inp->mixed_slots);
     }
 
-    // token embeddings path (ubatch.token != nullptr)
-    // keep it last: its ops must be next to the first GPU op in the graph, otherwise the scheduler assigns them to the CPU
-    if (ubatch.token && !ubatch.is_mixed()) {
-        idx = inps.size();
-    }
-    inps.push_back(build_tok(inp->tokens));
+    assert(ggml_are_same_shape (inps[0], inps[1]));
+    assert(ggml_are_same_stride(inps[0], inps[1]));
 
-    assert(ggml_are_same_shape (inps.front(), inps.back()));
-    assert(ggml_are_same_stride(inps.front(), inps.back()));
+    const int idx = ubatch.is_mixed() ? 2 : ubatch.token ? 0 : 1;
 
-    // note: this also puts the inputs at the start of the graph
-    // ref: https://github.com/ggml-org/llama.cpp/pull/18599
-    ggml_tensor * cur = ggml_build_forward_select(gf, inps.data(), inps.size(), idx);
+    ggml_tensor * cur = ggml_build_forward_select(gf, inps.data(), has_mixed ? 3 : 2, idx);
 
     if (n_embd_inp != n_embd) {
         cur = ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0);
@@ -2585,9 +2576,11 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 
     cb(cur, "embd", -1);
 
-    // note: do not expand the scale ops here, they must be next to their first user, otherwise the scheduler may assign them to the CPU
-
     res->add_input(std::move(inp));
+
+    // make sure the produced embeddings are immediately materialized in the ggml graph
+    // ref: https://github.com/ggml-org/llama.cpp/pull/18599
+    ggml_build_forward_expand(gf, cur);
 
     return cur;
 }
