@@ -3737,17 +3737,12 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         // WIP: chunked coopmat GDN prefill. Passes test-backend-ops; opt-in pending perf tuning.
         // Prefer the coopmat2 shader; fall back to the coopmat1 + maintenance1 variant.
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-        if (device->coopmat2 && device->coopmat2_bf16_support && getenv("GGML_VK_GDN_CM2")) {
-            device->gated_delta_net_cm2_wgs = GGML_VK_GDN_CM2_WGS;
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2,
+        if (device->coopmat2 && device->coopmat2_bf16_support && getenv("GGML_VK_GDN_CHUNKED")) {
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
-            // whole-head V=128 with the state mirror in shared (NVIDIA opt-in shared budget
-            // fits [D x 128]): 7 bindings, no gmem scratch. Kills the CU-grid tail for head
-            // counts that need 2 blocks/head at V=64 (e.g. 48-head 27B). Pipeline may fail to
-            // create if the device's shared budget is too small; the dispatch guards on null.
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2_v128,
-                "gated_delta_net_f32_cm2_v128sh", gated_delta_net_f32_cm2_v128sh_len, gated_delta_net_f32_cm2_v128sh_data,
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
+                "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
         }
 #endif
@@ -3757,8 +3752,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         // this create call on the lazy per-pipeline recompile.
         if (!(device->coopmat2 && device->coopmat2_bf16_support) &&
             device->coopmat_support && device->coopmat_bf16_support && device->coopmat_maintenance1 &&
-            getenv("GGML_VK_GDN_CM2")) {
-            device->gated_delta_net_cm2_wgs = GGML_VK_GDN_CM2_WGS;
+            getenv("GGML_VK_GDN_CHUNKED")) {
             // Run at the device's native subgroup size (wave64 on RDNA, WGS=512) when it is 64.
             const bool w64 = device->subgroup_size == 64;
             const uint32_t rsg = w64 ? 64u : 32u;
@@ -3773,7 +3767,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 spvlen = w64 ? gated_delta_net_f32_cm1_wave64_len : gated_delta_net_f32_cm1_len;
             }
             // default cm1 (V=64) keeps the state mirror in shared: 7 bindings.
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2, nm, spvlen, spv,
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm, nm, spvlen, spv,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
             // whole-head V=128 cm1: mirror in a gmem scratch buffer (binding 7 -> 8 total).
             // wave64 only; used for head counts that tail the CU grid at V=64.
@@ -3781,7 +3775,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 const char * nm128  = device->coopmat_bf16_acc_support ? "gated_delta_net_f32_cm1_bf16acc_wave64_v128" : "gated_delta_net_f32_cm1_wave64_v128";
                 const void * spv128 = device->coopmat_bf16_acc_support ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v128_data : (const void *)gated_delta_net_f32_cm1_wave64_v128_data;
                 size_t spvlen128    = device->coopmat_bf16_acc_support ? gated_delta_net_f32_cm1_bf16acc_wave64_v128_len : gated_delta_net_f32_cm1_wave64_v128_len;
-                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2_v128, nm128, spvlen128, spv128,
+                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128, nm128, spvlen128, spv128,
                     "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
             }
         }
@@ -10306,40 +10300,29 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     const uint32_t s_off = S_v * H * n_tokens * n_seqs;
 
-    // Chunked coopmat2 prefill path: non-KDA, S_v == D == 128, K == 1, enough tokens.
     const ggml_tensor * src_g = dst->src[3];
-    const bool use_cm2 = ctx->device->pipeline_gated_delta_net_cm2 != nullptr &&
+    const bool use_cm = ctx->device->pipeline_gated_delta_net_cm != nullptr &&
         src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= 64;
 
-    // Adaptive value tiling for the chunked path: V=64 (2 blocks/head) vs whole-head
-    // V=128 (1 block/head). Pick the tiling that better fills the CU/SM grid; V=128 shares
-    // the value-independent work (gram/pmat/inversion) and fills a single wave for head
-    // counts that tail at V=64. The state mirror lives in shared on coopmat2 (NVIDIA opt-in
-    // shared budget fits [D x 128]) and in a gmem scratch on coopmat1 (RDNA, 64KB LDS cap).
-    // GGML_VK_GDN_V128 forces it / GGML_VK_GDN_NO_V128 disables it for tests.
     bool use_v128 = false;
-    if (use_cm2 && ctx->device->pipeline_gated_delta_net_cm2_v128 != nullptr && !getenv("GGML_VK_GDN_NO_V128")) {
-        if (getenv("GGML_VK_GDN_V128")) {
-            use_v128 = true;
-        } else {
-            const uint32_t nsm = ctx->device->shader_core_count;
-            if (nsm != 0) {
-                const uint32_t wg64  = 2u * H * n_seqs;
-                const uint32_t wg128 = H * n_seqs;
-                const uint32_t waves64  = (wg64  + nsm - 1) / nsm;
-                const uint32_t waves128 = (wg128 + nsm - 1) / nsm;
-                // occupancy = wgs / (waves * nsm); prefer v128 when at least as good.
-                use_v128 = (uint64_t)wg128 * waves64 >= (uint64_t)wg64 * waves128;
-            }
+    if (use_cm && ctx->device->pipeline_gated_delta_net_cm_v128 != nullptr) {
+        const uint32_t nsm = ctx->device->shader_core_count;
+        if (nsm != 0) {
+            const uint32_t wg64  = 2u * H * n_seqs;
+            const uint32_t wg128 = H * n_seqs;
+            const uint32_t waves64  = (wg64  + nsm - 1) / nsm;
+            const uint32_t waves128 = (wg128 + nsm - 1) / nsm;
+            // prefer v128 when occupancy (wgs / (waves * nsm)) is at least as good
+            use_v128 = (uint64_t)wg128 * waves64 >= (uint64_t)wg64 * waves128;
         }
     }
 
-    const uint32_t cm_V     = use_v128 ? 128u : GGML_VK_GDN_CM2_V;
-    const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;  // coopmat2 v128 mirrors to shared
+    const uint32_t cm_V     = use_v128 ? 128u : GGML_VK_GDN_CM_V;
+    const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;
 
     vk_pipeline pipeline = use_v128
-        ? ctx->device->pipeline_gated_delta_net_cm2_v128
-        : (use_cm2 ? ctx->device->pipeline_gated_delta_net_cm2
+        ? ctx->device->pipeline_gated_delta_net_cm_v128
+        : (use_cm ? ctx->device->pipeline_gated_delta_net_cm
                    : ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op));
     GGML_ASSERT(pipeline != nullptr);
 
@@ -10353,7 +10336,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     vk_subbuffer mirror_buf{};
     if (cm_gmem) {
-        const uint32_t LDP = GGML_VK_GDN_CM2_LDP;
+        const uint32_t LDP = GGML_VK_GDN_CM_LDP;
         const uint32_t blocks = (S_v / cm_V) * n_seqs * H;
         const size_t scratch_size = (size_t)blocks * LDP * cm_V * 2u * sizeof(uint16_t);
         if (ctx->prealloc_size_x < scratch_size) {
@@ -10398,7 +10381,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     } else {
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
             {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-            pc, use_cm2 ? std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
+            pc, use_cm ? std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
     }
 }
 
