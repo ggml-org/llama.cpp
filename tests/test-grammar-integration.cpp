@@ -1588,6 +1588,22 @@ static void test_json_schema_unordered_properties() {
             R"""({"name": "n", "column_type": "x", "prompt": 1})""",
         });
 
+    test_schema_unordered(
+        "too many required properties: keep declared order",
+        R"""({
+            "type": "object",
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
+            "required": ["a", "b", "c", "d", "e", "f", "g"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
+        },
+        {
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
+            R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
+        });
+
     test_schema(
         "ordered (default) still rejects out-of-order keys",
         make_schema(R"""(, "additionalProperties": false)"""),

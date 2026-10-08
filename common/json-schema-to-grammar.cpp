@@ -741,16 +741,12 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        if (_unordered_properties) {
-            // track which of up to max_tracked keys were seen (2^n rules), required keys first;
-            // the other properties and additional keys are "free": any order, repeats allowed
-            constexpr size_t max_tracked = 6;
-            std::vector<std::string> tracked;
-            for (const auto & prop_name : prop_names) {
-                if (required.count(prop_name) && tracked.size() < max_tracked) {
-                    tracked.push_back(prop_name);
-                }
-            }
+        // track which of up to max_tracked keys were seen (2^n rules), required keys first;
+        // the other properties and additional keys are "free": any order, repeats allowed
+        // with more required keys than that, keep the declared order so all of them are enforced
+        constexpr size_t max_tracked = 6;
+        if (_unordered_properties && required_props.size() <= max_tracked) {
+            std::vector<std::string> tracked = required_props;
             for (const auto & prop_name : prop_names) {
                 if (!required.count(prop_name) && tracked.size() < max_tracked) {
                     tracked.push_back(prop_name);
