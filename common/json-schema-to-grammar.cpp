@@ -742,37 +742,19 @@ private:
         }
 
         // required keys: exactly once, in any order (2^n rules, so above max_required keep the declared order)
-        // optional keys: anywhere, repeats allowed but capped per run; additional keys: anywhere, unbounded
+        // optional and additional keys: anywhere, repeats allowed
         constexpr size_t max_required = 6;
         if (_unordered_properties && required_props.size() <= max_required) {
             const size_t n = required_props.size();
-            std::vector<std::string> optional_kvs;
-            std::string additional_kv;
-            for (const auto & prop_name : optional_props) {
-                if (prop_name == "*") {
-                    additional_kv = prop_kv_rule_names[prop_name];
-                } else {
-                    optional_kvs.push_back(prop_kv_rule_names[prop_name]);
-                }
-            }
             std::string free_kv;
             std::string free_loop;
             if (!optional_props.empty()) {
-                std::vector<std::string> free_kvs = optional_kvs;
-                if (!additional_kv.empty()) {
-                    free_kvs.push_back(additional_kv);
+                std::vector<std::string> free_kvs;
+                for (const auto & prop_name : optional_props) {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
                 }
                 free_kv = _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
-                const std::string additional_loop = "( \",\" space " + additional_kv + " )*";
-                if (optional_kvs.empty()) {
-                    free_loop = additional_loop;
-                } else {
-                    std::string optional_kv = _add_rule(name + (name.empty() ? "" : "-") + "optional-kv", string_join(optional_kvs, " | "));
-                    std::string repeat = "{0," + std::to_string(optional_kvs.size()) + "}";
-                    free_loop = additional_kv.empty()
-                        ? "( \",\" space " + optional_kv + " )" + repeat
-                        : additional_loop + " ( \",\" space " + optional_kv + " " + additional_loop + " )" + repeat;
-                }
+                free_loop = "( \",\" space " + free_kv + " )*";
             }
 
             // rest of the object after the required keys in `seen`
