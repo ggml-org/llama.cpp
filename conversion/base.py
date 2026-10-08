@@ -2336,12 +2336,26 @@ class TextModel(ModelBase):
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
+        else:
+            embedding_config_path = self.dir_model / "embedding_config.json"
+            if embedding_config_path.is_file():
+                with open(embedding_config_path, encoding="utf-8") as f:
+                    embedding_config = json.load(f)
+                pooling = embedding_config.get("pooling")
+                if pooling == "last_token":
+                    self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+                elif pooling is not None:
+                    raise NotImplementedError(f"unsupported embedding_config.json pooling {pooling!r}")
 
         # pooling before a classification head (e.g. ModernBertForSequenceClassification)
         if (classifier_pooling := self.hparams.get("classifier_pooling")) is not None:
             if classifier_pooling not in ("cls", "mean"):
                 raise NotImplementedError(f"Unsupported classifier_pooling: {classifier_pooling}")
             self.gguf_writer.add_classifier_pooling_type(mode_mapping[classifier_pooling])
+        if (classifier_activation := self.hparams.get("classifier_activation")) is not None:
+            if classifier_activation not in ("gelu", "silu", "tanh"):
+                raise NotImplementedError(f"Unsupported classifier_activation: {classifier_activation}")
+            self.gguf_writer.add_classifier_activation(classifier_activation)
 
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer
@@ -2499,7 +2513,11 @@ class TextModel(ModelBase):
         if template is not None:
             self.gguf_writer.add_chat_template(template)
 
-    def _set_vocab_plamo(self):
+    def _set_vocab_plamo(
+        self,
+        eot_token: str,
+        normal_tokens: Iterable[str] = (),
+    ):
         # PLaMo models use a custom tokenizer with a .jsonl file
         tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
         tokenizer_config_path = self.dir_model / "tokenizer_config.json"
@@ -2523,27 +2541,30 @@ class TextModel(ModelBase):
         tokens = []
         scores = []
         toktypes = []
+        normal_tokens = set(normal_tokens)
 
         with open(tokenizer_jsonl_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f):
                 if line.strip():
                     token_data = json.loads(line)
                     # Format: [token, score, type, ?, ?, ?, ?]
-                    token = token_data[0].encode("utf-8")
+                    token_str = token_data[0]
+                    token = token_str.encode("utf-8")
                     score = float(token_data[1])
                     token_type_str = token_data[2] if len(token_data) > 2 else "NORMAL"
 
                     tokens.append(token)
                     scores.append(score)
 
-                    if token_type_str == "UNKNOWN":
+                    if token_str in normal_tokens:
+                        toktypes.append(gguf.TokenType.NORMAL)
+                    elif token_type_str == "UNKNOWN":
                         toktypes.append(gguf.TokenType.UNKNOWN)
                     elif token_type_str == "CONTROL":
                         toktypes.append(gguf.TokenType.CONTROL)
                     elif token_type_str == "BYTE":
                         toktypes.append(gguf.TokenType.BYTE)
                     else:
-                        token_str = token_data[0]
                         if token_str.startswith("<|plamo:") and token_str.endswith("|>"):
                             toktypes.append(gguf.TokenType.CONTROL)
                         else:
@@ -2580,8 +2601,7 @@ class TextModel(ModelBase):
             token_id = tokens.index(tokenizer_config["unk_token"].encode("utf-8"))
             self.gguf_writer.add_unk_token_id(token_id)
 
-        # Add <|plamo:op|> as EOT to ensure appropriate end of generation
-        self.gguf_writer.add_eot_token_id(4)
+        self.gguf_writer.add_eot_token_id(tokens.index(eot_token.encode("utf-8")))
 
         self.gguf_writer.add_add_space_prefix(False)
 

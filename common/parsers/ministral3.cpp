@@ -86,14 +86,14 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
         // Tool call parser
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
                 const auto   schema   = common_chat_tool_parameters(function);
 
                 tool_choice |=
-                    p.rule("tool-" + name, p.tool_open(p.tool_name(p.literal(name)) + "[ARGS]") +
-                                               p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
+                    p.rule("tool-" + std::to_string(tool_index), p.tool_open(p.tool_name(p.literal(name)) + "[ARGS]") +
+                                               p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", schema)));
             });
 
             auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
