@@ -222,7 +222,9 @@ struct llama_moe_cache::impl {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                devices.push_back({ backends[i], bufts[i] });
+                auto & d = devices.emplace_back();
+                d.backend = backends[i];
+                d.buft    = bufts[i];
             }
         }
         if (devices.empty()) {
