@@ -250,10 +250,9 @@ static void top_k_radix_cuda(
     }
 }
 
-// sort each row, then keep the first k columns
-static void top_k_bitonic_cuda(
+static void top_k_argsort_cuda(
         ggml_cuda_pool & pool,
-        const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
+        const float * src, int * dst, int ncols, int64_t nrows, int k, bool use_cub, cudaStream_t stream) {
     const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) ncols * sizeof(int), nrows);
 
     ggml_cuda_pool_alloc<int> tmp_alloc(pool, (size_t) ncols * chunk_nrows);
@@ -262,7 +261,15 @@ static void top_k_bitonic_cuda(
     for (int64_t i = 0; i < nrows; i += chunk_nrows) {
         const int iter_nrows = std::min(chunk_nrows, nrows - i);
 
-        argsort_f32_i32_cuda_bitonic(src, tmp, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
+        if (use_cub) {
+#ifdef GGML_CUDA_USE_CUB
+            argsort_f32_i32_cuda_cub(pool, src, tmp, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
+#else
+            GGML_ABORT("CUB is not available");
+#endif // GGML_CUDA_USE_CUB
+        } else {
+            argsort_f32_i32_cuda_bitonic(src, tmp, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
+        }
         CUDA_CHECK(cudaMemcpy2DAsync(dst, k * sizeof(int), tmp, ncols * sizeof(int), k * sizeof(int), iter_nrows,
                                      cudaMemcpyDeviceToDevice, stream));
 
@@ -270,29 +277,6 @@ static void top_k_bitonic_cuda(
         dst += (size_t) k     * iter_nrows;
     }
 }
-
-#if defined(GGML_CUDA_USE_CUB) && !defined(CUB_TOP_K_AVAILABLE)
-// same as above, using CUB segmented sort
-static void top_k_argsort_cub(
-        ggml_cuda_pool & pool,
-        const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
-    const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) ncols * sizeof(float), nrows);
-
-    ggml_cuda_pool_alloc<int> tmp_alloc(pool, (size_t) ncols * chunk_nrows);
-    int * tmp = tmp_alloc.get();
-
-    for (int64_t i = 0; i < nrows; i += chunk_nrows) {
-        const int iter_nrows = std::min(chunk_nrows, nrows - i);
-
-        argsort_f32_i32_cuda_cub(pool, src, tmp, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
-        CUDA_CHECK(cudaMemcpy2DAsync(dst, k * sizeof(int), tmp, ncols * sizeof(int), k * sizeof(int), iter_nrows,
-                                     cudaMemcpyDeviceToDevice, stream));
-
-        src += (size_t) ncols * iter_nrows;
-        dst += (size_t) k     * iter_nrows;
-    }
-}
-#endif // defined(GGML_CUDA_USE_CUB) && !defined(CUB_TOP_K_AVAILABLE)
 
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
@@ -326,7 +310,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         // the padded row must fit in shared memory
         const int ncols_pad = next_power_of_2(ncols);
         if (ncols_pad * sizeof(int) <= ggml_cuda_info().devices[device].smpb) {
-            top_k_bitonic_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
+            top_k_argsort_cuda(pool, src0_d, dst_d, ncols, nrows, k, false, stream);
             return;
         }
     }
@@ -344,7 +328,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
 #elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
     if (ncols <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT) {
-        top_k_argsort_cub(pool, src0_d, dst_d, ncols, nrows, k, stream);
+        top_k_argsort_cuda(pool, src0_d, dst_d, ncols, nrows, k, true, stream);
     } else {
         top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
     }
