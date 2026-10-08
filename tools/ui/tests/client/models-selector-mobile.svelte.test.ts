@@ -34,13 +34,14 @@ describe('model picker drawer on a phone', () => {
 		vi.spyOn(ModelsService, 'list').mockResolvedValue({
 			data: [{ id: option.model }, { id: other.model }]
 		} as never);
-		modelsStore.models = [option, other];
+		// the models read through the providers data layer on this layer of the stack
+		modelsStore.activeModels = [option, other];
 		await modelsStore.selectModelById(option.id);
 		await page.viewport(PHONE.width, PHONE.height);
 	});
 
 	afterEach(async () => {
-		modelsStore.models = [];
+		modelsStore.activeModels = [];
 		vi.restoreAllMocks();
 		await page.viewport(DESKTOP.width, DESKTOP.height);
 	});
