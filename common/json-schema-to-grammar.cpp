@@ -684,7 +684,7 @@ private:
         auto it = schema.ref.find('#');
         std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
         static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
-        std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
+        std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-") + (_unordered_properties ? "-unordered" : "");
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
             if (!schema.target) {
                 _errors.push_back("Unresolved $ref " + schema.ref);
@@ -741,17 +741,51 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        if (_unordered_properties) {
-            // any property in any order; required and uniqueness are not enforced
-            std::vector<std::string> kvs;
-            for (const auto & prop_name : prop_names) {
-                kvs.push_back(prop_kv_rule_names[prop_name]);
+        // one rule per set of seen keys (2^n rules), so above this limit keep the declared order
+        constexpr size_t max_unordered_props = 6;
+        if (_unordered_properties && prop_names.size() <= max_unordered_props) {
+            const size_t n = prop_names.size();
+            size_t required_mask = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (required.count(prop_names[i])) {
+                    required_mask |= size_t(1) << i;
+                }
+            }
+            std::string additional_kvs;
+            if (prop_kv_rule_names.count("*")) {
+                additional_kvs = "( \",\" space " + prop_kv_rule_names["*"] + " )*";
+            }
+
+            // rest of the object after the keys in `seen`: each key at most once, close only when all required keys are seen
+            std::map<size_t, std::string> rest_rules;
+            std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
+                auto it = rest_rules.find(seen);
+                if (it != rest_rules.end()) {
+                    return it->second;
+                }
+                std::vector<std::string> alts;
+                for (size_t i = 0; i < n; i++) {
+                    if (!(seen & (size_t(1) << i))) {
+                        alts.push_back("\",\" space " + prop_kv_rule_names[prop_names[i]] + " " + get_rest(seen | (size_t(1) << i)));
+                    }
+                }
+                std::string body = additional_kvs;
+                if (!alts.empty()) {
+                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )" + ((seen & required_mask) == required_mask ? "?" : "");
+                }
+                std::string res = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
+                rest_rules[seen] = res;
+                return res;
+            };
+
+            std::vector<std::string> firsts;
+            for (size_t i = 0; i < n; i++) {
+                firsts.push_back(prop_kv_rule_names[prop_names[i]] + " " + get_rest(size_t(1) << i));
             }
             if (prop_kv_rule_names.count("*")) {
-                kvs.push_back(prop_kv_rule_names["*"]);
+                firsts.push_back(prop_kv_rule_names["*"] + " " + get_rest(0));
             }
-            std::string any_kv = _add_rule(name + (name.empty() ? "" : "-") + "any-kv", string_join(kvs, " | "));
-            return "\"{\" space ( " + any_kv + " ( \",\" space " + any_kv + " )* )? space \"}\"";
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (required_mask == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
@@ -836,9 +870,10 @@ public:
     }
 
     std::string add_schema_unordered(const std::string & name, const common_chat_schema & schema) {
+        bool prev = _unordered_properties;
         _unordered_properties = true;
         auto rule = visit(schema, name);
-        _unordered_properties = false;
+        _unordered_properties = prev;
         return rule;
     }
 
@@ -1013,7 +1048,8 @@ public:
 
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf, bool unordered_properties) {
 #ifdef LLAMA_USE_LLGUIDANCE
-    if (!force_gbnf) {
+    // llguidance %json keeps the declared order, so use GBNF for unordered
+    if (!force_gbnf && !unordered_properties) {
         return "%llguidance {}\nstart: %json " + schema.dump();
     }
 #else

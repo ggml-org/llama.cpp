@@ -1502,10 +1502,12 @@ static void test_json_schema_unordered_properties() {
             R"""({"dtype": "int", "expr": "0"})""",
             R"""({"n": 1, "dtype": "int", "expr": "0"})""",
             R"""({"dtype": "int", "other": 1, "expr": "0"})""",
+            R"""({"other": 1, "more": 2})""",
         },
         {
             R"""({"n": "x"})""",
             R"""({"expr": "0",})""",
+            R"""({"expr": "0", "expr": "1"})""",
         });
 
     test_schema_unordered(
@@ -1518,6 +1520,40 @@ static void test_json_schema_unordered_properties() {
         {
             R"""({"dtype": "int", "other": 1})""",
             R"""({"expr": 0})""",
+            R"""({"expr": "0", "dtype": "int", "expr": "0"})""",
+        });
+
+    test_schema_unordered(
+        "required properties in any order",
+        make_schema(R"""(, "required": ["expr", "n"], "additionalProperties": false)"""),
+        {
+            R"""({"expr": "0", "n": 1})""",
+            R"""({"n": 1, "expr": "0"})""",
+            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
+            R"""({"dtype": "int", "expr": "0", "n": 1})""",
+        },
+        {
+            R"""({})""",
+            R"""({"expr": "0"})""",
+            R"""({"dtype": "int", "n": 1})""",
+            R"""({"n": 1, "n": 1, "expr": "0"})""",
+        });
+
+    test_schema_unordered(
+        "too many properties: keep declared order",
+        R"""({
+            "type": "object",
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
+            "required": ["a", "b"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"a": 1, "b": 2})""",
+            R"""({"a": 1, "b": 2, "g": 3})""",
+        },
+        {
+            R"""({"b": 2, "a": 1})""",
+            R"""({"a": 1})""",
         });
 
     test_schema(

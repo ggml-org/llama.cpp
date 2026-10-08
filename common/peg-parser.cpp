@@ -1154,6 +1154,13 @@ common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p,
     return this->schema(p, name, doc, *doc->root, raw);
 }
 
+common_peg_parser common_peg_parser_builder::unordered_schema(const common_peg_parser & p) {
+    if (auto * s = std::get_if<common_peg_schema_parser>(&arena_.get(p.id()))) {
+        s->unordered = true;
+    }
+    return p;
+}
+
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
     auto clean_name = rule_name(name);
     auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, p.id(), trigger});
@@ -1741,9 +1748,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
                 }
-                // tool-call schemas: models do not reliably follow the declared property order
-                bool is_tool_schema = p.name.rfind("tool-", 0) == 0;
-                return (is_tool_schema ? builder.add_schema_unordered : builder.add_schema)(p.name, *p.node);
+                return (p.unordered ? builder.add_schema_unordered : builder.add_schema)(p.name, *p.node);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 return p.name;
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -1871,7 +1876,8 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
                 {"type", "schema"},
                 {"child", p.child},
                 {"name", p.name},
-                {"raw", p.raw}
+                {"raw", p.raw},
+                {"unordered", p.unordered}
             };
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             return json{
@@ -2017,6 +2023,7 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         parser.child = j["child"].get<common_peg_parser_id>();
         parser.name = j["name"];
         parser.raw = j["raw"].get<bool>();
+        parser.unordered = j.value("unordered", false);
         return parser;
     }
     if (type == "rule") {
