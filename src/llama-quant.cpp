@@ -292,6 +292,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     if (ggml_n_dims(tensor) < 2) return false;
 
     const std::string name = ggml_get_name(tensor);
+    if (name.compare(0, 10, "decision2.") == 0) {
+        return false; // the small bilinear and MLP head runs in F32
+    }
 
     // This used to be a regex, but <regex> has an extreme cost to compile times.
     bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?

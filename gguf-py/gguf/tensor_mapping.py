@@ -1291,6 +1291,14 @@ class TensorNameMap:
             "joint_head.evidence_layers.{bid}.memory_norm",  # clef
         ),
 
+        MODEL_TENSOR.DECISION2_CANDIDATE_NORM: ("decision2.candidate_norm",),
+        MODEL_TENSOR.DECISION2_QUERY_NORM: ("decision2.query_norm",),
+        MODEL_TENSOR.DECISION2_KEY: ("decision2.key",),
+        MODEL_TENSOR.DECISION2_QUERY: ("decision2.query",),
+        MODEL_TENSOR.DECISION2_CANDIDATE_MLP: ("decision2.candidate_mlp",),
+        MODEL_TENSOR.DECISION2_QUERY_MLP: ("decision2.query_mlp",),
+        MODEL_TENSOR.DECISION2_SCALAR: ("decision2.scalar",),
+
         MODEL_TENSOR.DECISION_HIDDEN_NORM: (
             "joint_head.hidden_norm",  # clef
         ),

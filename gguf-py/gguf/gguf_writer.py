@@ -1355,6 +1355,12 @@ class GGUFWriter:
     def add_decision_head_count(self, value: int) -> None:
         self.add_uint32(Keys.Decision.HEAD_COUNT.format(arch=self.arch), value)
 
+    def add_decision_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.Decision.HEAD_DIM.format(arch=self.arch), value)
+
+    def add_decision_score_bias(self, n_levels: int, index: int, value: float) -> None:
+        self.add_float32(Keys.Decision.SCORE_BIAS.format(arch=self.arch, n_levels=n_levels, index=index), value)
+
     def add_decision_max_head_tokens(self, value: int) -> None:
         self.add_uint32(Keys.Decision.MAX_HEAD_TOKENS.format(arch=self.arch), value)
 

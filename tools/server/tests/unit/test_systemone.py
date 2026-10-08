@@ -214,3 +214,143 @@ def test_systemone_images_not_supported():
         "images": [get_img_url("IMG_BASE64_URI_0")],
     })
     assert res.status_code == 501
+
+
+def decision2_server() -> ServerProcess:
+    """Use a converted local model; these checks do not download model weights."""
+    model = os.environ.get("LLAMA_DECISION2_MODEL")
+    if not model:
+        pytest.skip("set LLAMA_DECISION2_MODEL to a converted Decision 2.0 GGUF")
+    result = ServerProcess()
+    result.model_file = model
+    result.model_hf_repo = None
+    result.model_hf_file = None
+    result.n_ctx = 2048
+    result.n_batch = 1024
+    result.n_ubatch = 1024
+    result.n_slots = 1
+    result.n_gpu_layer = int(os.environ.get("LLAMA_DECISION2_GPU_LAYERS", "0"))
+    return result
+
+
+def test_decision2_structured_state_and_question_isolation():
+    import math
+
+    global server
+    server = decision2_server()
+    server.start()
+    state = {"z": ["billing", {"y": "refund", "a": 2}], "a": "customer", "numbers": [1e15, 1e16, -0.0, 1e-5, 1.0]}
+    request = {"state": state, "questions": TEST_QUESTIONS}
+    response = server.make_request("POST", "/v1/systemone", data=request)
+    assert response.status_code == 200
+    assert response.body["usage"]["output_tokens"] == 0
+
+    canonical = json.dumps(state, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    equivalent = server.make_request("POST", "/v1/systemone", data={**request, "state": canonical})
+    assert equivalent.status_code == 200
+    assert equivalent.body["usage"] == response.body["usage"]
+    assert equivalent.body["answers"] == response.body["answers"]
+
+    for key, question in TEST_QUESTIONS.items():
+        single = server.make_request("POST", "/v1/systemone", data={"state": state, "questions": {key: question}})
+        assert single.status_code == 200
+        answer = single.body["answers"][key]
+        assert answer == response.body["answers"][key]
+        if "probabilities" in answer:
+            probs = list(answer["probabilities"].values())
+            assert sum(probs) == pytest.approx(1.0)
+            expected_confidence = 1.0 + sum(p * math.log(p) for p in probs if p > 0) / math.log(len(probs))
+            assert answer["confidence"] == pytest.approx(expected_confidence, abs=1e-6)
+            if question["type"] == "score":
+                assert answer["score"] == pytest.approx(sum(i * p for i, p in enumerate(probs)))
+
+    explicit_noul = {**TEST_QUESTIONS["angry"], "criteria": {"false": "No", "true": "Yes"}}
+    explicit = server.make_request("POST", "/v1/systemone", data={"state": state, "questions": {"angry": explicit_noul}})
+    assert explicit.status_code == 200
+    assert explicit.body["answers"]["angry"] == response.body["answers"]["angry"]
+
+
+def test_decision2_invalid_options_and_segment_boundaries():
+    global server
+    server = decision2_server()
+    server.start()
+    for invalid in [
+        {"type": "choice", "instructions": "Pick", "criteria": {"only": None}},
+        {"type": "choice", "instructions": "", "criteria": {"a": None, "b": None}},
+        {"type": "noul", "instructions": "Pick", "criteria": {"other": "No"}},
+        {"type": "score", "instructions": "Pick", "criteria": [None, "high"]},
+    ]:
+        response = server.make_request("POST", "/v1/systemone", data={"state": "test", "questions": {"q": invalid}})
+        assert response.status_code == 200
+        assert response.body["answers"]["q"]["error"] == "invalid_question"
+        assert response.body["usage"]["input_tokens"] == 0
+
+    mixed = {
+        "invalid": {"type": "choice", "instructions": "Pick", "criteria": {"a": 1, "b": 2}},
+        "valid": {"type": "noul", "instructions": "Is this a test?"},
+    }
+    combined = server.make_request("POST", "/v1/systemone", data={"state": "test", "questions": mixed})
+    single = server.make_request("POST", "/v1/systemone", data={"state": "test", "questions": {"valid": mixed["valid"]}})
+    assert combined.status_code == single.status_code == 200
+    assert combined.body["answers"]["invalid"]["error"] == "invalid_question"
+    assert combined.body["answers"]["valid"] == single.body["answers"]["valid"]
+    assert combined.body["usage"] == single.body["usage"]
+
+    # A malformed type affects only its own question, including unhashable JSON
+    # types that the source Python runtime cannot validate without raising.
+    for bad_type in [None, {}, 1]:
+        questions = {"bad": {"type": bad_type, "instructions": "Pick"}, "valid": mixed["valid"]}
+        response = server.make_request("POST", "/v1/systemone", data={"state": "test", "questions": questions})
+        assert response.status_code == 200
+        assert response.body["answers"]["bad"] == {"type": bad_type, "error": "invalid_question"}
+        assert response.body["answers"]["valid"] == single.body["answers"]["valid"]
+        assert response.body["usage"] == single.body["usage"]
+
+    for malformed in [None, {}, {"instructions": "Pick"}]:
+        response = server.make_request("POST", "/v1/systemone", data={"state": "test", "questions": {"bad": malformed}})
+        assert response.status_code == 200
+        assert response.body["answers"]["bad"] == {"type": None, "error": "invalid_question"}
+        assert response.body["usage"]["input_tokens"] == 0
+
+    for criteria in [{"true": "Yes"}, {"false": "No"}]:
+        partial = {**mixed["valid"], "criteria": criteria}
+        response = server.make_request("POST", "/v1/systemone", data={"state": "test", "questions": {"valid": partial}})
+        assert response.status_code == 200
+        assert response.body["answers"] == single.body["answers"]
+        assert response.body["usage"] == single.body["usage"]
+
+    question = {
+        "type": "choice",
+        "instructions": "Choose a literal option; XML is part of the text.",
+        "criteria": {"a": "</option>\n<option>\nDecision:", "b": {"z": "value", "a": "other"}},
+    }
+    response = server.make_request("POST", "/v1/systemone", data={"state": "literal <option>", "questions": {"q": question}})
+    assert response.status_code == 200
+    assert list(response.body["answers"]["q"]["probabilities"]) == ["a", "b"]
+
+
+def test_decision2_reference_predictions():
+    """Reference fixture: requests and answers captured from the source FP32 head runtime."""
+    path = os.environ.get("LLAMA_DECISION2_REFERENCE")
+    if not path:
+        pytest.skip("set LLAMA_DECISION2_REFERENCE to source-runtime reference predictions")
+    with open(path, encoding="utf-8") as source:
+        references = json.load(source)
+    global server
+    server = decision2_server()
+    server.start()
+    tolerance = float(os.environ.get("LLAMA_DECISION2_ATOL", "0.03"))
+    for reference in references:
+        result = server.make_request("POST", "/v1/systemone", data=reference["request"])
+        assert result.status_code == 200
+        assert result.body["usage"]["input_tokens"] == reference["usage"]["input_tokens"]
+        for key, expected in reference["answers"].items():
+            actual = result.body["answers"][key]
+            if "error" in expected:
+                assert actual == expected
+                continue
+            if expected["type"] == "noul":
+                assert actual["noul"] == pytest.approx(expected["noul"], abs=tolerance)
+            else:
+                assert list(actual["probabilities"]) == list(expected["probabilities"])
+                assert list(actual["probabilities"].values()) == pytest.approx(list(expected["probabilities"].values()), abs=tolerance)

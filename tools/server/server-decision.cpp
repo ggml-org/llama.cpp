@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <regex>
 #include <stdexcept>
@@ -44,10 +45,12 @@ void server_decision_context::init(const llama_model * model) {
     vocab = llama_model_get_vocab(model);
 
     const char * tmpl_src = llama_model_chat_template(model, "systemone");
-    if (tmpl_src == nullptr) {
+    if (tmpl_src == nullptr && model_type != COMMON_DECISION_TYPE_DECISION2) {
         throw std::runtime_error("decision model has no \"systemone\" template");
     }
-    tmpl = std::make_shared<const common_chat_template>(tmpl_src, "", "");
+    if (tmpl_src) {
+        tmpl = std::make_shared<const common_chat_template>(tmpl_src, "", "");
+    }
 
     const std::string prefix_temp = prefix + "temperature.";
     for (int32_t i = 0; i < llama_model_meta_count(model); i++) {
@@ -119,6 +122,28 @@ void server_decision_context::init(const llama_model * model) {
             throw std::runtime_error("decision model has no valid max_head_tokens");
         }
         n_options_max = 255;
+    } else if (model_type == COMMON_DECISION_TYPE_DECISION2) {
+        n_options_max = 255;
+        for (size_t count = 2; count <= 10; ++count) {
+            std::vector<float> offsets;
+            for (size_t i = 0; i < count; ++i) {
+                const auto value = decision_meta_str(model, prefix + "score_bias." + std::to_string(count) + "." + std::to_string(i));
+                if (!value.empty()) {
+                    char * end;
+                    const float offset = std::strtof(value.c_str(), &end);
+                    if (*end || !std::isfinite(offset) || offsets.size() != i) {
+                        throw std::runtime_error("invalid Decision2 score offsets");
+                    }
+                    offsets.push_back(offset);
+                }
+            }
+            if (!offsets.empty()) {
+                if (offsets.size() != count) {
+                    throw std::runtime_error("incomplete Decision2 score offsets");
+                }
+                score_bias.emplace(count, std::move(offsets));
+            }
+        }
     } else if (model_type == COMMON_DECISION_TYPE_CLEF) {
         n_options_max   = 255;
         noul_true_first = true;
@@ -153,74 +178,134 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
         throw std::invalid_argument("\"questions\" must be a non-empty object");
     }
 
+    const auto payload_ok = [](const json & value) {
+        return value.is_string() || value.is_object() || value.is_array();
+    };
+    if (type == COMMON_DECISION_TYPE_DECISION2 && !payload_ok(body.at("state"))) {
+        throw std::invalid_argument("state must be text, an object, or an array");
+    }
+
     std::vector<server_decision_question> questions;
     for (const auto & [id, q] : body.at("questions").items()) {
         auto err = [&id = id](const std::string & msg) {
             return std::invalid_argument("questions." + id + ": " + msg);
         };
-        if (!q.is_object()) {
-            throw err("must be an object");
-        }
-        if (!q.contains("instructions") || q.at("instructions").is_null()) {
-            throw err("\"instructions\" must be provided");
-        }
+        try {
+            if (!q.is_object()) {
+                throw err("must be an object");
+            }
+            if (!q.contains("instructions") || q.at("instructions").is_null()) {
+                throw err("\"instructions\" must be provided");
+            }
 
-        server_decision_question question;
-        question.id           = id;
-        question.instructions = q.at("instructions");
+            if (type == COMMON_DECISION_TYPE_DECISION2 && (id.empty() || !payload_ok(q.at("instructions")) ||
+                    (q.at("instructions").is_string() && q.at("instructions").get<std::string>().empty()))) {
+                throw err("instructions must be nonempty text, an object, or an array, and the question ID must be nonempty");
+            }
 
-        const std::string type_name = json_value(q, "type", std::string());
-        const json        criteria  = q.contains("criteria") ? q.at("criteria") : json();
+            server_decision_question question;
+            question.id           = id;
+            question.instructions = q.at("instructions");
 
-        if (type_name == "choice") {
-            question.type = SERVER_DECISION_QUESTION_CHOICE;
-            if (!criteria.is_object() || criteria.empty()) {
-                throw err("\"criteria\" must be a non-empty object");
-            }
-            for (const auto & [key, description] : criteria.items()) {
-                question.options.push_back({key, description});
-            }
-            if (choice_sorted) {
-                std::sort(question.options.begin(), question.options.end(), [](const auto & a, const auto & b) {
-                    return a.key < b.key;
-                });
-            }
-        } else if (type_name == "score") {
-            question.type = SERVER_DECISION_QUESTION_SCORE;
-            if (!criteria.is_array() || criteria.size() < 2 || criteria.size() > 10) {
-                throw err("\"criteria\" must be an array of 2 to 10 levels");
-            }
-            for (size_t i = 0; i < criteria.size(); i++) {
-                question.options.push_back({std::to_string(i), criteria.at(i)});
-            }
-        } else if (type_name == "noul") {
-            question.type = SERVER_DECISION_QUESTION_NOUL;
-            if (!criteria.is_null() && !criteria.is_object()) {
-                throw err("\"criteria\" must be an object");
-            }
-            for (const char * key : {"false", "true"}) {
-                json description;
-                if (criteria.is_object() && criteria.contains(key)) {
-                    description = criteria.at(key);
-                } else if (criteria.is_object() && type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
-                    // lfm2-d1-omni also reads the descriptions under "no" and "yes"
-                    const char * alias = std::string(key) == "true" ? "yes" : "no";
-                    description = criteria.contains(alias) ? criteria.at(alias) : json();
+            const std::string type_name = json_value(q, "type", std::string());
+            const json        criteria  = q.contains("criteria") ? q.at("criteria") : json();
+
+            if (type_name == "choice") {
+                question.type = SERVER_DECISION_QUESTION_CHOICE;
+                if (!criteria.is_object() || criteria.empty()) {
+                    throw err("\"criteria\" must be a non-empty object");
                 }
-                question.options.push_back({key, description});
+                for (const auto & [key, description] : criteria.items()) {
+                    question.options.push_back({key, description});
+                }
+                if (choice_sorted) {
+                    std::sort(question.options.begin(), question.options.end(), [](const auto & a, const auto & b) {
+                        return a.key < b.key;
+                    });
+                }
+            } else if (type_name == "score") {
+                question.type = SERVER_DECISION_QUESTION_SCORE;
+                if (!criteria.is_array() || criteria.size() < 2 || criteria.size() > 10) {
+                    throw err("\"criteria\" must be an array of 2 to 10 levels");
+                }
+                for (size_t i = 0; i < criteria.size(); i++) {
+                    question.options.push_back({std::to_string(i), criteria.at(i)});
+                }
+            } else if (type_name == "noul") {
+                question.type = SERVER_DECISION_QUESTION_NOUL;
+                if (!criteria.is_null() && !criteria.is_object()) {
+                    throw err("\"criteria\" must be an object");
+                }
+                for (const char * key : {"false", "true"}) {
+                    json description;
+                    if (criteria.is_object() && criteria.contains(key)) {
+                        description = criteria.at(key);
+                    } else if (criteria.is_object() && type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
+                        // lfm2-d1-omni also reads the descriptions under "no" and "yes"
+                        const char * alias = std::string(key) == "true" ? "yes" : "no";
+                        description = criteria.contains(alias) ? criteria.at(alias) : json();
+                    }
+                    question.options.push_back({key, description});
+                }
+                if (noul_true_first) {
+                    std::swap(question.options[0], question.options[1]);
+                }
+            } else {
+                throw err("\"type\" must be one of: choice, score, noul");
             }
-            if (noul_true_first) {
-                std::swap(question.options[0], question.options[1]);
+
+            if (type == COMMON_DECISION_TYPE_DECISION2) {
+                if (question.type == SERVER_DECISION_QUESTION_NOUL) {
+                    if (criteria.is_object() && std::any_of(criteria.begin(), criteria.end(), [](const json & value) { return value.is_null(); })) {
+                        throw err("noul descriptions cannot be null");
+                    }
+                    if (criteria.is_object()) {
+                        for (const auto & item : criteria.items()) {
+                            if (item.key() != "false" && item.key() != "true") {
+                                throw err("noul criteria only accept false and true");
+                            }
+                        }
+                    }
+                    question.options.clear();
+                    if (criteria.is_object() && criteria.size() == 2) {
+                        for (const auto & [key, description] : criteria.items()) {
+                            question.options.push_back({key, description});
+                        }
+                    } else {
+                        for (const char * key : {"false", "true"}) {
+                            const json description = criteria.is_object() && criteria.contains(key) ? criteria.at(key) : json(std::string(key) == "true" ? "Yes" : "No");
+                            question.options.push_back({key, description});
+                        }
+                    }
+                }
+                if (question.options.size() < 2) {
+                    throw err("at least two options are required");
+                }
+                for (const auto & option : question.options) {
+                    if (option.key.empty() || (!payload_ok(option.description) &&
+                            !(question.type == SERVER_DECISION_QUESTION_CHOICE && option.description.is_null()))) {
+                        throw err("invalid option key or description");
+                    }
+                }
             }
-        } else {
-            throw err("\"type\" must be one of: choice, score, noul");
-        }
 
-        if (question.options.size() > n_options_max) {
-            throw err(string_format("too many options (%zu), this model supports at most %zu", question.options.size(), n_options_max));
-        }
+            if (question.options.size() > n_options_max) {
+                throw err(string_format("too many options (%zu), this model supports at most %zu", question.options.size(), n_options_max));
+            }
 
-        questions.push_back(std::move(question));
+            questions.push_back(std::move(question));
+        } catch (const std::invalid_argument &) {
+            if (type != COMMON_DECISION_TYPE_DECISION2) {
+                throw;
+            }
+            server_decision_question invalid;
+            invalid.id = id;
+            invalid.error = {
+                {"type", q.is_object() && q.contains("type") ? q.at("type") : json()},
+                {"error", "invalid_question"},
+            };
+            questions.push_back(std::move(invalid));
+        }
     }
     return questions;
 }
@@ -254,6 +339,13 @@ static void decision_load_audio(const json & data, std::vector<raw_buffer> & fil
 }
 
 json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+    if (type == COMMON_DECISION_TYPE_DECISION2) {
+        if (body.contains("files") || body.contains("images")) {
+            throw std::invalid_argument("Decision2 accepts text and structured JSON state");
+        }
+        return body.at("state");
+    }
+
     if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
         throw std::invalid_argument("\"videos\" is not supported");
     }
@@ -658,6 +750,10 @@ void server_decision_context::fill_task(
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
         server_task & task) const {
+    if (type == COMMON_DECISION_TYPE_DECISION2) {
+        fill_task_decision2(state, question, task);
+        return;
+    }
     if (type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         fill_task_d1omni(state, questions, question, variant, files, mctx, init_opt, task);
         return;
@@ -701,6 +797,91 @@ void server_decision_context::fill_task(
         }
         task.decision.pointer = tokens.size() - 1;
     }
+    task.tokens = server_tokens(tokens, false);
+}
+
+static std::string decision2_canonical(const json & value) {
+    if (value.is_number_float()) {
+        char buffer[64];
+        const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value.get<double>(), std::chars_format::general);
+        if (result.ec != std::errc()) {
+            throw std::invalid_argument("invalid Decision2 JSON number");
+        }
+        std::string number(buffer, result.ptr);
+        const auto exp_pos = number.find('e');
+        if (exp_pos != std::string::npos) {
+            const int exponent = std::stoi(number.substr(exp_pos + 1));
+            // Match Python repr(float): fixed notation for decimal exponents [-4, 16).
+            if (exponent >= -4 && exponent < 16) {
+                std::string digits = number.substr(0, exp_pos);
+                const bool negative = digits.front() == '-';
+                if (negative) {
+                    digits.erase(0, 1);
+                }
+                digits.erase(std::remove(digits.begin(), digits.end(), '.'), digits.end());
+                const int point = exponent + 1;
+                if (point <= 0) {
+                    number = "0." + std::string(-point, '0') + digits;
+                } else if ((size_t) point >= digits.size()) {
+                    number = digits + std::string(point - digits.size(), '0') + ".0";
+                } else {
+                    number = digits.substr(0, point) + "." + digits.substr(point);
+                }
+                return negative ? "-" + number : number;
+            }
+        } else if (number.find('.') == std::string::npos) {
+            number += ".0";
+        }
+        return number;
+    }
+    if (value.is_object()) {
+        const auto sorted = decision_sort_keys(value);
+        std::string result = "{";
+        for (const auto & [key, item] : sorted.items()) {
+            result += (result.size() > 1 ? "," : "") + json(key).dump() + ":" + decision2_canonical(item);
+        }
+        return result + "}";
+    }
+    if (value.is_array()) {
+        std::string result = "[";
+        for (const auto & item : value) {
+            result += (result.size() > 1 ? "," : "") + decision2_canonical(item);
+        }
+        return result + "]";
+    }
+    return value.dump();
+}
+
+static std::string decision2_payload(const json & value) {
+    return value.is_string() ? value.get<std::string>() : decision2_canonical(value);
+}
+
+void server_decision_context::fill_task_decision2(const json & state, const server_decision_question & question, server_task & task) const {
+    llama_tokens tokens;
+    auto append = [&](const std::string & text, int32_t order) {
+        // The reference tokenizer encodes each segment separately, without BOS/EOS.
+        auto part = common_tokenize(vocab, text, false, true);
+        if (part.empty()) {
+            throw std::invalid_argument("empty Decision2 prompt segment");
+        }
+        tokens.insert(tokens.end(), part.begin(), part.end());
+        task.decision.order.resize(tokens.size(), LLAMA_DECISION_ORDER_NONE);
+        task.decision.order.back() = order;
+    };
+    append("Context:\n" + decision2_payload(state) + "\n\nTask type: " + decision_question_type_name(question.type) +
+            "\nQuestion:\n" + decision2_payload(question.instructions) + "\nOptions:", LLAMA_DECISION_ORDER_NONE);
+    for (const auto & option : question.options) {
+        const json value = {{"description", option.description}, {"key", option.key}};
+        append("\n<option>\n" + decision2_canonical(value) + "\n</option>", LLAMA_DECISION_ORDER_OPTION);
+        if (task.decision.first < 0) {
+            task.decision.first = tokens.size() - 1;
+        }
+    }
+    const int32_t query_order = question.type == SERVER_DECISION_QUESTION_CHOICE ? LLAMA_DECISION_ORDER_QUESTION_CHOICE :
+        question.type == SERVER_DECISION_QUESTION_SCORE ? LLAMA_DECISION_ORDER_QUESTION_SCORE : LLAMA_DECISION_ORDER_QUESTION_NOUL;
+    append("\n\nSelect the single option best supported by the context and instructions.\nDecision:", query_order);
+    task.decision.n_scores = question.options.size();
+    task.params.cache_prompt = false;
     task.tokens = server_tokens(tokens, false);
 }
 
@@ -1067,13 +1248,22 @@ json server_decision_context::format_answer(const server_decision_question & que
     const float temperature = has_media && type == COMMON_DECISION_TYPE_LFM2_D1_OMNI ? 1.0f : get_temperature(question);
     std::vector<double> probs(n, 0.0);
     for (size_t v = 0; v < scores.size(); v++) {
-        const auto & s = scores[v];
+        auto s = scores[v];
         if (s.size() != n) {
             throw std::runtime_error("decision result does not match the number of options");
         }
         // a joint head returns NaN if it could not use the decision order
-        if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v); })) {
+        if (std::any_of(s.begin(), s.end(), [this](float v) { return std::isnan(v) || (type == COMMON_DECISION_TYPE_DECISION2 && !std::isfinite(v)); })) {
             throw std::runtime_error("the model could not evaluate the decision");
+        }
+        const auto offsets = score_bias.find(n);
+        if (type == COMMON_DECISION_TYPE_DECISION2 && question.type == SERVER_DECISION_QUESTION_SCORE && offsets != score_bias.end()) {
+            for (size_t i = 0; i < n; ++i) {
+                s[i] += offsets->second[i];
+                if (!std::isfinite(s[i])) {
+                    throw std::runtime_error("nonfinite Decision2 score after applying offsets");
+                }
+            }
         }
         const float score_max = *std::max_element(s.begin(), s.end());
         std::vector<double> p(n);
@@ -1112,22 +1302,33 @@ json server_decision_context::format_answer(const server_decision_question & que
         probabilities[question.options[i].key] = probs[i];
     }
 
+    double entropy_confidence = 1.0;
+    if (type == COMMON_DECISION_TYPE_DECISION2) {
+        double entropy = 0.0;
+        for (const auto p : probs) {
+            if (p > 0.0) {
+                entropy -= p * std::log(p);
+            }
+        }
+        entropy_confidence = std::max(0.0, std::min(1.0, 1.0 - entropy / std::log((double) n)));
+    }
+
     if (question.type == SERVER_DECISION_QUESTION_CHOICE) {
         const size_t best = std::max_element(probs.begin(), probs.end()) - probs.begin();
         answer["choice"]        = question.options[best].key;
         answer["probabilities"] = probabilities;
-        answer["confidence"]    = decision_confidence_choice(probs);
+        answer["confidence"]    = type == COMMON_DECISION_TYPE_DECISION2 ? entropy_confidence : decision_confidence_choice(probs);
     } else {
         double expected = 0.0;
         json legend = json::object();
         for (size_t i = 0; i < n; i++) {
             expected += i * probs[i];
-            legend[question.options[i].key] = question.options[i].description;
+            legend[question.options[i].key] = type == COMMON_DECISION_TYPE_DECISION2 ? json(decision2_payload(question.options[i].description)) : question.options[i].description;
         }
         answer["score"]         = expected;
         answer["legend"]        = legend;
         answer["probabilities"] = probabilities;
-        answer["confidence"]    = decision_confidence_score(probs);
+        answer["confidence"]    = type == COMMON_DECISION_TYPE_DECISION2 ? entropy_confidence : decision_confidence_score(probs);
     }
     return answer;
 }

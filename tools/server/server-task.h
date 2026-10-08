@@ -186,8 +186,10 @@ struct server_task {
         int32_t                  pointer = -1;
 
         // first prompt position that is read, -1 if none
+        int32_t first = -1; // a head may read rows independently of markers and pointer
+
         int32_t pos_first() const {
-            int32_t pos = pointer;
+            int32_t pos = first < 0 ? pointer : first;
             for (const int32_t marker : markers) {
                 pos = pos < 0 ? marker : std::min(pos, marker);
             }

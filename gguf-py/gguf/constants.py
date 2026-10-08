@@ -329,6 +329,8 @@ class Keys:
         BLOCK_COUNT        = "{arch}.decision.block_count"
         ROUTING_BLOCK_COUNT = "{arch}.decision.routing_block_count"
         HEAD_COUNT         = "{arch}.decision.head_count"
+        HEAD_DIM           = "{arch}.decision.head_dim"
+        SCORE_BIAS         = "{arch}.decision.score_bias.{n_levels}.{index}"
         MAX_HEAD_TOKENS    = "{arch}.decision.max_head_tokens"
         TEMPERATURE        = "{arch}.decision.temperature.{name}"  # name: "<type>" or "<type>.<n_opt bucket>"
 
@@ -908,6 +910,13 @@ class MODEL_TENSOR(IntEnum):
     DECISION_SCALES               = auto()
     DECISION_SCORER               = auto()
     DECISION_SCORER_OUT           = auto()
+    DECISION2_CANDIDATE_NORM       = auto()
+    DECISION2_QUERY_NORM           = auto()
+    DECISION2_KEY                  = auto()
+    DECISION2_QUERY                = auto()
+    DECISION2_CANDIDATE_MLP        = auto()
+    DECISION2_QUERY_MLP            = auto()
+    DECISION2_SCALAR               = auto()
     CONV1D               = auto()
     CONVNEXT_DW          = auto()
     CONVNEXT_NORM        = auto()
@@ -1690,6 +1699,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DECISION_SCALES:               "decision.scales",
     MODEL_TENSOR.DECISION_SCORER:               "decision.scorer",
     MODEL_TENSOR.DECISION_SCORER_OUT:           "decision.scorer_out",
+    MODEL_TENSOR.DECISION2_CANDIDATE_NORM: "decision2.candidate_norm",
+    MODEL_TENSOR.DECISION2_QUERY_NORM: "decision2.query_norm",
+    MODEL_TENSOR.DECISION2_KEY: "decision2.key",
+    MODEL_TENSOR.DECISION2_QUERY: "decision2.query",
+    MODEL_TENSOR.DECISION2_CANDIDATE_MLP: "decision2.candidate_mlp",
+    MODEL_TENSOR.DECISION2_QUERY_MLP: "decision2.query_mlp",
+    MODEL_TENSOR.DECISION2_SCALAR: "decision2.scalar",
     MODEL_TENSOR.CONV1D:                    "conv1d",
     MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
     MODEL_TENSOR.CONVNEXT_NORM:             "convnext.{bid}.norm",
@@ -2808,6 +2824,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     MODEL_ARCH.QWEN3: [
+        MODEL_TENSOR.DECISION2_CANDIDATE_NORM,
+        MODEL_TENSOR.DECISION2_QUERY_NORM,
+        MODEL_TENSOR.DECISION2_KEY,
+        MODEL_TENSOR.DECISION2_QUERY,
+        MODEL_TENSOR.DECISION2_CANDIDATE_MLP,
+        MODEL_TENSOR.DECISION2_QUERY_MLP,
+        MODEL_TENSOR.DECISION2_SCALAR,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
@@ -2930,6 +2953,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.QWEN35: [
+        MODEL_TENSOR.DECISION2_CANDIDATE_NORM,
+        MODEL_TENSOR.DECISION2_QUERY_NORM,
+        MODEL_TENSOR.DECISION2_KEY,
+        MODEL_TENSOR.DECISION2_QUERY,
+        MODEL_TENSOR.DECISION2_CANDIDATE_MLP,
+        MODEL_TENSOR.DECISION2_QUERY_MLP,
+        MODEL_TENSOR.DECISION2_SCALAR,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
@@ -6069,6 +6099,7 @@ class GGUFValueType(IntEnum):
 
 
 class DecisionType:
+    DECISION2 = "decision2"  # candidate endpoints and a final query, bilinear plus MLP head
     LAYA    = "laya"     # head blocks + scorer on the hidden state of one marker token per option
     OPENJEV = "openjev"  # logits of one label token per option
     LEV     = "lev"      # same as openjev, noul is read from a rating scale
