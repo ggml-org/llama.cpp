@@ -53,6 +53,7 @@
 
 #define GGML_COMMON_IMPL_CPP
 #include "ggml-backend-impl.h"
+#include "ggml-alloc.h"
 #include "ggml-common.h"
 #include "ggml-hexagon.h"
 #include "ggml-impl.h"
@@ -101,12 +102,15 @@ static size_t opt_ndev    = 1;
 static size_t opt_nhvx    = 0; // use all
 static int    opt_nhmx    = 1; // when set, enable HMX; when 0, use HVX only
 static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space for buffer mappings
-static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
 static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static bool   opt_hostbuf = false;
 static bool   opt_dma64   = false;
+
+static size_t opt_mbuf_dyn    = 512ul * 1024 * 1024;      // max dynamic (compute) buffer size
+static size_t opt_mbuf_static = 1ul * 1024 * 1024 * 1024; // max static (weight/KV) buffer size
+static size_t opt_mbuf_total  = 0;                        // total buffer space limit (0 = unconstrained)
 
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
@@ -121,7 +125,7 @@ static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD 
 static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C };
 
 static int opt_opbatch  = 1280; // max number of ops in a batch
-static int opt_opqueue  = 32;   // max number of pending batches
+static int opt_opqueue  = 8;   // max number of pending batches
 static int opt_optrace  = 0;    // trace buffer size per thread (0 means default)
 static int opt_oppoll   = 0;    // polling for batch completions
 static int opt_opfusion = 1;    // enable/disable op fusion
@@ -2820,8 +2824,30 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
     GGML_UNUSED(buft);
 }
 
+static size_t parse_size(const char * str, size_t default_unit = 1024 * 1024) {
+    if (!str || str[0] == '\0') {
+        return 0;
+    }
+    char * end = NULL;
+    double val = strtod(str, &end);
+    if (val < 0) {
+        return 0;
+    }
+    if (end && *end) {
+        while (*end == ' ') end++;
+        if (*end == 'k' || *end == 'K') {
+            return (size_t) (val * 1024);
+        } else if (*end == 'm' || *end == 'M') {
+            return (size_t) (val * 1024 * 1024);
+        } else if (*end == 'g' || *end == 'G') {
+            return (size_t) (val * 1024 * 1024 * 1024);
+        }
+    }
+    return (size_t) (val * default_unit);
+}
+
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    return opt_mbuf;
+    return opt_mbuf_dyn;
     GGML_UNUSED(buft);
 }
 
@@ -2835,25 +2861,199 @@ static bool ggml_backend_hexagon_host_buffer_type_is_host(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
+struct ggml_backend_hexagon_alloc_buffer_n_plan_item {
+    size_t size;
+    int    first;
+    int    last;
+};
+
+using ggml_backend_hexagon_alloc_buffer_n_plan_t = std::vector<ggml_backend_hexagon_alloc_buffer_n_plan_item>;
+
+static const char * ggml_hexagon_kv_layer_suffix(const struct ggml_tensor * t) {
+    if (strncmp(t->name, "cache_", 6) != 0) {
+        return NULL;
+    }
+    const char * p = strstr(t->name, "_l");
+    if (!p || !isdigit((unsigned char)p[2])) {
+        return NULL;
+    }
+    return p;
+}
+
+struct ggml_backend_hexagon_alloc_unit {
+    size_t size;
+    int    first;
+    int    last;
+};
+
+static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buffer_n_plan(
+        ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
+    ggml_backend_hexagon_alloc_buffer_n_plan_t plan;
+
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t max_size  = opt_mbuf_static > 0 ? opt_mbuf_static : SIZE_MAX;
+
+    std::vector<ggml_backend_hexagon_alloc_unit> units;
+
+    int i = 0;
+    while (i < n_tensors) {
+        struct ggml_tensor * t = tensors[i];
+        size_t unit_size = 0;
+        int unit_first = i;
+        int unit_last = i + 1;
+
+        if (t->data == NULL && t->view_src == NULL) {
+            unit_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+        }
+
+        const char * layer_suffix = ggml_hexagon_kv_layer_suffix(t);
+
+        while (unit_last < n_tensors) {
+            struct ggml_tensor * next = tensors[unit_last];
+
+            if (next->view_src != NULL) {
+                unit_last++;
+                continue;
+            }
+
+            if (layer_suffix != NULL) {
+                const char * next_suffix = ggml_hexagon_kv_layer_suffix(next);
+                if (next_suffix != NULL && strcmp(layer_suffix, next_suffix) == 0) {
+                    if (next->data == NULL) {
+                        unit_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, next), alignment);
+                    }
+                    unit_last++;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        units.push_back({ unit_size, unit_first, unit_last });
+        i = unit_last;
+    }
+
+    size_t cur_buf_size  = 0;
+    int    cur_buf_first = 0;
+
+    for (const auto & unit : units) {
+        if (unit.size == 0) {
+            continue;
+        }
+
+        if (cur_buf_size > 0 && (cur_buf_size + unit.size) > max_size) {
+            plan.push_back({ cur_buf_size, cur_buf_first, unit.first });
+            cur_buf_size  = 0;
+            cur_buf_first = unit.first;
+        }
+
+        cur_buf_size += unit.size;
+    }
+
+    if (cur_buf_size > 0) {
+        plan.push_back({ cur_buf_size, cur_buf_first, n_tensors });
+    }
+
+    return plan;
+}
+
+static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer_n(
+        ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
+    const ggml_backend_hexagon_alloc_buffer_n_plan_t plan = ggml_backend_hexagon_alloc_buffer_n_plan(buft, tensors, n_tensors);
+
+    std::vector<ggml_backend_buffer_t> buffers;
+    buffers.reserve(plan.size());
+
+    for (const auto & item : plan) {
+        ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, item.size);
+        if (buffer == NULL) {
+            GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), item.size);
+            for (ggml_backend_buffer_t b : buffers) {
+                ggml_backend_buffer_free(b);
+            }
+            return NULL;
+        }
+
+        struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
+
+        struct ggml_tensor * t_failed = NULL;
+        for (int j = item.first; j < item.last; j++) {
+            struct ggml_tensor * t = tensors[j];
+            if (t->data == NULL) {
+                if (t->view_src == NULL) {
+                    if (ggml_tallocr_alloc(&tallocr, t) != GGML_STATUS_SUCCESS) {
+                        t_failed = t;
+                        break;
+                    }
+                } else if (t->buffer == NULL) {
+                    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+                        t_failed = t;
+                        break;
+                    }
+                }
+            } else {
+                if (t->view_src != NULL && t->buffer == NULL) {
+                    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+                        t_failed = t;
+                        break;
+                    }
+                }
+            }
+        }
+        if (t_failed != NULL) {
+            GGML_LOG_ERROR("%s: failed to initialize tensor %s\n", __func__, t_failed->name);
+            for (ggml_backend_buffer_t b : buffers) {
+                ggml_backend_buffer_free(b);
+            }
+            ggml_backend_buffer_free(buffer);
+            return NULL;
+        }
+
+        buffers.push_back(buffer);
+    }
+
+    if (buffers.empty()) {
+        return NULL;
+    }
+
+    if (buffers.size() == 1) {
+        return buffers[0];
+    }
+
+    return ggml_backend_multi_buffer_alloc_buffer(buffers.data(), buffers.size());
+}
+
+static size_t ggml_backend_hexagon_buffer_type_get_alloc_size_n(
+        ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
+    const ggml_backend_hexagon_alloc_buffer_n_plan_t plan = ggml_backend_hexagon_alloc_buffer_n_plan(buft, tensors, n_tensors);
+
+    size_t total = 0;
+    for (const auto & item : plan) {
+        total += item.size;
+    }
+    return total;
+}
+
 static ggml_backend_buffer_type_i ggml_backend_hexagon_buffer_type_interface = {
     /* .get_name            = */ ggml_backend_hexagon_buffer_type_name,
     /* .alloc_buffer        = */ ggml_backend_hexagon_buffer_type_alloc_buffer,
-    /* .alloc_buffer_n      = */ NULL,
+    /* .alloc_buffer_n      = */ ggml_backend_hexagon_buffer_type_alloc_buffer_n,
     /* .get_alignment       = */ ggml_backend_hexagon_buffer_type_get_alignment,
     /* .get_max_size        = */ ggml_backend_hexagon_buffer_type_get_max_size,
     /* .get_alloc_size      = */ ggml_backend_hexagon_buffer_type_get_alloc_size,
-    /* .get_alloc_size_n    = */ NULL,
+    /* .get_alloc_size_n    = */ ggml_backend_hexagon_buffer_type_get_alloc_size_n,
     /* .is_host             = */ ggml_backend_hexagon_buffer_type_is_host,
 };
 
 static ggml_backend_buffer_type_i ggml_backend_hexagon_host_buffer_type_interface = {
     /* .get_name            = */ ggml_backend_hexagon_buffer_type_name,
     /* .alloc_buffer        = */ ggml_backend_hexagon_host_buffer_type_alloc_buffer,
-    /* .alloc_buffer_n      = */ NULL,
+    /* .alloc_buffer_n      = */ ggml_backend_hexagon_buffer_type_alloc_buffer_n,
     /* .get_alignment       = */ ggml_backend_hexagon_buffer_type_get_alignment,
     /* .get_max_size        = */ ggml_backend_hexagon_buffer_type_get_max_size,
     /* .get_alloc_size      = */ ggml_backend_hexagon_buffer_type_get_alloc_size,
-    /* .get_alloc_size_n    = */ NULL,
+    /* .get_alloc_size_n    = */ ggml_backend_hexagon_buffer_type_get_alloc_size_n,
     /* .is_host             = */ ggml_backend_hexagon_host_buffer_type_is_host,
 };
 
@@ -8545,8 +8745,8 @@ static const char * ggml_backend_hexagon_device_get_description(ggml_backend_dev
 }
 
 static void ggml_backend_hexagon_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    *free  = 0;
-    *total = *free;
+    *free  = opt_mbuf_total;
+    *total = opt_mbuf_total;
 
     GGML_UNUSED(dev);
 }
@@ -9295,7 +9495,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     size_t MiB = 1024 * 1024;
 
     // Update vmem default
-    opt_vmem = opt_arch >= 75 ? HTP_OP_MAX_VMEM_DEFAULT : 3000 * MiB;
+    opt_vmem  = opt_arch >= 75 ? HTP_OP_MAX_VMEM_DEFAULT : 3000 * MiB;
     opt_dma64 = opt_arch > 79 && (!str_dma64 || atoi(str_dma64) != 0);
 
     auto RE_ICASE = std::regex_constants::icase;
@@ -9313,13 +9513,30 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
-    opt_fa_head_split = str_fa_head_split ? atoi(str_fa_head_split)        : opt_fa_head_split;
-    opt_gdn_select = str_gdn_select ? atoi(str_gdn_select)                 : opt_gdn_select;
-    opt_ar_select = str_ar_select ? atoi(str_ar_select)                   : opt_ar_select;
-    opt_ar_scatter = str_ar_scatter ? atoi(str_ar_scatter)                : opt_ar_scatter;
-    opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
-    opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
-    opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf) != 0                 : opt_hostbuf;
+    opt_fa_head_split = str_fa_head_split ? atoi(str_fa_head_split)       : opt_fa_head_split;
+    opt_gdn_select    = str_gdn_select    ? atoi(str_gdn_select)          : opt_gdn_select;
+    opt_ar_select     = str_ar_select     ? atoi(str_ar_select)           : opt_ar_select;
+    opt_ar_scatter    = str_ar_scatter    ? atoi(str_ar_scatter)          : opt_ar_scatter;
+
+    if (str_mbuf) {
+        const char * p = str_mbuf;
+        for (int idx = 0; idx < 3 && p && *p; idx++) {
+            while (*p == ' ') p++;
+            const char * comma = strchr(p, ',');
+            size_t len = comma ? (size_t)(comma - p) : strlen(p);
+            while (len > 0 && p[len - 1] == ' ') len--;
+            if (len > 0) {
+                std::string token(p, len);
+                if (idx == 0) opt_mbuf_dyn    = parse_size(token.c_str());
+                if (idx == 1) opt_mbuf_static = parse_size(token.c_str());
+                if (idx == 2) opt_mbuf_total  = parse_size(token.c_str());
+            }
+            if (!comma) break;
+            p = comma + 1;
+        }
+    }
+    opt_vmem    = str_vmem    ? parse_size(str_vmem)   : opt_vmem;
+    opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) != 0 : opt_hostbuf;
 
     // Parse device configuration
     const char * str_devices  = getenv("GGML_HEXAGON_DEVICES");
