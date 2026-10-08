@@ -4983,6 +4983,87 @@ void ggml_compute_forward_l2_norm(
     }
 }
 
+// ggml_compute_forward_l2_norm_back
+
+static void ggml_compute_forward_l2_norm_back_f32(
+    const ggml_compute_params * params,
+    ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0]; // gradients from forward pass output
+    const ggml_tensor * src1 = dst->src[1]; // x from forward pass
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst) && ggml_are_same_shape(src0, src1));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    GGML_ASSERT(eps >= 0.0f);
+
+    // y = x / max(norm(x), eps), with norm(x) = sqrt(sum(x*x))
+    // dx = scale*dy - scale^3 * x * dot(x,dy)   (norm > eps)
+    // dx = scale*dy                             (norm <= eps, scale is constant)
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const char * dy = (const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                const char * x  = (const char *) src1->data + i01*nb11 + i02*nb12 + i03*nb13;
+
+                ggml_float sum_xx  = 0.0;
+                ggml_float sum_xdy = 0.0;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    const float xi  = *(const float *) (x  + i00*nb10);
+                    const float dyi = *(const float *) (dy + i00*nb00);
+                    sum_xx  += (ggml_float)(xi * xi);
+                    sum_xdy += (ggml_float)(xi * dyi);
+                }
+
+                const float norm = sqrtf((float) sum_xx);
+
+                char * dx = (char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3;
+
+                if (norm > eps) {
+                    const float scale   = 1.0f / norm;
+                    const float scale_x = -scale*scale*scale * (float) sum_xdy;
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        const float xi  = *(const float *) (x  + i00*nb10);
+                        const float dyi = *(const float *) (dy + i00*nb00);
+                        *(float *) (dx + i00*nb0) = scale*dyi + scale_x*xi;
+                    }
+                } else {
+                    const float scale = 1.0f / eps;
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        const float dyi = *(const float *) (dy + i00*nb00);
+                        *(float *) (dx + i00*nb0) = scale*dyi;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_l2_norm_back(
+    const ggml_compute_params * params,
+    ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_l2_norm_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_out_prod
 
 static void ggml_compute_forward_out_prod_f32(

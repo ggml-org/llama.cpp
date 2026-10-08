@@ -8501,6 +8501,7 @@ struct test_l2_norm : public test_case {
         const std::array<int64_t, 4> ne_a = noncontig_rows ?
             std::array<int64_t, 4>{ ne[1], ne[0], ne[2], ne[3] } : ne;
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         if (noncontig_rows) {
@@ -8513,6 +8514,39 @@ struct test_l2_norm : public test_case {
         }
 
         ggml_tensor * out = ggml_l2_norm(ctx, a, eps);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_L2_NORM_BACK
+struct test_l2_norm_back : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const float eps;
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, eps);
+    }
+
+    test_l2_norm_back(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3},
+            float eps = 1e-6f)
+        : type(type), ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * grad = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(grad, "grad");
+
+        ggml_tensor * out = ggml_l2_norm_back(ctx, grad, a, eps);
         ggml_set_name(out, "out");
 
         return out;
@@ -11197,6 +11231,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    test_cases.emplace_back(new test_l2_norm_back());
 
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
