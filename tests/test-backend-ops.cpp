@@ -11427,6 +11427,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }, { 1, 0, 2, 3 })); // sum dst not-contiguous
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 10,  5,  4, 3 }, { 1, 0, 2, 3 })); // non-contiguous rows, 4D
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 11,  5,  6, 3 }, { 2, 0, 1, 3 })); // rotated dims, nb[0] != sizeof(float)
     test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, false));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, false, true));
