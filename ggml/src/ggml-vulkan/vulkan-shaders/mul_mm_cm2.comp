@@ -26,6 +26,7 @@
 #ifdef MULMAT_QUANT
 layout (constant_id = 7) const uint MmTypeA = 0;
 layout (constant_id = 8) const uint MmABlockBytes = 2;
+layout (constant_id = 9) const uint MmQuantK = 1;
 #endif
 
 #include "types.glsl"
@@ -386,7 +387,7 @@ void main() {
 #endif
 
 #ifdef MULMAT_QUANT
-    const uint qk = mm_quant_k();
+    const uint qk = MmQuantK;
 #else
     const uint qk = QUANT_K;
 #endif
