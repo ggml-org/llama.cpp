@@ -3748,7 +3748,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
         if (gdn_chunked && device->architecture == vk_device_architecture::AMD_RDNA4 &&
-            device->coopmat_support && device->coopmat_bf16_support && device->coopmat_maintenance1 &&
+            device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
             device->subgroup_size == 64) {
             const bool bf16acc = device->coopmat_bf16_acc_support;
             // V=64: state mirror in shared, 7 bindings
@@ -4422,11 +4422,11 @@ vk_device ggml_vk_get_device(size_t idx) {
 #endif
 
 #if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
-        // VK_EXT_cooperative_matrix_maintenance1 has no feature-enable struct in the
-        // Vulkan headers used here; enabling the extension is sufficient. Chain a
-        // features struct into pNext here if a newer SDK adds one.
+        VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT coopmat_m1_features {};
+        coopmat_m1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT;
         if (device->coopmat_support && device->coopmat_maintenance1) {
-            device_extensions.push_back("VK_EXT_cooperative_matrix_maintenance1");
+            last_struct->pNext = (VkBaseOutStructure *)&coopmat_m1_features;
+            last_struct = (VkBaseOutStructure *)&coopmat_m1_features;
         }
 #endif
 
@@ -4580,6 +4580,17 @@ vk_device ggml_vk_get_device(size_t idx) {
 #if defined(VK_KHR_cooperative_matrix)
         device->coopmat_support = device->coopmat_support && coopmat_features.cooperativeMatrix;
         device->coopmat1_fa_support = device->coopmat_support && device->subgroup_require_full_support;
+#endif
+
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+        device->coopmat_maintenance1 = device->coopmat_support && device->coopmat_maintenance1;
+        if (device->coopmat_maintenance1) {
+            device->coopmat_m1_reductions      = coopmat_m1_features.cooperativeMatrixReductions;
+            device->coopmat_m1_conversions     = coopmat_m1_features.cooperativeMatrixConversions;
+            device->coopmat_m1_per_element_ops = coopmat_m1_features.cooperativeMatrixPerElementOperations;
+            device->coopmat_m1_get_coordinate  = coopmat_m1_features.cooperativeMatrixGetCoordinate;
+            device_extensions.push_back(VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_EXTENSION_NAME);
+        }
 #endif
 
         if (coopmat2_support) {
@@ -5117,6 +5128,15 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     }
 #endif
 
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+    VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT coopmat_m1_features {};
+    coopmat_m1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT;
+    if (coopmat_support && coopmat_maintenance1_support) {
+        last_struct->pNext = (VkBaseOutStructure *)&coopmat_m1_features;
+        last_struct = (VkBaseOutStructure *)&coopmat_m1_features;
+    }
+#endif
+
     VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR shader_integer_dot_product_features {};
     shader_integer_dot_product_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
     if (integer_dot_product) {
@@ -5206,6 +5226,10 @@ static void ggml_vk_print_gpu_info(size_t idx) {
                        coopmat2_features.cooperativeMatrixBlockLoads;
 #else
     coopmat2_support = false;
+#endif
+
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+    coopmat_maintenance1_support = coopmat_maintenance1_support && coopmat_m1_features.cooperativeMatrixPerElementOperations;
 #endif
 
     coopmat2_decode_vector_support = coopmat2_decode_vector_support && coopmat2_decode_vector_features.cooperativeMatrixDecodeVector;

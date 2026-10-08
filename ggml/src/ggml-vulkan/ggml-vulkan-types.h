@@ -36,6 +36,21 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 } VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV;
 #endif
 
+#ifndef VK_EXT_cooperative_matrix_maintenance1
+#define VK_EXT_cooperative_matrix_maintenance1 1
+#define VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_EXTENSION_NAME "VK_EXT_cooperative_matrix_maintenance1"
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT ((VkStructureType)1000659000)
+typedef struct VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           cooperativeMatrixProperties2;
+    VkBool32           cooperativeMatrixReductions;
+    VkBool32           cooperativeMatrixConversions;
+    VkBool32           cooperativeMatrixPerElementOperations;
+    VkBool32           cooperativeMatrixGetCoordinate;
+} VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT;
+#endif
+
 #if __has_include(<spirv/unified1/spirv.hpp>)
 #    include <spirv/unified1/spirv.hpp>
 #elif __has_include(<spirv-headers/spirv.hpp>)
@@ -760,6 +775,10 @@ struct vk_device_struct {
     bool coopmat_bf16_support {};
     bool coopmat_bf16_acc_support {};
     bool coopmat_maintenance1 {};
+    bool coopmat_m1_reductions {};
+    bool coopmat_m1_conversions {};
+    bool coopmat_m1_per_element_ops {};
+    bool coopmat_m1_get_coordinate {};
     bool coopmat_support_16x16x16_f16acc {};
     bool coopmat_support_16x16x16_f32acc {};
     bool coopmat1_fa_support {};
