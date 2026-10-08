@@ -227,7 +227,7 @@ struct ggml_cuda_mmq_config {
 
 #undef CASE
 
-static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1 = GGML_PREC_Q8) {
+static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
         if (GGML_CUDA_CC_IS_GCN(cc)) {
             return ggml_cuda_mmq_get_config_gcn(type, J, fallback);
@@ -295,10 +295,8 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
     GGML_UNUSED_VARS(type, J, fallback, prec_src1);
 }
 
-// FIXME all of the host functions are missing prec_src1, this can lead to inconsitent behavior.
-
-static __host__ int ggml_cuda_mmq_get_type(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).type;
+static __host__ int ggml_cuda_mmq_get_type(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).type;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_type(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
@@ -313,48 +311,48 @@ static constexpr __device__ int ggml_cuda_mmq_get_occupancy(ggml_type type, int 
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).occupancy;
 }
 
-static __host__ int ggml_cuda_mmq_get_I(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).I;
+static __host__ int ggml_cuda_mmq_get_I(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).I;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_I(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).I;
 }
 
-static __host__ int ggml_cuda_mmq_get_J(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).J;
+static __host__ int ggml_cuda_mmq_get_J(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).J;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_J(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).J;
 }
 
-static __host__ ggml_cuda_mmq_sram_layout ggml_cuda_mmq_get_sram_layout(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).sram_layout;
+static __host__ ggml_cuda_mmq_sram_layout ggml_cuda_mmq_get_sram_layout(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).sram_layout;
 }
 
 static constexpr __device__ ggml_cuda_mmq_sram_layout ggml_cuda_mmq_get_sram_layout(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).sram_layout;
 }
 
-static __host__ int ggml_cuda_mmq_get_K_vram(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).K_vram;
+static __host__ int ggml_cuda_mmq_get_K_vram(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).K_vram;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_K_vram(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).K_vram;
 }
 
-static __host__ bool ggml_cuda_mmq_get_stream_k(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).stream_k;
+static __host__ bool ggml_cuda_mmq_get_stream_k(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).stream_k;
 }
 
 static constexpr __device__ bool ggml_cuda_mmq_get_stream_k(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).stream_k;
 }
 
-static __host__ int ggml_cuda_mmq_get_fallback(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).fallback;
+static __host__ int ggml_cuda_mmq_get_fallback(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_config(type, J, fallback, cc, prec_src1).fallback;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_fallback(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
@@ -363,8 +361,8 @@ static constexpr __device__ int ggml_cuda_mmq_get_fallback(ggml_type type, int J
 
 // ---------------------------------------------------------------------------------------------
 
-static __host__ int ggml_cuda_mmq_get_sram_stride(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_sram_stride(ggml_cuda_mmq_get_sram_layout(type, J, fallback, cc));
+static __host__ int ggml_cuda_mmq_get_sram_stride(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
+    return ggml_cuda_mmq_get_sram_stride(ggml_cuda_mmq_get_sram_layout(type, J, fallback, cc, prec_src1));
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_sram_stride(ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_Q8) {
