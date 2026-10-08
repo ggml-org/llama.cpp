@@ -38,13 +38,13 @@ using namespace cub;
 #endif      // GGML_CUDA_USE_CUB
 
 // max rows for the per-row DeviceTopK / CUB argsort path before switching to radix
-#ifndef GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK
+#ifndef GGML_CUDA_TOP_K_NROWS_THRESHOLD
 #    ifdef CUB_TOP_K_AVAILABLE
-#        define GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK 2
+#        define GGML_CUDA_TOP_K_NROWS_THRESHOLD 2
 #    else
-#        define GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK 1
+#        define GGML_CUDA_TOP_K_NROWS_THRESHOLD 1
 #    endif
-#endif // GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK
+#endif // GGML_CUDA_TOP_K_NROWS_THRESHOLD
 
 #ifdef CUB_TOP_K_AVAILABLE
 
@@ -318,7 +318,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 #else
     const bool bitonic_short    = ncols <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC;
 #endif // CUB_TOP_K_AVAILABLE
-    const bool bitonic_few_rows = nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK &&
+    const bool bitonic_few_rows = nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD &&
                                   ncols <= GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC_FEW_ROWS &&
                                   nrows <= ggml_cuda_info().devices[device].nsm;
 
@@ -331,7 +331,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         }
     }
 
-    if (nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK) {
+    if (nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD) {
         top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
         return;
     }
