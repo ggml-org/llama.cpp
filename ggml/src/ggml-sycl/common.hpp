@@ -64,7 +64,7 @@ extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_mmvq_wide;
-extern int g_ggml_sycl_enable_xmx;
+extern int g_ggml_sycl_enable_xmx_esimd;
 extern int g_ggml_sycl_prioritize_dmmv;
 
 // Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
@@ -343,7 +343,7 @@ struct ggml_sycl_device_info {
 const ggml_sycl_device_info & ggml_sycl_info();
 
 static inline bool ggml_sycl_xmx_enabled(int device) {
-    return g_ggml_sycl_enable_xmx && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+    return g_ggml_sycl_enable_xmx_esimd && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
 }
 
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
