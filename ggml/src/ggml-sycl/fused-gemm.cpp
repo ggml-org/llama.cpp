@@ -11,6 +11,8 @@
 
 namespace mx = sycl::ext::oneapi::experimental::matrix;
 
+// FG_ / fg_ is short for fused GEMM: the weights are dequantized inside the GEMM, into the XMX tiles.
+
 // A k step is one 32-value weight sub-block; iq3_s and the other superblock formats split their
 // superblock into steps of this width. The sub-groups of a work-group each walk their own K range
 // and are summed at the end.
@@ -174,13 +176,15 @@ template <int SG> static constexpr bool fg_built() {
 #endif
 }
 
-static size_t grouped_gemm_packed_capacity(size_t size) {
-    size_t capacity = 1;
-    while (capacity < size) {
-        capacity *= 2;
-    }
-    return capacity;
+// Upper bound on the tile count when total_rows rows are routed to n_as experts: the worst case gives
+// each expert one row and fills whole tiles with the rest. The bound depends only on the shape, not
+// on the routing, so the pool reuses one buffer every ubatch instead of keeping one per size seen.
+static constexpr int64_t grouped_gemm_max_tiles(int64_t total_rows, int64_t n_as, int64_t BN) {
+    return total_rows <= n_as ? total_rows : n_as + (total_rows - n_as) / BN;
 }
+// Tiles do not cross experts, so the bound is not ceil(total_rows / BN): 34 rows over 2 experts with
+// BN = 16 split 17 + 17 need 2 + 2 tiles, where the ceil gives 3.
+static_assert(grouped_gemm_max_tiles(34, 2, 16) == 4);
 
 // the device lists S with an f32 accumulator and output
 template <typename S> static bool fg_device_has_combo(const std::vector<mx::combination> & combinations) {
@@ -1041,10 +1045,12 @@ static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src
     const int64_t groups_m = (M + S::SG_ROWS - 1) / S::SG_ROWS;
     const int     Npad     = (int) (n_tiles * S::BN);
 
-    ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles_dev(pool, n_tiles);
+    const int64_t max_tiles = grouped_gemm_max_tiles(expert_row_offsets[n_as], n_as, S::BN);
+    GGML_ASSERT(n_tiles <= max_tiles);
+    ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles_dev(pool, max_tiles);
     SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(tiles_dev.get(), tiles.data(), n_tiles * sizeof(ggml_sycl_gg_tile))));
 
-    ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, grouped_gemm_packed_capacity((size_t) K * Npad));
+    ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * max_tiles * S::BN);
     grouped_gemm_pack_b<S>(src1, packed_b.get(), tiles_dev.get(), Npad, (int) K, stream);
 
     const typename S::tsb *   packed    = packed_b.get();
