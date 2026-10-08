@@ -1578,9 +1578,10 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
                                       const common_chat_input &         input,
                                       bool                              is_partial,
                                       const common_chat_parser_params & params) {
-    const common_peg_arena & parser = src_parser.empty() ?
-        build_chat_peg_parser([](common_chat_peg_builder & p) { return p.content(p.rest()) + p.end(); }) :
-        src_parser;
+    // both branches must be lvalues, a temporary here would copy the arena on every call
+    static const common_peg_arena content_only =
+        build_chat_peg_parser([](common_chat_peg_builder & p) { return p.content(p.rest()) + p.end(); });
+    const common_peg_arena & parser = src_parser.empty() ? content_only : src_parser;
 
     if (src_parser.empty()) {
         LOG_DBG("No parser definition detected, assuming pure content parser.");
