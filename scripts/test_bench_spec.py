@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 
+import contextlib
 import importlib.util
+import io
+import json
 import math
+import os
+import shlex
+import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -82,6 +90,192 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             "deadoff0-q8_0",
             "deadoff3-q8_0",
         ])
+
+    def test_curve_arms_enable_the_adaptive_controller(self) -> None:
+        with mock.patch.object(BENCH_SPEC, "MODE", "acceptance-curve"):
+            arms = BENCH_SPEC.build_arms()
+        self.assertEqual(arms[0]["extra"][:2], ["--spec-type", "draft-mtp-adaptive"])
+        for arm, depth in zip(arms[1:], ("3", "7")):
+            self.assertEqual(arm["extra"], ["--spec-type", "draft-mtp", "--spec-draft-n-min", depth,
+                                             "--spec-draft-n-max", depth])
+
+    def test_curve_publishes_only_validated_request_totals(self) -> None:
+        arm = {"name": "adaptive-3-7"}
+        run = {"draft_n": 100, "draft_n_accepted": 90}
+        prompt = {"id": "p", "tg_median": 10.0, "all_verifier_invariants_ok": True, "runs": [run]}
+        good = {"error": None, "spec_stats_missing": False, "prompts": [prompt]}
+        cases = [
+            (good, [], True),
+            ({**good, "error": "health_timeout", "prompts": []}, [], False),
+            ({**good, "prompts": [{**prompt, "all_verifier_invariants_ok": False}]}, [], False),
+            (good, None, False),
+            (good, ["xe: reset"], False),
+        ]
+        for drafted, accepted in ((100, 101), (True, 1), (100, False), (0, 0), (100, None), (1.5, 1)):
+            cases.append(({**good, "prompts": [{**prompt, "runs": [
+                {"draft_n": drafted, "draft_n_accepted": accepted}]}]}, [], False))
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(BENCH_SPEC, "RESULTS", Path(root)):
+            path = BENCH_SPEC.curve_path(arm["name"])
+            for launch, faults, valid in cases:
+                path.write_text("stale evidence", encoding="utf-8")
+                with mock.patch.multiple(BENCH_SPEC, run_arm=mock.Mock(return_value=launch),
+                                         dmesg_lines=mock.Mock(return_value=["boot"]),
+                                         new_gpu_faults=mock.Mock(return_value=faults)):
+                    result = BENCH_SPEC.run_arm_curve(arm, [{"id": "p"}])
+                self.assertEqual(result["error"] is None, valid)
+                self.assertEqual(path.exists(), valid)
+                if valid:
+                    self.assertEqual(BENCH_SPEC.json.loads(path.read_text()),
+                                     {"n_draft": 100, "n_accepted": 90, "prompt_id": "p"})
+
+    def test_curve_main_propagates_arm_failures(self) -> None:
+        arm = {"name": "adaptive-3-7"}
+        # Campaign startup now removes traces; tests must never touch real results.
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.multiple(BENCH_SPEC, MODE="acceptance-curve", REPEATS=1, RESULTS=Path(root),
+                                 load_prompts=mock.Mock(return_value=[{"id": "p"}]),
+                                 build_arms=mock.Mock(return_value=[arm]),
+                                 render_driver=mock.Mock(return_value="xe"),
+                                 gpu_holders=mock.Mock(return_value=[])):
+            for error, expected in (("health_timeout", 1), (None, 0)):
+                with mock.patch.object(BENCH_SPEC, "run_arm_curve",
+                                       return_value={"arm": arm, "error": error, "rows": 1}):
+                    self.assertEqual(BENCH_SPEC.main(), expected)
+
+    def test_curve_invalidates_all_old_traces_before_an_interrupted_campaign(self) -> None:
+        arms = [{"name": name} for name in ("adaptive-3-7", "fixed-3", "fixed-7")]
+        for interrupted in (False, True):
+            with tempfile.TemporaryDirectory() as root, \
+                    mock.patch.multiple(BENCH_SPEC, MODE="acceptance-curve", REPEATS=1, RESULTS=Path(root),
+                                        load_prompts=mock.Mock(return_value=[{"id": "p"}]),
+                                        build_arms=mock.Mock(return_value=arms),
+                                        render_driver=mock.Mock(return_value="xe"),
+                                        gpu_holders=mock.Mock(side_effect=[[], [] if interrupted else ["busy"]])):
+                paths = [BENCH_SPEC.curve_path(arm["name"]) for arm in arms]
+                for path in paths:
+                    path.write_text("old campaign", encoding="utf-8")
+
+                def launch(arm: dict, prompts: list) -> dict:
+                    if arm == arms[0]:
+                        self.assertTrue(all(not path.exists() for path in paths))
+                        paths[0].write_text("new adaptive", encoding="utf-8")
+                        return {"arm": arm, "error": None, "rows": 1}
+                    raise KeyboardInterrupt
+
+                with mock.patch.object(BENCH_SPEC, "run_arm_curve", side_effect=launch):
+                    if interrupted:
+                        with self.assertRaises(KeyboardInterrupt):
+                            BENCH_SPEC.main()
+                    else:
+                        self.assertEqual(BENCH_SPEC.main(), BENCH_SPEC.EXIT_GPU_BUSY)
+                self.assertTrue(paths[0].exists())
+                self.assertFalse(paths[1].exists())
+                self.assertFalse(paths[2].exists())
+
+    def test_curve_interleaves_actual_requests_and_trace_rows(self) -> None:
+        prompts = [{"id": name, "prompt": name} for name in ("p1", "p2", "p3")]
+        response = {"tokens": [11], "timings": {"predicted_n": 1, "draft_n": 7, "draft_n_accepted": 6},
+                    "completion_probabilities": [{"id": 11, "logprob": -0.1,
+                                                   "top_logprobs": [{"id": 11, "logprob": -0.1}]}]}
+        arm = {"name": "adaptive-3-7", "kv": "q8_0", "spec_label": "draft-mtp-adaptive"}
+        with tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.multiple(BENCH_SPEC, MODE="acceptance-curve", REPEATS=67, RESULTS=Path(root),
+                                    start_server=mock.Mock(), stop_server=mock.Mock(),
+                                    wait_health=mock.Mock(return_value=True),
+                                    apply_chat_template=mock.Mock(side_effect=lambda messages: messages[0]["content"]),
+                                    scan_log=mock.Mock(return_value={}),
+                                    dmesg_lines=mock.Mock(return_value=["boot"])), \
+                mock.patch.object(BENCH_SPEC, "post_completion", return_value=response) as post, \
+                mock.patch.object(BENCH_SPEC.time, "sleep"):
+            result = BENCH_SPEC.run_arm_curve(arm, prompts)
+            self.assertIsNone(result["error"])
+            rows = [json.loads(line) for line in BENCH_SPEC.curve_path(arm["name"]).read_text().splitlines()]
+        expected = [prompt["id"] for prompt in prompts] * 67
+        self.assertEqual([call.args[0] for call in post.call_args_list], ["p1", *expected])  # warmup discarded
+        self.assertEqual([row["prompt_id"] for row in rows], expected)
+        tail = [row["prompt_id"] for row in rows[-50:]]
+        self.assertEqual(sorted(tail.count(prompt["id"]) for prompt in prompts), [16, 17, 17])
+
+    def test_stop_server_reaps_children_without_signalling_its_own_group(self) -> None:
+        for shared in (False, True):
+            proc = mock.Mock(pid=1234)
+            proc.poll.return_value = None
+            proc.wait.side_effect = [subprocess.TimeoutExpired("server", 20),
+                                     subprocess.TimeoutExpired("server", 10), 0]
+            with mock.patch.object(BENCH_SPEC.os, "getpgid", return_value=42 if shared else 1234), \
+                    mock.patch.object(BENCH_SPEC.os, "getpgrp", return_value=42), \
+                    mock.patch.object(BENCH_SPEC.os, "killpg") as killpg:
+                BENCH_SPEC.stop_server(proc)
+            signals = [signal.SIGINT, signal.SIGTERM, signal.SIGKILL]
+            if shared:
+                killpg.assert_not_called()
+                self.assertEqual(proc.send_signal.call_args_list, [mock.call(sig) for sig in signals])
+            else:
+                proc.send_signal.assert_not_called()
+                self.assertEqual(killpg.call_args_list, [mock.call(1234, sig) for sig in signals])
+            self.assertEqual(proc.wait.call_args_list, [mock.call(timeout=t) for t in (20, 10, 5)])
+
+    @unittest.skipUnless(sys.platform == "linux" and shutil.which("timeout"), "requires Linux and timeout")
+    def test_curve_wrapper_hard_timeout_kills_server_before_service_restore(self) -> None:
+        # Use real process groups and SIGKILL, but fake the server and service commands.
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            driver = root / "driver.py"
+            driver.write_text('''import importlib.util, json, os, shlex, signal, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("bench", os.environ["HARNESS_PATH"])
+bench = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bench)
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+bench.server_command = lambda arm: "exec " + shlex.join([sys.executable, "-c",
+    "import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
+child = bench.start_server({}, Path(os.environ["TEST_ROOT"]) / "server.log")
+Path(os.environ["TEST_ROOT"], "child.json").write_text(json.dumps({
+    "pid": child.pid, "pgid": os.getpgid(child.pid), "parent_pgid": os.getpgrp(), "mode": bench.MODE}))
+while True:
+    time.sleep(60)
+''', encoding="utf-8")
+            commands = {
+                "python3": f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(driver))}\n",
+                "timeout": f"#!/bin/sh\nshift 3\nexec {shlex.quote(shutil.which('timeout'))} "
+                           '--signal=INT --kill-after=0.2s 2s "$@"\n',
+                "sudo": '#!/bin/sh\nshift\nexec "$@"\n',
+                "systemctl": f"#!{sys.executable}\n" + '''import json, os, sys
+from pathlib import Path
+root = Path(os.environ["TEST_ROOT"])
+if sys.argv[1] == "start":
+    child = json.loads((root / "child.json").read_text())
+    stat = Path(f"/proc/{child['pid']}/stat")
+    child["state_at_restore"] = stat.read_text().split()[2] if stat.exists() else "gone"
+    (root / "restored.json").write_text(json.dumps(child))
+''',
+            }
+            for name, content in commands.items():
+                path = root / name
+                path.write_text(content, encoding="utf-8")
+                path.chmod(0o755)
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "HARNESS_PATH": str(MODULE_PATH.resolve()), "TEST_ROOT": str(root),
+                   "SERVER_BIN": "unused", "MODEL": "unused", "MODE": "baseline", "SKIP_STOP_SERVICE": "0"}
+            try:
+                result = subprocess.run(["bash", str(MODULE_PATH.parents[1] / "run-spec-curve.sh")],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 137, result.stderr)
+                observed = json.loads((root / "restored.json").read_text())
+                self.assertEqual(observed["mode"], "acceptance-curve")
+                self.assertEqual(observed["pgid"], observed["parent_pgid"])
+                self.assertIn(observed["state_at_restore"], ("Z", "gone"))
+            finally:
+                # Also clean up if a regression detaches the fake server from timeout.
+                if (root / "child.json").exists():
+                    child = json.loads((root / "child.json").read_text())
+                    try:
+                        os.kill(child["pid"], signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_scan_log_records_hard_off_trips(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
