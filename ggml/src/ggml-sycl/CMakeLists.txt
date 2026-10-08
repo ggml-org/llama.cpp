@@ -221,4 +221,27 @@ if (GGML_SYCL_DEVICE_ARCH)
         "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
+
+    # The XMX dequant-GEMM tiles need the sub-group size of the target: 8 on Xe-HPG (DG2, ARL-H),
+    # 16 on Xe-HPC and Xe2 or newer. ocloc fails on the other size, so build only the one that fits.
+    # 0 (unknown name, mixed list, or no XMX) builds no XMX tile and the path stays off.
+    set(_ggml_sycl_xmx_sg "")
+    string(TOLOWER "${GGML_SYCL_DEVICE_ARCH}" _ggml_sycl_archs)
+    string(REPLACE "," ";" _ggml_sycl_archs "${_ggml_sycl_archs}")
+    foreach(_arch IN LISTS _ggml_sycl_archs)
+        if (_arch MATCHES "^(dg2|acm|ats-m|arl-h|xe-hpg|12\\.5[567]\\.|12\\.74\\.)")
+            set(_sg 8)
+        elseif (_arch MATCHES "^(pvc|bmg|lnl|ptl|wcl|nvl|cri|xe2|xe3|xe-hpc|12\\.60\\.|20\\.|30\\.)")
+            set(_sg 16)
+        else()
+            set(_sg 0)
+        endif()
+        if (_ggml_sycl_xmx_sg STREQUAL "" OR _ggml_sycl_xmx_sg EQUAL _sg)
+            set(_ggml_sycl_xmx_sg ${_sg})
+        else()
+            set(_ggml_sycl_xmx_sg 0)
+        endif()
+    endforeach()
+    message(STATUS "GGML_SYCL_DEVICE_ARCH: XMX dequant-GEMM sub-group size ${_ggml_sycl_xmx_sg} (0 = off)")
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_XMX_AOT_SG=${_ggml_sycl_xmx_sg})
 endif()
