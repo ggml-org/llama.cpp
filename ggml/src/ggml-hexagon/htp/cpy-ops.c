@@ -141,6 +141,21 @@ DEFINE_CPY_RESHAPE(f32,  float, 4)
 DEFINE_CPY_RESHAPE(f16, __fp16, 2)
 DEFINE_CPY_RESHAPE(i32, int32_t, 4)
 
+// Advance a (r, i01, i02, i03) row cursor by n rows that do not cross a dim-1 run.
+#define cpy_rows_advance(r, i01, i02, i03, n) \
+    do {                                      \
+        (r) += (n);                           \
+        (i01) += (n);                         \
+        if ((i01) == ne01) {                  \
+            (i01) = 0;                        \
+            if (++(i02) == ne02) {            \
+                (i02) = 0;                    \
+                (i03)++;                      \
+            }                                 \
+        }                                     \
+    } while (0)
+
+// Move several rows instead of single row
 #define DEFINE_CPY_CONVERT_SAMESHAPE(NAME, CONV_FUNC)                                        \
 static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, void * data) { \
     struct htp_copy_context * ct = (struct htp_copy_context *) data;                         \
@@ -151,7 +166,6 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
     const uint32_t ir0 = ct->row_start + dr * ith;                                           \
     const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);                           \
     if (ir0 >= ir1) return;                                                                  \
-    const uint32_t nrows_thread = ir1 - ir0;                                                 \
                                                                                              \
     dma_queue * dma_q = octx->ctx->dma[ith];                                                 \
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                   \
@@ -159,6 +173,9 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
     const struct htp_copy_convert_params * cvt = &ct->kparams->u.convert;                    \
     const uint32_t src0_buf_size = cvt->src0_buf_size;                                       \
     const uint32_t dst_buf_size  = cvt->dst_buf_size;                                        \
+    const uint32_t src0_row_stride = cvt->src0_row_stride;                                   \
+    const uint32_t dst_row_stride  = cvt->dst_row_stride;                                    \
+    const uint32_t blk_rows        = cvt->blk_rows;                                          \
     uint8_t * vtcm_src0_base = ct->vtcm_src0 + ith * cvt->spad0_size_per_thread;             \
     uint8_t * vtcm_dst_base  = ct->vtcm_dst  + ith * cvt->spad1_size_per_thread;             \
     const uint32_t src0_row_size = ne00 * ct->kparams->src0_type_size;                       \
@@ -170,62 +187,43 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
     uint32_t i02 = fastdiv(rem, &cvt->div_ne01);                                             \
     uint32_t i01 = rem - i02 * ne01;                                                         \
                                                                                              \
-    uint32_t f_i01 = i01, f_i02 = i02, f_i03 = i03;                                          \
-    dma_addr_t f_src0_addr = src0->data + f_i01*nb01 + f_i02*nb02 + f_i03*nb03;              \
+    uint32_t f_r = ir0, f_i01 = i01, f_i02 = i02, f_i03 = i03;                               \
+    uint32_t c_r = ir0, c_i01 = i01, c_i02 = i02, c_i03 = i03;                               \
                                                                                              \
-    uint32_t c_i01 = i01, c_i02 = i02, c_i03 = i03;                                          \
-    dma_addr_t c_dst_addr = dst->data + c_i01*nb1 + c_i02*nb2 + c_i03*nb3;                   \
-                                                                                             \
-    for (uint32_t r = 0; r < nrows_thread && r < 2; ++r) {                                   \
-        uint8_t * src_spad = vtcm_src0_base + r * src0_buf_size;                             \
-        uint8_t * dst_spad = vtcm_dst_base  + r * dst_buf_size;                              \
+    for (uint32_t b = 0; b < 2 && f_r < ir1; ++b) {                                          \
+        uint8_t * src_spad = vtcm_src0_base + b * src0_buf_size;                             \
+        uint8_t * dst_spad = vtcm_dst_base  + b * dst_buf_size;                              \
+        const uint32_t nr = MIN(blk_rows, MIN(ne01 - f_i01, ir1 - f_r));                     \
+        dma_addr_t f_src0_addr = src0->data + f_i01*nb01 + f_i02*nb02 + f_i03*nb03;          \
         dma_queue_push(dma_q, dma_make_data(dst->data, dst_spad),                            \
                        dst_row_size, dst_buf_size, dst_row_size, 0);                         \
         dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                          \
-                       src0_buf_size, src0_row_size, src0_row_size, 1);                      \
-        f_src0_addr += nb01;                                                                 \
-        if (++f_i01 == ne01) {                                                               \
-            f_i01 = 0;                                                                       \
-            if (++f_i02 == ne02) {                                                           \
-                f_i02 = 0;                                                                   \
-                f_i03++;                                                                     \
-            }                                                                                \
-            f_src0_addr = src0->data + f_i02*nb02 + f_i03*nb03;                              \
-        }                                                                                    \
+                       src0_row_stride, nb01, src0_row_size, nr);                            \
+        cpy_rows_advance(f_r, f_i01, f_i02, f_i03, nr);                                      \
     }                                                                                        \
                                                                                              \
-    for (uint32_t r = 0; r < nrows_thread; ++r) {                                            \
+    for (uint32_t blk = 0; c_r < ir1; ++blk) {                                               \
+        const uint32_t nr = MIN(blk_rows, MIN(ne01 - c_i01, ir1 - c_r));                     \
         uint8_t * dst_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).src;               \
         uint8_t * src_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;               \
                                                                                              \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);                     \
-        CONV_FUNC(dst_spad, src_spad, ne00);                                                 \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);                      \
-                                                                                             \
-        dma_queue_push(dma_q, dma_make_data(c_dst_addr, dst_spad),                           \
-                       dst_row_size, dst_buf_size, dst_row_size, 1);                         \
-        c_dst_addr += nb1;                                                                   \
-        if (++c_i01 == ne01) {                                                               \
-            c_i01 = 0;                                                                       \
-            if (++c_i02 == ne02) {                                                           \
-                c_i02 = 0;                                                                   \
-                c_i03++;                                                                     \
-            }                                                                                \
-            c_dst_addr = dst->data + c_i02*nb2 + c_i03*nb3;                                  \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                   \
+        for (uint32_t r = 0; r < nr; ++r) {                                                  \
+            CONV_FUNC(dst_spad + r * dst_row_stride, src_spad + r * src0_row_stride, ne00);  \
         }                                                                                    \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                    \
                                                                                              \
-        if (r + 2 < nrows_thread) {                                                          \
+        dma_addr_t c_dst_addr = dst->data + c_i01*nb1 + c_i02*nb2 + c_i03*nb3;               \
+        dma_queue_push(dma_q, dma_make_data(c_dst_addr, dst_spad),                           \
+                       nb1, dst_row_stride, dst_row_size, nr);                               \
+        cpy_rows_advance(c_r, c_i01, c_i02, c_i03, nr);                                      \
+                                                                                             \
+        if (f_r < ir1) {                                                                     \
+            const uint32_t fnr = MIN(blk_rows, MIN(ne01 - f_i01, ir1 - f_r));                \
+            dma_addr_t f_src0_addr = src0->data + f_i01*nb01 + f_i02*nb02 + f_i03*nb03;      \
             dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                      \
-                           src0_buf_size, src0_row_size, src0_row_size, 1);                  \
-            f_src0_addr += nb01;                                                             \
-            if (++f_i01 == ne01) {                                                           \
-                f_i01 = 0;                                                                   \
-                if (++f_i02 == ne02) {                                                       \
-                    f_i02 = 0;                                                               \
-                    f_i03++;                                                                 \
-                }                                                                            \
-                f_src0_addr = src0->data + f_i02*nb02 + f_i03*nb03;                          \
-            }                                                                                \
+                           src0_row_stride, nb01, src0_row_size, fnr);                       \
+            cpy_rows_advance(f_r, f_i01, f_i02, f_i03, fnr);                                 \
         }                                                                                    \
     }                                                                                        \
     dma_queue_flush(dma_q);                                                                  \

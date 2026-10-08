@@ -6751,7 +6751,7 @@ static bool ggml_hexagon_precompute_cpy_params(
 
     const uint32_t n_threads = sess->n_threads > 0 ? (uint32_t) sess->n_threads : 4;
     struct htp_copy_convert_vtcm_layout layout;
-    htp_copy_convert_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], src_type_size, dst_type_size, n_threads);
+    htp_copy_convert_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], src_type_size, dst_type_size, n_threads);
 
     if (sess->vtcm_size > 0 && layout.total_bytes > sess->vtcm_size) {
         return false;
@@ -6765,6 +6765,9 @@ static bool ggml_hexagon_precompute_cpy_params(
     kparams->u.convert.dst_buf_size  = layout.dst_buf_size;
     kparams->u.convert.spad0_size_per_thread = layout.spad0_size_per_thread;
     kparams->u.convert.spad1_size_per_thread = layout.spad1_size_per_thread;
+    kparams->u.convert.src0_row_stride = layout.src0_row_stride;
+    kparams->u.convert.dst_row_stride  = layout.dst_row_stride;
+    kparams->u.convert.blk_rows        = layout.blk_rows;
     kparams->u.convert.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
     kparams->u.convert.div_ne02_ne01 = init_fastdiv_values((uint32_t) (src0->ne[2] * src0->ne[1]));
 

@@ -19,6 +19,9 @@ struct htp_copy_convert_params {
     uint32_t              dst_buf_size;
     uint32_t              spad0_size_per_thread;
     uint32_t              spad1_size_per_thread;
+    uint32_t              src0_row_stride;  // row pitch in the VTCM buffers
+    uint32_t              dst_row_stride;
+    uint32_t              blk_rows;         // rows moved per DMA descriptor
     struct fastdiv_values div_ne01;
     struct fastdiv_values div_ne02_ne01;
 };
@@ -48,7 +51,15 @@ struct htp_copy_kernel_params {
     } u;
 };
 
+// Size of one VTCM staging buffer: big enough that a DMA descriptor moves many short
+// rows at once. The copy kernels keep four per thread (two in flight each way), about
+// 1 MB of VTCM with 8 threads.
+#define HTP_COPY_VTCM_BLK_BYTES (32 * 1024)
+
 struct htp_copy_convert_vtcm_layout {
+    uint32_t src0_row_stride;
+    uint32_t dst_row_stride;
+    uint32_t blk_rows;
     uint32_t src0_buf_size;
     uint32_t dst_buf_size;
     uint32_t spad0_size_per_thread;
@@ -56,15 +67,30 @@ struct htp_copy_convert_vtcm_layout {
     uint32_t total_bytes;
 };
 
+// ne01 bounds a block: rows of one block share the dim-1 stride.
 static inline void htp_copy_convert_vtcm_layout_build(
     struct htp_copy_convert_vtcm_layout * layout,
     uint32_t ne00,
+    uint32_t ne01,
     uint32_t src_type_size,
     uint32_t dst_type_size,
     uint32_t n_threads) {
 
-    layout->src0_buf_size = hex_round_up(ne00 * src_type_size, 256);
-    layout->dst_buf_size  = hex_round_up(ne00 * dst_type_size, 256);
+    layout->src0_row_stride = hex_round_up(ne00 * src_type_size, 256);
+    layout->dst_row_stride  = hex_round_up(ne00 * dst_type_size, 256);
+
+    const uint32_t max_row = layout->src0_row_stride > layout->dst_row_stride ? layout->src0_row_stride : layout->dst_row_stride;
+    uint32_t blk_rows = HTP_COPY_VTCM_BLK_BYTES / max_row;
+    if (blk_rows > ne01) {
+        blk_rows = ne01;
+    }
+    if (blk_rows == 0) {
+        blk_rows = 1;
+    }
+    layout->blk_rows = blk_rows;
+
+    layout->src0_buf_size = blk_rows * layout->src0_row_stride;
+    layout->dst_buf_size  = blk_rows * layout->dst_row_stride;
     layout->spad0_size_per_thread = 2 * layout->src0_buf_size;
     layout->spad1_size_per_thread = 2 * layout->dst_buf_size;
     layout->total_bytes = n_threads * (layout->spad0_size_per_thread + layout->spad1_size_per_thread);
