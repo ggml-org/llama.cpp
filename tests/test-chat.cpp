@@ -13,6 +13,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "log.h"
+#include "peg-parser/simple-tokenize.h"
 
 #include <algorithm>
 #include <exception>
@@ -1101,39 +1102,6 @@ static bool g_force_reconstruction_test = false;
 static void test_peg_parser(common_chat_templates *                      tmpls,
                             const std::function<void(peg_test_case &)> & init,
                             bool                                         detailed_debug) {
-    // UTF-8-safe truncation helper (same as in test_parser_with_streaming)
-    constexpr auto utf8_truncate_safe_len = [](const std::string_view s) -> size_t {
-        auto len = s.size();
-        if (len == 0) {
-            return 0;
-        }
-        auto i = len;
-        for (size_t back = 0; back < 4 && i > 0; ++back) {
-            --i;
-            unsigned char c = s[i];
-            if ((c & 0x80) == 0) {
-                return len;
-            }
-            if ((c & 0xC0) == 0xC0) {
-                size_t expected_len = 0;
-                if ((c & 0xE0) == 0xC0) {
-                    expected_len = 2;
-                } else if ((c & 0xF0) == 0xE0) {
-                    expected_len = 3;
-                } else if ((c & 0xF8) == 0xF0) {
-                    expected_len = 4;
-                } else {
-                    return i;
-                }
-                if (len - i >= expected_len) {
-                    return len;
-                }
-                return i;
-            }
-        }
-        return len - std::min(len, size_t(3));
-    };
-
     peg_test_case tc;
     init(tc);
     if (tc.params.messages.empty()) {
@@ -1165,21 +1133,11 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     common_chat_msg msg_prev;
     msg_accum.role = msg_prev.role = "assistant";
 
-    // Feed the input one codepoint at a time, like streamed tokens, and check that the deltas add up
-    size_t fed      = 0;
-    bool   finished = false;
-    for (size_t i = 1; i <= tc.input.size(); ++i) {
-        size_t safe_len = utf8_truncate_safe_len(std::string_view(tc.input).substr(0, i));
-        if (safe_len <= fed) {
-            continue;
-        }
-        common_chat_input chunk(tc.input.substr(fed, safe_len - fed));
-        fed = safe_len;
-
-        bool is_partial = fed < tc.input.size() || tc.is_partial;
-        if (!is_partial) {
-            finished = true;
-        }
+    // Feed the input in token-like pieces, as the server would, and check that the deltas add up
+    const auto pieces = simple_tokenize(tc.input);
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        bool is_partial = i + 1 < pieces.size() || tc.is_partial;
+        common_chat_input chunk(pieces[i]);
         const common_chat_msg & msg_current = is_partial ? session.feed(chunk) : session.finish(chunk);
 
         for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
@@ -1218,7 +1176,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     if (!tc.is_partial) {
-        if (!finished) {
+        if (pieces.empty()) {
             session.finish();
         }
         assert_msg_equals(tc.expect, session.msg(), true);
