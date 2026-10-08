@@ -16,6 +16,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_DECISION,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
@@ -107,7 +108,7 @@ struct task_result_state {
     std::vector<common_chat_msg_diff> diffs;
     common_chat_parser_params chat_parser_params;
     common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
+    common_chat_input generated_input; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
 
@@ -127,7 +128,7 @@ struct task_result_state {
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
-        const std::string & text_added,
+        const common_chat_input & added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls = false);
@@ -148,6 +149,8 @@ struct server_task {
     // temporary store of child tasks for scheduling
     // note: accessing to elements is invalid after the task is moved to server_slot
     std::vector<server_task> child_tasks;
+    // if set on a parent, the children have their own prompt and only share its first n_tokens_shared tokens
+    int32_t n_tokens_shared = 0;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -172,6 +175,32 @@ struct server_task {
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
+    // used by SERVER_TASK_TYPE_DECISION
+    // where to read the model output of each option, exactly one of the two lists is used
+    struct decision {
+        std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
+        std::vector<int32_t>     label_groups; // if set, number of labels per output, the output is their max
+        std::vector<int32_t>     markers;      // embeddings[column] at these prompt positions
+        int32_t                  column = 0;
+        // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
+        int32_t                  pointer = -1;
+
+        // first prompt position that is read, -1 if none
+        int32_t pos_first() const {
+            int32_t pos = pointer;
+            for (const int32_t marker : markers) {
+                pos = pos < 0 ? marker : std::min(pos, marker);
+            }
+            return pos;
+        }
+
+        // for a joint head: one value per prompt token, see llama_batch_ext_set_decision_order()
+        // the scores are the first n_scores rows of the embeddings
+        std::vector<int32_t> order;
+        int32_t              n_scores = 0;
+    };
+    decision decision;
+
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
 
@@ -188,6 +217,8 @@ struct server_task {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
                 return true;
+            case SERVER_TASK_TYPE_DECISION:
+                return !decision.markers.empty() || !decision.order.empty();
             default:
                 return false;
         }
@@ -198,6 +229,8 @@ struct server_task {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
                 return true;
+            case SERVER_TASK_TYPE_DECISION:
+                return !decision.labels.empty();
             default:
                 return false;
         }
@@ -318,7 +351,7 @@ struct completion_token_output {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    std::string content;
+    common_chat_input content;
     llama_tokens tokens;
 
     bool stream;
@@ -393,8 +426,8 @@ struct server_task_result_cmpl_final : server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
-    std::string  content;
-    llama_tokens tokens;
+    common_chat_input content;
+    llama_tokens      tokens;
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
@@ -468,6 +501,14 @@ struct server_task_result_embd : server_task_result {
 
 struct server_task_result_rerank : server_task_result {
     float score = -1e6;
+
+    int32_t n_tokens;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_decision : server_task_result {
+    std::vector<float> scores; // one raw model output per option
 
     int32_t n_tokens;
 

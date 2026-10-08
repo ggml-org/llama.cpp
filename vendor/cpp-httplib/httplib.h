@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.58.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003a00"
+#define CPPHTTPLIB_VERSION "0.60.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003c00"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -831,12 +831,19 @@ inline from_chars_result<double> from_chars(const char *first, const char *last,
   return {p, std::errc{}};
 }
 
-inline bool parse_port(const char *s, size_t len, int &port) {
+inline bool parse_int_in_range(const char *s, size_t len, int lo, int hi,
+                               int &out) {
   int val = 0;
   auto r = from_chars(s, s + len, val);
-  if (r.ec != std::errc{} || val < 1 || val > 65535) { return false; }
-  port = val;
+  if (r.ec != std::errc{} || r.ptr != s + len || val < lo || val > hi) {
+    return false;
+  }
+  out = val;
   return true;
+}
+
+inline bool parse_port(const char *s, size_t len, int &port) {
+  return parse_int_in_range(s, len, 1, 65535, port);
 }
 
 inline bool parse_port(const std::string &s, int &port) {
@@ -937,6 +944,48 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   }
 
   return true;
+}
+
+// Resolves a relative-path or query-only Location value against the path of
+// the request being redirected (RFC 3986 section 5.2). Absolute URIs and
+// references starting with '/' are returned unchanged.
+inline std::string resolve_relative_location(const std::string &location,
+                                             const std::string &base) {
+  if (location.empty() || location[0] == '/') { return location; }
+
+  // A ':' in the first segment means the value has a scheme.
+  if (location.find(':') < location.find_first_of("/?#")) { return location; }
+
+  if (location[0] == '#') { return base.substr(0, base.find('#')) + location; }
+
+  auto base_path = base.substr(0, base.find_first_of("?#"));
+  if (location[0] == '?') { return base_path + location; }
+
+  if (base_path.empty() || base_path[0] != '/') { base_path = "/"; }
+  auto merged = base_path.substr(0, base_path.rfind('/') + 1) + location;
+
+  // Remove "." and ".." segments from the merged path.
+  auto path_end = (std::min)(merged.find_first_of("?#"), merged.size());
+  std::string path;
+  size_t i = 0;
+  while (i < path_end) {
+    auto next = (std::min)(merged.find('/', i + 1), path_end);
+    auto segment = merged.substr(i + 1, next - i - 1);
+    auto is_last = next == path_end;
+    if (segment == "." || segment == "..") {
+      if (segment == "..") {
+        path.erase((std::min)(path.rfind('/'), path.size()));
+      }
+      if (is_last) { path += '/'; }
+    } else {
+      path += '/';
+      path += segment;
+    }
+    i = next;
+  }
+  if (path.empty()) { path = "/"; }
+
+  return path + merged.substr(path_end);
 }
 
 } // namespace detail
@@ -1842,6 +1891,7 @@ struct Response {
   ContentProvider content_provider_;
   ContentProviderResourceReleaser content_provider_resource_releaser_;
   bool is_chunked_content_provider_ = false;
+  bool is_file_content_provider_ = false;
   bool content_provider_success_ = false;
   std::string file_content_path_;
   std::string file_content_content_type_;
@@ -3399,6 +3449,9 @@ private:
 
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   bool enable_windows_cert_verification_ = true;
+  // Like ca_cert_store_set_, tracks what ctx_ cannot report back: whether
+  // set_server_certificate_verifier() installed a verifier.
+  bool server_certificate_verifier_set_ = false;
 #endif
 
   friend class ClientImpl;
@@ -3914,6 +3967,7 @@ bool is_field_vchar(char c);
 bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
 bool is_field_valid(const std::string &name, const std::string &value);
+bool is_request_target(const std::string &s);
 
 } // namespace fields
 } // namespace detail
@@ -4322,7 +4376,8 @@ public:
   void stop();
 
 private:
-  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms);
+  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms,
+                      bool &has_data, bool &has_id);
   void run_event_loop();
   void dispatch_event(const SSEMessage &msg);
   bool should_reconnect(int count) const;

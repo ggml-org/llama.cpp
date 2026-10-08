@@ -25,15 +25,9 @@ void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_mimo2::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -101,9 +95,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     const float v_scale = hparams.f_attn_value_scale;
-    const bool emit_h_nextn = cparams.embeddings_nextn;
     const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
-    const bool crop_last_layer = inp_out_ids && (!emit_h_nextn || cparams.embeddings_nextn_masked) && !extract_final_inp;
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
@@ -185,7 +177,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
             }
         }
 
-        if (il == n_layer - 1 && crop_last_layer) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids) && !extract_final_inp) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -236,18 +228,17 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
     cur = inpL;
     if (extract_final_inp) {
         res->t_layer_inp[n_layer] = cur;
-        if (inp_out_ids && (!emit_h_nextn || cparams.embeddings_nextn_masked)) {
+        if (crop_before_nextn(inp_out_ids)) {
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
         }
     }
 
-    if (emit_h_nextn) {
-        cb(cur, "h_nextn", -1);
-        res->t_h_nextn = cur;
+    // pre-norm state for MTP; set even when extraction is off
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
 
-        if (!cparams.embeddings_nextn_masked && inp_out_ids) {
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-        }
+    if (crop_after_nextn(inp_out_ids)) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
     cur = build_norm(cur,

@@ -106,14 +106,14 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
 
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
                 const auto   params   = common_chat_tool_parameters(function);
 
                 auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
                 auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
-                auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
+                auto args       = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", params));
 
                 // recipient in role header
                 //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
@@ -123,7 +123,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
                 //   <|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
                 auto tool_in_channel = p.tool(p.tool_open(channel + func_name + constraint + p.literal("<|message|>")) + args);
 
-                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_in_role | tool_in_channel);
             });
 
             auto tool_call  = p.trigger_rule("tool-call", tool_choice);
