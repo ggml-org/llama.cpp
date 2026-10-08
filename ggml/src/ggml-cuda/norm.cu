@@ -13,33 +13,37 @@ static __global__ void norm_f32(
 
     ggml_cuda_pdl_sync();
 
-    // grid.y and grid.z are clamped to the CUDA limit, iterate over the excess channels/samples
     for (int sample = blockIdx.z; sample < nsamples; sample += gridDim.z) {
         for (int channel = blockIdx.y; channel < nchannels; channel += gridDim.y) {
             const float * xc   = x   + sample*stride_sample + channel*stride_channel + row*stride_row;
             float       * dstc = dst + ((sample*nchannels + channel)*nrows + row)*ncols;
 
-            float2 mean_var = make_float2(0.0f, 0.0f);
+            const float k = xc[0];
 
+            float2 mean_var = make_float2(0.0f, 0.0f);
             for (int col = tid; col < ncols; col += block_size) {
-                const float xi = xc[col];
-                mean_var.x += xi;
-                mean_var.y += xi * xi;
+                mean_var.x += xc[col] - k;
+            }
+            mean_var = block_reduce<block_reduce_method::SUM, block_size>(mean_var, s_sum2);
+            const float mean_d = mean_var.x / ncols;   // mean of (x - k)
+
+            if constexpr (block_size > WARP_SIZE) {
+                __syncthreads();
             }
 
-            // sum up partial sums
-            mean_var = block_reduce<block_reduce_method::SUM, block_size>(mean_var, s_sum2);
-
-            const float mean = mean_var.x / ncols;
-            const float var = mean_var.y / ncols - mean * mean;
-            const float inv_std = rsqrtf(var + eps);
+            float2 sq_var = make_float2(0.0f, 0.0f);
+            for (int col = tid; col < ncols; col += block_size) {
+                const float d = (xc[col] - k) - mean_d;
+                sq_var.x += d * d;
+            }
+            sq_var = block_reduce<block_reduce_method::SUM, block_size>(sq_var, s_sum2);
+            const float inv_std = rsqrtf(sq_var.x / ncols + eps);
 
             for (int col = tid; col < ncols; col += block_size) {
-                dstc[col] = (xc[col] - mean) * inv_std;
+                dstc[col] = ((xc[col] - k) - mean_d) * inv_std;
             }
 
             if constexpr (block_size > WARP_SIZE) {
-                // sync is needed as we reuse s_sum2 across block_reduce invocations, see #26385
                 __syncthreads();
             }
         }
@@ -58,7 +62,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
     ggml_cuda_pdl_sync();
     for (int j = start; j < end; j += block_size) {
         tmp += x[j];
-    }
+    }   
 
     extern __shared__ float s_sum[];
     tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);

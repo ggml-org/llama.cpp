@@ -3583,17 +3583,19 @@ struct test_norm : public test_case {
     const bool v; // whether a is a non-contiguous view
     const float eps;
     const bool noncontig_rows;
+    const float constant;
 
     std::string vars() override {
-        return VARS_TO_STR5(type, ne, v, eps, noncontig_rows);
+        return VARS_TO_STR5(type, ne, v, eps, noncontig_rows) + ", constant=" + std::to_string(constant);
     }
 
     test_norm(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
             bool v = false,
             float eps = 1e-6f,
-            bool noncontig_rows = false)
-        : type(type), ne(ne), v(v), eps(eps), noncontig_rows(noncontig_rows) {}
+            bool noncontig_rows = false,
+            float constant = 0.0f)
+        : type(type), ne(ne), v(v), eps(eps), noncontig_rows(noncontig_rows), constant(constant) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const std::array<int64_t, 4> ne_a = noncontig_rows ?
@@ -3615,6 +3617,21 @@ struct test_norm : public test_case {
 
         return out;
     }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (constant == 0.0f) {
+            test_case::initialize_tensors(ctx);
+            return;
+        }
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->op == GGML_OP_NONE && t->type == GGML_TYPE_F32) {
+                const int64_t n = ggml_nelements(t);
+                std::vector<float> data(n, constant);
+                ggml_backend_tensor_set(t, data.data(), 0, n * sizeof(float));
+            }
+        }
+    }
+
 };
 
 // GGML_OP_NORM + GGML_OP_MUL + GGML_OP_ADD
@@ -10317,6 +10334,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+        test_cases.emplace_back(new test_norm(GGML_TYPE_F32, { 768, 1, 1, 1}, false, 1e-5f, false, 224.25f));
+        test_cases.emplace_back(new test_norm(GGML_TYPE_F32, {1600, 1, 1, 1}, false, 1e-5f, false, 22.0f));
+        test_cases.emplace_back(new test_norm(GGML_TYPE_F32, {1280, 1, 1, 1}, false, 1e-5f, false, 100.0f));
 
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
