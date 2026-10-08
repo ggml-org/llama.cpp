@@ -3734,10 +3734,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
         }
 
-        // WIP: chunked coopmat GDN prefill. Passes test-backend-ops; opt-in pending perf tuning.
-        // Prefer the coopmat2 shader; fall back to the coopmat1 + maintenance1 variant.
+        // chunked coopmat GDN prefill: coopmat2 on NVIDIA, coopmat1 on RDNA4 (the scan wins on RDNA3)
+        const bool gdn_chunked = getenv("GGML_VK_DISABLE_GDN_CHUNKED") == nullptr;
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-        if (device->coopmat2 && device->coopmat2_bf16_support && getenv("GGML_VK_GDN_CHUNKED")) {
+        if (gdn_chunked && device->coopmat2 && device->coopmat2_bf16_support) {
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
@@ -3747,39 +3747,25 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-        // Only when the coopmat2 path above is unavailable. Gate on a stable
-        // condition (not the pipeline pointer) so ggml_vk_load_shaders re-reaches
-        // this create call on the lazy per-pipeline recompile.
-        if (!(device->coopmat2 && device->coopmat2_bf16_support) &&
+        if (gdn_chunked && device->architecture == vk_device_architecture::AMD_RDNA4 &&
             device->coopmat_support && device->coopmat_bf16_support && device->coopmat_maintenance1 &&
-            getenv("GGML_VK_GDN_CHUNKED")) {
-            // Run at the device's native subgroup size (wave64 on RDNA, WGS=512) when it is 64.
-            const bool w64 = device->subgroup_size == 64;
-            const uint32_t rsg = w64 ? 64u : 32u;
-            const char * nm; const void * spv; size_t spvlen;
-            if (device->coopmat_bf16_acc_support) {
-                nm  = w64 ? "gated_delta_net_f32_cm1_bf16acc_wave64" : "gated_delta_net_f32_cm1_bf16acc";
-                spv = w64 ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_data : (const void *)gated_delta_net_f32_cm1_bf16acc_data;
-                spvlen = w64 ? gated_delta_net_f32_cm1_bf16acc_wave64_len : gated_delta_net_f32_cm1_bf16acc_len;
-            } else {
-                nm  = w64 ? "gated_delta_net_f32_cm1_wave64" : "gated_delta_net_f32_cm1";
-                spv = w64 ? (const void *)gated_delta_net_f32_cm1_wave64_data : (const void *)gated_delta_net_f32_cm1_data;
-                spvlen = w64 ? gated_delta_net_f32_cm1_wave64_len : gated_delta_net_f32_cm1_len;
-            }
-            // default cm1 (V=64) keeps the state mirror in shared: 7 bindings.
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm, nm, spvlen, spv,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
-            // whole-head V=128 cm1: mirror in a gmem scratch buffer (binding 7 -> 8 total).
-            // wave64 only; used for head counts that tail the CU grid at V=64.
-            if (w64) {
-                const char * nm128  = device->coopmat_bf16_acc_support ? "gated_delta_net_f32_cm1_bf16acc_wave64_v128" : "gated_delta_net_f32_cm1_wave64_v128";
-                const void * spv128 = device->coopmat_bf16_acc_support ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v128_data : (const void *)gated_delta_net_f32_cm1_wave64_v128_data;
-                size_t spvlen128    = device->coopmat_bf16_acc_support ? gated_delta_net_f32_cm1_bf16acc_wave64_v128_len : gated_delta_net_f32_cm1_wave64_v128_len;
-                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128, nm128, spvlen128, spv128,
-                    "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
-            }
+            device->subgroup_size == 64) {
+            const bool bf16acc = device->coopmat_bf16_acc_support;
+            // V=64: state mirror in shared, 7 bindings
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64" : "gated_delta_net_f32_cm1_wave64",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_len : gated_delta_net_f32_cm1_wave64_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_data : (const void *)gated_delta_net_f32_cm1_wave64_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+            // V=128: state mirror in a gmem scratch buffer, 8 bindings
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64_v128" : "gated_delta_net_f32_cm1_wave64_v128",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_v128_len : gated_delta_net_f32_cm1_wave64_v128_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v128_data : (const void *)gated_delta_net_f32_cm1_wave64_v128_data,
+                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
         }
 #endif
+        GGML_UNUSED(gdn_chunked);
     }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
