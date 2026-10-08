@@ -425,7 +425,7 @@ def main():
             cmd_args += ["-t", "6"]
         if getattr(args, "no_embd_offload", False):
             if not any("token_embd" in arg or "output.weight" in arg for arg in cmd_args):
-                cmd_args += ["-ot", "token_embd.weight=CPU,output.weight=CPU"]
+                cmd_args += ["-ot", r"^(token_embd|output)\.weight$=CPU"]
 
     # Resolve target directory on device
     target_dir = args.target_dir
