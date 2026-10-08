@@ -34,6 +34,7 @@ set(LLAMA_CORE_SOURCES
     llama-memory-recurrent.cpp
     llama-mmap.cpp
     llama-model-loader.cpp
+    moe_pager.cpp
     llama-model-saver.cpp
     llama-model.cpp
     llama-quant.cpp
@@ -66,6 +67,12 @@ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @O
 
 target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(llama PUBLIC ../include)
+
+if (GGML_CUDA)
+    # moe_pager.cpp uses the CUDA runtime directly (cudaHostAlloc / cudaMemcpy)
+    target_include_directories(llama PRIVATE ${_cmake_CUDAToolkit_include_directories})
+    target_link_directories(llama PRIVATE ${_cmake_CUDAToolkit_library_directories})
+endif()
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)

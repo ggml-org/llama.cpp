@@ -1,0 +1,88 @@
+// moe_pager.h -- user-space O_DIRECT expert pager for sparse MoE streaming.
+//
+// Reads routed-expert weight slices straight out of the GGUF with O_DIRECT via
+// io_uring into pinned staging, bypassing the kernel page cache entirely.
+// The index is built once from the GGUF header; no expert bytes are cached on
+// disk and nothing is written.
+//
+// This is deliberately self-contained: it knows nothing about llama.cpp graphs so
+// it can be unit-tested on its own before being wired into build_moe_ffn.
+#pragma once
+
+#include <cstdint>
+#include <cstddef>
+#include <string>
+#include <vector>
+
+struct ggml_tensor;
+struct ggml_context;
+struct ggml_backend_buffer;
+struct ggml_backend;
+typedef void (*ggml_backend_sched_eval_callback)(struct ggml_tensor *, bool, void *);
+
+// one expert slice set: gate/up (fused) + down, raw quantised bytes
+struct moe_expert_slice {
+    uint64_t off;   // 4 KiB aligned-down file offset
+    uint32_t len;   // 4 KiB aligned-up length
+};
+
+class moe_pager {
+public:
+    ~moe_pager();
+
+    // Open the GGUF and index every (layer, expert) slice. Returns false and
+    // fills `err` on failure. Does not allocate GPU memory.
+    bool init(const char * gguf_path, int n_layer, int n_expert, int n_used, std::string & err);
+
+    // Attach a CUDA backend + graph context so we can DMA into weight tensors.
+    void attach_gpu(void * backend, size_t gate_up_elems, size_t down_elems);
+
+    // Number of layers/experts this pager serves.
+    int  n_layer()  const { return n_layer_; }
+    int  n_expert() const { return n_expert_; }
+    int  n_used()   const { return n_used_; }
+    size_t bytes_per_expert() const { return bytes_per_expert_; }
+
+    // Fetch expert `e` of layer `il` into pinned staging and DMA it into the
+    // supplied device pointers (gate_up first, then down). Blocking.
+    // Returns true on success.
+    bool fetch(int il, int e, void * dst_gate_up, size_t gate_up_bytes,
+                                  void * dst_down,    size_t down_bytes);
+
+    // Non-blocking prefetch: queue a read. Returns true if it was queued.
+    bool prefetch(int il, int e);
+    // Wait for a queued prefetch and DMA it. Returns true on success.
+    bool commit(int il, int e, void * dst_gate_up, size_t gate_up_bytes,
+                                   void * dst_down,    size_t down_bytes);
+
+    // public for verification: exact file range this pager reads for an expert
+    const moe_expert_slice * slices(int il, int e) const { return &idx_[((size_t) il * n_expert_ + e) * 2]; }
+
+    long stats_io_ops()   const { return io_ops_; }
+    long stats_io_bytes() const { return io_bytes_; }
+
+private:
+    struct Req { int il, e, stage, done; bool used; };
+    // public for verification: the exact file range this pager reads for an expert
+
+    std::string path_;
+    int n_layer_ = 0, n_expert_ = 0, n_used_ = 0;
+    int fd_ = -1;
+    std::vector<moe_expert_slice> idx_;   // n_layer * n_expert * 2
+    size_t bytes_per_expert_ = 0;
+
+    void * backend_ = nullptr;
+    char * stage_ = nullptr;              // pinned staging, NSTAGE slots
+    size_t stage_bytes_ = 0;
+    static const int NSTAGE = 48;
+    static const long ALIGN = 4096;
+
+    std::vector<Req> reqs_;
+    std::vector<int> free_stage_;
+    void * ring_ = nullptr;
+    long io_ops_ = 0, io_bytes_ = 0;
+
+    int submit_(int key);
+    int find_(int key) const;
+    double wait_(int r);
+};
