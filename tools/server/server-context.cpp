@@ -2437,6 +2437,171 @@ private:
         queue_results.send(std::move(res));
     }
 
+    // logit_gate: classify from the logits of the last prompt token before any
+    // decoding. returns true when the gate produced a result (slot released);
+    // false means fall through to normal generation (gate_then_chat, not fired).
+    bool evaluate_logit_gate(server_slot & slot, int32_t off) {
+        const auto & gate = slot.task->params.logit_gate;
+
+        // the gate result is only rendered by the completion / chat completions
+        // response types; on the other endpoints sharing this handler it would
+        // fire and then silently vanish — reject explicitly instead
+        const auto res_type = slot.task->params.res_type;
+        if (res_type != TASK_RESPONSE_TYPE_NONE && res_type != TASK_RESPONSE_TYPE_OAI_CHAT
+                && res_type != TASK_RESPONSE_TYPE_OAI_CMPL) {
+            send_error(slot, "logit_gate is only supported by the completion and chat completions endpoints", ERROR_TYPE_INVALID_REQUEST);
+            slot.release();
+            slot.i_batch = -1;
+            return true;
+        }
+
+        const int tok_idx = slot.i_batch - off;
+        const float * logits = llama_get_logits_ith(slot.ctx_tgt, tok_idx);
+        if (logits == nullptr) {
+            send_error(slot, "logit_gate: logits not available for the last prompt token", ERROR_TYPE_SERVER);
+            slot.release();
+            slot.i_batch = -1;
+            return true;
+        }
+
+        // non-finite logits (quantization edge cases) would produce NaN
+        // probabilities and an ambiguous empty "best" — reject explicitly
+        for (const auto & c : gate.candidates) {
+            for (llama_token id : c.ids) {
+                if (!std::isfinite(logits[id])) {
+                    send_error(slot, "logit_gate: model produced non-finite logits", ERROR_TYPE_SERVER);
+                    slot.release();
+                    slot.i_batch = -1;
+                    return true;
+                }
+            }
+        }
+
+        // temperature scaling: divide the candidate logits by the temperature so
+        // the returned probabilities are honest. explicit request value wins;
+        // disabled entirely by options.temperature_scaling = false
+        const float temp = gate.temperature_scaling ? gate.temperature : 1.0f;
+        const float scale = 1.0f / temp;
+
+        // softmax over the union of candidate token ids (max-shifted for stability);
+        // accumulated in double so a large logit gap cannot underflow the losers to
+        // exactly zero and make "best" exactly 1.0
+        std::vector<double> candidate_lse; // per-candidate log-sum-exp, scaled space
+        candidate_lse.reserve(gate.candidates.size());
+        double max_logit = -INFINITY;
+        for (const auto & c : gate.candidates) {
+            for (llama_token id : c.ids) {
+                max_logit = std::max(max_logit, (double) logits[id] * scale);
+            }
+        }
+        double sum_exp = 0.0;
+        for (const auto & c : gate.candidates) {
+            double unnorm = 0.0;
+            for (llama_token id : c.ids) {
+                unnorm += std::exp((double) logits[id] * scale - max_logit);
+            }
+            sum_exp += unnorm;
+            candidate_lse.push_back(max_logit + std::log(unnorm)); // log-sum-exp, temperature-scaled space
+        }
+
+        json distribution = json::array();
+        json label_logits = json::object();
+        // best/p stay double through the threshold comparison: a float cast can
+        // round a near-certain winner up to exactly 1.0, which would fire a
+        // gate_then_chat request even at threshold 1.0 ("never fire")
+        double best = 0.0;
+        std::string best_label;
+        double entropy = 0.0;
+        for (size_t i = 0; i < gate.candidates.size(); i++) {
+            const auto & c = gate.candidates[i];
+            const double p = std::exp(candidate_lse[i] - max_logit - std::log(sum_exp));
+            if (p > best) {
+                best = p;
+                best_label = c.label;
+            }
+            if (p > 0.0) {
+                entropy -= p * std::log(p);
+            }
+            distribution.push_back(json { {"label", c.label}, {"prob", (float) p} });
+            if (gate.return_logits) {
+                // raw (un-tempered) logit for temperature fitting: the true
+                // log-sum-exp over the UNSCALED logits. T·LSE(l/T) is not
+                // LSE(l), so this must be computed independently
+                double raw_max = -INFINITY;
+                for (llama_token id : c.ids) {
+                    raw_max = std::max(raw_max, (double) logits[id]);
+                }
+                double raw_sum = 0.0;
+                for (llama_token id : c.ids) {
+                    raw_sum += std::exp((double) logits[id] - raw_max);
+                }
+                label_logits[c.label] = raw_max + std::log(raw_sum);
+            }
+        }
+        const double confidence = gate.candidates.size() > 1
+            ? 1.0 - entropy / std::log((double) gate.candidates.size())
+            : 1.0;
+
+        if (gate.gate_then_chat) {
+            // the true best probability over finite candidates is strictly
+            // below 1 (a single candidate's 1.0 is vacuous certainty), but
+            // double rounding can still produce exactly 1.0 once the logit
+            // gap is large enough — snap it to the largest double below 1 so
+            // that threshold = 1.0 means "never fire"
+            if (best >= 1.0) {
+                best = std::nextafter(1.0, 0.0);
+            }
+            if (best < gate.threshold) {
+                return false; // fall through: this request continues as normal generation
+            }
+        }
+
+        auto res = std::make_unique<server_task_result_cmpl_final>();
+        res->id      = slot.task->id;
+        res->id_slot = slot.id;
+        res->index   = slot.task->index;
+        res->content = {};
+        res->tokens  = llama_tokens{};
+        res->stats   = slot.stats;
+        res->prompt  = slot.task->tokens.detokenize(ctx_tgt, true);
+        res->response_fields = slot.task->params.response_fields;
+        res->truncated             = false;
+        res->n_decoded             = 0;
+        res->n_prompt_tokens       = slot.task->n_tokens();
+        res->n_prompt_tokens_cache = slot.stats.n_prompt_cached;
+        res->n_tokens_cached       = slot.prompt.n_tokens();
+        res->has_new_line          = false;
+        res->stop                  = STOP_TYPE_NONE;
+        res->post_sampling_probs   = slot.task->params.post_sampling_probs;
+        res->verbose               = slot.task->params.verbose;
+        res->stream                = slot.task->params.stream;
+        res->include_usage         = slot.task->params.include_usage;
+        res->res_type              = slot.task->params.res_type;
+        res->oaicompat_model       = slot.task->params.oaicompat_model;
+        res->oaicompat_cmpl_id     = slot.task->params.oaicompat_cmpl_id;
+        res->generation_params     = slot.task->params;
+        res->logit_gate = json {
+            {"best",         best_label},
+            {"prob",         (float) best},
+            {"fired",        true},
+            {"threshold",    gate.threshold},
+            {"confidence",   confidence},
+            {"temperature",  temp},
+            {"distribution", distribution},
+        };
+        if (gate.return_logits) {
+            res->logit_gate["label_logits"] = label_logits;
+        }
+
+        SLT_INF(slot, "logit_gate fired: best = '%s' (p = %.4f, mode = %s)\n",
+                best_label.c_str(), best, gate.gate_then_chat ? "gate_then_chat" : "gate_only");
+
+        queue_results.send(std::move(res));
+        slot.release();
+        slot.i_batch = -1;
+        return true;
+    }
+
     //
     // Functions to process the task
     //
@@ -4325,6 +4490,11 @@ private:
                     return;
                 }
 
+                if (slot.task->params.logit_gate.enabled && evaluate_logit_gate(slot, off)) {
+                    // gate produced a decision: result sent, slot already released
+                    return;
+                }
+
                 GGML_ASSERT(slot.task->need_sampling());
 
                 // prompt evaluated for next-token prediction
@@ -5558,7 +5728,15 @@ void server_routes::init_routes() {
     this->post_anthropic_messages = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
-        json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
+        const json body_orig = json::parse(req.body);
+        // the anthropic converter drops unknown fields, so logit_gate would be
+        // silently ignored — reject it like on the other unsupported endpoints
+        if (body_orig.contains("logit_gate")) {
+            res->error(format_error_response(
+                "logit_gate is only supported by the completion and chat completions endpoints", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        json body = server_chat_convert_anthropic_to_oai(body_orig);
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         common_chat_session session;
@@ -6137,6 +6315,13 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const s
             } break;
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             {
+                // the anthropic converter drops unknown fields, so logit_gate
+                // would be silently ignored — reject it explicitly
+                if (body.contains("logit_gate")) {
+                    res->error(format_error_response(
+                        "logit_gate is only supported by the completion and chat completions endpoints", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
                 body = server_chat_convert_anthropic_to_oai(body);
             } break;
         default:
