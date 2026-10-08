@@ -45,6 +45,10 @@ struct test_registry {
 // mtmd_image
 //
 
+static std::string image_size_to_str(const clip_image_size & size) {
+    return std::to_string(size.width) + "x" + std::to_string(size.height);
+}
+
 MAKE_TEST(test_image_preprocessor_lfm2) {
     clip_hparams hparams;
     hparams.patch_size = 16;
@@ -69,6 +73,32 @@ MAKE_TEST(test_image_preprocessor_lfm2) {
             "tiling for " + std::to_string(size.width) + "x" + std::to_string(size.height),
             std::string(expected ? "tiled" : "single"),
             std::string(actual   ? "tiled" : "single"));
+    }
+
+    // { image size, expected size from HF smart_resize }
+    const std::vector<std::pair<clip_image_size, clip_image_size>> resize_cases = {
+        { {  400, 600 }, { 384, 608 } }, // 400 / 32 = 12.5 rounds half to even
+        { {  480, 336 }, { 480, 320 } },
+        { {   64, 169 }, { 160, 416 } }, // 169 * beta / 32 is exactly 13 in double
+        { { 1024, 768 }, { 576, 416 } },
+    };
+
+    for (const auto & [size, expected] : resize_cases) {
+        t.assert_equal("smart_resize for " + image_size_to_str(size), image_size_to_str(expected),
+            image_size_to_str(mtmd_image_preprocessor_lfm2::smart_resize(hparams, size)));
+    }
+
+    // { image size, expected grid from HF }
+    const std::vector<std::pair<clip_image_size, clip_image_size>> grid_cases = {
+        { {  720, 1600 }, { 2, 4 } }, // 0.45 is an exact tie between 2/4 and 2/5 in double, not in float
+        { {  420, 1440 }, { 1, 3 } },
+        { {  255, 2160 }, { 1, 8 } },
+        { { 1024,  768 }, { 3, 2 } },
+    };
+
+    for (const auto & [size, expected] : grid_cases) {
+        t.assert_equal("grid for " + image_size_to_str(size), image_size_to_str(expected),
+            image_size_to_str(mtmd_image_preprocessor_lfm2::get_grid_layout(size.height, size.width)));
     }
 }
 
