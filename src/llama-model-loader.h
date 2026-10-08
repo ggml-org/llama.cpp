@@ -83,7 +83,6 @@ struct llama_model_loader {
     bool check_tensors;
     bool no_alloc;
     bool load_mtp;
-    bool reclaim_mmap_source = true; // bug fix for #16761
 
     // handle TENSOR_READ_LAZY
     // use case: keep PLE / engrams embd tensors on disk, read them on demand
@@ -141,6 +140,10 @@ struct llama_model_loader {
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
+    // tensors copied out of the mmap and weights read in place from it, used to reclaim the copied source pages after load
+    std::vector<std::pair<const llama_tensor_weight *, size_t>> copied_from_mmap;
+    std::set<const llama_tensor_weight *>                       read_from_mmap;
+
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
     struct ggml_backend_buft_comparator {
         bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
@@ -183,7 +186,6 @@ struct llama_model_loader {
         bool check_tensors,
         bool no_alloc,
         bool load_mtp,
-        bool reclaim_mmap_source,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 

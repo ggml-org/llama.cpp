@@ -490,8 +490,6 @@ struct common_params {
 
     enum llama_lazy_mode lazy_mode = LLAMA_LAZY_MODE_AUTO; // on-demand reading of tensors marked by the arch
 
-    bool reclaim_mmap_source = true; // bug fix for #16761 (CPU_REPACK duplicates mmap source pages). Opt out with --no-reclaim-mmap-source.
-
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 

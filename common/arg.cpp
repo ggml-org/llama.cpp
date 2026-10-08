@@ -2723,15 +2723,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LAZY_MODE"));
     add_opt(common_arg(
-        {"--no-reclaim-mmap-source"},
-        "opt out of the default-on reclaim of dormant mmap source pages after CPU weight repacking "
-        "(bug fix for #16761). Escape hatch for unexpected regressions. "
-        "Applies to --load-mode auto and --load-mode mmap on Linux.",
-        [](common_params & params) {
-            params.reclaim_mmap_source = false;
-        }
-    ).set_env("LLAMA_ARG_NO_RECLAIM_MMAP_SOURCE"));
-    add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
         "- distribute: spread execution evenly over all nodes\n"

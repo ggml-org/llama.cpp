@@ -6,11 +6,6 @@
 #include "llama-hparams.h"
 #include "llama.h"
 
-#ifdef __linux__
-#include <sys/mman.h> // madvise, MADV_DONTNEED
-#include <unistd.h>   // sysconf, _SC_PAGESIZE
-#endif
-
 #include <algorithm>
 #include <array>
 #include <cinttypes>
@@ -545,7 +540,6 @@ llama_model_loader::llama_model_loader(
         bool check_tensors,
         bool no_alloc,
         bool load_mtp,
-        bool reclaim_mmap_source,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
@@ -840,7 +834,6 @@ llama_model_loader::llama_model_loader(
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
     this->load_mtp = load_mtp;
-    this->reclaim_mmap_source = reclaim_mmap_source;
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -1611,13 +1604,6 @@ bool llama_model_loader::load_all_data(
     }
 
     std::vector<ggml_tensor *> tensors;
-
-#if defined(MADV_DONTNEED)
-    // Page size for reclaim_mmap_source; queried once and reused for every repacked tensor
-    // whose source pages are dropped after they are copied out of the mmap.
-    const uintptr_t reclaim_page_size = (uintptr_t) sysconf(_SC_PAGESIZE);
-#endif
-
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
         tensors.push_back(cur);
     }
@@ -1679,27 +1665,16 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+
+                // read in place from the mmap, so its source pages must stay mapped
+                read_from_mmap.insert(weight);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
 
-#if defined(MADV_DONTNEED)
-                // Bug fix for #16761. This tensor's data was copied from the mmap into
-                // its own buffer (e.g. CPU_REPACK), so the source pages [data, data + n_size)
-                // are now dormant - compute reads only from the copy. madvise drops them
-                // from RSS; the read-only file mapping stays valid and any later access
-                // (e.g. a concurrent --check-tensors validation thread) simply re-faults
-                // the original bytes from disk - safe, never wrong data. Skipped under
-                // mlock (lmlocks != nullptr), where the user wants the file pages
-                // resident. The range is rounded inward to whole pages so we never evict
-                // a page shared with a neighbouring zero-copy tensor.
-                if (reclaim_mmap_source && lmlocks == nullptr) {
-                    const uintptr_t beg = ((uintptr_t) data + reclaim_page_size - 1) & ~(reclaim_page_size - 1);
-                    const uintptr_t end = ((uintptr_t) data + n_size)                & ~(reclaim_page_size - 1);
-                    if (end > beg) {
-                        madvise((void *) beg, end - beg, MADV_DONTNEED);
-                    }
+                // the source pages are no longer needed; reclaimed after all contexts are loaded (skipped under mlock)
+                if (use_mmap && lmlocks == nullptr) {
+                    copied_from_mmap.emplace_back(weight, n_size);
                 }
-#endif
             }
         } else {
             const auto & file = files.at(weight->idx);
@@ -1809,6 +1784,22 @@ bool llama_model_loader::load_all_data(
     if (size_done >= size_data) {
         // unmap offloaded tensors and metadata
         if (use_mmap) {
+            // drop the source pages of tensors copied out of the mmap (e.g. by weight repacking) from RSS
+            // only for --load-mode auto/mmap; the pages stay in the page cache, ref: https://github.com/ggml-org/llama.cpp/issues/16761
+            for (const auto & copied : copied_from_mmap) {
+                const llama_tensor_weight * w = copied.first;
+                // a duplicated tensor (e.g. tied token_embd/output) may still read the same range in place
+                if (read_from_mmap.count(w)) {
+                    continue;
+                }
+                // on failure (e.g. seccomp) the same error would repeat for every tensor
+                if (!mappings.at(w->idx)->discard_fragment(w->offs, w->offs + copied.second)) {
+                    break;
+                }
+            }
+            copied_from_mmap.clear();
+            read_from_mmap.clear();
+
             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
                 const auto & mmap_used = mmaps_used.at(idx);
                 auto & mapping = mappings.at(idx);
