@@ -82,12 +82,6 @@ static int next_power_of_2(int x) {
     return n;
 }
 
-// rows per chunk to keep the scratch buffer around 64 MB
-static int64_t top_k_chunk_nrows(const size_t row_bytes, const int64_t nrows) {
-    const size_t chunk_bytes = 1 << 26;
-    return std::min(nrows, (int64_t) std::max(chunk_bytes / row_bytes, (size_t) 1));
-}
-
 static __device__ __forceinline__ uint32_t top_k_float_to_ordered(float value) {
     const uint32_t bits = __float_as_uint(value);
     const uint32_t mask = (uint32_t) (-(int32_t) (bits >> 31)) | 0x80000000U;
@@ -224,7 +218,7 @@ static void top_k_radix_cuda(
     const int blocks_per_row = std::min((ncols + 1023) / 1024, 64);
 
     // chunk the rows to bound the histogram memory
-    const int64_t chunk_nrows = top_k_chunk_nrows((size_t) blocks_per_row * NBINS * sizeof(int), nrows);
+    const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) blocks_per_row * NBINS * sizeof(int), nrows);
 
     ggml_cuda_pool_alloc<top_k_radix_state> states_alloc(pool, chunk_nrows);
     ggml_cuda_pool_alloc<int> histograms_alloc(pool, (size_t) chunk_nrows * blocks_per_row * NBINS);
@@ -260,7 +254,7 @@ static void top_k_radix_cuda(
 static void top_k_bitonic_cuda(
         ggml_cuda_pool & pool,
         const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
-    const int64_t chunk_nrows = top_k_chunk_nrows((size_t) ncols * sizeof(int), nrows);
+    const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) ncols * sizeof(int), nrows);
 
     ggml_cuda_pool_alloc<int> tmp_alloc(pool, (size_t) ncols * chunk_nrows);
     int * tmp = tmp_alloc.get();
@@ -282,7 +276,7 @@ static void top_k_bitonic_cuda(
 static void top_k_argsort_cub(
         ggml_cuda_pool & pool,
         const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
-    const int64_t chunk_nrows = argsort_f32_i32_cuda_cub_chunk_nrows((size_t) ncols * sizeof(float), nrows);
+    const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) ncols * sizeof(float), nrows);
 
     ggml_cuda_pool_alloc<int> tmp_alloc(pool, (size_t) ncols * chunk_nrows);
     int * tmp = tmp_alloc.get();
