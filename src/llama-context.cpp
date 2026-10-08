@@ -2771,6 +2771,20 @@ llm_graph_cb llama_context::graph_get_cb() const {
                 }
             }
         }
+
+        // run the input embeddings on the device of layer 0
+        // otherwise the scheduler can put small ops like pad or scale on the CPU, which wakes the CPU threads for each token
+        if (il == -1 && strcmp(name, "embd") == 0) {
+            ggml_tensor * node = cur->view_src ? cur->view_src : cur;
+            if (node->op != GGML_OP_NONE) {
+                const auto & dev_layer = model.dev_layer(0);
+                for (const auto & backend : backends) {
+                    if (ggml_backend_get_device(backend.get()) == dev_layer && ggml_backend_supports_op(backend.get(), node)) {
+                        ggml_backend_sched_set_tensor_backend(sched.get(), node, backend.get());
+                    }
+                }
+            }
+        }
     };
 }
 
