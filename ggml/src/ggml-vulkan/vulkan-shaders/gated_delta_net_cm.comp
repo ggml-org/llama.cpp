@@ -121,13 +121,39 @@ void split(const float x, out OPD h, out OPD l) {
     l = OPD(x - float(h));
 }
 
-#ifdef COOPMAT2
-// no bf16 accumulator or subgroup acc<->A/B conversion on NVIDIA: split per element
+#ifdef BF16ACC
+// split through a bf16 accumulator
+#define SPLIT_STORE(m, arr_h, off_h, arr_l, off_l, ld, layout) { \
+    const coopmat<OPD, SG, TM, TN, MACC> h_ = coopmat<OPD, SG, TM, TN, MACC>(m); \
+    const coopmat<OPD, SG, TM, TN, MACC> l_ = coopmat<OPD, SG, TM, TN, MACC>(m - coopmat<float, SG, TM, TN, MACC>(h_)); \
+    coopMatStore(h_, arr_h, off_h, ld, layout); \
+    coopMatStore(l_, arr_l, off_l, ld, layout); \
+}
+
+#ifdef GMEM_MIRROR
+#define STORE_MIRROR(m, off) SPLIT_STORE(m, data_mirror, mir_h + off, data_mirror, mir_l + off, LDP, COL)
+#else
+#define STORE_MIRROR(m, off) SPLIT_STORE(m, sh_sh, off, sh_sl, off, LDP, COL)
+#endif
+#define STORE_DELTA(m, off)  SPLIT_STORE(m, sh_dh, off, sh_dl, off, VH, ROW)
+#define STORE_SOLVED(m, off) SPLIT_STORE(m, sh_soh, off, sh_sol, off, VH, ROW)
+#else
+// split per element
+#ifdef GMEM_MIRROR
+float SplitColS(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
+    const uint idx = off + c * LDP + r;
+    split(elem, data_mirror[idx], data_mirror[idx + LDP * V]);
+    return elem;
+}
+#define STORE_MIRROR(m, off) coopMatPerElement(m, m, SplitColS, mir_h + off)
+#else
 float SplitColS(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
     const uint idx = off + c * LDP + r;
     split(elem, sh_sh[idx], sh_sl[idx]);
     return elem;
 }
+#define STORE_MIRROR(m, off) coopMatPerElement(m, m, SplitColS, off)
+#endif
 
 float SplitRowD(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
     const uint idx = off + r * VH + c;
@@ -141,31 +167,8 @@ float SplitRowSO(const in uint32_t r, const in uint32_t c, const in float elem, 
     return elem;
 }
 
-#define STORE_MIRROR(m, off) coopMatPerElement(m, m, SplitColS, off)
 #define STORE_DELTA(m, off)  coopMatPerElement(m, m, SplitRowD, off)
 #define STORE_SOLVED(m, off) coopMatPerElement(m, m, SplitRowSO, off)
-#else
-// split via ACCB: bf16 accumulator, or A-matrix through the maintenance1 conversion
-#if defined(BF16ACC)
-#define ACCB MACC
-#else
-#define ACCB MUA
-#endif
-
-#define SPLIT_STORE(m, arr_h, off_h, arr_l, off_l, ld, layout) { \
-    const coopmat<OPD, SG, TM, TN, ACCB> h_ = coopmat<OPD, SG, TM, TN, ACCB>(m); \
-    const coopmat<OPD, SG, TM, TN, ACCB> l_ = coopmat<OPD, SG, TM, TN, ACCB>(m - coopmat<float, SG, TM, TN, MACC>(h_)); \
-    coopMatStore(h_, arr_h, off_h, ld, layout); \
-    coopMatStore(l_, arr_l, off_l, ld, layout); \
-}
-
-#ifdef GMEM_MIRROR
-#define STORE_MIRROR(m, off) SPLIT_STORE(m, data_mirror, mir_h + off, data_mirror, mir_l + off, LDP, COL)
-#else
-#define STORE_MIRROR(m, off) SPLIT_STORE(m, sh_sh, off, sh_sl, off, LDP, COL)
-#endif
-#define STORE_DELTA(m, off)  SPLIT_STORE(m, sh_dh, off, sh_dl, off, VH, ROW)
-#define STORE_SOLVED(m, off) SPLIT_STORE(m, sh_soh, off, sh_sol, off, VH, ROW)
 #endif
 
 #ifdef GMEM_MIRROR
