@@ -4995,7 +4995,7 @@ static bool ggml_sycl_mul_mat_glu_dmmv_esimd(ggml_backend_sycl_context & ctx, gg
 }
 #endif
 
-// Fused dense-FFN mat-vec for the {mul_mat(gate), mul_mat(up), GLU} subgraph at node_idx.
+// Fused dense-FFN mat-vec for the {mul_mat(gate), mul_mat(up), GLU} subgraph.
 // Returns false if it declined, in which case the caller runs the three nodes normally.
 static bool ggml_sycl_op_mul_mat_glu_fused(ggml_backend_sycl_context & ctx, ggml_tensor * gate, ggml_tensor * up, ggml_tensor * glu) {
     const ggml_tensor * wu   = up->src[0];
