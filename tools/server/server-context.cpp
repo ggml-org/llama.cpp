@@ -4768,7 +4768,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             const json & data,
             const std::vector<raw_buffer> & files,
             task_response_type res_type,
-            const std::optional<common_chat_session> & chat_session) {
+            const common_chat_session & chat_session) {
     GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
     auto res = create_response();
@@ -4811,7 +4811,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
         // message delimiters for checkpointing
-        auto delimiters = chat_session ? chat_session->sampling().message_delimiters :
+        auto delimiters = chat_session.has_template() ? chat_session.sampling().message_delimiters :
             common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
         delimiters.tokenize(ctx_server.vocab);
 
@@ -4826,8 +4826,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     params,
                     meta->logit_bias_eog,
                     data);
-            if (chat_session) {
-                server_schema::apply_chat_sampling(task.params, ctx_server.vocab, chat_session->sampling());
+            if (chat_session.has_template()) {
+                server_schema::apply_chat_sampling(task.params, ctx_server.vocab, chat_session.sampling());
             }
 
             task.params.message_spans = task.tokens.find_message_spans(delimiters);
@@ -4851,11 +4851,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             tasks.push_back(std::move(task));
         }
 
-        if (chat_session) {
-            rd.post_tasks(std::move(tasks), *chat_session);
-        } else {
-            rd.post_tasks(std::move(tasks));
-        }
+        rd.post_tasks(std::move(tasks), chat_session);
     } catch (const std::exception & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5452,7 +5448,7 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = json::parse(req.body);
-        std::optional<common_chat_session> session;
+        common_chat_session session;
         json body_parsed = oaicompat_chat_params_parse(
             ctx_server.vocab,
             body,
@@ -5515,7 +5511,7 @@ void server_routes::init_routes() {
         json body = server_chat_convert_responses_to_chatcmpl(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
-        std::optional<common_chat_session> session;
+        common_chat_session session;
         json body_parsed = oaicompat_chat_params_parse(
             ctx_server.vocab,
             body,
@@ -5551,7 +5547,7 @@ void server_routes::init_routes() {
             files);
         SRV_DBG("%s\n", "Request converted: OpenAI Transcriptions -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
-        std::optional<common_chat_session> session;
+        common_chat_session session;
         json body_parsed = oaicompat_chat_params_parse(
             ctx_server.vocab,
             body,
@@ -5573,7 +5569,7 @@ void server_routes::init_routes() {
         json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
-        std::optional<common_chat_session> session;
+        common_chat_session session;
         json body_parsed = oaicompat_chat_params_parse(
             ctx_server.vocab,
             body,
@@ -5596,8 +5592,8 @@ void server_routes::init_routes() {
     // same with handle_chat_completions, but without inference part
     this->post_apply_template = [this](const server_http_req & req) {
         auto res = create_response();
-        std::vector<raw_buffer> files;              // dummy, unused
-        std::optional<common_chat_session> session; // dummy, unused
+        std::vector<raw_buffer> files; // dummy, unused
+        common_chat_session session;   // dummy, unused
         json body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(
             ctx_server.vocab,
@@ -6156,7 +6152,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const s
             return res;
     }
 
-    std::optional<common_chat_session> session; // dummy, unused
+    common_chat_session session; // dummy, unused
     json body_parsed = oaicompat_chat_params_parse(
             ctx_server.vocab,
             body,

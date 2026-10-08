@@ -360,7 +360,7 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files,
-    std::optional<common_chat_session> & out_session);
+    common_chat_session & out_session);
 
 // used by /embeddings endpoint, content has the same format as a chat message content array
 server_tokens tokenize_oai_content_array(

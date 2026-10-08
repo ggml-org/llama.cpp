@@ -1657,6 +1657,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
                                          const common_chat_session_params &   params) {
     auto applied = common_chat_templates_apply(tmpls, inputs);
 
+    templated   = true;
     prompt_text = std::move(applied.prompt);
 
     sampling_params.grammar            = std::move(applied.grammar);

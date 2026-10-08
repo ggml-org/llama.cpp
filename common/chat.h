@@ -406,6 +406,9 @@ class common_chat_session {
     common_chat_format           format()   const { return parser_params.format; }
     const common_chat_msg &      msg()      const { return cur; }
 
+    // false for a default session, which parses its output as plain content
+    bool has_template() const { return templated; }
+
     // appends a chunk and parses leniently, the message keeps its last value if nothing parses
     const common_chat_msg & feed(const common_chat_input & chunk);
 
@@ -418,7 +421,8 @@ class common_chat_session {
     common_chat_parser_params parser_params;
     common_chat_input         input;
     common_chat_msg           cur;
-    bool                      finished = false;
+    bool                      templated = false;
+    bool                      finished  = false;
 };
 
 // used by arg and server

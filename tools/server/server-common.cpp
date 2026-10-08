@@ -1270,7 +1270,7 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files,
-    std::optional<common_chat_session> & out_session)
+    common_chat_session & out_session)
 {
     json llama_params;
 
@@ -1430,10 +1430,10 @@ json oaicompat_chat_params_parse(
     // Apply chat template to the list of messages
     common_chat_session_params session_params;
     session_params.echo = json_value(body, "echo", false);
-    out_session.emplace(opt.tmpls.get(), vocab, inputs, session_params);
+    out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
 
-    const auto & chat_sampling = out_session->sampling();
-    llama_params["prompt"] = out_session->prompt();
+    const auto & chat_sampling = out_session.sampling();
+    llama_params["prompt"] = out_session.prompt();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
