@@ -1,0 +1,26 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.layout_k16_major.body(%token_count: index, %input: buffer, %output: buffer)
+
+// Exact K16-major F16 layout for native matrix fragments. The ordinary F16
+// alternate remains unchanged; this copy is a private dispatch transient.
+config.decl @ggml.copy_f16_k16_major.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.copy_f16_k16_major.token_count : %value: index where [range(%value, 512, 2048), mul(%value, 512)]
+config.decl @ggml.copy_f16_k16_major.input_is_f16 : %value: index where [range(%value, 0, 1)]
+amdgpu.target<gfx11-generic> @ggml_copy_f16_k16_major_target {subgroup_size = 32}
+
+kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_major") @ggml_copy_f16_k16_major(%token_count: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %tile = index.constant 2048 : index
+  %rounding = index.constant 2047 : index
+  %width = config.get @ggml.copy_f16_k16_major.input_size : index
+  %elements = index.mul %token_count, %width : index
+  %rounded = index.add %elements, %rounding : index
+  %groups = index.div %rounded, %tile : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%token_count: index, %input: buffer, %output: buffer) {
+  template.apply<@ggml.copy.layout_k16_major.body>(%token_count, %input, %output) : (index, buffer, buffer)
+  kernel.return
+}

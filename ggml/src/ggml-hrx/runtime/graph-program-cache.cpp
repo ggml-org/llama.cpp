@@ -1,25 +1,86 @@
 #include "graph-program-cache.h"
 
+#include "dispatch/command-program-dump.h"
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-impl.h"
 #include "ggml.h"
 
 #include <cstddef>
 #include <cstdlib>
+#include <optional>
 #include <sstream>
 #include <utility>
 
 namespace ggml::hrx {
 namespace {
 
-static bool tensor_metadata_matches(const Value & value, const ggml_tensor * tensor) {
+static const ggml_tensor * tensor_storage_root(const ggml_tensor * tensor) {
+    while (tensor != nullptr && tensor->view_src != nullptr) {
+        tensor = tensor->view_src;
+    }
+    return tensor;
+}
+
+static size_t tensor_storage_offset(const ggml_tensor * tensor) {
+    return tensor != nullptr && tensor->view_src != nullptr ? tensor->view_offs : 0;
+}
+
+static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggml_tensor * tensor, size_t & offset) {
+    if (source == nullptr || tensor == nullptr || tensor_storage_root(source) != tensor_storage_root(tensor)) {
+        return false;
+    }
+    const size_t source_offset = tensor_storage_offset(source);
+    const size_t tensor_offset = tensor_storage_offset(tensor);
+    if (tensor_offset < source_offset) {
+        return false;
+    }
+    const size_t relative_offset = tensor_offset - source_offset;
+    if (relative_offset > ggml_nbytes(source) || ggml_nbytes(tensor) > ggml_nbytes(source) - relative_offset) {
+        return false;
+    }
+    offset = relative_offset;
+    return true;
+}
+
+static bool tensor_alias_matches(const ValueMap &                         values,
+                                 const Value &                            value,
+                                 const ggml_tensor *                      tensor,
+                                 const std::vector<const ggml_tensor *> & tensor_by_value) {
+    const bool tensor_alias = tensor->view_src != nullptr;
+    const bool value_alias  = value.alias_source.value >= 0;
+    if (!value_alias) {
+        return !tensor_alias || value.kind == ValueKind::External;
+    }
+    if (!tensor_alias) {
+        return true;
+    }
+
+    const Value * source_value = values.find(value.alias_source);
+    if (source_value == nullptr || value.alias_source.value < 0 ||
+        static_cast<size_t>(value.alias_source.value) >= tensor_by_value.size()) {
+        return false;
+    }
+    const ggml_tensor * source_tensor = tensor_by_value[static_cast<size_t>(value.alias_source.value)];
+    if (source_tensor == nullptr) {
+        return tensor_alias && value.storage_offset == tensor->view_offs;
+    }
+    size_t relative_offset = 0;
+    if (!tensor_storage_relative_offset(source_tensor, tensor, relative_offset) ||
+        value.storage_offset < source_value->storage_offset) {
+        return false;
+    }
+    return relative_offset == value.storage_offset - source_value->storage_offset;
+}
+
+static bool tensor_metadata_matches(const ValueMap &                         values,
+                                    const Value &                            value,
+                                    const ggml_tensor *                      tensor,
+                                    const std::vector<const ggml_tensor *> & tensor_by_value) {
     if (tensor == nullptr || value.type != tensor->type || value.element_count != ggml_nelements(tensor) ||
         value.byte_count != ggml_nbytes(tensor) || value.contiguous != ggml_is_contiguous(tensor)) {
         return false;
     }
-    const bool tensor_alias = tensor->view_src != nullptr;
-    const bool value_alias  = value.alias_source.value >= 0;
-    if (tensor_alias && (!value_alias || value.storage_offset != tensor->view_offs)) {
+    if (!tensor_alias_matches(values, value, tensor, tensor_by_value)) {
         return false;
     }
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
@@ -28,6 +89,33 @@ static bool tensor_metadata_matches(const Value & value, const ggml_tensor * ten
         }
     }
     return true;
+}
+
+static std::string format_tensor_metadata(const ggml_tensor * tensor) {
+    if (tensor == nullptr) {
+        return "null";
+    }
+    std::ostringstream out;
+    out << ggml_type_name(tensor->type) << " ne=[" << tensor->ne[0] << ',' << tensor->ne[1] << ',' << tensor->ne[2]
+        << ',' << tensor->ne[3] << "] nb=[" << tensor->nb[0] << ',' << tensor->nb[1] << ',' << tensor->nb[2] << ','
+        << tensor->nb[3] << "] elements=" << ggml_nelements(tensor) << " bytes=" << ggml_nbytes(tensor)
+        << " contiguous=" << (ggml_is_contiguous(tensor) ? 1 : 0);
+    if (tensor->view_src != nullptr) {
+        out << " view_offs=" << tensor->view_offs;
+    }
+    return out.str();
+}
+
+static std::string format_value_metadata(const Value & value) {
+    std::ostringstream out;
+    out << (value.kind == ValueKind::External ? "external " : "transient ") << ggml_type_name(value.type) << " ne=["
+        << value.ne[0] << ',' << value.ne[1] << ',' << value.ne[2] << ',' << value.ne[3] << "] nb=[" << value.nb[0]
+        << ',' << value.nb[1] << ',' << value.nb[2] << ',' << value.nb[3] << "] elements=" << value.element_count
+        << " bytes=" << value.byte_count << " contiguous=" << (value.contiguous ? 1 : 0);
+    if (value.alias_source.value >= 0) {
+        out << " storage_offset=" << value.storage_offset;
+    }
+    return out.str();
 }
 
 static bool graph_node_params_match(const GraphNode & cached_node, const ggml_tensor * current_node) {
@@ -57,11 +145,78 @@ static bool graph_replay_should_fallback(HrxGraphReplayEvent event) {
     return event == HrxGraphReplayEvent::Ineligible || event == HrxGraphReplayEvent::BuildFailed;
 }
 
+static void collect_command_graph_values(const std::vector<Command> & commands, std::vector<uint8_t> & values) {
+    for (const Command & command : commands) {
+        for (const CommandBinding & binding : command.bindings) {
+            if (binding.origin == CommandBindingOrigin::GraphValue && binding.value.value >= 0 &&
+                static_cast<size_t>(binding.value.value) < values.size()) {
+                values[static_cast<size_t>(binding.value.value)] = 1;
+            }
+        }
+    }
+}
+
+static std::vector<uint8_t> collect_command_graph_values(const CommandProgram & commands, size_t value_count) {
+    std::vector<uint8_t> values(value_count, 0);
+    collect_command_graph_values(commands.initialization_commands, values);
+    collect_command_graph_values(commands.commands, values);
+    return values;
+}
+
+static bool can_skip_external_binding(const Value & value,
+                                      const CommandProgram & commands,
+                                      size_t value_count,
+                                      std::optional<std::vector<uint8_t>> & command_graph_values) {
+    if (value.element_count != 0 && value.byte_count != 0) {
+        return false;
+    }
+    if (!command_graph_values.has_value()) {
+        command_graph_values = collect_command_graph_values(commands, value_count);
+    }
+    return (*command_graph_values)[static_cast<size_t>(value.id.value)] == 0;
+}
+
+class TensorValueIndex {
+  public:
+    explicit TensorValueIndex(size_t maximum_size) : maximum_size_(maximum_size) {}
+    ~TensorValueIndex() { ggml_hash_set_free(&tensors_); }
+
+    TensorValueIndex(const TensorValueIndex &) = delete;
+    TensorValueIndex & operator=(const TensorValueIndex &) = delete;
+
+    std::optional<int32_t> find(const ggml_tensor * tensor) const {
+        if (tensors_.size == 0) {
+            return std::nullopt;
+        }
+        const size_t index = ggml_hash_find(&tensors_, tensor);
+        if (index == GGML_HASHSET_FULL || !ggml_bitset_get(tensors_.used, index)) {
+            return std::nullopt;
+        }
+        return values_[index];
+    }
+
+    void emplace(const ggml_tensor * tensor, int32_t value) {
+        if (tensors_.size == 0) {
+            GGML_ASSERT(maximum_size_ <= SIZE_MAX / 2);
+            tensors_ = ggml_hash_set_new(2 * maximum_size_);
+            values_.resize(tensors_.size);
+        }
+        const size_t index = ggml_hash_insert(&tensors_, const_cast<ggml_tensor *>(tensor));
+        GGML_ASSERT(index != GGML_HASHSET_ALREADY_EXISTS);
+        values_[index] = value;
+    }
+
+  private:
+    size_t maximum_size_;
+    ggml_hash_set tensors_ = {};
+    std::vector<int32_t> values_;
+};
+
 static Status bind_current_value(const ValueMap &                                   values,
                                  ValueId                                            expected,
                                  const ggml_tensor *                                tensor,
                                  std::vector<const ggml_tensor *> &                 tensor_by_value,
-                                 std::unordered_map<const ggml_tensor *, int32_t> & value_by_tensor,
+                                 TensorValueIndex &                                  value_by_tensor,
                                  const char *                                       role,
                                  size_t                                             node_index) {
     Status        status;
@@ -81,21 +236,29 @@ static Status bind_current_value(const ValueMap &                               
         return status;
     }
 
+    if (existing_tensor == tensor) {
+        // Both maps are populated together when a value is first seen.
+        return status;
+    }
+
     const auto existing_value = value_by_tensor.find(tensor);
-    if (existing_value != value_by_tensor.end() && existing_value->second != expected.value) {
-        status.log("node %zu %s tensor maps to cached values %d and %d", node_index, role, existing_value->second,
+    if (existing_value.has_value() && *existing_value != expected.value) {
+        status.log("node %zu %s tensor maps to cached values %d and %d", node_index, role, *existing_value,
                    expected.value);
         return status;
     }
 
-    if (existing_tensor == nullptr && existing_value == value_by_tensor.end() &&
-        !tensor_metadata_matches(*value, tensor)) {
-        status.log("node %zu %s value %d metadata does not match current tensor", node_index, role, expected.value);
+    if (existing_tensor == nullptr && !existing_value.has_value() &&
+        !tensor_metadata_matches(values, *value, tensor, tensor_by_value)) {
+        status.log("node %zu %s value %d metadata does not match current tensor: cached %s current %s", node_index,
+                   role, expected.value, format_value_metadata(*value).c_str(), format_tensor_metadata(tensor).c_str());
         return status;
     }
 
     tensor_by_value[static_cast<size_t>(expected.value)] = tensor;
-    value_by_tensor.emplace(tensor, expected.value);
+    if (!existing_value.has_value()) {
+        value_by_tensor.emplace(tensor, expected.value);
+    }
     return status;
 }
 
@@ -104,7 +267,8 @@ static std::string command_program_shape_key(const CommandProgram & commands) {
     out << "hrx-command-program-v1|commands=" << commands.commands.size();
     for (const Command & command : commands.commands) {
         out << "|ordinal=" << command.ordinal << "|kind=" << static_cast<int>(command.kind)
-            << "|kernel=" << command.kernel.kernel_id;
+            << "|kernel=" << command.kernel.kernel_id
+            << "|workload=" << static_cast<int>(command.kernel.workload_specialization);
         for (const auto & parameter : command.kernel.integer_parameters) {
             out << "|ip:" << parameter.first << '=' << parameter.second;
         }
@@ -114,7 +278,9 @@ static std::string command_program_shape_key(const CommandProgram & commands) {
         out << "|bindings=" << command.bindings.size();
         for (const CommandBinding & binding : command.bindings) {
             out << "|b:" << binding.name << ':' << binding.value.value << ':' << static_cast<int>(binding.origin) << ':'
-                << binding.offset << ':' << binding.length << ':' << static_cast<int>(binding.access);
+                << binding.offset << ':' << binding.length << ':' << static_cast<int>(binding.access) << ':'
+                << binding.layout << ':' << static_cast<int>(binding.source_type) << ':' << binding.input_size << ':'
+                << binding.output_size << ':' << binding.source_length;
         }
         out << "|deps=" << command.dependencies.size();
         for (const uint32_t dependency : command.dependencies) {
@@ -141,7 +307,8 @@ GraphProgram::GraphProgram(uint64_t                        uid,
     target_(std::move(target)),
     graph_(std::move(graph)),
     commands_(std::move(commands)),
-    command_shape_(std::move(command_shape)) {}
+    command_shape_(std::move(command_shape)),
+    command_shape_hash_(command_program_shape_hash(command_shape_)) {}
 
 const GraphProgramExternalSlot * GraphProgram::find_external_slot(ValueId value) const {
     const auto found = external_slot_by_value_.find(value.value);
@@ -287,7 +454,8 @@ bool GraphProgram::has_prepared_program() const {
 }
 
 bool GraphProgram::can_use_prepared_fast_path(const ggml_cgraph & graph) const {
-    return graph.nodes == fast_path_nodes_;
+    // The UID prevents graph-arena address reuse from passing the fast path.
+    return graph.uid == uid_ && graph.nodes == fast_path_nodes_;
 }
 
 PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
@@ -320,6 +488,22 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
         ++prepared_stats_.builds;
     } else {
         ++prepared_stats_.hits;
+    }
+
+    if (environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_REPLAY") || debug_serial_command_execution_enabled()) {
+        result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
+        result.graph_replay_ineligible_reason = debug_serial_command_execution_enabled() ?
+                                                    "debug_serial_execution" :
+                                                    "disabled_by_environment";
+        result.success = bind_and_execute_prepared_command_program(context, *commands_, bindings, prepared_);
+        if (!result.success) {
+            result.status.log("execute cached HRX command program failed");
+        }
+        return result;
+    }
+
+    if (environment_flag_enabled("GGML_HRX_REBUILD_GRAPH_REPLAY")) {
+        recorded_ = {};
     }
 
     const RecordedCommandGraphExecutionResult replay =
@@ -361,7 +545,7 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
 
     const ValueMap &                                 values = graph_->values();
     std::vector<const ggml_tensor *>                 tensor_by_value(values.size(), nullptr);
-    std::unordered_map<const ggml_tensor *, int32_t> value_by_tensor;
+    TensorValueIndex                                value_by_tensor(values.size());
 
     for (size_t node_index = 0; node_index < graph_->nodes().size(); ++node_index) {
         const GraphNode &   cached_node  = graph_->nodes()[node_index];
@@ -410,11 +594,22 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
         }
     }
 
-    for (const ValueId id : values.external_value_ids()) {
+    std::optional<std::vector<uint8_t>> command_graph_values;
+    const std::vector<ValueId> external_ids = values.external_value_ids();
+    result.external_bindings.reserve(external_ids.size());
+    for (const ValueId id : external_ids) {
+        const Value * value = values.find(id);
+        if (value == nullptr) {
+            result.status.log("external value %d is missing from the cached graph", id.value);
+            return result;
+        }
         if (id.value < 0 || static_cast<size_t>(id.value) >= tensor_by_value.size() ||
             tensor_by_value[static_cast<size_t>(id.value)] == nullptr) {
             result.status.log("external value %d is missing from the current graph", id.value);
             return result;
+        }
+        if (can_skip_external_binding(*value, *commands_, values.size(), command_graph_values)) {
+            continue;
         }
         result.external_bindings.push_back({ id, tensor_by_value[static_cast<size_t>(id.value)] });
     }
@@ -478,6 +673,7 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
     GraphProgram * cached_program = program.get();
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        validated_matches_.clear();
         programs_[graph.uid] = std::move(program);
         cached_program       = programs_[graph.uid].get();
         last_program_        = cached_program;
@@ -495,6 +691,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
     if (graph.uid != 0) {
         const bool     disable_fast_path  = environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_UID_FAST_PATH");
         const bool     validate_fast_path = environment_flag_enabled("GGML_HRX_VALIDATE_GRAPH_UID_CACHE");
+        const bool     allow_structural_reuse = std::getenv("GGML_HRX_DUMP_COMMAND_PROGRAM_DIR") == nullptr;
         GraphProgram * cached_program     = nullptr;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -506,6 +703,13 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                 if (found != programs_.end() && found->second->target() == target) {
                     cached_program = found->second.get();
                     last_program_  = cached_program;
+                }
+                if (cached_program == nullptr && !disable_fast_path && allow_structural_reuse) {
+                    const auto matched = validated_matches_.find(graph.uid);
+                    if (matched != validated_matches_.end() && matched->second.nodes == graph.nodes &&
+                        matched->second.program->target() == target) {
+                        cached_program = matched->second.program;
+                    }
                 }
             }
         }
@@ -535,6 +739,34 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                 result.status.append(match.status);
                 return result;
             }
+            std::lock_guard<std::mutex> lock(mutex_);
+            validated_matches_.erase(graph.uid);
+        }
+
+        // Physical bindings have a separate prepared-program cache key.
+        if (allow_structural_reuse) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const auto & entry : programs_) {
+                GraphProgram * candidate = entry.second.get();
+                if (candidate == cached_program || candidate->target() != target) {
+                    continue;
+                }
+                GraphProgramMatch match = candidate->match_current_graph(graph);
+                if (!match.valid()) {
+                    continue;
+                }
+                last_program_ = candidate;
+                if (!disable_fast_path) {
+                    if (validated_matches_.size() >= 128) {
+                        validated_matches_.clear();
+                    }
+                    validated_matches_[graph.uid] = { candidate, graph.nodes };
+                }
+                ++stats_.hits;
+                result.program = candidate;
+                result.match   = std::move(match);
+                return result;
+            }
         }
     }
 
@@ -559,6 +791,7 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
 
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    validated_matches_.clear();
     programs_.clear();
     last_program_ = nullptr;
 }
@@ -581,6 +814,10 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
     }
 
     std::string command_shape = command_program_shape_key(commands);
+    Status      dump_status   = dump_command_program_kernels_if_requested(commands, corpus, target, command_shape);
+    for (const std::string & error : dump_status.errors()) {
+        GGML_LOG_WARN("ggml_hrx: %s\n", error.c_str());
+    }
     return std::make_unique<GraphProgram>(uid, target, std::make_unique<Graph>(std::move(imported_graph)),
                                           std::make_unique<CommandProgram>(std::move(commands)),
                                           std::move(command_shape));

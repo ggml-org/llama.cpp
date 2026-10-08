@@ -4,10 +4,12 @@
 #include "transient-allocator.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace ggml::hrx {
@@ -19,6 +21,11 @@ static bool string_equal(const char * lhs, const char * rhs) {
 
 static std::string string_value(const char * value) {
     return value != nullptr ? value : "";
+}
+
+static bool replay_seeded_transients_enabled() {
+    const char * value = std::getenv("GGML_HRX_REPLAY_SEEDED_TRANSIENTS");
+    return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
 }
 
 static CommandBindingOrigin command_binding_origin(const Graph & graph, const Value & value) {
@@ -40,12 +47,65 @@ struct StorageBindingTarget {
     size_t  offset = 0;
 };
 
-static StorageBindingTarget storage_binding_target(const Graph & graph, ValueId value) {
+static bool resource_access_writes(ResourceAccess access) {
+    return access == ResourceAccess::Write || access == ResourceAccess::ReadWrite;
+}
+
+static bool byte_range_is_covered(size_t range_offset, size_t range_length, size_t cover_offset, size_t cover_length) {
+    if (range_offset < cover_offset) {
+        return false;
+    }
+    const size_t relative_offset = range_offset - cover_offset;
+    return relative_offset <= cover_length && range_length <= cover_length - relative_offset;
+}
+
+static const Value * find_external_storage_binding_target(const Graph & graph,
+                                                          const Value & source,
+                                                          size_t        binding_offset,
+                                                          size_t        binding_length) {
+    if (source.storage.value < 0 || binding_length > source.byte_count ||
+        binding_offset > source.byte_count - binding_length) {
+        return nullptr;
+    }
+
+    if (binding_offset > std::numeric_limits<size_t>::max() - source.storage_offset) {
+        return nullptr;
+    }
+    const size_t  range_offset = source.storage_offset + binding_offset;
+    const Value * best         = nullptr;
+    for (const Value & candidate : graph.values().values()) {
+        if (candidate.kind != ValueKind::External || candidate.storage != source.storage) {
+            continue;
+        }
+        if (!byte_range_is_covered(range_offset, binding_length, candidate.storage_offset, candidate.byte_count)) {
+            continue;
+        }
+        if (best == nullptr || candidate.byte_count < best->byte_count) {
+            best = &candidate;
+        }
+    }
+    return best;
+}
+
+static StorageBindingTarget storage_binding_target(const Graph &  graph,
+                                                   ValueId        value,
+                                                   size_t         binding_offset,
+                                                   size_t         binding_length,
+                                                   ResourceAccess access) {
     StorageBindingTarget target;
     target.value              = value;
     const Value * graph_value = graph.values().find(value);
     if (graph_value == nullptr || graph_value->kind != ValueKind::Transient) {
         return target;
+    }
+    if (resource_access_writes(access)) {
+        const Value * external_target =
+            find_external_storage_binding_target(graph, *graph_value, binding_offset, binding_length);
+        if (external_target != nullptr) {
+            target.value  = external_target->id;
+            target.offset = graph_value->storage_offset + binding_offset - external_target->storage_offset;
+            return target;
+        }
     }
     const Value * root = graph.values().find(graph_value->storage_root);
     if (root == nullptr) {
@@ -102,6 +162,11 @@ static void append_command(const Graph &          graph,
         command_binding.value                                      = binding.value;
         command_binding.offset                                     = binding.offset;
         command_binding.length                                     = binding.length;
+        command_binding.layout                                     = binding.layout;
+        command_binding.source_type                                = binding.source_type;
+        command_binding.input_size                                 = binding.input_size;
+        command_binding.output_size                                = binding.output_size;
+        command_binding.source_length                              = binding.source_length;
         const Value *                               value          = graph.values().find(command_binding.value);
         const CommandPlanTransient *                plan_transient = find_plan_transient(plan, command_binding.value);
         const CommandPlanCompletionCounterRequest * completion_counter =
@@ -109,13 +174,14 @@ static void append_command(const Graph &          graph,
         if (value == nullptr && plan_transient == nullptr && completion_counter == nullptr) {
             status.log("command %u binding %zu references missing value %d", command.ordinal, binding_index,
                        command_binding.value.value);
-        } else if (value != nullptr) {
-            command_binding.origin = command_binding_origin(graph, *value);
-        } else {
-            command_binding.origin = CommandBindingOrigin::Transient;
         }
-        const StorageBindingTarget binding_target = storage_binding_target(graph, command_binding.value);
-        command_binding.value                     = binding_target.value;
+        if (definition != nullptr && binding_index < definition->bindings.size()) {
+            command_binding.name   = string_value(definition->bindings[binding_index].name);
+            command_binding.access = definition->bindings[binding_index].access;
+        }
+        const StorageBindingTarget binding_target = storage_binding_target(
+            graph, command_binding.value, command_binding.offset, command_binding.length, command_binding.access);
+        command_binding.value = binding_target.value;
         if (binding_target.offset > 0) {
             if (binding_target.offset > std::numeric_limits<size_t>::max() - command_binding.offset) {
                 status.log("command %u binding %zu storage alias offset overflows", command.ordinal, binding_index);
@@ -123,9 +189,11 @@ static void append_command(const Graph &          graph,
                 command_binding.offset += binding_target.offset;
             }
         }
-        if (definition != nullptr && binding_index < definition->bindings.size()) {
-            command_binding.name   = string_value(definition->bindings[binding_index].name);
-            command_binding.access = definition->bindings[binding_index].access;
+        const Value * target_value = graph.values().find(command_binding.value);
+        if (target_value != nullptr) {
+            command_binding.origin = command_binding_origin(graph, *target_value);
+        } else if (plan_transient != nullptr || completion_counter != nullptr) {
+            command_binding.origin = CommandBindingOrigin::Transient;
         }
         command.bindings.push_back(std::move(command_binding));
     }
@@ -140,7 +208,7 @@ static void verify_command_list(const std::vector<Command> & commands,
     for (size_t i = 0; i < commands.size(); ++i) {
         const Command &   command         = commands[i];
         const std::string command_context = format_command(command);
-        if (command.ordinal != i) {
+        if (command.ordinal != i && !replay_seeded_transients_enabled()) {
             status.log("%s has non-contiguous ordinal at index %zu", command_context.c_str(), i);
         }
         if (command.kind != CommandKind::Kernel) {
@@ -315,6 +383,78 @@ static void verify_transient_allocations(const CommandProgram & program, Status 
     }
 }
 
+static bool binding_requires_prior_write(const CommandBinding & binding) {
+    return binding.origin == CommandBindingOrigin::Transient && binding.access == ResourceAccess::Read;
+}
+
+static bool binding_defines_transient_value(const CommandBinding & binding) {
+    return binding.origin == CommandBindingOrigin::Transient && resource_access_writes(binding.access);
+}
+
+static int32_t find_later_transient_writer(const std::vector<Command> & commands,
+                                           size_t                       begin,
+                                           ValueId                      value) {
+    for (size_t i = begin; i < commands.size(); ++i) {
+        const Command & command = commands[i];
+        for (const CommandBinding & binding : command.bindings) {
+            if (binding.value == value && binding_defines_transient_value(binding)) {
+                return static_cast<int32_t>(command.ordinal);
+            }
+        }
+    }
+    return -1;
+}
+
+static void verify_transient_reads_are_defined(const CommandProgram & program, Status & status) {
+    if (replay_seeded_transients_enabled()) {
+        return;
+    }
+
+    std::unordered_set<int32_t> defined;
+    for (const Command & command : program.initialization_commands) {
+        for (const CommandBinding & binding : command.bindings) {
+            if (binding_defines_transient_value(binding)) {
+                defined.insert(binding.value.value);
+            }
+        }
+    }
+    for (const ConstantInitialization & initialization : program.constant_initializations) {
+        defined.insert(initialization.value.value);
+    }
+    if (program.completion_counters.byte_count > 0) {
+        for (const TransientAllocation & allocation : program.transients.allocations) {
+            if (allocation_overlaps_region(allocation, program.completion_counters.arena_offset,
+                                           program.completion_counters.byte_count)) {
+                defined.insert(allocation.value.value);
+            }
+        }
+    }
+
+    for (size_t command_index = 0; command_index < program.commands.size(); ++command_index) {
+        const Command &   command         = program.commands[command_index];
+        const std::string command_context = format_command(command);
+        for (size_t binding_index = 0; binding_index < command.bindings.size(); ++binding_index) {
+            const CommandBinding & binding = command.bindings[binding_index];
+            if (!binding_requires_prior_write(binding) || defined.find(binding.value.value) != defined.end()) {
+                continue;
+            }
+            const int32_t later_writer = find_later_transient_writer(program.commands, command_index + 1, binding.value);
+            if (later_writer >= 0) {
+                status.log("%s %s reads transient value %d before write by command %d", command_context.c_str(),
+                           format_command_binding(binding).c_str(), binding.value.value, later_writer);
+            } else {
+                status.log("%s %s reads transient value %d before write", command_context.c_str(),
+                           format_command_binding(binding).c_str(), binding.value.value);
+            }
+        }
+        for (const CommandBinding & binding : command.bindings) {
+            if (binding_defines_transient_value(binding)) {
+                defined.insert(binding.value.value);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 const TransientAllocation * find_transient_allocation(const TransientPlan & plan, ValueId value) {
@@ -351,6 +491,7 @@ CommandProgram build_command_program(const Graph &        graph,
             initialization.data,
         });
     }
+    result.activation_publication_diagnostics = plan.metadata.activation_publication_diagnostics();
     return result;
 }
 
@@ -387,6 +528,7 @@ VerificationResult verify_command_program(const CommandProgram & program,
         }
     }
     verify_transient_allocations(program, result.status);
+    verify_transient_reads_are_defined(program, result.status);
     for (const ConstantInitialization & initialization : program.constant_initializations) {
         const TransientAllocation * allocation = find_transient_allocation(program.transients, initialization.value);
         if (allocation == nullptr) {

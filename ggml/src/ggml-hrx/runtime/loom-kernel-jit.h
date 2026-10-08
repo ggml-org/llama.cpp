@@ -24,6 +24,7 @@ struct LoomKernelCompileRequest {
     std::vector<ggml_hrx_loom_jit_source>            dependencies;
     std::vector<std::pair<std::string, std::string>> config_storage;
     std::vector<int64_t>                             workload;
+    bool                                             specialize_workload = true;
 };
 
 class LoomCompiledKernel {

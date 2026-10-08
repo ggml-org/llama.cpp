@@ -1,0 +1,77 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.rollback_store_carried(%slot: index, %cache_count: index, %n_t: index, %cache_sequence_base: index, %channel: index, %old0: f32, %old1: f32, %old2: f32, %cache: buffer)
+
+template.decl @llm.ssm_conv.rollback_store_x(%slot: index, %cache_count: index, %n_t: index, %cache_sequence_base: index, %token: index, %channel: index, %value: f32, %cache: buffer)
+
+template.def<@llm.ssm_conv.rollback_store_carried> device @llm_ssm_conv_rollback_store_carried(%slot: index, %cache_count: index, %n_t: index, %cache_sequence_base: index, %channel: index, %old0: f32, %old1: f32, %old2: f32, %cache: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %active = index.cmp ult, %slot, %cache_count : index
+  scf.if %active {
+    %has_full_history = index.cmp ult, %slot, %n_t : index
+    %start = scf.if %has_full_history -> (index) {
+      %candidate = index.sub %n_t, %slot : index
+      scf.yield %candidate : index
+    } else {
+      scf.yield %c0 : index
+    }
+    %cache_g = buffer.assume.memory_space<global> %cache : buffer
+    %cache_v = buffer.view %cache_g[%base] : buffer -> view<589824xf32>
+    scf.for %row = [%c0 to %c3 step %c1] {
+      %source_row = index.add %start, %row : index
+      %is_carried = index.cmp ult, %source_row, %c3 : index
+      scf.if %is_carried {
+        %is_zero = index.cmp eq, %source_row, %c0 : index
+        %is_one = index.cmp eq, %source_row, %c1 : index
+        %old12 = scf.select %is_one, %old1, %old2 : f32
+        %value = scf.select %is_zero, %old0, %old12 : f32
+        %channel_base0 = index.mul %channel, %c3 : index
+        %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 196605), mul(%channel_base0, 3)] : index
+        %cache_channel_index0 = index.add %channel_base, %row : index
+        %cache_channel_index = index.assume %cache_channel_index0 [range(%cache_channel_index0, 0, 196607)] : index
+        %cache_index0 = index.add %cache_sequence_base, %cache_channel_index : index
+        %cache_index = index.assume %cache_index0 [range(%cache_index0, 0, 589823)] : index
+        view.store %value, %cache_v[%cache_index] : f32, view<589824xf32>
+      }
+    }
+  }
+  template.return
+}
+template.def<@llm.ssm_conv.rollback_store_x> device @llm_ssm_conv_rollback_store_x(%slot: index, %cache_count: index, %n_t: index, %cache_sequence_base: index, %token: index, %channel: index, %value: f32, %cache: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c3 = index.constant 3 : index
+  %active = index.cmp ult, %slot, %cache_count : index
+  %has_full_history = index.cmp ult, %slot, %n_t : index
+  %start = scf.if %has_full_history -> (index) {
+    %candidate = index.sub %n_t, %slot : index
+    scf.yield %candidate : index
+  } else {
+    scf.yield %c0 : index
+  }
+  %source_row = index.add %token, %c3 : index
+  %end = index.add %start, %c3 : index
+  %at_or_after_start = index.cmp uge, %source_row, %start : index
+  %before_end = index.cmp ult, %source_row, %end : index
+  %within_window = scalar.andi %at_or_after_start, %before_end : i1
+  %writes = scalar.andi %active, %within_window : i1
+  scf.if %writes {
+    %row0 = index.sub %source_row, %start : index
+    %row = index.assume %row0 [range(%row0, 0, 2)] : index
+    %channel_base0 = index.mul %channel, %c3 : index
+    %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 196605), mul(%channel_base0, 3)] : index
+    %cache_channel_index0 = index.add %channel_base, %row : index
+    %cache_channel_index = index.assume %cache_channel_index0 [range(%cache_channel_index0, 0, 196607)] : index
+    %cache_index0 = index.add %cache_sequence_base, %cache_channel_index : index
+    %cache_index = index.assume %cache_index0 [range(%cache_index0, 0, 589823)] : index
+    %cache_g = buffer.assume.memory_space<global> %cache : buffer
+    %cache_v = buffer.view %cache_g[%base] : buffer -> view<589824xf32>
+    view.store %value, %cache_v[%cache_index] : f32, view<589824xf32>
+  }
+  template.return
+}

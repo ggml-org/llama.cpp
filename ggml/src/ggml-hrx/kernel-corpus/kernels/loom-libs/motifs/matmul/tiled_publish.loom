@@ -1,0 +1,44 @@
+template.decl @ggml.matmul.tiled_publish.store_vector4(%format: index, %publish_word: i1, %token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @ggml.matmul.tiled_publish_f32.store_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %output: buffer)
+
+template.def<@ggml.matmul.tiled_publish.store_vector4> device @ggml_matmul_tiled_publish_store_vector4(%format: index, %publish_word: i1, %token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %f16_element_bytes = index.constant 2 : offset
+  %f32_element_bytes = index.constant 4 : offset
+  %is_f16 = index.cmp eq, %format, %c16 : index
+  %is_f32 = index.cmp eq, %format, %c32 : index
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %row_element_offset = index.mul %token0, %output_size : index
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+  %publish_f32 = scalar.andi %publish_word, %is_f32 : i1
+  scf.if %publish_f32 {
+    %row_byte_offset = index.scale %row_element_offset, %f32_element_bytes : index, offset -> offset
+    %output_row = buffer.view %output_noalias[%row_byte_offset] : buffer -> view<[%output_size]xf32>
+    vector.store.mask %values, %output_row[%channel], %mask : vector<4xf32>, view<[%output_size]xf32>, vector<4xi1>
+  }
+  %publish_f16 = scalar.andi %publish_word, %is_f16 : i1
+  scf.if %publish_f16 {
+    %row_byte_offset = index.scale %row_element_offset, %f16_element_bytes : index, offset -> offset
+    %output_row = buffer.view %output_noalias[%row_byte_offset] : buffer -> view<[%output_size]xf16>
+    %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store.mask %truncated, %output_row[%channel], %mask : vector<4xf16>, view<[%output_size]xf16>, vector<4xi1>
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.tiled_publish_f32.store_vector4> device @ggml_matmul_tiled_publish_f32_store_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %output: buffer) {
+  %f32_format = index.constant 32 : index
+  %publish_word = scalar.constant true : i1
+  %c0_offset = index.constant 0 : offset
+  %scratch_d_byte_add = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  template.apply<@ggml.matmul.tiled_publish.store_vector4>(%f32_format, %publish_word, %token_count0, %output_size0, %token0, %channel, %values, %scratch_values, %scratch_d, %output) : (index, i1, index, index, index, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}

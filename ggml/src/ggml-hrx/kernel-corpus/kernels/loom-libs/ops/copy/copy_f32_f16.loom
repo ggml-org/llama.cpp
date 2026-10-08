@@ -1,0 +1,30 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.convert_f32_f16.body(%element_count: index, %source: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_copy_f32_gfx11_wave64 {subgroup_size = 64}
+
+// Aligned tensor conversions used by existing F16-consuming matmul entries.
+kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_f32_f16") @ggml_copy_f32_f16(%element_count: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %tile = index.constant 1024 : index
+  %rounding = index.constant 1023 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %tile : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%element_count: index, %source: buffer, %output: buffer) {
+  template.apply<@ggml.copy.convert_f32_f16.body>(%element_count, %source, %output) : (index, buffer, buffer)
+  kernel.return
+}
+
+check.case public @ggml_copy_f32_f16_small_case {
+  %count = check.literal value(12) : index
+  %source = check.generate.iota offset(-2.0) step(0.5) : tensor<12xf32>
+  %output = check.generate.fill value(0.0) : tensor<12xf16>
+  %expected = check.generate.iota offset(-2.0) step(0.5) : tensor<12xf16>
+  kernel.launch @ggml_copy_f32_f16[%count](%count, %source, %output) : [index](index, tensor<12xf32>, tensor<12xf16>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12xf16>
+  check.return
+}

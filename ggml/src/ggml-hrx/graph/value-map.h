@@ -118,6 +118,7 @@ class ValueMap {
 
   private:
     const Value * find_alias_source(const ggml_tensor * tensor) const;
+    void          promote_storage_root_external(ValueId storage_root);
 
     std::vector<Value>                              values_;
     std::vector<ValueStorage>                       storages_;

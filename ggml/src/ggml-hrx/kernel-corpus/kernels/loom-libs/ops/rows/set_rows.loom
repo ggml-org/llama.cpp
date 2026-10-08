@@ -1,0 +1,108 @@
+// Generic GGML SET_ROWS for contiguous 2D row caches.
+template.decl @ggml.set_rows.body(%token_count: index, %cache_row_count: index, %hidden_size: index, %rows: buffer, %indices: buffer, %cache: buffer)
+
+template.decl @ggml.set_rows.launch(%hidden_capacity: index, %token_capacity: index) -> (index, index, index, index)
+
+template.decl @ggml.set_rows.load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %input_stride: index, %rows: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.rows.cache_publish.safe_i64_row(%arg0: index, %arg1: index, %arg2: index, %arg3: buffer) -> (i1, index)
+
+template.decl @ggml.rows.cache_publish.f32_vector4(%arg0: index, %arg1: i1, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: vector<4xf32>, %arg7: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_set_rows_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.set_rows.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+config.decl @ggml.set_rows.hidden_capacity : %value: index where [range(%value, 4, 32768), mul(%value, 4)]
+
+config.decl @ggml.set_rows.input_format : %value: index where [range(%value, 16, 32)]
+
+config.decl @ggml.set_rows.output_format : %value: index where [range(%value, 16, 32)]
+
+config.decl @ggml.set_rows.input_stride : %value: index where [range(%value, 4, 1048576)]
+
+template.def<@ggml.set_rows.load_f32_vector4> device @ggml_set_rows_load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %input_stride: index, %rows: buffer) -> (vector<4xf32>) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %zero = vector.splat %c0_f32 : vector<4xf32>
+  %is_f16 = index.cmp eq, %input_format, %c16 : index
+  %is_f32 = index.cmp eq, %input_format, %c32 : index
+  %f16_values = scf.if %is_f16 -> (vector<4xf32>) {
+    %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%token_count]x[%input_stride]xf16>
+    %loaded = vector.load %rows_view[%token, %channel] : view<[%token_count]x[%input_stride]xf16> -> vector<4xf16>
+    %widened = vector.extf %loaded : vector<4xf16> to vector<4xf32>
+    scf.yield %widened : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %f32_values = scf.if %is_f32 -> (vector<4xf32>) {
+    %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%token_count]x[%input_stride]xf32>
+    %loaded = vector.load %rows_view[%token, %channel] : view<[%token_count]x[%input_stride]xf32> -> vector<4xf32>
+    scf.yield %loaded : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %selected = scf.select %is_f32, %f32_values, %f16_values : vector<4xf32>
+  template.return %selected : vector<4xf32>
+}
+
+template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index, %cache_row_count: index, %hidden_size: index, %rows: buffer, %indices: buffer, %cache: buffer) {
+  %token_capacity = config.get @ggml.set_rows.token_capacity : index
+  %hidden_capacity = config.get @ggml.set_rows.hidden_capacity : index
+  %input_format = config.get @ggml.set_rows.input_format : index
+  %output_format = config.get @ggml.set_rows.output_format : index
+  %input_stride = config.get @ggml.set_rows.input_stride : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 32768), mul(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %packet_tile_base = index.mul %channel_tile, %c256 : index
+  %packet0 = index.add %packet_tile_base, %workitem0 : index
+  %packet_count = index.div %bounded_hidden_size, %c4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %valid_packet = index.cmp ult, %packet0, %packet_count : index
+  %publish0 = scalar.andi %valid_token, %valid_packet : i1
+  %token = scf.select %valid_token, %token0, %c0 : index
+  %packet = scf.select %valid_packet, %packet0, %c0 : index
+  %channel = index.mul %packet, %c4 : index
+  %rows_noalias, %indices_noalias, %cache_noalias = buffer.assume.noalias %rows, %indices, %cache : buffer, buffer, buffer
+  %valid_row, %cache_row = template.apply<@ggml.rows.cache_publish.safe_i64_row>(%token, %bounded_token_count, %bounded_cache_row_count, %indices_noalias) : (index, index, index, buffer) -> (i1, index)
+  %publish = scalar.andi %publish0, %valid_row : i1
+  %values = template.apply<@ggml.set_rows.load_f32_vector4>(%input_format, %token, %channel, %bounded_token_count, %input_stride, %rows_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>)
+  template.apply<@ggml.rows.cache_publish.f32_vector4>(%output_format, %publish, %cache_row, %channel, %bounded_cache_row_count, %bounded_hidden_size, %values, %cache_noalias) : (index, i1, index, index, index, index, vector<4xf32>, buffer)
+  template.return
+}
+
+template.def<@ggml.set_rows.launch> @ggml_set_rows_launch(%hidden_capacity: index, %token_capacity: index) -> (index, index, index, index) {
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %packet_count = index.div %hidden_capacity, %c4 : index
+  %padded_packet_count = index.add %packet_count, %c255 : index
+  %packet_tiles = index.div %padded_packet_count, %c256 : index
+  template.return %packet_tiles, %token_capacity, %c1, %c256 : index, index, index, index
+}
+
+kernel.def target(@ggml_set_rows_gfx11_wave64) @ggml_set_rows(%token_count: index, %cache_row_count: index, %hidden_size: index) {
+  %token_capacity = config.get @ggml.set_rows.token_capacity : index
+  %hidden_capacity = config.get @ggml.set_rows.hidden_capacity : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c255 = index.constant 255 : index
+  %workgroup_size = index.constant 256 : index
+  %packet_count = index.div %hidden_capacity, %c4 : index
+  %padded_packet_count = index.add %packet_count, %c255 : index
+  %packet_tiles = index.div %padded_packet_count, %workgroup_size : index
+  kernel.launch.config workgroups(%packet_tiles, %token_capacity, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %hidden_size: index, %rows: buffer, %indices: buffer, %cache: buffer) where [range(%token_count, 1, 2048)] {
+  template.apply<@ggml.set_rows.body>(%token_count, %cache_row_count, %hidden_size, %rows, %indices, %cache) : (index, index, index, buffer, buffer, buffer)
+  kernel.return
+}

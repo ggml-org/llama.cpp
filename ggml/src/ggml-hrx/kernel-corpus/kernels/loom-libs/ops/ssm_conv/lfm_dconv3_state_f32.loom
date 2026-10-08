@@ -1,0 +1,128 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @llm_ssm_conv_lfm_dconv3_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @llm.ssm_conv.lfm_dconv3.n_t : %value: index where [range(%value, 1, 64)]
+
+kernel.def target(@llm_ssm_conv_lfm_dconv3_gfx11_wave32) export("llm_ssm_conv_lfm_dconv3_state_f32") @llm_ssm_conv_lfm_dconv3_state_f32() {
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %n_t = config.get @llm.ssm_conv.lfm_dconv3.n_t : index
+  %groups = index.mul %n_t, %c8 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%state: buffer, %x: buffer, %filter: buffer, %output: buffer, %cache: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c8 = index.constant 8 : index
+  %c2048 = index.constant 2048 : index
+  %c256 = index.constant 256 : index
+  %n_t0 = config.get @llm.ssm_conv.lfm_dconv3.n_t : index
+  %n_t = index.assume %n_t0 [range(%n_t0, 1, 64)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 511)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %token0 = index.div %group, %c8 : index
+  %token = index.assume %token0 [range(%token0, 0, 63)] : index
+  %channel_group = index.rem %group, %c8 : index
+  %channel_base = index.mul %channel_group, %c256 : index
+  %channel0 = index.add %channel_base, %lane : index
+  %channel = index.assume %channel0 [range(%channel0, 0, 2047)] : index
+  %token_elements0 = index.mul %n_t, %c2048 : index
+  %token_elements = index.assume %token_elements0 [range(%token_elements0, 2048, 131072), mul(%token_elements0, 2048)] : index
+
+  %state_v = buffer.view %state[%base] : buffer -> view<4096xf32>
+  %filter_v = buffer.view %filter[%base] : buffer -> view<6144xf32>
+  %cache_v = buffer.view %cache[%base] : buffer -> view<4096xf32>
+  %state_base0 = index.mul %channel, %c2 : index
+  %state_base = index.assume %state_base0 [range(%state_base0, 0, 4094), mul(%state_base0, 2)] : index
+  %filter_base0 = index.mul %channel, %c3 : index
+  %filter_base = index.assume %filter_base0 [range(%filter_base0, 0, 6141), mul(%filter_base0, 3)] : index
+  %filter_one0 = index.add %filter_base, %c1 : index
+  %filter_one = index.assume %filter_one0 [range(%filter_one0, 1, 6142)] : index
+  %filter_two0 = index.add %filter_base, %c2 : index
+  %filter_two = index.assume %filter_two0 [range(%filter_two0, 2, 6143)] : index
+  %w0 = view.load %filter_v[%filter_base] : view<6144xf32> -> f32
+  %w1 = view.load %filter_v[%filter_one] : view<6144xf32> -> f32
+  %w2 = view.load %filter_v[%filter_two] : view<6144xf32> -> f32
+
+  %from_x0 = index.cmp uge, %token, %c2 : index
+  %v0 = scf.if %from_x0 -> (f32) {
+    %x_token = index.sub %token, %c2 : index
+    %x_base = index.mul %x_token, %c2048 : index
+    %x_index0 = index.add %x_base, %channel : index
+    %x_index, %x_extent = index.assume %x_index0, %token_elements [lt(%x_index0, %token_elements)] : index, index
+    %x_view = buffer.view %x[%base] : buffer -> view<[%x_extent]xf32>
+    %loaded = view.load %x_view[%x_index] : view<[%x_extent]xf32> -> f32
+    scf.yield %loaded : f32
+  } else {
+    %state_index0 = index.add %state_base, %token : index
+    %state_index = index.assume %state_index0 [range(%state_index0, 0, 4095)] : index
+    %loaded = view.load %state_v[%state_index] : view<4096xf32> -> f32
+    scf.yield %loaded : f32
+  }
+  %position1 = index.add %token, %c1 : index
+  %from_x1 = index.cmp uge, %position1, %c2 : index
+  %v1 = scf.if %from_x1 -> (f32) {
+    %x_token = index.sub %position1, %c2 : index
+    %x_base = index.mul %x_token, %c2048 : index
+    %x_index0 = index.add %x_base, %channel : index
+    %x_index, %x_extent = index.assume %x_index0, %token_elements [lt(%x_index0, %token_elements)] : index, index
+    %x_view = buffer.view %x[%base] : buffer -> view<[%x_extent]xf32>
+    %loaded = view.load %x_view[%x_index] : view<[%x_extent]xf32> -> f32
+    scf.yield %loaded : f32
+  } else {
+    %state_index0 = index.add %state_base, %position1 : index
+    %state_index = index.assume %state_index0 [range(%state_index0, 1, 4095)] : index
+    %loaded = view.load %state_v[%state_index] : view<4096xf32> -> f32
+    scf.yield %loaded : f32
+  }
+  %x_base2 = index.mul %token, %c2048 : index
+  %x_index20 = index.add %x_base2, %channel : index
+  %x_index2, %x_extent2 = index.assume %x_index20, %token_elements [lt(%x_index20, %token_elements)] : index, index
+  %x_view2 = buffer.view %x[%base] : buffer -> view<[%x_extent2]xf32>
+  %v2 = view.load %x_view2[%x_index2] : view<[%x_extent2]xf32> -> f32
+  %product0 = scalar.mulf %v0, %w0 : f32
+  %product1 = scalar.mulf %v1, %w1 : f32
+  %sum0 = scalar.addf %product0, %product1 : f32
+  %product2 = scalar.mulf %v2, %w2 : f32
+  %sum1 = scalar.addf %sum0, %product2 : f32
+  %output_index, %output_extent = index.assume %x_index20, %token_elements [lt(%x_index20, %token_elements)] : index, index
+  %output_view = buffer.view %output[%base] : buffer -> view<[%output_extent]xf32>
+  view.store %sum1, %output_view[%output_index] : f32, view<[%output_extent]xf32>
+
+  %publish = index.cmp eq, %token, %c0 : index
+  scf.if %publish {
+    %one_token = index.cmp eq, %n_t, %c1 : index
+    %tail0, %tail1 = scf.if %one_token -> (f32, f32) {
+      %state_one0 = index.add %state_base, %c1 : index
+      %state_one = index.assume %state_one0 [range(%state_one0, 1, 4095)] : index
+      %old1 = view.load %state_v[%state_one] : view<4096xf32> -> f32
+      scf.yield %old1, %v2 : f32, f32
+    } else {
+      %tail_token0 = index.sub %n_t, %c2 : index
+      %tail_token1 = index.sub %n_t, %c1 : index
+      %tail_base0 = index.mul %tail_token0, %c2048 : index
+      %tail_base1 = index.mul %tail_token1, %c2048 : index
+      %tail_index00 = index.add %tail_base0, %channel : index
+      %tail_index10 = index.add %tail_base1, %channel : index
+      %tail_index0, %tail_extent0 = index.assume %tail_index00, %token_elements [lt(%tail_index00, %token_elements)] : index, index
+      %tail_index1, %tail_extent1 = index.assume %tail_index10, %token_elements [lt(%tail_index10, %token_elements)] : index, index
+      %tail_view0 = buffer.view %x[%base] : buffer -> view<[%tail_extent0]xf32>
+      %tail_view1 = buffer.view %x[%base] : buffer -> view<[%tail_extent1]xf32>
+      %loaded0 = view.load %tail_view0[%tail_index0] : view<[%tail_extent0]xf32> -> f32
+      %loaded1 = view.load %tail_view1[%tail_index1] : view<[%tail_extent1]xf32> -> f32
+      scf.yield %loaded0, %loaded1 : f32, f32
+    }
+    %cache_one0 = index.add %state_base, %c1 : index
+    %cache_one = index.assume %cache_one0 [range(%cache_one0, 1, 4095)] : index
+    view.store %tail0, %cache_v[%state_base] : f32, view<4096xf32>
+    view.store %tail1, %cache_v[%cache_one] : f32, view<4096xf32>
+  }
+  kernel.return
+}

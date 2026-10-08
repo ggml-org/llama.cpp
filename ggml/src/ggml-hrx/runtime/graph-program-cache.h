@@ -56,6 +56,8 @@ class GraphProgram {
 
     const std::string & command_shape() const { return command_shape_; }
 
+    uint64_t command_shape_hash() const { return command_shape_hash_; }
+
     const Graph & graph() const { return *graph_; }
 
     Graph & graph() { return *graph_; }
@@ -89,6 +91,7 @@ class GraphProgram {
     std::unique_ptr<Graph>          graph_;
     std::unique_ptr<CommandProgram> commands_;
     std::string                     command_shape_;
+    uint64_t                        command_shape_hash_ = 0;
 
     std::vector<GraphProgramExternalSlot> external_slots_;
     std::unordered_map<int32_t, size_t>   external_slot_by_value_;
@@ -138,6 +141,11 @@ class GraphProgramCache {
     void clear();
 
   private:
+    struct ValidatedGraphMatch {
+        GraphProgram *              program = nullptr;
+        const ggml_tensor * const * nodes   = nullptr;
+    };
+
     GraphProgramLookup build_from_imported(const ggml_cgraph &  graph,
                                            Graph &&             imported_graph,
                                            const KernelCorpus & corpus,
@@ -151,6 +159,7 @@ class GraphProgramCache {
 
     mutable std::mutex                                          mutex_;
     std::unordered_map<uint64_t, std::unique_ptr<GraphProgram>> programs_;
+    std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;
     GraphProgram *                                              last_program_ = nullptr;
     GraphProgramCacheStats                                      stats_;
 };

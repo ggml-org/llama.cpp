@@ -57,6 +57,11 @@ std::string format_command_binding(const CommandBinding & binding) {
         << " origin=" << command_binding_origin_name(binding.origin)
         << " access=" << resource_access_name(binding.access) << " range=[" << binding.offset << ", "
         << binding.offset + binding.length << ")";
+    if (binding.layout != kNativeWeightLayout) {
+        out << " layout=" << binding.layout << " source_type=" << static_cast<int>(binding.source_type)
+            << " input_size=" << binding.input_size << " output_size=" << binding.output_size
+            << " source_length=" << binding.source_length;
+    }
     return out.str();
 }
 

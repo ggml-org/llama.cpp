@@ -1,0 +1,965 @@
+{
+  "command_count": 965,
+  "dispatch_count": 28,
+  "dispatches": [
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_000_ggml_get_rows_f32",
+      "compile_parameters": {
+        "ggml.get_rows_f32.hidden_capacity": "5120",
+        "ggml.get_rows_f32.token_capacity": "4",
+        "ggml.get_rows_f32.weight_format": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "hidden_size": 5120,
+        "row_count": 248320,
+        "token_count": 4
+      },
+      "kernel": "loom_libs:ggml_get_rows_f32",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/get_rows_f32.loom"
+      ],
+      "sources": [
+        "ops/rows/get_rows_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_get_rows_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_001_ggml_rmsnorm_binary_symmetric_i4_k32",
+      "compile_parameters": {
+        "ggml.rmsnorm_binary_symmetric_i4.hidden_size": "5120",
+        "ggml.rmsnorm_binary_symmetric_i4.rms_epsilon": "9.99999997e-07"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "token_count": 4
+      },
+      "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+      ],
+      "sources": [
+        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+      ],
+      "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_002_ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "10240",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_003_ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "48",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_004_ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "6144",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_005_ggml_get_rows_f32",
+      "compile_parameters": {
+        "ggml.get_rows_f32.hidden_capacity": "30720",
+        "ggml.get_rows_f32.token_capacity": "1",
+        "ggml.get_rows_f32.weight_format": "32"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {
+        "hidden_size": 30720,
+        "row_count": 20,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_get_rows_f32",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/get_rows_f32.loom"
+      ],
+      "sources": [
+        "ops/rows/get_rows_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_get_rows_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_006_llm_ssm_conv_dconv4_silu_rollback_f32",
+      "compile_parameters": {
+        "llm.ssm_conv.rollback.cache_count": "5",
+        "llm.ssm_conv.rollback.d_inner": "10240",
+        "llm.ssm_conv.rollback.n_s": "1",
+        "llm.ssm_conv.rollback.n_t": "4",
+        "llm.ssm_conv.rollback.workgroup_size": "256"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {},
+      "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
+      "library_sources": [
+        "motifs/ssm_conv/state_materialize.loom",
+        "motifs/ssm_conv/rollback_store.loom",
+        "motifs/ssm_conv/decode_update.loom",
+        "motifs/ssm_conv/dconv4_silu.loom"
+      ],
+      "primary_sources": [
+        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+      ],
+      "sources": [
+        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
+        "motifs/ssm_conv/state_materialize.loom",
+        "motifs/ssm_conv/rollback_store.loom",
+        "motifs/ssm_conv/decode_update.loom",
+        "motifs/ssm_conv/dconv4_silu.loom"
+      ],
+      "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_007_ggml_get_rows_f32",
+      "compile_parameters": {
+        "ggml.get_rows_f32.hidden_capacity": "786432",
+        "ggml.get_rows_f32.token_capacity": "1",
+        "ggml.get_rows_f32.weight_format": "32"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {
+        "hidden_size": 786432,
+        "row_count": 20,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_get_rows_f32",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/get_rows_f32.loom"
+      ],
+      "sources": [
+        "ops/rows/get_rows_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_get_rows_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_008_llm_gated_delta_net_projection_epilogue_f32",
+      "compile_parameters": {
+        "llm.gated_delta_net.epilogue_head_count": "48",
+        "llm.gated_delta_net.epilogue_workgroup_size": "256"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {
+        "element_count": 192
+      },
+      "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/gated_delta_net_f32_wmma.loom"
+      ],
+      "sources": [
+        "ops/gated_delta_net_f32_wmma.loom"
+      ],
+      "symbol": "llm_gated_delta_net_projection_epilogue_f32",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_009_llm_gated_delta_net_f32_wmma_head128_snapshot",
+      "compile_parameters": {
+        "llm.gated_delta_net.head_count": "48",
+        "llm.gated_delta_net.head_width": "128",
+        "llm.gated_delta_net.l2_epsilon": "9.99999997e-07",
+        "llm.gated_delta_net.qk_stride1": "128",
+        "llm.gated_delta_net.qk_stride2": "10240",
+        "llm.gated_delta_net.qk_stride3": "40960",
+        "llm.gated_delta_net.query_head_count": "16",
+        "llm.gated_delta_net.query_sequence_ratio": "1",
+        "llm.gated_delta_net.scalar_stride1": "1",
+        "llm.gated_delta_net.scalar_stride2": "48",
+        "llm.gated_delta_net.scalar_stride3": "192",
+        "llm.gated_delta_net.sequence_count": "1",
+        "llm.gated_delta_net.snapshot_stride": "3145728",
+        "llm.gated_delta_net.token_count": "4",
+        "llm.gated_delta_net.value_stride1": "128",
+        "llm.gated_delta_net.value_stride2": "10240",
+        "llm.gated_delta_net.value_stride3": "40960",
+        "llm.gated_delta_net.workgroup_size": "256"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {},
+      "kernel": "loom_libs:llm_gated_delta_net_f32_wmma_head128_snapshot",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/gated_delta_net_f32_wmma.loom"
+      ],
+      "sources": [
+        "ops/gated_delta_net_f32_wmma.loom"
+      ],
+      "symbol": "llm_gated_delta_net_f32_wmma_head128_snapshot",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_010_ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
+      "compile_parameters": {
+        "ggml.rmsnorm_gate_silu_mul_symmetric_i4.hidden_size": "128",
+        "ggml.rmsnorm_gate_silu_mul_symmetric_i4.rms_epsilon": "9.99999997e-07"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 48,
+      "integer_parameters": {
+        "token_count": 192
+      },
+      "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+      ],
+      "sources": [
+        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+      ],
+      "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_011_ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "6144",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 64,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_012_ggml_add_rmsnorm_binary_symmetric_i4_k32",
+      "compile_parameters": {
+        "ggml.add_rmsnorm_binary_symmetric_i4.hidden_size": "5120",
+        "ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon": "9.99999997e-07"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 127,
+      "integer_parameters": {
+        "token_count": 4
+      },
+      "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+      ],
+      "sources": [
+        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+      ],
+      "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_013_ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "17408",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 64,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_014_ggml_binary_swiglu_symmetric_i4_k32",
+      "compile_parameters": {
+        "ggml.binary_swiglu_symmetric_i4.input_size": "17408",
+        "ggml.binary_swiglu_symmetric_i4.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 64,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_binary_swiglu_symmetric_i4_k32",
+      "library_sources": [
+        "motifs/binary_f32_apply.loom"
+      ],
+      "primary_sources": [
+        "ops/binary_f32.loom"
+      ],
+      "sources": [
+        "ops/binary_f32.loom",
+        "motifs/binary_f32_apply.loom"
+      ],
+      "symbol": "ggml_binary_swiglu_symmetric_i4_k32",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_015_ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "17408",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 64,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_016_ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "12288",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_017_ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat_q6_k_packed.input_size": "5120",
+        "ggml.mul_mat_q6_k_packed.output_accumulation": "0",
+        "ggml.mul_mat_q6_k_packed.output_size": "1024"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {
+        "token_count": 4
+      },
+      "kernel": "loom_libs:ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_018_ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat.symmetric_i4.lowrow.input_size": "5120",
+        "ggml.mul_mat.symmetric_i4.lowrow.output_size": "1024",
+        "ggml.mul_mat.symmetric_i4.lowrow.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_symmetric_i4_lowrow_wmma",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_019_ggml_rmsnorm_mul_rope_f32",
+      "compile_parameters": {
+        "ggml.rmsnorm_mul_rope.attn_factor": "1",
+        "ggml.rmsnorm_mul_rope.epsilon": "9.99999997e-07",
+        "ggml.rmsnorm_mul_rope.freq_base": "10000000",
+        "ggml.rmsnorm_mul_rope.freq_scale": "1",
+        "ggml.rmsnorm_mul_rope.hidden_size": "256",
+        "ggml.rmsnorm_mul_rope.input_stride1": "512",
+        "ggml.rmsnorm_mul_rope.input_stride2": "12288",
+        "ggml.rmsnorm_mul_rope.input_stride3": "49152",
+        "ggml.rmsnorm_mul_rope.mode": "40",
+        "ggml.rmsnorm_mul_rope.n_dims": "64",
+        "ggml.rmsnorm_mul_rope.ne1": "24",
+        "ggml.rmsnorm_mul_rope.ne2": "4",
+        "ggml.rmsnorm_mul_rope.ne3": "1",
+        "ggml.rmsnorm_mul_rope.output_stride1": "256",
+        "ggml.rmsnorm_mul_rope.output_stride2": "6144",
+        "ggml.rmsnorm_mul_rope.output_stride3": "24576",
+        "ggml.rmsnorm_mul_rope.section0": "11",
+        "ggml.rmsnorm_mul_rope.section1": "11",
+        "ggml.rmsnorm_mul_rope.section2": "10",
+        "ggml.rmsnorm_mul_rope.section3": "0",
+        "ggml.rmsnorm_mul_rope.workgroup_size": "256"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/rope/rope_f32.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+      ],
+      "sources": [
+        "ops/normalization/rmsnorm_mul_rope_f32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/rope/rope_f32.loom"
+      ],
+      "symbol": "ggml_rmsnorm_mul_rope_f32",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_020_ggml_rmsnorm_mul_rope_f32",
+      "compile_parameters": {
+        "ggml.rmsnorm_mul_rope.attn_factor": "1",
+        "ggml.rmsnorm_mul_rope.epsilon": "9.99999997e-07",
+        "ggml.rmsnorm_mul_rope.freq_base": "10000000",
+        "ggml.rmsnorm_mul_rope.freq_scale": "1",
+        "ggml.rmsnorm_mul_rope.hidden_size": "256",
+        "ggml.rmsnorm_mul_rope.input_stride1": "256",
+        "ggml.rmsnorm_mul_rope.input_stride2": "1024",
+        "ggml.rmsnorm_mul_rope.input_stride3": "4096",
+        "ggml.rmsnorm_mul_rope.mode": "40",
+        "ggml.rmsnorm_mul_rope.n_dims": "64",
+        "ggml.rmsnorm_mul_rope.ne1": "4",
+        "ggml.rmsnorm_mul_rope.ne2": "4",
+        "ggml.rmsnorm_mul_rope.ne3": "1",
+        "ggml.rmsnorm_mul_rope.output_stride1": "256",
+        "ggml.rmsnorm_mul_rope.output_stride2": "1024",
+        "ggml.rmsnorm_mul_rope.output_stride3": "4096",
+        "ggml.rmsnorm_mul_rope.section0": "11",
+        "ggml.rmsnorm_mul_rope.section1": "11",
+        "ggml.rmsnorm_mul_rope.section2": "10",
+        "ggml.rmsnorm_mul_rope.section3": "0",
+        "ggml.rmsnorm_mul_rope.workgroup_size": "256"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/rope/rope_f32.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+      ],
+      "sources": [
+        "ops/normalization/rmsnorm_mul_rope_f32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/rope/rope_f32.loom"
+      ],
+      "symbol": "ggml_rmsnorm_mul_rope_f32",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_021_ggml_set_rows",
+      "compile_parameters": {
+        "ggml.set_rows.hidden_capacity": "1024",
+        "ggml.set_rows.input_format": "32",
+        "ggml.set_rows.output_format": "16",
+        "ggml.set_rows.token_capacity": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 32,
+      "integer_parameters": {
+        "cache_row_count": 262144,
+        "hidden_size": 1024,
+        "token_count": 4
+      },
+      "kernel": "loom_libs:ggml_set_rows",
+      "library_sources": [
+        "motifs/rows/cache_publish.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/set_rows.loom"
+      ],
+      "sources": [
+        "ops/rows/set_rows.loom",
+        "motifs/rows/cache_publish.loom"
+      ],
+      "symbol": "ggml_set_rows",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_022_ggml_flash_attention_f32_f16_wmma",
+      "compile_parameters": {
+        "ggml.flash_attention.apply_gate": "1",
+        "ggml.flash_attention.gate_stride_head": "512",
+        "ggml.flash_attention.gate_stride_token": "12288",
+        "ggml.flash_attention.head_size": "256",
+        "ggml.flash_attention.key_value_head_count": "4",
+        "ggml.flash_attention.query_head_count": "24"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {
+        "key_value_token_count": 256,
+        "query_token_count": 4
+      },
+      "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
+      "library_sources": [
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
+      ],
+      "primary_sources": [
+        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+      ],
+      "sources": [
+        "ops/flash_attention/prefill_f32_f16_wmma.loom",
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
+      ],
+      "symbol": "ggml_flash_attention_f32_f16_wmma",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_023_ggml_quantize_f32_symmetric_i4_k32",
+      "compile_parameters": {
+        "ggml.quantize_symmetric_i4_k32.input_size": "6144",
+        "ggml.quantize_symmetric_i4_k32.token_count": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 16,
+      "integer_parameters": {},
+      "kernel": "loom_libs:ggml_quantize_f32_symmetric_i4_k32",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_swiglu_symmetric_i4_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_swiglu_symmetric_i4_wmma.loom"
+      ],
+      "symbol": "ggml_quantize_f32_symmetric_i4_k32",
+      "workload_parameters": []
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_024_ggml_binary_f32",
+      "compile_parameters": {
+        "ggml.binary_f32.op": "0"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "element_count": 20480
+      },
+      "kernel": "loom_libs:ggml_binary_f32",
+      "library_sources": [
+        "motifs/binary_f32_apply.loom"
+      ],
+      "primary_sources": [
+        "ops/binary_f32.loom"
+      ],
+      "sources": [
+        "ops/binary_f32.loom",
+        "motifs/binary_f32_apply.loom"
+      ],
+      "symbol": "ggml_binary_f32",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_025_ggml_rmsnorm_binary_f32",
+      "compile_parameters": {
+        "ggml.rmsnorm_binary_f32.hidden_size": "5120",
+        "ggml.rmsnorm_binary_f32.op": "2",
+        "ggml.rmsnorm_binary_f32.rms_epsilon": "9.99999997e-07"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "token_count": 4
+      },
+      "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_binary.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/rmsnorm_binary_f32.loom"
+      ],
+      "sources": [
+        "ops/normalization/rmsnorm_binary_f32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_binary.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ],
+      "symbol": "ggml_rmsnorm_binary_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_026_ggml_get_rows_f32",
+      "compile_parameters": {
+        "ggml.get_rows_f32.hidden_capacity": "5120",
+        "ggml.get_rows_f32.token_capacity": "1",
+        "ggml.get_rows_f32.weight_format": "32"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "hidden_size": 5120,
+        "row_count": 4,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_get_rows_f32",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/get_rows_f32.loom"
+      ],
+      "sources": [
+        "ops/rows/get_rows_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_get_rows_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@v2_mtp4_program4_tg_c4_027_ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+      "compile_parameters": {
+        "ggml.mul_mat_q6_k_packed.input_size": "5120",
+        "ggml.mul_mat_q6_k_packed.output_accumulation": "0",
+        "ggml.mul_mat_q6_k_packed.output_size": "248320"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+      "library_sources": [],
+      "primary_sources": [
+        "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+      ],
+      "symbol": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    }
+  ],
+  "generated_count": 28,
+  "kernel_counts": {
+    "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32": 127,
+    "loom_libs:ggml_binary_f32": 1,
+    "loom_libs:ggml_binary_swiglu_symmetric_i4_k32": 64,
+    "loom_libs:ggml_flash_attention_f32_f16_wmma": 16,
+    "loom_libs:ggml_get_rows_f32": 98,
+    "loom_libs:ggml_mul_mat_q6_k_i8_prepacked_f16_wmma": 16,
+    "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma": 1,
+    "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma": 112,
+    "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma": 112,
+    "loom_libs:ggml_mul_mat_symmetric_i4_lowrow_wmma": 144,
+    "loom_libs:ggml_quantize_f32_symmetric_i4_k32": 16,
+    "loom_libs:ggml_rmsnorm_binary_f32": 1,
+    "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32": 1,
+    "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32": 48,
+    "loom_libs:ggml_rmsnorm_mul_rope_f32": 32,
+    "loom_libs:ggml_set_rows": 32,
+    "loom_libs:llm_gated_delta_net_f32_wmma_head128_snapshot": 48,
+    "loom_libs:llm_gated_delta_net_projection_epilogue_f32": 48,
+    "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32": 48
+  },
+  "loom_source": "tools/benchmarks/loom/v2_mtp4_program4.work.loom",
+  "model": "v2_mtp4_program4",
+  "scenario": "tg_c4",
+  "schema": "ggml-hrx-model-loom-benchmarks-v2"
+}

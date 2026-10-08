@@ -1,0 +1,336 @@
+// Test-only direct comparison between the existing Q1_0 F32 decoder and the
+// inactive native Q1_0 x Q8_1 x4 packed contraction motif.
+func.decl @ggml_q1_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>)
+
+func.decl @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_block: index, %word_in_block: index) -> (vector<4xi8>, f32)
+
+func.decl @ggml_q1_0_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+
+func.decl @ggml_q1_0_q8_1_x4_rows2_lane(%input_size: index, %weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32)
+
+func.decl @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, %gate_row_byte_base: offset, %up: buffer, %up_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32)
+
+amdgpu.target<gfx11-generic> @ggml_q1_0_q8_1_x4_gfx11_wave32 {subgroup_size = 32}
+
+func.def inline @ggml_q1_0_q8_1_x4_generic_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %block_count = index.div %bounded_input_size, %c128 : index
+  %lane_k = index.mul %bounded_lane, %c4 : index
+  %block_in_q1 = index.div %bounded_lane, %c8 : index
+  %word_in_block = index.rem %bounded_lane, %c8 : index
+  %result = scf.for %block = [%c0 to %block_count step %c1](%accumulator = %c0_f32 : f32) -> (f32) {
+    %block_k = index.mul %block, %c128 : index
+    %k = index.add %block_k, %lane_k : index
+    %weight_values = func.call @ggml_q1_0_f32_vector4(%weight, %weight_row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
+    %q8_block_base = index.mul %block, %c4 : index
+    %q8_block = index.add %q8_block_base, %block_in_q1 : index
+    %q8_values_i8, %q8_d = func.call @ggml_q8_1_x4_word(%q8_input, %q8_row_byte_base, %q8_block, %word_in_block) : (buffer, offset, index, index) -> (vector<4xi8>, f32)
+    %q8_values_f32 = vector.sitofp %q8_values_i8 : vector<4xi8> to vector<4xf32>
+    %q8_scale = vector.splat %q8_d : vector<4xf32>
+    %activation = vector.mulf %q8_values_f32, %q8_scale : vector<4xf32>
+    %products = vector.mulf %weight_values, %activation : vector<4xf32>
+    %contribution = vector.reduce<addf> %products, %c0_f32 : vector<4xf32>, f32
+    %next = scalar.addf %accumulator, %contribution : f32
+    scf.yield %next : f32
+  }
+  func.return %result : f32
+}
+
+kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_generic_control(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size2 = index.assume %row0, %bounded_output_size [lt(%row0, %bounded_output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %weight_block_bytes = index.constant 18 : offset
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %lane_value = func.call @ggml_q1_0_q8_1_x4_generic_row_lane(%bounded_input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+  %dot = kernel.subgroup.reduce<addf> %lane_value : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%q8_row_byte_base] : buffer -> view<[%bounded_output_size2]xf32>
+    view.store %dot, %output_view[%row] : f32, view<[%bounded_output_size2]xf32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_packed(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size2 = index.assume %row0, %bounded_output_size [lt(%row0, %bounded_output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %weight_block_bytes = index.constant 18 : offset
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %lane_value = func.call @ggml_q1_0_q8_1_x4_row_lane(%bounded_input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+  %dot = kernel.subgroup.reduce<addf> %lane_value : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%q8_row_byte_base] : buffer -> view<[%bounded_output_size2]xf32>
+    view.store %dot, %output_view[%row] : f32, view<[%bounded_output_size2]xf32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_packed_rows2(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c32 = index.constant 32 : index
+  %rounded = index.add %output_size, %c1 : index
+  %groups = index.div %rounded, %c2 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %weight_block_bytes = index.constant 18 : offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %row00 = index.mul %group, %c2 : index
+  %row0, %bounded_output_size = index.assume %row00, %output_size [lt(%row00, %output_size)] : index, index
+  %row1 = index.add %row0, %c1 : index
+  %has_row1 = index.cmp ult, %row1, %bounded_output_size : index
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %row0_base = index.scale %row0, %weight_row_bytes : index, offset -> offset
+  %partial0, %partial1 = scf.if %has_row1 -> (f32, f32) {
+    %bounded_row1 = index.assume %row1 [lt(%row1, %bounded_output_size)] : index
+    %row1_base = index.scale %bounded_row1, %weight_row_bytes : index, offset -> offset
+    %pair0, %pair1 = func.call @ggml_q1_0_q8_1_x4_rows2_lane(%bounded_input_size, %weight, %row0_base, %row1_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, offset, buffer, offset, index) -> (f32, f32)
+    scf.yield %pair0, %pair1 : f32, f32
+  } else {
+    %single = func.call @ggml_q1_0_q8_1_x4_row_lane(%bounded_input_size, %weight, %row0_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+    scf.yield %single, %c0_f32 : f32, f32
+  }
+  %sum0 = kernel.subgroup.reduce<addf> %partial0 : f32
+  %sum1 = kernel.subgroup.reduce<addf> %partial1 : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%q8_row_byte_base] : buffer -> view<[%bounded_output_size]xf32>
+    view.store %sum0, %output_view[%row0] : f32, view<[%bounded_output_size]xf32>
+    scf.if %has_row1 {
+      %bounded_row1 = index.assume %row1 [lt(%row1, %bounded_output_size)] : index
+      view.store %sum1, %output_view[%bounded_row1] : f32, view<[%bounded_output_size]xf32>
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_packed_pair(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %q8_input: buffer, %gate_weight: buffer, %up_weight: buffer, %gate_output: buffer, %up_output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size2 = index.assume %row0, %bounded_output_size [lt(%row0, %bounded_output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %weight_block_bytes = index.constant 18 : offset
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %gate_lane, %up_lane = func.call @ggml_q1_0_q8_1_x4_pair_lane(%bounded_input_size, %gate_weight, %weight_row_byte_base, %up_weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, buffer, offset, index) -> (f32, f32)
+  %gate = kernel.subgroup.reduce<addf> %gate_lane : f32
+  %up = kernel.subgroup.reduce<addf> %up_lane : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %gate_view = buffer.view %gate_output[%q8_row_byte_base] : buffer -> view<[%bounded_output_size2]xf32>
+    %up_view = buffer.view %up_output[%q8_row_byte_base] : buffer -> view<[%bounded_output_size2]xf32>
+    view.store %gate, %gate_view[%row] : f32, view<[%bounded_output_size2]xf32>
+    view.store %up, %up_view[%row] : f32, view<[%bounded_output_size2]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_boundary_differential_case {
+  %input_size = check.literal value(128) : index
+  %output_size = check.literal value(3) : index
+  %q8_input = check.generate.fill value(61) : tensor<144xi8>
+  %weight = check.generate.fill value(62) : tensor<3x18xi8>
+  %generic_output = check.generate.fill value(0.0) : tensor<3xf32>
+  %packed_output = check.generate.fill value(1.0) : tensor<3xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %generic_output) : [index, index](index, index, tensor<144xi8>, tensor<3x18xi8>, tensor<3xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<144xi8>, tensor<3x18xi8>, tensor<3xf32>)
+  check.expect.close actual(%packed_output) expected(%generic_output) atol(0.01) rtol(1.0000000000000001e-05) nan(same) : tensor<3xf32>
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x4096_differential_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %q8_input = check.generate.fill value(61) : tensor<20x144xi8>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %generic_output = check.generate.fill value(0.0) : tensor<4096xf32>
+  %packed_output = check.generate.fill value(1.0) : tensor<4096xf32>
+  %rows2_output = check.generate.fill value(2.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %generic_output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %rows2_output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.expect.close actual(%packed_output) expected(%generic_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<4096xf32>
+  check.expect.close actual(%rows2_output) expected(%generic_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<4096xf32>
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x9728_pair_differential_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(9728) : index
+  %q8_input = check.generate.fill value(61) : tensor<20x144xi8>
+  %gate_weight = check.generate.fill value(62) : tensor<9728x20x18xi8>
+  %up_weight = check.generate.fill value(63) : tensor<9728x20x18xi8>
+  %generic_gate = check.generate.fill value(0.0) : tensor<9728xf32>
+  %generic_up = check.generate.fill value(0.0) : tensor<9728xf32>
+  %paired_gate = check.generate.fill value(1.0) : tensor<9728xf32>
+  %paired_up = check.generate.fill value(1.0) : tensor<9728xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %gate_weight, %generic_gate) : [index, index](index, index, tensor<20x144xi8>, tensor<9728x20x18xi8>, tensor<9728xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %up_weight, %generic_up) : [index, index](index, index, tensor<20x144xi8>, tensor<9728x20x18xi8>, tensor<9728xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_packed_pair[%input_size, %output_size](%input_size, %output_size, %q8_input, %gate_weight, %up_weight, %paired_gate, %paired_up) : [index, index](index, index, tensor<20x144xi8>, tensor<9728x20x18xi8>, tensor<9728x20x18xi8>, tensor<9728xf32>, tensor<9728xf32>)
+  check.expect.close actual(%paired_gate) expected(%generic_gate) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<9728xf32>
+  check.expect.close actual(%paired_up) expected(%generic_up) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<9728xf32>
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x4096_generic_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %q8_input = check.generate.fill value(61) : tensor<20x144xi8>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x4096_packed_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %q8_input = check.generate.fill value(61) : tensor<20x144xi8>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x4096_packed_rows2_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %q8_input = check.generate.fill value(61) : tensor<20x144xi8>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_shape_differential_case {
+  %input_size = check.param.choice values([2560, 4096, 9728]) name("input_size") : index
+  %output_size = check.param.choice values([1024, 2560, 4096, 151669]) name("output_size") : index
+  %block_count = check.param.choice values([20, 32, 76]) name("block_count") : index
+  %q8_input = check.generate.fill value(61) : tensor<[%block_count]x144xi8>
+  %weight = check.generate.fill value(62) : tensor<[%output_size]x[%block_count]x18xi8>
+  %packed_output = check.generate.fill value(1.0) : tensor<[%output_size]xf32>
+  %rows2_output = check.generate.fill value(2.0) : tensor<[%output_size]xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<[%block_count]x144xi8>, tensor<[%output_size]x[%block_count]x18xi8>, tensor<[%output_size]xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %rows2_output) : [index, index](index, index, tensor<[%block_count]x144xi8>, tensor<[%output_size]x[%block_count]x18xi8>, tensor<[%output_size]xf32>)
+  check.expect.close actual(%rows2_output) expected(%packed_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<[%output_size]xf32>
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_shape_packed_case {
+  %input_size = check.param.choice values([2560, 4096, 9728]) name("input_size") : index
+  %output_size = check.param.choice values([1024, 2560, 4096, 151669]) name("output_size") : index
+  %block_count = check.param.choice values([20, 32, 76]) name("block_count") : index
+  %q8_input = check.generate.fill value(61) : tensor<[%block_count]x144xi8>
+  %weight = check.generate.fill value(62) : tensor<[%output_size]x[%block_count]x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<[%output_size]xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %output) : [index, index](index, index, tensor<[%block_count]x144xi8>, tensor<[%output_size]x[%block_count]x18xi8>, tensor<[%output_size]xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_shape_packed_rows2_case {
+  %input_size = check.param.choice values([2560, 4096, 9728]) name("input_size") : index
+  %output_size = check.param.choice values([1024, 2560, 4096, 151669]) name("output_size") : index
+  %block_count = check.param.choice values([20, 32, 76]) name("block_count") : index
+  %q8_input = check.generate.fill value(61) : tensor<[%block_count]x144xi8>
+  %weight = check.generate.fill value(62) : tensor<[%output_size]x[%block_count]x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<[%output_size]xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %output) : [index, index](index, index, tensor<[%block_count]x144xi8>, tensor<[%output_size]x[%block_count]x18xi8>, tensor<[%output_size]xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_q8_1_x4_vocab_differential_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(151669) : index
+  %q8_input = check.generate.fill value(61) : tensor<20x144xi8>
+  %weight = check.generate.fill value(62) : tensor<151669x20x18xi8>
+  %packed_output = check.generate.fill value(1.0) : tensor<151669xf32>
+  %rows2_output = check.generate.fill value(2.0) : tensor<151669xf32>
+  kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<20x144xi8>, tensor<151669x20x18xi8>, tensor<151669xf32>)
+  kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %rows2_output) : [index, index](index, index, tensor<20x144xi8>, tensor<151669x20x18xi8>, tensor<151669xf32>)
+  check.expect.close actual(%rows2_output) expected(%packed_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<151669xf32>
+  check.return
+}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_bonsai_2560x4096_generic_case> @ggml_q1_0_q8_1_x4_bonsai_2560x4096_generic
+
+check.benchmark<@ggml_q1_0_q8_1_x4_bonsai_2560x4096_packed_case> @ggml_q1_0_q8_1_x4_bonsai_2560x4096_packed
+
+check.benchmark<@ggml_q1_0_q8_1_x4_bonsai_2560x4096_packed_rows2_case> @ggml_q1_0_q8_1_x4_bonsai_2560x4096_packed_rows2
+
+check.benchmark<@ggml_q1_0_q8_1_x4_bonsai_2560x4096_differential_case> @ggml_q1_0_q8_1_x4_bonsai_2560x4096_correctness
+
+check.benchmark<@ggml_q1_0_q8_1_x4_bonsai_2560x9728_pair_differential_case> @ggml_q1_0_q8_1_x4_bonsai_2560x9728_pair_correctness
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_differential_case> @ggml_q1_0_q8_1_x4_2560x1024_correctness {block_count = 20, input_size = 2560, output_size = 1024}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_differential_case> @ggml_q1_0_q8_1_x4_4096x2560_correctness {block_count = 32, input_size = 4096, output_size = 2560}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_differential_case> @ggml_q1_0_q8_1_x4_9728x2560_correctness {block_count = 76, input_size = 9728, output_size = 2560}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_vocab_differential_case> @ggml_q1_0_q8_1_x4_2560x151669_correctness
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_case> @ggml_q1_0_q8_1_x4_2560x1024_packed {block_count = 20, input_size = 2560, output_size = 1024}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_rows2_case> @ggml_q1_0_q8_1_x4_2560x1024_packed_rows2 {block_count = 20, input_size = 2560, output_size = 1024}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_case> @ggml_q1_0_q8_1_x4_4096x2560_packed {block_count = 32, input_size = 4096, output_size = 2560}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_rows2_case> @ggml_q1_0_q8_1_x4_4096x2560_packed_rows2 {block_count = 32, input_size = 4096, output_size = 2560}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_case> @ggml_q1_0_q8_1_x4_9728x2560_packed {block_count = 76, input_size = 9728, output_size = 2560}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_rows2_case> @ggml_q1_0_q8_1_x4_9728x2560_packed_rows2 {block_count = 76, input_size = 9728, output_size = 2560}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_case> @ggml_q1_0_q8_1_x4_2560x151669_packed {block_count = 20, input_size = 2560, output_size = 151669}
+
+check.benchmark<@ggml_q1_0_q8_1_x4_shape_packed_rows2_case> @ggml_q1_0_q8_1_x4_2560x151669_packed_rows2 {block_count = 20, input_size = 2560, output_size = 151669}

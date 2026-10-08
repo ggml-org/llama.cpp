@@ -6,6 +6,7 @@
 #include "ggml.h"
 #include "hrx-interop-utils.h"
 #include "runtime/host-memory.h"
+#include "testing_suite.h"
 
 #include <array>
 #include <cstdint>
@@ -169,10 +170,8 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     tensor->data   = ggml_backend_buffer_get_base(local);
     REQUIRE(ggml_backend_buffer_init_tensor(local, tensor) == GGML_STATUS_SUCCESS);
 
-    const uint64_t upload_fallbacks =
-        context->device->synchronous_upload_fallbacks.load(std::memory_order_relaxed);
-    const uint64_t download_fallbacks =
-        context->device->synchronous_download_fallbacks.load(std::memory_order_relaxed);
+    const uint64_t upload_fallbacks   = context->device->synchronous_upload_fallbacks.load(std::memory_order_relaxed);
+    const uint64_t download_fallbacks = context->device->synchronous_download_fallbacks.load(std::memory_order_relaxed);
     auto * host_words = static_cast<uint32_t *>(ggml_backend_buffer_get_base(buffer));
     for (size_t i = 0; i < 64; ++i) {
         host_words[i] = static_cast<uint32_t>(i * 13 + 7);
@@ -230,8 +229,8 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
         hrx_synchronous_h2d(context->device->device, device_values.data(), staging.buffer, 0, device_values.size()));
 
     std::array<uint8_t, 48> download_result = {};
-    REQUIRE(transfers.download_synchronous(
-        context->stream, staging.buffer, 12, download_result.data() + 4, 20).success());
+    REQUIRE(
+        transfers.download_synchronous(context->stream, staging.buffer, 12, download_result.data() + 4, 20).success());
     stats = transfers.stats();
     REQUIRE(stats.downloads == 1);
     REQUIRE(stats.download_bytes == 20);
@@ -339,7 +338,6 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::HostWeightCacheStats weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 1);
     REQUIRE(weight_stats.misses == 3);
-    REQUIRE(weight_stats.layout_conflicts == 1);
     REQUIRE(weight_stats.allocation_count == 3);
     REQUIRE(weight_stats.resident_bytes == 96);
 
@@ -351,27 +349,52 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 0);
     REQUIRE(weight_stats.misses == 0);
-    REQUIRE(weight_stats.layout_conflicts == 0);
     REQUIRE(weight_stats.allocation_count == 0);
     REQUIRE(weight_stats.resident_bytes == 0);
 }
 
-int main() {
-    if (ggml_backend_hrx_get_device_count() == 0) {
-        std::fprintf(stderr, "test skipped: no HRX devices available\n");
-        return 0;
-    }
-
+template <typename F>
+static void run_with_hrx_backend(F && f) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     ggml_backend_hrx_context * context = backend_context(backend);
-
-    run_backend_buffer_checks(backend);
-    run_host_buffer_checks(backend);
-    run_host_transfer_checks(context);
-    run_host_staging_checks(context);
-    run_host_weight_cache_checks(context);
-
+    f(backend, context);
     ggml_backend_free(backend);
-    return 0;
+}
+
+static void register_hrx_buffer_cases(test_runner::Suite & suite) {
+    suite.device_case("backend_buffer", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_backend_buffer_checks(backend);
+        });
+    });
+    suite.device_case("host_buffer", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_host_buffer_checks(backend);
+        });
+    });
+    suite.device_case("host_transfer", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_host_transfer_checks(context);
+        });
+    });
+    suite.device_case("host_staging", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_host_staging_checks(context);
+        });
+    });
+    suite.device_case("host_weight_cache", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_host_weight_cache_checks(context);
+        });
+    });
+}
+
+int main(int argc, char ** argv) {
+    test_runner::Suite suite(test_runner::Config::with_prefix(
+        "HRX buffer test", "hrx-buffer", "GGML_HRX_BUFFER_TEST", 1));
+    register_hrx_buffer_cases(suite);
+
+    const bool has_device = ggml_backend_hrx_get_device_count() != 0;
+    return suite.run(argc, argv, has_device);
 }

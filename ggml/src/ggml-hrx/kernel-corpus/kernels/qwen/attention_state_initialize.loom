@@ -1,0 +1,112 @@
+// Copyright 2026 The IREE Authors
+//
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+amdgpu.target<gfx11-generic> @qwen_attention_state_gfx11_wave64 {subgroup_size = 64}
+
+// Captures the position before the metadata producer overwrites the positions
+// buffer with the canonical sequence used by attention.
+kernel.def target(@qwen_attention_state_gfx11_wave64) export("qwen_attention_context_base_capture") @qwen_attention_context_base_capture() {
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%positions: buffer, %control: buffer) {
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %positions_noalias, %control_noalias = buffer.assume.noalias %positions, %control : buffer, buffer
+  %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<1xi32>
+  %control_view = buffer.view %control_noalias[%c0_offset] : buffer -> view<1xi32>
+  %context_base = view.load %positions_view[%c0] : view<1xi32> -> i32
+  view.store %context_base, %control_view[%c0] : i32, view<1xi32>
+  kernel.return
+}
+
+// Decode has one query row, so the input position is already the absolute
+// position consumed by attention. Publish its cache indices and causal mask
+// while initializing every self-resetting completion counter in the replay.
+kernel.def target(@qwen_attention_state_gfx11_wave64) export("qwen_attention_decode_state_initialize") @qwen_attention_decode_state_initialize(%context_capacity: index, %completion_counter_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%context_capacity: index, %completion_counter_count: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %attention_mask: buffer, %completion_counters: buffer) {
+  %bounded_context_capacity = index.assume %context_capacity [range(%context_capacity, 1, 32768)] : index
+  %counter_count = index.assume %completion_counter_count [range(%completion_counter_count, 1, 64)] : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %c0_i16 = scalar.constant 0 : i16
+  %c0_i32 = scalar.constant 0 : i32
+  // 0xfc00 is the F16 negative-infinity bit pattern.
+  %negative_infinity_i16 = scalar.constant -1024 : i16
+  %c0_offset = index.constant 0 : offset
+  %positions_noalias, %key_indices_noalias, %value_indices_noalias, %mask_noalias, %counters_noalias = buffer.assume.noalias %positions, %key_cache_indices, %value_cache_indices, %attention_mask, %completion_counters : buffer, buffer, buffer, buffer, buffer
+  %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<1xi32>
+  %key_indices_view = buffer.view %key_indices_noalias[%c0_offset] : buffer -> view<1xi64>
+  %value_indices_view = buffer.view %value_indices_noalias[%c0_offset] : buffer -> view<1xi64>
+  %mask_view = buffer.view %mask_noalias[%c0_offset] : buffer -> view<[%bounded_context_capacity]xi16>
+  %counters_view = buffer.view %counters_noalias[%c0_offset] : buffer -> view<[%counter_count]xi32>
+  %context_base_raw = view.load %positions_view[%c0] : view<1xi32> -> i32
+  %context_base_i32 = scalar.assume %context_base_raw [range(%context_base_raw, 0, 32767)] : i32
+  %context_base0 = index.cast %context_base_i32 : i32 to index
+  %context_base = index.assume %context_base0 [range(%context_base0, 0, 32767)] : index
+  %visible_count0 = index.add %context_base, %c1 : index
+  %visible_count, %launch_context_capacity = index.assume %visible_count0, %bounded_context_capacity [le(%visible_count0, %bounded_context_capacity)] : index, index
+  scf.for %key_base = [%c0 to %launch_context_capacity step %c256] {
+    %key0 = index.add %key_base, %workitem : index
+    %valid_key = index.cmp ult, %key0, %launch_context_capacity : index
+    %safe_key0 = scf.select %valid_key, %key0, %c0 : index
+    %key = index.assume %safe_key0 [lt(%safe_key0, %launch_context_capacity)] : index
+    %is_visible = index.cmp ult, %key, %visible_count : index
+    %mask_bits = scf.select %is_visible, %c0_i16, %negative_infinity_i16 : i16
+    scf.if %valid_key {
+      view.store %mask_bits, %mask_view[%key] : i16, view<[%bounded_context_capacity]xi16>
+    }
+  }
+  %is_first = index.cmp eq, %workitem, %c0 : index
+  scf.if %is_first {
+    %cache_index = index.cast %context_base : index to i64
+    view.store %cache_index, %key_indices_view[%c0] : i64, view<1xi64>
+    view.store %cache_index, %value_indices_view[%c0] : i64, view<1xi64>
+  }
+  %is_counter = index.cmp ult, %workitem, %counter_count : index
+  scf.if %is_counter {
+    %counter = index.assume %workitem [lt(%workitem, %counter_count)] : index
+    view.store %c0_i32, %counters_view[%counter] : i32, view<[%counter_count]xi32>
+  }
+  kernel.return
+}
+
+check.case public @qwen_attention_context_base_capture_case {
+  %positions = check.generate.fill value(7) : tensor<1xi32>
+  %control = check.generate.fill value(-1) : tensor<1xi32>
+  %expected = check.generate.fill value(7) : tensor<1xi32>
+  kernel.launch @qwen_attention_context_base_capture(%positions, %control) : (tensor<1xi32>, tensor<1xi32>)
+  check.expect.equal actual(%control) expected(%expected) : tensor<1xi32>
+  check.return
+}
+
+check.case public @qwen_attention_decode_state_initialize_case {
+  %context_capacity = check.literal value(768) : index
+  %counter_count = check.literal value(56) : index
+  %positions = check.generate.fill value(767) : tensor<1xi32>
+  %key_cache_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %value_cache_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %attention_mask = check.generate.fill value(1) : tensor<768xi16>
+  %counters = check.generate.fill value(-1) : tensor<56xi32>
+  %expected_cache_indices = check.generate.fill value(767) : tensor<1xi64>
+  %expected_mask = check.generate.fill value(0) : tensor<768xi16>
+  %expected_counters = check.generate.fill value(0) : tensor<56xi32>
+  kernel.launch @qwen_attention_decode_state_initialize[%context_capacity, %counter_count](%context_capacity, %counter_count, %positions, %key_cache_indices, %value_cache_indices, %attention_mask, %counters) : [index, index](index, index, tensor<1xi32>, tensor<1xi64>, tensor<1xi64>, tensor<768xi16>, tensor<56xi32>)
+  check.expect.equal actual(%key_cache_indices) expected(%expected_cache_indices) : tensor<1xi64>
+  check.expect.equal actual(%value_cache_indices) expected(%expected_cache_indices) : tensor<1xi64>
+  check.expect.equal actual(%attention_mask) expected(%expected_mask) : tensor<768xi16>
+  check.expect.equal actual(%counters) expected(%expected_counters) : tensor<56xi32>
+  check.return
+}
+
+check.benchmark<@qwen_attention_context_base_capture_case> @qwen_attention_context_base_capture_benchmark
+
+check.benchmark<@qwen_attention_decode_state_initialize_case> @qwen_attention_decode_state_initialize_benchmark

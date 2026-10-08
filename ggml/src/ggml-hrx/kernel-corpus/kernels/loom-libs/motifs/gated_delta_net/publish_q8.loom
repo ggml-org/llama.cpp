@@ -1,0 +1,11 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @llm.gated_delta_net.publish_q8.vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.def<@llm.gated_delta_net.publish_q8.vector4_strict> device @llm_gated_delta_net_publish_q8_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  template.apply<@ggml.quantize_q8_1_x4.publish_vector4_strict>(%publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}

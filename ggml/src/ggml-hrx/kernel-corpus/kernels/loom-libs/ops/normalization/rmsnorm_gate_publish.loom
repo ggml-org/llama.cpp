@@ -1,0 +1,32 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_gate_f32.publish_body(%publish_q8: i1, %token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %alternate_output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rmsnorm_gate_f32.hidden_size : %value: index where [range(%value, 128, 1024), mul(%value, 128)]
+
+config.decl @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+
+config.decl @ggml.rmsnorm_gate_f32.gate_op : %value: index where [range(%value, 0, 23)]
+
+config.decl @ggml.rmsnorm_gate_f32.f16_output_row_width : %value: index where [range(%value, 0, 32768), mul(%value, 128)]
+
+config.decl @ggml.rmsnorm_gate_f32.publish_q8 : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_gate_f32_publish") @ggml_rmsnorm_gate_f32_publish(%token_count: index) {
+  %one = index.constant 1 : index
+  %eight = index.constant 8 : index
+  %seven = index.constant 7 : index
+  %threads = index.constant 256 : index
+  %round = index.add %token_count, %seven : index
+  %groups = index.div %round, %eight : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %alternate_output: buffer) {
+  %publish_format = config.get @ggml.rmsnorm_gate_f32.publish_q8 : index
+  %q8_format = index.constant 1 : index
+  %publish_q8 = index.cmp eq, %publish_format, %q8_format : index
+  template.apply<@ggml.rmsnorm_gate_f32.publish_body>(%publish_q8, %token_count, %input, %weight, %raw_gate, %output, %alternate_output) : (i1, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -22,6 +22,7 @@ struct CommandProgramBinding {
     size_t       capacity   = 0;
     void *       host_data  = nullptr;
     bool         weight     = false;
+    bool         empty_value = false;
 
     bool requires_materialization() const { return host_data != nullptr; }
 };

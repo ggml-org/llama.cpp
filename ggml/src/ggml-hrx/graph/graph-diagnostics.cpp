@@ -139,7 +139,24 @@ json op_params_json(const OpParams & params) {
                 };
             } else if constexpr (std::is_same_v<T, GluParams>) {
                 return {
-                    { "kind", "glu"                      },
+                    { "kind",    "glu"                       },
+                    { "op",      static_cast<int>(value.op)  },
+                    { "swapped", value.swapped               }
+                };
+            } else if constexpr (std::is_same_v<T, ScaleParams>) {
+                return {
+                    { "kind",  "scale"     },
+                    { "scale", value.scale },
+                    { "bias",  value.bias  }
+                };
+            } else if constexpr (std::is_same_v<T, BinaryParams>) {
+                return {
+                    { "kind", "binary"                   },
+                    { "op",   static_cast<int>(value.op) }
+                };
+            } else if constexpr (std::is_same_v<T, UnaryParams>) {
+                return {
+                    { "kind", "unary"                    },
                     { "op",   static_cast<int>(value.op) }
                 };
             } else if constexpr (std::is_same_v<T, RopeParams>) {
@@ -154,6 +171,7 @@ json op_params_json(const OpParams & params) {
                     { "attn_factor", value.attn_factor },
                     { "beta_fast",   value.beta_fast   },
                     { "beta_slow",   value.beta_slow   },
+                    { "sections",    value.sections    },
                 };
             }
         },
@@ -187,13 +205,29 @@ OpParams parse_op_params(const json & item) {
         return ClampParams{ min, max };
     }
     if (kind == "glu") {
-        return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))) };
+        return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))),
+                          item.value("swapped", false) };
+    }
+    if (kind == "scale") {
+        return ScaleParams{ item.value("scale", 0.0f), item.value("bias", 0.0f) };
+    }
+    if (kind == "binary") {
+        return BinaryParams{ static_cast<BinaryKind>(item.value("op", static_cast<int>(BinaryKind::Add))) };
+    }
+    if (kind == "unary") {
+        return UnaryParams{ static_cast<UnaryKind>(item.value("op", static_cast<int>(UnaryKind::Abs))) };
     }
     if (kind == "rope") {
+        std::array<int, GGML_MROPE_SECTIONS> sections = {};
+        if (item.contains("sections")) {
+            sections = item["sections"].get<std::array<int, GGML_MROPE_SECTIONS>>();
+        }
         return RopeParams{
-            item.value("n_dims", 0),         item.value("mode", 0),          item.value("n_ctx_orig", 0),
-            item.value("freq_base", 0.0f),   item.value("freq_scale", 0.0f), item.value("ext_factor", 0.0f),
-            item.value("attn_factor", 0.0f), item.value("beta_fast", 0.0f),  item.value("beta_slow", 0.0f),
+            item.value("n_dims", 0),         item.value("mode", 0),
+            item.value("n_ctx_orig", 0),     item.value("freq_base", 0.0f),
+            item.value("freq_scale", 0.0f),  item.value("ext_factor", 0.0f),
+            item.value("attn_factor", 0.0f), item.value("beta_fast", 0.0f),
+            item.value("beta_slow", 0.0f),   sections,
         };
     }
     return std::monostate{};

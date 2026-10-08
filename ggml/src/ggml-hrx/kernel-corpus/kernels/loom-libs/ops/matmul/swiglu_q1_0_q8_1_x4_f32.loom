@@ -1,0 +1,41 @@
+func.decl @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, %gate_row_byte_base: offset, %up: buffer, %up_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32)
+
+amdgpu.target<gfx11-generic> @ggml_q1_0_q8_1_x4_swiglu_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.matmul.q1_0_q8_1_x4.input_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @ggml.matmul.q1_0_q8_1_x4.output_size : %value: index where [range(%value, 1, 524288)]
+
+kernel.def target(@ggml_q1_0_q8_1_x4_swiglu_gfx11_wave32) @ggml_mul_mat_swiglu_q1_0_q8_1_x4_f32(%token_count: index) {
+  %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%token_count: index, %q8_input: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.matmul.q1_0_q8_1_x4.input_size : index
+  %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size = index.assume %row0, %output_size [lt(%row0, %output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %weight_block_bytes = index.constant 18 : offset
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %gate_lane, %up_lane = func.call @ggml_q1_0_q8_1_x4_pair_lane(%bounded_input_size, %gate_weight, %weight_row_byte_base, %up_weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, buffer, offset, index) -> (f32, f32)
+  %gate = kernel.subgroup.reduce<addf> %gate_lane : f32
+  %up = kernel.subgroup.reduce<addf> %up_lane : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %sigmoid = scalar.logisticf<afn> %gate : f32
+    %silu = scalar.mulf %gate, %sigmoid : f32
+    %value = scalar.mulf %silu, %up : f32
+    %output_view = buffer.view %output[%q8_row_byte_base] : buffer -> view<[%bounded_token_count]x[%bounded_output_size]xf32>
+    view.store %value, %output_view[%c0, %row] : f32, view<[%bounded_token_count]x[%bounded_output_size]xf32>
+  }
+  kernel.return
+}

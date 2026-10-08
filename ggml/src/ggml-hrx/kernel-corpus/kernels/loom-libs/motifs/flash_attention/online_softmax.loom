@@ -1,0 +1,29 @@
+template.decl @ggml.flash_attention.online_softmax.prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>)
+
+template.def<@ggml.flash_attention.online_softmax.prefill> device @ggml_flash_attention_online_softmax_prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %probability_layout = encoding.layout.strided [72, 1] : encoding<layout>
+  %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
+  %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>
+  %next_max = vector.maxnumf %current_max, %block_max : vector<4xf32>
+  %score_delta = vector.subf<reassoc|nnan|nsz> %masked_scores, %next_max : vector<4xf32>
+  %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
+  %probability = vector.select %valid, %raw_probability, %c0_f32x4 : vector<4xf32>
+  %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
+  %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %current_max, %next_max : vector<4xf32>
+  %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
+  %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_sum, %old_scale : vector<4xf32>
+  %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %block_sum : vector<4xf32>
+  %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+  %probability0 = vector.extract %probability_f16[0] : vector<4xf16> -> f16
+  %probability1 = vector.extract %probability_f16[1] : vector<4xf16> -> f16
+  %probability2 = vector.extract %probability_f16[2] : vector<4xf16> -> f16
+  %probability3 = vector.extract %probability_f16[3] : vector<4xf16> -> f16
+  view.store %probability0, %probability_stage_view[%query_row0, %lane] : f16, view<16x64xf16, %probability_layout>
+  view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_layout>
+  view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_layout>
+  view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_layout>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  template.return %next_max, %next_sum, %old_scale : vector<4xf32>, vector<4xf32>, vector<4xf32>
+}

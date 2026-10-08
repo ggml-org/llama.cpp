@@ -1,0 +1,24 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.inplace_state.publish_head128(%state: view<1073741824xf32>, %index0: index, %index1: index, %index2: index, %index3: index, %index4: index, %index5: index, %index6: index, %index7: index, %index8: index, %index9: index, %index10: index, %index11: index, %index12: index, %index13: index, %index14: index, %index15: index, %value0: vector<4xf32>, %value1: vector<4xf32>, %value2: vector<4xf32>, %value3: vector<4xf32>, %value4: vector<4xf32>, %value5: vector<4xf32>, %value6: vector<4xf32>, %value7: vector<4xf32>, %value8: vector<4xf32>, %value9: vector<4xf32>, %value10: vector<4xf32>, %value11: vector<4xf32>, %value12: vector<4xf32>, %value13: vector<4xf32>, %value14: vector<4xf32>, %value15: vector<4xf32>)
+
+template.def<@llm.gated_delta_net.inplace_state.publish_head128> device @llm_gated_delta_net_inplace_state_publish_head128(%state: view<1073741824xf32>, %index0: index, %index1: index, %index2: index, %index3: index, %index4: index, %index5: index, %index6: index, %index7: index, %index8: index, %index9: index, %index10: index, %index11: index, %index12: index, %index13: index, %index14: index, %index15: index, %value0: vector<4xf32>, %value1: vector<4xf32>, %value2: vector<4xf32>, %value3: vector<4xf32>, %value4: vector<4xf32>, %value5: vector<4xf32>, %value6: vector<4xf32>, %value7: vector<4xf32>, %value8: vector<4xf32>, %value9: vector<4xf32>, %value10: vector<4xf32>, %value11: vector<4xf32>, %value12: vector<4xf32>, %value13: vector<4xf32>, %value14: vector<4xf32>, %value15: vector<4xf32>) {
+  vector.store %value0, %state[%index0] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value1, %state[%index1] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value2, %state[%index2] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value3, %state[%index3] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value4, %state[%index4] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value5, %state[%index5] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value6, %state[%index6] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value7, %state[%index7] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value8, %state[%index8] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value9, %state[%index9] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value10, %state[%index10] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value11, %state[%index11] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value12, %state[%index12] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value13, %state[%index13] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value14, %state[%index14] : vector<4xf32>, view<1073741824xf32>
+  vector.store %value15, %state[%index15] : vector<4xf32>, view<1073741824xf32>
+  template.return
+}

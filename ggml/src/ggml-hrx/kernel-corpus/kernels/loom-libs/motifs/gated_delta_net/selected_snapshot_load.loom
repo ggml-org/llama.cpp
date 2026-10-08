@@ -1,0 +1,27 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.selected_snapshot_load.state_offset(%select_state: i1, %state_row_count: index, %state_ids: buffer, %base: offset, %sequence_count: index, %sequence: index, %head_count: index, %head: index, %state_size: index, %default_offset: index) -> (index, i1)
+
+template.def<@llm.gated_delta_net.selected_snapshot_load.state_offset> device @llm_gated_delta_net_selected_snapshot_load_state_offset(%select_state: i1, %state_row_count: index, %state_ids: buffer, %base: offset, %sequence_count: index, %sequence: index, %head_count: index, %head: index, %state_size: index, %default_offset: index) -> (index, i1) {
+  %selected_state_offset, %selected_valid = scf.if %select_state -> (index, i1) {
+    %selected_zero_i32 = scalar.constant 0 : i32
+    %selected_limit_i32 = index.cast %state_row_count : index to i32
+    %selected_ids_view = buffer.view %state_ids[%base] : buffer -> view<[%sequence_count]xi32>
+    %selected_raw = view.load %selected_ids_view[%sequence] : view<[%sequence_count]xi32> -> i32
+    %selected_nonnegative = scalar.cmpi sge, %selected_raw, %selected_zero_i32 : i32
+    %selected_in_range = scalar.cmpi slt, %selected_raw, %selected_limit_i32 : i32
+    %selected_ok = scalar.andi %selected_nonnegative, %selected_in_range : i1
+    %selected_safe_i32 = scf.select %selected_ok, %selected_raw, %selected_zero_i32 : i32
+    %selected_id0 = index.cast %selected_safe_i32 : i32 to index
+    %selected_id = index.assume %selected_id0 [range(%selected_id0, 0, 262207), lt(%selected_id0, %state_row_count)] : index
+    %selected_head0 = index.mul %selected_id, %head_count : index
+    %selected_head = index.add %selected_head0, %head : index
+    %selected_offset = index.mul %selected_head, %state_size : index
+    scf.yield %selected_offset, %selected_ok : index, i1
+  } else {
+    %selected_always_valid = scalar.constant true : i1
+    scf.yield %default_offset, %selected_always_valid : index, i1
+  }
+  template.return %selected_state_offset, %selected_valid : index, i1
+}

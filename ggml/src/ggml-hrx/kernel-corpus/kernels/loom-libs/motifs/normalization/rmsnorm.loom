@@ -1,0 +1,367 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Computes the reciprocal RMS scale for one F32 row. The caller owns launch
+// geometry; this motif assumes a 256-workitem wave32 workgroup.
+template.decl @ggml.rmsnorm_f32.apply(%value: f32, %scale: f32) -> (f32)
+
+template.decl @ggml.rmsnorm_f32.row_scale(%token_count0: index, %token0: index, %hidden_size0: index, %input_stride0: index, %epsilon: f32, %input: buffer) -> (f32, index, index, i1)
+
+template.def<@ggml.rmsnorm_f32.row_scale> device @ggml_rmsnorm_f32_row_scale(%token_count0: index, %token0: index, %hidden_size0: index, %input_stride0: index, %epsilon: f32, %input: buffer) -> (f32, index, index, i1) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 1048576)] : index
+  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 64, 32768), mul(%hidden_size0, 64)] : index
+  %input_stride1 = index.assume %input_stride0 [range(%input_stride0, 64, 1048576)] : index
+  %hidden_size, %input_stride = index.assume %hidden_size1, %input_stride1 [le(%hidden_size1, %input_stride1)] : index, index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %scratch_bytes = index.constant 1024 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %valid_token = index.cmp ult, %token0, %token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token = index.assume %safe_token0 [lt(%safe_token0, %token_count)] : index
+  %hidden_size_i32 = index.cast %hidden_size : index to i32
+  %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%input_stride]xf32>
+  %c1024 = index.constant 1024 : index
+  %tail = index.rem %hidden_size, %c1024 : index
+  %unroll_limit = index.sub %hidden_size, %tail : index
+  %prefix_sum = scf.for %channel = [%workitem to %unroll_limit step %c1024](%running_sum = %c0_f32 : f32) -> (f32) {
+    %offset0 = index.constant 0 : index
+    %channel0 = index.add %channel, %offset0 : index
+    %value0 = view.load %input_view[%token, %channel0] : view<[%token_count]x[%input_stride]xf32> -> f32
+    %offset1 = index.constant 256 : index
+    %channel1 = index.add %channel, %offset1 : index
+    %value1 = view.load %input_view[%token, %channel1] : view<[%token_count]x[%input_stride]xf32> -> f32
+    %offset2 = index.constant 512 : index
+    %channel2 = index.add %channel, %offset2 : index
+    %value2 = view.load %input_view[%token, %channel2] : view<[%token_count]x[%input_stride]xf32> -> f32
+    %offset3 = index.constant 768 : index
+    %channel3 = index.add %channel, %offset3 : index
+    %value3 = view.load %input_view[%token, %channel3] : view<[%token_count]x[%input_stride]xf32> -> f32
+    %square0 = scalar.mulf<reassoc|nnan|ninf|nsz> %value0, %value0 : f32
+    %sum0 = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square0 : f32
+    %square1 = scalar.mulf<reassoc|nnan|ninf|nsz> %value1, %value1 : f32
+    %sum1 = scalar.addf<reassoc|nnan|ninf|nsz> %sum0, %square1 : f32
+    %square2 = scalar.mulf<reassoc|nnan|ninf|nsz> %value2, %value2 : f32
+    %sum2 = scalar.addf<reassoc|nnan|ninf|nsz> %sum1, %square2 : f32
+    %square3 = scalar.mulf<reassoc|nnan|ninf|nsz> %value3, %value3 : f32
+    %sum3 = scalar.addf<reassoc|nnan|ninf|nsz> %sum2, %square3 : f32
+    scf.yield %sum3 : f32
+  }
+  %tail_start = index.add %unroll_limit, %workitem : index
+  %thread_sum = scf.for %channel = [%tail_start to %hidden_size step %c256](%running_sum = %prefix_sum : f32) -> (f32) {
+    %value = view.load %input_view[%token, %channel] : view<[%token_count]x[%input_stride]xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_view = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_view[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %c8 : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_view[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %scale, %scratch_view[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %scale = view.load %scratch_view[%c0] : view<256xf32> -> f32
+  template.return %scale, %token, %token_count, %valid_token : f32, index, index, i1
+}
+
+// One subgroup owns a short row; callers supply a valid row index and pack
+// independent rows into a workgroup. No workgroup scratch or barriers.
+template.decl @ggml.rmsnorm_f32.subgroup_row_scale(%token_count: index, %token: index, %hidden_size: index, %epsilon: f32, %input: buffer) -> (f32)
+
+template.def<@ggml.rmsnorm_f32.subgroup_row_scale> device @ggml_rmsnorm_f32_subgroup_row_scale(%token_count0: index, %token0: index, %hidden0: index, %epsilon: f32, %input_n: buffer) -> (f32) {
+  %bounded_token_count = index.assume %token_count0 [range(%token_count0, 1, 1048576)] : index
+  %row = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 128, 1024), mul(%hidden0, 128)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %four = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %zero_offset = index.constant 0 : offset
+  %channel0 = index.mul %lane, %four : index
+  %zero = scalar.constant 0.0 : f32
+  %zero4 = vector.constant 0.0 : vector<4xf32>
+  %iv = buffer.view %input_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %last_channel = index.sub %hidden, %four : index
+  %squares = scf.for %channel = [%channel0 to %hidden step %c128](%sum = %zero4 : vector<4xf32>) -> (vector<4xf32>) {
+    %bounded_channel = index.assume %channel [range(%channel, 0, 1020), mul(%channel, 4), le(%channel, %last_channel)] : index
+    %x = vector.load %iv[%row, %bounded_channel] : view<[%bounded_token_count]x[%hidden]xf32> -> vector<4xf32>
+    %xx = vector.mulf<reassoc|nnan|ninf|nsz> %x, %x : vector<4xf32>
+    %next = vector.addf<reassoc|nnan|ninf|nsz> %sum, %xx : vector<4xf32>
+    scf.yield %next : vector<4xf32>
+  }
+  %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %squares, %zero : vector<4xf32>, f32
+  %row_sum = kernel.subgroup.reduce<addf> %lane_sum : f32
+  %hidden_i = index.cast %hidden : index to i32
+  %hidden_f = scalar.sitofp %hidden_i : i32 to f32
+  %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_f : f32
+  %biased = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
+  template.return %scale : f32
+}
+
+template.def<@ggml.rmsnorm_f32.apply> device @ggml_rmsnorm_f32_apply(%value: f32, %scale: f32) -> (f32) {
+  %normalized = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %scale : f32
+  template.return %normalized : f32
+}
+
+
+config.decl @ggml.rmsnorm_f32.hidden_size : %value: index where [range(%value, 64, 32768), mul(%value, 64)]
+config.decl @ggml.rmsnorm_f32.input_stride : %value: index where [range(%value, 64, 1048576)]
+config.decl @ggml.rmsnorm_f32.rms_epsilon : f32
+
+template.decl @ggml.rmsnorm_f32.body(%token_count: index, %input: buffer, %output: buffer)
+
+template.def<@ggml.rmsnorm_f32.body> device @ggml_rmsnorm_f32_body(%token_count: index, %input: buffer, %output: buffer) {
+  %hidden_size0 = config.get @ggml.rmsnorm_f32.hidden_size : index
+  %input_stride0 = config.get @ggml.rmsnorm_f32.input_stride : index
+  %epsilon = config.get @ggml.rmsnorm_f32.rms_epsilon : f32
+  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 64, 32768), mul(%hidden_size0, 64)] : index
+  %input_stride1 = index.assume %input_stride0 [range(%input_stride0, 64, 1048576)] : index
+  %hidden_size, %input_stride = index.assume %hidden_size1, %input_stride1 [le(%hidden_size1, %input_stride1)] : index, index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %input_stride, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%input_stride]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  scf.if %valid_token {
+    scf.for %channel = [%workitem to %hidden_size step %c256] {
+      %value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%input_stride]xf32> -> f32
+      %normalized = template.apply<@ggml.rmsnorm_f32.apply>(%value, %row_scale) : (f32, f32) -> (f32)
+      view.store %normalized, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%hidden_size]xf32>
+    }
+  }
+  template.return
+}
+
+template.decl @ggml.rope_f32.rotate_scalar_pair(%x: f32, %y: f32, %cosine: f32, %sine: f32) -> (f32, f32)
+template.decl @ggml.rmsnorm_mul_rope_f32.body(%input: buffer, %weight: buffer, %positions: buffer, %output: buffer)
+
+config.decl @ggml.rmsnorm_mul_rope.hidden_size : %value: index where [range(%value, 2, 512)]
+config.decl @ggml.rmsnorm_mul_rope.ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.rmsnorm_mul_rope.ne2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.rmsnorm_mul_rope.ne3 : %value: index where [range(%value, 1, 1024)]
+config.decl @ggml.rmsnorm_mul_rope.input_stride1 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.input_stride2 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.input_stride3 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.output_stride1 : %value: index where [range(%value, 0, 268435456)]
+config.decl @ggml.rmsnorm_mul_rope.output_stride2 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.output_stride3 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.n_dims : %value: index where [range(%value, 2, 512)]
+config.decl @ggml.rmsnorm_mul_rope.section0 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.section1 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.section2 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.section3 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.mode : %value: index where [range(%value, 2, 40)]
+config.decl @ggml.rmsnorm_mul_rope.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @ggml.rmsnorm_mul_rope.epsilon : f32
+config.decl @ggml.rmsnorm_mul_rope.freq_base : f32
+config.decl @ggml.rmsnorm_mul_rope.freq_scale : f32
+config.decl @ggml.rmsnorm_mul_rope.attn_factor : f32
+
+template.def<@ggml.rmsnorm_mul_rope_f32.body> device @ggml_rmsnorm_mul_rope_f32_body(%src0: buffer, %weight: buffer, %pos: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %cneox = index.constant 2 : index
+  %c40 = index.constant 40 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %cneg2_f32 = scalar.constant -2.0 : f32
+  %eps = config.get @ggml.rmsnorm_mul_rope.epsilon : f32
+  %freq_base = config.get @ggml.rmsnorm_mul_rope.freq_base : f32
+  %freq_scale = config.get @ggml.rmsnorm_mul_rope.freq_scale : f32
+  %attn_factor = config.get @ggml.rmsnorm_mul_rope.attn_factor : f32
+
+  %ncols = config.get @ggml.rmsnorm_mul_rope.hidden_size : index
+  %ne1 = config.get @ggml.rmsnorm_mul_rope.ne1 : index
+  %ne2 = config.get @ggml.rmsnorm_mul_rope.ne2 : index
+  %s1 = config.get @ggml.rmsnorm_mul_rope.input_stride1 : index
+  %s2 = config.get @ggml.rmsnorm_mul_rope.input_stride2 : index
+  %s3 = config.get @ggml.rmsnorm_mul_rope.input_stride3 : index
+  %d1 = config.get @ggml.rmsnorm_mul_rope.output_stride1 : index
+  %d2 = config.get @ggml.rmsnorm_mul_rope.output_stride2 : index
+  %d3 = config.get @ggml.rmsnorm_mul_rope.output_stride3 : index
+  %n_dims = config.get @ggml.rmsnorm_mul_rope.n_dims : index
+  %sec0 = config.get @ggml.rmsnorm_mul_rope.section0 : index
+  %sec1 = config.get @ggml.rmsnorm_mul_rope.section1 : index
+  %sec2 = config.get @ggml.rmsnorm_mul_rope.section2 : index
+  %sec3 = config.get @ggml.rmsnorm_mul_rope.section3 : index
+  %mode = config.get @ggml.rmsnorm_mul_rope.mode : index
+  %wg = config.get @ggml.rmsnorm_mul_rope.workgroup_size : index
+
+  %ncols_b = index.assume %ncols [range(%ncols, 2, 512)] : index
+  %ne1_b = index.assume %ne1 [range(%ne1, 1, 1048576)] : index
+  %ne2_b = index.assume %ne2 [range(%ne2, 1, 1048576)] : index
+  %n_dims_b = index.assume %n_dims [range(%n_dims, 2, 512)] : index
+
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1073741823)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %src_global = buffer.assume.memory_space<global> %src0 : buffer
+  %weight_global = buffer.assume.memory_space<global> %weight : buffer
+  %pos_global = buffer.assume.memory_space<global> %pos : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src_na, %weight_na, %pos_na, %dst_na = buffer.assume.noalias %src_global, %weight_global, %pos_global, %dst_global : buffer, buffer, buffer, buffer
+  %src_view = buffer.view %src_na[%base] : buffer -> view<1073741824xf32>
+  %weight_view = buffer.view %weight_na[%base] : buffer -> view<65536xf32>
+  %pos_view = buffer.view %pos_na[%base] : buffer -> view<1073741824xi32>
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<1073741824xf32>
+
+  %n12 = index.mul %ne1_b, %ne2_b : index
+  %i3 = index.div %row, %n12 : index
+  %r12 = index.rem %row, %n12 : index
+  %i2 = index.div %r12, %ne1_b : index
+  %i1 = index.rem %r12, %ne1_b : index
+  %o1 = index.mul %i1, %s1 : index
+  %o2 = index.mul %i2, %s2 : index
+  %o3 = index.mul %i3, %s3 : index
+  %o12 = index.add %o1, %o2 : index
+  %src_base0 = index.add %o12, %o3 : index
+  %src_base = index.assume %src_base0 [range(%src_base0, 0, 1073741823)] : index
+
+  %sum = scf.for %col = [%lane to %ncols_b step %wg](%acc = %c0_f32 : f32) -> (f32) {
+    %si0 = index.add %src_base, %col : index
+    %si = index.assume %si0 [range(%si0, 0, 1073741823)] : index
+    %value = view.load %src_view[%si] : view<1073741824xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %square : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %ncols_i32 = index.cast %ncols_b : index to i32
+  %ncols_f32 = scalar.sitofp %ncols_i32 : i32 to f32
+  %mean = scalar.divf<reassoc|nnan|ninf|nsz> %row_sum, %ncols_f32 : f32
+  %biased = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
+
+  %half = index.div %ncols_b, %c2 : index
+  %active = index.cmp ult, %lane, %half : index
+  scf.if %active {
+    %ih = index.add %lane, %c0 : index
+    %i0 = index.mul %ih, %c2 : index
+    %half_dims = index.div %n_dims_b, %c2 : index
+    %rotate = index.cmp ult, %i0, %n_dims_b : index
+
+    %sd01 = index.add %sec0, %sec1 : index
+    %sd012 = index.add %sd01, %sec2 : index
+    %sect_dims = index.add %sd012, %sec3 : index
+    %sector = index.rem %ih, %sect_dims : index
+    %m3 = index.rem %sector, %c3 : index
+    %s0lim = index.mul %sec0, %c3 : index
+    %s1lim = index.mul %sec1, %c3 : index
+    %s2lim = index.mul %sec2, %c3 : index
+    %is0 = index.cmp eq, %m3, %c0 : index
+    %is1 = index.cmp eq, %m3, %c1 : index
+    %is2 = index.cmp eq, %m3, %c2 : index
+    %ok0 = index.cmp ult, %sector, %s0lim : index
+    %ok1 = index.cmp ult, %sector, %s1lim : index
+    %ok2 = index.cmp ult, %sector, %s2lim : index
+    %im_p0 = scf.select %ok0, %c0, %c3 : index
+    %im_a = scf.select %is0, %im_p0, %c3 : index
+    %im_p2 = scf.select %ok2, %c2, %c3 : index
+    %im_b = scf.select %is2, %im_p2, %im_a : index
+    %im_p1 = scf.select %ok1, %c1, %c3 : index
+    %plane_im = scf.select %is1, %im_p1, %im_b : index
+
+    %sec_w = index.add %sec0, %sec1 : index
+    %sec_w2 = index.add %sec_w, %sec2 : index
+    %lt0 = index.cmp ult, %sector, %sec0 : index
+    %ltw = index.cmp ult, %sector, %sec_w : index
+    %ltw2 = index.cmp ult, %sector, %sec_w2 : index
+    %mr_a = scf.select %ltw2, %c2, %c3 : index
+    %mr_b = scf.select %ltw, %c1, %mr_a : index
+    %plane_mr = scf.select %lt0, %c0, %mr_b : index
+    %is_im = index.cmp eq, %mode, %c40 : index
+    %plane = scf.select %is_im, %plane_im, %plane_mr : index
+
+    %plane_off = index.mul %plane, %ne2_b : index
+    %sectioned_pos_i = index.add %i2, %plane_off : index
+    %is_neox = index.cmp eq, %mode, %cneox : index
+    %pos_i0 = scf.select %is_neox, %i2, %sectioned_pos_i : index
+    %pos_i = index.assume %pos_i0 [range(%pos_i0, 0, 1073741823)] : index
+    %pos_i32 = view.load %pos_view[%pos_i] : view<1073741824xi32> -> i32
+    %pos_f = scalar.sitofp %pos_i32 : i32 to f32
+    %n_dims_i32 = index.cast %n_dims_b : index to i32
+    %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
+    %ih_i32 = index.cast %ih : index to i32
+    %ih_f = scalar.sitofp %ih_i32 : i32 to f32
+    %scaled_ih = scalar.mulf<nnan|ninf|nsz> %cneg2_f32, %ih_f : f32
+    %theta_exponent = scalar.divf<nnan|ninf|nsz> %scaled_ih, %n_dims_f32 : f32
+    %freq = scalar.powf<afn> %freq_base, %theta_exponent : f32
+    %theta_base = scalar.mulf<nnan|ninf|nsz> %pos_f, %freq : f32
+    %theta = scalar.mulf<nnan|ninf|nsz> %theta_base, %freq_scale : f32
+    %cos_theta_raw = scalar.cosf<afn> %theta : f32
+    %s0v = scalar.sinf<afn> %theta : f32
+    %cos_theta = scalar.mulf<nnan|ninf|nsz> %cos_theta_raw, %attn_factor : f32
+    %sin_theta = scalar.mulf<nnan|ninf|nsz> %s0v, %attn_factor : f32
+
+    %off_a = scf.select %rotate, %ih, %i0 : index
+    %rot_b = index.add %ih, %half_dims : index
+    %pass_b = index.add %i0, %c1 : index
+    %off_b = scf.select %rotate, %rot_b, %pass_b : index
+    %sa0 = index.add %src_base, %off_a : index
+    %sa = index.assume %sa0 [range(%sa0, 0, 1073741823)] : index
+    %sb0 = index.add %src_base, %off_b : index
+    %sb = index.assume %sb0 [range(%sb0, 0, 1073741823)] : index
+
+    %raw0 = view.load %src_view[%sa] : view<1073741824xf32> -> f32
+    %raw1 = view.load %src_view[%sb] : view<1073741824xf32> -> f32
+    %rms0 = scalar.mulf<nnan|ninf|nsz> %raw0, %rms_scale : f32
+    %rms1 = scalar.mulf<nnan|ninf|nsz> %raw1, %rms_scale : f32
+    %w0 = view.load %weight_view[%off_a] : view<65536xf32> -> f32
+    %w1 = view.load %weight_view[%off_b] : view<65536xf32> -> f32
+    %x0 = scalar.mulf<nnan|ninf|nsz> %rms0, %w0 : f32
+    %x1 = scalar.mulf<nnan|ninf|nsz> %rms1, %w1 : f32
+
+    %rot0, %rot1 = template.apply<@ggml.rope_f32.rotate_scalar_pair>(%x0, %x1, %cos_theta, %sin_theta) : (f32, f32, f32, f32) -> (f32, f32)
+    %out0 = scf.select %rotate, %rot0, %x0 : f32
+    %out1 = scf.select %rotate, %rot1, %x1 : f32
+
+    %db1 = index.mul %i1, %d1 : index
+    %db2 = index.mul %i2, %d2 : index
+    %db3 = index.mul %i3, %d3 : index
+    %db01 = index.add %db1, %db2 : index
+    %dst_row = index.add %db01, %db3 : index
+    %da0 = index.add %dst_row, %off_a : index
+    %da = index.assume %da0 [range(%da0, 0, 1073741823)] : index
+    %db0 = index.add %dst_row, %off_b : index
+    %db = index.assume %db0 [range(%db0, 0, 1073741823)] : index
+    view.store %out0, %dst_view[%da] : f32, view<1073741824xf32>
+    view.store %out1, %dst_view[%db] : f32, view<1073741824xf32>
+  }
+  template.return
+}

@@ -1,0 +1,73 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @qwen3_moe.attention.qkv_postprocess_fused_decode.body(%value_uses_q6_index: index, %token_count: index, %cache_row_count: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_output_raw: buffer, %key_output_raw: buffer, %value_output_raw: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer, %completion_counters: buffer)
+
+template.decl @qwen3_moe.attention.qkv_quantized.body(%value_uses_q6_index: index, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer)
+
+template.decl @qwen3_moe.attention.postprocess.head_body(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: buffer, %arg6: buffer, %arg7: buffer, %arg8: buffer, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer)
+
+config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.attention.key_value_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 128, 128)]
+
+// The fused export sources the value storage format from model config.
+template.def<@qwen3_moe.attention.qkv_postprocess_fused_decode.body> device @qwen3_moe_attention_qkv_postprocess_fused_decode_body(%value_uses_q6_index: index, %token_count: index, %cache_row_count: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_output_raw: buffer, %key_output_raw: buffer, %value_output_raw: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer, %completion_counters: buffer) {
+  %publish_projection_output = scalar.constant true : i1
+  %projection_token = kernel.workgroup.id<y> : index
+  template.apply<@qwen3_moe.attention.qkv_quantized.body>(%value_uses_q6_index, %publish_projection_output, %token_count, %projection_token, %q8_input, %query_weight, %key_weight, %value_weight, %query_output_raw, %key_output_raw, %value_output_raw) : (index, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  %query_size0 = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
+  %head_size0 = config.get @qwen3_moe.attention.head_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 128, 262144), range(%key_value_size0, 128, 262144), range(%head_size0, 128, 128), mul(%query_size0, %head_size0), mul(%key_value_size0, %head_size0)] : index, index, index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0_offset = index.constant 0 : offset
+  %counter_scratch_bytes = index.constant 4 : offset
+  %channel_tile = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %token = index.assume %c0 [lt(%c0, %bounded_token_count)] : index
+  %head_tile_count = index.div %head_size, %c8 : index
+  %head_domain0 = index.div %channel_tile, %head_tile_count : index
+  %query_head_count = index.div %query_size, %head_size : index
+  %key_value_head_count = index.div %key_value_size, %head_size : index
+  %key_value_domain_count = index.mul %key_value_head_count, %c2 : index
+  %head_domain_count = index.add %query_head_count, %key_value_domain_count : index
+  %head_domain, %completion_counter_count = index.assume %head_domain0, %head_domain_count [lt(%head_domain0, %head_domain_count)] : index, index
+  %is_arrival_workitem = index.cmp eq, %workitem, %c0 : index
+  %completion_counters_aligned = buffer.assume.alignment %completion_counters {minimum_alignment = 16} : buffer
+  %completion_counters_view = buffer.view %completion_counters_aligned[%c0_offset] : buffer -> view<[%completion_counter_count]xi32>
+  %counter_scratch = buffer.alloca<workgroup> align(4) %counter_scratch_bytes : buffer
+  %counter_scratch_view = buffer.view %counter_scratch[%c0_offset] : buffer -> view<1xi32>
+  // Publish every producer's projection stores before the leader advances one
+  // workgroup arrival. The last arrival then acquires the complete head.
+  kernel.barrier<global> scope(workgroup) ordering(release)
+  scf.if %is_arrival_workitem {
+    %old_counter = view.atomic.rmw<addi> %c1_i32, %completion_counters_view[%head_domain] {ordering = acq_rel, scope = device} : i32, view<[%completion_counter_count]xi32> -> i32
+    view.store %old_counter, %counter_scratch_view[%c0] : i32, view<1xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %old_counter = view.load %counter_scratch_view[%c0] : view<1xi32> -> i32
+  %head_tile_count_i32 = index.cast %head_tile_count : index to i32
+  %last_head_tile_i32 = scalar.subi %head_tile_count_i32, %c1_i32 : i32
+  %negative_head_tile_count_i32 = scalar.subi %c0_i32, %head_tile_count_i32 : i32
+  %is_last_head_tile = scalar.cmpi eq, %old_counter, %last_head_tile_i32 : i32
+  scf.if %is_last_head_tile {
+    kernel.barrier<global> scope(workgroup) ordering(acquire)
+    %publish_postprocess_output = scalar.constant true : i1
+    template.apply<@qwen3_moe.attention.postprocess.head_body>(%publish_postprocess_output, %bounded_token_count, %cache_row_count, %head_domain, %token, %positions, %key_cache_indices, %value_cache_indices, %query_output_raw, %key_output_raw, %value_output_raw, %query_norm_weight, %key_norm_weight, %inverse_frequencies, %query_output, %key_cache, %value_cache) : (i1, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+    // The counter becomes reusable only after all semantic output stores.
+    kernel.barrier<global> scope(workgroup) ordering(release)
+    scf.if %is_arrival_workitem {
+      view.atomic.reduce<addi> %negative_head_tile_count_i32, %completion_counters_view[%head_domain] {ordering = release, scope = device} : i32, view<[%completion_counter_count]xi32>
+    }
+  }
+  template.return
+}

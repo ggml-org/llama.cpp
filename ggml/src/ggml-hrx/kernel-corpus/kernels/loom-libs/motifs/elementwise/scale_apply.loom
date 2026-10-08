@@ -1,0 +1,10 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.elementwise.scale_apply(%value: f32, %scale: f32, %bias: f32) -> (f32)
+
+template.def<@ggml.elementwise.scale_apply> device @ggml_elementwise_scale_apply(%value: f32, %scale: f32, %bias: f32) -> (f32) {
+  %scaled = scalar.mulf %value, %scale : f32
+  %result = scalar.addf %scaled, %bias : f32
+  template.return %result : f32
+}

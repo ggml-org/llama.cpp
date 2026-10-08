@@ -1,0 +1,14 @@
+// Shared SwiGLU activation for routed F32 pair publication.
+template.decl @ggml.matmul_id.pair_f32_swiglu.apply_vector4(%gate: vector<4xf32>, %up: vector<4xf32>) -> (vector<4xf32>)
+
+template.def<@ggml.matmul_id.pair_f32_swiglu.apply_vector4> device @ggml_mul_mat_id_pair_f32_swiglu_apply_vector4(%gate: vector<4xf32>, %up: vector<4xf32>) -> (vector<4xf32>) {
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
+  %negative_gate = vector.subf %c0_f32x4, %gate : vector<4xf32>
+  %gate_exp = vector.expf<afn> %negative_gate : vector<4xf32>
+  %denominator = vector.addf %c1_f32x4, %gate_exp : vector<4xf32>
+  %sigmoid = vector.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32x4, %denominator : vector<4xf32>
+  %silu = vector.mulf<reassoc|nnan|ninf|nsz|contract> %gate, %sigmoid : vector<4xf32>
+  %result = vector.mulf<reassoc|nnan|ninf|nsz|contract> %silu, %up : vector<4xf32>
+  template.return %result : vector<4xf32>
+}

@@ -1,0 +1,81 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.binary_f32.apply(%arg0: index, %arg1: f32, %arg2: f32) -> (f32)
+
+template.decl @ggml.elementwise.broadcast_index(%linear: index, %n0: index, %n1: index, %n2: index, %coord0: index, %coord1: index, %coord2: index, %coord3: index, %broadcast_dim0_flag: index, %broadcast_dim1_flag: index, %broadcast_dim2_flag: index, %broadcast_dim3_flag: index, %zero: index, %one: index) -> (index)
+
+amdgpu.target<gfx11-generic> @ggml_binary_bc_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.binary_bc_f32.op : %value: index where [range(%value, 0, 8)]
+
+config.decl @ggml.binary_bc_f32.src0_broadcast_dim0 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src0_broadcast_dim1 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src0_broadcast_dim2 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src0_broadcast_dim3 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src1_broadcast_dim0 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src1_broadcast_dim1 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src1_broadcast_dim2 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.binary_bc_f32.src1_broadcast_dim3 : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@ggml_binary_bc_f32_gfx11_wave64) export("ggml_binary_bc_f32") @ggml_binary_bc_f32(%element_count: index, %ne0: index, %ne1: index, %ne2: index, %ne3: index, %src0_element_count: index, %src1_element_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %ne0: index, %ne1: index, %ne2: index, %ne3: index, %src0_element_count: index, %src1_element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %n0 = index.assume %ne0 [range(%ne0, 1, 134217728)] : index
+  %n1 = index.assume %ne1 [range(%ne1, 1, 134217728)] : index
+  %n2 = index.assume %ne2 [range(%ne2, 1, 134217728)] : index
+  %src0_count = index.assume %src0_element_count [range(%src0_element_count, 1, 134217728)] : index
+  %src1_count = index.assume %src1_element_count [range(%src1_element_count, 1, 134217728)] : index
+  %op = config.get @ggml.binary_bc_f32.op : index
+  %src0_broadcast_dim0_flag = config.get @ggml.binary_bc_f32.src0_broadcast_dim0 : index
+  %src0_broadcast_dim1_flag = config.get @ggml.binary_bc_f32.src0_broadcast_dim1 : index
+  %src0_broadcast_dim2_flag = config.get @ggml.binary_bc_f32.src0_broadcast_dim2 : index
+  %src0_broadcast_dim3_flag = config.get @ggml.binary_bc_f32.src0_broadcast_dim3 : index
+  %src1_broadcast_dim0_flag = config.get @ggml.binary_bc_f32.src1_broadcast_dim0 : index
+  %src1_broadcast_dim1_flag = config.get @ggml.binary_bc_f32.src1_broadcast_dim1 : index
+  %src1_broadcast_dim2_flag = config.get @ggml.binary_bc_f32.src1_broadcast_dim2 : index
+  %src1_broadcast_dim3_flag = config.get @ggml.binary_bc_f32.src1_broadcast_dim3 : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %one = index.constant 1 : index
+  %zero = index.constant 0 : index
+  %base0 = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base0, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %lhs_view = buffer.view %lhs[%zero_offset] : buffer -> view<[%src0_count]xf32>
+  %rhs_view = buffer.view %rhs[%zero_offset] : buffer -> view<[%src1_count]xf32>
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %coord0 = index.rem %linear, %n0 : index
+    %linear_div_n0 = index.div %linear, %n0 : index
+    %coord1 = index.rem %linear_div_n0, %n1 : index
+    %linear_div_n01 = index.div %linear_div_n0, %n1 : index
+    %coord2 = index.rem %linear_div_n01, %n2 : index
+    %coord3 = index.div %linear_div_n01, %n2 : index
+
+    %src0_linear = template.apply<@ggml.elementwise.broadcast_index>(%linear, %n0, %n1, %n2, %coord0, %coord1, %coord2, %coord3, %src0_broadcast_dim0_flag, %src0_broadcast_dim1_flag, %src0_broadcast_dim2_flag, %src0_broadcast_dim3_flag, %zero, %one) : (index, index, index, index, index, index, index, index, index, index, index, index, index, index) -> (index)
+    %src1_linear = template.apply<@ggml.elementwise.broadcast_index>(%linear, %n0, %n1, %n2, %coord0, %coord1, %coord2, %coord3, %src1_broadcast_dim0_flag, %src1_broadcast_dim1_flag, %src1_broadcast_dim2_flag, %src1_broadcast_dim3_flag, %zero, %one) : (index, index, index, index, index, index, index, index, index, index, index, index, index, index) -> (index)
+
+    %lhs_value = view.load %lhs_view[%src0_linear] : view<[%src0_count]xf32> -> f32
+    %rhs_value = view.load %rhs_view[%src1_linear] : view<[%src1_count]xf32> -> f32
+    %result = template.apply<@ggml.binary_f32.apply>(%op, %lhs_value, %rhs_value) : (index, f32, f32) -> (f32)
+    view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

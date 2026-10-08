@@ -1,0 +1,69 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rows.cache_publish.safe_i64_row(%token: index, %token_count: index, %cache_row_count: index, %indices: buffer) -> (i1, index)
+
+template.decl @ggml.rows.cache_publish.f32_vector2(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<2xf32>, %cache: buffer)
+
+template.decl @ggml.rows.cache_publish.f32_vector4(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<4xf32>, %cache: buffer)
+
+template.def<@ggml.rows.cache_publish.safe_i64_row> device @ggml_rows_cache_publish_safe_i64_row(%token: index, %token_count: index, %cache_row_count: index, %indices: buffer) -> (i1, index) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
+  %c0 = index.constant 0 : index
+  %c0_i64 = scalar.constant 0 : i64
+  %c1048575_i64 = scalar.constant 1048575 : i64
+  %c0_offset = index.constant 0 : offset
+  %indices_view = buffer.view %indices[%c0_offset] : buffer -> view<[%bounded_token_count]xi64>
+  %index_raw = view.load %indices_view[%token] : view<[%bounded_token_count]xi64> -> i64
+  %index_nonnegative = scalar.cmpi sge, %index_raw, %c0_i64 : i64
+  %index_in_cast_range = scalar.cmpi sle, %index_raw, %c1048575_i64 : i64
+  %valid_index = scalar.andi %index_nonnegative, %index_in_cast_range : i1
+  %safe_index0_i64 = scf.select %valid_index, %index_raw, %c0_i64 : i64
+  %safe_index_i64 = scalar.assume %safe_index0_i64 [range(%safe_index0_i64, 0, 1048575)] : i64
+  %cache_row0 = index.cast %safe_index_i64 : i64 to index
+  %valid_row = index.cmp ult, %cache_row0, %bounded_cache_row_count : index
+  %publish = scalar.andi %valid_index, %valid_row : i1
+  %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
+  template.return %publish, %cache_row : i1, index
+}
+
+template.def<@ggml.rows.cache_publish.f32_vector2> device @ggml_rows_cache_publish_f32_vector2(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<2xf32>, %cache: buffer) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %is_f16 = index.cmp eq, %output_format, %c16 : index
+  %is_f32 = index.cmp eq, %output_format, %c32 : index
+  %publish_f16 = scalar.andi %publish, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  scf.if %publish_f16 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf16>
+    %truncated = vector.fptrunc %values : vector<2xf32> to vector<2xf16>
+    vector.store %truncated, %cache_view[%cache_row, %channel] : vector<2xf16>, view<[%cache_row_count]x[%hidden_size]xf16>
+  }
+  scf.if %publish_f32 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf32>
+    vector.store %values, %cache_view[%cache_row, %channel] : vector<2xf32>, view<[%cache_row_count]x[%hidden_size]xf32>
+  }
+  template.return
+}
+
+template.def<@ggml.rows.cache_publish.f32_vector4> device @ggml_rows_cache_publish_f32_vector4(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<4xf32>, %cache: buffer) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %is_f16 = index.cmp eq, %output_format, %c16 : index
+  %is_f32 = index.cmp eq, %output_format, %c32 : index
+  %publish_f16 = scalar.andi %publish, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  scf.if %publish_f16 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf16>
+    %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %truncated, %cache_view[%cache_row, %channel] : vector<4xf16>, view<[%cache_row_count]x[%hidden_size]xf16>
+  }
+  scf.if %publish_f32 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf32>
+    vector.store %values, %cache_view[%cache_row, %channel] : vector<4xf32>, view<[%cache_row_count]x[%hidden_size]xf32>
+  }
+  template.return
+}

@@ -1,0 +1,26 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+template.decl @ggml.quantize_q8_1_x4.publish_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @ggml.normalization.publish_q8.binary_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.def<@ggml.normalization.publish_q8.binary_vector4> device @ggml_normalization_publish_q8_binary_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}
+
+template.decl @ggml.normalization.publish_q8.gate_vector4(%publish_word: i1, %row: index, %hidden_size: index, %channel: index, %values: vector<4xf32>, %output: buffer)
+
+template.def<@ggml.normalization.publish_q8.gate_vector4> device @ggml_normalization_publish_q8_gate_vector4(%publish_word: i1, %row: index, %hidden_size: index, %channel: index, %values: vector<4xf32>, %output: buffer) {
+  %zero_offset = index.constant 0 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %scratch_d_offset = index.constant 1024 : offset
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%zero_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_offset] : buffer -> view<32xf32>
+  %flat_channel = index.madd %row, %hidden_size, %channel : index
+  template.apply<@ggml.quantize_q8_1_x4.publish_vector4_strict>(%publish_word, %zero_offset, %flat_channel, %values, %scratch_values, %scratch_d, %output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}

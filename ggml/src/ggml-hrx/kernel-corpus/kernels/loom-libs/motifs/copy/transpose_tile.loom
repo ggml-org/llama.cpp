@@ -1,0 +1,56 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.transpose_tile.f16_body(%rows: index, %columns: index, %input: buffer, %output: buffer)
+
+template.def<@ggml.copy.transpose_tile.f16_body> device @ggml_copy_transpose_tile_f16_body(%rows: index, %columns: index, %input: buffer, %output: buffer) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %zero = index.constant 0 : offset
+  %bytes = index.constant 2560 : offset
+  %wi = kernel.workitem.id<x> : index
+  %gx = kernel.workgroup.id<x> : index
+  %gy = kernel.workgroup.id<y> : index
+  %row_origin = index.mul %gy, %c32 : index
+  %col_origin = index.mul %gx, %c32 : index
+  %row = index.div %wi, %c8 : index
+  %col_word = index.rem %wi, %c8 : index
+  %col = index.mul %col_word, %c4 : index
+  %source_row0 = index.add %row_origin, %row : index
+  %source_row, %bounded_rows = index.assume %source_row0, %rows [lt(%source_row0, %rows)] : index, index
+  %source_col = index.add %col_origin, %col : index
+  %source_col_end0 = index.add %source_col, %c4 : index
+  %source_col_end, %bounded_columns0 = index.assume %source_col_end0, %columns [le(%source_col_end0, %columns)] : index, index
+  %src, %dst = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %src[%zero] : buffer -> view<[%bounded_rows]x[%bounded_columns0]xf16>
+  %shared = buffer.alloca<workgroup> align(16) %bytes : buffer
+  %shared_view = buffer.view %shared[%zero] : buffer -> view<32x40xf16>
+  %transposed = encoding.layout.strided [1, 40] : encoding<layout>
+  %shared_transpose_view = buffer.view %shared[%zero] : buffer -> view<32x32xf16, %transposed>
+  %loaded = vector.load %input_view[%source_row, %source_col] : view<[%bounded_rows]x[%bounded_columns0]xf16> -> vector<4xf16>
+  vector.store %loaded, %shared_view[%row, %col] : vector<4xf16>, view<32x40xf16>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %add0 = index.constant 0 : index
+  %read_col0 = index.add %col, %add0 : index
+  %s0 = view.load %shared_transpose_view[%row, %read_col0] : view<32x32xf16, %transposed> -> f16
+  %add1 = index.constant 1 : index
+  %read_col1 = index.add %col, %add1 : index
+  %s1 = view.load %shared_transpose_view[%row, %read_col1] : view<32x32xf16, %transposed> -> f16
+  %add2 = index.constant 2 : index
+  %read_col2 = index.add %col, %add2 : index
+  %s2 = view.load %shared_transpose_view[%row, %read_col2] : view<32x32xf16, %transposed> -> f16
+  %add3 = index.constant 3 : index
+  %read_col3 = index.add %col, %add3 : index
+  %s3 = view.load %shared_transpose_view[%row, %read_col3] : view<32x32xf16, %transposed> -> f16
+  %swapped = vector.from_elements %s0, %s1, %s2, %s3 : vector<4xf16>
+  %target_row0 = index.add %col_origin, %row : index
+  %target_row, %bounded_columns = index.assume %target_row0, %bounded_columns0 [lt(%target_row0, %bounded_columns0)] : index, index
+  %target_col = index.add %row_origin, %col : index
+  %target_col_end0 = index.add %target_col, %c4 : index
+  %target_col_end, %bounded_output_rows = index.assume %target_col_end0, %bounded_rows [le(%target_col_end0, %bounded_rows)] : index, index
+  %bounded_output_view = buffer.view %dst[%zero] : buffer -> view<[%bounded_columns]x[%bounded_output_rows]xf16>
+  vector.store %swapped, %bounded_output_view[%target_row, %target_col] : vector<4xf16>, view<[%bounded_columns]x[%bounded_output_rows]xf16>
+  template.return
+}

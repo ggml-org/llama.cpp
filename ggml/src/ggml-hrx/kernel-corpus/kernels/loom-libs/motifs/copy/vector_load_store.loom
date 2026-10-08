@@ -1,0 +1,24 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.vector_load_store.f32_body(%element_count: index, %source: buffer, %output: buffer)
+
+template.def<@ggml.copy.vector_load_store.f32_body> device @ggml_copy_vector_load_store_f32_body(%element_count: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %base = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742079)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %value = view.load %source_view[%linear] : view<[%count]xf32> -> f32
+    view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  template.return
+}

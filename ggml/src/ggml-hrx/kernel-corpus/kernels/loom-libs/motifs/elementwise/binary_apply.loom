@@ -1,0 +1,141 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+template.def<@ggml.binary_f32.apply> device priority(1) @ggml_binary_f32_apply(%op: index, %lhs: f32, %rhs: f32) -> (f32) {
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_5_f32 = scalar.constant 0.5 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c2_f32 = scalar.constant 2.0 : f32
+  %cn2_f32 = scalar.constant -2.0 : f32
+  %gelu_coef = scalar.constant 0.044715 : f32
+  %gelu_quick_coef = scalar.constant -1.702 : f32
+  %sqrt_2_over_pi = scalar.constant 0.79788456080286544 : f32
+  %sqrt_2_inv = scalar.constant 0.70710678118654745 : f32
+
+  // ADD (op 0): x + y.
+  %op_add = index.constant 0 : index
+  %sum = scalar.addf %lhs, %rhs : f32
+  %is_add = index.cmp eq, %op, %op_add : index
+  %add_selected = scf.select %is_add, %sum, %lhs : f32
+
+  // SUB (op 1): x - y.
+  %op_sub = index.constant 1 : index
+  %difference = scalar.subf %lhs, %rhs : f32
+  %is_sub = index.cmp eq, %op, %op_sub : index
+  %sub_selected = scf.select %is_sub, %difference, %add_selected : f32
+
+  // MUL (op 2): x * y.
+  %op_mul = index.constant 2 : index
+  %product = scalar.mulf %lhs, %rhs : f32
+  %is_mul = index.cmp eq, %op, %op_mul : index
+  %mul_selected = scf.select %is_mul, %product, %sub_selected : f32
+
+  // DIV (op 3): x / y.
+  %op_div = index.constant 3 : index
+  %quotient = scalar.divf %lhs, %rhs : f32
+  %is_div = index.cmp eq, %op, %op_div : index
+  %div_selected = scf.select %is_div, %quotient, %mul_selected : f32
+
+  // SWIGLU (op 4): silu(x) * y.
+  %op_swiglu = index.constant 4 : index
+  %silu_negative = scalar.negf %lhs : f32
+  %silu_exp = scalar.expf<afn> %silu_negative : f32
+  %silu_denominator = scalar.addf %c1_f32, %silu_exp : f32
+  %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
+  %silu = scalar.mulf %lhs, %silu_sigmoid : f32
+  %swiglu = scalar.mulf %silu, %rhs : f32
+  %is_swiglu = index.cmp eq, %op, %op_swiglu : index
+  %swiglu_selected = scf.select %is_swiglu, %swiglu, %div_selected : f32
+
+  // GEGLU (op 5): gelu(x) * y.
+  %op_geglu = index.constant 5 : index
+  %gelu_x2 = scalar.mulf %lhs, %lhs : f32
+  %gelu_poly0 = scalar.mulf %gelu_coef, %gelu_x2 : f32
+  %gelu_poly = scalar.addf %c1_f32, %gelu_poly0 : f32
+  %gelu_inner0 = scalar.mulf %lhs, %gelu_poly : f32
+  %gelu_inner = scalar.mulf %sqrt_2_over_pi, %gelu_inner0 : f32
+  %gelu_tanh_scaled = scalar.mulf %cn2_f32, %gelu_inner : f32
+  %gelu_tanh_exp = scalar.expf<afn> %gelu_tanh_scaled : f32
+  %gelu_tanh_denominator = scalar.addf %c1_f32, %gelu_tanh_exp : f32
+  %gelu_tanh_ratio = scalar.divf %c2_f32, %gelu_tanh_denominator : f32
+  %gelu_tanh = scalar.subf %gelu_tanh_ratio, %c1_f32 : f32
+  %gelu_one_plus = scalar.addf %c1_f32, %gelu_tanh : f32
+  %gelu_half_x = scalar.mulf %c0_5_f32, %lhs : f32
+  %gelu = scalar.mulf %gelu_half_x, %gelu_one_plus : f32
+  %geglu = scalar.mulf %gelu, %rhs : f32
+  %is_geglu = index.cmp eq, %op, %op_geglu : index
+  %geglu_selected = scf.select %is_geglu, %geglu, %swiglu_selected : f32
+
+  // REGLU (op 6): relu(x) * y.
+  %op_reglu = index.constant 6 : index
+  %relu_is_positive = scalar.cmpf ogt, %lhs, %c0_f32 : f32
+  %relu = scf.select %relu_is_positive, %lhs, %c0_f32 : f32
+  %reglu = scalar.mulf %relu, %rhs : f32
+  %is_reglu = index.cmp eq, %op, %op_reglu : index
+  %reglu_selected = scf.select %is_reglu, %reglu, %geglu_selected : f32
+
+  // GEGLU_ERF (op 7): gelu_erf(x) * y.
+  %op_geglu_erf = index.constant 7 : index
+  %gelu_erf_scaled = scalar.mulf %sqrt_2_inv, %lhs : f32
+  %gelu_erf_value = scalar.erff %gelu_erf_scaled : f32
+  %gelu_erf_one_plus = scalar.addf %c1_f32, %gelu_erf_value : f32
+  %gelu_erf_half_x = scalar.mulf %c0_5_f32, %lhs : f32
+  %gelu_erf = scalar.mulf %gelu_erf_half_x, %gelu_erf_one_plus : f32
+  %geglu_erf = scalar.mulf %gelu_erf, %rhs : f32
+  %is_geglu_erf = index.cmp eq, %op, %op_geglu_erf : index
+  %geglu_erf_selected = scf.select %is_geglu_erf, %geglu_erf, %reglu_selected : f32
+
+  // GEGLU_QUICK (op 8): gelu_quick(x) * y.
+  %op_geglu_quick = index.constant 8 : index
+  %gelu_quick_scaled = scalar.mulf %gelu_quick_coef, %lhs : f32
+  %gelu_quick_exp = scalar.expf<afn> %gelu_quick_scaled : f32
+  %gelu_quick_denominator = scalar.addf %c1_f32, %gelu_quick_exp : f32
+  %gelu_quick_sigmoid = scalar.divf %c1_f32, %gelu_quick_denominator : f32
+  %gelu_quick = scalar.mulf %lhs, %gelu_quick_sigmoid : f32
+  %geglu_quick = scalar.mulf %gelu_quick, %rhs : f32
+  %is_geglu_quick = index.cmp eq, %op, %op_geglu_quick : index
+  %result = scf.select %is_geglu_quick, %geglu_quick, %geglu_erf_selected : f32
+  template.return %result : f32
+}
+
+template.decl @ggml.binary_f32.apply_vector8(%op: index, %lhs: vector<8xf32>, %rhs: vector<8xf32>) -> (vector<8xf32>)
+
+template.def<@ggml.binary_f32.apply_vector8> device @ggml_binary_f32_apply_vector8(%op: index, %lhs: vector<8xf32>, %rhs: vector<8xf32>) -> (vector<8xf32>) {
+  %op_swiglu = index.constant 4 : index
+  %is_swiglu = index.cmp eq, %op, %op_swiglu : index
+  %result = scf.if %is_swiglu -> (vector<8xf32>) {
+    %silu = vector.siluf %lhs : vector<8xf32>
+    %value = vector.mulf %silu, %rhs : vector<8xf32>
+    scf.yield %value : vector<8xf32>
+  } else {
+    %lhs0 = vector.extract %lhs[0] : vector<8xf32> -> f32
+    %rhs0 = vector.extract %rhs[0] : vector<8xf32> -> f32
+    %value0 = template.apply<@ggml.binary_f32.apply>(%op, %lhs0, %rhs0) : (index, f32, f32) -> (f32)
+    %lhs1 = vector.extract %lhs[1] : vector<8xf32> -> f32
+    %rhs1 = vector.extract %rhs[1] : vector<8xf32> -> f32
+    %value1 = template.apply<@ggml.binary_f32.apply>(%op, %lhs1, %rhs1) : (index, f32, f32) -> (f32)
+    %lhs2 = vector.extract %lhs[2] : vector<8xf32> -> f32
+    %rhs2 = vector.extract %rhs[2] : vector<8xf32> -> f32
+    %value2 = template.apply<@ggml.binary_f32.apply>(%op, %lhs2, %rhs2) : (index, f32, f32) -> (f32)
+    %lhs3 = vector.extract %lhs[3] : vector<8xf32> -> f32
+    %rhs3 = vector.extract %rhs[3] : vector<8xf32> -> f32
+    %value3 = template.apply<@ggml.binary_f32.apply>(%op, %lhs3, %rhs3) : (index, f32, f32) -> (f32)
+    %lhs4 = vector.extract %lhs[4] : vector<8xf32> -> f32
+    %rhs4 = vector.extract %rhs[4] : vector<8xf32> -> f32
+    %value4 = template.apply<@ggml.binary_f32.apply>(%op, %lhs4, %rhs4) : (index, f32, f32) -> (f32)
+    %lhs5 = vector.extract %lhs[5] : vector<8xf32> -> f32
+    %rhs5 = vector.extract %rhs[5] : vector<8xf32> -> f32
+    %value5 = template.apply<@ggml.binary_f32.apply>(%op, %lhs5, %rhs5) : (index, f32, f32) -> (f32)
+    %lhs6 = vector.extract %lhs[6] : vector<8xf32> -> f32
+    %rhs6 = vector.extract %rhs[6] : vector<8xf32> -> f32
+    %value6 = template.apply<@ggml.binary_f32.apply>(%op, %lhs6, %rhs6) : (index, f32, f32) -> (f32)
+    %lhs7 = vector.extract %lhs[7] : vector<8xf32> -> f32
+    %rhs7 = vector.extract %rhs[7] : vector<8xf32> -> f32
+    %value7 = template.apply<@ggml.binary_f32.apply>(%op, %lhs7, %rhs7) : (index, f32, f32) -> (f32)
+    %value = vector.from_elements %value0, %value1, %value2, %value3, %value4, %value5, %value6, %value7 : vector<8xf32>
+    scf.yield %value : vector<8xf32>
+  }
+  template.return %result : vector<8xf32>
+}

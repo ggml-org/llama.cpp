@@ -1,0 +1,60 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+config.decl @ggml.copy_f16_k16_major.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.copy_f16_k16_major.token_count : %value: index where [range(%value, 512, 2048), mul(%value, 512)]
+config.decl @ggml.copy_f16_k16_major.input_is_f16 : %value: index where [range(%value, 0, 1)]
+
+template.decl @ggml.copy.convert_f32_f16.vector8(%values: vector<8xf32>) -> (vector<8xf16>)
+template.decl @ggml.copy.layout_k16_major.body(%token_count: index, %input: buffer, %output: buffer)
+
+template.def<@ggml.copy.layout_k16_major.body> device @ggml_copy_layout_k16_major_body(%token_count: index, %input: buffer, %output: buffer) {
+  %width = config.get @ggml.copy_f16_k16_major.input_size : index
+  %token_count_static = config.get @ggml.copy_f16_k16_major.token_count : index
+  %tokens = index.assume %token_count_static [range(%token_count_static, 16, 2048), mul(%token_count_static, 16)] : index
+  %count = index.mul %tokens, %width : index
+  %c0 = index.constant 0 : offset
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c256 = index.constant 256 : index
+  %thread = kernel.workitem.id<x> : index
+  %group = kernel.workgroup.id<x> : index
+  %packet = index.madd %group, %c256, %thread : index
+  %linear_raw = index.mul %packet, %c8 : index
+  %linear = index.assume %linear_raw [range(%linear_raw, 0, 67110904), mul(%linear_raw, 8)] : index
+  %end = index.add %linear, %c8 : index
+  %valid = index.cmp ule, %end, %count : index
+  scf.if %valid {
+    %tile = index.div %linear, %c256 : index
+    %local = index.rem %linear, %c256 : index
+    %m_tiles_raw = index.div %tokens, %c16 : index
+    %m_tiles = index.assume %m_tiles_raw [range(%m_tiles_raw, 1, 128)] : index
+    %m_tile = index.rem %tile, %m_tiles : index
+    %k_tile = index.div %tile, %m_tiles : index
+    %row_in_tile = index.div %local, %c16 : index
+    %k_in_tile_raw = index.rem %local, %c16 : index
+    %k_in_tile = index.assume %k_in_tile_raw [range(%k_in_tile_raw, 0, 8), mul(%k_in_tile_raw, 8)] : index
+    %row = index.madd %m_tile, %c16, %row_in_tile : index
+    %k = index.madd %k_tile, %c16, %k_in_tile : index
+    %bounded_row, %bounded_tokens = index.assume %row, %tokens [lt(%row, %tokens)] : index, index
+    %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+    %dest = buffer.view %output_noalias[%c0] : buffer -> view<[%count]xf16>
+    %maximum_k = index.sub %width, %c8 : index
+    %bounded_k = index.assume %k [range(%k, 0, %maximum_k), mul(%k, 8)] : index
+    %input_is_f16 = config.get @ggml.copy_f16_k16_major.input_is_f16 : index
+    %one = index.constant 1 : index
+    %use_f16 = index.cmp eq, %input_is_f16, %one : index
+    %values = scf.if %use_f16 -> (vector<8xf16>) {
+      %source = buffer.view %input_noalias[%c0] : buffer -> view<[%tokens]x[%width]xf16>
+      %loaded = vector.load %source[%bounded_row, %bounded_k] : view<[%tokens]x[%width]xf16> -> vector<8xf16>
+      scf.yield %loaded : vector<8xf16>
+    } else {
+      %source = buffer.view %input_noalias[%c0] : buffer -> view<[%tokens]x[%width]xf32>
+      %loaded = vector.load %source[%bounded_row, %bounded_k] : view<[%tokens]x[%width]xf32> -> vector<8xf32>
+      %converted = template.apply<@ggml.copy.convert_f32_f16.vector8>(%loaded) : (vector<8xf32>) -> (vector<8xf16>)
+      scf.yield %converted : vector<8xf16>
+    }
+    vector.store %values, %dest[%linear] : vector<8xf16>, view<[%count]xf16>
+  }
+  template.return
+}

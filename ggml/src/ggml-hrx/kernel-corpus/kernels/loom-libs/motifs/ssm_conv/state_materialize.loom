@@ -1,0 +1,176 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.rollback_store_carried(%slot: index, %cache_count: index, %n_t: index, %cache_sequence_base: index, %channel: index, %old0: f32, %old1: f32, %old2: f32, %cache: buffer)
+
+template.decl @llm.ssm_conv.rollback_store_x(%slot: index, %cache_count: index, %n_t: index, %cache_sequence_base: index, %token: index, %channel: index, %value: f32, %cache: buffer)
+
+template.decl @llm.ssm_conv.decode_update(%prev0: f32, %prev1: f32, %prev2: f32, %new_x: f32, %w0: f32, %w1: f32, %w2: f32, %w3: f32) -> (f32)
+
+template.decl @llm.ssm_conv.state_materialized_body(%d_inner0: index, %n_t0: index, %n_s0: index, %cache_count0: index, %state: buffer, %x: buffer, %filt: buffer, %dst: buffer, %cache0: buffer, %cache1: buffer, %cache2: buffer, %cache3: buffer, %cache4: buffer)
+
+template.def<@llm.ssm_conv.state_materialized_body> device @llm_ssm_conv_state_materialized_body(%d_inner0: index, %n_t0: index, %n_s0: index, %cache_count0: index, %state: buffer, %x: buffer, %filt: buffer, %dst: buffer, %cache0: buffer, %cache1: buffer, %cache2: buffer, %cache3: buffer, %cache4: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %d_inner = index.assume %d_inner0 [range(%d_inner0, 32, 65536), mul(%d_inner0, 32)] : index
+  %n_t = index.assume %n_t0 [range(%n_t0, 1, 512)] : index
+  %n_s = index.assume %n_s0 [range(%n_s0, 1, 3)] : index
+  %cache_count = index.assume %cache_count0 [range(%cache_count0, 1, 5)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %sequence0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 255)] : index
+  %sequence, %launch_n_s = index.assume %sequence0, %n_s [lt(%sequence0, %n_s)] : index, index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %c256 = index.constant 256 : index
+  %channel_base = index.mul %group, %c256 : index
+  %channel0 = index.add %channel_base, %lane : index
+  %channel = index.assume %channel0 [range(%channel0, 0, 65535)] : index
+  %in_bounds = index.cmp ult, %channel, %d_inner : index
+
+  %state_g = buffer.assume.memory_space<global> %state : buffer
+  %x_g = buffer.assume.memory_space<global> %x : buffer
+  %filt_g = buffer.assume.memory_space<global> %filt : buffer
+  %dst_g = buffer.assume.memory_space<global> %dst : buffer
+  %state_na, %x_na, %filt_na = buffer.assume.noalias %state_g, %x_g, %filt_g : buffer, buffer, buffer
+  %state_v = buffer.view %state_na[%base] : buffer -> view<589824xf32>
+  %x_v = buffer.view %x_na[%base] : buffer -> view<100663296xf32>
+  %filt_v = buffer.view %filt_na[%base] : buffer -> view<262144xf32>
+  %dst_v = buffer.view %dst_g[%base] : buffer -> view<100663296xf32>
+
+  %state_sequence_span0 = index.mul %d_inner, %c3 : index
+  %state_sequence_span = index.assume %state_sequence_span0 [range(%state_sequence_span0, 96, 196608), mul(%state_sequence_span0, 96)] : index
+  %state_sequence_base0 = index.mul %sequence, %state_sequence_span : index
+  %state_sequence_base = index.assume %state_sequence_base0 [range(%state_sequence_base0, 0, 393216)] : index
+  %x_sequence_span0 = index.mul %n_t, %d_inner : index
+  %x_sequence_span = index.assume %x_sequence_span0 [range(%x_sequence_span0, 32, 33554432), mul(%x_sequence_span0, 32)] : index
+  %x_sequence_base0 = index.mul %sequence, %x_sequence_span : index
+  %x_sequence_base = index.assume %x_sequence_base0 [range(%x_sequence_base0, 0, 67108864)] : index
+
+  scf.if %in_bounds {
+    %state_channel0 = index.mul %channel, %c3 : index
+    %state_channel = index.assume %state_channel0 [range(%state_channel0, 0, 196605), mul(%state_channel0, 3)] : index
+    %state_row0 = index.add %state_sequence_base, %state_channel : index
+    %state_row = index.assume %state_row0 [range(%state_row0, 0, 589821)] : index
+    %state_row1_0 = index.add %state_row, %c1 : index
+    %state_row1 = index.assume %state_row1_0 [range(%state_row1_0, 1, 589822)] : index
+    %state_row2_0 = index.add %state_row, %c2 : index
+    %state_row2 = index.assume %state_row2_0 [range(%state_row2_0, 2, 589823)] : index
+
+    %old0 = view.load %state_v[%state_row] : view<589824xf32> -> f32
+    %old1 = view.load %state_v[%state_row1] : view<589824xf32> -> f32
+    %old2 = view.load %state_v[%state_row2] : view<589824xf32> -> f32
+
+    %filter_row0 = index.mul %channel, %c4 : index
+    %filter_row = index.assume %filter_row0 [range(%filter_row0, 0, 262140), mul(%filter_row0, 4)] : index
+    %weights = vector.load %filt_v[%filter_row] : view<262144xf32> -> vector<4xf32>
+    %w0 = vector.extract %weights[%c0] : vector<4xf32> -> f32
+    %w1 = vector.extract %weights[%c1] : vector<4xf32> -> f32
+    %w2 = vector.extract %weights[%c2] : vector<4xf32> -> f32
+    %w3 = vector.extract %weights[%c3] : vector<4xf32> -> f32
+
+    template.apply<@llm.ssm_conv.rollback_store_carried>(%c0, %cache_count, %n_t, %state_sequence_base, %channel, %old0, %old1, %old2, %cache0) : (index, index, index, index, index, f32, f32, f32, buffer)
+    template.apply<@llm.ssm_conv.rollback_store_carried>(%c1, %cache_count, %n_t, %state_sequence_base, %channel, %old0, %old1, %old2, %cache1) : (index, index, index, index, index, f32, f32, f32, buffer)
+    template.apply<@llm.ssm_conv.rollback_store_carried>(%c2, %cache_count, %n_t, %state_sequence_base, %channel, %old0, %old1, %old2, %cache2) : (index, index, index, index, index, f32, f32, f32, buffer)
+    template.apply<@llm.ssm_conv.rollback_store_carried>(%c3, %cache_count, %n_t, %state_sequence_base, %channel, %old0, %old1, %old2, %cache3) : (index, index, index, index, index, f32, f32, f32, buffer)
+    template.apply<@llm.ssm_conv.rollback_store_carried>(%c4, %cache_count, %n_t, %state_sequence_base, %channel, %old0, %old1, %old2, %cache4) : (index, index, index, index, index, f32, f32, f32, buffer)
+
+    // Replace the full three-value history at each rolled loop boundary.
+    // Keep only three steps and the final partial block unrolled.
+    %full_trip_count = index.div %n_t, %c3 : index
+    %full_token_count = index.mul %full_trip_count, %c3 : index
+    %trip0, %trip1, %trip2 = scf.for %block = [%c0 to %full_token_count step %c3](%block0 = %old0 : f32, %block1 = %old1 : f32, %block2 = %old2 : f32) -> (f32, f32, f32) {
+      %step0, %step1, %step2 = scf.for %phase = [%c0 to %c3 step %c1](%prev0 = %block0 : f32, %prev1 = %block1 : f32, %prev2 = %block2 : f32) -> (f32, f32, f32) unroll {
+        %token = index.add %block, %phase : index
+
+        %row_base0 = index.mul %token, %d_inner : index
+        %row_base = index.assume %row_base0 [range(%row_base0, 0, 33488896), mul(%row_base0, 32)] : index
+        %row_index0 = index.add %row_base, %channel : index
+        %row_index = index.assume %row_index0 [range(%row_index0, 0, 33554431)] : index
+        %index0 = index.add %x_sequence_base, %row_index : index
+        %index = index.assume %index0 [range(%index0, 0, 100663295)] : index
+        %new_x = view.load %x_v[%index] : view<100663296xf32> -> f32
+        %activated = template.apply<@llm.ssm_conv.decode_update>(%prev0, %prev1, %prev2, %new_x, %w0, %w1, %w2, %w3) : (f32, f32, f32, f32, f32, f32, f32, f32) -> (f32)
+
+        template.apply<@llm.ssm_conv.rollback_store_x>(%c0, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache0) : (index, index, index, index, index, index, f32, buffer)
+        template.apply<@llm.ssm_conv.rollback_store_x>(%c1, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache1) : (index, index, index, index, index, index, f32, buffer)
+        template.apply<@llm.ssm_conv.rollback_store_x>(%c2, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache2) : (index, index, index, index, index, index, f32, buffer)
+        template.apply<@llm.ssm_conv.rollback_store_x>(%c3, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache3) : (index, index, index, index, index, index, f32, buffer)
+        template.apply<@llm.ssm_conv.rollback_store_x>(%c4, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache4) : (index, index, index, index, index, index, f32, buffer)
+        view.store %activated, %dst_v[%index] : f32, view<100663296xf32>
+        scf.yield %prev1, %prev2, %new_x : f32, f32, f32
+      }
+      scf.yield %step0, %step1, %step2 : f32, f32, f32
+    }
+    %final0, %final1, %final2 = scf.for %token = [%full_token_count to %n_t step %c1](%prev0 = %trip0 : f32, %prev1 = %trip1 : f32, %prev2 = %trip2 : f32) -> (f32, f32, f32) unroll {
+      %row_base0 = index.mul %token, %d_inner : index
+      %row_base = index.assume %row_base0 [range(%row_base0, 0, 33488896), mul(%row_base0, 32)] : index
+      %row_index0 = index.add %row_base, %channel : index
+      %row_index = index.assume %row_index0 [range(%row_index0, 0, 33554431)] : index
+      %index0 = index.add %x_sequence_base, %row_index : index
+      %index = index.assume %index0 [range(%index0, 0, 100663295)] : index
+      %new_x = view.load %x_v[%index] : view<100663296xf32> -> f32
+      %activated = template.apply<@llm.ssm_conv.decode_update>(%prev0, %prev1, %prev2, %new_x, %w0, %w1, %w2, %w3) : (f32, f32, f32, f32, f32, f32, f32, f32) -> (f32)
+
+      template.apply<@llm.ssm_conv.rollback_store_x>(%c0, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache0) : (index, index, index, index, index, index, f32, buffer)
+      template.apply<@llm.ssm_conv.rollback_store_x>(%c1, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache1) : (index, index, index, index, index, index, f32, buffer)
+      template.apply<@llm.ssm_conv.rollback_store_x>(%c2, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache2) : (index, index, index, index, index, index, f32, buffer)
+      template.apply<@llm.ssm_conv.rollback_store_x>(%c3, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache3) : (index, index, index, index, index, index, f32, buffer)
+      template.apply<@llm.ssm_conv.rollback_store_x>(%c4, %cache_count, %n_t, %state_sequence_base, %token, %channel, %new_x, %cache4) : (index, index, index, index, index, index, f32, buffer)
+      view.store %activated, %dst_v[%index] : f32, view<100663296xf32>
+      scf.yield %prev1, %prev2, %new_x : f32, f32, f32
+    }
+  }
+  template.return
+}
+
+// Regression: distinct initial history must survive every rolled boundary.
+// With history [1, 2, 3], five input tokens equal to 4, and filter
+// [1, 2, 3, 4], the convolution is [30, 36, 39, 40, 40].
+// SiLU rounds each of these positive values back to itself in F32.
+kernel.def @ssm_conv_rolling_history_check() {
+  %one = index.constant 1 : index
+  %wg = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %one, %one) workgroup_size(%wg, %one, %one) : index
+} launch(%state: buffer, %input: buffer, %filter: buffer, %output: buffer, %cache: buffer) {
+  %channels = index.constant 32 : index
+  %tokens = index.constant 5 : index
+  %one = index.constant 1 : index
+  template.apply<@llm.ssm_conv.state_materialized_body>(%channels, %tokens, %one, %one, %state, %input, %filter, %output, %cache, %cache, %cache, %cache, %cache) : (index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+check.case public @ssm_conv_rolling_history {
+  %state = check.generate.iota offset(1.0) step(1.0) period(3) : tensor<96xf32>
+  %input = check.generate.fill value(4.0) : tensor<160xf32>
+  %filter = check.generate.iota offset(1.0) step(1.0) period(4) : tensor<128xf32>
+  %separate = check.generate.fill value(-999.0) : tensor<160xf32>
+  %inplace = check.generate.fill value(-999.0) : tensor<160xf32>
+  %cache = check.generate.fill value(-999.0) : tensor<96xf32>
+  %expected_cache = check.generate.fill value(4.0) : tensor<96xf32>
+  kernel.launch @ssm_conv_rolling_history_check[](%state, %input, %filter, %separate, %cache) : [](tensor<96xf32>, tensor<160xf32>, tensor<128xf32>, tensor<160xf32>, tensor<96xf32>)
+  kernel.launch @ssm_conv_rolling_history_check[](%state, %input, %filter, %inplace, %state) : [](tensor<96xf32>, tensor<160xf32>, tensor<128xf32>, tensor<160xf32>, tensor<96xf32>)
+  check.expect.equal actual(%cache) expected(%expected_cache) : tensor<96xf32>
+  check.expect.equal actual(%state) expected(%expected_cache) : tensor<96xf32>
+  check.expect.equal actual(%inplace) expected(%separate) : tensor<160xf32>
+  %row0 = check.tensor.view %separate offset(0) : tensor<160xf32> -> tensor<32xf32>
+  %expected0 = check.generate.fill value(30.0) : tensor<32xf32>
+  check.expect.equal actual(%row0) expected(%expected0) : tensor<32xf32>
+  %row1 = check.tensor.view %separate offset(128) : tensor<160xf32> -> tensor<32xf32>
+  %expected1 = check.generate.fill value(36.0) : tensor<32xf32>
+  check.expect.equal actual(%row1) expected(%expected1) : tensor<32xf32>
+  %row2 = check.tensor.view %separate offset(256) : tensor<160xf32> -> tensor<32xf32>
+  %expected2 = check.generate.fill value(39.0) : tensor<32xf32>
+  check.expect.equal actual(%row2) expected(%expected2) : tensor<32xf32>
+  %row3 = check.tensor.view %separate offset(384) : tensor<160xf32> -> tensor<32xf32>
+  %expected3 = check.generate.fill value(40.0) : tensor<32xf32>
+  check.expect.equal actual(%row3) expected(%expected3) : tensor<32xf32>
+  %row4 = check.tensor.view %separate offset(512) : tensor<160xf32> -> tensor<32xf32>
+  %expected4 = check.generate.fill value(40.0) : tensor<32xf32>
+  check.expect.equal actual(%row4) expected(%expected4) : tensor<32xf32>
+  check.return
+}

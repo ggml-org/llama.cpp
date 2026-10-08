@@ -1,0 +1,13 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.dconv4_silu(%x0: f32, %x1: f32, %x2: f32, %x3: f32, %w0: f32, %w1: f32, %w2: f32, %w3: f32) -> (f32)
+
+template.def<@llm.ssm_conv.dconv4_silu> device @llm_ssm_conv_dconv4_silu(%x0: f32, %x1: f32, %x2: f32, %x3: f32, %w0: f32, %w1: f32, %w2: f32, %w3: f32) -> (f32) {
+  %a0 = scalar.mulf<nnan|ninf|nsz> %x0, %w0 : f32
+  %a1 = scalar.fmaf<nnan|ninf|nsz> %x1, %w1, %a0 : f32
+  %a2 = scalar.fmaf<nnan|ninf|nsz> %x2, %w2, %a1 : f32
+  %a3 = scalar.fmaf<nnan|ninf|nsz> %x3, %w3, %a2 : f32
+  %result = scalar.siluf<afn> %a3 : f32
+  template.return %result : f32
+}

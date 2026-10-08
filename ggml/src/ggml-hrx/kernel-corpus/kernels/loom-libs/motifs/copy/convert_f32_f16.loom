@@ -1,0 +1,33 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.convert_f32_f16.body(%element_count: index, %source: buffer, %output: buffer)
+template.decl @ggml.copy.convert_f32_f16.vector8(%values: vector<8xf32>) -> (vector<8xf16>)
+
+template.def<@ggml.copy.convert_f32_f16.body> device @ggml_copy_convert_f32_f16_body(%element_count: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 4, 1073741824), mul(%element_count, 4)] : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %threads = index.constant 256 : index
+  %four = index.constant 4 : index
+  %lane = index.madd %group, %threads, %thread : index
+  %linear0 = index.mul %lane, %four : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742844), mul(%linear0, 4)] : index
+  %end = index.add %linear, %four : index
+  %valid = index.cmp ule, %end, %count : index
+  %zero = index.constant 0 : offset
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %source_view = buffer.view %source_noalias[%zero] : buffer -> view<[%count]xf32>
+  %output_view = buffer.view %output_noalias[%zero] : buffer -> view<[%count]xf16>
+  scf.if %valid {
+    %values = vector.load %source_view[%linear] : view<[%count]xf32> -> vector<4xf32>
+    %converted = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %converted, %output_view[%linear] : vector<4xf16>, view<[%count]xf16>
+  }
+  template.return
+}
+
+template.def<@ggml.copy.convert_f32_f16.vector8> device @ggml_copy_convert_f32_f16_vector8(%values: vector<8xf32>) -> (vector<8xf16>) {
+  %converted = vector.fptrunc %values : vector<8xf32> to vector<8xf16>
+  template.return %converted : vector<8xf16>
+}

@@ -1,0 +1,57 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.routing.weighted_reduce_f16_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %residual_input: buffer, %output: buffer)
+
+config.decl @qwen3_moe.routed_down.route_count : %value: index where [range(%value, 1, 8)]
+
+config.decl @qwen3_moe.routed_down.output_size : %value: index where [range(%value, 1, 4096)]
+
+// Preserves route-order FP32 accumulation before loading and adding the
+// residual. The caller owns launch geometry and the public ABI.
+template.def<@ggml.routing.weighted_reduce_f16_f32> device @ggml_routing_weighted_reduce_f16_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %residual_input: buffer, %output: buffer) {
+  %route_count = config.get @qwen3_moe.routed_down.route_count : index
+  %output_size = config.get @qwen3_moe.routed_down.output_size : index
+  %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 4096)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %lane = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %assignment_count = index.mul %token_count, %bounded_route_count : index
+  %channel_tile_base = index.mul %channel_tile, %c256 : index
+  %lane_channel_add = index.mul %lane, %c4 : index
+  %channel = index.add %channel_tile_base, %lane_channel_add : index
+  %active_token = index.cmp ult, %token0, %token_count : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %publishes_output = scalar.andi %active_token, %valid_channel : i1
+  %route_weights_noalias, %routed_output_noalias, %residual_input_noalias, %output_noalias = buffer.assume.noalias %route_weights, %routed_output, %residual_input, %output : buffer, buffer, buffer, buffer
+  %route_weight_view = buffer.view %route_weights_noalias[%c0_offset] : buffer -> view<[%token_count]x[%bounded_route_count]xf32>
+  %routed_output_view = buffer.view %routed_output_noalias[%c0_offset] : buffer -> view<[%assignment_count]x[%bounded_output_size]xf16>
+  %residual_input_view = buffer.view %residual_input_noalias[%c0_offset] : buffer -> view<[%token_count]x[%bounded_output_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%token_count]x[%bounded_output_size]xf32>
+  scf.if %publishes_output {
+    %token, %output_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+    %mask = vector.mask.range [%channel to %bounded_output_size step %c1] : index -> vector<4xi1>
+    %weighted_sum = scf.for %route = [%c0 to %bounded_route_count step %c1](%sum = %c0_f32x4 : vector<4xf32>) -> (vector<4xf32>) unroll {
+      %assignment = index.madd %token, %bounded_route_count, %route : index
+      %routed = vector.load.mask %routed_output_view[%assignment, %channel], %mask, %c0_f16x4 : view<[%assignment_count]x[%bounded_output_size]xf16>, vector<4xi1>, vector<4xf16>
+      %wide = vector.extf %routed : vector<4xf16> to vector<4xf32>
+      %route_weight = view.load %route_weight_view[%token, %route] : view<[%token_count]x[%bounded_route_count]xf32> -> f32
+      %route_weight_x4 = vector.splat %route_weight : vector<4xf32>
+      %weighted = vector.mulf %wide, %route_weight_x4 : vector<4xf32>
+      %next = vector.addf %sum, %weighted : vector<4xf32>
+      scf.yield %next : vector<4xf32>
+    }
+    %residual = vector.load.mask %residual_input_view[%token, %channel], %mask, %c0_f32x4 : view<[%token_count]x[%bounded_output_size]xf32>, vector<4xi1>, vector<4xf32>
+    %result = vector.addf %residual, %weighted_sum : vector<4xf32>
+    vector.store.mask %result, %output_view[%token, %channel], %mask : vector<4xf32>, view<[%token_count]x[%bounded_output_size]xf32>, vector<4xi1>
+  }
+  template.return
+}

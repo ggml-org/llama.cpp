@@ -1,0 +1,112 @@
+// Token-vector routed pair projection with compile-configured binary operation.
+template.decl @ggml.matmul_id.vector_pair.body(%publish_output: i1, %binary_op: index, %input_size: index, %token_count: index, %token: index, %route_count: index, %route: index, %route_stride: index, %expert_count: index, %output_size: index, %channel: index, %lane: index, %input: buffer, %route_ids: buffer, %lhs_weight: buffer, %rhs_weight: buffer, %output: buffer)
+
+template.decl @ggml.matmul_id.vector_pair.q8_1_x4.completion(%token_count: index, %route_count: index, %output_size: index, %token: index, %route: index, %channel_base: index, %subgroup: index, %workitem: index, %output: buffer, %completion_counters: buffer, %next_q8_output: buffer)
+
+config.decl @ggml.mul_mat_id.vector.input_size : %value: index where [range(%value, 512, 32768), mul(%value, 512)]
+
+config.decl @ggml.mul_mat_id.vector.expert_count : %value: index where [range(%value, 1, 512)]
+
+config.decl @ggml.mul_mat_id.vector.route_count : %value: index where [range(%value, 1, 8)]
+
+config.decl @ggml.mul_mat_id.vector.output_size : %value: index where [range(%value, 1, 4096)]
+
+config.decl @ggml.mul_mat_id.vector.input_format : %value: index where [range(%value, 0, 64)]
+
+config.decl @ggml.mul_mat_id.vector.lhs_weight_format : %value: index where [range(%value, 0, 81)]
+
+config.decl @ggml.mul_mat_id.vector.rhs_weight_format : %value: index where [range(%value, 0, 81)]
+
+config.decl @ggml.mul_mat_id.vector.binary_op : %value: index where [range(%value, 0, 8)]
+
+config.decl @ggml.mul_mat_id.vector.publish_format : %value: index where [range(%value, 0, 64)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+kernel.def @ggml_mul_mat_id_vector_pair_binary_publish_f32(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index) {
+  %configured_route_count = config.get @ggml.mul_mat_id.vector.route_count : index
+  %configured_output_size = config.get @ggml.mul_mat_id.vector.output_size : index
+  %unit = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %workgroup_size = index.constant 128 : index
+  %padded_output_size = index.add %configured_output_size, %c3 : index
+  %channel_workgroup_count = index.div %padded_output_size, %c4 : index
+  kernel.launch.config workgroups(%channel_workgroup_count, %configured_route_count, %token_count) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.mul_mat_id.vector.input_size : index
+  %configured_route_count0 = config.get @ggml.mul_mat_id.vector.route_count : index
+  %configured_expert_count0 = config.get @ggml.mul_mat_id.vector.expert_count : index
+  %configured_output_size0 = config.get @ggml.mul_mat_id.vector.output_size : index
+  %input_format = config.get @ggml.mul_mat_id.vector.input_format : index
+  %lhs_weight_format = config.get @ggml.mul_mat_id.vector.lhs_weight_format : index
+  %rhs_weight_format = config.get @ggml.mul_mat_id.vector.rhs_weight_format : index
+  %binary_op = config.get @ggml.mul_mat_id.vector.binary_op : index
+  %publish_format = config.get @ggml.mul_mat_id.vector.publish_format : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 512)] : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_stride = index.assume %route_stride [range(%route_stride, 1, 128)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 128), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 1, 4096), eq(%output_size, %configured_output_size0)] : index, index
+  %token0 = kernel.workgroup.id<z> : index
+  %channel_workgroup = kernel.workgroup.id<x> : index
+  %route0 = kernel.workgroup.id<y> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %safe_token, %body_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
+  %channel_base = index.mul %channel_workgroup, %c4 : index
+  %channel0 = index.add %channel_base, %subgroup : index
+  %valid_channel = index.cmp ult, %channel0, %bounded_output_size : index
+  %safe_channel0 = scf.select %valid_channel, %channel0, %c0 : index
+  %safe_channel, %body_output_size = index.assume %safe_channel0, %bounded_output_size [lt(%safe_channel0, %bounded_output_size)] : index, index
+  %route, %body_route_count = index.assume %route0, %bounded_route_count [lt(%route0, %bounded_route_count)] : index, index
+  %publishes_output = scalar.andi %valid_token, %valid_channel : i1
+  template.apply<@ggml.matmul_id.vector_pair.body>(%publishes_output, %binary_op, %input_size, %body_token_count, %safe_token, %body_route_count, %route, %bounded_route_stride, %bounded_expert_count, %body_output_size, %safe_channel, %lane, %q8_input, %route_ids, %gate_weight, %up_weight, %output) : (i1, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def @ggml_mul_mat_id_vector_pair_binary_publish_q8(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index) {
+  %configured_route_count = config.get @ggml.mul_mat_id.vector.route_count : index
+  %configured_output_size = config.get @ggml.mul_mat_id.vector.output_size : index
+  %unit = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %workgroup_size = index.constant 128 : index
+  %padded_output_size = index.add %configured_output_size, %c3 : index
+  %channel_workgroup_count = index.div %padded_output_size, %c4 : index
+  kernel.launch.config workgroups(%channel_workgroup_count, %configured_route_count, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %lhs_weight: buffer, %rhs_weight: buffer, %output: buffer, %completion_counters: buffer, %next_q8_output: buffer) {
+  %input_size = config.get @ggml.mul_mat_id.vector.input_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %configured_route_count0 = config.get @ggml.mul_mat_id.vector.route_count : index
+  %configured_expert_count0 = config.get @ggml.mul_mat_id.vector.expert_count : index
+  %configured_output_size0 = config.get @ggml.mul_mat_id.vector.output_size : index
+  %input_format = config.get @ggml.mul_mat_id.vector.input_format : index
+  %lhs_weight_format = config.get @ggml.mul_mat_id.vector.lhs_weight_format : index
+  %rhs_weight_format = config.get @ggml.mul_mat_id.vector.rhs_weight_format : index
+  %binary_op = config.get @ggml.mul_mat_id.vector.binary_op : index
+  %publish_format = config.get @ggml.mul_mat_id.vector.publish_format : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_stride = index.assume %route_stride [range(%route_stride, 1, 128)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 128), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %q8_input_noalias, %route_ids_noalias, %lhs_weight_noalias, %rhs_weight_noalias, %output_noalias, %completion_counters_noalias, %next_q8_output_noalias = buffer.assume.noalias %q8_input, %route_ids, %lhs_weight, %rhs_weight, %output, %completion_counters, %next_q8_output : buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %publishes_binary = scalar.constant true : i1
+  %body_token = index.constant 0 : index
+  %channel_workgroup = kernel.workgroup.id<x> : index
+  %route = kernel.workgroup.id<y> : index
+  %token = kernel.workgroup.id<z> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %workitem = kernel.workitem.id<x> : index
+  %c4 = index.constant 4 : index
+  %channel_base = index.mul %channel_workgroup, %c4 : index
+  %channel = index.add %channel_base, %subgroup : index
+  template.apply<@ggml.matmul_id.vector_pair.body>(%publishes_binary, %binary_op, %input_size, %bounded_token_count, %body_token, %bounded_route_count, %route, %bounded_route_stride, %bounded_expert_count, %bounded_output_size, %channel, %lane, %q8_input_noalias, %route_ids_noalias, %lhs_weight_noalias, %rhs_weight_noalias, %output_noalias) : (i1, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.matmul_id.vector_pair.q8_1_x4.completion>(%bounded_token_count, %bounded_route_count, %bounded_output_size, %token, %route, %channel_base, %subgroup, %workitem, %output_noalias, %completion_counters_noalias, %next_q8_output_noalias) : (index, index, index, index, index, index, index, index, buffer, buffer, buffer)
+  kernel.return
+}

@@ -1,0 +1,54 @@
+// Routed GGML gate/up MUL_MAT_ID fused with SwiGLU for tiled expert tables.
+template.decl @ggml.matmul_id.pair_f32_swiglu.body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.mul_mat_id_swiglu.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+
+config.decl @ggml.mul_mat_id_swiglu.output_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @ggml.mul_mat_id_swiglu.expert_count : %value: index where [range(%value, 1, 512)]
+
+config.decl @ggml.mul_mat_id_swiglu.route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @ggml.mul_mat_id_swiglu.input_route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @ggml.mul_mat_id_swiglu.gate_weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.mul_mat_id_swiglu.up_weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+kernel.def target(@ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32_gfx11_wave64) @ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32(%token_count: index) {
+  %expert_count = config.get @ggml.mul_mat_id_swiglu.expert_count : index
+  %route_count = config.get @ggml.mul_mat_id_swiglu.route_count : index
+  %output_size = config.get @ggml.mul_mat_id_swiglu.output_size : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %assignment_count = index.mul %token_count, %route_count : index
+  %rounded_assignment_count = index.add %assignment_count, %c31 : index
+  %assignment_partition_count = index.div %rounded_assignment_count, %c32 : index
+  %has_more_assignment_partitions = index.cmp ugt, %assignment_partition_count, %expert_count : index
+  %launch_partition_count = scf.select %has_more_assignment_partitions, %assignment_partition_count, %expert_count : index
+  kernel.launch.config workgroups(%output_tiles, %launch_partition_count, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %input_size = config.get @ggml.mul_mat_id_swiglu.input_size : index
+  %route_count = config.get @ggml.mul_mat_id_swiglu.route_count : index
+  %input_route_count = config.get @ggml.mul_mat_id_swiglu.input_route_count : index
+  %expert_count = config.get @ggml.mul_mat_id_swiglu.expert_count : index
+  %output_size = config.get @ggml.mul_mat_id_swiglu.output_size : index
+  %gate_weight_format = config.get @ggml.mul_mat_id_swiglu.gate_weight_format : index
+  %up_weight_format = config.get @ggml.mul_mat_id_swiglu.up_weight_format : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %partition_ordinal = kernel.workgroup.id<y> : index
+  template.apply<@ggml.matmul_id.pair_f32_swiglu.body>(%gate_weight_format, %up_weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -1,0 +1,26 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Decodes four adjacent values from one 32-value Q8_1 block for FP16 matrix
+// staging. The block sum field is not part of the row values.
+func.def inline @ggml_q8_1_f16_vector4(%weight: buffer, %row_byte_base: offset, %q8_block: index, %packet: index) -> (vector<4xf16>) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %block_bytes = index.constant 36 : offset
+  %code_offset = index.constant 4 : offset
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %q8_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %code_byte_base = index.add %block_byte_base, %code_offset : offset
+  %ds_view = buffer.view %weight[%block_byte_base] : buffer -> view<2xf16>
+  %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<32xi8>
+  %packet_base = index.mul %bounded_packet, %c4 : index
+  %codes = vector.load %code_view[%packet_base] : view<32xi8> -> vector<4xi8>
+  %codes_f32 = vector.sitofp %codes : vector<4xi8> to vector<4xf32>
+  %d_f16 = view.load %ds_view[%c0] : view<2xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %d_vector = vector.splat %d : vector<4xf32>
+  %values_f32 = vector.mulf %codes_f32, %d_vector : vector<4xf32>
+  %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
+  func.return %values : vector<4xf16>
+}

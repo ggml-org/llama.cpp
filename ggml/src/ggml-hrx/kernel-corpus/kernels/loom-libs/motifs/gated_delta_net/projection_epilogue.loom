@@ -1,0 +1,69 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.projection_epilogue.apply(%alpha: f32, %beta: f32, %bias: f32, %a_scale: f32, %zero: f32, %one: f32) -> (f32, f32)
+
+template.decl @llm.gated_delta_net.projection_epilogue.standalone_body(%element_count: index, %alpha_raw: buffer, %beta_raw: buffer, %bias: buffer, %a_scale: buffer, %gate_dst: buffer, %beta_dst: buffer)
+
+template.decl @llm.gated_delta_net.publish_f32.projection_pair(%gate: f32, %beta: f32, %gate_output: view<1048576xf32>, %beta_output: view<1048576xf32>, %index: index)
+
+config.decl @llm.gated_delta_net.epilogue_head_count : %value: index where [range(%value, 1, 4096)]
+
+config.decl @llm.gated_delta_net.epilogue_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+template.def<@llm.gated_delta_net.projection_epilogue.apply> device @llm_gated_delta_net_projection_epilogue_apply(%alpha: f32, %beta: f32, %bias: f32, %a_scale: f32, %zero: f32, %one: f32) -> (f32, f32) {
+  %biased = scalar.addf<nnan|ninf|nsz> %alpha, %bias : f32
+  %abs = scalar.absf %biased : f32
+  %neg_abs = scalar.negf %abs : f32
+  %exp = scalar.expf<afn> %neg_abs : f32
+  %one_plus = scalar.addf<nnan|ninf|nsz> %one, %exp : f32
+  %log = scalar.logf<afn> %one_plus : f32
+  %positive = scalar.maxnumf %biased, %zero : f32
+  %softplus = scalar.addf<nnan|ninf|nsz> %positive, %log : f32
+  %gate = scalar.mulf<nnan|ninf|nsz> %softplus, %a_scale : f32
+  %beta_result = scalar.logisticf<afn> %beta : f32
+  template.return %gate, %beta_result : f32, f32
+}
+
+template.def<@llm.gated_delta_net.projection_epilogue.standalone_body> device @llm_gated_delta_net_projection_epilogue_standalone_body(%element_count: index, %alpha_raw: buffer, %beta_raw: buffer, %bias: buffer, %a_scale: buffer, %gate_dst: buffer, %beta_dst: buffer) {
+  %base = index.constant 0 : offset
+  %heads0 = config.get @llm.gated_delta_net.epilogue_head_count : index
+  %workgroup_size = config.get @llm.gated_delta_net.epilogue_workgroup_size : index
+  %elements = index.assume %element_count [range(%element_count, 1, 1048576)] : index
+  %heads = index.assume %heads0 [range(%heads0, 1, 4096)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 32767)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_base = index.mul %workgroup, %workgroup_size : index
+  %linear0 = index.add %linear_base, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1048575)] : index
+  %in_bounds = index.cmp ult, %linear, %elements : index
+
+  %alpha_global = buffer.assume.memory_space<global> %alpha_raw : buffer
+  %beta_global = buffer.assume.memory_space<global> %beta_raw : buffer
+  %bias_global = buffer.assume.memory_space<global> %bias : buffer
+  %a_scale_global = buffer.assume.memory_space<global> %a_scale : buffer
+  %gate_global = buffer.assume.memory_space<global> %gate_dst : buffer
+  %beta_dst_global = buffer.assume.memory_space<global> %beta_dst : buffer
+  %alpha_noalias, %beta_noalias, %bias_noalias, %a_scale_noalias, %gate_noalias, %beta_dst_noalias = buffer.assume.noalias %alpha_global, %beta_global, %bias_global, %a_scale_global, %gate_global, %beta_dst_global : buffer, buffer, buffer, buffer, buffer, buffer
+  %alpha_view = buffer.view %alpha_noalias[%base] : buffer -> view<1048576xf32>
+  %beta_view = buffer.view %beta_noalias[%base] : buffer -> view<1048576xf32>
+  %bias_view = buffer.view %bias_noalias[%base] : buffer -> view<4096xf32>
+  %a_scale_view = buffer.view %a_scale_noalias[%base] : buffer -> view<4096xf32>
+  %gate_view = buffer.view %gate_noalias[%base] : buffer -> view<1048576xf32>
+  %beta_dst_view = buffer.view %beta_dst_noalias[%base] : buffer -> view<1048576xf32>
+
+  scf.if %in_bounds {
+    %head = index.rem %linear, %heads : index
+    %alpha = view.load %alpha_view[%linear] : view<1048576xf32> -> f32
+    %beta = view.load %beta_view[%linear] : view<1048576xf32> -> f32
+    %bias_value = view.load %bias_view[%head] : view<4096xf32> -> f32
+    %a_value = view.load %a_scale_view[%head] : view<4096xf32> -> f32
+    %c0 = scalar.constant 0.0 : f32
+    %c1 = scalar.constant 1.0 : f32
+    %gate, %beta_result = template.apply<@llm.gated_delta_net.projection_epilogue.apply>(%alpha, %beta, %bias_value, %a_value, %c0, %c1) : (f32, f32, f32, f32, f32, f32) -> (f32, f32)
+    template.apply<@llm.gated_delta_net.publish_f32.projection_pair>(%gate, %beta_result, %gate_view, %beta_dst_view, %linear) : (f32, f32, view<1048576xf32>, view<1048576xf32>, index)
+  }
+  template.return
+}

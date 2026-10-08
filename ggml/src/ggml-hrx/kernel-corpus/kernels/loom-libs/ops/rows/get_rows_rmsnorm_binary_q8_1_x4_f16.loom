@@ -1,0 +1,111 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.get_rows_f32.load_vector4_common(%weight_format: index, %publish: i1, %valid_token_id: i1, %token: index, %row_count: index, %hidden_size: index, %channel: index, %weight: buffer) -> (vector<4xf32>)
+template.decl @ggml.normalization.publish_q8.binary_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_get_rows_rmsnorm_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
+config.decl @ggml.get_rows_rmsnorm.rms_epsilon : f32
+
+kernel.def target(@ggml_get_rows_rmsnorm_gfx11_wave32) export("ggml_get_rows_rmsnorm_binary_q8_1_x4_f16") @ggml_get_rows_rmsnorm_binary_q8_1_x4_f16(%token_count: index, %row_count: index, %hidden_size: index) {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_capacity, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %norm_weight: buffer, %raw_output: buffer, %output: buffer, %q8_output: buffer, %f16_output: buffer) {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %hidden_capacity = config.get @ggml.get_rows_f32.hidden_capacity : index
+  %weight_format = config.get @ggml.get_rows_f32.weight_format : index
+  %epsilon = config.get @ggml.get_rows_rmsnorm.rms_epsilon : f32
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 1, 2048), eq(%token_count, %token_capacity)] : index, index
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
+  %bounded_hidden_size, %configured_hidden_capacity = index.assume %hidden_size, %hidden_capacity [range(%hidden_size, 128, 32768), mul(%hidden_size, 128), eq(%hidden_size, %hidden_capacity)] : index, index
+  %token0 = kernel.workgroup.id<x> : index
+  %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c1024 = index.constant 1024 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_offset = index.constant 0 : offset
+  %group_bytes = index.constant 144 : offset
+  %scratch_d_offset = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %token_ids_na, %weight_na, %norm_weight_na, %raw_output_na, %output_na, %q8_output_na, %f16_output_na = buffer.assume.noalias %token_ids, %weight, %norm_weight, %raw_output, %output, %q8_output, %f16_output : buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %token_ids_view = buffer.view %token_ids_na[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %token_id_raw = view.load %token_ids_view[%token] : view<[%bounded_token_count]xi32> -> i32
+  %valid_token_id = scalar.cmpi sge, %token_id_raw, %c0_i32 : i32
+  %safe_token_id_i32 = scf.select %valid_token_id, %token_id_raw, %c0_i32 : i32
+  %token_id = index.cast %safe_token_id_i32 : i32 to index
+  %raw_output_view = buffer.view %raw_output_na[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  %output_view = buffer.view %output_na[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  %norm_weight_view = buffer.view %norm_weight_na[%c0_offset] : buffer -> view<[%bounded_hidden_size]xf32>
+  %f16_output_view = buffer.view %f16_output_na[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf16>
+  %channel0 = index.mul %workitem, %c4 : index
+  %squares = scf.for %channel = [%channel0 to %bounded_hidden_size step %c1024](%running = %c0_f32x4 : vector<4xf32>) -> (vector<4xf32>) {
+    %values = template.apply<@ggml.get_rows_f32.load_vector4_common>(%weight_format, %valid_token_id, %valid_token_id, %token_id, %bounded_row_count, %bounded_hidden_size, %channel, %weight_na) : (index, i1, i1, index, index, index, index, buffer) -> (vector<4xf32>)
+    vector.store %values, %raw_output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    %square = vector.mulf<reassoc|nnan|ninf|nsz> %values, %values : vector<4xf32>
+    %next = vector.addf<reassoc|nnan|ninf|nsz> %running, %square : vector<4xf32>
+    scf.yield %next : vector<4xf32>
+  }
+  %thread_sum = vector.reduce<addf, reassoc|nnan|nsz> %squares, %c0_f32 : vector<4xf32>, f32
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_offset] : buffer -> view<32xf32>
+  %subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %subgroup_leader {
+    view.store %subgroup_sum, %scratch_values[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %first_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %partial_lane = index.cmp ult, %lane, %c8 : index
+  %loads_partial = scalar.andi %first_subgroup, %partial_lane : i1
+  %partial = scf.if %loads_partial -> (f32) {
+    %value = view.load %scratch_values[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %partial : f32
+  %writes_scale = scalar.andi %first_subgroup, %subgroup_leader : i1
+  scf.if %writes_scale {
+    %hidden_i32 = index.cast %bounded_hidden_size : index to i32
+    %hidden_f32 = scalar.sitofp %hidden_i32 : i32 to f32
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %scale, %scratch_values[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %scale = view.load %scratch_values[%c0] : view<256xf32> -> f32
+  %scale_vector = vector.splat %scale : vector<4xf32>
+  %physical_group_count = index.div %bounded_hidden_size, %c128 : index
+  %row_bytes = index.scale %physical_group_count, %group_bytes : index, offset -> offset
+  %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
+  scf.for %channel = [%channel0 to %bounded_hidden_size step %c1024] {
+    %values = vector.load %raw_output_view[%token, %channel] : view<[%bounded_token_count]x[%bounded_hidden_size]xf32> -> vector<4xf32>
+    %weights = vector.load %norm_weight_view[%channel] : view<[%bounded_hidden_size]xf32> -> vector<4xf32>
+    %normalized = vector.mulf %values, %scale_vector : vector<4xf32>
+    %result = vector.mulf %normalized, %weights : vector<4xf32>
+    vector.store %result, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    %half = vector.fptrunc %result : vector<4xf32> to vector<4xf16>
+    vector.store %half, %f16_output_view[%token, %channel] : vector<4xf16>, view<[%bounded_token_count]x[%bounded_hidden_size]xf16>
+    template.apply<@ggml.normalization.publish_q8.binary_vector4>(%valid_token_id, %token_output_byte_base, %channel, %result, %scratch_values, %scratch_d, %q8_output_na) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  }
+  kernel.return
+}

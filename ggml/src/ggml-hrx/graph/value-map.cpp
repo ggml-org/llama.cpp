@@ -5,12 +5,66 @@
 #include <utility>
 
 namespace ggml::hrx {
+namespace {
+
+static const ggml_tensor * tensor_storage_root(const ggml_tensor * tensor) {
+    while (tensor != nullptr && tensor->view_src != nullptr) {
+        tensor = tensor->view_src;
+    }
+    return tensor;
+}
+
+static size_t tensor_storage_offset(const ggml_tensor * tensor) {
+    return tensor != nullptr && tensor->view_src != nullptr ? tensor->view_offs : 0;
+}
+
+static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggml_tensor * tensor, size_t & offset) {
+    if (source == nullptr || tensor == nullptr || tensor_storage_root(source) != tensor_storage_root(tensor)) {
+        return false;
+    }
+    const size_t source_offset = tensor_storage_offset(source);
+    const size_t tensor_offset = tensor_storage_offset(tensor);
+    if (tensor_offset < source_offset) {
+        return false;
+    }
+    const size_t relative_offset = tensor_offset - source_offset;
+    if (relative_offset > ggml_nbytes(source) || ggml_nbytes(tensor) > ggml_nbytes(source) - relative_offset) {
+        return false;
+    }
+    offset = relative_offset;
+    return true;
+}
+
+}  // namespace
 
 const Value * ValueMap::find_alias_source(const ggml_tensor * tensor) const {
     if (tensor == nullptr || tensor->view_src == nullptr) {
         return nullptr;
     }
-    return find_tensor(tensor->view_src);
+    const Value * exact_source = find_tensor(tensor->view_src);
+    if (exact_source != nullptr) {
+        return exact_source;
+    }
+    const Value * best_source      = nullptr;
+    size_t        best_source_size = 0;
+    for (const Value & value : values_) {
+        size_t relative_offset = 0;
+        if (value.tensor == nullptr || !tensor_storage_relative_offset(value.tensor, tensor, relative_offset)) {
+            continue;
+        }
+        if (best_source == nullptr || ggml_nbytes(value.tensor) < best_source_size) {
+            best_source      = &value;
+            best_source_size = ggml_nbytes(value.tensor);
+        }
+    }
+    return best_source;
+}
+
+void ValueMap::promote_storage_root_external(ValueId storage_root) {
+    if (storage_root.value < 0 || static_cast<size_t>(storage_root.value) >= values_.size()) {
+        return;
+    }
+    values_[static_cast<size_t>(storage_root.value)].kind = ValueKind::External;
 }
 
 ValueId ValueMap::get_or_add_tensor_value(const ggml_tensor * tensor, ValueKind kind) {
@@ -19,6 +73,7 @@ ValueId ValueMap::get_or_add_tensor_value(const ggml_tensor * tensor, ValueKind 
         Value & value = values_[found->second];
         if (kind == ValueKind::External) {
             value.kind = ValueKind::External;
+            promote_storage_root_external(value.storage_root);
         }
         return value.id;
     }
@@ -31,14 +86,21 @@ ValueId ValueMap::get_or_add_tensor_value(const ggml_tensor * tensor, ValueKind 
     size_t         storage_offset     = 0;
     size_t         storage_byte_count = ggml_nbytes(tensor);
     if (alias_source != nullptr) {
+        size_t relative_offset = 0;
+        if (!tensor_storage_relative_offset(alias_source->tensor, tensor, relative_offset)) {
+            relative_offset = tensor->view_offs;
+        }
         storage            = alias_source->storage;
         storage_root       = alias_source->storage_root;
         alias_source_id    = alias_source->id;
-        storage_offset     = tensor->view_offs;
+        storage_offset     = alias_source->storage_offset + relative_offset;
         storage_byte_count = alias_source->storage_byte_count;
         const Value * root = find(storage_root);
         if (root != nullptr && root->kind == ValueKind::External) {
             kind = ValueKind::External;
+        }
+        if (kind == ValueKind::External) {
+            promote_storage_root_external(storage_root);
         }
     } else {
         storage      = ValueStorageId(static_cast<int32_t>(storages_.size()));

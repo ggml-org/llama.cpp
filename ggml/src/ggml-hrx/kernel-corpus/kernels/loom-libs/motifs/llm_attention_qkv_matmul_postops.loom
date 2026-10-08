@@ -1,0 +1,101 @@
+template.decl @llm.attention_qkv.normal_rope_vector4(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %values: vector<4xf32>) -> (vector<4xf32>)
+
+template.decl @llm.attention_qkv.rope_vector4(%token: index, %channel: index, %token_count0: index, %head_size0: index, %head_count0: index, %positions: buffer, %theta: buffer, %freq_factors: buffer, %values: vector<4xf32>) -> (vector<4xf32>)
+
+template.decl @llm.attention_qkv.store_cache_vector4(%output_format: index, %token0: index, %channel: index, %token_count0: index, %cache_row_count0: index, %output_size0: index, %indices: buffer, %values: vector<4xf32>, %cache: buffer)
+
+template.decl @llm.attention_qkv.store_query_vector4(%token0: index, %channel: index, %token_count0: index, %head_size0: index, %head_count0: index, %values: vector<4xf32>, %output: buffer)
+
+func.decl @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+
+template.def<@llm.attention_qkv.normal_rope_vector4> device @llm_attention_qkv_normal_rope_vector4(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %values: vector<4xf32>) -> (vector<4xf32>) {
+  %x0 = vector.extract %values[0] : vector<4xf32> -> f32
+  %y0 = vector.extract %values[1] : vector<4xf32> -> f32
+  %x1 = vector.extract %values[2] : vector<4xf32> -> f32
+  %y1 = vector.extract %values[3] : vector<4xf32> -> f32
+  %x_values = vector.from_elements %x0, %x1 : vector<2xf32>
+  %y_values = vector.from_elements %y0, %y1 : vector<2xf32>
+  %rotated_x, %rotated_y = func.call @ggml_rope_f32_pair_packet(%position, %theta, %freq_factors, %x_values, %y_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+  %rotated_x0 = vector.extract %rotated_x[0] : vector<2xf32> -> f32
+  %rotated_x1 = vector.extract %rotated_x[1] : vector<2xf32> -> f32
+  %rotated_y0 = vector.extract %rotated_y[0] : vector<2xf32> -> f32
+  %rotated_y1 = vector.extract %rotated_y[1] : vector<2xf32> -> f32
+  %rotated = vector.from_elements %rotated_x0, %rotated_y0, %rotated_x1, %rotated_y1 : vector<4xf32>
+  template.return %rotated : vector<4xf32>
+}
+
+template.def<@llm.attention_qkv.rope_vector4> device @llm_attention_qkv_rope_vector4(%token: index, %channel: index, %token_count0: index, %head_size0: index, %head_count0: index, %positions: buffer, %theta: buffer, %freq_factors: buffer, %values: vector<4xf32>) -> (vector<4xf32>) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), mul(%head_size0, 4)] : index
+  %head_count = index.assume %head_count0 [range(%head_count0, 1, 64)] : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c0_offset = index.constant 0 : offset
+  %half_head_size = index.div %head_size, %c2 : index
+  %head_channel = index.rem %channel, %head_size : index
+  %channel_packet = index.div %head_channel, %c4 : index
+  %theta_channel = index.mul %channel_packet, %c2 : index
+  %positions_noalias, %theta_noalias, %freq_factors_noalias = buffer.assume.noalias %positions, %theta, %freq_factors : buffer, buffer, buffer
+  %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%token_count]xi32>
+  %theta_view = buffer.view %theta_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+  %freq_factors_view = buffer.view %freq_factors_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+  %position_i32 = view.load %positions_view[%token] : view<[%token_count]xi32> -> i32
+  %position = scalar.sitofp %position_i32 : i32 to f32
+  %theta_packet = vector.load %theta_view[%theta_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+  %freq_factors_packet = vector.load %freq_factors_view[%theta_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+  %rotated = template.apply<@llm.attention_qkv.normal_rope_vector4>(%position, %theta_packet, %freq_factors_packet, %values) : (f32, vector<2xf32>, vector<2xf32>, vector<4xf32>) -> (vector<4xf32>)
+  template.return %rotated : vector<4xf32>
+}
+
+template.def<@llm.attention_qkv.store_query_vector4> device @llm_attention_qkv_store_query_vector4(%token0: index, %channel: index, %token_count0: index, %head_size0: index, %head_count0: index, %values: vector<4xf32>, %output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), mul(%head_size0, 4)] : index
+  %head_count = index.assume %head_count0 [range(%head_count0, 1, 64)] : index
+  %c0_offset = index.constant 0 : offset
+  %head = index.div %channel, %head_size : index
+  %head_channel = index.rem %channel, %head_size : index
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%token_count]x[%head_count]x[%head_size]xf32>
+  vector.store %values, %output_view[%token, %head, %head_channel] : vector<4xf32>, view<[%token_count]x[%head_count]x[%head_size]xf32>
+  template.return
+}
+
+template.def<@llm.attention_qkv.store_cache_vector4> device @llm_attention_qkv_store_cache_vector4(%output_format: index, %token0: index, %channel: index, %token_count0: index, %cache_row_count0: index, %output_size0: index, %indices: buffer, %values: vector<4xf32>, %cache: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %cache_row_count = index.assume %cache_row_count0 [range(%cache_row_count0, 1, 1048576)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 4, 32768), mul(%output_size0, 4)] : index
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_i64 = scalar.constant 0 : i64
+  %c1048575_i64 = scalar.constant 1048575 : i64
+  %c0_offset = index.constant 0 : offset
+  %is_f16 = index.cmp eq, %output_format, %c16 : index
+  %is_f32 = index.cmp eq, %output_format, %c32 : index
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %indices_noalias, %cache_noalias = buffer.assume.noalias %indices, %cache : buffer, buffer
+  %indices_view = buffer.view %indices_noalias[%c0_offset] : buffer -> view<[%token_count]xi64>
+  %index_raw = view.load %indices_view[%token] : view<[%token_count]xi64> -> i64
+  %index_nonnegative = scalar.cmpi sge, %index_raw, %c0_i64 : i64
+  %index_in_cast_range = scalar.cmpi sle, %index_raw, %c1048575_i64 : i64
+  %valid_index = scalar.andi %index_nonnegative, %index_in_cast_range : i1
+  %safe_index0_i64 = scf.select %valid_index, %index_raw, %c0_i64 : i64
+  %safe_index_i64 = scalar.assume %safe_index0_i64 [range(%safe_index0_i64, 0, 1048575)] : i64
+  %cache_row0 = index.cast %safe_index_i64 : i64 to index
+  %valid_row = index.cmp ult, %cache_row0, %cache_row_count : index
+  %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
+  %publish = scalar.andi %valid_index, %valid_row : i1
+  %publish_f16 = scalar.andi %publish, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  scf.if %publish_f16 {
+    %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf16>
+    %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %truncated, %cache_view[%cache_row, %channel] : vector<4xf16>, view<[%cache_row_count]x[%output_size]xf16>
+  }
+  scf.if %publish_f32 {
+    %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf32>
+    vector.store %values, %cache_view[%cache_row, %channel] : vector<4xf32>, view<[%cache_row_count]x[%output_size]xf32>
+  }
+  template.return
+}

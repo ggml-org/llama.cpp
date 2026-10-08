@@ -1,4 +1,5 @@
 set(HRX_SOURCE_DIR "" CACHE PATH "Optional HRX source tree to build instead of using installed hrx and loomc packages")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 if(HRX_SOURCE_DIR)
     include(ExternalProject)
@@ -9,12 +10,28 @@ if(HRX_SOURCE_DIR)
         message(FATAL_ERROR "HRX_SOURCE_DIR does not contain a CMakeLists.txt: ${HRX_SOURCE_DIR}")
     endif()
 
+    # Enforce the HRX compatibility floor before building dependencies; rerun configure when the pin or checker changes.
+    set(GGML_HRX_REVISION_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_hrx_revision.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/hrx-minimum-commit.txt" "${GGML_HRX_REVISION_CHECK}")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${GGML_HRX_REVISION_CHECK}" "${HRX_SOURCE_DIR}"
+        RESULT_VARIABLE GGML_HRX_REVISION_RESULT
+        OUTPUT_VARIABLE GGML_HRX_REVISION_OUTPUT
+        ERROR_VARIABLE GGML_HRX_REVISION_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT GGML_HRX_REVISION_RESULT EQUAL 0)
+        message(FATAL_ERROR "${GGML_HRX_REVISION_ERROR}")
+    endif()
+    message(STATUS "${GGML_HRX_REVISION_OUTPUT}")
+
     set(GGML_HRX_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/hrx")
     set(GGML_HRX_BUILD_DIR "${GGML_HRX_PREFIX}/src/ggml-hrx-deps-build")
     set(GGML_HRX_LIB "${GGML_HRX_BUILD_DIR}/libhrx/src/libhrx/${CMAKE_SHARED_LIBRARY_PREFIX}hrx${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(GGML_LOOMC_LIB "${GGML_HRX_BUILD_DIR}/loom/binding/c/${CMAKE_SHARED_LIBRARY_PREFIX}loomc${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(GGML_HRX_LOOM_LINK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-link/loom-link${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_LOOM_FORMAT "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-format/loom-format${CMAKE_EXECUTABLE_SUFFIX}")
+    set(GGML_HRX_IREE_BENCHMARK_LOOM "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/iree-benchmark-loom/iree-benchmark-loom${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_DEPS_TARGET ggml-hrx-deps)
 
     set(GGML_HRX_CMAKE_ARGS
@@ -41,9 +58,10 @@ if(HRX_SOURCE_DIR)
         SOURCE_DIR "${HRX_SOURCE_DIR}"
         PREFIX "${GGML_HRX_PREFIX}"
         CMAKE_ARGS ${GGML_HRX_CMAKE_ARGS}
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format --config ${CMAKE_BUILD_TYPE}
+        BUILD_ALWAYS TRUE
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format loom_tools_iree-benchmark-loom_iree-benchmark-loom --config ${CMAKE_BUILD_TYPE}
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}"
+        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_IREE_BENCHMARK_LOOM}"
         UPDATE_COMMAND ""
     )
 
@@ -64,9 +82,8 @@ else()
     find_package(loomc CONFIG REQUIRED)
     find_program(GGML_HRX_LOOM_LINK NAMES loom-link)
     find_program(GGML_HRX_LOOM_FORMAT NAMES loom-format)
+    find_program(GGML_HRX_IREE_BENCHMARK_LOOM NAMES iree-benchmark-loom)
 endif()
-
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT "binary" CACHE STRING "Embedded Loom corpus source format: text or binary")
 set_property(CACHE GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT PROPERTY STRINGS text binary)
@@ -86,8 +103,30 @@ elseif(NOT GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT STREQUAL "text")
     message(FATAL_ERROR "Unsupported GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT: ${GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT}")
 endif()
 
-set(GGML_HRX_QWEN_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernel-corpus/kernels/qwen_moe")
+set(GGML_HRX_QWEN_MOE_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernel-corpus/kernels/qwen_moe")
+set(GGML_HRX_QWEN_MOE_KERNEL_CORPUS_MANIFEST "${GGML_HRX_QWEN_MOE_KERNEL_CORPUS_DIR}/manifest.json")
+set(GGML_HRX_HRX_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernel-corpus/kernels/hrx")
+set(GGML_HRX_HRX_KERNEL_CORPUS_MANIFEST "${GGML_HRX_HRX_KERNEL_CORPUS_DIR}/manifest.json")
+set(GGML_HRX_QWEN_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernel-corpus/kernels/qwen")
 set(GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST "${GGML_HRX_QWEN_KERNEL_CORPUS_DIR}/manifest.json")
+set(GGML_HRX_LOOM_LIBS_KERNEL_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/kernel-corpus/kernels/loom-libs")
+set(GGML_HRX_LOOM_LIBS_KERNEL_CORPUS_MANIFEST "${GGML_HRX_LOOM_LIBS_KERNEL_CORPUS_DIR}/manifest.json")
+set(GGML_HRX_KERNEL_CORPUS_MANIFESTS
+    "${GGML_HRX_QWEN_MOE_KERNEL_CORPUS_MANIFEST}"
+    "${GGML_HRX_HRX_KERNEL_CORPUS_MANIFEST}"
+    "${GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST}"
+    "${GGML_HRX_LOOM_LIBS_KERNEL_CORPUS_MANIFEST}"
+)
+set(GGML_HRX_KERNEL_CORPUS_MANIFEST_ARGS
+    --manifest "${GGML_HRX_QWEN_MOE_KERNEL_CORPUS_MANIFEST}"
+    --corpus-dir "${GGML_HRX_QWEN_MOE_KERNEL_CORPUS_DIR}"
+    --manifest "${GGML_HRX_HRX_KERNEL_CORPUS_MANIFEST}"
+    --corpus-dir "${GGML_HRX_HRX_KERNEL_CORPUS_DIR}"
+    --manifest "${GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST}"
+    --corpus-dir "${GGML_HRX_QWEN_KERNEL_CORPUS_DIR}"
+    --manifest "${GGML_HRX_LOOM_LIBS_KERNEL_CORPUS_MANIFEST}"
+    --corpus-dir "${GGML_HRX_LOOM_LIBS_KERNEL_CORPUS_DIR}"
+)
 set(GGML_HRX_KERNEL_CORPUS_SOURCES_INC "${CMAKE_CURRENT_BINARY_DIR}/kernel-corpus-sources.inc")
 set(GGML_HRX_KERNEL_CORPUS_QWEN_INC "${CMAKE_CURRENT_BINARY_DIR}/kernel-corpus-qwen.inc")
 set(GGML_HRX_KERNEL_CORPUS_CATALOG_INC "${CMAKE_CURRENT_BINARY_DIR}/kernel-corpus-catalog.inc")
@@ -103,14 +142,13 @@ add_custom_command(
         --source-output "${GGML_HRX_KERNEL_CORPUS_SOURCES_INC}"
         --corpus-output "${GGML_HRX_KERNEL_CORPUS_QWEN_INC}"
         --catalog-output "${GGML_HRX_KERNEL_CORPUS_CATALOG_INC}"
-        --manifest "${GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST}"
-        --corpus-dir "${GGML_HRX_QWEN_KERNEL_CORPUS_DIR}"
+        ${GGML_HRX_KERNEL_CORPUS_MANIFEST_ARGS}
         --source-format "${GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT}"
         ${GGML_HRX_KERNEL_CORPUS_TOOL_ARGS}
         --depfile "${GGML_HRX_KERNEL_CORPUS_DEPFILE}"
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_kernel_corpus.py"
-        "${GGML_HRX_QWEN_KERNEL_CORPUS_MANIFEST}"
+        ${GGML_HRX_KERNEL_CORPUS_MANIFESTS}
         ${GGML_HRX_KERNEL_CORPUS_TOOL_DEPENDS}
     DEPFILE "${GGML_HRX_KERNEL_CORPUS_DEPFILE}"
     VERBATIM
@@ -148,6 +186,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch/command-plan.h
     dispatch/command-program-bindings.cpp
     dispatch/command-program-bindings.h
+    dispatch/command-program-dump.cpp
+    dispatch/command-program-dump.h
     dispatch/command-program-diagnostics.cpp
     dispatch/command-program-diagnostics.h
     dispatch/command-program.cpp
@@ -159,30 +199,69 @@ ggml_add_backend_library(ggml-hrx
     dispatch/dispatch.h
     dispatch/transient-allocator.cpp
     dispatch/transient-allocator.h
-    dispatch_registration/dispatch-add.cpp
-    dispatch_registration/dispatch-add.h
-    dispatch_registration/dispatch-gather-add.cpp
-    dispatch_registration/dispatch-gather-add.h
-    dispatch_registration/dispatch-llm-matmul.cpp
-    dispatch_registration/dispatch-llm-matmul.h
-    dispatch_registration/dispatch-llm-profiles.h
-    dispatch_registration/dispatch-llm-shapes.h
-    dispatch_registration/dispatch-qwen-attention-postprocess.cpp
-    dispatch_registration/dispatch-qwen-attention-postprocess.h
-    dispatch_registration/dispatch-qwen-flash-attention.cpp
-    dispatch_registration/dispatch-qwen-flash-attention.h
-    dispatch_registration/dispatch-qwen-matmul.cpp
-    dispatch_registration/dispatch-qwen-matmul.h
-    dispatch_registration/dispatch-moe-router.cpp
-    dispatch_registration/dispatch-moe-router.h
-    dispatch_registration/dispatch-qwen-preamble.cpp
-    dispatch_registration/dispatch-qwen-preamble.h
+    dispatch_registration/common/dispatch-activation-publication.cpp
+    dispatch_registration/common/dispatch-activation-publication.h
+    dispatch_registration/common/dispatch-binary.cpp
+    dispatch_registration/common/dispatch-binary.h
+    dispatch_registration/common/dispatch-binary-common.h
+    dispatch_registration/common/dispatch-common.cpp
+    dispatch_registration/common/dispatch-common.h
+    dispatch_registration/common/dispatch-copy.cpp
+    dispatch_registration/common/dispatch-copy.h
+    dispatch_registration/common/dispatch-flash-attention.cpp
+    dispatch_registration/common/dispatch-flash-attention.h
+    dispatch_registration/common/dispatch-gated-mul-mat-id.cpp
+    dispatch_registration/common/dispatch-gated-mul-mat-id.h
+    dispatch_registration/common/dispatch-gated-mul-mat.cpp
+    dispatch_registration/common/dispatch-gated-mul-mat.h
+    dispatch_registration/common/dispatch-gather-add.cpp
+    dispatch_registration/common/dispatch-gather-add.h
+    dispatch_registration/common/dispatch-get-rows.cpp
+    dispatch_registration/common/dispatch-get-rows.h
+    dispatch_registration/common/dispatch-glu.cpp
+    dispatch_registration/common/dispatch-glu.h
+    dispatch_registration/common/dispatch-mul-mat-id.cpp
+    dispatch_registration/common/dispatch-mul-mat-id-common.h
+    dispatch_registration/common/dispatch-mul-mat-id.h
+    dispatch_registration/common/dispatch-mul-mat.cpp
+    dispatch_registration/common/dispatch-mul-mat-common.h
+    dispatch_registration/common/dispatch-mul-mat-weight-format.h
+    dispatch_registration/common/dispatch-mul-mat.h
+    dispatch_registration/common/dispatch-rope-set-rows.cpp
+    dispatch_registration/common/dispatch-rope-set-rows.h
+    dispatch_registration/common/dispatch-rope-utils.h
+    dispatch_registration/common/dispatch-rmsnorm.cpp
+    dispatch_registration/common/dispatch-rmsnorm.h
+    dispatch_registration/common/dispatch-scale.cpp
+    dispatch_registration/common/dispatch-scale.h
+    dispatch_registration/common/dispatch-unary.cpp
+    dispatch_registration/common/dispatch-unary.h
+    dispatch_registration/common/iq-codebook-resource.cpp
+    dispatch_registration/common/iq-codebook-resource.h
     dispatch_registration/dispatch-registry.cpp
     dispatch_registration/dispatch-registry.h
-    dispatch_registration/dispatch-rmsnorm.cpp
-    dispatch_registration/dispatch-rmsnorm.h
-    dispatch_registration/dispatch-routed-ffn.cpp
-    dispatch_registration/dispatch-routed-ffn.h
+    dispatch_registration/immutable-program-resource.cpp
+    dispatch_registration/immutable-program-resource.h
+    dispatch_registration/llm/dispatch-attention-qkv.cpp
+    dispatch_registration/llm/dispatch-attention-qkv.h
+    dispatch_registration/llm/dispatch-gated-delta-net.cpp
+    dispatch_registration/llm/dispatch-gated-delta-net.h
+    dispatch_registration/llm/dispatch-ssm-conv.cpp
+    dispatch_registration/llm/dispatch-ssm-conv.h
+    dispatch_registration/qwen/dispatch-llm-profiles.h
+    dispatch_registration/qwen/dispatch-llm-shapes.h
+    dispatch_registration/qwen/dispatch-moe-router.cpp
+    dispatch_registration/qwen/dispatch-moe-router.h
+    dispatch_registration/qwen/dispatch-qwen.cpp
+    dispatch_registration/qwen/dispatch-qwen.h
+    dispatch_registration/qwen/dispatch-qwen-attention-postprocess.cpp
+    dispatch_registration/qwen/dispatch-qwen-attention-postprocess.h
+    dispatch_registration/qwen/dispatch-qwen-matmul.cpp
+    dispatch_registration/qwen/dispatch-qwen-matmul.h
+    dispatch_registration/qwen/dispatch-qwen-rmsnorm.cpp
+    dispatch_registration/qwen/dispatch-qwen-rmsnorm.h
+    dispatch_registration/qwen/dispatch-routed-ffn.cpp
+    dispatch_registration/qwen/dispatch-routed-ffn.h
     status.h
     graph/graph.cpp
     graph/graph-diagnostics.cpp

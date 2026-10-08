@@ -62,6 +62,7 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
             binding.generation = value_binding.generation;
             binding.capacity   = value_binding.capacity;
             binding.weight     = value_binding.weight;
+            binding.empty_value = ggml_nbytes(external.tensor) == 0;
         } else {
             status.log("external value %d is not bound", external.value.value);
         }
@@ -92,8 +93,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    const bool use_graph_prepared =
-        !lookup.program->has_prepared_program() || lookup.program->can_use_prepared_fast_path(graph);
+    const bool        use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
     GraphProgramMatch binding_match = std::move(lookup.match);
     if (use_graph_prepared && lookup.program->has_prepared_program()) {
         binding_match = lookup.program->match_host_staging_graph(graph);
@@ -117,11 +117,13 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.transient_arena,
         &context_.host_transfers,
         &context_.host_weights,
+        &context_.device->host_buffers,
+        &context_.graph_replay_state,
     };
     const PreparedCommandProgramCacheExecutionResult execution =
         use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings) :
                              context_.prepared_programs.execute_with_result(execution_context, lookup.program->uid(),
-                                                                            lookup.program->command_shape(),
+                                                                            lookup.program->command_shape_hash(),
                                                                             lookup.program->commands(), bindings);
     if (!execution.success) {
         result.status.append(execution.status);

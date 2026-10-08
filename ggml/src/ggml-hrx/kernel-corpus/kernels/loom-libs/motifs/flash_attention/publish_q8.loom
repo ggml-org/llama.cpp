@@ -1,0 +1,83 @@
+config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+
+template.decl @ggml.flash_attention.decode_split.pack_completed_q8(%key_value_head: index, %output: buffer, %q8_output: buffer)
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+// Packs the query heads owned by one completed KV head into GGML's Q8_1 x4
+// layout. Each 32-workitem cohort owns one contiguous 128-element query row;
+// the production 8:1 GQA ratio therefore fills all 256 workitems. Smaller or
+// larger valid ratios use the same phase loop without making barriers
+// conditional.
+template.def<@ggml.flash_attention.decode_split.pack_completed_q8> device @ggml_flash_attention_decode_pack_completed_key_value_head_q8_1_x4(%key_value_head: index, %output: buffer, %q8_output: buffer) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
+  %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %scratch_d_byte_add = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %output_noalias, %q8_output_noalias = buffer.assume.noalias %output, %q8_output : buffer, buffer
+  %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
+  %q8_output_aligned = buffer.assume.alignment %q8_output_noalias {minimum_alignment = 16} : buffer
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  %padded_value_head_size = index.add %value_head_size, %c127 : index
+  %head_tile_count = index.div %padded_value_head_size, %c128 : index
+  %group_in_phase = index.div %workitem, %c32 : index
+  %lane_in_group0 = index.rem %workitem, %c32 : index
+  %lane_in_group = index.assume %lane_in_group0 [range(%lane_in_group0, 0, 31)] : index
+  %block_in_group0 = index.div %lane_in_group, %c8 : index
+  %block_in_group = index.assume %block_in_group0 [range(%block_in_group0, 0, 3)] : index
+  %word_in_block0 = index.rem %lane_in_group, %c8 : index
+  %word_in_block = index.assume %word_in_block0 [range(%word_in_block0, 0, 7)] : index
+  %padded_phase_count = index.add %query_heads_per_key_value_head, %c7 : index
+  %phase_count = index.div %padded_phase_count, %c8 : index
+  scf.for %phase = [%c0 to %phase_count step %c1] unroll {
+    %phase_group_base = index.mul %phase, %c8 : index
+    %group_in_key_value_head = index.add %phase_group_base, %group_in_phase : index
+    %valid_group = index.cmp ult, %group_in_key_value_head, %query_heads_per_key_value_head : index
+    %key_value_query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
+    %query_head0 = index.add %key_value_query_head_base, %group_in_key_value_head : index
+    %safe_query_head = scf.select %valid_group, %query_head0, %c0 : index
+    scf.for %head_tile = [%c0 to %head_tile_count step %c1] unroll {
+      %head_tile_channel = index.mul %head_tile, %c128 : index
+      %block_element_add = index.mul %block_in_group, %c32 : index
+      %word_element_add = index.mul %word_in_block, %c4 : index
+      %input_channel_add = index.add %block_element_add, %word_element_add : index
+      %input_channel0 = index.add %head_tile_channel, %input_channel_add : index
+      %input_channel = index.assume %input_channel0 [range(%input_channel0, 0, 508)] : index
+      %valid_channel = index.cmp ult, %input_channel, %value_head_size : index
+      %publish_word = scalar.andi %valid_group, %valid_channel : i1
+      %input_values = scf.if %publish_word -> (vector<4xf32>) {
+        %values = vector.load %output_view[%safe_query_head, %input_channel] : view<[%query_head_count]x[%value_head_size]xf32> -> vector<4xf32>
+        scf.yield %values : vector<4xf32>
+      } else {
+        scf.yield %c0_f32x4 : vector<4xf32>
+      }
+      %flattened_head_channel = index.mul %safe_query_head, %value_head_size : index
+      %flattened_channel = index.add %flattened_head_channel, %input_channel : index
+      template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%publish_word, %c0_offset, %flattened_channel, %input_values, %scratch_values, %scratch_d, %q8_output_aligned) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+    }
+  }
+  template.return
+}

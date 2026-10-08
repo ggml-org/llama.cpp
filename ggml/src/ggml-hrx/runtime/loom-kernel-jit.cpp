@@ -26,6 +26,8 @@ class LoomAmdgpuJit {
         ggml_hrx_loom_jit_amdgpu_options options = {};
         options.processor                        = target;
         options.identifier                       = target;
+        options.sanitizer                        = std::getenv("GGML_HRX_LOOM_SANITIZER");
+        options.sanitizer_reporting              = std::getenv("GGML_HRX_LOOM_SANITIZER_REPORTING");
         if (ErrorResult error = take_status(ggml_hrx_loom_jit_amdgpu_create(&options, &jit_))) {
             error_message = "create Loom JIT: " + *error;
             GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
@@ -48,11 +50,20 @@ class LoomAmdgpuJit {
 };
 
 static size_t default_worker_count() {
+    const char * configured = std::getenv("GGML_HRX_JIT_WORKERS");
+    if (configured != nullptr && configured[0] != '\0') {
+        char *              end   = nullptr;
+        const unsigned long count = std::strtoul(configured, &end, 10);
+        if (end != configured && *end == '\0' && count >= 1 && count <= 64) {
+            return static_cast<size_t>(count);
+        }
+        GGML_LOG_WARN("%s: ignoring invalid GGML_HRX_JIT_WORKERS=%s\n", __func__, configured);
+    }
     const unsigned int hardware_threads = std::thread::hardware_concurrency();
     if (hardware_threads == 0) {
         return 1;
     }
-    return std::min<size_t>(hardware_threads, 4);
+    return std::min<size_t>(hardware_threads, 8);
 }
 
 static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
@@ -79,9 +90,11 @@ static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
     compile_options.dependency_count                  = request.dependencies.size();
     compile_options.config_bindings                   = configs.data();
     compile_options.config_binding_count              = configs.size();
-    compile_options.workload_arguments                = request.workload.data();
-    compile_options.workload_argument_count           = request.workload.size();
-    compile_options.evaluate_launch_config            = true;
+    compile_options.specialize_workload               = request.specialize_workload;
+    compile_options.workload_arguments = request.specialize_workload ? request.workload.data() : nullptr;
+    compile_options.workload_argument_count = request.specialize_workload ? request.workload.size() : 0;
+    compile_options.load_launch_config                = true;
+    compile_options.evaluate_launch_config            = request.specialize_workload;
 
     if (ErrorResult error = take_status(ggml_hrx_loom_jit_amdgpu_compile(jit, &compile_options, &compiled))) {
         error_message = "compile " + key + ": " + *error;

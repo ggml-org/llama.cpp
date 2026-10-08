@@ -1,0 +1,199 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+func.decl @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_block: index, %word_in_block: index) -> (vector<4xi8>, f32)
+
+// Expands four adjacent native Q1_0 sign bits only at the integer dot boundary.
+func.def inline @ggml_q1_0_sign_word(%code: i8, %bit_base: index) -> (vector<4xi8>) {
+  %nibble_mask = scalar.constant 15 : i32
+  %spread_multiplier = scalar.constant 2113665 : i32
+  %byte_lsb_mask = scalar.constant 16843009 : i32
+  %byte_ones = scalar.constant 255 : i32
+  %code_i32 = scalar.extui %code : i8 to i32
+  %base_i32 = index.cast %bit_base : index to i32
+  %shifted = scalar.shrui %code_i32, %base_i32 : i32
+  %nibble = scalar.andi %shifted, %nibble_mask : i32
+  %spread0 = scalar.muli %nibble, %spread_multiplier : i32
+  %spread = scalar.andi %spread0, %byte_lsb_mask : i32
+  %zero_lsb = scalar.xori %spread, %byte_lsb_mask : i32
+  %negative_bytes = scalar.muli %zero_lsb, %byte_ones : i32
+  %signed_i32 = scalar.ori %negative_bytes, %spread : i32
+  %signed_word = vector.from_elements %signed_i32 : vector<1xi32>
+  %signed = vector.bitcast %signed_word : vector<1xi32> to vector<4xi8>
+  func.return %signed : vector<4xi8>
+}
+
+// Computes one wave32 lane's contribution for one native 128-value Q1_0 block.
+func.def inline @ggml_q1_0_q8_1_x4_block_lane(%weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q1_block: index, %lane: index) -> (f32) {
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %block_bytes = index.constant 18 : offset
+  %code_byte_add = index.constant 2 : offset
+  %c0_i32v = vector.constant 0 : vector<1xi32>
+  %block_byte_add = index.scale %q1_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %weight_row_byte_base, %block_byte_add : offset
+  %code_byte_base = index.add %block_byte_base, %code_byte_add : offset
+  %d_view = buffer.view %weight[%block_byte_base] : buffer -> view<1xf16>
+  %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<16xi8>
+  %d_f16 = view.load %d_view[0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %code_index0 = index.div %bounded_lane, %c2 : index
+  %code_index = index.assume %code_index0 [range(%code_index0, 0, 15)] : index
+  %code = view.load %code_view[%code_index] : view<16xi8> -> i8
+  %half_byte = index.rem %bounded_lane, %c2 : index
+  %bit_base = index.mul %half_byte, %c4 : index
+  %signed_weight = func.call @ggml_q1_0_sign_word(%code, %bit_base) : (i8, index) -> (vector<4xi8>)
+  %block_in_q1 = index.div %bounded_lane, %c8 : index
+  %word_in_block = index.rem %bounded_lane, %c8 : index
+  %q8_block_base = index.mul %q1_block, %c4 : index
+  %q8_block = index.add %q8_block_base, %block_in_q1 : index
+  %q8_values, %q8_d = func.call @ggml_q8_1_x4_word(%q8_input, %q8_row_byte_base, %q8_block, %word_in_block) : (buffer, offset, index, index) -> (vector<4xi8>, f32)
+  %dot = vector.dot4i<s8s8> %signed_weight, %q8_values, %c0_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %dot_i32 = vector.extract %dot[0] : vector<1xi32> -> i32
+  %dot_f32 = scalar.sitofp %dot_i32 : i32 to f32
+  %weight_scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %dot_f32, %d : f32
+  %contribution = scalar.mulf<reassoc|nnan|ninf|nsz> %weight_scaled, %q8_d : f32
+  func.return %contribution : f32
+}
+
+// Computes one wave32 lane's partial for a complete native Q1_0 row.
+func.def inline @ggml_q1_0_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %block_count = index.div %bounded_input_size, %c128 : index
+  %result = scf.for %block = [%c0 to %block_count step %c1](%accumulator = %c0_f32 : f32) -> (f32) {
+    %value = func.call @ggml_q1_0_q8_1_x4_block_lane(%weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %block, %lane) : (buffer, offset, buffer, offset, index, index) -> (f32)
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %accumulator, %value : f32
+    scf.yield %next : f32
+  }
+  func.return %result : f32
+}
+
+// Reuses each Q8_1 activation packet across two adjacent Q1_0 output rows.
+func.def inline @ggml_q1_0_q8_1_x4_block_rows2_lane(%weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q1_block: index, %lane: index) -> (f32, f32) {
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %block_bytes = index.constant 18 : offset
+  %code_byte_add = index.constant 2 : offset
+  %c0_i32v = vector.constant 0 : vector<1xi32>
+  %block_byte_add = index.scale %q1_block, %block_bytes : index, offset -> offset
+  %row0_block_base = index.add %row0_byte_base, %block_byte_add : offset
+  %row1_block_base = index.add %row1_byte_base, %block_byte_add : offset
+  %row0_code_base = index.add %row0_block_base, %code_byte_add : offset
+  %row1_code_base = index.add %row1_block_base, %code_byte_add : offset
+  %row0_d_view = buffer.view %weight[%row0_block_base] : buffer -> view<1xf16>
+  %row1_d_view = buffer.view %weight[%row1_block_base] : buffer -> view<1xf16>
+  %row0_code_view = buffer.view %weight[%row0_code_base] : buffer -> view<16xi8>
+  %row1_code_view = buffer.view %weight[%row1_code_base] : buffer -> view<16xi8>
+  %row0_d_f16 = view.load %row0_d_view[0] : view<1xf16> -> f16
+  %row1_d_f16 = view.load %row1_d_view[0] : view<1xf16> -> f16
+  %row0_d = scalar.extf %row0_d_f16 : f16 to f32
+  %row1_d = scalar.extf %row1_d_f16 : f16 to f32
+  %code_index0 = index.div %bounded_lane, %c2 : index
+  %code_index = index.assume %code_index0 [range(%code_index0, 0, 15)] : index
+  %row0_code = view.load %row0_code_view[%code_index] : view<16xi8> -> i8
+  %row1_code = view.load %row1_code_view[%code_index] : view<16xi8> -> i8
+  %half_byte = index.rem %bounded_lane, %c2 : index
+  %bit_base = index.mul %half_byte, %c4 : index
+  %row0_sign = func.call @ggml_q1_0_sign_word(%row0_code, %bit_base) : (i8, index) -> (vector<4xi8>)
+  %row1_sign = func.call @ggml_q1_0_sign_word(%row1_code, %bit_base) : (i8, index) -> (vector<4xi8>)
+  %block_in_q1 = index.div %bounded_lane, %c8 : index
+  %word_in_block = index.rem %bounded_lane, %c8 : index
+  %q8_block_base = index.mul %q1_block, %c4 : index
+  %q8_block = index.add %q8_block_base, %block_in_q1 : index
+  %q8_values, %q8_d = func.call @ggml_q8_1_x4_word(%q8_input, %q8_row_byte_base, %q8_block, %word_in_block) : (buffer, offset, index, index) -> (vector<4xi8>, f32)
+  %row0_dot = vector.dot4i<s8s8> %row0_sign, %q8_values, %c0_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %row1_dot = vector.dot4i<s8s8> %row1_sign, %q8_values, %c0_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %row0_i32 = vector.extract %row0_dot[0] : vector<1xi32> -> i32
+  %row1_i32 = vector.extract %row1_dot[0] : vector<1xi32> -> i32
+  %row0_f32 = scalar.sitofp %row0_i32 : i32 to f32
+  %row1_f32 = scalar.sitofp %row1_i32 : i32 to f32
+  %row0_scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %row0_f32, %row0_d : f32
+  %row1_scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %row1_f32, %row1_d : f32
+  %row0_contribution = scalar.mulf<reassoc|nnan|ninf|nsz> %row0_scaled, %q8_d : f32
+  %row1_contribution = scalar.mulf<reassoc|nnan|ninf|nsz> %row1_scaled, %q8_d : f32
+  func.return %row0_contribution, %row1_contribution : f32, f32
+}
+
+func.def inline @ggml_q1_0_q8_1_x4_rows2_lane(%input_size: index, %weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %block_count = index.div %bounded_input_size, %c128 : index
+  %result0, %result1 = scf.for %block = [%c0 to %block_count step %c1](%acc0 = %c0_f32 : f32, %acc1 = %c0_f32 : f32) -> (f32, f32) unroll(%c4) {
+    %value0, %value1 = func.call @ggml_q1_0_q8_1_x4_block_rows2_lane(%weight, %row0_byte_base, %row1_byte_base, %q8_input, %q8_row_byte_base, %block, %lane) : (buffer, offset, offset, buffer, offset, index, index) -> (f32, f32)
+    %next0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc0, %value0 : f32
+    %next1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc1, %value1 : f32
+    scf.yield %next0, %next1 : f32, f32
+  }
+  func.return %result0, %result1 : f32, f32
+}
+
+// Reuses each Q8_1 activation packet across the gate and up projection rows.
+func.def inline @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, %gate_row_byte_base: offset, %up: buffer, %up_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %block_bytes = index.constant 18 : offset
+  %code_byte_add = index.constant 2 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_i32v = vector.constant 0 : vector<1xi32>
+  %block_count = index.div %bounded_input_size, %c128 : index
+  %gate_result, %up_result = scf.for %block = [%c0 to %block_count step %c1](%gate_acc = %c0_f32 : f32, %up_acc = %c0_f32 : f32) -> (f32, f32) unroll(%c4) {
+    %block_byte_add = index.scale %block, %block_bytes : index, offset -> offset
+    %gate_block_base = index.add %gate_row_byte_base, %block_byte_add : offset
+    %up_block_base = index.add %up_row_byte_base, %block_byte_add : offset
+    %gate_code_base = index.add %gate_block_base, %code_byte_add : offset
+    %up_code_base = index.add %up_block_base, %code_byte_add : offset
+    %gate_d_view = buffer.view %gate[%gate_block_base] : buffer -> view<1xf16>
+    %up_d_view = buffer.view %up[%up_block_base] : buffer -> view<1xf16>
+    %gate_code_view = buffer.view %gate[%gate_code_base] : buffer -> view<16xi8>
+    %up_code_view = buffer.view %up[%up_code_base] : buffer -> view<16xi8>
+    %gate_d_f16 = view.load %gate_d_view[0] : view<1xf16> -> f16
+    %up_d_f16 = view.load %up_d_view[0] : view<1xf16> -> f16
+    %gate_d = scalar.extf %gate_d_f16 : f16 to f32
+    %up_d = scalar.extf %up_d_f16 : f16 to f32
+    %code_index0 = index.div %bounded_lane, %c2 : index
+    %code_index = index.assume %code_index0 [range(%code_index0, 0, 15)] : index
+    %gate_code = view.load %gate_code_view[%code_index] : view<16xi8> -> i8
+    %up_code = view.load %up_code_view[%code_index] : view<16xi8> -> i8
+    %half_byte = index.rem %bounded_lane, %c2 : index
+    %bit_base = index.mul %half_byte, %c4 : index
+    %gate_sign = func.call @ggml_q1_0_sign_word(%gate_code, %bit_base) : (i8, index) -> (vector<4xi8>)
+    %up_sign = func.call @ggml_q1_0_sign_word(%up_code, %bit_base) : (i8, index) -> (vector<4xi8>)
+    %block_in_q1 = index.div %bounded_lane, %c8 : index
+    %word_in_block = index.rem %bounded_lane, %c8 : index
+    %q8_block_base = index.mul %block, %c4 : index
+    %q8_block = index.add %q8_block_base, %block_in_q1 : index
+    %q8_values, %q8_d = func.call @ggml_q8_1_x4_word(%q8_input, %q8_row_byte_base, %q8_block, %word_in_block) : (buffer, offset, index, index) -> (vector<4xi8>, f32)
+    %gate_dot = vector.dot4i<s8s8> %gate_sign, %q8_values, %c0_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %up_dot = vector.dot4i<s8s8> %up_sign, %q8_values, %c0_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %gate_i32 = vector.extract %gate_dot[0] : vector<1xi32> -> i32
+    %up_i32 = vector.extract %up_dot[0] : vector<1xi32> -> i32
+    %gate_f32 = scalar.sitofp %gate_i32 : i32 to f32
+    %up_f32 = scalar.sitofp %up_i32 : i32 to f32
+    %gate_scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %gate_f32, %gate_d : f32
+    %up_scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %up_f32, %up_d : f32
+    %gate_value = scalar.mulf<reassoc|nnan|ninf|nsz> %gate_scaled, %q8_d : f32
+    %up_value = scalar.mulf<reassoc|nnan|ninf|nsz> %up_scaled, %q8_d : f32
+    %next_gate = scalar.addf<reassoc|nnan|ninf|nsz> %gate_acc, %gate_value : f32
+    %next_up = scalar.addf<reassoc|nnan|ninf|nsz> %up_acc, %up_value : f32
+    scf.yield %next_gate, %next_up : f32, f32
+  }
+  func.return %gate_result, %up_result : f32, f32
+}

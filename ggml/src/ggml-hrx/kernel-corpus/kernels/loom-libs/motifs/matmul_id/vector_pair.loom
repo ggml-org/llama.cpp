@@ -1,0 +1,279 @@
+// Common token-vector routed pair contraction and binary publication.
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+template.decl @ggml.matmul_id.vector_pair.body(%publish_output: i1, %binary_op: index, %input_size: index, %token_count: index, %token: index, %route_count: index, %route: index, %route_stride: index, %expert_count: index, %output_size: index, %channel: index, %lane: index, %q8_input: buffer, %route_ids: buffer, %lhs_weight: buffer, %rhs_weight: buffer, %output: buffer)
+
+template.decl @ggml.matmul_id.vector_pair.binary(%binary_op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+template.def<@ggml.matmul_id.vector_pair.binary> device @ggml_matmul_id_vector_pair_binary(%binary_op: index, %lhs: f32, %rhs: f32) -> (f32) {
+  %swiglu_op = index.constant 4 : index
+  %is_swiglu = index.cmp eq, %binary_op, %swiglu_op : index
+  %result = scf.if %is_swiglu -> (f32) {
+    // Preserve the established routed SwiGLU lowering for numerical and HSACO parity.
+    %lhs_silu = scalar.siluf %lhs : f32
+    %swiglu = scalar.mulf %lhs_silu, %rhs : f32
+    scf.yield %swiglu : f32
+  } else {
+    %generic = template.apply<@ggml.binary_f32.apply>(%binary_op, %lhs, %rhs) : (index, f32, f32) -> (f32)
+    scf.yield %generic : f32
+  }
+  template.return %result : f32
+}
+
+template.def<@ggml.matmul_id.vector_pair.body> device @ggml_matmul_id_vector_pair_body(%publish_output: i1, %binary_op: index, %input_size: index, %token_count: index, %token: index, %route_count: index, %route: index, %route_stride: index, %expert_count: index, %output_size: index, %channel: index, %lane: index, %q8_input: buffer, %route_ids: buffer, %lhs_weight: buffer, %rhs_weight: buffer, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 512)] : index
+  %bounded_route_count, %bounded_route_stride = index.assume %route_count, %route_stride [range(%route_count, 1, 8), range(%route_stride, 1, 128), le(%route_count, %route_stride)] : index, index
+  %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 128)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 4096)] : index
+  %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
+  %bounded_channel, %body_output_size = index.assume %channel, %bounded_output_size [lt(%channel, %bounded_output_size)] : index, index
+  %bounded_route, %body_route_count = index.assume %route, %bounded_route_count [lt(%route, %bounded_route_count)] : index, index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c1023 = index.constant 1023 : index
+  %c1024 = index.constant 1024 : index
+  %q4_block_bytes = index.constant 144 : index
+  %q4_block_bytes_offset = index.constant 144 : offset
+  %q8_group_bytes = index.constant 144 : offset
+  %q8_payload_byte_add = index.constant 16 : offset
+  %c1_byte = index.constant 1 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %q4_block_count = index.div %input_size, %c256 : index
+  %weight_row_bytes = index.mul %q4_block_count, %q4_block_bytes : index
+  %weight_expert_bytes = index.mul %bounded_output_size, %weight_row_bytes : index
+  %q8_group_count = index.div %input_size, %c128 : index
+  %q8_bytes_per_token = index.mul %q8_group_count, %q4_block_bytes : index
+  %padded_input_size = index.add %input_size, %c1023 : index
+  %iteration_count = index.div %padded_input_size, %c1024 : index
+  %q8_noalias, %route_ids_noalias, %lhs_noalias, %rhs_noalias, %output_noalias = buffer.assume.noalias %q8_input, %route_ids, %lhs_weight, %rhs_weight, %output : buffer, buffer, buffer, buffer, buffer
+  %route_ids_view = buffer.view %route_ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_route_stride]xi32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_route_count]x[%bounded_output_size]xf32>
+  %route_index, %route_row_stride = index.assume %bounded_route, %bounded_route_stride [lt(%bounded_route, %bounded_route_stride)] : index, index
+  %expert_i32 = view.load %route_ids_view[%bounded_token, %route_index] : view<[%bounded_token_count]x[%bounded_route_stride]xi32> -> i32
+  %expert0 = index.cast %expert_i32 : i32 to index
+  %expert = index.assume %expert0 [range(%expert0, 0, 127)] : index
+  %expert_byte_base = index.mul %expert, %weight_expert_bytes : index
+  %channel_byte_add = index.mul %bounded_channel, %weight_row_bytes : index
+  %row_byte_index = index.add %expert_byte_base, %channel_byte_add : index
+  %row_byte_base = index.scale %row_byte_index, %c1_byte : index, offset -> offset
+  %q8_token_byte_index = index.mul %bounded_token, %q8_bytes_per_token : index
+  %q8_token_byte_base = index.scale %q8_token_byte_index, %c1_byte : index, offset -> offset
+  %q4_group_pair0 = index.div %bounded_lane, %c2 : index
+  %q4_group_pair1 = index.rem %q4_group_pair0, %c4 : index
+  %q4_group_pair = index.assume %q4_group_pair1 [range(%q4_group_pair1, 0, 3)] : index
+  %q4_half0 = index.rem %bounded_lane, %c2 : index
+  %q4_half = index.assume %q4_half0 [range(%q4_half0, 0, 1)] : index
+  %lane_q4_block = index.div %bounded_lane, %c8 : index
+  %q8_group_in_block0 = index.div %q4_group_pair, %c2 : index
+  %q8_group_in_block = index.assume %q8_group_in_block0 [range(%q8_group_in_block0, 0, 1)] : index
+  %pair_in_q8_group0 = index.rem %q4_group_pair, %c2 : index
+  %pair_in_q8_group = index.assume %pair_in_q8_group0 [range(%pair_in_q8_group0, 0, 1)] : index
+  %q8_low_inner_block0 = index.mul %pair_in_q8_group, %c2 : index
+  %q8_low_inner_block = index.assume %q8_low_inner_block0 [range(%q8_low_inner_block0, 0, 2)] : index
+  %q8_high_inner_block0 = index.add %q8_low_inner_block, %c1 : index
+  %q8_high_inner_block = index.assume %q8_high_inner_block0 [range(%q8_high_inner_block0, 1, 3)] : index
+  %q8_half_word_add = index.mul %q4_half, %c4 : index
+  %q8_low_inner_word_base = index.mul %q8_low_inner_block, %c8 : index
+  %q8_low_word_index0 = index.add %q8_low_inner_word_base, %q8_half_word_add : index
+  %q8_low_word_index = index.assume %q8_low_word_index0 [range(%q8_low_word_index0, 0, 20)] : index
+  %q8_high_inner_word_base = index.mul %q8_high_inner_block, %c8 : index
+  %q8_high_word_index0 = index.add %q8_high_inner_word_base, %q8_half_word_add : index
+  %q8_high_word_index = index.assume %q8_high_word_index0 [range(%q8_high_word_index0, 8, 28)] : index
+  %q8_low_ds_index0 = index.mul %q8_low_inner_block, %c2 : index
+  %q8_low_ds_index = index.assume %q8_low_ds_index0 [range(%q8_low_ds_index0, 0, 4)] : index
+  %gate_acc, %up_acc = scf.for %iteration = [%c0 to %iteration_count step %c1](%gate_iter = %c0_f32 : f32, %up_iter = %c0_f32 : f32) -> (f32, f32) unroll {
+    %iteration_q4_block = index.mul %iteration, %c4 : index
+    %q4_block0 = index.add %iteration_q4_block, %lane_q4_block : index
+    %valid_q4_block = index.cmp ult, %q4_block0, %q4_block_count : index
+    %gate_contribution, %up_contribution = scf.if %valid_q4_block -> (f32, f32) {
+      %q4_block, %bounded_q4_block_count = index.assume %q4_block0, %q4_block_count [lt(%q4_block0, %q4_block_count)] : index, index
+      %q8_block_group_base = index.mul %q4_block, %c2 : index
+      %q8_group0 = index.add %q8_block_group_base, %q8_group_in_block : index
+      %q8_group, %bounded_q8_group_count = index.assume %q8_group0, %q8_group_count [lt(%q8_group0, %q8_group_count)] : index, index
+      %q8_group_byte_add = index.scale %q8_group, %q8_group_bytes : index, offset -> offset
+      %q8_group_byte_base = index.add %q8_token_byte_base, %q8_group_byte_add : offset
+      %q8_payload_byte_base = index.add %q8_group_byte_base, %q8_payload_byte_add : offset
+      %q8_ds_view = buffer.view %q8_noalias[%q8_group_byte_base] : buffer -> view<8xf16>
+      %q8_words_view = buffer.view %q8_noalias[%q8_payload_byte_base] : buffer -> view<32xi32>
+      %q8_ds = vector.load %q8_ds_view[%q8_low_ds_index] : view<8xf16> -> vector<4xf16>
+      %q8_low_d_f16 = vector.extract %q8_ds[0] : vector<4xf16> -> f16
+      %q8_low_s_f16 = vector.extract %q8_ds[1] : vector<4xf16> -> f16
+      %q8_high_d_f16 = vector.extract %q8_ds[2] : vector<4xf16> -> f16
+      %q8_high_s_f16 = vector.extract %q8_ds[3] : vector<4xf16> -> f16
+      %q8_low_d = scalar.extf %q8_low_d_f16 : f16 to f32
+      %q8_low_s = scalar.extf %q8_low_s_f16 : f16 to f32
+      %q8_high_d = scalar.extf %q8_high_d_f16 : f16 to f32
+      %q8_high_s = scalar.extf %q8_high_s_f16 : f16 to f32
+      %q8_low_words = vector.load %q8_words_view[%q8_low_word_index] : view<32xi32> -> vector<4xi32>
+      %q8_high_words = vector.load %q8_words_view[%q8_high_word_index] : view<32xi32> -> vector<4xi32>
+      %q8_low_values = vector.bitcast %q8_low_words : vector<4xi32> to vector<16xi8>
+      %q8_high_values = vector.bitcast %q8_high_words : vector<4xi32> to vector<16xi8>
+      %q4_block_byte_add = index.scale %q4_block, %q4_block_bytes_offset : index, offset -> offset
+      %q4_block_byte_base = index.add %row_byte_base, %q4_block_byte_add : offset
+      %gate_header_view = buffer.view %lhs_noalias[%q4_block_byte_base] : buffer -> view<4xi32>
+      %up_header_view = buffer.view %rhs_noalias[%q4_block_byte_base] : buffer -> view<4xi32>
+      %gate_header_words = vector.load %gate_header_view[0] : view<4xi32> -> vector<4xi32>
+      %up_header_words = vector.load %up_header_view[0] : view<4xi32> -> vector<4xi32>
+      %gate_q4_low, %gate_low_d_scale, %gate_low_dmin_scale, %gate_q4_high, %gate_high_d_scale, %gate_high_dmin_scale = func.call @ggml_matmul_id_q4k_chunk_pair(%lhs_noalias, %row_byte_base, %q4_block, %q4_group_pair, %q4_half, %gate_header_words) : (buffer, offset, index, index, index, vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+      %up_q4_low, %up_low_d_scale, %up_low_dmin_scale, %up_q4_high, %up_high_d_scale, %up_high_dmin_scale = func.call @ggml_matmul_id_q4k_chunk_pair(%rhs_noalias, %row_byte_base, %q4_block, %q4_group_pair, %q4_half, %up_header_words) : (buffer, offset, index, index, index, vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+      %gate_low = func.call @ggml_matmul_id_q4k_q8_1_dot(%gate_q4_low, %gate_low_d_scale, %gate_low_dmin_scale, %q8_low_values, %q8_low_d, %q8_low_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %gate_high = func.call @ggml_matmul_id_q4k_q8_1_dot(%gate_q4_high, %gate_high_d_scale, %gate_high_dmin_scale, %q8_high_values, %q8_high_d, %q8_high_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %up_low = func.call @ggml_matmul_id_q4k_q8_1_dot(%up_q4_low, %up_low_d_scale, %up_low_dmin_scale, %q8_low_values, %q8_low_d, %q8_low_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %up_high = func.call @ggml_matmul_id_q4k_q8_1_dot(%up_q4_high, %up_high_d_scale, %up_high_dmin_scale, %q8_high_values, %q8_high_d, %q8_high_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %gate_pair = scalar.addf %gate_low, %gate_high : f32
+      %up_pair = scalar.addf %up_low, %up_high : f32
+      scf.yield %gate_pair, %up_pair : f32, f32
+    } else {
+      scf.yield %c0_f32, %c0_f32 : f32, f32
+    }
+    %gate_next = scalar.addf %gate_iter, %gate_contribution : f32
+    %up_next = scalar.addf %up_iter, %up_contribution : f32
+    scf.yield %gate_next, %up_next : f32, f32
+  }
+  %gate_dot = kernel.subgroup.reduce<addf> %gate_acc : f32
+  %up_dot = kernel.subgroup.reduce<addf> %up_acc : f32
+  %lane_i32 = index.cast %bounded_lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %writes_output = scalar.andi %publish_output, %is_lane_zero : i1
+  scf.if %writes_output {
+    %result = template.apply<@ggml.matmul_id.vector_pair.binary>(%binary_op, %gate_dot, %up_dot) : (index, f32, f32) -> (f32)
+    view.store %result, %output_view[%bounded_token, %bounded_route, %bounded_channel] : f32, view<[%bounded_token_count]x[%bounded_route_count]x[%bounded_output_size]xf32>
+  }
+  template.return
+}
+
+// Strict Q8_1 x4 publication for routed vector pair producers.
+template.decl @ggml.matmul_id.vector_pair.q8_1_x4.subgroup_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer)
+
+template.decl @ggml.matmul_id.vector_pair.q8_1_x4.completion(%token_count: index, %route_count: index, %output_size: index, %token: index, %route: index, %channel_base: index, %subgroup: index, %workitem: index, %output: buffer, %completion_counters: buffer, %next_q8_output: buffer)
+
+// One selected subgroup packs a 128-value physical group as four Q8_1 blocks.
+template.def<@ggml.matmul_id.vector_pair.q8_1_x4.subgroup_body> device @ggml_matmul_id_vector_pair_q8_1_x4_subgroup_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer) {
+  %group_count, %group = index.assume %group_count0, %group0 [range(%group_count0, 1, 524288), lt(%group0, %group_count0)] : index, index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127_f32 = scalar.constant 127.0 : f32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_offset = index.constant 0 : offset
+  %launched_element_count = index.mul %group_count, %c128 : index
+  %group_element_base = index.mul %group, %c128 : index
+  %lane_element_add = index.mul %lane, %c4 : index
+  %input_index = index.add %group_element_base, %lane_element_add : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launched_element_count]xf32>
+  %input_values = vector.load %input_view[%input_index] : view<[%launched_element_count]xf32> -> vector<4xf32>
+  %absolute_values = vector.absf %input_values : vector<4xf32>
+  %thread_maximum = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
+  %block0 = index.div %lane, %c8 : index
+  %block = index.assume %block0 [range(%block0, 0, 3)] : index
+  %block_maxima = vector.insert %thread_maximum into %c0_f32x4[%block] : f32, vector<4xf32>
+  %reduced_maxima = kernel.subgroup.reduce<maxnumf> %block_maxima : vector<4xf32>
+  %amax = vector.extract %reduced_maxima[%block] : vector<4xf32> -> f32
+  %d = scalar.divf %amax, %c127_f32 : f32
+  %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
+  %d_inverse = scf.if %d_nonzero -> (f32) {
+    %inverse = scalar.divf %c1_f32, %d : f32
+    scf.yield %inverse : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
+  %scaled_values = vector.mulf %input_values, %d_inverse_vector : vector<4xf32>
+  %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+  %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
+  %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
+  %group_byte_offset = index.scale %group, %group_bytes : index, offset -> offset
+  %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
+  %group_ds = buffer.view %output_noalias[%group_byte_offset] : buffer -> view<8xf16>
+  %group_qs = buffer.view %output_noalias[%payload_byte_offset] : buffer -> view<32xi32>
+  scf.if %publish_output {
+    vector.store %packed_word, %group_qs[%lane] : vector<1xi32>, view<32xi32>
+  }
+  %thread_sum = vector.reduce<addf> %rounded_values, %c0_f32 : vector<4xf32>, f32
+  %block_sums0 = vector.insert %thread_sum into %c0_f32x4[%block] : f32, vector<4xf32>
+  %reduced_sums = kernel.subgroup.reduce<addf> %block_sums0 : vector<4xf32>
+  %quantized_sum = vector.extract %reduced_sums[%block] : vector<4xf32> -> f32
+  %s = scalar.mulf %quantized_sum, %d : f32
+  %word_in_block = index.rem %lane, %c8 : index
+  %is_block_leader = index.cmp eq, %word_in_block, %c0 : index
+  %publishes_metadata = scalar.andi %publish_output, %is_block_leader : i1
+  scf.if %publishes_metadata {
+    %d_f16 = scalar.fptrunc %d : f32 to f16
+    %s_f16 = scalar.fptrunc %s : f32 to f16
+    %ds_index = index.mul %block, %c2 : index
+    %s_index = index.add %ds_index, %c1 : index
+    view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
+    view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+  }
+  template.return
+}
+
+// Every producer workgroup advances one four-channel arrival. The final
+// arrival acquires the full physical group, publishes Q8, and resets it.
+template.def<@ggml.matmul_id.vector_pair.q8_1_x4.completion> device @ggml_matmul_id_vector_pair_q8_1_x4_completion(%token_count: index, %route_count: index, %output_size: index, %token: index, %route: index, %channel_base: index, %subgroup: index, %workitem: index, %output: buffer, %completion_counters: buffer, %next_q8_output: buffer) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c0_offset = index.constant 0 : offset
+  %counter_scratch_bytes = index.constant 4 : offset
+  %physical_group_count = index.div %output_size, %c128 : index
+  %row_count = index.mul %token_count, %route_count : index
+  %completion_counter_count = index.mul %row_count, %physical_group_count : index
+  %token_row_base = index.mul %token, %route_count : index
+  %row = index.add %token_row_base, %route : index
+  %row_group_base = index.mul %row, %physical_group_count : index
+  %group_in_row = index.div %channel_base, %c128 : index
+  %counter_index0 = index.add %row_group_base, %group_in_row : index
+  %counter_index, %bounded_completion_counter_count = index.assume %counter_index0, %completion_counter_count [lt(%counter_index0, %completion_counter_count)] : index, index
+  %completion_counters_aligned = buffer.assume.alignment %completion_counters {minimum_alignment = 16} : buffer
+  %completion_counters_view = buffer.view %completion_counters_aligned[%c0_offset] : buffer -> view<[%bounded_completion_counter_count]xi32>
+  %counter_scratch = buffer.alloca<workgroup> align(4) %counter_scratch_bytes : buffer
+  %counter_scratch_view = buffer.view %counter_scratch[%c0_offset] : buffer -> view<1xi32>
+  %is_arrival_lane = index.cmp eq, %workitem, %c0 : index
+  kernel.barrier<global> scope(workgroup) ordering(release)
+  scf.if %is_arrival_lane {
+    %old_counter0 = view.atomic.rmw<addi> %c4_i32, %completion_counters_view[%counter_index] {ordering = acq_rel, scope = device} : i32, view<[%bounded_completion_counter_count]xi32> -> i32
+    view.store %old_counter0, %counter_scratch_view[%c0] : i32, view<1xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %old_counter = view.load %counter_scratch_view[%c0] : view<1xi32> -> i32
+  %group_size_i32 = index.cast %c128 : index to i32
+  %last_arrival_i32 = scalar.subi %group_size_i32, %c4_i32 : i32
+  %negative_group_size_i32 = scalar.subi %c0_i32, %group_size_i32 : i32
+  %is_last_arrival = scalar.cmpi eq, %old_counter, %last_arrival_i32 : i32
+  scf.if %is_last_arrival {
+    kernel.barrier<global> scope(workgroup) ordering(acquire)
+    %publish_output = scalar.constant true : i1
+    %is_quantize_subgroup = index.cmp eq, %subgroup, %c0 : index
+    scf.if %is_quantize_subgroup {
+      template.apply<@ggml.matmul_id.vector_pair.q8_1_x4.subgroup_body>(%publish_output, %bounded_completion_counter_count, %counter_index, %output, %next_q8_output) : (i1, index, index, buffer, buffer)
+    }
+    kernel.barrier<global> scope(workgroup) ordering(release)
+    scf.if %is_arrival_lane {
+      view.atomic.reduce<addi> %negative_group_size_i32, %completion_counters_view[%counter_index] {ordering = release, scope = device} : i32, view<[%bounded_completion_counter_count]xi32>
+    }
+  }
+  template.return
+}
+func.decl @ggml_matmul_id_q4k_chunk_pair(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %q4_half: index, %header_words: vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+func.decl @ggml_matmul_id_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale: f32, %dmin_scale: f32, %q8_values: vector<16xi8>, %q8_d: f32, %q8_s: f32) -> (f32)

@@ -1,0 +1,4 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_prepare_gfx11_wave32 {subgroup_size = 32}

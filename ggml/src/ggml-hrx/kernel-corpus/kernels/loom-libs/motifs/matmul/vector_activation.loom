@@ -1,0 +1,1470 @@
+func.decl @ggml_q4k_scale_min_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32)
+
+func.decl @ggml_dot_u8_s8_vector8_f32(%weight: vector<2xi32>, %activation: vector<2xi32>) -> (f32)
+
+config.def @ggml.matmul.vector.activation_format = 0 : index
+config.def @ggml.matmul.vector.publish_format = 0 : index
+
+func.decl @ggml_q4k_native_row64_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q4_block: index, %q4_group: index, %packet: index) -> (vector<4xf32>)
+
+func.decl @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf32>)
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 1)]
+
+// Shared vector-shaped matmul reduction pipeline.
+//
+// Op wrappers provide publication and output-group hooks by defining:
+//   ggml.matmul.vector_activation.publish_vector4
+//   ggml.matmul.vector_activation.finish_output_group
+template.decl @ggml.matmul.vector_activation.core(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+
+template.decl @ggml.matmul.vector_activation.finish_output_group(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: f32, %arg7: index, %arg8: index, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer)
+
+template.decl @ggml.matmul.vector_activation.launch(%token_capacity: index, %input_size: index, %output_size: index, %weight_format: index) -> (index, index, index, index)
+
+template.decl @ggml.matmul.vector_activation.publish_vector4(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: vector<4xf32>, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer)
+
+template.decl @ggml.matmul.vector_activation.publish_pair2(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: i1, %arg6: f32, %arg7: f32, %arg8: index, %arg9: index, %arg10: index, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer)
+
+func.decl @ggml_matmul_vector_f32_decode_pair(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: f32, %arg8: index, %arg9: index, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer)
+
+func.decl @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offset)
+
+func.decl @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: index) -> (offset)
+
+func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
+
+func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+
+
+func.def pure inline @ggml_matmul_vector_q8_geometry(%token_capacity: index, %input_size: index, %output_size: index, %weight_format: index) -> (index, index) {
+  %c0 = index.constant 0 : index
+  %c5 = index.constant 5 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %q4_format = index.constant 44 : index
+  %q6_format = index.constant 46 : index
+  %q8_format = index.constant 9 : index
+  %activation_format = config.get @ggml.matmul.vector.activation_format : index
+  %native_q4 = index.cmp eq, %weight_format, %q4_format : index
+  %native_q6 = index.cmp eq, %weight_format, %q6_format : index
+  %q8_input = index.cmp eq, %activation_format, %q8_format : index
+  %q4_min_blocks = index.constant 327680 : index
+  %blocks = index.div %input_size, %c256 : index
+  %weight_blocks = index.mul %blocks, %output_size : index
+  %large_payload = index.cmp uge, %weight_blocks, %q4_min_blocks : index
+  %q4_can_stage = scalar.andi %native_q4, %large_payload : i1
+  %native_staged = scalar.ori %q4_can_stage, %native_q6 : i1
+  %native_q8 = scalar.andi %native_staged, %q8_input : i1
+  %q4_min_k = index.constant 16384 : index
+  %q6_min_k = index.constant 8192 : index
+  %min_k = scf.select %native_q4, %q4_min_k, %q6_min_k : index
+  %min_n = index.constant 4096 : index
+  %five_tokens = index.cmp eq, %token_capacity, %c5 : index
+  %long_k = index.cmp uge, %input_size, %min_k : index
+  %wide_n = index.cmp uge, %output_size, %min_n : index
+  %contracts = index.cmp ule, %output_size, %input_size : index
+  %large = scalar.andi %long_k, %wide_n : i1
+  %long_reduction = scalar.andi %large, %contracts : i1
+  %staged_shape = scalar.andi %five_tokens, %long_reduction : i1
+  %staged = scalar.andi %native_q8, %staged_shape : i1
+  %rows = scf.select %native_q4, %c64, %c32 : index
+  %result = scf.select %staged, %rows, %c0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %block_bytes = index.constant 144 : index
+  %half_cache_bytes = index.constant 16777216 : index
+  %cache_bytes = index.constant 33554432 : index
+  %payload_bytes = index.mul %weight_blocks, %block_bytes : index
+  %large_half = index.cmp uge, %payload_bytes, %half_cache_bytes : index
+  %fits_cache = index.cmp ule, %payload_bytes, %cache_bytes : index
+  %cache_range = scalar.andi %large_half, %fits_cache : i1
+  %remainder = index.rem %blocks, %c2 : index
+  %even_blocks = index.cmp eq, %remainder, %c0 : index
+  %reduces_rows = index.cmp ult, %output_size, %input_size : index
+  %native_q4_q8 = scalar.andi %native_q4, %q8_input : i1
+  %plain = index.cmp eq, %result, %c0 : index
+  %q4_plain = scalar.andi %native_q4_q8, %plain : i1
+  %five_wide = scalar.andi %five_tokens, %wide_n : i1
+  %reduction = scalar.andi %reduces_rows, %even_blocks : i1
+  %partition_shape = scalar.andi %five_wide, %reduction : i1
+  %partition_payload = scalar.andi %partition_shape, %cache_range : i1
+  %partitioned = scalar.andi %q4_plain, %partition_payload : i1
+  %k_partitions = scf.select %partitioned, %c2, %c1 : index
+  func.return %result, %k_partitions : index, index
+}
+
+func.def pure inline @ggml_matmul_vector_uses_dot(%token_capacity: index, %input_size: index) -> (i1) {
+  %c0 = index.constant 0 : index
+  %c5 = index.constant 5 : index
+  %c32 = index.constant 32 : index
+  %few_tokens = index.cmp ule, %token_capacity, %c5 : index
+  %tail = index.rem %input_size, %c32 : index
+  %aligned_reduction = index.cmp eq, %tail, %c0 : index
+  %use_dot = scalar.andi %few_tokens, %aligned_reduction : i1
+  func.return %use_dot : i1
+}
+
+func.def pure inline @ggml_matmul_vector_uses_f32_decode_pair(%token_capacity: index, %input_size: index, %publish_format: index) -> (i1) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %activation_format = config.get @ggml.matmul.vector.activation_format : index
+  %f32_input = index.cmp eq, %activation_format, %c0 : index
+  %one_token = index.cmp eq, %token_capacity, %c1 : index
+  %tail = index.rem %input_size, %c32 : index
+  %aligned_reduction = index.cmp eq, %tail, %c0 : index
+  %plain_publish = index.cmp eq, %publish_format, %c0 : index
+  %shape = scalar.andi %one_token, %aligned_reduction : i1
+  %f32_shape = scalar.andi %shape, %f32_input : i1
+  %use_pair = scalar.andi %f32_shape, %plain_publish : i1
+  func.return %use_pair : i1
+}
+
+template.def<@ggml.matmul.vector_activation.launch> pure @ggml_matmul_vector_activation_launch(%token_capacity: index, %input_size: index, %output_size: index, %weight_format: index) -> (index, index, index, index) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_groups = index.div %padded_output_size, %c64 : index
+  %padded_token_count = index.add %token_capacity, %c31 : index
+  %token_groups = index.div %padded_token_count, %c32 : index
+  %c5 = index.constant 5 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %vector_reduction = func.call pure @ggml_matmul_vector_uses_dot(%token_capacity, %input_size) : (index, index) -> (i1)
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %small_output = index.cmp ult, %output_size, %c64 : index
+  %narrow = scalar.andi %vector_reduction, %small_output : i1
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %staged_rows, %k_partitions = func.call pure @ggml_matmul_vector_q8_geometry(%token_capacity, %input_size, %output_size, %weight_format) : (index, index, index, index) -> (index, index)
+  %staged = index.cmp ugt, %staged_rows, %c0 : index
+  %staged_rounding = index.sub %staged_rows, %c1 : index
+  %staged_threads = index.mul %staged_rows, %c16 : index
+  %cohort_rows = index.div %c8, %k_partitions : index
+  %cohort_rounding = index.sub %cohort_rows, %c1 : index
+  %base_rows_per_group = scf.select %narrow, %c4, %cohort_rows : index
+  %c1024 = index.constant 1024 : index
+  %c4096 = index.constant 4096 : index
+  %activation_format = config.get @ggml.matmul.vector.activation_format : index
+  %f32_input = index.cmp eq, %activation_format, %c0 : index
+  %batched_tokens = index.cmp ugt, %token_capacity, %c1 : index
+  %long_reduction = index.cmp uge, %input_size, %c4096 : index
+  %partition_tail = index.rem %input_size, %c1024 : index
+  %full_partitions = index.cmp eq, %partition_tail, %c0 : index
+  %batch_f32 = scalar.andi %batched_tokens, %f32_input : i1
+  %partitionable = scalar.andi %long_reduction, %full_partitions : i1
+  %partition_rows = scalar.andi %batch_f32, %partitionable : i1
+  %narrow_threads = scf.select %partition_rows, %c1024, %c256 : index
+  %base_workgroup_size = scf.select %narrow, %narrow_threads, %c128 : index
+  %base_rounding = scf.select %narrow, %c3, %cohort_rounding : index
+  %row_rounding = scf.select %staged, %staged_rounding, %base_rounding : index
+  %rows_per_group = scf.select %staged, %staged_rows, %base_rows_per_group : index
+  %workgroup_size = scf.select %staged, %staged_threads, %base_workgroup_size : index
+  %rounded_n = index.add %output_size, %row_rounding : index
+  %direct_row_groups = index.div %rounded_n, %rows_per_group : index
+  %publish_format = config.get @ggml.matmul.vector.publish_format : index
+  %pair_decode = func.call pure @ggml_matmul_vector_uses_f32_decode_pair(%token_capacity, %input_size, %publish_format) : (index, index, index) -> (i1)
+  %padded_pair_output = index.add %output_size, %c1 : index
+  %pair_groups = index.div %padded_pair_output, %c2 : index
+  %pair_workgroup_size = index.constant 64 : index
+  %reduction_launch_x = scf.select %pair_decode, %pair_groups, %direct_row_groups : index
+  %reduction_workgroup_size = scf.select %pair_decode, %pair_workgroup_size, %workgroup_size : index
+  %launch_x = scf.select %vector_reduction, %reduction_launch_x, %output_groups : index
+  %launch_y = scf.select %vector_reduction, %c1, %token_groups : index
+  template.return %launch_x, %launch_y, %c1, %reduction_workgroup_size : index, index, index, index
+}
+
+func.def inline @ggml_matmul_vector_combine_k_partitions(%value: f32, %partitions: index) -> (f32) {
+  %c1 = index.constant 1 : index
+  %partitioned = index.cmp ugt, %partitions, %c1 : index
+  %result = scf.if %partitioned -> (f32) {
+    %offset = scalar.constant 16 : i32
+    %width = scalar.constant 32 : i32
+    %peer, %ok = kernel.subgroup.shuffle<xor> %value, %offset, %width : f32, i32, i32
+    %sum = scalar.addf %value, %peer : f32
+    scf.yield %sum : f32
+  } else {
+    scf.yield %value : f32
+  }
+  func.return %result : f32
+}
+
+func.def inline @ggml_matmul_vector_reduce_cohort_f32(%value: f32) -> (f32) {
+  %width = scalar.constant 32 : i32
+  %off1 = scalar.constant 1 : i32
+  %peer1, %ok1 = kernel.subgroup.shuffle<xor> %value, %off1, %width : f32, i32, i32
+  %sum1 = scalar.addf %value, %peer1 : f32
+  %off2 = scalar.constant 2 : i32
+  %peer2, %ok2 = kernel.subgroup.shuffle<xor> %sum1, %off2, %width : f32, i32, i32
+  %sum2 = scalar.addf %sum1, %peer2 : f32
+  %off4 = scalar.constant 4 : i32
+  %peer4, %ok4 = kernel.subgroup.shuffle<xor> %sum2, %off4, %width : f32, i32, i32
+  %sum4 = scalar.addf %sum2, %peer4 : f32
+  %off8 = scalar.constant 8 : i32
+  %peer8, %ok8 = kernel.subgroup.shuffle<xor> %sum4, %off8, %width : f32, i32, i32
+  %sum8 = scalar.addf %sum4, %peer8 : f32
+  func.return %sum8 : f32
+}
+
+// Narrow vector projections assign a full wave to each row.
+// Both cohort sizes use the existing wrapper publication hooks.
+func.def inline @ggml_matmul_vector_reduce_f32(%values: vector<4xf32>, %full_wave: i1) -> (f32) {
+  %zero = scalar.constant 0.0 : f32
+  %width = scalar.constant 32 : i32
+  %xor1 = scalar.constant 1 : i32
+  %xor2 = scalar.constant 2 : i32
+  %xor4 = scalar.constant 4 : i32
+  %xor8 = scalar.constant 8 : i32
+  %sum = vector.reduce<addf> %values, %zero : vector<4xf32>, f32
+  %peer1, %ok1 = kernel.subgroup.shuffle<xor> %sum, %xor1, %width : f32, i32, i32
+  %sum1 = scalar.addf %sum, %peer1 : f32
+  %peer2, %ok2 = kernel.subgroup.shuffle<xor> %sum1, %xor2, %width : f32, i32, i32
+  %sum2 = scalar.addf %sum1, %peer2 : f32
+  %peer4, %ok4 = kernel.subgroup.shuffle<xor> %sum2, %xor4, %width : f32, i32, i32
+  %sum4 = scalar.addf %sum2, %peer4 : f32
+  %peer8, %ok8 = kernel.subgroup.shuffle<xor> %sum4, %xor8, %width : f32, i32, i32
+  %sum8 = scalar.addf %sum4, %peer8 : f32
+  %result = scf.if %full_wave -> (f32) {
+    %xor16 = scalar.constant 16 : i32
+    %peer16, %ok16 = kernel.subgroup.shuffle<xor> %sum8, %xor16, %width : f32, i32, i32
+    %sum16 = scalar.addf %sum8, %peer16 : f32
+    %lane32 = scalar.constant 32 : i32
+    %peer32 = kernel.subgroup.broadcast %sum16 from %lane32 : f32, i32
+    %sum64 = scalar.addf %sum16, %peer32 : f32
+    scf.yield %sum64 : f32
+  } else {
+    scf.yield %sum8 : f32
+  }
+  func.return %result : f32
+}
+
+func.def inline @ggml_matmul_vector_f32_activation_dot(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
+  %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %base = index.constant 0 : offset
+  %zero = vector.constant 0.0 : vector<4xf32>
+  %tokens = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 32)] : index
+  %n = index.assume %output_size0 [range(%output_size0, 1, 524288)] : index
+  %workgroup_size = kernel.workgroup.size<x> : index
+  %one_wave_per_row = index.cmp eq, %workgroup_size, %c256 : index
+  %c1024 = index.constant 1024 : index
+  %partition_group = index.cmp eq, %workgroup_size, %c1024 : index
+  %narrow_output = index.cmp ult, %n, %c64 : index
+  %partitioned = scalar.andi %partition_group, %narrow_output : i1
+  %full_wave = scalar.ori %one_wave_per_row, %partitioned : i1
+  %k_partitions = scf.select %partitioned, %c4, %c1 : index
+  %cohort_width = scf.select %full_wave, %c64, %c16 : index
+  %rows_per_group = scf.select %full_wave, %c4, %c8 : index
+  %wave_rows = scf.select %full_wave, %c1, %c4 : index
+  %step_width = scf.select %full_wave, %c256, %c64 : index
+  %steps_per_block = scf.select %full_wave, %c1, %c4 : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %lane16 = index.rem %lane, %cohort_width : index
+  %cohort = index.div %lane, %cohort_width : index
+  %row_group_base = index.mul %channel_group, %rows_per_group : index
+  %row_subgroup = index.div %subgroup, %k_partitions : index
+  %k_partition = index.rem %subgroup, %k_partitions : index
+  %wave_add = index.mul %row_subgroup, %wave_rows : index
+  %wave_base = index.add %row_group_base, %wave_add : index
+  %row = index.add %wave_base, %cohort : index
+  %valid_row = index.cmp ult, %row, %n : index
+  %packet = index.rem %lane16, %c8 : index
+  %lane_group = index.div %lane16, %c8 : index
+  %lane_k = index.mul %lane16, %c4 : index
+  %c255 = index.constant 255 : index
+  %padded_k = index.add %k, %c255 : index
+  %blocks = index.div %padded_k, %c256 : index
+  %step_rounding = index.sub %step_width, %c1 : index
+  %padded_steps = index.add %k, %step_rounding : index
+  %steps = index.div %padded_steps, %step_width : index
+  %partition_steps = index.div %steps, %k_partitions : index
+  %step_begin = index.mul %k_partition, %partition_steps : index
+  %step_end = index.add %step_begin, %partition_steps : index
+  %row_bytes = func.call @ggml_dequant_weight_row_bytes(%weight_format, %k) : (index, index) -> (offset)
+  %row_base = index.scale %row, %row_bytes : index, offset -> offset
+  %a_na, %w_na = buffer.assume.noalias %input, %weight : buffer, buffer
+  %av = buffer.view %a_na[%base] : buffer -> view<[%tokens]x[%blocks]x256xf32>
+  %total0, %total1, %total2, %total3, %total4 = scf.for %step = [%step_begin to %step_end step %c1](%acc0 = %zero : vector<4xf32>, %acc1 = %zero : vector<4xf32>, %acc2 = %zero : vector<4xf32>, %acc3 = %zero : vector<4xf32>, %acc4 = %zero : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+    %block = index.div %step, %steps_per_block : index
+    %quarter = index.rem %step, %steps_per_block : index
+    %quarter_group = index.mul %quarter, %c2 : index
+    %group = index.add %quarter_group, %lane_group : index
+    %step_k = index.mul %step, %step_width : index
+    %kk = index.add %step_k, %lane_k : index
+    %valid_k = index.cmp ult, %kk, %k : index
+    %valid_row_k = scalar.andi %valid_row, %valid_k : i1
+    %local_step_k = index.mul %quarter, %step_width : index
+    %local_k = index.add %local_step_k, %lane_k : index
+    %input_mask = vector.mask.range [%kk to %k step %c1] : index -> vector<4xi1>
+    %ww = scf.if %valid_row_k -> (vector<4xf32>) {
+      %format44 = index.constant 44 : index
+      %packed = index.cmp eq, %weight_format, %format44 : index
+      %wh = scf.if %packed -> (vector<4xf32>) {
+        %v = func.call @ggml_q4k_native_row64_f32_vector4(%w_na, %row, %k, %block, %group, %packet) : (buffer, index, index, index, index, index) -> (vector<4xf32>)
+        scf.yield %v : vector<4xf32>
+      } else {
+        %v = func.call @ggml_dequant_f32_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %w_na, %row_base, %k, %block, %group, %packet, %kk) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf32>)
+        scf.yield %v : vector<4xf32>
+      }
+      scf.yield %wh : vector<4xf32>
+    } else {
+      scf.yield %zero : vector<4xf32>
+    }
+    %t0 = index.constant 0 : index
+    %valid0 = index.cmp ult, %t0, %tokens : index
+    %next0 = scf.if %valid0 -> (vector<4xf32>) {
+      %a = vector.load.mask %av[%t0, %block, %local_k], %input_mask, %zero : view<[%tokens]x[%blocks]x256xf32>, vector<4xi1>, vector<4xf32>
+      %r = vector.fmaf %ww, %a, %acc0 : vector<4xf32>
+      scf.yield %r : vector<4xf32>
+    } else {
+      scf.yield %acc0 : vector<4xf32>
+    }
+    %t1 = index.constant 1 : index
+    %valid1 = index.cmp ult, %t1, %tokens : index
+    %next1 = scf.if %valid1 -> (vector<4xf32>) {
+      %a = vector.load.mask %av[%t1, %block, %local_k], %input_mask, %zero : view<[%tokens]x[%blocks]x256xf32>, vector<4xi1>, vector<4xf32>
+      %r = vector.fmaf %ww, %a, %acc1 : vector<4xf32>
+      scf.yield %r : vector<4xf32>
+    } else {
+      scf.yield %acc1 : vector<4xf32>
+    }
+    %t2 = index.constant 2 : index
+    %valid2 = index.cmp ult, %t2, %tokens : index
+    %next2 = scf.if %valid2 -> (vector<4xf32>) {
+      %a = vector.load.mask %av[%t2, %block, %local_k], %input_mask, %zero : view<[%tokens]x[%blocks]x256xf32>, vector<4xi1>, vector<4xf32>
+      %r = vector.fmaf %ww, %a, %acc2 : vector<4xf32>
+      scf.yield %r : vector<4xf32>
+    } else {
+      scf.yield %acc2 : vector<4xf32>
+    }
+    %t3 = index.constant 3 : index
+    %valid3 = index.cmp ult, %t3, %tokens : index
+    %next3 = scf.if %valid3 -> (vector<4xf32>) {
+      %a = vector.load.mask %av[%t3, %block, %local_k], %input_mask, %zero : view<[%tokens]x[%blocks]x256xf32>, vector<4xi1>, vector<4xf32>
+      %r = vector.fmaf %ww, %a, %acc3 : vector<4xf32>
+      scf.yield %r : vector<4xf32>
+    } else {
+      scf.yield %acc3 : vector<4xf32>
+    }
+    %t4 = index.constant 4 : index
+    %valid4 = index.cmp ult, %t4, %tokens : index
+    %next4 = scf.if %valid4 -> (vector<4xf32>) {
+      %a = vector.load.mask %av[%t4, %block, %local_k], %input_mask, %zero : view<[%tokens]x[%blocks]x256xf32>, vector<4xi1>, vector<4xf32>
+      %r = vector.fmaf %ww, %a, %acc4 : vector<4xf32>
+      scf.yield %r : vector<4xf32>
+    } else {
+      scf.yield %acc4 : vector<4xf32>
+    }
+    scf.yield %next0, %next1, %next2, %next3, %next4 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  }
+  %leader = index.cmp eq, %lane16, %c0 : index
+  %c5 = index.constant 5 : index
+  %stage_width = scf.select %partitioned, %c16, %c8 : index
+  %stage_elements = index.mul %stage_width, %c5 : index
+  %element_bytes = index.constant 4 : offset
+  %stage_bytes = index.scale %stage_elements, %element_bytes : index, offset -> offset
+  %stage = buffer.alloca<workgroup> align(16) %stage_bytes : buffer
+  %sv = buffer.view %stage[%base] : buffer -> view<5x[%stage_width]xf32>
+  %local_row0 = index.add %wave_add, %cohort : index
+  %partial_offset = index.mul %k_partition, %c4 : index
+  %local_row = index.add %local_row0, %partial_offset : index
+  %p0 = index.constant 0 : index
+  %publishes0 = index.cmp ult, %p0, %tokens : index
+  scf.if %publishes0 {
+    %sum8 = func.call @ggml_matmul_vector_reduce_f32(%total0, %full_wave) : (vector<4xf32>, i1) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p0, %local_row] : f32, view<5x[%stage_width]xf32>
+    }
+  }
+  %p1 = index.constant 1 : index
+  %publishes1 = index.cmp ult, %p1, %tokens : index
+  scf.if %publishes1 {
+    %sum8 = func.call @ggml_matmul_vector_reduce_f32(%total1, %full_wave) : (vector<4xf32>, i1) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p1, %local_row] : f32, view<5x[%stage_width]xf32>
+    }
+  }
+  %p2 = index.constant 2 : index
+  %publishes2 = index.cmp ult, %p2, %tokens : index
+  scf.if %publishes2 {
+    %sum8 = func.call @ggml_matmul_vector_reduce_f32(%total2, %full_wave) : (vector<4xf32>, i1) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p2, %local_row] : f32, view<5x[%stage_width]xf32>
+    }
+  }
+  %p3 = index.constant 3 : index
+  %publishes3 = index.cmp ult, %p3, %tokens : index
+  scf.if %publishes3 {
+    %sum8 = func.call @ggml_matmul_vector_reduce_f32(%total3, %full_wave) : (vector<4xf32>, i1) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p3, %local_row] : f32, view<5x[%stage_width]xf32>
+    }
+  }
+  %p4 = index.constant 4 : index
+  %publishes4 = index.cmp ult, %p4, %tokens : index
+  scf.if %publishes4 {
+    %sum8 = func.call @ggml_matmul_vector_reduce_f32(%total4, %full_wave) : (vector<4xf32>, i1) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p4, %local_row] : f32, view<5x[%stage_width]xf32>
+    }
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %workitem = kernel.workitem.id<x> : index
+  %publish_packets = index.div %rows_per_group, %c4 : index
+  %publish_token = index.div %workitem, %publish_packets : index
+  %publish_packet = index.rem %workitem, %publish_packets : index
+  %publish_add = index.mul %publish_packet, %c4 : index
+  %publish_channel = index.add %row_group_base, %publish_add : index
+  %valid_token = index.cmp ult, %publish_token, %tokens : index
+  %valid_channel = index.cmp ult, %publish_channel, %n : index
+  %publishes = scalar.andi %valid_token, %valid_channel : i1
+  scf.if %publishes {
+    %safe_token, %safe_count = index.assume %publish_token, %tokens [lt(%publish_token, %tokens)] : index, index
+    %stage_token = index.assume %safe_token [range(%safe_token, 0, 4)] : index
+    %stage_add = index.assume %publish_add [range(%publish_add, 0, 4), mul(%publish_add, 4)] : index
+    %stage_row_offset = index.mul %stage_token, %stage_width : index
+    %stage_origin0 = index.add %stage_row_offset, %stage_add : index
+    %stage_origin = scf.if %partitioned -> (index) {
+      %origin = index.assume %stage_origin0 [range(%stage_origin0, 0, 64), mul(%stage_origin0, 4)] : index
+      scf.yield %origin : index
+    } else {
+      %origin = index.assume %stage_origin0 [range(%stage_origin0, 0, 36), mul(%stage_origin0, 4)] : index
+      scf.yield %origin : index
+    }
+    %flat_stage = buffer.view %stage[%base] : buffer -> view<[%stage_elements]xf32>
+    %values0 = vector.load %flat_stage[%stage_origin] : view<[%stage_elements]xf32> -> vector<4xf32>
+    %values = scf.if %partitioned -> (vector<4xf32>) {
+      %stage_origin1 = index.add %stage_origin, %c4 : index
+      %stage_origin2 = index.add %stage_origin1, %c4 : index
+      %stage_origin3 = index.add %stage_origin2, %c4 : index
+      %values1 = vector.load %flat_stage[%stage_origin1] : view<[%stage_elements]xf32> -> vector<4xf32>
+      %values2 = vector.load %flat_stage[%stage_origin2] : view<[%stage_elements]xf32> -> vector<4xf32>
+      %values3 = vector.load %flat_stage[%stage_origin3] : view<[%stage_elements]xf32> -> vector<4xf32>
+      %sum01 = vector.addf %values0, %values1 : vector<4xf32>
+      %sum012 = vector.addf %sum01, %values2 : vector<4xf32>
+      %sum = vector.addf %sum012, %values3 : vector<4xf32>
+      scf.yield %sum : vector<4xf32>
+    } else {
+      scf.yield %values0 : vector<4xf32>
+    }
+    %publish_format = config.get @ggml.matmul.vector.publish_format : index
+    template.apply<@ggml.matmul.vector_activation.publish_vector4>(%publishes, %safe_token, %publish_channel, %safe_count, %n, %output_accumulation, %output_unary_op, %publish_format, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (i1, index, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  }
+  %row_rounding = index.sub %rows_per_group, %c1 : index
+  %rounded_n = index.add %n, %row_rounding : index
+  %output_groups = index.div %rounded_n, %rows_per_group : index
+  template.apply<@ggml.matmul.vector_activation.finish_output_group>(%tokens, %n, %output_groups, %c1, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %c0, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  func.return
+}
+
+// Copy the original Q8_1_x4 records for up to 2048 reduction elements.
+// Call uniformly at a slab boundary; only the final slab may be partial.
+func.def inline @ggml_matmul_vector_q8_1_x4_stage_slab(%input: buffer, %stage: buffer, %capacity: index, %slab_begin: index, %blocks: index, %global_row_bytes: offset) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c144 = index.constant 144 : index
+  %c576 = index.constant 576 : index
+  %c18 = index.constant 18 : index
+  %base = index.constant 0 : offset
+  %packet_bytes = index.constant 16 : offset
+  %block_bytes = index.constant 288 : offset
+  %workgroup_size = kernel.workgroup.size<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %stage_packets = index.mul %capacity, %c144 : index
+  %stage_elements = index.mul %capacity, %c576 : index
+  %stage_view = buffer.view %stage[%base] : buffer -> view<[%stage_elements]xi32>
+  %slab_limit = index.add %slab_begin, %c8 : index
+  %full_slab = index.cmp ule, %slab_limit, %blocks : index
+  %slab_end = scf.select %full_slab, %slab_limit, %blocks : index
+  %active_blocks0 = index.sub %slab_end, %slab_begin : index
+  %active_blocks = index.assume %active_blocks0 [range(%active_blocks0, 1, 8)] : index
+  %active_packets = index.mul %active_blocks, %c18 : index
+  %slab_byte_add = index.scale %slab_begin, %block_bytes : index, offset -> offset
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  scf.for %copy_packet = [%thread to %stage_packets step %workgroup_size] {
+    %copy_token = index.div %copy_packet, %c144 : index
+    %copy_inner = index.rem %copy_packet, %c144 : index
+    %copy_valid = index.cmp ult, %copy_inner, %active_packets : index
+    scf.if %copy_valid {
+      %copy_row = index.scale %copy_token, %global_row_bytes : index, offset -> offset
+      %copy_bytes = index.scale %copy_inner, %packet_bytes : index, offset -> offset
+      %copy_base0 = index.add %copy_row, %slab_byte_add : offset
+      %copy_base = index.add %copy_base0, %copy_bytes : offset
+      %source = buffer.view %input[%copy_base] : buffer -> view<4xi32>
+      %values = vector.load %source[%c0] : view<4xi32> -> vector<4xi32>
+      %copy_origin = index.mul %copy_packet, %c4 : index
+      vector.store %values, %stage_view[%copy_origin] : vector<4xi32>, view<[%stage_elements]xi32>
+    }
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  func.return
+}
+
+func.def inline @ggml_matmul_vector_q8_publish(%tokens: index, %n: index, %rows_per_group: index, %row_base: index, %local_row: index, %block_lane: index, %channel_group: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %publish_format: index, %total_g0: f32, %total_g1: f32, %total_g2: f32, %total_g3: f32, %total_g4: f32, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %base = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %leader = index.cmp eq, %block_lane, %c0 : index
+  %width = scalar.constant 32 : i32
+  %stage_rows = index.constant 5 : index
+  %stage_elements = index.mul %stage_rows, %rows_per_group : index
+  %element_bytes = index.constant 4 : offset
+  %stage_bytes = index.scale %stage_elements, %element_bytes : index, offset -> offset
+  %stage = buffer.alloca<workgroup> align(16) %stage_bytes : buffer
+  %sv = buffer.view %stage[%base] : buffer -> view<5x[%rows_per_group]xf32>
+  %p0 = index.constant 0 : index
+  %publishes0 = index.cmp ult, %p0, %tokens : index
+  scf.if %publishes0 {
+    %sum = scalar.addf %total_g0, %zero : f32
+    %sum8 = func.call @ggml_matmul_vector_reduce_cohort_f32(%sum) : (f32) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p0, %local_row] : f32, view<5x[%rows_per_group]xf32>
+    }
+  }
+  %p1 = index.constant 1 : index
+  %publishes1 = index.cmp ult, %p1, %tokens : index
+  scf.if %publishes1 {
+    %sum = scalar.addf %total_g1, %zero : f32
+    %sum8 = func.call @ggml_matmul_vector_reduce_cohort_f32(%sum) : (f32) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p1, %local_row] : f32, view<5x[%rows_per_group]xf32>
+    }
+  }
+  %p2 = index.constant 2 : index
+  %publishes2 = index.cmp ult, %p2, %tokens : index
+  scf.if %publishes2 {
+    %sum = scalar.addf %total_g2, %zero : f32
+    %sum8 = func.call @ggml_matmul_vector_reduce_cohort_f32(%sum) : (f32) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p2, %local_row] : f32, view<5x[%rows_per_group]xf32>
+    }
+  }
+  %p3 = index.constant 3 : index
+  %publishes3 = index.cmp ult, %p3, %tokens : index
+  scf.if %publishes3 {
+    %sum = scalar.addf %total_g3, %zero : f32
+    %sum8 = func.call @ggml_matmul_vector_reduce_cohort_f32(%sum) : (f32) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p3, %local_row] : f32, view<5x[%rows_per_group]xf32>
+    }
+  }
+  %p4 = index.constant 4 : index
+  %publishes4 = index.cmp ult, %p4, %tokens : index
+  scf.if %publishes4 {
+    %sum = scalar.addf %total_g4, %zero : f32
+    %sum8 = func.call @ggml_matmul_vector_reduce_cohort_f32(%sum) : (f32) -> (f32)
+    scf.if %leader {
+      view.store %sum8, %sv[%p4, %local_row] : f32, view<5x[%rows_per_group]xf32>
+    }
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %workitem = kernel.workitem.id<x> : index
+  %publish_packets = index.div %rows_per_group, %c4 : index
+  %publish_token = index.div %workitem, %publish_packets : index
+  %publish_packet = index.rem %workitem, %publish_packets : index
+  %publish_add = index.mul %publish_packet, %c4 : index
+  %publish_channel = index.add %row_base, %publish_add : index
+  %valid_token = index.cmp ult, %publish_token, %tokens : index
+  %valid_channel = index.cmp ult, %publish_channel, %n : index
+  %publishes = scalar.andi %valid_token, %valid_channel : i1
+  scf.if %publishes {
+    %safe_token, %safe_count = index.assume %publish_token, %tokens [lt(%publish_token, %tokens)] : index, index
+    %stage_token = index.assume %safe_token [range(%safe_token, 0, 4)] : index
+    %row_limit = index.sub %rows_per_group, %c4 : index
+    %stage_add = index.assume %publish_add [range(%publish_add, 0, %row_limit), mul(%publish_add, 4)] : index
+    %stage_row_offset = index.mul %stage_token, %rows_per_group : index
+    %stage_origin0 = index.add %stage_row_offset, %stage_add : index
+    %stage_limit = index.sub %stage_elements, %c4 : index
+    %stage_origin = index.assume %stage_origin0 [range(%stage_origin0, 0, %stage_limit), mul(%stage_origin0, 4)] : index
+    %flat_stage = buffer.view %stage[%base] : buffer -> view<[%stage_elements]xf32>
+    %values = vector.load %flat_stage[%stage_origin] : view<[%stage_elements]xf32> -> vector<4xf32>
+    %publish_format = config.get @ggml.matmul.vector.publish_format : index
+    template.apply<@ggml.matmul.vector_activation.publish_vector4>(%publishes, %safe_token, %publish_channel, %safe_count, %n, %output_accumulation, %output_unary_op, %publish_format, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (i1, index, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  }
+  %rounding = index.sub %rows_per_group, %c1 : index
+  %rounded_n = index.add %n, %rounding : index
+  %output_groups = index.div %rounded_n, %rows_per_group : index
+  template.apply<@ggml.matmul.vector_activation.finish_output_group>(%tokens, %n, %output_groups, %c1, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %c0, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  func.return
+}
+
+func.def inline @ggml_q4_prefetch_native_words(%weight: buffer, %row_group_block: index, %block: index, %row_lane: index, %payload_field: index, %payload_word: index) -> (vector<4xi32>, vector<2xi32>) {
+  %zero = index.constant 0 : index
+  %record_bytes = index.constant 9216 : offset
+  %row_field_bytes = index.constant 16 : offset
+  %payload_add = index.constant 1024 : offset
+  %group_block = index.add %row_group_block, %block : index
+  %group_base = index.scale %group_block, %record_bytes : index, offset -> offset
+  %row_offset = index.scale %row_lane, %row_field_bytes : index, offset -> offset
+  %wb = index.add %group_base, %row_offset : offset
+  %wc = index.add %group_base, %payload_add : offset
+  %header_view = buffer.view %weight[%wb] : buffer -> view<4xi32>
+  %code_view = buffer.view %weight[%wc] : buffer -> view<8x64x4xi32>
+  %headers = vector.load %header_view[%zero] : view<4xi32> -> vector<4xi32>
+  %raw = vector.load %code_view[%payload_field, %row_lane, %payload_word] : view<8x64x4xi32> -> vector<2xi32>
+  func.return %headers, %raw : vector<4xi32>, vector<2xi32>
+}
+
+// Native Q4_K bytes and Q8_1_x4 activations, with one 16-lane cohort per row.
+// Retain the wrapper publication hooks so bias, residual and RMSNorm fusions
+// share this contraction without a separate dispatch or intermediate output.
+func.def pure inline @ggml_matmul_vector_q4_q8_token_pairs(%capacity: index, %tokens: index, %k: index, %n: index) -> (i1) {
+  %c4 = index.constant 4 : index
+  %c4096 = index.constant 4096 : index
+  %capacity4 = index.cmp eq, %capacity, %c4 : index
+  %tokens4 = index.cmp eq, %tokens, %c4 : index
+  %four_tokens = scalar.andi %capacity4, %tokens4 : i1
+  %long_input = index.cmp uge, %k, %c4096 : index
+  %wide_output = index.cmp uge, %n, %c4096 : index
+  %contracts = index.cmp ule, %n, %k : index
+  %wide = scalar.andi %long_input, %wide_output : i1
+  %contracting = scalar.andi %wide, %contracts : i1
+  %eligible = scalar.andi %four_tokens, %contracting : i1
+  func.return %eligible : i1
+}
+
+func.def inline @ggml_matmul_vector_q4_q8_adjacent_scale_min(%scale0: i32, %scale1: i32, %scale2: i32, %pair0: index) -> (i32, i32, i32, i32) {
+  %pair = index.assume %pair0 [range(%pair0, 0, 3)] : index
+  %two = index.constant 2 : index
+  %sixteen = index.constant 16 : index
+  %low = index.cmp ult, %pair, %two : index
+  %pair_lane = index.rem %pair, %two : index
+  %shift_index = index.mul %pair_lane, %sixteen : index
+  %shift = index.cast %shift_index : index to i32
+  %two_i32 = scalar.constant 2 : i32
+  %four_i32 = scalar.constant 4 : i32
+  %eight_i32 = scalar.constant 8 : i32
+  %low_mask = scalar.constant 3855 : i32
+  %high_mask = scalar.constant 12336 : i32
+  %byte_mask = scalar.constant 255 : i32
+  %high_shift = scalar.addi %shift, %two_i32 : i32
+  %min_shift = scalar.addi %shift, %four_i32 : i32
+  %s_source = scf.select %low, %scale0, %scale2 : i32
+  %m_source = scf.select %low, %scale1, %scale2 : i32
+  %s_high_shift = scf.select %low, %shift, %high_shift : i32
+  %m_low_shift = scf.select %low, %shift, %min_shift : i32
+  %s_lo_raw = scalar.shrui %s_source, %shift : i32
+  %s_lo = scalar.andi %s_lo_raw, %low_mask : i32
+  %s_hi_raw = scalar.shrui %scale0, %s_high_shift : i32
+  %s_hi = scalar.andi %s_hi_raw, %high_mask : i32
+  %s = scalar.ori %s_lo, %s_hi : i32
+  %m_lo_raw = scalar.shrui %m_source, %m_low_shift : i32
+  %m_lo = scalar.andi %m_lo_raw, %low_mask : i32
+  %m_hi_raw = scalar.shrui %scale1, %s_high_shift : i32
+  %m_hi = scalar.andi %m_hi_raw, %high_mask : i32
+  %m = scalar.ori %m_lo, %m_hi : i32
+  %s0 = scalar.andi %s, %byte_mask : i32
+  %m0 = scalar.andi %m, %byte_mask : i32
+  %s1 = scalar.shrui %s, %eight_i32 : i32
+  %m1 = scalar.shrui %m, %eight_i32 : i32
+  func.return %s0, %m0, %s1, %m1 : i32, i32, i32, i32
+}
+
+func.def inline @ggml_matmul_vector_q4_q8_dot8(%paired_tokens: i1, %weight: vector<2xi32>, %activation: vector<2xi32>) -> (f32) {
+  %value = scf.if %paired_tokens -> (f32) {
+    %zero = vector.constant 0 : vector<1xi32>
+    %wi0 = vector.extract %weight[0] : vector<2xi32> -> i32
+    %ai0 = vector.extract %activation[0] : vector<2xi32> -> i32
+    %ww0 = vector.splat %wi0 : vector<1xi32>
+    %aw0 = vector.splat %ai0 : vector<1xi32>
+    %w0 = vector.bitcast %ww0 : vector<1xi32> to vector<4xi8>
+    %a0 = vector.bitcast %aw0 : vector<1xi32> to vector<4xi8>
+    %d0 = vector.dot4i<u8s8> %w0, %a0, %zero : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %wi1 = vector.extract %weight[1] : vector<2xi32> -> i32
+    %ai1 = vector.extract %activation[1] : vector<2xi32> -> i32
+    %ww1 = vector.splat %wi1 : vector<1xi32>
+    %aw1 = vector.splat %ai1 : vector<1xi32>
+    %w1 = vector.bitcast %ww1 : vector<1xi32> to vector<4xi8>
+    %a1 = vector.bitcast %aw1 : vector<1xi32> to vector<4xi8>
+    %d1 = vector.dot4i<u8s8> %w1, %a1, %d0 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %sum = vector.extract %d1[0] : vector<1xi32> -> i32
+    %result = scalar.sitofp %sum : i32 to f32
+    scf.yield %result : f32
+  } else {
+    %original = func.call @ggml_dot_u8_s8_vector8_f32(%weight, %activation) : (vector<2xi32>, vector<2xi32>) -> (f32)
+    scf.yield %original : f32
+  }
+  func.return %value : f32
+}
+
+func.def inline @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+
+  %capacity = config.get @ggml.workload.token_capacity : index
+  %staged_rows, %k_partitions = func.call pure @ggml_matmul_vector_q8_geometry(%capacity, %input_size0, %output_size0, %weight_format) : (index, index, index, index) -> (index, index)
+  %no_staged_rows = index.constant 0 : index
+  %staged = index.cmp ugt, %staged_rows, %no_staged_rows : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 1), le(%token_count, %capacity)] : index
+  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %n = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %paired_tokens = func.call pure @ggml_matmul_vector_q4_q8_token_pairs(%capacity, %tokens, %k, %n) : (index, index, index, index) -> (i1)
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %base = index.constant 0 : offset
+  %block_bytes = index.constant 144 : offset
+  %code_offset = index.constant 16 : offset
+  %zero = scalar.constant 0.0 : f32
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %wave = kernel.subgroup.id : index
+  %wg = index.add %channel_group, %c0 : index
+  %c64_rows = index.constant 64 : index
+  %direct_rows = index.div %c8, %k_partitions : index
+  %rows_per_group = scf.select %staged, %c64_rows, %direct_rows : index
+  %row_base = index.mul %wg, %rows_per_group : index
+  %wave_rows = index.div %c4, %k_partitions : index
+  %wave_row = index.mul %wave, %wave_rows : index
+  %cohort_width = index.mul %c16, %k_partitions : index
+  %row_half = index.div %lane, %cohort_width : index
+  %cohort_lane = index.rem %lane, %cohort_width : index
+  %local_row = index.add %wave_row, %row_half : index
+  %row = index.add %row_base, %local_row : index
+  %valid_row = index.cmp ult, %row, %n : index
+  %cohort = index.div %lane, %c16 : index
+  %block_lane = index.rem %lane, %c16 : index
+  %pair = index.div %block_lane, %c4 : index
+  %packet = index.rem %block_lane, %c4 : index
+  %group0 = index.mul %pair, %c2 : index
+  %group1 = index.add %group0, %c1 : index
+  %word_page = index.mul %pair, %c8 : index
+  %word_add = index.mul %packet, %c2 : index
+  %word_index = index.add %word_page, %word_add : index
+  %meta_lane = index.cmp eq, %packet, %c0 : index
+  %blocks = index.div %k, %c256 : index
+  %partition_blocks = index.div %blocks, %k_partitions : index
+  %k_team = index.div %cohort_lane, %c16 : index
+  %k_begin = index.mul %k_team, %partition_blocks : index
+  %weight_row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %weight_row_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %q8_groups = index.div %k, %c128 : index
+  %global_q8_row_bytes = index.scale %q8_groups, %block_bytes : index, offset -> offset
+  %slab_row_bytes = index.constant 2304 : offset
+  %q8_row_bytes = scf.select %staged, %slab_row_bytes, %global_q8_row_bytes : offset
+  %q8_half = index.div %pair, %c2 : index
+  %q8_pair = index.rem %pair, %c2 : index
+  %q8_group0 = index.mul %q8_pair, %c2 : index
+  %q8_group1 = index.add %q8_group0, %c1 : index
+  %q8_words_base = index.mul %q8_group0, %c8 : index
+  %q8_word0 = index.add %q8_words_base, %word_add : index
+  %q8_word1 = index.add %q8_word0, %c8 : index
+  %q8_meta0 = index.mul %q8_group0, %c2 : index
+  %q8_meta1 = index.mul %q8_group1, %c2 : index
+  %q8_sum0 = index.add %q8_meta0, %c1 : index
+  %q8_sum1 = index.add %q8_meta1, %c1 : index
+  %c64 = index.constant 64 : index
+  %record_bytes = index.constant 9216 : offset
+  %row_field_bytes = index.constant 16 : offset
+  %payload_add = index.constant 1024 : offset
+  %direct_row_group = index.div %row, %c64 : index
+  %row_group = scf.select %staged, %channel_group, %direct_row_group : index
+  %row_lane = index.rem %row, %c64 : index
+  %row_group_block = index.mul %row_group, %blocks : index
+  %row_offset = index.scale %row_lane, %row_field_bytes : index, offset -> offset
+  %payload_field = index.div %word_index, %c4 : index
+  %payload_word = index.rem %word_index, %c4 : index
+  %input_na, %gate_na = buffer.assume.noalias %input, %weight : buffer, buffer
+  %slab_blocks = index.constant 8 : index
+  %full_stage_bytes = index.constant 11520 : offset
+  %q8_stage_bytes = scf.select %staged, %full_stage_bytes, %base : offset
+  %q8_stage = buffer.alloca<workgroup> align(16) %q8_stage_bytes : buffer
+  %q8_input = scf.select %staged, %q8_stage, %input_na : buffer
+  %zero_header = vector.constant 0 : vector<4xi32>
+  %zero_raw = vector.constant 0 : vector<2xi32>
+  %prime_header, %prime_raw = scf.if %staged -> (vector<4xi32>, vector<2xi32>) {
+    %header, %raw = func.call @ggml_q4_prefetch_native_words(%gate_na, %row_group_block, %c0, %row_lane, %payload_field, %payload_word) : (buffer, index, index, index, index, index) -> (vector<4xi32>, vector<2xi32>)
+    scf.yield %header, %raw : vector<4xi32>, vector<2xi32>
+  } else {
+    scf.yield %zero_header, %zero_raw : vector<4xi32>, vector<2xi32>
+  }
+  %total_g0, %total_g1, %total_g2, %total_g3, %total_g4, %last_header, %last_raw = scf.for %block_base = [%c0 to %partition_blocks step %c1](%acc_g0 = %zero : f32, %acc_g1 = %zero : f32, %acc_g2 = %zero : f32, %acc_g3 = %zero : f32, %acc_g4 = %zero : f32, %carry_header = %prime_header : vector<4xi32>, %carry_raw = %prime_raw : vector<2xi32>) -> (f32, f32, f32, f32, f32, vector<4xi32>, vector<2xi32>) {
+    %block_in_slab = index.rem %block_base, %slab_blocks : index
+    %slab_boundary = index.cmp eq, %block_in_slab, %c0 : index
+    %new_slab = scalar.andi %staged, %slab_boundary : i1
+    scf.if %new_slab {
+      func.call @ggml_matmul_vector_q8_1_x4_stage_slab(%input_na, %q8_stage, %capacity, %block_base, %blocks, %global_q8_row_bytes) : (buffer, buffer, index, index, index, offset)
+    }
+    %block = index.add %block_base, %k_begin : index
+    %valid_block = index.cmp ult, %block, %blocks : index
+    %safe_block = scf.select %valid_block, %block, %c0 : index
+    %group_block = index.add %row_group_block, %safe_block : index
+    %group_base = index.scale %group_block, %record_bytes : index, offset -> offset
+    %wb = index.add %group_base, %row_offset : offset
+    %wc = index.add %group_base, %payload_add : offset
+    %g_header_view = buffer.view %gate_na[%wb] : buffer -> view<4xi32>
+    %g_code_view = buffer.view %gate_na[%wc] : buffer -> view<8x64x4xi32>
+    %g_headers = scf.if %staged -> (vector<4xi32>) {
+      scf.yield %carry_header : vector<4xi32>
+    } else {
+      %header = vector.load %g_header_view[%c0] : view<4xi32> -> vector<4xi32>
+      scf.yield %header : vector<4xi32>
+    }
+    %g_dm_i32 = vector.extract %g_headers[0] : vector<4xi32> -> i32
+    %g_dm_word = vector.splat %g_dm_i32 : vector<1xi32>
+    %g_dm = vector.bitcast %g_dm_word : vector<1xi32> to vector<2xf16>
+    %g_d0h = vector.extract %g_dm[0] : vector<2xf16> -> f16
+    %g_d1h = vector.extract %g_dm[1] : vector<2xf16> -> f16
+    %g_d0 = scalar.extf %g_d0h : f16 to f32
+    %g_d1 = scalar.extf %g_d1h : f16 to f32
+    %g_s0 = vector.extract %g_headers[1] : vector<4xi32> -> i32
+    %g_s1 = vector.extract %g_headers[2] : vector<4xi32> -> i32
+    %g_s2 = vector.extract %g_headers[3] : vector<4xi32> -> i32
+    %pair_scale0, %pair_min0, %pair_scale1, %pair_min1 = scf.if %paired_tokens -> (i32, i32, i32, i32) {
+      %s0, %m0, %s1, %m1 = func.call @ggml_matmul_vector_q4_q8_adjacent_scale_min(%g_s0, %g_s1, %g_s2, %pair) : (i32, i32, i32, index) -> (i32, i32, i32, i32)
+      scf.yield %s0, %m0, %s1, %m1 : i32, i32, i32, i32
+    } else {
+      %zero_i32 = scalar.constant 0 : i32
+      scf.yield %zero_i32, %zero_i32, %zero_i32, %zero_i32 : i32, i32, i32, i32
+    }
+    %g_scale0i, %g_min0i = scf.if %paired_tokens -> (i32, i32) {
+      scf.yield %pair_scale0, %pair_min0 : i32, i32
+    } else {
+      %scale, %minimum = func.call @ggml_q4k_scale_min_from_header(%g_s0, %g_s1, %g_s2, %group0) : (i32, i32, i32, index) -> (i32, i32)
+      scf.yield %scale, %minimum : i32, i32
+    }
+    %g_scale0f = scalar.uitofp %g_scale0i : i32 to f32
+    %g_min0f = scalar.uitofp %g_min0i : i32 to f32
+    %g_ws0 = scalar.mulf %g_d0, %g_scale0f : f32
+    %g_wm0 = scalar.mulf %g_d1, %g_min0f : f32
+    %g_scale1i, %g_min1i = scf.if %paired_tokens -> (i32, i32) {
+      scf.yield %pair_scale1, %pair_min1 : i32, i32
+    } else {
+      %scale, %minimum = func.call @ggml_q4k_scale_min_from_header(%g_s0, %g_s1, %g_s2, %group1) : (i32, i32, i32, index) -> (i32, i32)
+      scf.yield %scale, %minimum : i32, i32
+    }
+    %g_scale1f = scalar.uitofp %g_scale1i : i32 to f32
+    %g_min1f = scalar.uitofp %g_min1i : i32 to f32
+    %g_ws1 = scalar.mulf %g_d0, %g_scale1f : f32
+    %g_wm1 = scalar.mulf %g_d1, %g_min1f : f32
+    %g_raw = scf.if %staged -> (vector<2xi32>) {
+      scf.yield %carry_raw : vector<2xi32>
+    } else {
+      %raw = vector.load %g_code_view[%payload_field, %row_lane, %payload_word] : view<8x64x4xi32> -> vector<2xi32>
+      scf.yield %raw : vector<2xi32>
+    }
+    %g_mask = vector.constant 252645135 : vector<2xi32>
+    %g_shift = vector.constant 4 : vector<2xi32>
+    %g_lo = vector.andi %g_raw, %g_mask : vector<2xi32>
+    %g_high = vector.shrui %g_raw, %g_shift : vector<2xi32>
+    %g_hi = vector.andi %g_high, %g_mask : vector<2xi32>
+    %next_block = index.add %block, %c1 : index
+    %next_exists = index.cmp ult, %next_block, %blocks : index
+    %has_next = scalar.andi %staged, %next_exists : i1
+    %next_header, %next_raw = scf.if %has_next -> (vector<4xi32>, vector<2xi32>) {
+      %header, %raw = func.call @ggml_q4_prefetch_native_words(%gate_na, %row_group_block, %next_block, %row_lane, %payload_field, %payload_word) : (buffer, index, index, index, index, index) -> (vector<4xi32>, vector<2xi32>)
+      scf.yield %header, %raw : vector<4xi32>, vector<2xi32>
+    } else {
+      scf.yield %carry_header, %carry_raw : vector<4xi32>, vector<2xi32>
+    }
+    %input_block = scf.select %staged, %block_in_slab, %safe_block : index
+    %q8_block0 = index.mul %input_block, %c2 : index
+    %q8_block = index.add %q8_block0, %q8_half : index
+    %q8_block_add = index.scale %q8_block, %block_bytes : index, offset -> offset
+    %t0 = index.constant 0 : index
+    %valid0 = index.cmp ult, %t0, %tokens : index
+    %next_g0 = scf.if %valid0 -> (f32) {
+      %tb = index.scale %t0, %q8_row_bytes : index, offset -> offset
+      %qb = index.add %tb, %q8_block_add : offset
+      %qc = index.add %qb, %code_offset : offset
+      %q_view = buffer.view %q8_input[%qc] : buffer -> view<32xi32>
+      %ds_view = buffer.view %q8_input[%qb] : buffer -> view<8xf16>
+      %a0 = vector.load %q_view[%q8_word0] : view<32xi32> -> vector<2xi32>
+      %a1 = vector.load %q_view[%q8_word1] : view<32xi32> -> vector<2xi32>
+      %ad0h = view.load %ds_view[%q8_meta0] : view<8xf16> -> f16
+      %ad1h = view.load %ds_view[%q8_meta1] : view<8xf16> -> f16
+      %ad0 = scalar.extf %ad0h : f16 to f32
+      %ad1 = scalar.extf %ad1h : f16 to f32
+      %as0h = view.load %ds_view[%q8_sum0] : view<8xf16> -> f16
+      %as1h = view.load %ds_view[%q8_sum1] : view<8xf16> -> f16
+      %as0_raw = scalar.extf %as0h : f16 to f32
+      %as1_raw = scalar.extf %as1h : f16 to f32
+      %as0 = scf.select %meta_lane, %as0_raw, %zero : f32
+      %as1 = scf.select %meta_lane, %as1_raw, %zero : f32
+      %g_dot0 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_lo, %a0) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_dot1 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_hi, %a1) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_s0 = scalar.mulf %g_ws0, %ad0 : f32
+      %g_s1 = scalar.mulf %g_ws1, %ad1 : f32
+      %g_c0 = scalar.mulf %g_dot0, %g_s0 : f32
+      %g_contribution = scalar.fmaf %g_dot1, %g_s1, %g_c0 : f32
+      %g_cor0 = scalar.mulf %g_wm0, %as0 : f32
+      %g_cor = scalar.fmaf %g_wm1, %as1, %g_cor0 : f32
+      %g_corrected = scalar.subf %g_contribution, %g_cor : f32
+      %g_valid = scf.select %valid_block, %g_corrected, %zero : f32
+      %g_updated = scalar.addf %acc_g0, %g_valid : f32
+      scf.yield %g_updated : f32
+    } else {
+      scf.yield %acc_g0 : f32
+    }
+    %t1 = index.constant 1 : index
+    %valid1 = index.cmp ult, %t1, %tokens : index
+    %next_g1 = scf.if %valid1 -> (f32) {
+      %tb = index.scale %t1, %q8_row_bytes : index, offset -> offset
+      %qb = index.add %tb, %q8_block_add : offset
+      %qc = index.add %qb, %code_offset : offset
+      %q_view = buffer.view %q8_input[%qc] : buffer -> view<32xi32>
+      %ds_view = buffer.view %q8_input[%qb] : buffer -> view<8xf16>
+      %a0 = vector.load %q_view[%q8_word0] : view<32xi32> -> vector<2xi32>
+      %a1 = vector.load %q_view[%q8_word1] : view<32xi32> -> vector<2xi32>
+      %ds = vector.load %ds_view[%q8_meta0] : view<8xf16> -> vector<4xf16>
+      %ad0h = vector.extract %ds[0] : vector<4xf16> -> f16
+      %ad1h = vector.extract %ds[2] : vector<4xf16> -> f16
+      %ad0 = scalar.extf %ad0h : f16 to f32
+      %ad1 = scalar.extf %ad1h : f16 to f32
+      %as0h = vector.extract %ds[1] : vector<4xf16> -> f16
+      %as1h = vector.extract %ds[3] : vector<4xf16> -> f16
+      %as0_raw = scalar.extf %as0h : f16 to f32
+      %as1_raw = scalar.extf %as1h : f16 to f32
+      %as0 = scf.select %meta_lane, %as0_raw, %zero : f32
+      %as1 = scf.select %meta_lane, %as1_raw, %zero : f32
+      %g_dot0 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_lo, %a0) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_dot1 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_hi, %a1) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_s0 = scalar.mulf %g_ws0, %ad0 : f32
+      %g_s1 = scalar.mulf %g_ws1, %ad1 : f32
+      %g_c0 = scalar.mulf %g_dot0, %g_s0 : f32
+      %g_contribution = scalar.fmaf %g_dot1, %g_s1, %g_c0 : f32
+      %g_cor0 = scalar.mulf %g_wm0, %as0 : f32
+      %g_cor = scalar.fmaf %g_wm1, %as1, %g_cor0 : f32
+      %g_corrected = scalar.subf %g_contribution, %g_cor : f32
+      %g_valid = scf.select %valid_block, %g_corrected, %zero : f32
+      %g_updated = scalar.addf %acc_g1, %g_valid : f32
+      scf.yield %g_updated : f32
+    } else {
+      scf.yield %acc_g1 : f32
+    }
+    scf.if %paired_tokens {
+      scf.schedule.fence
+    }
+    %t2 = index.constant 2 : index
+    %valid2 = index.cmp ult, %t2, %tokens : index
+    %next_g2 = scf.if %valid2 -> (f32) {
+      %tb = index.scale %t2, %q8_row_bytes : index, offset -> offset
+      %qb = index.add %tb, %q8_block_add : offset
+      %qc = index.add %qb, %code_offset : offset
+      %q_view = buffer.view %q8_input[%qc] : buffer -> view<32xi32>
+      %ds_view = buffer.view %q8_input[%qb] : buffer -> view<8xf16>
+      %a0 = vector.load %q_view[%q8_word0] : view<32xi32> -> vector<2xi32>
+      %a1 = vector.load %q_view[%q8_word1] : view<32xi32> -> vector<2xi32>
+      %ds = vector.load %ds_view[%q8_meta0] : view<8xf16> -> vector<4xf16>
+      %ad0h = vector.extract %ds[0] : vector<4xf16> -> f16
+      %ad1h = vector.extract %ds[2] : vector<4xf16> -> f16
+      %ad0 = scalar.extf %ad0h : f16 to f32
+      %ad1 = scalar.extf %ad1h : f16 to f32
+      %as0h = vector.extract %ds[1] : vector<4xf16> -> f16
+      %as1h = vector.extract %ds[3] : vector<4xf16> -> f16
+      %as0_raw = scalar.extf %as0h : f16 to f32
+      %as1_raw = scalar.extf %as1h : f16 to f32
+      %as0 = scf.select %meta_lane, %as0_raw, %zero : f32
+      %as1 = scf.select %meta_lane, %as1_raw, %zero : f32
+      %g_dot0 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_lo, %a0) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_dot1 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_hi, %a1) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_s0 = scalar.mulf %g_ws0, %ad0 : f32
+      %g_s1 = scalar.mulf %g_ws1, %ad1 : f32
+      %g_c0 = scalar.mulf %g_dot0, %g_s0 : f32
+      %g_contribution = scalar.fmaf %g_dot1, %g_s1, %g_c0 : f32
+      %g_cor0 = scalar.mulf %g_wm0, %as0 : f32
+      %g_cor = scalar.fmaf %g_wm1, %as1, %g_cor0 : f32
+      %g_corrected = scalar.subf %g_contribution, %g_cor : f32
+      %g_valid = scf.select %valid_block, %g_corrected, %zero : f32
+      %g_updated = scalar.addf %acc_g2, %g_valid : f32
+      scf.yield %g_updated : f32
+    } else {
+      scf.yield %acc_g2 : f32
+    }
+    %t3 = index.constant 3 : index
+    %valid3 = index.cmp ult, %t3, %tokens : index
+    %next_g3 = scf.if %valid3 -> (f32) {
+      %tb = index.scale %t3, %q8_row_bytes : index, offset -> offset
+      %qb = index.add %tb, %q8_block_add : offset
+      %qc = index.add %qb, %code_offset : offset
+      %q_view = buffer.view %q8_input[%qc] : buffer -> view<32xi32>
+      %ds_view = buffer.view %q8_input[%qb] : buffer -> view<8xf16>
+      %a0 = vector.load %q_view[%q8_word0] : view<32xi32> -> vector<2xi32>
+      %a1 = vector.load %q_view[%q8_word1] : view<32xi32> -> vector<2xi32>
+      %ds = vector.load %ds_view[%q8_meta0] : view<8xf16> -> vector<4xf16>
+      %ad0h = vector.extract %ds[0] : vector<4xf16> -> f16
+      %ad1h = vector.extract %ds[2] : vector<4xf16> -> f16
+      %ad0 = scalar.extf %ad0h : f16 to f32
+      %ad1 = scalar.extf %ad1h : f16 to f32
+      %as0h = vector.extract %ds[1] : vector<4xf16> -> f16
+      %as1h = vector.extract %ds[3] : vector<4xf16> -> f16
+      %as0_raw = scalar.extf %as0h : f16 to f32
+      %as1_raw = scalar.extf %as1h : f16 to f32
+      %as0 = scf.select %meta_lane, %as0_raw, %zero : f32
+      %as1 = scf.select %meta_lane, %as1_raw, %zero : f32
+      %g_dot0 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_lo, %a0) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_dot1 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_hi, %a1) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_s0 = scalar.mulf %g_ws0, %ad0 : f32
+      %g_s1 = scalar.mulf %g_ws1, %ad1 : f32
+      %g_c0 = scalar.mulf %g_dot0, %g_s0 : f32
+      %g_contribution = scalar.fmaf %g_dot1, %g_s1, %g_c0 : f32
+      %g_cor0 = scalar.mulf %g_wm0, %as0 : f32
+      %g_cor = scalar.fmaf %g_wm1, %as1, %g_cor0 : f32
+      %g_corrected = scalar.subf %g_contribution, %g_cor : f32
+      %g_valid = scf.select %valid_block, %g_corrected, %zero : f32
+      %g_updated = scalar.addf %acc_g3, %g_valid : f32
+      scf.yield %g_updated : f32
+    } else {
+      scf.yield %acc_g3 : f32
+    }
+    %t4 = index.constant 4 : index
+    %valid4 = index.cmp ult, %t4, %tokens : index
+    %next_g4 = scf.if %valid4 -> (f32) {
+      %tb = index.scale %t4, %q8_row_bytes : index, offset -> offset
+      %qb = index.add %tb, %q8_block_add : offset
+      %qc = index.add %qb, %code_offset : offset
+      %q_view = buffer.view %q8_input[%qc] : buffer -> view<32xi32>
+      %ds_view = buffer.view %q8_input[%qb] : buffer -> view<8xf16>
+      %a0 = vector.load %q_view[%q8_word0] : view<32xi32> -> vector<2xi32>
+      %a1 = vector.load %q_view[%q8_word1] : view<32xi32> -> vector<2xi32>
+      %ds = vector.load %ds_view[%q8_meta0] : view<8xf16> -> vector<4xf16>
+      %ad0h = vector.extract %ds[0] : vector<4xf16> -> f16
+      %ad1h = vector.extract %ds[2] : vector<4xf16> -> f16
+      %ad0 = scalar.extf %ad0h : f16 to f32
+      %ad1 = scalar.extf %ad1h : f16 to f32
+      %as0h = vector.extract %ds[1] : vector<4xf16> -> f16
+      %as1h = vector.extract %ds[3] : vector<4xf16> -> f16
+      %as0_raw = scalar.extf %as0h : f16 to f32
+      %as1_raw = scalar.extf %as1h : f16 to f32
+      %as0 = scf.select %meta_lane, %as0_raw, %zero : f32
+      %as1 = scf.select %meta_lane, %as1_raw, %zero : f32
+      %g_dot0 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_lo, %a0) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_dot1 = func.call @ggml_matmul_vector_q4_q8_dot8(%paired_tokens, %g_hi, %a1) : (i1, vector<2xi32>, vector<2xi32>) -> (f32)
+      %g_s0 = scalar.mulf %g_ws0, %ad0 : f32
+      %g_s1 = scalar.mulf %g_ws1, %ad1 : f32
+      %g_c0 = scalar.mulf %g_dot0, %g_s0 : f32
+      %g_contribution = scalar.fmaf %g_dot1, %g_s1, %g_c0 : f32
+      %g_cor0 = scalar.mulf %g_wm0, %as0 : f32
+      %g_cor = scalar.fmaf %g_wm1, %as1, %g_cor0 : f32
+      %g_corrected = scalar.subf %g_contribution, %g_cor : f32
+      %g_valid = scf.select %valid_block, %g_corrected, %zero : f32
+      %g_updated = scalar.addf %acc_g4, %g_valid : f32
+      scf.yield %g_updated : f32
+    } else {
+      scf.yield %acc_g4 : f32
+    }
+    scf.yield %next_g0, %next_g1, %next_g2, %next_g3, %next_g4, %next_header, %next_raw : f32, f32, f32, f32, f32, vector<4xi32>, vector<2xi32>
+  }
+  %combined0 = func.call @ggml_matmul_vector_combine_k_partitions(%total_g0, %k_partitions) : (f32, index) -> (f32)
+  %combined1 = func.call @ggml_matmul_vector_combine_k_partitions(%total_g1, %k_partitions) : (f32, index) -> (f32)
+  %combined2 = func.call @ggml_matmul_vector_combine_k_partitions(%total_g2, %k_partitions) : (f32, index) -> (f32)
+  %combined3 = func.call @ggml_matmul_vector_combine_k_partitions(%total_g3, %k_partitions) : (f32, index) -> (f32)
+  %combined4 = func.call @ggml_matmul_vector_combine_k_partitions(%total_g4, %k_partitions) : (f32, index) -> (f32)
+  %publish_format = config.get @ggml.matmul.vector.publish_format : index
+  func.call @ggml_matmul_vector_q8_publish(%tokens, %n, %rows_per_group, %row_base, %local_row, %cohort_lane, %channel_group, %output_accumulation, %output_unary_op, %epsilon, %publish_format, %combined0, %combined1, %combined2, %combined3, %combined4, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, index, index, index, f32, index, f32, f32, f32, f32, f32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  func.return
+}
+
+// Native Q6_K carrier with signed I8 dot products and F32 scaling.
+func.def inline @ggml_matmul_vector_q6_prefetch_native_words(%weight_na: buffer, %row_group_block: index, %block: index, %row_lane: index, %half16: index, %group: index, %half128: index, %ql_side: index, %packet: index) -> (f16, i8, vector<4xi32>, vector<4xi32>) {
+  %c2 = index.constant 2 : index
+  %record_bytes = index.constant 13440 : offset
+  %scale_add = index.constant 128 : offset
+  %raw_add = index.constant 1152 : offset
+  %group_block = index.add %row_group_block, %block : index
+  %block_base = index.scale %group_block, %record_bytes : index, offset -> offset
+  %scale_base = index.add %block_base, %scale_add : offset
+  %raw_base = index.add %block_base, %raw_add : offset
+  %d_view = buffer.view %weight_na[%block_base] : buffer -> view<64xf16>
+  %s_view = buffer.view %weight_na[%scale_base] : buffer -> view<64x2x8xi8>
+  %raw_view = buffer.view %weight_na[%raw_base] : buffer -> view<2x3x64x8xi32>
+  %dh = view.load %d_view[%row_lane] : view<64xf16> -> f16
+  %si = view.load %s_view[%row_lane, %half16, %group] : view<64x2x8xi8> -> i8
+  %ql = vector.load %raw_view[%half128, %ql_side, %row_lane, %packet] : view<2x3x64x8xi32> -> vector<4xi32>
+  %qh = vector.load %raw_view[%half128, %c2, %row_lane, %packet] : view<2x3x64x8xi32> -> vector<4xi32>
+  func.return %dh, %si, %ql, %qh : f16, i8, vector<4xi32>, vector<4xi32>
+}
+
+func.def inline @ggml_matmul_vector_q6_q8_activation_values(%pipelined: i1, %token: index, %q8_row_bytes: offset, %q8_block_add: offset, %capacity: index, %current_slot: index, %q8_block0: index, %q8_input: buffer, %q8_word0: index, %q8_meta: index) -> (vector<16xi8>, f32) {
+  %code_offset = index.constant 16 : offset
+  %a, %ad = scf.if %pipelined -> (vector<16xi8>, f32) {
+    %base = index.constant 0 : offset
+    %c4 = index.constant 4 : index
+    %q8_block = index.assume %q8_block0 [range(%q8_block0, 0, 7)] : index
+    %word = index.add %q8_word0, %c4 : index
+    %q_view = buffer.view %q8_input[%base] : buffer -> view<2x[%capacity]x8x36xi32>
+    %ds_view = buffer.view %q8_input[%base] : buffer -> view<2x[%capacity]x8x72xf16>
+    %words = vector.load %q_view[%current_slot, %token, %q8_block, %word] : view<2x[%capacity]x8x36xi32> -> vector<4xi32>
+    %a = vector.bitcast %words : vector<4xi32> to vector<16xi8>
+    %scale = view.load %ds_view[%current_slot, %token, %q8_block, %q8_meta] : view<2x[%capacity]x8x72xf16> -> f16
+    %ad = scalar.extf %scale : f16 to f32
+    scf.yield %a, %ad : vector<16xi8>, f32
+  } else {
+    %tb = index.scale %token, %q8_row_bytes : index, offset -> offset
+    %qb = index.add %tb, %q8_block_add : offset
+    %qc = index.add %qb, %code_offset : offset
+    %q_view = buffer.view %q8_input[%qc] : buffer -> view<32xi32>
+    %ds_view = buffer.view %q8_input[%qb] : buffer -> view<8xf16>
+    %words = vector.load %q_view[%q8_word0] : view<32xi32> -> vector<4xi32>
+    %a = vector.bitcast %words : vector<4xi32> to vector<16xi8>
+    %scale = view.load %ds_view[%q8_meta] : view<8xf16> -> f16
+    %ad = scalar.extf %scale : f16 to f32
+    scf.yield %a, %ad : vector<16xi8>, f32
+  }
+  func.return %a, %ad : vector<16xi8>, f32
+}
+
+func.def inline @ggml_matmul_vector_q6_q8_dot16(%pipelined: i1, %w: vector<16xi8>, %a: vector<16xi8>) -> (i32) {
+  %sum = scf.if %pipelined -> (i32) {
+    %di0 = vector.constant 0 : vector<1xi32>
+    %dw0 = vector.slice %w[0] : vector<16xi8> -> vector<4xi8>
+    %da0 = vector.slice %a[0] : vector<16xi8> -> vector<4xi8>
+    %di1 = vector.dot4i<s8s8> %dw0, %da0, %di0 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %dw1 = vector.slice %w[4] : vector<16xi8> -> vector<4xi8>
+    %da1 = vector.slice %a[4] : vector<16xi8> -> vector<4xi8>
+    %di2 = vector.dot4i<s8s8> %dw1, %da1, %di1 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %dw2 = vector.slice %w[8] : vector<16xi8> -> vector<4xi8>
+    %da2 = vector.slice %a[8] : vector<16xi8> -> vector<4xi8>
+    %di3 = vector.dot4i<s8s8> %dw2, %da2, %di2 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %dw3 = vector.slice %w[12] : vector<16xi8> -> vector<4xi8>
+    %da3 = vector.slice %a[12] : vector<16xi8> -> vector<4xi8>
+    %di4 = vector.dot4i<s8s8> %dw3, %da3, %di3 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+    %chain_sum = vector.extract %di4[0] : vector<1xi32> -> i32
+    scf.yield %chain_sum : i32
+  } else {
+    %init = vector.constant 0 : vector<4xi32>
+    %dot = vector.dot4i<s8s8> %w, %a, %init : vector<16xi8>, vector<16xi8>, vector<4xi32>
+    %seed = scalar.constant 0 : i32
+    %direct_sum = vector.reduce<addi> %dot, %seed : vector<4xi32>, i32
+    scf.yield %direct_sum : i32
+  }
+  func.return %sum : i32
+}
+
+func.def inline @ggml_matmul_vector_q8_1_x4_prefetch_half_slab(%input: buffer, %capacity0: index, %slot_begin: index, %blocks: index, %global_row_bytes: offset) -> (vector<4xi32>) {
+  %capacity = index.assume %capacity0 [range(%capacity0, 1, 5)] : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c18 = index.constant 18 : index
+  %c72 = index.constant 72 : index
+  %packet_bytes = index.constant 16 : offset
+  %block_bytes = index.constant 288 : offset
+  %thread = kernel.workitem.id<x> : index
+  %total_packets = index.mul %capacity, %c72 : index
+  %copy_packet = index.rem %thread, %total_packets : index
+  %copy_token = index.div %copy_packet, %c72 : index
+  %copy_inner = index.rem %copy_packet, %c72 : index
+  %remaining = index.sub %blocks, %slot_begin : index
+  %full = index.cmp uge, %remaining, %c4 : index
+  %active0 = scf.select %full, %c4, %remaining : index
+  %active = index.assume %active0 [range(%active0, 1, 4)] : index
+  %active_packets = index.mul %active, %c18 : index
+  %copy_valid = index.cmp ult, %copy_inner, %active_packets : index
+  %safe_inner = scf.select %copy_valid, %copy_inner, %c0 : index
+  %copy_row = index.scale %copy_token, %global_row_bytes : index, offset -> offset
+  %slot_bytes = index.scale %slot_begin, %block_bytes : index, offset -> offset
+  %copy_bytes = index.scale %safe_inner, %packet_bytes : index, offset -> offset
+  %copy_base0 = index.add %copy_row, %slot_bytes : offset
+  %copy_base = index.add %copy_base0, %copy_bytes : offset
+  %source = buffer.view %input[%copy_base] : buffer -> view<4xi32>
+  %values = vector.load %source[%c0] : view<4xi32> -> vector<4xi32>
+  func.return %values : vector<4xi32>
+}
+func.def inline @ggml_matmul_vector_q8_1_x4_publish_half_slab(%stage: buffer, %capacity0: index, %slot0: index, %values: vector<4xi32>) {
+  %capacity = index.assume %capacity0 [range(%capacity0, 1, 5)] : index
+  %slot = index.assume %slot0 [range(%slot0, 0, 1)] : index
+  %c4 = index.constant 4 : index
+  %c72 = index.constant 72 : index
+  %base = index.constant 0 : offset
+  %thread = kernel.workitem.id<x> : index
+  %total_packets = index.mul %capacity, %c72 : index
+  %thread_valid = index.cmp ult, %thread, %total_packets : index
+  scf.if %thread_valid {
+    %copy_token0 = index.div %thread, %c72 : index
+    %copy_token = index.assume %copy_token0 [range(%copy_token0, 0, 4), lt(%copy_token0, %capacity)] : index
+    %copy_inner = index.rem %thread, %c72 : index
+    %origin = index.mul %copy_inner, %c4 : index
+    %destination = buffer.view %stage[%base] : buffer -> view<2x[%capacity]x288xi32>
+    vector.store %values, %destination[%slot, %copy_token, %origin] : vector<4xi32>, view<2x[%capacity]x288xi32>
+  }
+  func.return
+}
+
+
+func.def inline @ggml_matmul_vector_q6_q8_accumulate(%pipelined: i1, %tokens: index, %q8_row_bytes: offset, %q8_block_add: offset, %capacity: index, %current_slot: index, %q8_block0: index, %q8_input: buffer, %q8_word0: index, %q8_meta: index, %w: vector<16xi8>, %ws: f32, %acc_g0: f32, %acc_g1: f32, %acc_g2: f32, %acc_g3: f32, %acc_g4: f32) -> (f32, f32, f32, f32, f32) {
+  %code_offset = index.constant 16 : offset
+  %t0 = index.constant 0 : index
+  %valid0 = index.cmp ult, %t0, %tokens : index
+  %computed_g0 = scf.if %valid0 -> (f32) {
+    %a, %ad = func.call @ggml_matmul_vector_q6_q8_activation_values(%pipelined, %t0, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block0, %q8_input, %q8_word0, %q8_meta) : (i1, index, offset, offset, index, index, index, buffer, index, index) -> (vector<16xi8>, f32)
+    %sum = func.call @ggml_matmul_vector_q6_q8_dot16(%pipelined, %w, %a) : (i1, vector<16xi8>, vector<16xi8>) -> (i32)
+    %sumf = scalar.sitofp %sum : i32 to f32
+    %scale = scalar.mulf %ws, %ad : f32
+    %updated = scalar.fmaf %sumf, %scale, %acc_g0 : f32
+    scf.yield %updated : f32
+  } else {
+    scf.yield %acc_g0 : f32
+  }
+  %t1 = index.constant 1 : index
+  %valid1 = index.cmp ult, %t1, %tokens : index
+  %computed_g1 = scf.if %valid1 -> (f32) {
+    %a, %ad = func.call @ggml_matmul_vector_q6_q8_activation_values(%pipelined, %t1, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block0, %q8_input, %q8_word0, %q8_meta) : (i1, index, offset, offset, index, index, index, buffer, index, index) -> (vector<16xi8>, f32)
+    %sum = func.call @ggml_matmul_vector_q6_q8_dot16(%pipelined, %w, %a) : (i1, vector<16xi8>, vector<16xi8>) -> (i32)
+    %sumf = scalar.sitofp %sum : i32 to f32
+    %scale = scalar.mulf %ws, %ad : f32
+    %updated = scalar.fmaf %sumf, %scale, %acc_g1 : f32
+    scf.yield %updated : f32
+  } else {
+    scf.yield %acc_g1 : f32
+  }
+  %t2 = index.constant 2 : index
+  %valid2 = index.cmp ult, %t2, %tokens : index
+  %computed_g2 = scf.if %valid2 -> (f32) {
+    %a, %ad = func.call @ggml_matmul_vector_q6_q8_activation_values(%pipelined, %t2, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block0, %q8_input, %q8_word0, %q8_meta) : (i1, index, offset, offset, index, index, index, buffer, index, index) -> (vector<16xi8>, f32)
+    %sum = func.call @ggml_matmul_vector_q6_q8_dot16(%pipelined, %w, %a) : (i1, vector<16xi8>, vector<16xi8>) -> (i32)
+    %sumf = scalar.sitofp %sum : i32 to f32
+    %scale = scalar.mulf %ws, %ad : f32
+    %updated = scalar.fmaf %sumf, %scale, %acc_g2 : f32
+    scf.yield %updated : f32
+  } else {
+    scf.yield %acc_g2 : f32
+  }
+  %t3 = index.constant 3 : index
+  %valid3 = index.cmp ult, %t3, %tokens : index
+  %computed_g3 = scf.if %valid3 -> (f32) {
+    %a, %ad = func.call @ggml_matmul_vector_q6_q8_activation_values(%pipelined, %t3, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block0, %q8_input, %q8_word0, %q8_meta) : (i1, index, offset, offset, index, index, index, buffer, index, index) -> (vector<16xi8>, f32)
+    %sum = func.call @ggml_matmul_vector_q6_q8_dot16(%pipelined, %w, %a) : (i1, vector<16xi8>, vector<16xi8>) -> (i32)
+    %sumf = scalar.sitofp %sum : i32 to f32
+    %scale = scalar.mulf %ws, %ad : f32
+    %updated = scalar.fmaf %sumf, %scale, %acc_g3 : f32
+    scf.yield %updated : f32
+  } else {
+    scf.yield %acc_g3 : f32
+  }
+  %t4 = index.constant 4 : index
+  %valid4 = index.cmp ult, %t4, %tokens : index
+  %computed_g4 = scf.if %valid4 -> (f32) {
+    %a, %ad = func.call @ggml_matmul_vector_q6_q8_activation_values(%pipelined, %t4, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block0, %q8_input, %q8_word0, %q8_meta) : (i1, index, offset, offset, index, index, index, buffer, index, index) -> (vector<16xi8>, f32)
+    %sum = func.call @ggml_matmul_vector_q6_q8_dot16(%pipelined, %w, %a) : (i1, vector<16xi8>, vector<16xi8>) -> (i32)
+    %sumf = scalar.sitofp %sum : i32 to f32
+    %scale = scalar.mulf %ws, %ad : f32
+    %updated = scalar.fmaf %sumf, %scale, %acc_g4 : f32
+    scf.yield %updated : f32
+  } else {
+    scf.yield %acc_g4 : f32
+  }
+  func.return %computed_g0, %computed_g1, %computed_g2, %computed_g3, %computed_g4 : f32, f32, f32, f32, f32
+}
+
+func.def inline @ggml_matmul_vector_q6_q8_1_x4_activation_dot(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %capacity = config.get @ggml.workload.token_capacity : index
+  %staged_rows, %k_partitions = func.call pure @ggml_matmul_vector_q8_geometry(%capacity, %input_size0, %output_size0, %weight_format) : (index, index, index, index) -> (index, index)
+  %no_staged_rows = index.constant 0 : index
+  %staged = index.cmp ugt, %staged_rows, %no_staged_rows : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 1), le(%token_count, %capacity)] : index
+  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %n = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %base = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %wave = kernel.subgroup.id : index
+  %rows_per_group = scf.select %staged, %c32, %c8 : index
+  %row_base = index.mul %channel_group, %rows_per_group : index
+  %wave_row = index.mul %wave, %c4 : index
+  %cohort = index.div %lane, %c16 : index
+  %local_row = index.add %wave_row, %cohort : index
+  %row = index.add %row_base, %local_row : index
+  %block_lane = index.rem %lane, %c16 : index
+  %group = index.div %block_lane, %c2 : index
+  %half16 = index.rem %block_lane, %c2 : index
+  %half128 = index.div %group, %c4 : index
+  %group_in_half = index.rem %group, %c4 : index
+  %ql_side = index.rem %group_in_half, %c2 : index
+  %nibble = index.div %group_in_half, %c2 : index
+  %nibble_shift0 = index.mul %nibble, %c4 : index
+  %nibble_shift1 = index.cast %nibble_shift0 : index to i32
+  %nibble_shift = vector.splat %nibble_shift1 : vector<4xi32>
+  %high_shift0 = index.mul %group_in_half, %c2 : index
+  %high_shift1 = index.cast %high_shift0 : index to i32
+  %high_shift = vector.splat %high_shift1 : vector<4xi32>
+  %packet = index.mul %half16, %c4 : index
+  %q8_group_words = index.mul %group_in_half, %c8 : index
+  %q8_word0 = index.add %q8_group_words, %packet : index
+  %q8_meta = index.mul %group_in_half, %c2 : index
+  %blocks = index.div %k, %c256 : index
+  %q8_groups = index.div %k, %c128 : index
+  %q8_block_bytes = index.constant 144 : offset
+  %global_q8_row_bytes = index.scale %q8_groups, %q8_block_bytes : index, offset -> offset
+  %native_block_bytes = index.constant 210 : index
+  %cache_bytes = index.constant 33554432 : index
+  %weight_blocks = index.mul %blocks, %n : index
+  %weight_bytes = index.mul %weight_blocks, %native_block_bytes : index
+  %exceeds_cache = index.cmp uge, %weight_bytes, %cache_bytes : index
+  %pipelined = scalar.andi %staged, %exceeds_cache : i1
+  %full_slab_row_bytes = index.constant 2304 : offset
+  %half_slab_row_bytes = index.constant 1152 : offset
+  %slab_row_bytes = scf.select %pipelined, %half_slab_row_bytes, %full_slab_row_bytes : offset
+  %q8_row_bytes = scf.select %staged, %slab_row_bytes, %global_q8_row_bytes : offset
+  %code_offset = index.constant 16 : offset
+  %record_bytes = index.constant 13440 : offset
+  %scale_add = index.constant 128 : offset
+  %raw_add = index.constant 1152 : offset
+  %staged_row_group = index.div %channel_group, %c2 : index
+  %direct_row_group = index.div %row, %c64 : index
+  %row_group = scf.select %staged, %staged_row_group, %direct_row_group : index
+  %row_lane = index.rem %row, %c64 : index
+  %row_group_block = index.mul %row_group, %blocks : index
+  %input_na, %weight_na = buffer.assume.noalias %input, %weight : buffer, buffer
+  %slab_blocks = scf.select %pipelined, %c4, %c8 : index
+  %full_stage_bytes = index.constant 11520 : offset
+  %q8_stage_bytes = scf.select %staged, %full_stage_bytes, %base : offset
+  %q8_stage = buffer.alloca<workgroup> align(16) %q8_stage_bytes : buffer
+  %q8_input = scf.select %staged, %q8_stage, %input_na : buffer
+  %zero_half = scalar.constant 0.0 : f16
+  %zero_code = scalar.constant 0 : i8
+  %zero_words = vector.constant 0 : vector<4xi32>
+  %prime_d, %prime_s, %prime_ql, %prime_qh = scf.if %staged -> (f16, i8, vector<4xi32>, vector<4xi32>) {
+    %pd, %ps, %pql, %pqh = func.call @ggml_matmul_vector_q6_prefetch_native_words(%weight_na, %row_group_block, %c0, %row_lane, %half16, %group, %half128, %ql_side, %packet) : (buffer, index, index, index, index, index, index, index, index) -> (f16, i8, vector<4xi32>, vector<4xi32>)
+    scf.yield %pd, %ps, %pql, %pqh : f16, i8, vector<4xi32>, vector<4xi32>
+  } else {
+    scf.yield %zero_half, %zero_code, %zero_words, %zero_words : f16, i8, vector<4xi32>, vector<4xi32>
+  }
+  scf.if %pipelined {
+    %prime_q8 = func.call @ggml_matmul_vector_q8_1_x4_prefetch_half_slab(%input_na, %capacity, %c0, %blocks, %global_q8_row_bytes) : (buffer, index, index, index, offset) -> (vector<4xi32>)
+    func.call @ggml_matmul_vector_q8_1_x4_publish_half_slab(%q8_stage, %capacity, %c0, %prime_q8) : (buffer, index, index, vector<4xi32>)
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  }
+  %total_g0, %total_g1, %total_g2, %total_g3, %total_g4, %last_d, %last_s, %last_ql, %last_qh = scf.for %block = [%c0 to %blocks step %c1](%acc_g0 = %zero : f32, %acc_g1 = %zero : f32, %acc_g2 = %zero : f32, %acc_g3 = %zero : f32, %acc_g4 = %zero : f32, %carry_d = %prime_d : f16, %carry_s = %prime_s : i8, %carry_ql = %prime_ql : vector<4xi32>, %carry_qh = %prime_qh : vector<4xi32>) -> (f32, f32, f32, f32, f32, f16, i8, vector<4xi32>, vector<4xi32>) {
+    %block_in_slab = index.rem %block, %slab_blocks : index
+    %slab_boundary = index.cmp eq, %block_in_slab, %c0 : index
+    %direct_stage = scalar.andi %staged, %slab_boundary : i1
+    %true = scalar.constant true : i1
+    %not_pipelined = scalar.xori %pipelined, %true : i1
+    %stage_current = scalar.andi %direct_stage, %not_pipelined : i1
+    scf.if %stage_current {
+      func.call @ggml_matmul_vector_q8_1_x4_stage_slab(%input_na, %q8_stage, %capacity, %block, %blocks, %global_q8_row_bytes) : (buffer, buffer, index, index, index, offset)
+    }
+    %slab_number = index.div %block, %slab_blocks : index
+    %current_slot = index.rem %slab_number, %c2 : index
+    %following_slab = index.add %slab_number, %c1 : index
+    %following_begin = index.mul %following_slab, %slab_blocks : index
+    %following_exists = index.cmp ult, %following_begin, %blocks : index
+    %next_slot = index.rem %following_slab, %c2 : index
+    %staged_future = scalar.andi %pipelined, %following_exists : i1
+    %current_d, %current_s, %current_ql, %current_qh = scf.if %staged -> (f16, i8, vector<4xi32>, vector<4xi32>) {
+      scf.yield %carry_d, %carry_s, %carry_ql, %carry_qh : f16, i8, vector<4xi32>, vector<4xi32>
+    } else {
+      %wd, %ws8, %wql, %wqh = func.call @ggml_matmul_vector_q6_prefetch_native_words(%weight_na, %row_group_block, %block, %row_lane, %half16, %group, %half128, %ql_side, %packet) : (buffer, index, index, index, index, index, index, index, index) -> (f16, i8, vector<4xi32>, vector<4xi32>)
+      scf.yield %wd, %ws8, %wql, %wqh : f16, i8, vector<4xi32>, vector<4xi32>
+    }
+    %d = scalar.extf %current_d : f16 to f32
+    %sf = scalar.sitofp %current_s : i8 to f32
+    %ws = scalar.mulf %d, %sf : f32
+    %nibble_mask = vector.constant 252645135 : vector<4xi32>
+    %high_mask = vector.constant 50529027 : vector<4xi32>
+    %four = vector.constant 4 : vector<4xi32>
+    %ql_shifted = vector.shrui %current_ql, %nibble_shift : vector<4xi32>
+    %low = vector.andi %ql_shifted, %nibble_mask : vector<4xi32>
+    %qh_shifted = vector.shrui %current_qh, %high_shift : vector<4xi32>
+    %high0 = vector.andi %qh_shifted, %high_mask : vector<4xi32>
+    %high = vector.shli %high0, %four : vector<4xi32>
+    %code = vector.ori %low, %high : vector<4xi32>
+    // Guard bits prevent subtraction from borrowing across packed bytes.
+    %guard_mask = vector.constant -2139062144 : vector<4xi32>
+    %center = vector.constant 538976288 : vector<4xi32>
+    %guarded = vector.ori %code, %guard_mask : vector<4xi32>
+    %centered = vector.subi %guarded, %center : vector<4xi32>
+    %signed_code = vector.xori %centered, %guard_mask : vector<4xi32>
+    %w = vector.bitcast %signed_code : vector<4xi32> to vector<16xi8>
+    %next_block = index.add %block, %c1 : index
+    %next_exists = index.cmp ult, %next_block, %blocks : index
+    %has_next = scalar.andi %staged, %next_exists : i1
+    %next_d, %next_s, %next_ql, %next_qh = scf.if %has_next -> (f16, i8, vector<4xi32>, vector<4xi32>) {
+      %wd, %ws8, %wql, %wqh = func.call @ggml_matmul_vector_q6_prefetch_native_words(%weight_na, %row_group_block, %next_block, %row_lane, %half16, %group, %half128, %ql_side, %packet) : (buffer, index, index, index, index, index, index, index, index) -> (f16, i8, vector<4xi32>, vector<4xi32>)
+      scf.yield %wd, %ws8, %wql, %wqh : f16, i8, vector<4xi32>, vector<4xi32>
+    } else {
+      scf.yield %carry_d, %carry_s, %carry_ql, %carry_qh : f16, i8, vector<4xi32>, vector<4xi32>
+    }
+    %input_block = scf.select %staged, %block_in_slab, %block : index
+    %q8_block0 = index.mul %input_block, %c2 : index
+    %q8_block = index.add %q8_block0, %half128 : index
+    %q8_local_block_add = index.scale %q8_block, %q8_block_bytes : index, offset -> offset
+    %slot_row = index.mul %current_slot, %capacity : index
+    %slot_byte_add0 = index.scale %slot_row, %slab_row_bytes : index, offset -> offset
+    %slot_byte_add = scf.select %pipelined, %slot_byte_add0, %base : offset
+    %q8_block_add = index.add %slot_byte_add, %q8_local_block_add : offset
+    %slot_complete = index.cmp eq, %block_in_slab, %c3 : index
+    %publish_next = scalar.andi %staged_future, %slot_complete : i1
+    %next_g0, %next_g1, %next_g2, %next_g3, %next_g4 = scf.if %publish_next -> (f32, f32, f32, f32, f32) {
+      %next_q8 = func.call @ggml_matmul_vector_q8_1_x4_prefetch_half_slab(%input_na, %capacity, %following_begin, %blocks, %global_q8_row_bytes) : (buffer, index, index, index, offset) -> (vector<4xi32>)
+      %v0, %v1, %v2, %v3, %v4 = func.call @ggml_matmul_vector_q6_q8_accumulate(%pipelined, %tokens, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block, %q8_input, %q8_word0, %q8_meta, %w, %ws, %acc_g0, %acc_g1, %acc_g2, %acc_g3, %acc_g4) : (i1, index, offset, offset, index, index, index, buffer, index, index, vector<16xi8>, f32, f32, f32, f32, f32, f32) -> (f32, f32, f32, f32, f32)
+      func.call @ggml_matmul_vector_q8_1_x4_publish_half_slab(%q8_stage, %capacity, %next_slot, %next_q8) : (buffer, index, index, vector<4xi32>)
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      scf.yield %v0, %v1, %v2, %v3, %v4 : f32, f32, f32, f32, f32
+    } else {
+      %v0, %v1, %v2, %v3, %v4 = func.call @ggml_matmul_vector_q6_q8_accumulate(%pipelined, %tokens, %q8_row_bytes, %q8_block_add, %capacity, %current_slot, %q8_block, %q8_input, %q8_word0, %q8_meta, %w, %ws, %acc_g0, %acc_g1, %acc_g2, %acc_g3, %acc_g4) : (i1, index, offset, offset, index, index, index, buffer, index, index, vector<16xi8>, f32, f32, f32, f32, f32, f32) -> (f32, f32, f32, f32, f32)
+      scf.yield %v0, %v1, %v2, %v3, %v4 : f32, f32, f32, f32, f32
+    }
+    scf.yield %next_g0, %next_g1, %next_g2, %next_g3, %next_g4, %next_d, %next_s, %next_ql, %next_qh : f32, f32, f32, f32, f32, f16, i8, vector<4xi32>, vector<4xi32>
+  }
+  %publish_format = config.get @ggml.matmul.vector.publish_format : index
+  func.call @ggml_matmul_vector_q8_publish(%tokens, %n, %rows_per_group, %row_base, %local_row, %block_lane, %channel_group, %output_accumulation, %output_unary_op, %epsilon, %publish_format, %total_g0, %total_g1, %total_g2, %total_g3, %total_g4, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, index, index, index, f32, index, f32, f32, f32, f32, f32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  func.return
+}
+
+
+template.def<@ggml.matmul.vector_activation.core> device @ggml_matmul_vector_activation_core(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %activation_format = config.get @ggml.matmul.vector.activation_format : index
+  %q8_format = index.constant 9 : index
+  %uses_q8 = index.cmp eq, %activation_format, %q8_format : index
+  scf.if %uses_q8 {
+    %q6_format = index.constant 46 : index
+    %uses_q6 = index.cmp eq, %weight_format, %q6_format : index
+    scf.if %uses_q6 {
+      func.call @ggml_matmul_vector_q6_q8_1_x4_activation_dot(%weight_format, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %token_group, %input, %weight, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+    } else {
+      func.call @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%weight_format, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %token_group, %input, %weight, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+    }
+  } else {
+    %token_capacity = config.get @ggml.workload.token_capacity : index
+    %publish_format = config.get @ggml.matmul.vector.publish_format : index
+    %pair_decode = func.call pure @ggml_matmul_vector_uses_f32_decode_pair(%token_capacity, %input_size0, %publish_format) : (index, index, index) -> (i1)
+    scf.if %pair_decode {
+      func.call @ggml_matmul_vector_f32_decode_pair(%weight_format, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %publish_format, %epsilon, %channel_group, %token_group, %input, %weight, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+    } else {
+      func.call @ggml_matmul_vector_f32_activation_dot(%weight_format, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %token_group, %input, %weight, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+    }
+  }
+  template.return
+}

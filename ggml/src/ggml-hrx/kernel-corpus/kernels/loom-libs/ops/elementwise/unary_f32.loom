@@ -1,0 +1,37 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.unary_f32.apply(%arg0: index, %arg1: f32) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_unary_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.unary_f32.op : %value: index where [range(%value, 0, 23)]
+
+kernel.def target(@ggml_unary_f32_gfx11_wave64) export("ggml_unary_f32") @ggml_unary_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %input: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %op = config.get @ggml.unary_f32.op : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %base0 = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base0, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %value = view.load %input_view[%linear] : view<[%count]xf32> -> f32
+    %result = template.apply<@ggml.unary_f32.apply>(%op, %value) : (index, f32) -> (f32)
+    view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

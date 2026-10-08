@@ -1,0 +1,26 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.concat_dim0.f32_body(%row_count: index, %lhs_span: index, %rhs_span: index, %lhs: buffer, %rhs: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_copy_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.concat_dim0_f32.lhs_width : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.concat_dim0_f32.rhs_width : %value: index where [range(%value, 1, 65536)]
+
+kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_concat_dim0_f32") @ggml_concat_dim0_f32(%row_count: index, %lhs_span: index, %rhs_span: index) {
+  %one = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %lhs_width = config.get @ggml.concat_dim0_f32.lhs_width : index
+  %rhs_width = config.get @ggml.concat_dim0_f32.rhs_width : index
+  %output_width = index.add %lhs_width, %rhs_width : index
+  %element_count0 = index.mul %output_width, %row_count : index
+  %element_count = index.assume %element_count0 [range(%element_count0, 1, 1073741824)] : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%workgroup_size, %one, %one) : index
+} launch(%row_count: index, %lhs_span: index, %rhs_span: index, %lhs: buffer, %rhs: buffer, %output: buffer) where [range(%row_count, 1, 1048576), range(%lhs_span, 1, 1073741824), range(%rhs_span, 1, 1073741824)] {
+  template.apply<@ggml.copy.concat_dim0.f32_body>(%row_count, %lhs_span, %rhs_span, %lhs, %rhs, %output) : (index, index, index, buffer, buffer, buffer)
+  kernel.return
+}

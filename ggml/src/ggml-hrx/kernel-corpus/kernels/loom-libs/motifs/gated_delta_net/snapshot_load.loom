@@ -1,0 +1,12 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.snapshot_load.vector4(%state: view<1073741824xf32>, %index: index, %state_offset: index, %selected_state_offset: index, %selected_valid: i1, %zero: vector<4xf32>) -> (vector<4xf32>)
+
+template.def<@llm.gated_delta_net.snapshot_load.vector4> device @llm_gated_delta_net_snapshot_load_vector4(%state: view<1073741824xf32>, %index: index, %state_offset: index, %selected_state_offset: index, %selected_valid: i1, %zero: vector<4xf32>) -> (vector<4xf32>) {
+  %selected_index_local = index.sub %index, %state_offset : index
+  %selected_index = index.add %selected_index_local, %selected_state_offset : index
+  %selected = vector.load %state[%selected_index] : view<1073741824xf32> -> vector<4xf32>
+  %value = scf.select %selected_valid, %selected, %zero : vector<4xf32>
+  template.return %value : vector<4xf32>
+}

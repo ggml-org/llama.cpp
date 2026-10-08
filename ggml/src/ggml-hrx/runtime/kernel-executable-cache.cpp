@@ -30,22 +30,69 @@ static void append_u32(std::vector<uint8_t> & bytes, uint32_t value) {
     std::memcpy(bytes.data() + offset, &value, sizeof(value));
 }
 
+static void append_u64(std::vector<uint8_t> & bytes, uint64_t value) {
+    const size_t offset = bytes.size();
+    bytes.resize(offset + sizeof(value));
+    std::memcpy(bytes.data() + offset, &value, sizeof(value));
+}
+
 static bool pack_kernel_constants(const KernelDefinition & definition,
-                                  const Dispatch &         dispatch,
-                                  std::vector<uint8_t> &   constants) {
+                                  const KernelSpecialization & specialization,
+                                  size_t                       expected_size,
+                                  std::vector<uint8_t> &       constants) {
     constants.clear();
+    const size_t parameter_count = definition.launch_parameters.size();
+    if (parameter_count == 0) {
+        return expected_size == 0;
+    }
+    if (expected_size % parameter_count != 0) {
+        GGML_LOG_ERROR("%s: launch scalar ABI size does not match manifest for %s\n", __func__,
+                       kernel_definition_name(definition).c_str());
+        return false;
+    }
+    const size_t scalar_size = expected_size / parameter_count;
+    if (scalar_size != sizeof(uint32_t) && scalar_size != sizeof(uint64_t)) {
+        GGML_LOG_ERROR("%s: unsupported launch scalar ABI width %zu for %s\n", __func__, scalar_size,
+                       kernel_definition_name(definition).c_str());
+        return false;
+    }
     for (const KernelScalarDefinition & parameter : definition.launch_parameters) {
         const char * name = parameter.name != nullptr ? parameter.name : "";
         const char * type = parameter.type != nullptr ? parameter.type : "";
-        const auto   item = dispatch.kernel.integer_parameters.find(name);
-        if (item == dispatch.kernel.integer_parameters.end() || std::strcmp(type, "index") != 0 || item->second < 0 ||
-            static_cast<uint64_t>(item->second) > std::numeric_limits<uint32_t>::max()) {
+        const auto   item = specialization.integer_parameters.find(name);
+        if (item == specialization.integer_parameters.end() || std::strcmp(type, "index") != 0 || item->second < 0 ||
+            (scalar_size == sizeof(uint32_t) &&
+             static_cast<uint64_t>(item->second) > std::numeric_limits<uint32_t>::max())) {
             constants.clear();
             GGML_LOG_ERROR("%s: invalid launch scalar %s for %s\n", __func__, name,
                            kernel_definition_name(definition).c_str());
             return false;
         }
-        append_u32(constants, static_cast<uint32_t>(item->second));
+        if (scalar_size == sizeof(uint32_t)) {
+            append_u32(constants, static_cast<uint32_t>(item->second));
+        } else {
+            append_u64(constants, static_cast<uint64_t>(item->second));
+        }
+    }
+    return true;
+}
+
+static bool build_workload_arguments(const KernelDefinition &       definition,
+                                     const KernelSpecialization &   specialization,
+                                     std::vector<int64_t> &           workload) {
+    workload.clear();
+    workload.reserve(definition.workload_parameters.size());
+    for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
+        const char * name = parameter.name != nullptr ? parameter.name : "";
+        const char * type = parameter.type != nullptr ? parameter.type : "";
+        const auto   item = specialization.integer_parameters.find(name);
+        if (item == specialization.integer_parameters.end() || std::strcmp(type, "index") != 0) {
+            GGML_LOG_ERROR("%s: invalid workload scalar %s for %s\n", __func__, name,
+                           kernel_definition_name(definition).c_str());
+            workload.clear();
+            return false;
+        }
+        workload.push_back(item->second);
     }
     return true;
 }
@@ -55,15 +102,18 @@ static std::string kernel_executable_key(const KernelDefinition & definition,
                                          const char *             target) {
     std::ostringstream out;
     out << (target != nullptr ? target : "") << '|' << definition.source_digest << '|' << definition.symbol
-        << "|recipe=" << definition.compile_recipe.mode;
-    for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
-        const char * name = parameter.name != nullptr ? parameter.name : "";
-        const auto   item = dispatch.kernel.integer_parameters.find(name);
-        out << '|' << name << '=';
-        if (item == dispatch.kernel.integer_parameters.end()) {
-            out << "<missing>";
-        } else {
-            out << item->second;
+        << "|recipe=" << definition.compile_recipe.mode << "|workload="
+        << (dispatch.kernel.workload_specialization == WorkloadSpecialization::Dynamic ? "dynamic" : "exact");
+    if (dispatch.kernel.workload_specialization == WorkloadSpecialization::Exact) {
+        for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
+            const char * name = parameter.name != nullptr ? parameter.name : "";
+            const auto   item = dispatch.kernel.integer_parameters.find(name);
+            out << '|' << name << '=';
+            if (item == dispatch.kernel.integer_parameters.end()) {
+                out << "<missing>";
+            } else {
+                out << item->second;
+            }
         }
     }
     for (const KernelCompileConfig & config : definition.compile_config) {
@@ -123,17 +173,9 @@ static bool build_compile_request(const KernelDefinition &   definition,
         request.config_storage.push_back(config);
     }
 
-    request.workload.reserve(definition.workload_parameters.size());
-    for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
-        const char * name = parameter.name != nullptr ? parameter.name : "";
-        const char * type = parameter.type != nullptr ? parameter.type : "";
-        const auto   item = dispatch.kernel.integer_parameters.find(name);
-        if (item == dispatch.kernel.integer_parameters.end() || std::strcmp(type, "index") != 0) {
-            GGML_LOG_ERROR("%s: invalid workload scalar %s for %s\n", __func__, name,
-                           kernel_definition_name(definition).c_str());
-            return false;
-        }
-        request.workload.push_back(item->second);
+    request.specialize_workload = dispatch.kernel.workload_specialization == WorkloadSpecialization::Exact;
+    if (!build_workload_arguments(definition, dispatch.kernel, request.workload)) {
+        return false;
     }
     return true;
 }
@@ -141,7 +183,6 @@ static bool build_compile_request(const KernelDefinition &   definition,
 static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExecutablePrepareContext & context,
                                                                 const KernelDefinition &               definition,
                                                                 const Dispatch &                       dispatch,
-                                                                const std::vector<uint8_t> &           constants,
                                                                 const std::string &                    key,
                                                                 ggml_hrx_loom_jit_compile_result &     compiled,
                                                                 std::string &                          error_message) {
@@ -156,8 +197,8 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
         return nullptr;
     }
 
-    auto executable    = std::make_shared<KernelExecutable>();
-    executable->launch = compiled.launch_config;
+    auto executable            = std::make_shared<KernelExecutable>();
+    executable->launch_program = std::exchange(compiled.launch_program, nullptr);
     if (ErrorResult error =
             take_status(hrx_executable_load_data(context.device, compiled.hsaco_data, compiled.hsaco_size, "amdgpu",
                                                  context.target, &executable->executable))) {
@@ -177,15 +218,14 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
         return nullptr;
     }
-    if (executable->export_info.binding_count != dispatch.bindings.size() ||
-        executable->export_info.constant_byte_length != constants.size() ||
+    const size_t launch_parameter_count = definition.launch_parameters.size();
+    const bool constant_abi_valid = launch_parameter_count == 0 ? executable->export_info.constant_byte_length == 0 :
+                                                                  executable->export_info.constant_byte_length == launch_parameter_count * sizeof(uint32_t) ||
+                                                                      executable->export_info.constant_byte_length == launch_parameter_count * sizeof(uint64_t);
+    if (executable->launch_program == nullptr || executable->export_info.binding_count != dispatch.bindings.size() ||
+        !constant_abi_valid ||
         executable->export_info.parameter_count != dispatch.bindings.size() + definition.launch_parameters.size()) {
         error_message = "compiled ABI does not match manifest for " + key;
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
-        return nullptr;
-    }
-    if (executable->launch.workgroup_count[0] == 0 || executable->launch.workgroup_size[0] == 0) {
-        error_message = "compiled launch geometry is empty for " + key;
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
         return nullptr;
     }
@@ -224,7 +264,26 @@ class KernelExecutableCacheEntry {
     std::atomic<LoadState> load_state = LoadState::Unloaded;
 };
 
+static bool prepare_kernel_invocation(const KernelExecutableCacheEntry & entry,
+                                      const KernelExecutable &           executable,
+                                      const KernelSpecialization &       specialization,
+                                      std::vector<uint8_t> &             constants,
+                                      ggml_hrx_loom_jit_launch_config &  launch) {
+    std::vector<int64_t> workload;
+    if (!build_workload_arguments(*entry.definition, specialization, workload)) {
+        return false;
+    }
+    if (ErrorResult error = take_status(ggml_hrx_loom_jit_launch_program_evaluate(
+            executable.launch_program, workload.empty() ? nullptr : workload.data(), workload.size(), &launch))) {
+        GGML_LOG_ERROR("%s: evaluate launch %s: %s\n", __func__, entry.key.c_str(), error->c_str());
+        return false;
+    }
+    return pack_kernel_constants(*entry.definition, specialization, executable.export_info.constant_byte_length,
+                                 constants);
+}
+
 KernelExecutable::~KernelExecutable() {
+    ggml_hrx_loom_jit_launch_program_release(launch_program);
     if (executable != nullptr) {
         hrx_executable_release(executable);
     }
@@ -265,12 +324,8 @@ bool KernelExecutableCache::ensure_jit_locked(const char * target, std::string &
 
 KernelExecutableRef KernelExecutableCache::get_or_compile(const KernelExecutablePrepareContext & context,
                                                           const KernelDefinition &               definition,
-                                                          const Dispatch &                       dispatch,
-                                                          std::vector<uint8_t> &                 constants) {
+                                                          const Dispatch &                       dispatch) {
     KernelExecutableRef ref;
-    if (!pack_kernel_constants(definition, dispatch, constants)) {
-        return ref;
-    }
 
     const std::string        key = kernel_executable_key(definition, dispatch, context.target);
     LoomKernelCompileRequest request;
@@ -300,7 +355,9 @@ KernelExecutableRef KernelExecutableCache::get_or_compile(const KernelExecutable
 
 std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const KernelExecutablePrepareContext & context,
                                                                      const KernelExecutableRef &            ref,
-                                                                     const std::vector<uint8_t> &           constants) {
+                                                                     const KernelSpecialization & specialization,
+                                                                     std::vector<uint8_t> &       constants,
+                                                                     ggml_hrx_loom_jit_launch_config & launch) {
     if (!ref.valid()) {
         return nullptr;
     }
@@ -308,7 +365,11 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
     KernelExecutableCacheEntry &          entry      = *ref.entry;
     KernelExecutableCacheEntry::LoadState load_state = entry.load_state.load(std::memory_order_acquire);
     if (load_state == KernelExecutableCacheEntry::LoadState::Loaded) {
-        return std::atomic_load_explicit(&entry.executable, std::memory_order_acquire);
+        std::shared_ptr<KernelExecutable> executable =
+            std::atomic_load_explicit(&entry.executable, std::memory_order_acquire);
+        return executable != nullptr && prepare_kernel_invocation(entry, *executable, specialization, constants, launch)
+                   ? executable
+                   : nullptr;
     }
     if (load_state == KernelExecutableCacheEntry::LoadState::Failed) {
         std::lock_guard<std::mutex> entry_lock(entry.mutex);
@@ -329,7 +390,11 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
             GGML_LOG_ERROR("%s: %s\n", __func__, entry.error.c_str());
             return nullptr;
         }
-        return std::atomic_load_explicit(&entry.executable, std::memory_order_acquire);
+        std::shared_ptr<KernelExecutable> executable =
+            std::atomic_load_explicit(&entry.executable, std::memory_order_acquire);
+        return executable != nullptr && prepare_kernel_invocation(entry, *executable, specialization, constants, launch)
+                   ? executable
+                   : nullptr;
     }
 
     LoomCompiledKernelRef compiled_ref;
@@ -360,7 +425,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
 
     ggml_hrx_loom_jit_compile_result  compiled   = compiled_ref->take_result();
     std::shared_ptr<KernelExecutable> executable = load_kernel_executable(
-        context, *entry.definition, entry.dispatch, constants, entry.key, compiled, error_message);
+        context, *entry.definition, entry.dispatch, entry.key, compiled, error_message);
 
     if (executable != nullptr) {
         compiled.reset();
@@ -386,15 +451,19 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
             cache_.erase(found);
         }
     }
+    if (executable != nullptr && !prepare_kernel_invocation(entry, *executable, specialization, constants, launch)) {
+        return nullptr;
+    }
     return executable;
 }
 
 std::shared_ptr<KernelExecutable> KernelExecutableCache::prepare(const KernelExecutablePrepareContext & context,
                                                                  const KernelDefinition &               definition,
                                                                  const Dispatch &                       dispatch,
-                                                                 std::vector<uint8_t> &                 constants) {
-    const KernelExecutableRef ref = get_or_compile(context, definition, dispatch, constants);
-    return materialize(context, ref, constants);
+                                                                 std::vector<uint8_t> &                 constants,
+                                                                 ggml_hrx_loom_jit_launch_config &      launch) {
+    const KernelExecutableRef ref = get_or_compile(context, definition, dispatch);
+    return materialize(context, ref, dispatch.kernel, constants, launch);
 }
 
 void KernelExecutableCache::clear() {

@@ -1,17 +1,14 @@
 #include "dispatch-registry.h"
 
-#include "dispatch-add.h"
-#include "dispatch-gather-add.h"
-#include "dispatch-llm-matmul.h"
-#include "dispatch-moe-router.h"
-#include "dispatch-qwen-attention-postprocess.h"
-#include "dispatch-qwen-flash-attention.h"
-#include "dispatch-qwen-matmul.h"
-#include "dispatch-qwen-preamble.h"
-#include "dispatch-rmsnorm.h"
-#include "dispatch-routed-ffn.h"
+#include "common/dispatch-common.h"
+#include "llm/dispatch-attention-qkv.h"
+#include "llm/dispatch-gated-delta-net.h"
+#include "llm/dispatch-ssm-conv.h"
+#include "qwen/dispatch-qwen.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 namespace ggml::hrx {
@@ -20,6 +17,7 @@ namespace {
 static constexpr size_t kOpCount = static_cast<size_t>(GGML_OP_COUNT);
 
 static const std::vector<DispatchRegistration> kEmptyRegistrations;
+static const std::vector<DispatchActivationConsumerRegistration> kEmptyActivationConsumers;
 
 static bool valid_root_op(ggml_op op) {
     return op >= 0 && static_cast<size_t>(op) < kOpCount;
@@ -31,22 +29,24 @@ static void sort_registrations(std::vector<DispatchRegistration> & registrations
         [](const DispatchRegistration & lhs, const DispatchRegistration & rhs) { return lhs.priority > rhs.priority; });
 }
 
-static void register_llm_dispatches(DispatchRegistryBuilder & builder) {
-    register_qwen_attention_postprocess_dispatches(builder);
-    register_qwen_flash_attention_dispatches(builder);
-    register_qwen_matmul_dispatches(builder);
-    register_llm_matmul_dispatches(builder);
-    register_routed_ffn_dispatches(builder);
-    register_qwen_preamble_dispatches(builder);
-    register_qwen_rmsnorm_dispatches(builder);
-    register_moe_router_dispatches(builder);
+static bool qwen_dispatch_disabled_from_environment() {
+    const char * value = std::getenv("GGML_HRX_DISABLE_QWEN_DISPATCH");
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    return std::strcmp(value, "0") != 0 && std::strcmp(value, "false") != 0 && std::strcmp(value, "FALSE") != 0 &&
+           std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
 }
 
-static DispatchRegistry build_llm_registry() {
+static DispatchRegistry build_registry(bool include_qwen) {
     DispatchRegistryBuilder builder;
-    register_add_dispatch(builder);
-    register_gather_add_dispatch(builder);
-    register_llm_dispatches(builder);
+    register_common_dispatches(builder);
+    register_llm_attention_qkv_dispatches(builder);
+    register_llm_gated_delta_net_dispatch(builder);
+    register_llm_ssm_conv_dispatch(builder);
+    if (include_qwen) {
+        register_qwen_dispatches(builder);
+    }
     return builder.build();
 }
 
@@ -110,6 +110,14 @@ const std::vector<DispatchRegistration> & DispatchRegistry::registrations_for_ro
     return registrations_by_root_[static_cast<size_t>(root_op)].ordered;
 }
 
+const std::vector<DispatchActivationConsumerRegistration> &
+DispatchRegistry::activation_consumers_for_root(ggml_op root_op) const {
+    if (!valid_root_op(root_op) || activation_consumers_by_root_.empty()) {
+        return kEmptyActivationConsumers;
+    }
+    return activation_consumers_by_root_[static_cast<size_t>(root_op)];
+}
+
 void DispatchRegistryBuilder::add(DispatchRegistration registration) {
     if (!valid_root_op(registration.root_op) || registration.matcher == nullptr) {
         return;
@@ -127,9 +135,24 @@ void DispatchRegistryBuilder::add(DispatchRegistration registration) {
     }
 }
 
+void DispatchRegistryBuilder::add_activation_consumer(DispatchActivationConsumerRegistration registration) {
+    if (!valid_root_op(registration.root_op) || registration.accepts == nullptr ||
+        registration.accepted_formats == DispatchActivationInputNone) {
+        return;
+    }
+    if (registry_.activation_consumers_by_root_.empty()) {
+        registry_.activation_consumers_by_root_.resize(kOpCount);
+    }
+    registry_.activation_consumers_by_root_[static_cast<size_t>(registration.root_op)].push_back(
+        std::move(registration));
+}
+
 DispatchRegistry DispatchRegistryBuilder::build() {
     if (registry_.registrations_by_root_.empty()) {
         registry_.registrations_by_root_.resize(kOpCount);
+    }
+    if (registry_.activation_consumers_by_root_.empty()) {
+        registry_.activation_consumers_by_root_.resize(kOpCount);
     }
     for (DispatchRegistry::RegistrationGroup & group : registry_.registrations_by_root_) {
         sort_registrations(group.fused);
@@ -142,14 +165,18 @@ DispatchRegistry DispatchRegistryBuilder::build() {
 }
 
 const DispatchRegistry * find_dispatch_registry(const DispatchTarget & target) {
-    static const DispatchRegistry gfx1100_registry = build_llm_registry();
-    static const DispatchRegistry gfx1151_registry = build_llm_registry();
+    static const DispatchRegistry gfx1100_registry              = build_registry(true);
+    static const DispatchRegistry gfx1100_generic_only_registry = build_registry(false);
+    static const DispatchRegistry gfx1151_registry              = build_registry(true);
+    static const DispatchRegistry gfx1151_generic_only_registry = build_registry(false);
+
+    const bool qwen_disabled = qwen_dispatch_disabled_from_environment();
 
     if (target.architecture == "gfx1100") {
-        return &gfx1100_registry;
+        return qwen_disabled ? &gfx1100_generic_only_registry : &gfx1100_registry;
     }
     if (target.architecture == "gfx1151") {
-        return &gfx1151_registry;
+        return qwen_disabled ? &gfx1151_generic_only_registry : &gfx1151_registry;
     }
     return nullptr;
 }

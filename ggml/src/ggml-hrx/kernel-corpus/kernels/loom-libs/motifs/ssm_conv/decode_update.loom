@@ -1,0 +1,11 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.dconv4_silu(%x0: f32, %x1: f32, %x2: f32, %x3: f32, %w0: f32, %w1: f32, %w2: f32, %w3: f32) -> (f32)
+
+template.decl @llm.ssm_conv.decode_update(%prev0: f32, %prev1: f32, %prev2: f32, %new_x: f32, %w0: f32, %w1: f32, %w2: f32, %w3: f32) -> (f32)
+
+template.def<@llm.ssm_conv.decode_update> device @llm_ssm_conv_decode_update(%prev0: f32, %prev1: f32, %prev2: f32, %new_x: f32, %w0: f32, %w1: f32, %w2: f32, %w3: f32) -> (f32) {
+  %result = template.apply<@llm.ssm_conv.dconv4_silu>(%prev0, %prev1, %prev2, %new_x, %w0, %w1, %w2, %w3) : (f32, f32, f32, f32, f32, f32, f32, f32) -> (f32)
+  template.return %result : f32
+}

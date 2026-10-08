@@ -1,0 +1,21 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.prefill_finish(%state: buffer, %filter: buffer, %edges: buffer, %output: buffer, %cache: buffer)
+
+config.decl @llm.ssm_conv.generic.d_inner : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+
+amdgpu.target<gfx11-generic> @llm_ssm_conv_prefill_finish_wave32 {subgroup_size = 32}
+
+kernel.def target(@llm_ssm_conv_prefill_finish_wave32) @llm_ssm_conv_dconv4_silu_prefill_finish_f32() {
+  %width = config.get @llm.ssm_conv.generic.d_inner : index
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %round = index.constant 255 : index
+  %rounded = index.add %width, %round : index
+  %groups = index.div %rounded, %threads : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%state: buffer, %filter: buffer, %edges: buffer, %output: buffer, %cache: buffer) {
+  template.apply<@llm.ssm_conv.prefill_finish>(%state, %filter, %edges, %output, %cache) : (buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

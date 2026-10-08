@@ -1,0 +1,114 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Publishes an unrotated prefix and a partially rotated suffix directly into
+// one packed head. The source remains in its original strided full-head layout.
+template.decl @ggml.rope_f32.rotate_neox_packet(%position: f32, %input_base: index, %pair_channel: index, %half_n_dims: index, %bounded_input_span: index, %mscale: f32, %input: buffer, %theta_packet: vector<2xf32>, %freq_factors_packet: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+template.decl @ggml.rope_f32.rotate_normal_packet(%position: f32, %input_base: index, %normal_channel: index, %bounded_input_span: index, %mscale: f32, %input: buffer, %theta_packet: vector<2xf32>, %freq_factors_packet: vector<2xf32>) -> (vector<4xf32>)
+template.decl @ggml.rope_f32.copy_packet(%input_base: index, %normal_channel: index, %bounded_input_span: index, %input: buffer) -> (vector<4xf32>)
+
+amdgpu.target<gfx11-generic> @ggml_rope_concat_f32_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rope_concat_f32.prefix_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_concat_f32.rope_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_concat_f32.n_dims : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_concat_f32.head_count : %value: index where [range(%value, 1, 64)]
+config.decl @ggml.rope_concat_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+config.decl @ggml.rope_concat_f32.input_stride1 : %value: index where [range(%value, 4, 1073741824)]
+config.decl @ggml.rope_concat_f32.input_stride2 : %value: index where [range(%value, 4, 1073741824)]
+config.decl @ggml.rope_concat_f32.input_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_concat_f32.mscale : f32
+config.decl @ggml.rope_concat_f32.mode : %value: index where [range(%value, 0, 2)]
+
+kernel.def target(@ggml_rope_concat_f32_gfx11_wave32) export("ggml_rope_concat_f32") @ggml_rope_concat_f32(%token_count: index) {
+  %token_capacity = config.get @ggml.rope_concat_f32.token_capacity : index
+  %head_count = config.get @ggml.rope_concat_f32.head_count : index
+  %prefix_size = config.get @ggml.rope_concat_f32.prefix_size : index
+  %rope_size = config.get @ggml.rope_concat_f32.rope_size : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %output_size = index.add %prefix_size, %rope_size : index
+  %packet_count = index.div %output_size, %c4 : index
+  kernel.launch.config workgroups(%head_count, %token_capacity, %c1) workgroup_size(%packet_count, %c1, %c1) : index
+} launch(%token_count: index, %positions: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %token_capacity = config.get @ggml.rope_concat_f32.token_capacity : index
+  %head_count0 = config.get @ggml.rope_concat_f32.head_count : index
+  %prefix_size0 = config.get @ggml.rope_concat_f32.prefix_size : index
+  %rope_size0 = config.get @ggml.rope_concat_f32.rope_size : index
+  %n_dims0 = config.get @ggml.rope_concat_f32.n_dims : index
+  %input_stride1_0 = config.get @ggml.rope_concat_f32.input_stride1 : index
+  %input_stride2_0 = config.get @ggml.rope_concat_f32.input_stride2 : index
+  %input_span0 = config.get @ggml.rope_concat_f32.input_span : index
+  %mscale = config.get @ggml.rope_concat_f32.mscale : f32
+  %mode = config.get @ggml.rope_concat_f32.mode : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_input_span = index.assume %input_span0 [range(%input_span0, 1, 1073741824)] : index
+  %head_count, %prefix_size, %rope_size, %n_dims = index.assume %head_count0, %prefix_size0, %rope_size0, %n_dims0 [range(%head_count0, 1, 64), range(%prefix_size0, 4, 1024), range(%rope_size0, 4, 1024), range(%n_dims0, 4, 1024), mul(%prefix_size0, 4), mul(%rope_size0, 4), mul(%n_dims0, 4), le(%n_dims0, %rope_size0)] : index, index, index, index
+  %input_stride1, %input_stride2 = index.assume %input_stride1_0, %input_stride2_0 [range(%input_stride1_0, 4, 1073741824), range(%input_stride2_0, 4, 1073741824)] : index, index
+  %output_size0 = index.add %prefix_size, %rope_size : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 8, 1024), mul(%output_size0, 4)] : index
+  %head = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %packet0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %mode_neox = index.constant 2 : index
+  %c0_offset = index.constant 0 : offset
+  %prefix_packet_count = index.div %prefix_size, %c4 : index
+  %rotary_packet_count = index.div %n_dims, %c4 : index
+  %packet_count = index.div %output_size, %c4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %active_packet = index.cmp ult, %packet0, %packet_count : index
+  %publish = scalar.andi %valid_token, %active_packet : i1
+  %token = scf.select %valid_token, %token0, %c0 : index
+  %is_prefix = index.cmp ult, %packet0, %prefix_packet_count : index
+  %rope_packet0 = index.sub %packet0, %prefix_packet_count : index
+  %rope_packet = scf.select %is_prefix, %c0, %rope_packet0 : index
+  %rotary_packet = index.cmp ult, %rope_packet, %rotary_packet_count : index
+  %tail_packet = index.cmp uge, %rope_packet, %rotary_packet_count : index
+  %is_neox = index.cmp eq, %mode, %mode_neox : index
+  %positions_noalias, %input_noalias, %theta_noalias, %freq_factors_noalias, %output_noalias = buffer.assume.noalias %positions, %input, %theta, %freq_factors, %output : buffer, buffer, buffer, buffer, buffer
+  scf.if %publish {
+    %packet = index.assume %packet0 [lt(%packet0, %packet_count)] : index
+    %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+    %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%head_count]x[%output_size]xf32>
+    %input_token_offset = index.mul %token, %input_stride2 : index
+    %input_head_offset = index.mul %head, %input_stride1 : index
+    %input_base = index.add %input_token_offset, %input_head_offset : index
+    %output_channel = index.mul %packet, %c4 : index
+    scf.if %is_prefix {
+      %values = template.apply<@ggml.rope_f32.copy_packet>(%input_base, %output_channel, %bounded_input_span, %input_noalias) : (index, index, index, buffer) -> (vector<4xf32>)
+      vector.store %values, %output_view[%token, %head, %output_channel] : vector<4xf32>, view<[%bounded_token_count]x[%head_count]x[%output_size]xf32>
+    } else {
+      %rope_input_base = index.add %input_base, %prefix_size : index
+      %rope_channel = index.mul %rope_packet, %c4 : index
+      scf.if %rotary_packet {
+        %half_n_dims = index.div %n_dims, %c2 : index
+        %pair_channel = index.mul %rope_packet, %c2 : index
+        %theta_view = buffer.view %theta_noalias[%c0_offset] : buffer -> view<[%half_n_dims]xf32>
+        %freq_factors_view = buffer.view %freq_factors_noalias[%c0_offset] : buffer -> view<[%half_n_dims]xf32>
+        %position_i32 = view.load %positions_view[%token] : view<[%bounded_token_count]xi32> -> i32
+        %position = scalar.sitofp %position_i32 : i32 to f32
+        %theta_packet = vector.load %theta_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
+        %freq_factors_packet = vector.load %freq_factors_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
+        scf.if %is_neox {
+          %paired_channel = index.add %pair_channel, %half_n_dims : index
+          %scaled_low, %scaled_high = template.apply<@ggml.rope_f32.rotate_neox_packet>(%position, %rope_input_base, %pair_channel, %half_n_dims, %bounded_input_span, %mscale, %input_noalias, %theta_packet, %freq_factors_packet) : (f32, index, index, index, index, f32, buffer, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+          %low_output_channel = index.add %prefix_size, %pair_channel : index
+          %high_output_channel = index.add %prefix_size, %paired_channel : index
+          vector.store %scaled_low, %output_view[%token, %head, %low_output_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%output_size]xf32>
+          vector.store %scaled_high, %output_view[%token, %head, %high_output_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%output_size]xf32>
+        } else {
+          %rotated = template.apply<@ggml.rope_f32.rotate_normal_packet>(%position, %rope_input_base, %rope_channel, %bounded_input_span, %mscale, %input_noalias, %theta_packet, %freq_factors_packet) : (f32, index, index, index, f32, buffer, vector<2xf32>, vector<2xf32>) -> (vector<4xf32>)
+          vector.store %rotated, %output_view[%token, %head, %output_channel] : vector<4xf32>, view<[%bounded_token_count]x[%head_count]x[%output_size]xf32>
+        }
+      }
+      scf.if %tail_packet {
+        %values = template.apply<@ggml.rope_f32.copy_packet>(%rope_input_base, %rope_channel, %bounded_input_span, %input_noalias) : (index, index, index, buffer) -> (vector<4xf32>)
+        vector.store %values, %output_view[%token, %head, %output_channel] : vector<4xf32>, view<[%bounded_token_count]x[%head_count]x[%output_size]xf32>
+      }
+    }
+  }
+  kernel.return
+}

@@ -1,0 +1,90 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.get_rows_f32.load_vector4_common(%weight_format: index, %publish: i1, %valid_token_id: i1, %token: index, %row_count: index, %hidden_size: index, %channel: index, %weight: buffer) -> (vector<4xf32>)
+
+amdgpu.target<gfx11-generic> @ggml_get_rows_scale_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), mul(%value, 4)]
+config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
+config.decl @ggml.get_rows_scale_f32.scale : f32
+config.decl @ggml.get_rows_scale_f32.bias : f32
+
+kernel.def target(@ggml_get_rows_scale_f32_gfx11_wave64) export("ggml_get_rows_scale_f32") @ggml_get_rows_scale_f32(%token_count: index, %row_count: index, %hidden_size: index) {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %hidden_capacity = config.get @ggml.get_rows_f32.hidden_capacity : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %packet_count = index.div %hidden_capacity, %c4 : index
+  %padded_packet_count = index.add %packet_count, %c255 : index
+  %packet_tiles = index.div %padded_packet_count, %c256 : index
+  kernel.launch.config workgroups(%packet_tiles, %token_capacity, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %raw_output: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %hidden_capacity = config.get @ggml.get_rows_f32.hidden_capacity : index
+  %weight_format = config.get @ggml.get_rows_f32.weight_format : index
+  %scale = config.get @ggml.get_rows_scale_f32.scale : f32
+  %bias = config.get @ggml.get_rows_scale_f32.bias : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 1073741824), mul(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %packet_tile_base = index.mul %channel_tile, %c256 : index
+  %packet0 = index.add %packet_tile_base, %workitem : index
+  %packet_count = index.div %bounded_hidden_size, %c4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %valid_packet = index.cmp ult, %packet0, %packet_count : index
+  %publish = scalar.andi %valid_token, %valid_packet : i1
+  %token = scf.select %valid_token, %token0, %c0 : index
+  %packet = scf.select %valid_packet, %packet0, %c0 : index
+  %token_ids_na, %weight_na, %raw_output_na, %output_na = buffer.assume.noalias %token_ids, %weight, %raw_output, %output : buffer, buffer, buffer, buffer
+  %token_ids_view = buffer.view %token_ids_na[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %token_id_raw = view.load %token_ids_view[%token] : view<[%bounded_token_count]xi32> -> i32
+  %token_id_nonnegative = scalar.cmpi sge, %token_id_raw, %c0_i32 : i32
+  %safe_token_id_i32 = scf.select %token_id_nonnegative, %token_id_raw, %c0_i32 : i32
+  %token_id = index.cast %safe_token_id_i32 : i32 to index
+  %channel0 = index.mul %packet, %c4 : index
+  %channel_end0 = index.add %channel0, %c4 : index
+  %channel, %channel_end = index.assume %channel0, %channel_end0 [le(%channel_end0, %bounded_hidden_size)] : index, index
+  %values = template.apply<@ggml.get_rows_f32.load_vector4_common>(%weight_format, %publish, %token_id_nonnegative, %token_id, %bounded_row_count, %bounded_hidden_size, %channel, %weight_na) : (index, i1, i1, index, index, index, index, buffer) -> (vector<4xf32>)
+  %scale_vector = vector.splat %scale : vector<4xf32>
+  %bias_vector = vector.splat %bias : vector<4xf32>
+  %scaled = vector.mulf %values, %scale_vector : vector<4xf32>
+  %result = vector.addf %scaled, %bias_vector : vector<4xf32>
+  scf.if %publish {
+    %raw_output_view = buffer.view %raw_output_na[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    %output_view = buffer.view %output_na[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    vector.store %values, %raw_output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    vector.store %result, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_get_rows_scale_f32_f32_case {
+  %token_count = check.literal value(4) : index
+  %row_count = check.literal value(4) : index
+  %hidden_size = check.literal value(4) : index
+  %token_ids = check.generate.iota offset(3) step(-1) : tensor<4xi32>
+  %weight = check.generate.fill value(2.0) : tensor<4x4xf32>
+  %raw_output = check.generate.fill value(0.0) : tensor<4x4xf32>
+  %output = check.generate.fill value(0.0) : tensor<4x4xf32>
+  %expected_raw = check.generate.fill value(2.0) : tensor<4x4xf32>
+  %expected = check.generate.fill value(4.25) : tensor<4x4xf32>
+  kernel.launch @ggml_get_rows_scale_f32[%token_count, %row_count, %hidden_size](%token_count, %row_count, %hidden_size, %token_ids, %weight, %raw_output, %output) : [index, index, index](index, index, index, tensor<4xi32>, tensor<4x4xf32>, tensor<4x4xf32>, tensor<4x4xf32>)
+  check.expect.close actual(%raw_output) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<4x4xf32>
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4x4xf32>
+  check.return
+}
+
+check.benchmark<@ggml_get_rows_scale_f32_f32_case> @ggml_get_rows_scale_f32_f32

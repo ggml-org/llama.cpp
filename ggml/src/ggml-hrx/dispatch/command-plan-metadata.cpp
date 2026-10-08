@@ -37,6 +37,7 @@ static bool moe_routing_bundle_matches(const CommandPlanMoeRoutingBundle & lhs,
 void CommandPlanMetadata::clear() {
     generated_resources_.clear();
     alternate_values_.clear();
+    activation_publication_diagnostics_.clear();
     moe_routing_bundles_.clear();
 }
 
@@ -51,12 +52,20 @@ bool CommandPlanMetadata::append(CommandPlanMetadata && other, Status & status) 
             return false;
         }
     }
+    for (CommandPlanActivationPublicationDiagnostic & diagnostic : other.activation_publication_diagnostics_) {
+        append_activation_publication_diagnostic(std::move(diagnostic));
+    }
     for (CommandPlanMoeRoutingBundle & bundle : other.moe_routing_bundles_) {
         if (!append_moe_routing_bundle(std::move(bundle), status)) {
             return false;
         }
     }
     return true;
+}
+
+void CommandPlanMetadata::append_activation_publication_diagnostic(
+    CommandPlanActivationPublicationDiagnostic diagnostic) {
+    activation_publication_diagnostics_.push_back(std::move(diagnostic));
 }
 
 bool CommandPlanMetadata::append_generated_resource(CommandPlanGeneratedResource resource, Status & status) {
@@ -76,11 +85,13 @@ bool CommandPlanMetadata::append_generated_resource(CommandPlanGeneratedResource
 
 bool CommandPlanMetadata::append_alternate_value(CommandPlanAlternateValue alternate, Status & status) {
     for (const CommandPlanAlternateValue & existing : alternate_values_) {
-        if (existing.graph_value == alternate.graph_value) {
+        if (existing.graph_value == alternate.graph_value && existing.type == alternate.type &&
+            existing.byte_count == alternate.byte_count) {
             if (alternate_value_matches(existing, alternate)) {
                 return true;
             }
-            status.log("conflicting alternate value for graph value %d", alternate.graph_value.value);
+            status.log("conflicting alternate value for graph value %d type %d byte_count %zu",
+                       alternate.graph_value.value, static_cast<int>(alternate.type), alternate.byte_count);
             return false;
         }
     }
@@ -124,11 +135,12 @@ const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(Valu
 const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(ValueId   graph_value,
                                                                             ggml_type type,
                                                                             size_t    byte_count) const {
-    const CommandPlanAlternateValue * alternate = find_alternate_value(graph_value);
-    if (alternate == nullptr || alternate->type != type || alternate->byte_count != byte_count) {
-        return nullptr;
+    for (const CommandPlanAlternateValue & alternate : alternate_values_) {
+        if (alternate.graph_value == graph_value && alternate.type == type && alternate.byte_count == byte_count) {
+            return &alternate;
+        }
     }
-    return alternate;
+    return nullptr;
 }
 
 const CommandPlanMoeRoutingBundle * CommandPlanMetadata::find_moe_routing_bundle(ValueId route_ids) const {

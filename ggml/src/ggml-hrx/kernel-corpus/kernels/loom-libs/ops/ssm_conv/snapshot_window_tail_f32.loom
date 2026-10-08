@@ -1,0 +1,47 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.snapshot_window_tail(%state: buffer, %x: buffer, %dst: buffer, %cache: buffer)
+
+config.decl @llm.ssm_conv.snapshot.d_conv : %value: index where [range(%value, 4, 4)]
+
+config.decl @llm.ssm_conv.snapshot.d_inner : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
+config.decl @llm.ssm_conv.snapshot.n_t : %value: index where [range(%value, 512, 512)]
+
+config.decl @llm.ssm_conv.snapshot.n_s : %value: index where [range(%value, 1, 1)]
+
+config.decl @llm.ssm_conv.snapshot.state_row_stride : %value: index where [range(%value, 1, 1)]
+
+config.decl @llm.ssm_conv.snapshot.state_channel_stride : %value: index where [range(%value, 3, 3)]
+
+config.decl @llm.ssm_conv.snapshot.x_row_stride : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @llm.ssm_conv.snapshot.dst_row_stride : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @llm.ssm_conv.snapshot.cache_row_stride : %value: index where [range(%value, 1, 1)]
+
+config.decl @llm.ssm_conv.snapshot.cache_channel_stride : %value: index where [range(%value, 3, 3)]
+
+config.decl @llm.ssm_conv.snapshot.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("llm_ssm_conv_snapshot_window_tail_f32") @llm_ssm_conv_snapshot_window_tail_f32() {
+  %unit = index.constant 1 : index
+  %cneg1 = index.constant -1 : index
+  %x_snapshot_rows = index.constant 61 : index
+  %d_conv = config.get @llm.ssm_conv.snapshot.d_conv : index
+  %d_inner = config.get @llm.ssm_conv.snapshot.d_inner : index
+  %n_s = config.get @llm.ssm_conv.snapshot.n_s : index
+  %wg = config.get @llm.ssm_conv.snapshot.workgroup_size : index
+  %carry = index.add %d_conv, %cneg1 : index
+  %snapshot_rows = index.add %carry, %x_snapshot_rows : index
+  %rows = index.mul %snapshot_rows, %n_s : index
+  %total = index.mul %rows, %d_inner : index
+  %rounding = index.add %wg, %cneg1 : index
+  %rounded = index.add %total, %rounding : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
+} launch(%state: buffer, %x: buffer, %dst: buffer, %cache: buffer) {
+  template.apply<@llm.ssm_conv.snapshot_window_tail>(%state, %x, %dst, %cache) : (buffer, buffer, buffer, buffer)
+  kernel.return
+}

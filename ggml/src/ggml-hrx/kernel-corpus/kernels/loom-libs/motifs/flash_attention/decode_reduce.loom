@@ -1,0 +1,205 @@
+config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+
+template.decl @ggml.flash_attention.decode_split.reduce_completed.cooperative(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_completed.direct(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.publish_f32.scalar(%query_head_count: index, %value_head_size: index, %query_head: index, %output_channel: index, %sum: f32, %unnormalized_output: f32, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.publish_f32.vector2(%query_head_count: index, %value_head_size: index, %query_head_valid0: i1, %query_head_valid1: i1, %lane_output_channel_valid: i1, %query_head0: index, %query_head1: index, %lane_output_channel: index, %sum0: f32, %sum1: f32, %unnormalized_output0: vector<2xf32>, %unnormalized_output1: vector<2xf32>, %output: buffer)
+
+// Up to four split-K blocks are cheapest to fold directly. Each workitem owns
+// one output element, so the reducer needs no LDS or subgroup synchronization.
+template.def<@ggml.flash_attention.decode_split.reduce_completed.direct> device @ggml_flash_attention_decode_split_reduce_completed_direct_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) where [range(%partial_block_capacity0, 1, 4)] {
+  %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 1, 4), range(%active_block_count0, 1, 4), le(%active_block_count0, %partial_block_capacity0)] : index, index
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %workgroup_y0 = kernel.workgroup.id<y> : index
+  %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_large = scalar.constant -1e+30 : f32
+  %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
+  %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
+  %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
+  %partial_max_aligned = buffer.assume.alignment %partial_max {minimum_alignment = 16} : buffer
+  %partial_sum_aligned = buffer.assume.alignment %partial_sum {minimum_alignment = 16} : buffer
+  %partial_output_aligned = buffer.assume.alignment %partial_output {minimum_alignment = 16} : buffer
+  %output_aligned = buffer.assume.alignment %output {minimum_alignment = 16} : buffer
+  %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
+  %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16>
+  %partial_element_count = index.mul %query_heads_per_key_value_head, %value_head_size : index
+  scf.for %linear = [%workitem to %partial_element_count step %c256] {
+    %query_row = index.div %linear, %value_head_size : index
+    %output_channel = index.rem %linear, %value_head_size : index
+    %query_head = index.add %query_head_base, %query_row : index
+    %query_head_valid = index.cmp ult, %query_head, %query_head_count : index
+    scf.if %query_head_valid {
+      %maximum = scf.for %block = [%c0 to %active_block_count step %c1](%running_maximum = %negative_large : f32) -> (f32) unroll schedule(interleaved) {
+        %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+        %next_maximum = scalar.maxnumf %running_maximum, %block_maximum : f32
+        scf.yield %next_maximum : f32
+      }
+      %sum, %unnormalized_output = scf.for %block = [%c0 to %active_block_count step %c1](%running_sum = %c0_f32 : f32, %running_output = %c0_f32 : f32) -> (f32, f32) unroll schedule(interleaved) {
+        %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+        %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
+        %scale = scalar.expf<afn> %delta : f32
+        %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+        %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+        %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
+        %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> f16
+        %block_output = scalar.extf %block_output_f16 : f16 to f32
+        %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scale : f32
+        %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
+        scf.yield %next_sum, %next_output : f32, f32
+      }
+      template.apply<@ggml.flash_attention.decode_split.publish_f32.scalar>(%query_head_count, %value_head_size, %query_head, %output_channel, %sum, %unnormalized_output, %output_aligned) : (index, index, index, index, f32, f32, buffer)
+    }
+  }
+  template.return
+}
+
+// Longer bounded contexts amortize a cooperative reducer. Each wave folds two
+// query rows, stages the per-block scales in LDS, and writes two output channels
+// per lane.
+template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> device @ggml_flash_attention_decode_split_reduce_completed_cooperative_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) {
+  %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 1, 32), range(%active_block_count0, 1, 32), le(%active_block_count0, %partial_block_capacity0)] : index, index
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %workgroup_y0 = kernel.workgroup.id<y> : index
+  %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %scale_stage_bytes = index.constant 1024 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_large = scalar.constant -1e+30 : f32
+  %c0_f16x2 = vector.constant 0.0 : vector<2xf16>
+  %c0_f32x2 = vector.constant 0.0 : vector<2xf32>
+  %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
+  %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
+  %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
+  %padded_value_head_size = index.add %value_head_size, %c127 : index
+  %output_tile_count = index.div %padded_value_head_size, %c128 : index
+  %lane_output_base = index.mul %lane, %c2 : index
+  %lane_has_block = index.cmp ult, %lane, %active_block_count : index
+  %partial_max_aligned = buffer.assume.alignment %partial_max {minimum_alignment = 16} : buffer
+  %partial_sum_aligned = buffer.assume.alignment %partial_sum {minimum_alignment = 16} : buffer
+  %partial_output_aligned = buffer.assume.alignment %partial_output {minimum_alignment = 16} : buffer
+  %output_aligned = buffer.assume.alignment %output {minimum_alignment = 16} : buffer
+  %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
+  %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16>
+  %scale_stage = buffer.alloca<workgroup> align(16) %scale_stage_bytes : buffer
+  %scale_stage_view = buffer.view %scale_stage[%c0_offset] : buffer -> view<4x32x2xf32>
+  %padded_reduction_row_count = index.add %query_heads_per_key_value_head, %c7 : index
+  %reduction_phase_count = index.div %padded_reduction_row_count, %c8 : index
+  scf.for %phase = [%c0 to %reduction_phase_count step %c1] unroll {
+    %phase_row_base = index.mul %phase, %c8 : index
+    %subgroup_row_base = index.mul %subgroup, %c2 : index
+    %query_row0 = index.add %phase_row_base, %subgroup_row_base : index
+    %query_row1 = index.add %query_row0, %c1 : index
+    %query_head0 = index.add %query_head_base, %query_row0 : index
+    %query_head1 = index.add %query_head0, %c1 : index
+    // Inactive rows must not write query heads owned by the next KV head.
+    %query_head_valid0 = index.cmp ult, %query_row0, %query_heads_per_key_value_head : index
+    %query_head_valid1 = index.cmp ult, %query_row1, %query_heads_per_key_value_head : index
+    %safe_query_row0 = scf.select %query_head_valid0, %query_row0, %c0 : index
+    %safe_query_row1 = scf.select %query_head_valid1, %query_row1, %c0 : index
+    %reducer_active0 = scalar.andi %lane_has_block, %query_head_valid0 : i1
+    %reducer_active1 = scalar.andi %lane_has_block, %query_head_valid1 : i1
+    %local_maximum0 = scf.if %reducer_active0 -> (f32) {
+      %block_maximum = view.load %partial_max_view[%key_value_head, %lane, %query_row0] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+      scf.yield %block_maximum : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %local_maximum1 = scf.if %reducer_active1 -> (f32) {
+      %block_maximum = view.load %partial_max_view[%key_value_head, %lane, %query_row1] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+      scf.yield %block_maximum : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %local_maximums = vector.from_elements %local_maximum0, %local_maximum1 : vector<2xf32>
+    %maximums = kernel.subgroup.reduce<maxnumf> %local_maximums : vector<2xf32>
+    %maximum0 = vector.extract %maximums[0] : vector<2xf32> -> f32
+    %maximum1 = vector.extract %maximums[1] : vector<2xf32> -> f32
+    %local_sum0, %scale0 = scf.if %reducer_active0 -> (f32, f32) {
+      %block_maximum = view.load %partial_max_view[%key_value_head, %lane, %query_row0] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+      %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum0 : f32
+      %scale = scalar.expf<afn> %delta : f32
+      %block_sum = view.load %partial_sum_view[%key_value_head, %lane, %query_row0] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+      %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+      scf.yield %scaled_sum, %scale : f32, f32
+    } else {
+      scf.yield %c0_f32, %c0_f32 : f32, f32
+    }
+    %local_sum1, %scale1 = scf.if %reducer_active1 -> (f32, f32) {
+      %block_maximum = view.load %partial_max_view[%key_value_head, %lane, %query_row1] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+      %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum1 : f32
+      %scale = scalar.expf<afn> %delta : f32
+      %block_sum = view.load %partial_sum_view[%key_value_head, %lane, %query_row1] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+      %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+      scf.yield %scaled_sum, %scale : f32, f32
+    } else {
+      scf.yield %c0_f32, %c0_f32 : f32, f32
+    }
+    scf.if %lane_has_block {
+      %bounded_block_lane = index.assume %lane [range(%lane, 0, 31)] : index
+      %scales = vector.from_elements %scale0, %scale1 : vector<2xf32>
+      vector.store %scales, %scale_stage_view[%subgroup, %bounded_block_lane, %c0] : vector<2xf32>, view<4x32x2xf32>
+    }
+    %local_sums = vector.from_elements %local_sum0, %local_sum1 : vector<2xf32>
+    %sums = kernel.subgroup.reduce<addf> %local_sums : vector<2xf32>
+    %sum0 = vector.extract %sums[0] : vector<2xf32> -> f32
+    %sum1 = vector.extract %sums[1] : vector<2xf32> -> f32
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.for %output_tile = [%c0 to %output_tile_count step %c1] unroll {
+      %output_tile_channel = index.mul %output_tile, %c128 : index
+      %lane_output_channel = index.add %output_tile_channel, %lane_output_base : index
+      %lane_output_channel_valid = index.cmp ult, %lane_output_channel, %value_head_size : index
+      %safe_lane_output_channel = scf.select %lane_output_channel_valid, %lane_output_channel, %c0 : index
+      %unnormalized_output0, %unnormalized_output1 = scf.for %block = [%c0 to %active_block_count step %c1](%running_output0 = %c0_f32x2 : vector<2xf32>, %running_output1 = %c0_f32x2 : vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) unroll(%c4) schedule(interleaved) {
+        %scales = vector.load %scale_stage_view[%subgroup, %block, %c0] : view<4x32x2xf32> -> vector<2xf32>
+        %scale0 = vector.extract %scales[0] : vector<2xf32> -> f32
+        %scale1 = vector.extract %scales[1] : vector<2xf32> -> f32
+        %block_output0_f16 = vector.load %partial_output_view[%key_value_head, %block, %safe_query_row0, %safe_lane_output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> vector<2xf16>
+        %block_output0 = vector.extf %block_output0_f16 : vector<2xf16> to vector<2xf32>
+        %scale_vector0 = vector.splat %scale0 : vector<2xf32>
+        %scaled_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %block_output0, %scale_vector0 : vector<2xf32>
+        %next_output0 = vector.addf<reassoc|nnan|ninf|nsz> %running_output0, %scaled_output0 : vector<2xf32>
+        %block_output1_f16 = vector.load %partial_output_view[%key_value_head, %block, %safe_query_row1, %safe_lane_output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> vector<2xf16>
+        %block_output1 = vector.extf %block_output1_f16 : vector<2xf16> to vector<2xf32>
+        %scale_vector1 = vector.splat %scale1 : vector<2xf32>
+        %scaled_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %block_output1, %scale_vector1 : vector<2xf32>
+        %next_output1 = vector.addf<reassoc|nnan|ninf|nsz> %running_output1, %scaled_output1 : vector<2xf32>
+        scf.yield %next_output0, %next_output1 : vector<2xf32>, vector<2xf32>
+      }
+      template.apply<@ggml.flash_attention.decode_split.publish_f32.vector2>(%query_head_count, %value_head_size, %query_head_valid0, %query_head_valid1, %lane_output_channel_valid, %query_head0, %query_head1, %lane_output_channel, %sum0, %sum1, %unnormalized_output0, %unnormalized_output1, %output_aligned) : (index, index, i1, i1, i1, index, index, index, f32, f32, vector<2xf32>, vector<2xf32>, buffer)
+    }
+  }
+  template.return
+}

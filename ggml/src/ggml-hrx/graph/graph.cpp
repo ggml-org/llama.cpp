@@ -4,18 +4,48 @@
 
 #include <cassert>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace ggml::hrx {
 namespace {
 
+static const ggml_tensor * tensor_storage_root(const ggml_tensor * tensor) {
+    while (tensor != nullptr && tensor->view_src != nullptr) {
+        tensor = tensor->view_src;
+    }
+    return tensor;
+}
+
+static int32_t graph_tensor_use_count(const ggml_cgraph & graph, const ggml_tensor * tensor) {
+    if (tensor == nullptr || graph.use_counts == nullptr || graph.visited_hash_set.keys == nullptr) {
+        return -1;
+    }
+    const size_t hash_pos = ggml_hash_find(&graph.visited_hash_set, tensor);
+    if (hash_pos == GGML_HASHSET_FULL || !ggml_bitset_get(graph.visited_hash_set.used, hash_pos)) {
+        return -1;
+    }
+    return graph.use_counts[hash_pos];
+}
+
 static bool tensor_is_external(const ggml_tensor *                                  tensor,
-                               const std::unordered_map<const ggml_tensor *, int> & use_counts) {
-    if (tensor->op == GGML_OP_NONE) {
+                               const std::unordered_map<const ggml_tensor *, int> & use_counts,
+                               const std::unordered_set<const ggml_tensor *> &      graph_nodes,
+                               const ggml_cgraph &                                  graph) {
+    const ggml_tensor * root = tensor_storage_root(tensor);
+    if (root == nullptr || root->op == GGML_OP_NONE || graph_nodes.find(root) == graph_nodes.end()) {
         return true;
     }
-    const auto found = use_counts.find(tensor);
-    return found == use_counts.end() || found->second == 0;
+    if (tensor->flags & GGML_TENSOR_FLAG_OUTPUT) {
+        return true;
+    }
+    const auto    found      = use_counts.find(tensor);
+    const int     local_uses = found != use_counts.end() ? found->second : 0;
+    const int32_t graph_uses = graph_tensor_use_count(graph, tensor);
+    if (graph_uses > local_uses) {
+        return true;
+    }
+    return local_uses == 0;
 }
 
 }  // namespace
@@ -119,12 +149,15 @@ const GraphIndex & Graph::index() const {
 GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
     GraphImportResult                            result;
     std::unordered_map<const ggml_tensor *, int> use_counts;
+    std::unordered_set<const ggml_tensor *>      graph_nodes;
+    graph_nodes.reserve(static_cast<size_t>(graph.n_nodes));
     for (int i = 0; i < graph.n_nodes; ++i) {
         const ggml_tensor * node = graph.nodes[i];
         if (node == nullptr) {
             result.status.log("ggml graph contains a null node");
             return result;
         }
+        graph_nodes.insert(node);
         for (const ggml_tensor * source : node->src) {
             if (source != nullptr) {
                 ++use_counts[source];
@@ -140,14 +173,16 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
             if (source == nullptr) {
                 continue;
             }
-            const ValueKind kind = tensor_is_external(source, use_counts) ? ValueKind::External : ValueKind::Transient;
+            const ValueKind kind =
+                tensor_is_external(source, use_counts, graph_nodes, graph) ? ValueKind::External : ValueKind::Transient;
             inputs.push_back(values.get_or_add_tensor_value(source, kind));
         }
 
-        const ValueKind output_kind = tensor_is_external(node, use_counts) ? ValueKind::External : ValueKind::Transient;
-        const ValueId   output      = values.get_or_add_tensor_value(node, output_kind);
-        GraphNode &     graph_node  = result.graph.add_node(node->op, output, std::move(inputs));
-        graph_node.params           = import_op_params(*node);
+        const ValueKind output_kind =
+            tensor_is_external(node, use_counts, graph_nodes, graph) ? ValueKind::External : ValueKind::Transient;
+        const ValueId output     = values.get_or_add_tensor_value(node, output_kind);
+        GraphNode &   graph_node = result.graph.add_node(node->op, output, std::move(inputs));
+        graph_node.params        = import_op_params(*node);
     }
 
     result.status.append(result.graph.build_index());

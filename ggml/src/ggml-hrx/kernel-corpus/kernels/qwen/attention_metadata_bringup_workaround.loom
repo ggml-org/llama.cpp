@@ -1,0 +1,170 @@
+// Copyright 2026 The IREE Authors
+//
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+// Temporary, non-sanctioned one-function kernel for Qwen bring-up. This is not
+// a metadata-kernel framework or a second Loom authoring path. The owned
+// runtime carries one compact context-base control word and needs positions,
+// separate K/V cache indices, and the dense causal-mask bit pattern derived on
+// device before attention begins. Delete this fork when the Qwen kernel corpus
+// provides the canonical producer.
+amdgpu.target<gfx11-generic> @qwen_attention_metadata_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@qwen_attention_metadata_gfx11_wave64) export("qwen_attention_metadata_bringup_workaround") @qwen_attention_metadata_bringup_workaround(%token_count: index, %context_capacity: index) {
+  %one = index.constant 1 : index
+  %twofiftyfive = index.constant 255 : index
+  %twofiftysix = index.constant 256 : index
+  %padded_context_capacity = index.add %context_capacity, %twofiftyfive : index
+  %key_workgroup_count = index.div %padded_context_capacity, %twofiftysix : index
+  kernel.launch.config workgroups(%key_workgroup_count, %token_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%token_count: index, %context_capacity: index, %control: buffer, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %attention_mask: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_context_capacity = index.assume %context_capacity [range(%context_capacity, 1, 32768)] : index
+  %query0 = kernel.workgroup.id<y> : index
+  %query, %launch_token_count = index.assume %query0, %bounded_token_count [lt(%query0, %bounded_token_count)] : index, index
+  %key_workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %zero_i16 = scalar.constant 0 : i16
+  // 0xfc00 is the F16 negative-infinity bit pattern.
+  %negative_infinity_i16 = scalar.constant -1024 : i16
+  %zero_offset = index.constant 0 : offset
+  %control_noalias, %positions_noalias, %key_cache_indices_noalias, %value_cache_indices_noalias, %attention_mask_noalias = buffer.assume.noalias %control, %positions, %key_cache_indices, %value_cache_indices, %attention_mask : buffer, buffer, buffer, buffer, buffer
+  %control_view = buffer.view %control_noalias[%zero_offset] : buffer -> view<1xi32>
+  %context_base_raw = view.load %control_view[%zero] : view<1xi32> -> i32
+  %context_base_i32 = scalar.assume %context_base_raw [range(%context_base_raw, 0, 32767)] : i32
+  %context_base0 = index.cast %context_base_i32 : i32 to index
+  %context_base = index.assume %context_base0 [range(%context_base0, 0, 32767)] : index
+  %visible_count0 = index.add %context_base, %bounded_token_count : index
+  %visible_count, %launch_context_capacity = index.assume %visible_count0, %bounded_context_capacity [le(%visible_count0, %bounded_context_capacity)] : index, index
+  %key_workgroup_base = index.mul %key_workgroup, %twofiftysix : index
+  %key0 = index.add %key_workgroup_base, %workitem : index
+  %valid_key = index.cmp ult, %key0, %launch_context_capacity : index
+  %safe_key0 = scf.select %valid_key, %key0, %zero : index
+  %key = index.assume %safe_key0 [lt(%safe_key0, %launch_context_capacity)] : index
+  %mask_element_count = index.mul %launch_token_count, %launch_context_capacity : index
+  %mask_row_base = index.mul %query, %launch_context_capacity : index
+  %mask_element0 = index.add %mask_row_base, %key : index
+  %mask_element = index.assume %mask_element0 [lt(%mask_element0, %mask_element_count)] : index
+  %positions_view = buffer.view %positions_noalias[%zero_offset] : buffer -> view<[%launch_token_count]xi32>
+  %key_cache_indices_view = buffer.view %key_cache_indices_noalias[%zero_offset] : buffer -> view<[%launch_token_count]xi64>
+  %value_cache_indices_view = buffer.view %value_cache_indices_noalias[%zero_offset] : buffer -> view<[%launch_token_count]xi64>
+  %attention_mask_view = buffer.view %attention_mask_noalias[%zero_offset] : buffer -> view<[%mask_element_count]xi16>
+  %query_position0 = index.add %context_base, %query : index
+  %query_position = index.assume %query_position0 [lt(%query_position0, %visible_count)] : index
+  %causal_end = index.add %query_position, %one : index
+  %before_causal_end = index.cmp ult, %key, %causal_end : index
+  %before_visible_count = index.cmp ult, %key, %visible_count : index
+  %is_visible = scalar.andi %before_causal_end, %before_visible_count : i1
+  %mask_bits = scf.select %is_visible, %zero_i16, %negative_infinity_i16 : i16
+  scf.if %valid_key {
+    view.store %mask_bits, %attention_mask_view[%mask_element] : i16, view<[%mask_element_count]xi16>
+  }
+  %is_first_key_workgroup = index.cmp eq, %key_workgroup, %zero : index
+  %is_first_workitem = index.cmp eq, %workitem, %zero : index
+  %publishes_metadata = scalar.andi %is_first_key_workgroup, %is_first_workitem : i1
+  scf.if %publishes_metadata {
+    %absolute_position_i32 = index.cast %query_position : index to i32
+    %cache_index_i64 = index.cast %query_position : index to i64
+    // This fixed no-ring experiment maps each logical position directly to
+    // the same physical row in both cache planes.
+    view.store %absolute_position_i32, %positions_view[%query] : i32, view<[%launch_token_count]xi32>
+    view.store %cache_index_i64, %key_cache_indices_view[%query] : i64, view<[%launch_token_count]xi64>
+    view.store %cache_index_i64, %value_cache_indices_view[%query] : i64, view<[%launch_token_count]xi64>
+  }
+  kernel.return
+}
+
+// Position zero exposes the causal edge directly as `[0, -inf]`. A second
+// invocation proves that a nonzero context base advances all three metadata
+// streams and makes every prior cache row visible.
+check.case public @qwen_attention_metadata_causal_and_nonzero_base_case {
+  %one = check.literal value(1) : index
+  %two = check.literal value(2) : index
+  %five = check.literal value(5) : index
+  %zero_control = check.generate.fill value(0) : tensor<1xi32>
+  %zero_positions = check.generate.fill value(-1) : tensor<1xi32>
+  %zero_key_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %zero_value_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %zero_mask = check.generate.fill value(1) : tensor<2xi16>
+  %expected_zero = check.generate.fill value(0) : tensor<1xi32>
+  %expected_zero_indices = check.generate.fill value(0) : tensor<1xi64>
+  %expected_zero_mask = check.generate.iota offset(0) step(-1024) : tensor<2xi16>
+  kernel.launch @qwen_attention_metadata_bringup_workaround[%one, %two](%one, %two, %zero_control, %zero_positions, %zero_key_indices, %zero_value_indices, %zero_mask) : [index, index](index, index, tensor<1xi32>, tensor<1xi32>, tensor<1xi64>, tensor<1xi64>, tensor<2xi16>)
+  check.expect.equal actual(%zero_positions) expected(%expected_zero) : tensor<1xi32>
+  check.expect.equal actual(%zero_key_indices) expected(%expected_zero_indices) : tensor<1xi64>
+  check.expect.equal actual(%zero_value_indices) expected(%expected_zero_indices) : tensor<1xi64>
+  check.expect.equal actual(%zero_mask) expected(%expected_zero_mask) : tensor<2xi16>
+  %nonzero_control = check.generate.fill value(4) : tensor<1xi32>
+  %nonzero_positions = check.generate.fill value(-1) : tensor<1xi32>
+  %nonzero_key_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %nonzero_value_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %nonzero_mask = check.generate.fill value(1) : tensor<5xi16>
+  %expected_nonzero = check.generate.fill value(4) : tensor<1xi32>
+  %expected_nonzero_indices = check.generate.fill value(4) : tensor<1xi64>
+  %expected_nonzero_mask = check.generate.fill value(0) : tensor<5xi16>
+  kernel.launch @qwen_attention_metadata_bringup_workaround[%one, %five](%one, %five, %nonzero_control, %nonzero_positions, %nonzero_key_indices, %nonzero_value_indices, %nonzero_mask) : [index, index](index, index, tensor<1xi32>, tensor<1xi32>, tensor<1xi64>, tensor<1xi64>, tensor<5xi16>)
+  check.expect.equal actual(%nonzero_positions) expected(%expected_nonzero) : tensor<1xi32>
+  check.expect.equal actual(%nonzero_key_indices) expected(%expected_nonzero_indices) : tensor<1xi64>
+  check.expect.equal actual(%nonzero_value_indices) expected(%expected_nonzero_indices) : tensor<1xi64>
+  check.expect.equal actual(%nonzero_mask) expected(%expected_nonzero_mask) : tensor<5xi16>
+  check.return
+}
+
+check.case public @qwen_attention_metadata_benchmark_case {
+  %token_count = check.param.choice values([32, 128, 512]) name("token_count") : index
+  %control = check.generate.fill value(0) : tensor<1xi32>
+  %positions = check.generate.fill value(-1) : tensor<[%token_count]xi32>
+  %key_cache_indices = check.generate.fill value(-1) : tensor<[%token_count]xi64>
+  %value_cache_indices = check.generate.fill value(-1) : tensor<[%token_count]xi64>
+  %attention_mask = check.generate.fill value(1) : tensor<[%token_count]x[%token_count]xi16>
+  %expected_positions = check.generate.iota offset(0) step(1) : tensor<[%token_count]xi32>
+  %expected_cache_indices = check.generate.iota offset(0) step(1) : tensor<[%token_count]xi64>
+  kernel.launch @qwen_attention_metadata_bringup_workaround[%token_count, %token_count](%token_count, %token_count, %control, %positions, %key_cache_indices, %value_cache_indices, %attention_mask) : [index, index](index, index, tensor<1xi32>, tensor<[%token_count]xi32>, tensor<[%token_count]xi64>, tensor<[%token_count]xi64>, tensor<[%token_count]x[%token_count]xi16>)
+  check.expect.equal actual(%positions) expected(%expected_positions) : tensor<[%token_count]xi32>
+  check.expect.equal actual(%key_cache_indices) expected(%expected_cache_indices) : tensor<[%token_count]xi64>
+  check.expect.equal actual(%value_cache_indices) expected(%expected_cache_indices) : tensor<[%token_count]xi64>
+  check.return
+}
+
+// Locked decode geometry: one query row addressing the explicit 768-row KV
+// bucket recovered from the live llama.cpp graph.
+check.case public @qwen_attention_metadata_decode_768_case {
+  %token_count = check.literal value(1) : index
+  %context_capacity = check.literal value(768) : index
+  %control = check.generate.fill value(767) : tensor<1xi32>
+  %positions = check.generate.fill value(-1) : tensor<1xi32>
+  %key_cache_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %value_cache_indices = check.generate.fill value(-1) : tensor<1xi64>
+  %attention_mask = check.generate.fill value(1) : tensor<768xi16>
+  kernel.launch @qwen_attention_metadata_bringup_workaround[%token_count, %context_capacity](%token_count, %context_capacity, %control, %positions, %key_cache_indices, %value_cache_indices, %attention_mask) : [index, index](index, index, tensor<1xi32>, tensor<1xi32>, tensor<1xi64>, tensor<1xi64>, tensor<768xi16>)
+  check.return
+}
+
+check.case public @qwen_attention_metadata_prefill_512_case {
+  %token_count = check.literal value(512) : index
+  %context_capacity = check.literal value(512) : index
+  %control = check.generate.fill value(0) : tensor<1xi32>
+  %positions = check.generate.fill value(-1) : tensor<512xi32>
+  %key_cache_indices = check.generate.fill value(-1) : tensor<512xi64>
+  %value_cache_indices = check.generate.fill value(-1) : tensor<512xi64>
+  %attention_mask = check.generate.fill value(1) : tensor<512x512xi16>
+  kernel.launch @qwen_attention_metadata_bringup_workaround[%token_count, %context_capacity](%token_count, %context_capacity, %control, %positions, %key_cache_indices, %value_cache_indices, %attention_mask) : [index, index](index, index, tensor<1xi32>, tensor<512xi32>, tensor<512xi64>, tensor<512xi64>, tensor<512x512xi16>)
+  check.return
+}
+
+check.benchmark<@qwen_attention_metadata_causal_and_nonzero_base_case> @qwen_attention_metadata_causal_and_nonzero_base
+
+check.benchmark<@qwen_attention_metadata_decode_768_case> @qwen_attention_metadata_decode_768
+
+check.benchmark<@qwen_attention_metadata_prefill_512_case> @qwen_attention_metadata_model_prefill_512
+
+check.benchmark<@qwen_attention_metadata_benchmark_case> @qwen_attention_metadata_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen_attention_metadata_benchmark_case> @qwen_attention_metadata_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen_attention_metadata_benchmark_case> @qwen_attention_metadata_prefill_512 {token_count = 512}

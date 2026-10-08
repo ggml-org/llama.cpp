@@ -1,0 +1,176 @@
+config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
+
+template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.publish_f32.scalar(%query_head_count: index, %value_head_size: index, %query_head: index, %output_channel: index, %sum: f32, %unnormalized_output: f32, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.publish_f32.vector2(%query_head_count: index, %value_head_size: index, %query_head_valid0: i1, %query_head_valid1: i1, %lane_output_channel_valid: i1, %query_head0: index, %query_head1: index, %lane_output_channel: index, %sum0: f32, %sum1: f32, %unnormalized_output0: vector<2xf32>, %unnormalized_output1: vector<2xf32>, %output: buffer)
+
+template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_attention_prefill_publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
+  %apply_gate_index = config.get @ggml.flash_attention.apply_gate : index
+  %gate_stride_head = config.get @ggml.flash_attention.gate_stride_head : index
+  %gate_stride_token = config.get @ggml.flash_attention.gate_stride_token : index
+  %apply_gate = index.cmp eq, %apply_gate_index, %c1 : index
+  %gate_aligned = buffer.assume.alignment %gate {minimum_alignment = 16} : buffer
+  %gate_view = buffer.view %gate_aligned[%c0_offset] : buffer -> view<268435456xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+  %f16_output_view = buffer.view %f16_output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
+  // Normalize and publish the lane-owned packets. Query-tail rows never
+  // participate in the output store.
+  scf.if %lane_has_output {
+    %c4 = index.constant 4 : index
+    %lane_output_end0 = index.add %lane_output_channel, %c4 : index
+    %safe_lane_output_channel, %lane_output_end = index.assume %lane_output_channel, %lane_output_end0 [le(%lane_output_end0, %value_head_size)] : index, index
+    %sum0_scalar = vector.extract %final_sum[0] : vector<4xf32> -> f32
+    %sum1_scalar = vector.extract %final_sum[1] : vector<4xf32> -> f32
+    %sum2_scalar = vector.extract %final_sum[2] : vector<4xf32> -> f32
+    %sum3_scalar = vector.extract %final_sum[3] : vector<4xf32> -> f32
+    %inverse_sum0_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum0_scalar : f32
+    %inverse_sum1_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum1_scalar : f32
+    %inverse_sum2_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum2_scalar : f32
+    %inverse_sum3_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum3_scalar : f32
+    %inverse_sum0_f16 = scalar.fptrunc %inverse_sum0_f32 : f32 to f16
+    %inverse_sum1_f16 = scalar.fptrunc %inverse_sum1_f32 : f32 to f16
+    %inverse_sum2_f16 = scalar.fptrunc %inverse_sum2_f32 : f32 to f16
+    %inverse_sum3_f16 = scalar.fptrunc %inverse_sum3_f32 : f32 to f16
+    %inverse_sum0 = vector.splat %inverse_sum0_f16 : vector<4xf16>
+    %inverse_sum1 = vector.splat %inverse_sum1_f16 : vector<4xf16>
+    %inverse_sum2 = vector.splat %inverse_sum2_f16 : vector<4xf16>
+    %inverse_sum3 = vector.splat %inverse_sum3_f16 : vector<4xf16>
+    %normalized0_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output0, %inverse_sum0 : vector<4xf16>
+    %normalized1_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output1, %inverse_sum1 : vector<4xf16>
+    %normalized2_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output2, %inverse_sum2 : vector<4xf16>
+    %normalized3_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output3, %inverse_sum3 : vector<4xf16>
+    %normalized0 = vector.extf %normalized0_f16 : vector<4xf16> to vector<4xf32>
+    %normalized1 = vector.extf %normalized1_f16 : vector<4xf16> to vector<4xf32>
+    %normalized2 = vector.extf %normalized2_f16 : vector<4xf16> to vector<4xf32>
+    %normalized3 = vector.extf %normalized3_f16 : vector<4xf16> to vector<4xf32>
+    scf.if %query_valid0 {
+      %published0 = scf.if %apply_gate -> (vector<4xf32>) {
+        %gate_token_offset0 = index.mul %query_token0, %gate_stride_token : index
+        %gate_head_offset0 = index.mul %query_head, %gate_stride_head : index
+        %gate_head_base0 = index.add %gate_token_offset0, %gate_head_offset0 : index
+        %gate_index0_0 = index.add %gate_head_base0, %safe_lane_output_channel : index
+        %gate_index0 = index.assume %gate_index0_0 [range(%gate_index0_0, 0, 268435452)] : index
+        %raw_gate0 = vector.load %gate_view[%gate_index0] : view<268435456xf32> -> vector<4xf32>
+        %negative_gate0 = vector.negf %raw_gate0 : vector<4xf32>
+        %gate_exp0 = vector.expf<afn> %negative_gate0 : vector<4xf32>
+        %gate_denominator0 = vector.addf %c1_f32x4, %gate_exp0 : vector<4xf32>
+        %sigmoid_gate0 = vector.divf %c1_f32x4, %gate_denominator0 : vector<4xf32>
+        %gated_output0 = vector.mulf %normalized0, %sigmoid_gate0 : vector<4xf32>
+        scf.yield %gated_output0 : vector<4xf32>
+      } else {
+        scf.yield %normalized0 : vector<4xf32>
+      }
+      vector.store %published0, %output_view[%query_token0, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      scf.if %publish_f16 {
+        %half0 = vector.fptrunc %published0 : vector<4xf32> to vector<4xf16>
+        vector.store %half0, %f16_output_view[%query_token0, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
+      }
+    }
+    scf.if %query_valid1 {
+      %published1 = scf.if %apply_gate -> (vector<4xf32>) {
+        %gate_token_offset1 = index.mul %query_token1, %gate_stride_token : index
+        %gate_head_offset1 = index.mul %query_head, %gate_stride_head : index
+        %gate_head_base1 = index.add %gate_token_offset1, %gate_head_offset1 : index
+        %gate_index1_0 = index.add %gate_head_base1, %safe_lane_output_channel : index
+        %gate_index1 = index.assume %gate_index1_0 [range(%gate_index1_0, 0, 268435452)] : index
+        %raw_gate1 = vector.load %gate_view[%gate_index1] : view<268435456xf32> -> vector<4xf32>
+        %negative_gate1 = vector.negf %raw_gate1 : vector<4xf32>
+        %gate_exp1 = vector.expf<afn> %negative_gate1 : vector<4xf32>
+        %gate_denominator1 = vector.addf %c1_f32x4, %gate_exp1 : vector<4xf32>
+        %sigmoid_gate1 = vector.divf %c1_f32x4, %gate_denominator1 : vector<4xf32>
+        %gated_output1 = vector.mulf %normalized1, %sigmoid_gate1 : vector<4xf32>
+        scf.yield %gated_output1 : vector<4xf32>
+      } else {
+        scf.yield %normalized1 : vector<4xf32>
+      }
+      vector.store %published1, %output_view[%query_token1, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      scf.if %publish_f16 {
+        %half1 = vector.fptrunc %published1 : vector<4xf32> to vector<4xf16>
+        vector.store %half1, %f16_output_view[%query_token1, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
+      }
+    }
+    scf.if %query_valid2 {
+      %published2 = scf.if %apply_gate -> (vector<4xf32>) {
+        %gate_token_offset2 = index.mul %query_token2, %gate_stride_token : index
+        %gate_head_offset2 = index.mul %query_head, %gate_stride_head : index
+        %gate_head_base2 = index.add %gate_token_offset2, %gate_head_offset2 : index
+        %gate_index2_0 = index.add %gate_head_base2, %safe_lane_output_channel : index
+        %gate_index2 = index.assume %gate_index2_0 [range(%gate_index2_0, 0, 268435452)] : index
+        %raw_gate2 = vector.load %gate_view[%gate_index2] : view<268435456xf32> -> vector<4xf32>
+        %negative_gate2 = vector.negf %raw_gate2 : vector<4xf32>
+        %gate_exp2 = vector.expf<afn> %negative_gate2 : vector<4xf32>
+        %gate_denominator2 = vector.addf %c1_f32x4, %gate_exp2 : vector<4xf32>
+        %sigmoid_gate2 = vector.divf %c1_f32x4, %gate_denominator2 : vector<4xf32>
+        %gated_output2 = vector.mulf %normalized2, %sigmoid_gate2 : vector<4xf32>
+        scf.yield %gated_output2 : vector<4xf32>
+      } else {
+        scf.yield %normalized2 : vector<4xf32>
+      }
+      vector.store %published2, %output_view[%query_token2, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      scf.if %publish_f16 {
+        %half2 = vector.fptrunc %published2 : vector<4xf32> to vector<4xf16>
+        vector.store %half2, %f16_output_view[%query_token2, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
+      }
+    }
+    scf.if %query_valid3 {
+      %published3 = scf.if %apply_gate -> (vector<4xf32>) {
+        %gate_token_offset3 = index.mul %query_token3, %gate_stride_token : index
+        %gate_head_offset3 = index.mul %query_head, %gate_stride_head : index
+        %gate_head_base3 = index.add %gate_token_offset3, %gate_head_offset3 : index
+        %gate_index3_0 = index.add %gate_head_base3, %safe_lane_output_channel : index
+        %gate_index3 = index.assume %gate_index3_0 [range(%gate_index3_0, 0, 268435452)] : index
+        %raw_gate3 = vector.load %gate_view[%gate_index3] : view<268435456xf32> -> vector<4xf32>
+        %negative_gate3 = vector.negf %raw_gate3 : vector<4xf32>
+        %gate_exp3 = vector.expf<afn> %negative_gate3 : vector<4xf32>
+        %gate_denominator3 = vector.addf %c1_f32x4, %gate_exp3 : vector<4xf32>
+        %sigmoid_gate3 = vector.divf %c1_f32x4, %gate_denominator3 : vector<4xf32>
+        %gated_output3 = vector.mulf %normalized3, %sigmoid_gate3 : vector<4xf32>
+        scf.yield %gated_output3 : vector<4xf32>
+      } else {
+        scf.yield %normalized3 : vector<4xf32>
+      }
+      vector.store %published3, %output_view[%query_token3, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      scf.if %publish_f16 {
+        %half3 = vector.fptrunc %published3 : vector<4xf32> to vector<4xf16>
+        vector.store %half3, %f16_output_view[%query_token3, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
+      }
+    }
+  }
+  template.return
+}
+
+template.def<@ggml.flash_attention.decode_split.publish_f32.scalar> device @ggml_flash_attention_decode_split_publish_f32_scalar(%query_head_count: index, %value_head_size: index, %query_head: index, %output_channel: index, %sum: f32, %unnormalized_output: f32, %output: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
+  %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
+  view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x[%value_head_size]xf32>
+  template.return
+}
+
+template.def<@ggml.flash_attention.decode_split.publish_f32.vector2> device @ggml_flash_attention_decode_split_publish_f32_vector2(%query_head_count: index, %value_head_size: index, %query_head_valid0: i1, %query_head_valid1: i1, %lane_output_channel_valid: i1, %query_head0: index, %query_head1: index, %lane_output_channel: index, %sum0: f32, %sum1: f32, %unnormalized_output0: vector<2xf32>, %unnormalized_output1: vector<2xf32>, %output: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
+  %sum_vector0 = vector.splat %sum0 : vector<2xf32>
+  %sum_vector1 = vector.splat %sum1 : vector<2xf32>
+  %normalized_output0 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output0, %sum_vector0 : vector<2xf32>
+  %normalized_output1 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output1, %sum_vector1 : vector<2xf32>
+  %publish_output0 = scalar.andi %query_head_valid0, %lane_output_channel_valid : i1
+  %publish_output1 = scalar.andi %query_head_valid1, %lane_output_channel_valid : i1
+  scf.if %publish_output0 {
+    vector.store %normalized_output0, %output_view[%query_head0, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+  }
+  scf.if %publish_output1 {
+    vector.store %normalized_output1, %output_view[%query_head1, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+  }
+  template.return
+}

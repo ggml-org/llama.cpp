@@ -1,0 +1,762 @@
+config.decl @ggml.quantize_symmetric_i8_k256.token_count : %value: index where [range(%value, 256, 2048), mul(%value, 256)]
+
+config.decl @ggml.quantize_symmetric_i8_k256.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+
+func.def inline @ggml_symmetric_i8_wmmai8_stage_values(%token256: i1, %scratch: buffer, %base: offset, %adbase: index, %ad1: index, %values0: vector<32xi8>, %values1: vector<32xi8>) {
+  scf.if %token256 {
+    %al_flat = buffer.view %scratch[%base] : buffer -> view<20480xi8>
+    %ad0_bounded = index.assume %adbase [range(%adbase, 0, 20400)] : index
+    %ad1_bounded = index.assume %ad1 [range(%ad1, 32, 20432)] : index
+    vector.store %values0, %al_flat[%ad0_bounded] : vector<32xi8>, view<20480xi8>
+    vector.store %values1, %al_flat[%ad1_bounded] : vector<32xi8>, view<20480xi8>
+  } else {
+    %al_flat = buffer.view %scratch[%base] : buffer -> view<10240xi8>
+    %ad0_bounded = index.assume %adbase [range(%adbase, 0, 10160)] : index
+    %ad1_bounded = index.assume %ad1 [range(%ad1, 32, 10192)] : index
+    vector.store %values0, %al_flat[%ad0_bounded] : vector<32xi8>, view<10240xi8>
+    vector.store %values1, %al_flat[%ad1_bounded] : vector<32xi8>, view<10240xi8>
+  }
+  func.return
+}
+
+func.def inline @ggml_symmetric_i8_wmmai8_stage_metadata(%token256: i1, %scratch: buffer, %as_off: offset, %asum_off: offset, %dst0: index, %dst1: index, %d0: f32, %d1: f32, %sum0: f32, %sum1: f32) {
+  scf.if %token256 {
+    %scale_view = buffer.view %scratch[%as_off] : buffer -> view<512xf32>
+    %sum_view = buffer.view %scratch[%asum_off] : buffer -> view<512xf32>
+    %dst0_bounded = index.assume %dst0 [range(%dst0, 0, 495)] : index
+    %dst1_bounded = index.assume %dst1 [range(%dst1, 16, 511)] : index
+    view.store %d0, %scale_view[%dst0_bounded] : f32, view<512xf32>
+    view.store %d1, %scale_view[%dst1_bounded] : f32, view<512xf32>
+    view.store %sum0, %sum_view[%dst0_bounded] : f32, view<512xf32>
+    view.store %sum1, %sum_view[%dst1_bounded] : f32, view<512xf32>
+  } else {
+    %scale_view = buffer.view %scratch[%as_off] : buffer -> view<256xf32>
+    %sum_view = buffer.view %scratch[%asum_off] : buffer -> view<256xf32>
+    %dst0_bounded = index.assume %dst0 [range(%dst0, 0, 239)] : index
+    %dst1_bounded = index.assume %dst1 [range(%dst1, 16, 255)] : index
+    view.store %d0, %scale_view[%dst0_bounded] : f32, view<256xf32>
+    view.store %d1, %scale_view[%dst1_bounded] : f32, view<256xf32>
+    view.store %sum0, %sum_view[%dst0_bounded] : f32, view<256xf32>
+    view.store %sum1, %sum_view[%dst1_bounded] : f32, view<256xf32>
+  }
+  func.return
+}
+
+func.def inline @ggml_symmetric_i8_wmmai8_load_lhs(%token256: i1, %scratch: buffer, %base: offset, %row: index, %column: index, %c16: index) -> (vector<16xi8>) {
+  %lhs_layout = encoding.layout.strided [80, 1] : encoding<layout>
+  %result = scf.if %token256 -> (vector<16xi8>) {
+    %al_view = buffer.view %scratch[%base] : buffer -> view<256x64xi8, %lhs_layout>
+    %values = vector.fragment.load<lhs> %al_view[%row, %column] shape [%c16, %c16] : view<256x64xi8, %lhs_layout> -> vector<16xi8>
+    scf.yield %values : vector<16xi8>
+  } else {
+    %al_view = buffer.view %scratch[%base] : buffer -> view<128x64xi8, %lhs_layout>
+    %values = vector.fragment.load<lhs> %al_view[%row, %column] shape [%c16, %c16] : view<128x64xi8, %lhs_layout> -> vector<16xi8>
+    scf.yield %values : vector<16xi8>
+  }
+  func.return %result : vector<16xi8>
+}
+
+func.def inline @ggml_symmetric_i8_wmmai8_load_metadata(%token256: i1, %scratch: buffer, %as_off: offset, %asum_off: offset, %index: index) -> (vector<8xf32>, vector<8xf32>) {
+  %scale, %sum = scf.if %token256 -> (vector<8xf32>, vector<8xf32>) {
+    %scale_view = buffer.view %scratch[%as_off] : buffer -> view<512xf32>
+    %sum_view = buffer.view %scratch[%asum_off] : buffer -> view<512xf32>
+    %bounded_index = index.assume %index [range(%index, 0, 504)] : index
+    %scale_values = vector.load %scale_view[%bounded_index] : view<512xf32> -> vector<8xf32>
+    %sum_values = vector.load %sum_view[%bounded_index] : view<512xf32> -> vector<8xf32>
+    scf.yield %scale_values, %sum_values : vector<8xf32>, vector<8xf32>
+  } else {
+    %scale_view = buffer.view %scratch[%as_off] : buffer -> view<256xf32>
+    %sum_view = buffer.view %scratch[%asum_off] : buffer -> view<256xf32>
+    %bounded_index = index.assume %index [range(%index, 0, 120)] : index
+    %scale_values = vector.load %scale_view[%bounded_index] : view<256xf32> -> vector<8xf32>
+    %sum_values = vector.load %sum_view[%bounded_index] : view<256xf32> -> vector<8xf32>
+    scf.yield %scale_values, %sum_values : vector<8xf32>, vector<8xf32>
+  }
+  func.return %scale, %sum : vector<8xf32>, vector<8xf32>
+}
+
+amdgpu.target<gfx11-generic> @ggml_quantize_symmetric_i8_k256_gfx11_wave32 {subgroup_size = 32}
+
+// Quantize one K256 activation block with two least-squares scale refinements.
+kernel.def target(@ggml_quantize_symmetric_i8_k256_gfx11_wave32) export("ggml_quantize_f32_symmetric_i8_k256") @ggml_quantize_f32_symmetric_i8_k256(%token_count: index, %input_size_arg: index) {
+  %token_capacity = config.get @ggml.quantize_symmetric_i8_k256.token_count : index
+  %input_size = config.get @ggml.quantize_symmetric_i8_k256.input_size : index
+  %c256 = index.constant 256 : index
+  %c32 = index.constant 32 : index
+  %c1 = index.constant 1 : index
+  %block_count = index.div %input_size, %c256 : index
+  %group_count = index.mul %token_capacity, %block_count : index
+  kernel.launch.config workgroups(%group_count, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%token_count: index, %input_size_arg: index, %input: buffer, %output: buffer) {
+  %token_capacity0 = config.get @ggml.quantize_symmetric_i8_k256.token_count : index
+  %input_size0 = config.get @ggml.quantize_symmetric_i8_k256.input_size : index
+  %token_capacity, %input_size = index.assume %token_capacity0, %input_size0 [range(%token_capacity0, 1, 2048), range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index, index
+  %bounded_token_count, %bounded_input_size = index.assume %token_count, %input_size_arg [eq(%token_count, %token_capacity), eq(%input_size_arg, %input_size)] : index, index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %c256 = index.constant 256 : index
+  %c127 = scalar.constant 127.0 : f32
+  %cn127 = scalar.constant -127.0 : f32
+  %cn1 = scalar.constant -1.0 : f32
+  %c1f = scalar.constant 1.0 : f32
+  %c0f = scalar.constant 0.0 : f32
+  %c0h = scalar.constant 0.0 : f16
+  %v127 = vector.splat %c127 : vector<8xf32>
+  %vn127 = vector.splat %cn127 : vector<8xf32>
+  %vn1 = vector.splat %cn1 : vector<8xf32>
+  %base = index.constant 0 : offset
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %block_count = index.div %bounded_input_size, %c256 : index
+  %group_count = index.mul %bounded_token_count, %block_count : index
+  %group = index.assume %group0 [range(%group0, 0, 262143), lt(%group0, %group_count)] : index
+  %block = index.div %group, %bounded_token_count : index
+  %token = index.rem %group, %bounded_token_count : index
+  %token_base = index.mul %token, %bounded_input_size : index
+  %block_add = index.mul %block, %c256 : index
+  %lane_add = index.mul %lane, %c8 : index
+  %input_index0 = index.add %token_base, %block_add : index
+  %input_index = index.add %input_index0, %lane_add : index
+  %element_count = index.mul %bounded_token_count, %bounded_input_size : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%base] : buffer -> view<[%element_count]xf32>
+  %values = vector.load %input_view[%input_index] : view<[%element_count]xf32> -> vector<8xf32>
+  %absolute = vector.absf %values : vector<8xf32>
+  %lane_max = vector.reduce<maxnumf> %absolute, %c0f : vector<8xf32>, f32
+  %amax = kernel.subgroup.reduce<maxnumf> %lane_max : f32
+  %nonzero = scalar.cmpf one, %amax, %c0f : f32
+  %scale0 = scf.if %nonzero -> (f32) {
+    %value = scalar.divf %amax, %c127 : f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0f : f32
+  }
+  %inv0 = scf.if %nonzero -> (f32) {
+    %value = scalar.divf %c1f, %scale0 : f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0f : f32
+  }
+  %inv0v = vector.splat %inv0 : vector<8xf32>
+  %scaled0 = vector.mulf %values, %inv0v : vector<8xf32>
+  %rounded0 = vector.roundf %scaled0 : vector<8xf32>
+  %lower0 = vector.maxnumf %rounded0, %vn127 : vector<8xf32>
+  %neg0 = vector.mulf %lower0, %vn1 : vector<8xf32>
+  %negclamp0 = vector.maxnumf %neg0, %vn127 : vector<8xf32>
+  %clamped0 = vector.mulf %negclamp0, %vn1 : vector<8xf32>
+  %numerator_terms0 = vector.mulf %values, %clamped0 : vector<8xf32>
+  %denominator_terms0 = vector.mulf %clamped0, %clamped0 : vector<8xf32>
+  %lane_numerator0 = vector.reduce<addf> %numerator_terms0, %c0f : vector<8xf32>, f32
+  %lane_denominator0 = vector.reduce<addf> %denominator_terms0, %c0f : vector<8xf32>, f32
+  %numerator0 = kernel.subgroup.reduce<addf> %lane_numerator0 : f32
+  %denominator0 = kernel.subgroup.reduce<addf> %lane_denominator0 : f32
+  %has_denominator0 = scalar.cmpf one, %denominator0, %c0f : f32
+  %scale1 = scf.if %has_denominator0 -> (f32) {
+    %value = scalar.divf %numerator0, %denominator0 : f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %scale0 : f32
+  }
+  %inv1 = scf.if %nonzero -> (f32) {
+    %value = scalar.divf %c1f, %scale1 : f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0f : f32
+  }
+  %inv1v = vector.splat %inv1 : vector<8xf32>
+  %scaled1 = vector.mulf %values, %inv1v : vector<8xf32>
+  %rounded1 = vector.roundf %scaled1 : vector<8xf32>
+  %lower1 = vector.maxnumf %rounded1, %vn127 : vector<8xf32>
+  %neg1 = vector.mulf %lower1, %vn1 : vector<8xf32>
+  %negclamp1 = vector.maxnumf %neg1, %vn127 : vector<8xf32>
+  %clamped1 = vector.mulf %negclamp1, %vn1 : vector<8xf32>
+  %numerator_terms1 = vector.mulf %values, %clamped1 : vector<8xf32>
+  %denominator_terms1 = vector.mulf %clamped1, %clamped1 : vector<8xf32>
+  %lane_numerator1 = vector.reduce<addf> %numerator_terms1, %c0f : vector<8xf32>, f32
+  %lane_denominator1 = vector.reduce<addf> %denominator_terms1, %c0f : vector<8xf32>, f32
+  %numerator1 = kernel.subgroup.reduce<addf> %lane_numerator1 : f32
+  %denominator1 = kernel.subgroup.reduce<addf> %lane_denominator1 : f32
+  %has_denominator1 = scalar.cmpf one, %denominator1, %c0f : f32
+  %scale2 = scf.if %has_denominator1 -> (f32) {
+    %value = scalar.divf %numerator1, %denominator1 : f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %scale1 : f32
+  }
+  %encoded_scale = scalar.fptrunc %scale2 : f32 to f16
+  %decoded_scale = scalar.extf %encoded_scale : f16 to f32
+  %inverse = scf.if %nonzero -> (f32) {
+    %value = scalar.divf %c1f, %decoded_scale : f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0f : f32
+  }
+  %inverse_v = vector.splat %inverse : vector<8xf32>
+  %scaled = vector.mulf %values, %inverse_v : vector<8xf32>
+  %rounded = vector.roundf %scaled : vector<8xf32>
+  %lower = vector.maxnumf %rounded, %vn127 : vector<8xf32>
+  %neg = vector.mulf %lower, %vn1 : vector<8xf32>
+  %negclamp = vector.maxnumf %neg, %vn127 : vector<8xf32>
+  %clamped = vector.mulf %negclamp, %vn1 : vector<8xf32>
+  %quantized = vector.fptosi %clamped : vector<8xf32> to vector<8xi8>
+  %chunk = index.div %lane, %c4 : index
+  %word = index.rem %lane, %c4 : index
+  %block_chunk0 = index.mul %block, %c8 : index
+  %block_chunk = index.add %block_chunk0, %chunk : index
+  %payload_row0 = index.mul %block_chunk, %bounded_token_count : index
+  %payload_row = index.add %payload_row0, %token : index
+  %payload_base = index.mul %payload_row, %c32 : index
+  %word_add = index.mul %word, %c8 : index
+  %payload_index = index.add %payload_base, %word_add : index
+  %output_payload = buffer.view %output_noalias[%base] : buffer -> view<[%element_count]xi8>
+  vector.store %quantized, %output_payload[%payload_index] : vector<8xi8>, view<[%element_count]xi8>
+  %metadata_offset = index.cast %element_count : index to offset
+  %metadata = buffer.view %output_noalias[%metadata_offset] : buffer -> view<[%group_count]xi32>
+  %is_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_leader {
+    %metadata_pair = vector.from_elements %encoded_scale, %c0h : vector<2xf16>
+    %metadata_word = vector.bitcast %metadata_pair : vector<2xf16> to vector<1xi32>
+    vector.store %metadata_word, %metadata[%group] : vector<1xi32>, view<[%group_count]xi32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_symmetric_i8_gfx11_wave32) export("ggml_mul_mat_q5_k_symmetric_i8_wmma") @ggml_mul_mat_q5_k_symmetric_i8_wmma(%token_count: index) {
+  %unit = index.constant 1 : index
+  %tile_rows = index.constant 64 : index
+  %tile_tokens = index.constant 256 : index
+  %workgroup_size = index.constant 256 : index
+  %output_size = config.get @ggml.mul_mat.symmetric_i8.output_size : index
+  %token_capacity = config.get @ggml.mul_mat.symmetric_i8.token_count : index
+  %row_tiles = index.div %output_size, %tile_rows : index
+  %token_tiles = index.div %token_capacity, %tile_tokens : index
+  kernel.launch.config workgroups(%token_tiles, %row_tiles, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %base = index.constant 0 : offset
+  %lds_bytes = index.constant 30720 : offset
+  %w_off = index.constant 20480 : offset
+  %as_off = index.constant 25600 : offset
+  %ws_off = index.constant 27648 : offset
+  %asum_off = index.constant 28160 : offset
+  %wc_off = index.constant 30208 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c17 = index.constant 17 : index
+  %c34 = index.constant 34 : index
+  %k_kc = index.constant 64 : index
+  %k_astride = index.constant 80 : index
+  %k_wstride = index.constant 80 : index
+  %k_m = index.constant 256 : index
+  %k_n = index.constant 64 : index
+  %k_blocks = index.constant 2 : index
+  %k_wave = index.constant 32 : index
+  %k_wm = index.constant 8 : index
+  %fzero = vector.constant 0.0 : vector<8xf32>
+  %izero = vector.constant 0 : vector<8xi32>
+  %is_iq4xs = scalar.constant false : i1
+  %token256 = scalar.constant true : i1
+  %q8_plane = scalar.constant true : i1
+  %apply_swiglu = scalar.constant false : i1
+
+  %input_size0 = config.get @ggml.mul_mat.symmetric_i8.input_size : index
+  %output_size0 = config.get @ggml.mul_mat.symmetric_i8.output_size : index
+  %token_capacity = config.get @ggml.mul_mat.symmetric_i8.token_count : index
+  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), mul(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
+  %nchunks = index.div %input_size, %k_kc : index
+  %kblocks = index.div %input_size, %c32 : index
+
+  %col_tile0 = kernel.workgroup.id<x> : index
+  %row_tile0 = kernel.workgroup.id<y> : index
+  %tid0 = kernel.workitem.id<x> : index
+  %col_tile = index.assume %col_tile0 [range(%col_tile0, 0, 7)] : index
+  %row_tile = index.assume %row_tile0 [range(%row_tile0, 0, 4095)] : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %wave = index.div %tid, %k_wave : index
+
+  %weight_g = buffer.assume.memory_space<global> %weight : buffer
+  %output_g = buffer.assume.memory_space<global> %output : buffer
+  %q8_g = buffer.assume.memory_space<global> %q8_input : buffer
+  %weight_noalias, %output_noalias, %q8_noalias = buffer.assume.noalias %weight_g, %output_g, %q8_g : buffer, buffer, buffer
+
+  template.apply<@ggml.mul_mat.symmetric_i8.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %apply_swiglu, %output, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index)
+  kernel.return
+}
+
+template.decl @ggml.mul_mat.symmetric_i8.wmmai8.body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %apply_swiglu: i1, %gate: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index)
+
+amdgpu.target<gfx11-generic> @ggml_symmetric_i8_gfx11_wave32 {subgroup_size = 32}
+
+config.def @ggml.mul_mat.symmetric_i8.input_size = 5120 : index
+
+config.def @ggml.mul_mat.symmetric_i8.output_size = 17408 : index
+
+config.def @ggml.mul_mat.symmetric_i8.token_count = 512 : index
+
+config.def @ggml.mul_mat.symmetric_i8.activation_cadence = 256 : index
+
+config.def @ggml.mul_mat.symmetric_i8.chunks_per_activation = 4 : index
+
+config.def @ggml.mul_mat.symmetric_i8.activation_blocks_per_weight = 1 : index
+
+// Raw Q5_K x packed-Q8_1_x4 IU8 WMMA using the existing Loom activation layout.
+template.def<@ggml.mul_mat.symmetric_i8.wmmai8.body> device @ggml_mul_mat_symmetric_i8_wmmai8_body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %apply_swiglu: i1, %gate: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index) {
+  %q4_k_block = index.constant 256 : index
+  %q5_block_bytes = index.constant 176 : offset
+  %q5_high_offset = index.constant 16 : offset
+  %q5_code_offset = index.constant 48 : offset
+  %q8_group_bytes = index.constant 144 : offset
+  %q8_payload_offset = index.constant 16 : offset
+  %q8_elements_per_group = index.constant 128 : index
+  // dst is [rows, cols] with rows contiguous, and C is [cols, rows].
+  %dst_view = buffer.view %dst_na[%base] : buffer -> view<[%cols_b]x[%rows_b]xf32>
+  %gate_global = buffer.assume.memory_space<global> %gate : buffer
+  %gate_view = buffer.view %gate_global[%base] : buffer -> view<[%cols_b]x[%rows_b]xf32>
+
+  // Four or eight waves share one 64-row weight tile across the token tile.
+  %scratch = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+  %i8_schema = encoding.define #encoding.operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
+  // A compile-time format selects unsigned Q5_K or signed IQ4_XS operands before target lowering.
+  %signed_rhs_schema = encoding.define #encoding.operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
+  %unsigned_rhs_schema = encoding.define #encoding.operand<element_format=u8, payload_elements=16, payload_registers=4> : encoding<schema>
+  %u8_schema = scf.select %is_iq4xs, %signed_rhs_schema, %unsigned_rhs_schema : encoding<schema>
+  %rhs_layout = encoding.layout.strided [1, 80] : encoding<layout>
+  %wl_view = buffer.view %scratch[%w_off] : buffer -> view<64x64xi8, %rhs_layout>
+  %wl_flat = buffer.view %scratch[%w_off] : buffer -> view<5120xi8>
+  %wsl_view = buffer.view %scratch[%ws_off] : buffer -> view<128xf32>
+  %wcl_view = buffer.view %scratch[%wc_off] : buffer -> view<128xf32>
+
+  %col_base = index.mul %col_tile, %k_m : index
+  %row_base = index.mul %row_tile, %k_n : index
+
+  // One thread stages both K32 blocks for a token from the 144-byte Q8_1_x4 group.
+  %ascol_g = index.add %col_base, %tid : index
+  %adbase = index.mul %tid, %k_astride : index
+  %q8_groups_per_row = index.div %k_b, %q8_elements_per_group : index
+  %q8_row_bytes = index.scale %q8_groups_per_row, %q8_group_bytes : index, offset -> offset
+  %q8_row_byte_base = index.scale %ascol_g, %q8_row_bytes : index, offset -> offset
+  %q8_plane_payload_elements = index.mul %k_b, %cols_b : index
+  %q8_plane_payload_words = index.div %q8_plane_payload_elements, %c4 : index
+  %q8_plane_metadata_offset = index.cast %q8_plane_payload_elements : index to offset
+  %q8_plane_metadata_count = index.mul %kblocks, %cols_b : index
+  %q8_plane_payload = buffer.view %q8_na[%base] : buffer -> view<[%q8_plane_payload_words]xi32>
+  %q8_plane_metadata = buffer.view %q8_na[%q8_plane_metadata_offset] : buffer -> view<[%q8_plane_metadata_count]xi32>
+
+  // The waves own 32-token blocks and share one 64-row weight tile.
+  %wcol = index.rem %wave, %k_wm : index
+  %wrow = index.div %wave, %k_wm : index
+  %k_mspan = index.constant 32 : index
+  %k_nspan = index.constant 64 : index
+  %wm_off = index.mul %wcol, %k_mspan : index
+  %wn_off = index.mul %wrow, %k_nspan : index
+  %m_out = index.add %col_base, %wm_off : index
+  %n_out = index.add %row_base, %wn_off : index
+  %lm0 = index.add %wm_off, %c0 : index
+  %gm0 = index.add %m_out, %c0 : index
+  %k_ma1 = index.constant 16 : index
+  %lm1 = index.add %wm_off, %k_ma1 : index
+  %gm1 = index.add %m_out, %k_ma1 : index
+  %ln0 = index.add %wn_off, %c0 : index
+  %gn0 = index.add %n_out, %c0 : index
+  %k_nb1 = index.constant 16 : index
+  %ln1 = index.add %wn_off, %k_nb1 : index
+  %gn1 = index.add %n_out, %k_nb1 : index
+  %k_nb2 = index.constant 32 : index
+  %ln2 = index.add %wn_off, %k_nb2 : index
+  %gn2 = index.add %n_out, %k_nb2 : index
+  %k_nb3 = index.constant 48 : index
+  %ln3 = index.add %wn_off, %k_nb3 : index
+  %gn3 = index.add %n_out, %k_nb3 : index
+  %lane = index.rem %tid, %k_wave : index
+  %lane_lo = index.rem %lane, %c16 : index
+  %lane_hi = index.div %lane, %c16 : index
+  %wsb0_0 = index.add %ln0, %lane_lo : index
+  %wsb0 = index.mul %wsb0_0, %k_blocks : index
+  %wsb1_0 = index.add %ln1, %lane_lo : index
+  %wsb1 = index.mul %wsb1_0, %k_blocks : index
+  %wsb2_0 = index.add %ln2, %lane_lo : index
+  %wsb2 = index.mul %wsb2_0, %k_blocks : index
+  %wsb3_0 = index.add %ln3, %lane_lo : index
+  %wsb3 = index.mul %wsb3_0, %k_blocks : index
+  // Activation scale metadata is [tile][block][lane-half][register].
+  %as_tile0 = index.div %lm0, %c16 : index
+  %asb0 = index.mul %as_tile0, %k_blocks : index
+  %as_tile1 = index.div %lm1, %c16 : index
+  %asb1 = index.mul %as_tile1, %k_blocks : index
+
+  %i8_c64 = index.constant 64 : index
+  %i8_c258 = index.constant 258 : index
+  %i8_c256 = index.constant 256 : index
+  %i8_act_cadence = config.get @ggml.mul_mat.symmetric_i8.activation_cadence : index
+  %i8_chunks_per_act = config.get @ggml.mul_mat.symmetric_i8.chunks_per_activation : index
+  %i8_act_blocks_per_weight = config.get @ggml.mul_mat.symmetric_i8.activation_blocks_per_weight : index
+  %i8_c48_outer = index.constant 48 : index
+  %i8_record_bytes = index.constant 16512 : index
+  %i8_scale_bytes = index.constant 128 : index
+  %i8_field_bytes = index.constant 4096 : index
+  %i8_payload_elements = index.mul %k_b, %cols_b : index
+  %i8_payload_words = index.div %i8_payload_elements, %c4 : index
+  %i8_meta_offset = index.cast %i8_payload_elements : index to offset
+  %i8_act_block_count = index.div %k_b, %i8_act_cadence : index
+  %i8_weight_block_count = index.div %k_b, %i8_c256 : index
+  %i8_meta_count = index.mul %i8_act_block_count, %cols_b : index
+  %i8_q8_payload = buffer.view %q8_na[%base] : buffer -> view<[%i8_payload_words]xi32>
+  %i8_q8_meta = buffer.view %q8_na[%i8_meta_offset] : buffer -> view<[%i8_meta_count]xi32>
+  %i8_weight_records = index.mul %rows_b, %i8_weight_block_count : index
+  %i8_weight_bytes = index.mul %i8_weight_records, %i8_c258 : index
+  %i8_weight_view = buffer.view %src0_na[%base] : buffer -> view<[%i8_weight_bytes]xi8>
+  %f0_0, %f0_1, %f0_2, %f0_3, %f1_0, %f1_1, %f1_2, %f1_3 = scf.for %i8_act_block = [%c0 to %i8_act_block_count step %c1](%fc0_0 = %fzero : vector<8xf32>, %fc0_1 = %fzero : vector<8xf32>, %fc0_2 = %fzero : vector<8xf32>, %fc0_3 = %fzero : vector<8xf32>, %fc1_0 = %fzero : vector<8xf32>, %fc1_1 = %fzero : vector<8xf32>, %fc1_2 = %fzero : vector<8xf32>, %fc1_3 = %fzero : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+    %i8_source_row_base = index.constant 0 : index
+    %i8_weight_block = index.div %i8_act_block, %i8_act_blocks_per_weight : index
+    %i8_act_in_weight = index.rem %i8_act_block, %i8_act_blocks_per_weight : index
+    %i8_weight_inner_base = index.mul %i8_act_in_weight, %i8_chunks_per_act : index
+    %i8_tile_block0 = index.mul %row_tile, %i8_weight_block_count : index
+    %i8_tile_block = index.add %i8_tile_block0, %i8_weight_block : index
+    %i8_record_base = index.mul %i8_tile_block, %i8_record_bytes : index
+    %i8_i0_0, %i8_i0_1, %i8_i0_2, %i8_i0_3, %i8_i1_0, %i8_i1_1, %i8_i1_2, %i8_i1_3 = scf.for %inner = [%c0 to %i8_chunks_per_act step %c1](%i8_ic0_0 = %izero : vector<8xi32>, %i8_ic0_1 = %izero : vector<8xi32>, %i8_ic0_2 = %izero : vector<8xi32>, %i8_ic0_3 = %izero : vector<8xi32>, %i8_ic1_0 = %izero : vector<8xi32>, %i8_ic1_1 = %izero : vector<8xi32>, %i8_ic1_2 = %izero : vector<8xi32>, %i8_ic1_3 = %izero : vector<8xi32>) -> (vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>) {
+      %i8_chunk0_loop = index.mul %i8_act_block, %i8_chunks_per_act : index
+      %i8_chunk_loop = index.add %i8_chunk0_loop, %inner : index
+      %i8_q8_block0_loop = index.mul %i8_chunk_loop, %c2 : index
+      %i8_q8_block1_loop = index.add %i8_q8_block0_loop, %c1 : index
+      %i8_q8_token_base0_loop = index.mul %i8_q8_block0_loop, %cols_b : index
+      %i8_q8_token_base1_loop = index.mul %i8_q8_block1_loop, %cols_b : index
+      %i8_q8_token0_loop = index.add %i8_q8_token_base0_loop, %ascol_g : index
+      %i8_q8_token1_loop = index.add %i8_q8_token_base1_loop, %ascol_g : index
+      %i8_q8_word00_loop = index.mul %i8_q8_token0_loop, %c8 : index
+      %i8_q8_word10_loop = index.mul %i8_q8_token1_loop, %c8 : index
+      %i8_q8_word0_loop = index.assume %i8_q8_word00_loop [range(%i8_q8_word00_loop, 0, 268435448), mul(%i8_q8_word00_loop, 8)] : index
+      %i8_q8_word1_loop = index.assume %i8_q8_word10_loop [range(%i8_q8_word10_loop, 8, 268435448), mul(%i8_q8_word10_loop, 8)] : index
+      %i8_q8_words0_loop = vector.load %i8_q8_payload[%i8_q8_word0_loop] : view<[%i8_payload_words]xi32> -> vector<8xi32>
+      %i8_q8_words1_loop = vector.load %i8_q8_payload[%i8_q8_word1_loop] : view<[%i8_payload_words]xi32> -> vector<8xi32>
+      %i8_q8_values0_loop = vector.bitcast %i8_q8_words0_loop : vector<8xi32> to vector<32xi8>
+      %i8_q8_values1_loop = vector.bitcast %i8_q8_words1_loop : vector<8xi32> to vector<32xi8>
+      %i8_ad1_loop = index.add %adbase, %c32 : index
+      func.call @ggml_symmetric_i8_wmmai8_stage_values(%token256, %scratch, %base, %adbase, %i8_ad1_loop, %i8_q8_values0_loop, %i8_q8_values1_loop) : (i1, buffer, offset, index, index, vector<32xi8>, vector<32xi8>)
+      %i8_meta_block_base_loop = index.mul %i8_act_block, %cols_b : index
+      %i8_meta_index_loop = index.add %i8_meta_block_base_loop, %ascol_g : index
+      %i8_meta_word_loop = view.load %i8_q8_meta[%i8_meta_index_loop] : view<[%i8_meta_count]xi32> -> i32
+      %i8_meta_vector_loop = vector.from_elements %i8_meta_word_loop : vector<1xi32>
+      %i8_meta_halves_loop = vector.bitcast %i8_meta_vector_loop : vector<1xi32> to vector<2xf16>
+      %i8_qscale_f16_loop = vector.extract %i8_meta_halves_loop[0] : vector<2xf16> -> f16
+      %i8_qscale_loop = scalar.extf %i8_qscale_f16_loop : f16 to f32
+      %i8_qtoken_tile_loop = index.div %tid, %c16 : index
+      %i8_qtoken_inner_loop = index.rem %tid, %c16 : index
+      %i8_qtoken_parity_loop = index.rem %i8_qtoken_inner_loop, %c2 : index
+      %i8_qtoken_vector_loop = index.div %i8_qtoken_inner_loop, %c2 : index
+      %i8_qscale_tile0_loop = index.mul %i8_qtoken_tile_loop, %c4 : index
+      %i8_qscale_tile1_loop = index.add %i8_qscale_tile0_loop, %i8_qtoken_parity_loop : index
+      %i8_qscale_tile2_loop = index.mul %i8_qscale_tile1_loop, %c8 : index
+      %i8_qscale_dst0_loop = index.add %i8_qscale_tile2_loop, %i8_qtoken_vector_loop : index
+      %i8_qscale_dst1_loop = index.add %i8_qscale_dst0_loop, %c16 : index
+      func.call @ggml_symmetric_i8_wmmai8_stage_metadata(%token256, %scratch, %as_off, %asum_off, %i8_qscale_dst0_loop, %i8_qscale_dst1_loop, %i8_qscale_loop, %i8_qscale_loop, %i8_qscale_loop, %i8_qscale_loop) : (i1, buffer, offset, offset, index, index, f32, f32, f32, f32)
+      %i8_word0 = index.rem %tid, %c4 : index
+      %i8_word = index.assume %i8_word0 [range(%i8_word0, 0, 3)] : index
+      %i8_byte_position0 = index.mul %i8_word, %c16 : index
+      %i8_byte_position = index.assume %i8_byte_position0 [range(%i8_byte_position0, 0, 48), mul(%i8_byte_position0, 16)] : index
+      %i8_local_row0 = index.div %tid, %c4 : index
+      %i8_local_row = index.assume %i8_local_row0 [range(%i8_local_row0, 0, 63)] : index
+      %i8_weight_inner = index.add %i8_weight_inner_base, %inner : index
+      %i8_inner_bytes = index.mul %i8_weight_inner, %i8_field_bytes : index
+      %i8_row_byte0 = index.mul %i8_local_row, %i8_c64 : index
+      %i8_row_byte = index.add %i8_row_byte0, %i8_byte_position : index
+      %i8_payload_base = index.add %i8_record_base, %i8_scale_bytes : index
+      %i8_chunk_base = index.add %i8_payload_base, %i8_inner_bytes : index
+      %i8_address = index.add %i8_chunk_base, %i8_row_byte : index
+      %i8_values = vector.load %i8_weight_view[%i8_address] : view<[%i8_weight_bytes]xi8> -> vector<16xi8>
+      %i8_weight_row_base0 = index.mul %i8_local_row, %k_wstride : index
+      %i8_weight_row_base = index.add %i8_weight_row_base0, %i8_byte_position : index
+      %i8_weight_destination = index.assume %i8_weight_row_base [range(%i8_weight_row_base, 0, 5104), mul(%i8_weight_row_base, 16)] : index
+      vector.store %i8_values, %wl_flat[%i8_weight_destination] : vector<16xi8>, view<5120xi8>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %i8_lhs0_0_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm0, %c0, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs0_0_words = vector.bitcast %i8_lhs0_0_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs0_0 = vector.fragment<lhs> %i8_lhs0_0_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs0_1_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm0, %c16, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs0_1_words = vector.bitcast %i8_lhs0_1_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs0_1 = vector.fragment<lhs> %i8_lhs0_1_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs0_2_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm0, %c32, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs0_2_words = vector.bitcast %i8_lhs0_2_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs0_2 = vector.fragment<lhs> %i8_lhs0_2_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs0_3_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm0, %i8_c48_outer, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs0_3_words = vector.bitcast %i8_lhs0_3_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs0_3 = vector.fragment<lhs> %i8_lhs0_3_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs1_0_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm1, %c0, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs1_0_words = vector.bitcast %i8_lhs1_0_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs1_0 = vector.fragment<lhs> %i8_lhs1_0_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs1_1_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm1, %c16, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs1_1_words = vector.bitcast %i8_lhs1_1_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs1_1 = vector.fragment<lhs> %i8_lhs1_1_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs1_2_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm1, %c32, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs1_2_words = vector.bitcast %i8_lhs1_2_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs1_2 = vector.fragment<lhs> %i8_lhs1_2_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_lhs1_3_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm1, %i8_c48_outer, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
+      %i8_lhs1_3_words = vector.bitcast %i8_lhs1_3_raw : vector<16xi8> to vector<4xi32>
+      %i8_lhs1_3 = vector.fragment<lhs> %i8_lhs1_3_words shape [%c16, %c16] using {schema = %i8_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs0_0_raw = vector.fragment.load<rhs> %wl_view[%c0, %ln0] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs0_0_words = vector.bitcast %i8_rhs0_0_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs0_0 = vector.fragment<rhs> %i8_rhs0_0_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs0_1_raw = vector.fragment.load<rhs> %wl_view[%c16, %ln0] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs0_1_words = vector.bitcast %i8_rhs0_1_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs0_1 = vector.fragment<rhs> %i8_rhs0_1_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs0_2_raw = vector.fragment.load<rhs> %wl_view[%c32, %ln0] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs0_2_words = vector.bitcast %i8_rhs0_2_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs0_2 = vector.fragment<rhs> %i8_rhs0_2_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs0_3_raw = vector.fragment.load<rhs> %wl_view[%i8_c48_outer, %ln0] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs0_3_words = vector.bitcast %i8_rhs0_3_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs0_3 = vector.fragment<rhs> %i8_rhs0_3_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs1_0_raw = vector.fragment.load<rhs> %wl_view[%c0, %ln1] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs1_0_words = vector.bitcast %i8_rhs1_0_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs1_0 = vector.fragment<rhs> %i8_rhs1_0_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs1_1_raw = vector.fragment.load<rhs> %wl_view[%c16, %ln1] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs1_1_words = vector.bitcast %i8_rhs1_1_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs1_1 = vector.fragment<rhs> %i8_rhs1_1_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs1_2_raw = vector.fragment.load<rhs> %wl_view[%c32, %ln1] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs1_2_words = vector.bitcast %i8_rhs1_2_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs1_2 = vector.fragment<rhs> %i8_rhs1_2_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs1_3_raw = vector.fragment.load<rhs> %wl_view[%i8_c48_outer, %ln1] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs1_3_words = vector.bitcast %i8_rhs1_3_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs1_3 = vector.fragment<rhs> %i8_rhs1_3_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs2_0_raw = vector.fragment.load<rhs> %wl_view[%c0, %ln2] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs2_0_words = vector.bitcast %i8_rhs2_0_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs2_0 = vector.fragment<rhs> %i8_rhs2_0_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs2_1_raw = vector.fragment.load<rhs> %wl_view[%c16, %ln2] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs2_1_words = vector.bitcast %i8_rhs2_1_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs2_1 = vector.fragment<rhs> %i8_rhs2_1_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs2_2_raw = vector.fragment.load<rhs> %wl_view[%c32, %ln2] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs2_2_words = vector.bitcast %i8_rhs2_2_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs2_2 = vector.fragment<rhs> %i8_rhs2_2_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs2_3_raw = vector.fragment.load<rhs> %wl_view[%i8_c48_outer, %ln2] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs2_3_words = vector.bitcast %i8_rhs2_3_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs2_3 = vector.fragment<rhs> %i8_rhs2_3_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs3_0_raw = vector.fragment.load<rhs> %wl_view[%c0, %ln3] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs3_0_words = vector.bitcast %i8_rhs3_0_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs3_0 = vector.fragment<rhs> %i8_rhs3_0_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs3_1_raw = vector.fragment.load<rhs> %wl_view[%c16, %ln3] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs3_1_words = vector.bitcast %i8_rhs3_1_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs3_1 = vector.fragment<rhs> %i8_rhs3_1_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs3_2_raw = vector.fragment.load<rhs> %wl_view[%c32, %ln3] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs3_2_words = vector.bitcast %i8_rhs3_2_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs3_2 = vector.fragment<rhs> %i8_rhs3_2_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_rhs3_3_raw = vector.fragment.load<rhs> %wl_view[%i8_c48_outer, %ln3] shape [%c16, %c16] : view<64x64xi8, %rhs_layout> -> vector<16xi8>
+      %i8_rhs3_3_words = vector.bitcast %i8_rhs3_3_raw : vector<16xi8> to vector<4xi32>
+      %i8_rhs3_3 = vector.fragment<rhs> %i8_rhs3_3_words shape [%c16, %c16] using {schema = %signed_rhs_schema : encoding<schema>} : vector<4xi32>
+      %i8_init0_0 = vector.fragment<init> %i8_ic0_0 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma0_0_0 = vector.mma %i8_lhs0_0, %i8_rhs0_0, %i8_init0_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_0_1 = vector.mma %i8_lhs0_1, %i8_rhs0_1, %i8_mma0_0_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_0_2 = vector.mma %i8_lhs0_2, %i8_rhs0_2, %i8_mma0_0_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_0_3 = vector.mma %i8_lhs0_3, %i8_rhs0_3, %i8_mma0_0_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init0_1 = vector.fragment<init> %i8_ic0_1 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma0_1_0 = vector.mma %i8_lhs0_0, %i8_rhs1_0, %i8_init0_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_1_1 = vector.mma %i8_lhs0_1, %i8_rhs1_1, %i8_mma0_1_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_1_2 = vector.mma %i8_lhs0_2, %i8_rhs1_2, %i8_mma0_1_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_1_3 = vector.mma %i8_lhs0_3, %i8_rhs1_3, %i8_mma0_1_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init0_2 = vector.fragment<init> %i8_ic0_2 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma0_2_0 = vector.mma %i8_lhs0_0, %i8_rhs2_0, %i8_init0_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_2_1 = vector.mma %i8_lhs0_1, %i8_rhs2_1, %i8_mma0_2_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_2_2 = vector.mma %i8_lhs0_2, %i8_rhs2_2, %i8_mma0_2_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_2_3 = vector.mma %i8_lhs0_3, %i8_rhs2_3, %i8_mma0_2_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init0_3 = vector.fragment<init> %i8_ic0_3 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma0_3_0 = vector.mma %i8_lhs0_0, %i8_rhs3_0, %i8_init0_3 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_3_1 = vector.mma %i8_lhs0_1, %i8_rhs3_1, %i8_mma0_3_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_3_2 = vector.mma %i8_lhs0_2, %i8_rhs3_2, %i8_mma0_3_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma0_3_3 = vector.mma %i8_lhs0_3, %i8_rhs3_3, %i8_mma0_3_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init1_0 = vector.fragment<init> %i8_ic1_0 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma1_0_0 = vector.mma %i8_lhs1_0, %i8_rhs0_0, %i8_init1_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_0_1 = vector.mma %i8_lhs1_1, %i8_rhs0_1, %i8_mma1_0_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_0_2 = vector.mma %i8_lhs1_2, %i8_rhs0_2, %i8_mma1_0_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_0_3 = vector.mma %i8_lhs1_3, %i8_rhs0_3, %i8_mma1_0_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init1_1 = vector.fragment<init> %i8_ic1_1 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma1_1_0 = vector.mma %i8_lhs1_0, %i8_rhs1_0, %i8_init1_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_1_1 = vector.mma %i8_lhs1_1, %i8_rhs1_1, %i8_mma1_1_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_1_2 = vector.mma %i8_lhs1_2, %i8_rhs1_2, %i8_mma1_1_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_1_3 = vector.mma %i8_lhs1_3, %i8_rhs1_3, %i8_mma1_1_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init1_2 = vector.fragment<init> %i8_ic1_2 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma1_2_0 = vector.mma %i8_lhs1_0, %i8_rhs2_0, %i8_init1_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_2_1 = vector.mma %i8_lhs1_1, %i8_rhs2_1, %i8_mma1_2_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_2_2 = vector.mma %i8_lhs1_2, %i8_rhs2_2, %i8_mma1_2_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_2_3 = vector.mma %i8_lhs1_3, %i8_rhs2_3, %i8_mma1_2_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      %i8_init1_3 = vector.fragment<init> %i8_ic1_3 shape [%c16, %c16] : vector<8xi32>
+      %i8_mma1_3_0 = vector.mma %i8_lhs1_0, %i8_rhs3_0, %i8_init1_3 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_3_1 = vector.mma %i8_lhs1_1, %i8_rhs3_1, %i8_mma1_3_0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_3_2 = vector.mma %i8_lhs1_2, %i8_rhs3_2, %i8_mma1_3_1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      %i8_mma1_3_3 = vector.mma %i8_lhs1_3, %i8_rhs3_3, %i8_mma1_3_2 : vector<4xi32>, vector<4xi32>, vector<8xi32>
+      scf.schedule.fence
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      scf.yield %i8_mma0_0_3, %i8_mma0_1_3, %i8_mma0_2_3, %i8_mma0_3_3, %i8_mma1_0_3, %i8_mma1_1_3, %i8_mma1_2_3, %i8_mma1_3_3 : vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>
+    }
+    %i8_asi0_0 = index.add %asb0, %c0 : index
+    %i8_asi0_1 = index.mul %i8_asi0_0, %c2 : index
+    %i8_asi0_2 = index.add %i8_asi0_1, %lane_hi : index
+    %i8_asi0_3 = index.mul %i8_asi0_2, %c8 : index
+    %i8_asv0, %i8_unused_sum0 = func.call @ggml_symmetric_i8_wmmai8_load_metadata(%token256, %scratch, %as_off, %asum_off, %i8_asi0_3) : (i1, buffer, offset, offset, index) -> (vector<8xf32>, vector<8xf32>)
+    %i8_asi1_0 = index.add %asb1, %c0 : index
+    %i8_asi1_1 = index.mul %i8_asi1_0, %c2 : index
+    %i8_asi1_2 = index.add %i8_asi1_1, %lane_hi : index
+    %i8_asi1_3 = index.mul %i8_asi1_2, %c8 : index
+    %i8_asv1, %i8_unused_sum1 = func.call @ggml_symmetric_i8_wmmai8_load_metadata(%token256, %scratch, %as_off, %asum_off, %i8_asi1_3) : (i1, buffer, offset, offset, index) -> (vector<8xf32>, vector<8xf32>)
+    %i8_wsi0_0 = index.add %ln0, %lane_lo : index
+    %i8_wsi0 = index.assume %i8_wsi0_0 [range(%i8_wsi0_0, 0, 63)] : index
+    %i8_scale_source_row0 = index.add %i8_source_row_base, %i8_wsi0 : index
+    %i8_scale_byte0_0 = index.mul %i8_scale_source_row0, %c2 : index
+    %i8_scale_byte0 = index.add %i8_record_base, %i8_scale_byte0_0 : index
+    %i8_scale_bytes0 = vector.load %i8_weight_view[%i8_scale_byte0] : view<[%i8_weight_bytes]xi8> -> vector<2xi8>
+    %i8_scale_halfv0 = vector.bitcast %i8_scale_bytes0 : vector<2xi8> to vector<1xf16>
+    %i8_scale_half0 = vector.extract %i8_scale_halfv0[0] : vector<1xf16> -> f16
+    %i8_wscale0_scalar = scalar.extf %i8_scale_half0 : f16 to f32
+    %i8_wscale0 = vector.splat %i8_wscale0_scalar : vector<8xf32>
+    %i8_wsi1_0 = index.add %ln1, %lane_lo : index
+    %i8_wsi1 = index.assume %i8_wsi1_0 [range(%i8_wsi1_0, 0, 63)] : index
+    %i8_scale_source_row1 = index.add %i8_source_row_base, %i8_wsi1 : index
+    %i8_scale_byte1_0 = index.mul %i8_scale_source_row1, %c2 : index
+    %i8_scale_byte1 = index.add %i8_record_base, %i8_scale_byte1_0 : index
+    %i8_scale_bytes1 = vector.load %i8_weight_view[%i8_scale_byte1] : view<[%i8_weight_bytes]xi8> -> vector<2xi8>
+    %i8_scale_halfv1 = vector.bitcast %i8_scale_bytes1 : vector<2xi8> to vector<1xf16>
+    %i8_scale_half1 = vector.extract %i8_scale_halfv1[0] : vector<1xf16> -> f16
+    %i8_wscale1_scalar = scalar.extf %i8_scale_half1 : f16 to f32
+    %i8_wscale1 = vector.splat %i8_wscale1_scalar : vector<8xf32>
+    %i8_wsi2_0 = index.add %ln2, %lane_lo : index
+    %i8_wsi2 = index.assume %i8_wsi2_0 [range(%i8_wsi2_0, 0, 63)] : index
+    %i8_scale_source_row2 = index.add %i8_source_row_base, %i8_wsi2 : index
+    %i8_scale_byte2_0 = index.mul %i8_scale_source_row2, %c2 : index
+    %i8_scale_byte2 = index.add %i8_record_base, %i8_scale_byte2_0 : index
+    %i8_scale_bytes2 = vector.load %i8_weight_view[%i8_scale_byte2] : view<[%i8_weight_bytes]xi8> -> vector<2xi8>
+    %i8_scale_halfv2 = vector.bitcast %i8_scale_bytes2 : vector<2xi8> to vector<1xf16>
+    %i8_scale_half2 = vector.extract %i8_scale_halfv2[0] : vector<1xf16> -> f16
+    %i8_wscale2_scalar = scalar.extf %i8_scale_half2 : f16 to f32
+    %i8_wscale2 = vector.splat %i8_wscale2_scalar : vector<8xf32>
+    %i8_wsi3_0 = index.add %ln3, %lane_lo : index
+    %i8_wsi3 = index.assume %i8_wsi3_0 [range(%i8_wsi3_0, 0, 63)] : index
+    %i8_scale_source_row3 = index.add %i8_source_row_base, %i8_wsi3 : index
+    %i8_scale_byte3_0 = index.mul %i8_scale_source_row3, %c2 : index
+    %i8_scale_byte3 = index.add %i8_record_base, %i8_scale_byte3_0 : index
+    %i8_scale_bytes3 = vector.load %i8_weight_view[%i8_scale_byte3] : view<[%i8_weight_bytes]xi8> -> vector<2xi8>
+    %i8_scale_halfv3 = vector.bitcast %i8_scale_bytes3 : vector<2xi8> to vector<1xf16>
+    %i8_scale_half3 = vector.extract %i8_scale_halfv3[0] : vector<1xf16> -> f16
+    %i8_wscale3_scalar = scalar.extf %i8_scale_half3 : f16 to f32
+    %i8_wscale3 = vector.splat %i8_wscale3_scalar : vector<8xf32>
+    %i8_fp0_0 = vector.sitofp %i8_i0_0 : vector<8xi32> to vector<8xf32>
+    %i8_scale0_0 = vector.mulf %i8_asv0, %i8_wscale0 : vector<8xf32>
+    %i8_next0_0 = vector.fmaf %i8_fp0_0, %i8_scale0_0, %fc0_0 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp0_1 = vector.sitofp %i8_i0_1 : vector<8xi32> to vector<8xf32>
+    %i8_scale0_1 = vector.mulf %i8_asv0, %i8_wscale1 : vector<8xf32>
+    %i8_next0_1 = vector.fmaf %i8_fp0_1, %i8_scale0_1, %fc0_1 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp0_2 = vector.sitofp %i8_i0_2 : vector<8xi32> to vector<8xf32>
+    %i8_scale0_2 = vector.mulf %i8_asv0, %i8_wscale2 : vector<8xf32>
+    %i8_next0_2 = vector.fmaf %i8_fp0_2, %i8_scale0_2, %fc0_2 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp0_3 = vector.sitofp %i8_i0_3 : vector<8xi32> to vector<8xf32>
+    %i8_scale0_3 = vector.mulf %i8_asv0, %i8_wscale3 : vector<8xf32>
+    %i8_next0_3 = vector.fmaf %i8_fp0_3, %i8_scale0_3, %fc0_3 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp1_0 = vector.sitofp %i8_i1_0 : vector<8xi32> to vector<8xf32>
+    %i8_scale1_0 = vector.mulf %i8_asv1, %i8_wscale0 : vector<8xf32>
+    %i8_next1_0 = vector.fmaf %i8_fp1_0, %i8_scale1_0, %fc1_0 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp1_1 = vector.sitofp %i8_i1_1 : vector<8xi32> to vector<8xf32>
+    %i8_scale1_1 = vector.mulf %i8_asv1, %i8_wscale1 : vector<8xf32>
+    %i8_next1_1 = vector.fmaf %i8_fp1_1, %i8_scale1_1, %fc1_1 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp1_2 = vector.sitofp %i8_i1_2 : vector<8xi32> to vector<8xf32>
+    %i8_scale1_2 = vector.mulf %i8_asv1, %i8_wscale2 : vector<8xf32>
+    %i8_next1_2 = vector.fmaf %i8_fp1_2, %i8_scale1_2, %fc1_2 : vector<8xf32>
+    scf.schedule.fence
+    %i8_fp1_3 = vector.sitofp %i8_i1_3 : vector<8xi32> to vector<8xf32>
+    %i8_scale1_3 = vector.mulf %i8_asv1, %i8_wscale3 : vector<8xf32>
+    %i8_next1_3 = vector.fmaf %i8_fp1_3, %i8_scale1_3, %fc1_3 : vector<8xf32>
+    scf.schedule.fence
+    scf.yield %i8_next0_0, %i8_next0_1, %i8_next0_2, %i8_next0_3, %i8_next1_0, %i8_next1_1, %i8_next1_2, %i8_next1_3 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+  %out0_0 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate0_0 = vector.fragment.load<result> %gate_view[%gm0, %gn0] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu0_0 = vector.siluf %gate0_0 : vector<8xf32>
+    %result0_0 = vector.mulf %silu0_0, %f0_0 : vector<8xf32>
+    scf.yield %result0_0 : vector<8xf32>
+  } else {
+    scf.yield %f0_0 : vector<8xf32>
+  }
+  %out0_1 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate0_1 = vector.fragment.load<result> %gate_view[%gm0, %gn1] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu0_1 = vector.siluf %gate0_1 : vector<8xf32>
+    %result0_1 = vector.mulf %silu0_1, %f0_1 : vector<8xf32>
+    scf.yield %result0_1 : vector<8xf32>
+  } else {
+    scf.yield %f0_1 : vector<8xf32>
+  }
+  %out0_2 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate0_2 = vector.fragment.load<result> %gate_view[%gm0, %gn2] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu0_2 = vector.siluf %gate0_2 : vector<8xf32>
+    %result0_2 = vector.mulf %silu0_2, %f0_2 : vector<8xf32>
+    scf.yield %result0_2 : vector<8xf32>
+  } else {
+    scf.yield %f0_2 : vector<8xf32>
+  }
+  %out0_3 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate0_3 = vector.fragment.load<result> %gate_view[%gm0, %gn3] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu0_3 = vector.siluf %gate0_3 : vector<8xf32>
+    %result0_3 = vector.mulf %silu0_3, %f0_3 : vector<8xf32>
+    scf.yield %result0_3 : vector<8xf32>
+  } else {
+    scf.yield %f0_3 : vector<8xf32>
+  }
+  %out1_0 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate1_0 = vector.fragment.load<result> %gate_view[%gm1, %gn0] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu1_0 = vector.siluf %gate1_0 : vector<8xf32>
+    %result1_0 = vector.mulf %silu1_0, %f1_0 : vector<8xf32>
+    scf.yield %result1_0 : vector<8xf32>
+  } else {
+    scf.yield %f1_0 : vector<8xf32>
+  }
+  %out1_1 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate1_1 = vector.fragment.load<result> %gate_view[%gm1, %gn1] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu1_1 = vector.siluf %gate1_1 : vector<8xf32>
+    %result1_1 = vector.mulf %silu1_1, %f1_1 : vector<8xf32>
+    scf.yield %result1_1 : vector<8xf32>
+  } else {
+    scf.yield %f1_1 : vector<8xf32>
+  }
+  %out1_2 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate1_2 = vector.fragment.load<result> %gate_view[%gm1, %gn2] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu1_2 = vector.siluf %gate1_2 : vector<8xf32>
+    %result1_2 = vector.mulf %silu1_2, %f1_2 : vector<8xf32>
+    scf.yield %result1_2 : vector<8xf32>
+  } else {
+    scf.yield %f1_2 : vector<8xf32>
+  }
+  %out1_3 = scf.if %apply_swiglu -> (vector<8xf32>) {
+    %gate1_3 = vector.fragment.load<result> %gate_view[%gm1, %gn3] shape [%c16, %c16] : view<[%cols_b]x[%rows_b]xf32> -> vector<8xf32>
+    %silu1_3 = vector.siluf %gate1_3 : vector<8xf32>
+    %result1_3 = vector.mulf %silu1_3, %f1_3 : vector<8xf32>
+    scf.yield %result1_3 : vector<8xf32>
+  } else {
+    scf.yield %f1_3 : vector<8xf32>
+  }
+
+  vector.fragment.store<result> %out0_0, %dst_view[%gm0, %gn0] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out0_1, %dst_view[%gm0, %gn1] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out0_2, %dst_view[%gm0, %gn2] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out0_3, %dst_view[%gm0, %gn3] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out1_0, %dst_view[%gm1, %gn0] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out1_1, %dst_view[%gm1, %gn1] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out1_2, %dst_view[%gm1, %gn2] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  vector.fragment.store<result> %out1_3, %dst_view[%gm1, %gn3] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
+  template.return
+}

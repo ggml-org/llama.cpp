@@ -1,0 +1,20 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_binary_f32_k16.body(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_f32.rms_epsilon : f32
+config.decl @ggml.rmsnorm_binary_f32.op : %value: index where [range(%value, 0, 3)]
+
+// Retain two original lane streams per thread and publish both F32 and K16 F16.
+kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary_f32_k16") @ggml_rmsnorm_binary_f32_k16(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c128 = index.constant 128 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer) where [range(%token_count, 1, 1048576)] {
+  template.apply<@ggml.rmsnorm_binary_f32_k16.body>(%token_count, %input, %rhs, %output, %f16_output) : (index, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -1,0 +1,108 @@
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+template.decl @ggml.flash_attention.decode_split.pack_completed_q8(%key_value_head: index, %output: buffer, %q8_output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_completed.cooperative(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_completed.direct(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_fused(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer)
+
+// Completes bounded decode contexts inside the last arriving producer
+// workgroup. Four KV-head workgroups reduce their own query heads while all
+// other producers retire, erasing a second dispatch and its execution barrier.
+// Capacity selects the algorithm and partial layout; producer count owns the
+// issue-time completion threshold and active reduction prefix.
+template.def<@ggml.flash_attention.decode_split.reduce_fused> device priority(20) @ggml_flash_attention_decode_split_reduce_fused_direct_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 64, 256)] {
+  %partial_block_capacity, %producer_block_count = index.assume %partial_block_capacity0, %producer_block_count0 [range(%partial_block_capacity0, 1, 4), range(%producer_block_count0, 1, 4), le(%producer_block_count0, %partial_block_capacity0)] : index, index
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %workgroup_y0 = kernel.workgroup.id<y> : index
+  %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %counter_scratch_bytes = index.constant 4 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %completion_counter_noalias, %output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output, %completion_counter, %output : buffer, buffer, buffer, buffer, buffer
+  %completion_counter_aligned = buffer.assume.alignment %completion_counter_noalias {minimum_alignment = 16} : buffer
+  %completion_counter_view = buffer.view %completion_counter_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]xi32>
+  %counter_scratch = buffer.alloca<workgroup> align(4) %counter_scratch_bytes : buffer
+  %counter_scratch_view = buffer.view %counter_scratch[%c0_offset] : buffer -> view<1xi32>
+  %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
+  // Publish every producer's partial stores before the leader advances one
+  // workgroup arrival. The last arrival then acquires every partial.
+  kernel.barrier<global> scope(workgroup) ordering(release)
+  scf.if %workitem_is_zero {
+    %old_counter = view.atomic.rmw<addi> %c1_i32, %completion_counter_view[%key_value_head] {ordering = acq_rel, scope = device} : i32, view<[%key_value_head_count]xi32> -> i32
+    view.store %old_counter, %counter_scratch_view[%c0] : i32, view<1xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %old_counter = view.load %counter_scratch_view[%c0] : view<1xi32> -> i32
+  %key_value_block_count_i32 = index.cast %producer_block_count : index to i32
+  %last_block_ordinal_i32 = scalar.subi %key_value_block_count_i32, %c1_i32 : i32
+  %negative_key_value_block_count_i32 = scalar.subi %c0_i32, %key_value_block_count_i32 : i32
+  %is_last_partition = scalar.cmpi eq, %old_counter, %last_block_ordinal_i32 : i32
+  scf.if %is_last_partition {
+    kernel.barrier<global> scope(workgroup) ordering(acquire)
+    template.apply<@ggml.flash_attention.decode_split.reduce_completed.direct>(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
+    scf.if %publish_q8 {
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      template.apply<@ggml.flash_attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
+    }
+    // Do not expose the reset until every final F32 and Q8 store completes.
+    kernel.barrier<global> scope(workgroup) ordering(release)
+    scf.if %workitem_is_zero {
+      view.atomic.reduce<addi> %negative_key_value_block_count_i32, %completion_counter_view[%key_value_head] {ordering = release, scope = device} : i32, view<[%key_value_head_count]xi32>
+    }
+  }
+  template.return
+}
+// Contexts without a proven short bound use the cooperative completion path.
+template.def<@ggml.flash_attention.decode_split.reduce_fused> device priority(10) @ggml_flash_attention_decode_split_reduce_fused_cooperative_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 257, 2048)] {
+  %partial_block_capacity, %producer_block_count = index.assume %partial_block_capacity0, %producer_block_count0 [range(%partial_block_capacity0, 1, 32), range(%producer_block_count0, 1, 32), le(%producer_block_count0, %partial_block_capacity0)] : index, index
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %workgroup_y0 = kernel.workgroup.id<y> : index
+  %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %counter_scratch_bytes = index.constant 4 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %completion_counter_noalias, %output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output, %completion_counter, %output : buffer, buffer, buffer, buffer, buffer
+  %completion_counter_aligned = buffer.assume.alignment %completion_counter_noalias {minimum_alignment = 16} : buffer
+  %completion_counter_view = buffer.view %completion_counter_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]xi32>
+  %counter_scratch = buffer.alloca<workgroup> align(4) %counter_scratch_bytes : buffer
+  %counter_scratch_view = buffer.view %counter_scratch[%c0_offset] : buffer -> view<1xi32>
+  %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
+  // Publish every producer's partial stores before the leader advances one
+  // workgroup arrival. The last arrival then acquires every partial.
+  kernel.barrier<global> scope(workgroup) ordering(release)
+  scf.if %workitem_is_zero {
+    %old_counter = view.atomic.rmw<addi> %c1_i32, %completion_counter_view[%key_value_head] {ordering = acq_rel, scope = device} : i32, view<[%key_value_head_count]xi32> -> i32
+    view.store %old_counter, %counter_scratch_view[%c0] : i32, view<1xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %old_counter = view.load %counter_scratch_view[%c0] : view<1xi32> -> i32
+  %key_value_block_count_i32 = index.cast %producer_block_count : index to i32
+  %last_block_ordinal_i32 = scalar.subi %key_value_block_count_i32, %c1_i32 : i32
+  %negative_key_value_block_count_i32 = scalar.subi %c0_i32, %key_value_block_count_i32 : i32
+  %is_last_partition = scalar.cmpi eq, %old_counter, %last_block_ordinal_i32 : i32
+  scf.if %is_last_partition {
+    kernel.barrier<global> scope(workgroup) ordering(acquire)
+    template.apply<@ggml.flash_attention.decode_split.reduce_completed.cooperative>(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
+    scf.if %publish_q8 {
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      template.apply<@ggml.flash_attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
+    }
+    // Do not expose the reset until every final F32 and Q8 store completes.
+    kernel.barrier<global> scope(workgroup) ordering(release)
+    scf.if %workitem_is_zero {
+      view.atomic.reduce<addi> %negative_key_value_block_count_i32, %completion_counter_view[%key_value_head] {ordering = release, scope = device} : i32, view<[%key_value_head_count]xi32>
+    }
+  }
+  template.return
+}

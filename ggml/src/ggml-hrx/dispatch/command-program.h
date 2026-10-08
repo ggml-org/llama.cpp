@@ -31,6 +31,11 @@ struct CommandBinding {
     size_t               offset = 0;
     size_t               length = 0;
     ResourceAccess       access = ResourceAccess::Read;
+    std::string          layout        = kNativeWeightLayout;
+    ggml_type            source_type   = GGML_TYPE_COUNT;
+    int64_t              input_size    = 0;
+    int64_t              output_size   = 0;
+    size_t               source_length = 0;
 };
 
 struct Command {
@@ -73,6 +78,7 @@ struct CommandProgram {
     TransientPlan                       transients;
     CompletionCounterPlan               completion_counters;
     std::vector<ConstantInitialization> constant_initializations;
+    std::vector<CommandPlanActivationPublicationDiagnostic> activation_publication_diagnostics;
     Status                              status;
 
     bool valid() const { return status.success(); }

@@ -1,0 +1,126 @@
+// Vector-shaped GGML matmul reduction for batch-size-1 F32 outputs.
+template.decl @ggml.matmul.vector_publish.next_vector4(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: vector<4xf32>, %arg7: buffer)
+template.decl @ggml.matmul.vector_activation.core(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: f32, %arg7: index, %arg8: index, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer)
+
+template.decl @ggml.matmul.vector_activation.finish_output_group(%token_count: index, %output_size: index, %output_group_count: index, %token_group_count: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+
+template.decl @ggml.matmul.vector_activation.launch(%token_capacity: index, %input_size: index, %output_size: index, %weight_format: index) -> (index, index, index, index)
+
+template.decl @ggml.matmul.vector_activation.publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+
+template.decl @ggml.matmul.vector_activation.publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+
+template.decl @ggml.unary_f32.apply(%arg0: index, %arg1: f32) -> (f32)
+
+template.decl @ggml.unary_f32.apply_vector4(%arg0: index, %arg1: vector<4xf32>) -> (vector<4xf32>)
+
+amdgpu.target<gfx11-generic> @ggml_matmul_vector_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.matmul.vector.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+
+config.decl @ggml.matmul.vector.output_size : %value: index where [range(%value, 1, 524288)]
+
+config.decl @ggml.matmul.vector.output_accumulation : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.matmul.vector.output_unary_op : %value: index where [range(%value, 0, 23)]
+
+config.decl @ggml.matmul.vector.weight_format : %value: index where [range(%value, 0, 81)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 1)]
+
+template.def<@ggml.matmul.vector_activation.publish_vector4> device @ggml_matmul_vector_f32_f32_publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 5)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 524288)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %partition = kernel.workgroup.id<z> : index
+  %element_bytes = index.constant 4 : offset
+  %plane_elements = index.mul %token_count, %output_size : index
+  %plane_bytes = index.scale %plane_elements, %element_bytes : index, offset -> offset
+  %plane_offset = index.scale %partition, %plane_bytes : index, offset -> offset
+  %output_view = buffer.view %output_noalias[%plane_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %accumulates_output = index.cmp eq, %output_accumulation, %c1 : index
+  scf.if %publish_word {
+    %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+    %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+    %published = scf.if %accumulates_output -> (vector<4xf32>) {
+      %residual = vector.load.mask %output_view[%token, %channel], %mask, %c0_f32x4 : view<[%token_count]x[%output_size]xf32>, vector<4xi1>, vector<4xf32>
+      %sum = vector.addf %residual, %values : vector<4xf32>
+      scf.yield %sum : vector<4xf32>
+    } else {
+      scf.yield %values : vector<4xf32>
+    }
+    %activated = template.apply<@ggml.unary_f32.apply_vector4>(%output_unary_op, %published) : (index, vector<4xf32>) -> (vector<4xf32>)
+    vector.store.mask %activated, %output_view[%token, %channel], %mask : vector<4xf32>, view<[%token_count]x[%output_size]xf32>, vector<4xi1>
+    template.apply<@ggml.matmul.vector_publish.next_vector4>(%publish_word, %publish_format, %token_count0, %output_size0, %token0, %channel, %activated, %next_output) : (i1, index, index, index, index, index, vector<4xf32>, buffer)
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_activation.publish_pair2> device @ggml_matmul_vector_f32_f32_publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 5)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 524288)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %accumulates_output = index.cmp eq, %output_accumulation, %c1 : index
+  scf.if %publish_pair {
+    %published0 = scf.if %accumulates_output -> (f32) {
+      %residual = view.load %output_view[%token, %channel] : view<[%token_count]x[%output_size]xf32> -> f32
+      %sum = scalar.addf %residual, %value0 : f32
+      scf.yield %sum : f32
+    } else {
+      scf.yield %value0 : f32
+    }
+    %activated0 = template.apply<@ggml.unary_f32.apply>(%output_unary_op, %published0) : (index, f32) -> (f32)
+    view.store %activated0, %output_view[%token, %channel] : f32, view<[%token_count]x[%output_size]xf32>
+  }
+  scf.if %row1_valid {
+    scf.if %publish_pair {
+      %row1 = index.add %channel, %c1 : index
+      %published1 = scf.if %accumulates_output -> (f32) {
+        %residual = view.load %output_view[%token, %row1] : view<[%token_count]x[%output_size]xf32> -> f32
+        %sum = scalar.addf %residual, %value1 : f32
+        scf.yield %sum : f32
+      } else {
+        scf.yield %value1 : f32
+      }
+      %activated1 = template.apply<@ggml.unary_f32.apply>(%output_unary_op, %published1) : (index, f32) -> (f32)
+      view.store %activated1, %output_view[%token, %row1] : f32, view<[%token_count]x[%output_size]xf32>
+    }
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_activation.finish_output_group> device @ggml_matmul_vector_f32_f32_finish_output_group(%token_count: index, %output_size: index, %output_group_count: index, %token_group_count: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  template.return
+}
+
+kernel.def target(@ggml_matmul_vector_gfx11_wave64) @ggml_mul_mat_vector_f32_f32(%token_count: index) {
+  %input_size = config.get @ggml.matmul.vector.input_size : index
+  %output_size = config.get @ggml.matmul.vector.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %weight_format = config.get @ggml.matmul.vector.weight_format : index
+  %c1 = index.constant 1 : index
+  %launch_x, %launch_y, %launch_z, %workgroup_size = template.apply<@ggml.matmul.vector_activation.launch>(%token_capacity, %input_size, %output_size, %weight_format) pure : (index, index, index, index) -> (index, index, index, index)
+  kernel.launch.config workgroups(%launch_x, %launch_y, %launch_z) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer, %next_output: buffer) {
+  %input_size = config.get @ggml.matmul.vector.input_size : index
+  %output_size = config.get @ggml.matmul.vector.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %output_accumulation = config.get @ggml.matmul.vector.output_accumulation : index
+  %output_unary_op = config.get @ggml.matmul.vector.output_unary_op : index
+  %weight_format = config.get @ggml.matmul.vector.weight_format : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1), le(%token_count, %token_capacity)] : index
+  %channel_group = kernel.workgroup.id<x> : index
+  %token_group = kernel.workgroup.id<y> : index
+  template.apply<@ggml.matmul.vector_activation.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %output_accumulation, %output_unary_op, %c0_f32, %channel_group, %token_group, %input, %weight, %output, %output, %output, %output, %output, %output, %output, %next_output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

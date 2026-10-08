@@ -1,0 +1,169 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Generic GGML GET_ROWS for contiguous rows decoded through F32.
+//
+// One workitem publishes four adjacent output channels for one requested row.
+// Storage-format-specific row decoding is delegated to the common dequant
+// motif so Q1_0, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_XS, Q8_0, Q8_1, F16, BF16, and F32 share the same gather shape.
+template.decl @ggml.get_rows_f32.body(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer)
+
+template.decl @ggml.get_rows_f32.launch(%hidden_capacity: index, %token_capacity: index) -> (index, index, index, index)
+
+template.decl @ggml.get_rows_f32.load_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %publish: i1, %valid_token_id: i1, %token: index, %row_count: index, %hidden_size: index, %channel: index, %weight: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.get_rows_f32.load_vector4_common(%weight_format: index, %publish: i1, %valid_token_id: i1, %token: index, %row_count: index, %hidden_size: index, %channel: index, %weight: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.get_rows_f32.next_body(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer, %next_output: buffer)
+
+template.decl @ggml.publish_f32.f32_vector4(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: vector<4xf32>, %arg6: buffer)
+
+template.decl @ggml.publish_f32.next_vector4(%arg0: index, %arg1: i1, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: vector<4xf32>, %arg7: view<256xf32>, %arg8: view<32xf32>, %arg9: buffer)
+
+config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), mul(%value, 4)]
+
+config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.get_rows_f32.next_format : %value: index where [range(%value, 16, 81)]
+
+func.decl @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offset)
+
+func.decl @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: index) -> (offset)
+
+func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
+
+func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+
+func.decl @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf32>)
+
+template.def<@ggml.get_rows_f32.load_vector4> device @ggml_get_rows_f32_load_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %publish: i1, %valid_token_id: i1, %token: index, %row_count: index, %hidden_size: index, %channel: index, %weight: buffer) -> (vector<4xf32>) {
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c256 = index.constant 256 : index
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %token_id = index.assume %token [range(%token, 0, 262207)] : index
+  %bounded_token_id, %bounded_row_count = index.assume %token_id, %row_count [lt(%token_id, %row_count)] : index, index
+  %safe_values = scf.if %publish -> (vector<4xf32>) {
+    %row_bytes = func.call @ggml_dequant_weight_row_bytes(%weight_format, %hidden_size) : (index, index) -> (offset)
+    %row_byte_base = index.scale %bounded_token_id, %row_bytes : index, offset -> offset
+    %quant_block = index.div %channel, %c256 : index
+    %block_channel = index.rem %channel, %c256 : index
+    %quant_group = index.div %block_channel, %c32 : index
+    %group_channel = index.rem %block_channel, %c32 : index
+    %quant_packet = index.div %group_channel, %c4 : index
+    %values = func.call @ggml_dequant_f32_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight, %row_byte_base, %hidden_size, %quant_block, %quant_group, %quant_packet, %channel) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf32>)
+    %row_values = scf.select %valid_token_id, %values, %c0_f32x4 : vector<4xf32>
+    scf.yield %row_values : vector<4xf32>
+  } else {
+    scf.yield %c0_f32x4 : vector<4xf32>
+  }
+  template.return %safe_values : vector<4xf32>
+}
+
+template.def<@ggml.get_rows_f32.load_vector4_common> device @ggml_get_rows_f32_load_vector4_common(%weight_format: index, %publish: i1, %valid_token_id: i1, %token: index, %row_count: index, %hidden_size: index, %channel: index, %weight: buffer) -> (vector<4xf32>) {
+  %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
+  %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+  %values = template.apply<@ggml.get_rows_f32.load_vector4>(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %publish, %valid_token_id, %token, %row_count, %hidden_size, %channel, %weight) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, i1, i1, index, index, index, index, buffer) -> (vector<4xf32>)
+  template.return %values : vector<4xf32>
+}
+
+template.def<@ggml.get_rows_f32.body> device @ggml_get_rows_f32_body(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer) {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %hidden_capacity = config.get @ggml.get_rows_f32.hidden_capacity : index
+  %weight_format = config.get @ggml.get_rows_f32.weight_format : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 1073741824), mul(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %packet_tile_base = index.mul %channel_tile, %c256 : index
+  %packet0 = index.add %packet_tile_base, %workitem : index
+  %packet_count = index.div %bounded_hidden_size, %c4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %valid_packet = index.cmp ult, %packet0, %packet_count : index
+  %publish = scalar.andi %valid_token, %valid_packet : i1
+  %token = scf.select %valid_token, %token0, %c0 : index
+  %packet = scf.select %valid_packet, %packet0, %c0 : index
+  %token_ids_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %token_ids, %weight, %output : buffer, buffer, buffer
+  %token_ids_view = buffer.view %token_ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %token_id_raw = view.load %token_ids_view[%token] : view<[%bounded_token_count]xi32> -> i32
+  %token_id_nonnegative = scalar.cmpi sge, %token_id_raw, %c0_i32 : i32
+  %safe_token_id_i32 = scf.select %token_id_nonnegative, %token_id_raw, %c0_i32 : i32
+  %token_id = index.cast %safe_token_id_i32 : i32 to index
+  %channel0 = index.mul %packet, %c4 : index
+  %channel_end0 = index.add %channel0, %c4 : index
+  %channel, %channel_end = index.assume %channel0, %channel_end0 [le(%channel_end0, %bounded_hidden_size)] : index, index
+  %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
+  %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+  %values = template.apply<@ggml.get_rows_f32.load_vector4>(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %publish, %token_id_nonnegative, %token_id, %bounded_row_count, %bounded_hidden_size, %channel, %weight_noalias) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, i1, i1, index, index, index, index, buffer) -> (vector<4xf32>)
+  scf.if %publish {
+    %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    vector.store %values, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  }
+  template.return
+}
+
+template.def<@ggml.get_rows_f32.next_body> device @ggml_get_rows_f32_next_body(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer, %next_output: buffer) {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %hidden_capacity = config.get @ggml.get_rows_f32.hidden_capacity : index
+  %weight_format = config.get @ggml.get_rows_f32.weight_format : index
+  %next_format = config.get @ggml.get_rows_f32.next_format : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 256, 1073741824), mul(%hidden_size, 256), le(%hidden_size, %hidden_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %scratch_d_byte_add = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %packet_tile_base = index.mul %channel_tile, %c256 : index
+  %packet0 = index.add %packet_tile_base, %workitem : index
+  %packet_count = index.div %bounded_hidden_size, %c4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %valid_packet = index.cmp ult, %packet0, %packet_count : index
+  %publish = scalar.andi %valid_token, %valid_packet : i1
+  %token = scf.select %valid_token, %token0, %c0 : index
+  %packet = scf.select %valid_packet, %packet0, %c0 : index
+  %token_ids_noalias, %weight_noalias, %output_noalias, %next_output_noalias = buffer.assume.noalias %token_ids, %weight, %output, %next_output : buffer, buffer, buffer, buffer
+  %token_ids_view = buffer.view %token_ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %token_id_raw = view.load %token_ids_view[%token] : view<[%bounded_token_count]xi32> -> i32
+  %token_id_nonnegative = scalar.cmpi sge, %token_id_raw, %c0_i32 : i32
+  %safe_token_id_i32 = scf.select %token_id_nonnegative, %token_id_raw, %c0_i32 : i32
+  %token_id = index.cast %safe_token_id_i32 : i32 to index
+  %channel = index.mul %packet, %c4 : index
+  %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
+  %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+  %values = template.apply<@ggml.get_rows_f32.load_vector4>(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %publish, %token_id_nonnegative, %token_id, %bounded_row_count, %bounded_hidden_size, %channel, %weight_noalias) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, i1, i1, index, index, index, index, buffer) -> (vector<4xf32>)
+  template.apply<@ggml.publish_f32.f32_vector4>(%publish, %token, %channel, %bounded_token_count, %bounded_hidden_size, %values, %output_noalias) : (i1, index, index, index, index, vector<4xf32>, buffer)
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  template.apply<@ggml.publish_f32.next_vector4>(%next_format, %publish, %token, %channel, %bounded_token_count, %bounded_hidden_size, %values, %scratch_values, %scratch_d, %next_output_noalias) : (index, i1, index, index, index, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}
+
+template.def<@ggml.get_rows_f32.launch> @ggml_get_rows_f32_launch(%hidden_capacity: index, %token_capacity: index) -> (index, index, index, index) {
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %packet_count = index.div %hidden_capacity, %c4 : index
+  %padded_packet_count = index.add %packet_count, %c255 : index
+  %packet_tiles = index.div %padded_packet_count, %c256 : index
+  template.return %packet_tiles, %token_capacity, %c1, %c256 : index, index, index, index
+}

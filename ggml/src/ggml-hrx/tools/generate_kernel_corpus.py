@@ -107,8 +107,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-output", type=pathlib.Path, required=True)
     parser.add_argument("--corpus-output", type=pathlib.Path, required=True)
     parser.add_argument("--catalog-output", type=pathlib.Path, required=True)
-    parser.add_argument("--manifest", type=pathlib.Path, required=True)
-    parser.add_argument("--corpus-dir", type=pathlib.Path, required=True)
+    parser.add_argument("--manifest", type=pathlib.Path, action="append", required=True)
+    parser.add_argument("--corpus-dir", type=pathlib.Path, action="append", required=True)
     parser.add_argument("--source-format", choices=("text", "binary"), default="text")
     parser.add_argument("--loom-link", type=pathlib.Path)
     parser.add_argument("--loom-format", type=pathlib.Path)
@@ -148,7 +148,7 @@ def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Pat
         require_tool([
             str(loom_link),
             "--verify=false",
-            "--mode=archive",
+            "--mode=merge",
             "--strip-check",
             "--to=text",
             f"--output={stripped}",
@@ -165,7 +165,7 @@ def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Pat
             require_tool([
                 str(loom_link),
                 "--verify=false",
-                "--mode=archive",
+                "--mode=merge",
                 "--strip-check",
                 "--to=bc",
                 f"--output={bytecode}",
@@ -292,12 +292,145 @@ def collect_sources(manifest: dict) -> Tuple[List[str], Dict[str, List[str]]]:
     return sorted(all_sources), source_dependencies
 
 
-def manifest_file_digests(manifest: dict) -> Dict[str, str]:
-    return {file["path"]: file["sha256"] for file in manifest.get("files", [])}
-
-
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def json_digest(value: object) -> str:
+    return sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def complete_manifest_source_metadata(manifest: dict, source_paths: Dict[str, pathlib.Path]) -> dict:
+    completed = dict(manifest)
+    files = []
+    for file in manifest.get("files", []):
+        path = str(file["path"])
+        file_record = {key: value for key, value in file.items() if key not in ("owner", "sha256", "size")}
+        data = read_bytes(source_paths[path])
+        file_record["sha256"] = sha256(data)
+        files.append(file_record)
+    completed["files"] = files
+    corpus_digest_input = {
+        "files": [{"path": file["path"], "sha256": file["sha256"]} for file in files],
+        "exports": [
+            {
+                "family": export.get("family", DEFAULT_KERNEL_FAMILY),
+                "name": export["name"],
+                "source": export["source"],
+                "symbol": export["symbol"],
+                "target_selector": export.get("target_selector", ""),
+                "compile_recipe": export["compile_recipe"],
+            }
+            for export in completed.get("exports", [])
+        ],
+    }
+    recipe_digest_input = {
+        "link_modules": completed.get("link_modules", []),
+        "plan_cases": completed.get("plan_cases", []),
+    }
+    completed["corpus_sha256"] = json_digest(corpus_digest_input)
+    completed["build_bazel_sha256"] = json_digest(recipe_digest_input)
+    return completed
+
+
+def merge_unique_text(values: Iterable[str]) -> str:
+    unique = list(dict.fromkeys(value for value in values if value))
+    return ";".join(unique)
+
+
+def require_unique_export_variants(exports: List[dict]) -> None:
+    variants: Dict[Tuple[str, str, str], dict] = {}
+    for export in exports:
+        key = (
+            str(export.get("family", DEFAULT_KERNEL_FAMILY)),
+            str(export["name"]),
+            str(export.get("target_selector", "")),
+        )
+        previous = variants.get(key)
+        if previous is not None:
+            family, name, target = key
+            label = target or "default"
+            raise RuntimeError(f"kernel corpus repeats target variant {family}:{name}@{label}")
+        variants[key] = export
+
+
+def merge_manifests(manifest_paths: List[pathlib.Path], corpus_dirs: List[pathlib.Path]) -> Tuple[dict, Dict[str, pathlib.Path]]:
+    if len(manifest_paths) != len(corpus_dirs):
+        raise RuntimeError("--manifest and --corpus-dir must be provided the same number of times")
+    if not manifest_paths:
+        raise RuntimeError("at least one --manifest is required")
+
+    loaded = [(manifest_path, corpus_dir, json.loads(read_text(manifest_path)))
+              for manifest_path, corpus_dir in zip(manifest_paths, corpus_dirs)]
+    if len(loaded) == 1:
+        manifest_path, corpus_dir, manifest = loaded[0]
+        source_paths = {file["path"]: corpus_dir / file["path"] for file in manifest.get("files", [])}
+        return complete_manifest_source_metadata(manifest, source_paths), source_paths
+
+    files = []
+    file_digests: Dict[str, str] = {}
+    source_paths: Dict[str, pathlib.Path] = {}
+    exports = []
+    link_modules = []
+    plan_cases = []
+    metadata = []
+
+    for manifest_path, corpus_dir, manifest in loaded:
+        manifest_source_paths = {file["path"]: corpus_dir / file["path"] for file in manifest.get("files", [])}
+        manifest = complete_manifest_source_metadata(manifest, manifest_source_paths)
+        metadata.append({
+            "manifest": str(manifest_path),
+            "upstream_revision": manifest.get("upstream_revision", ""),
+            "corpus_sha256": manifest.get("corpus_sha256", ""),
+            "build_bazel_sha256": manifest.get("build_bazel_sha256", ""),
+        })
+        for file in manifest.get("files", []):
+            path = str(file["path"])
+            digest = str(file["sha256"])
+            previous = file_digests.get(path)
+            if previous is not None:
+                if previous != digest:
+                    raise RuntimeError(f"manifest file digest conflict for {path}: {previous} vs {digest}")
+                continue
+            file_digests[path] = digest
+            source_paths[path] = corpus_dir / path
+            files.append(dict(file))
+        exports.extend(dict(export) for export in manifest.get("exports", []))
+        link_modules.extend(dict(module) for module in manifest.get("link_modules", []))
+        plan_cases.extend(dict(case) for case in manifest.get("plan_cases", []))
+
+    require_unique_export_variants(exports)
+
+    corpus_digest_input = {
+        "files": [{"path": file["path"], "sha256": file["sha256"]} for file in files],
+        "exports": [
+            {
+                "family": export.get("family", DEFAULT_KERNEL_FAMILY),
+                "name": export["name"],
+                "source": export["source"],
+                "symbol": export["symbol"],
+                "target_selector": export.get("target_selector", ""),
+                "compile_recipe": export["compile_recipe"],
+            }
+            for export in exports
+        ],
+    }
+    recipe_digest_input = {
+        "manifests": metadata,
+        "link_modules": link_modules,
+        "plan_cases": plan_cases,
+    }
+
+    return {
+        "schema": "ggml-hrx-kernel-corpus-v2",
+        "upstream_revision": merge_unique_text(str(manifest.get("upstream_revision", "")) for _, _, manifest in loaded),
+        "corpus_sha256": json_digest(corpus_digest_input),
+        "build_bazel_sha256": json_digest(recipe_digest_input),
+        "files": files,
+        "exports": exports,
+        "link_modules": link_modules,
+        "plan_cases": plan_cases,
+    }, source_paths
 
 
 def kernel_catalog_id(family: str, name: str) -> int:
@@ -313,8 +446,7 @@ def kernel_catalog_id(family: str, name: str) -> int:
     return hash_value
 
 
-def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> Tuple[str, str, int]:
-    digests = manifest_file_digests(manifest)
+def generate_corpus_records(manifest: dict, source_records: Dict[str, str], source_digests: Dict[str, str]) -> Tuple[str, str, int]:
     arrays = []
     records = []
     exports = manifest.get("exports", [])
@@ -360,7 +492,7 @@ def generate_corpus_records(manifest: dict, source_records: Dict[str, str]) -> T
                 target_selector=cpp_string(export.get("target_selector", "")),
                 source=cpp_string(export["source"]),
                 dependencies=dependencies_span,
-                source_digest=cpp_string(digests[export["source"]]),
+                source_digest=cpp_string(source_digests[export["source"]]),
                 scalar_parameters=scalar_span,
                 bindings=bindings_span,
                 workload_parameters=workload_span,
@@ -396,13 +528,12 @@ def generate_catalog_verifier(manifest: dict) -> str:
     )
 
 
-def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, str, str, List[pathlib.Path], int]:
+def generate_includes(args: argparse.Namespace, manifest: dict, source_paths: Dict[str, pathlib.Path]) -> Tuple[str, str, str, List[pathlib.Path], int]:
     if args.source_format == "binary" and (args.loom_link is None or args.loom_format is None):
         raise RuntimeError("binary source format requires --loom-link and --loom-format")
 
-    corpus_dir = args.corpus_dir
     sources, source_dependencies = collect_sources(manifest)
-    digests = manifest_file_digests(manifest)
+    source_digests = {str(file["path"]): str(file["sha256"]) for file in manifest.get("files", [])}
     source_bytes: Dict[str, bytes] = {}
     source_format = "KERNEL_SOURCE_FORMAT_BINARY" if args.source_format == "binary" else "KERNEL_SOURCE_FORMAT_TEXT"
     input_files: List[pathlib.Path] = []
@@ -414,14 +545,12 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
                 raise RuntimeError(f"export primary source is not embedded: {primary}")
 
     for source in sources:
-        if source not in digests:
+        if source not in source_digests:
             raise RuntimeError(f"embedded source is missing from manifest file table: {source}")
-        path = corpus_dir / source
+        path = source_paths[source]
         input_files.append(path)
         data = read_bytes(path)
-        digest = sha256(data)
-        if digest != digests[source]:
-            raise RuntimeError(f"manifest digest mismatch for {source}: got {digest}, expected {digests[source]}")
+        source_digests[source] = sha256(data)
         if args.source_format == "binary":
             data = convert_source_to_bytecode(path, args.loom_link, args.loom_format)
         source_bytes[source] = data
@@ -476,7 +605,7 @@ def generate_includes(args: argparse.Namespace, manifest: dict) -> Tuple[str, st
         )
         lookup_entries.append(f"    {{ {cpp_string(source)}, &{record} }},")
 
-    kernel_arrays, kernel_records, kernel_count = generate_corpus_records(manifest, source_record_symbols)
+    kernel_arrays, kernel_records, kernel_count = generate_corpus_records(manifest, source_record_symbols, source_digests)
     return (
         SOURCE_DATA_TEMPLATE.format(
             source_arrays="\n".join(source_arrays),
@@ -508,8 +637,9 @@ def write_depfile(path: pathlib.Path, outputs: List[pathlib.Path], inputs: List[
 def main() -> int:
     args = parse_args()
     try:
-        manifest = json.loads(read_text(args.manifest))
-        source_include, corpus_include, catalog_include, input_files, byte_count = generate_includes(args, manifest)
+        manifest, source_paths = merge_manifests(args.manifest, args.corpus_dir)
+        source_include, corpus_include, catalog_include, input_files, byte_count = generate_includes(
+            args, manifest, source_paths)
         args.source_output.parent.mkdir(parents=True, exist_ok=True)
         args.corpus_output.parent.mkdir(parents=True, exist_ok=True)
         args.catalog_output.parent.mkdir(parents=True, exist_ok=True)
@@ -519,7 +649,7 @@ def main() -> int:
         if args.depfile is not None:
             args.depfile.parent.mkdir(parents=True, exist_ok=True)
             write_depfile(args.depfile, [args.source_output, args.corpus_output, args.catalog_output],
-                          [args.manifest, *input_files])
+                          [*args.manifest, *input_files])
     except Exception as exc:
         print(f"generate_kernel_corpus.py: {exc}", file=sys.stderr)
         return 1

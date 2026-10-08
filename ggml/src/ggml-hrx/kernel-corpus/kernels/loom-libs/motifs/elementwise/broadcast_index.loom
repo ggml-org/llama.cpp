@@ -1,0 +1,33 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.elementwise.broadcast_index(%linear: index, %n0: index, %n1: index, %n2: index, %coord0: index, %coord1: index, %coord2: index, %coord3: index, %broadcast_dim0_flag: index, %broadcast_dim1_flag: index, %broadcast_dim2_flag: index, %broadcast_dim3_flag: index, %zero: index, %one: index) -> (index)
+
+template.def<@ggml.elementwise.broadcast_index> device @ggml_elementwise_broadcast_index(%linear: index, %n0: index, %n1: index, %n2: index, %coord0: index, %coord1: index, %coord2: index, %coord3: index, %broadcast_dim0_flag: index, %broadcast_dim1_flag: index, %broadcast_dim2_flag: index, %broadcast_dim3_flag: index, %zero: index, %one: index) -> (index) {
+  %broadcast_dims01 = index.add %broadcast_dim0_flag, %broadcast_dim1_flag : index
+  %broadcast_dims23 = index.add %broadcast_dim2_flag, %broadcast_dim3_flag : index
+  %broadcast_dims = index.add %broadcast_dims01, %broadcast_dims23 : index
+  %no_broadcast = index.cmp eq, %broadcast_dims, %zero : index
+  %broadcast_dim0 = index.cmp eq, %broadcast_dim0_flag, %one : index
+  %broadcast_dim1 = index.cmp eq, %broadcast_dim1_flag, %one : index
+  %broadcast_dim2 = index.cmp eq, %broadcast_dim2_flag, %one : index
+  %broadcast_dim3 = index.cmp eq, %broadcast_dim3_flag, %one : index
+  %source_ne0 = scf.select %broadcast_dim0, %one, %n0 : index
+  %source_ne1 = scf.select %broadcast_dim1, %one, %n1 : index
+  %source_ne2 = scf.select %broadcast_dim2, %one, %n2 : index
+  %source_coord0 = scf.select %broadcast_dim0, %zero, %coord0 : index
+  %source_coord1 = scf.select %broadcast_dim1, %zero, %coord1 : index
+  %source_coord2 = scf.select %broadcast_dim2, %zero, %coord2 : index
+  %source_coord3 = scf.select %broadcast_dim3, %zero, %coord3 : index
+  %source_stride1 = index.add %source_ne0, %zero : index
+  %source_stride2 = index.mul %source_stride1, %source_ne1 : index
+  %source_stride3 = index.mul %source_stride2, %source_ne2 : index
+  %source_term1 = index.mul %source_coord1, %source_stride1 : index
+  %source_term2 = index.mul %source_coord2, %source_stride2 : index
+  %source_term3 = index.mul %source_coord3, %source_stride3 : index
+  %source_linear01 = index.add %source_coord0, %source_term1 : index
+  %source_linear012 = index.add %source_linear01, %source_term2 : index
+  %broadcast_linear = index.add %source_linear012, %source_term3 : index
+  %source_linear = scf.select %no_broadcast, %linear, %broadcast_linear : index
+  template.return %source_linear : index
+}

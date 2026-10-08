@@ -1,0 +1,381 @@
+// Qwen3 MoE grouped-query decode FlashAttention.
+//
+// Each workgroup processes one 64-token KV block for all GQA query heads that
+// share a KV head. The workgroups publish online-softmax state, then the last
+// arrival folds every block and resets the per-KV-head completion counter for
+// the next invocation. Packing GQA heads removes redundant K/V traffic while
+// split-K preserves enough parallelism for decode without another dispatch.
+template.decl @ggml.flash_attention.decode_split.pack_completed_q8(%key_value_head: index, %output: buffer, %q8_output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.produce_partials(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.produce_partials.active(%key_value_token_count: index, %partial_block_capacity0: index, %launched_block_count0: index, %query: buffer, %key: buffer, %value: buffer, %lane_mask: f32, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_completed.cooperative(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_completed.direct(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
+
+template.decl @ggml.flash_attention.decode_split.reduce_fused(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer)
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_flash_attention_decode_split_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), mul(%value, 16)]
+
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+
+config.decl @ggml.flash_attention.attention_scale : f32
+
+// Maximum K/V storage capacity available to the compiled kernel.
+config.decl @ggml.flash_attention.decode.key_value_token_capacity : %value: index where [range(%value, 64, 32768)]
+
+// Short-context export: produce and reduce in one dispatch.
+kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_attention_decode_split_f32_f16_wmma(%key_value_token_count: index) {
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %c1 = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_key_value_token_capacity = index.add %key_value_token_capacity, %c63 : index
+  %key_value_block_count = index.div %padded_key_value_token_capacity, %c64 : index
+  kernel.launch.config workgroups(%key_value_block_count, %key_value_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer) {
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %key_value_token_count_in_range = index.assume %key_value_token_count [range(%key_value_token_count, 1, 2048)] : index
+  %bounded_key_value_token_count, %launch_key_value_token_capacity = index.assume %key_value_token_count_in_range, %key_value_token_capacity [le(%key_value_token_count_in_range, %key_value_token_capacity)] : index, index
+  %padded_key_value_token_capacity = index.add %launch_key_value_token_capacity, %c63 : index
+  %producer_block_count = index.div %padded_key_value_token_capacity, %c64 : index
+  %publish_q8 = scalar.constant false : i1
+  template.apply<@ggml.flash_attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.flash_attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %partial_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Short-context export that publishes the F32 attention result and the Q8_1
+// representation consumed by the following output projection.
+kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_attention_decode_split_f32_f16_wmma_next_q8(%key_value_token_count: index) {
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %c1 = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_key_value_token_capacity = index.add %key_value_token_capacity, %c63 : index
+  %key_value_block_count = index.div %padded_key_value_token_capacity, %c64 : index
+  kernel.launch.config workgroups(%key_value_block_count, %key_value_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %next_q8_output: buffer) {
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %key_value_token_count_in_range = index.assume %key_value_token_count [range(%key_value_token_count, 1, 2048)] : index
+  %bounded_key_value_token_count, %launch_key_value_token_capacity = index.assume %key_value_token_count_in_range, %key_value_token_capacity [le(%key_value_token_count_in_range, %key_value_token_capacity)] : index, index
+  %padded_key_value_token_capacity = index.add %launch_key_value_token_capacity, %c63 : index
+  %producer_block_count = index.div %padded_key_value_token_capacity, %c64 : index
+  %publish_q8 = scalar.constant true : i1
+  template.apply<@ggml.flash_attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.flash_attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %next_q8_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Long-context producer export: publish partials for a following parallel
+// reducer without carrying short-context synchronization bindings.
+kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma(%key_value_token_count: index) {
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %c1 = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_key_value_token_capacity = index.add %key_value_token_capacity, %c63 : index
+  %key_value_block_count = index.div %padded_key_value_token_capacity, %c64 : index
+  kernel.launch.config workgroups(%key_value_block_count, %key_value_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %key_value_token_count_in_range = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
+  %bounded_key_value_token_count = index.assume %key_value_token_count_in_range [le(%key_value_token_count_in_range, %key_value_token_capacity)] : index
+  template.apply<@ggml.flash_attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Long contexts have enough split-K partials that assigning the reduction to
+// one last-arriving producer serializes useful work. This reducer launches one
+// two-wave workgroup per query head after an execution barrier from the
+// producer. The first wave computes normalization once and both waves consume
+// it, avoiding the duplicate work of independent 64-channel output slices.
+kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_attention_decode_split_reduce_f32(%key_value_token_count: index) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %query_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%key_value_token_count: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) {
+  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %query_head0 = kernel.workgroup.id<y> : index
+  %query_head = index.assume %query_head0 [range(%query_head0, 0, 63)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %reduction_stage_bytes = index.constant 8 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_large = scalar.constant -1e+30 : f32
+  %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
+  %c63 = index.constant 63 : index
+  %padded_key_value_token_capacity = index.add %key_value_token_capacity, %c63 : index
+  %key_value_block_count0 = index.div %padded_key_value_token_capacity, %c64 : index
+  %key_value_block_count = index.assume %key_value_block_count0 [range(%key_value_block_count0, 1, 512)] : index
+  %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
+  %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
+  %key_value_head = index.div %query_head, %query_heads_per_key_value_head : index
+  %query_row = index.rem %query_head, %query_heads_per_key_value_head : index
+  %is_first_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
+  %output_channel = index.add %workitem, %c0 : index
+  %output_channel_valid = index.cmp ult, %output_channel, %value_head_size : index
+  %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output, %output : buffer, buffer, buffer, buffer
+  %partial_max_aligned = buffer.assume.alignment %partial_max_noalias {minimum_alignment = 16} : buffer
+  %partial_sum_aligned = buffer.assume.alignment %partial_sum_noalias {minimum_alignment = 16} : buffer
+  %partial_output_aligned = buffer.assume.alignment %partial_output_noalias {minimum_alignment = 16} : buffer
+  %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
+  %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
+  %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
+  %reduction_stage = buffer.alloca<workgroup> align(8) %reduction_stage_bytes : buffer
+  %reduction_stage_view = buffer.view %reduction_stage[%c0_offset] : buffer -> view<2xf32>
+  %lane_maximum = scf.if %is_first_subgroup -> (f32) {
+    %maximum = scf.for %block = [%lane to %key_value_block_count step %c64](%running_maximum = %negative_large : f32) -> (f32) {
+      %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
+      %next_maximum = scalar.maxnumf %running_maximum, %block_maximum : f32
+      scf.yield %next_maximum : f32
+    }
+    scf.yield %maximum : f32
+  } else {
+    scf.yield %negative_large : f32
+  }
+  %subgroup_maximum = kernel.subgroup.reduce<maxnumf> %lane_maximum : f32
+  scf.if %workitem_is_zero {
+    view.store %subgroup_maximum, %reduction_stage_view[%c0] : f32, view<2xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %maximum = view.load %reduction_stage_view[%c0] : view<2xf32> -> f32
+  %lane_sum = scf.if %is_first_subgroup -> (f32) {
+    %sum = scf.for %block = [%lane to %key_value_block_count step %c64](%running_sum = %c0_f32 : f32) -> (f32) {
+      %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
+      %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
+      %scale = scalar.expf<afn> %delta : f32
+      view.store %scale, %partial_max_view[%key_value_head, %block, %query_row] : f32, view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
+      %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
+      %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+      %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
+      scf.yield %next_sum : f32
+    }
+    scf.yield %sum : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %lane_sum : f32
+  scf.if %workitem_is_zero {
+    view.store %subgroup_sum, %reduction_stage_view[%c1] : f32, view<2xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %sum = view.load %reduction_stage_view[%c1] : view<2xf32> -> f32
+  scf.if %output_channel_valid {
+    %unnormalized_output = scf.for %block = [%c0 to %key_value_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
+      %scale = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
+      %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16> -> f16
+      %block_output = scalar.extf %block_output_f16 : f16 to f32
+      %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scale : f32
+      %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
+      scf.yield %next_output : f32
+    }
+    %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
+    view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x[%value_head_size]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_case {
+  %key_value_token_count = check.literal value(256) : index
+  %query = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<256x4x128xf16>
+  %value = check.generate.fill value(2.0) : tensor<256x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<256xf16>
+  %partial_max = check.generate.fill value(-1.0) : tensor<4x4x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<4x4x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<4x4x16x128xf16>
+  %completion_counter = check.generate.fill value(0) : tensor<4xi32>
+  %output = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(2.0) : tensor<32x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<32x128xf32>, tensor<256x4x128xf16>, tensor<256x4x128xf16>, tensor<256xf16>, tensor<4x4x16xf32>, tensor<4x4x16xf32>, tensor<4x4x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+// Only KV row zero participates. The finite F32 iota step overflows to F16
+// negative infinity at every later row, leaving blocks one through three
+// entirely masked. Each empty split must publish the online-softmax identity
+// instead of evaluating -inf - -inf and contaminating the final reduction.
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_masked_blocks_case {
+  %key_value_token_count = check.literal value(256) : index
+  %query = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<256x4x128xf16>
+  %value = check.generate.fill value(2.0) : tensor<256x4x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-1e+30) : tensor<256xf16>
+  %partial_max = check.generate.fill value(-1.0) : tensor<4x4x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<4x4x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<4x4x16x128xf16>
+  %completion_counter = check.generate.fill value(0) : tensor<4xi32>
+  %output = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(2.0) : tensor<32x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<32x128xf32>, tensor<256x4x128xf16>, tensor<256x4x128xf16>, tensor<256xf16>, tensor<4x4x16xf32>, tensor<4x4x16xf32>, tensor<4x4x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+// The production Decode-513 shape combines eight full blocks with a one-row
+// tail and selects the cooperative fused reducer. Constant nonzero V keeps the
+// expected result exact while all four KV heads, 32 GQA heads, completion
+// counters, partial tensors, and tail guards participate. A second invocation
+// reuses the partial and counter storage with a different V tensor, making the
+// completion-counter reset observable.
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_decode_513_case {
+  %key_value_token_count = check.literal value(513) : index
+  %query = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<513x4x128xf16>
+  %value0 = check.generate.fill value(2.0) : tensor<513x4x128xf16>
+  %value1 = check.generate.fill value(3.0) : tensor<513x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<513xf16>
+  %partial_max = check.generate.fill value(-1.0) : tensor<4x9x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<4x9x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<4x9x16x128xf16>
+  %completion_counter = check.generate.fill value(0) : tensor<4xi32>
+  %output0 = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %output1 = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %expected0 = check.generate.fill value(2.0) : tensor<32x128xf32>
+  %expected1 = check.generate.fill value(3.0) : tensor<32x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value0, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output0) : [index](index, tensor<32x128xf32>, tensor<513x4x128xf16>, tensor<513x4x128xf16>, tensor<513xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  kernel.launch @ggml_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value1, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output1) : [index](index, tensor<32x128xf32>, tensor<513x4x128xf16>, tensor<513x4x128xf16>, tensor<513xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  check.expect.close actual(%output0) expected(%expected0) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.expect.close actual(%output1) expected(%expected1) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+// Sixty-five KV rows force a second split containing one valid row. The mask
+// selects that final row, whose iota values begin at 1024, so an omitted or
+// uninitialized tail cannot accidentally satisfy the check.
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_tail_case {
+  %key_value_token_count = check.literal value(65) : index
+  %query = check.generate.fill value(1.0) : tensor<1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<65x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<65x1x128xf16>
+  %mask = check.generate.iota offset(-64000.0) step(1000.0) : tensor<65xf16>
+  %partial_max = check.generate.fill value(-1.0) : tensor<1x2x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<1x2x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<1x2x16x128xf16>
+  %completion_counter = check.generate.fill value(0) : tensor<1xi32>
+  %output = check.generate.fill value(-1.0) : tensor<1x128xf32>
+  %expected = check.generate.iota offset(1024.0) step(0.125) : tensor<1x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<1x128xf32>, tensor<65x1x128xf16>, tensor<65x1x128xf16>, tensor<65xf16>, tensor<1x2x16xf32>, tensor<1x2x16xf32>, tensor<1x2x16x128xf16>, tensor<1xi32>, tensor<1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>
+  check.return
+}
+
+// Thirty-two split-K blocks exercise the separate parallel reducer and the
+// execution barrier between its producer and consumer dispatches.
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_long_case {
+  %key_value_token_count = check.literal value(2048) : index
+  %query = check.generate.fill value(0.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<2048x4x128xf16>
+  %value = check.generate.fill value(0.0) : tensor<2048x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<2048xf16>
+  %partial_max = check.generate.fill value(-1.0) : tensor<4x32x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<4x32x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<4x32x16x128xf16>
+  %output = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : [index](index, tensor<32x128xf32>, tensor<2048x4x128xf16>, tensor<2048x4x128xf16>, tensor<2048xf16>, tensor<4x32x16xf32>, tensor<4x32x16xf32>, tensor<4x32x16x128xf16>)
+  kernel.launch @ggml_flash_attention_decode_split_reduce_f32[%key_value_token_count](%key_value_token_count, %partial_max, %partial_sum, %partial_output, %output) : [index](index, tensor<4x32x16xf32>, tensor<4x32x16xf32>, tensor<4x32x16x128xf16>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case {
+  %key_value_token_count = check.param.choice values([64, 65, 128, 256, 512, 513, 768, 1024, 1280, 2048]) name("key_value_token_count") : index
+  %query = check.generate.fill value(0.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %value = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<[%key_value_token_count]xf16>
+  // Reserve the bounded scratch capacity once; each specialization addresses
+  // only ceildiv(key_value_token_count, 64) blocks.
+  %partial_max = check.generate.fill value(-1.0) : tensor<4x512x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<4x512x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<4x512x16x128xf16>
+  %completion_counter = check.generate.fill value(0) : tensor<4xi32>
+  %output = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]xf16>, tensor<4x512x16xf32>, tensor<4x512x16xf32>, tensor<4x512x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+// Long-context execution is one reusable producer/reducer command buffer. The
+// harness records an explicit dispatch execution barrier between these calls
+// and profiles their complete device-side span as one semantic operation.
+check.case public @ggml_flash_attention_decode_split_f32_f16_wmma_long_benchmark_case {
+  %key_value_token_count = check.param.choice values([2048, 32768]) name("key_value_token_count") : index
+  %query = check.generate.fill value(0.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %value = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<[%key_value_token_count]xf16>
+  %partial_max = check.generate.fill value(-1.0) : tensor<4x512x16xf32>
+  %partial_sum = check.generate.fill value(-1.0) : tensor<4x512x16xf32>
+  %partial_output = check.generate.fill value(-1.0) : tensor<4x512x16x128xf16>
+  %output = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
+  kernel.launch @ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : [index](index, tensor<32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]xf16>, tensor<4x512x16xf32>, tensor<4x512x16xf32>, tensor<4x512x16x128xf16>)
+  kernel.launch @ggml_flash_attention_decode_split_reduce_f32[%key_value_token_count](%key_value_token_count, %partial_max, %partial_sum, %partial_output, %output) : [index](index, tensor<4x512x16xf32>, tensor<4x512x16xf32>, tensor<4x512x16x128xf16>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_64 {key_value_token_count = 64}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_65 {key_value_token_count = 65}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_128 {key_value_token_count = 128}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_256 {key_value_token_count = 256}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_masked_blocks_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_256_masked_blocks
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_512 {key_value_token_count = 512}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_513 {key_value_token_count = 513}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_768 {key_value_token_count = 768}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_1024 {key_value_token_count = 1024}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_1280 {key_value_token_count = 1280}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_2048_fused {key_value_token_count = 2048}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_long_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_2048 {key_value_token_count = 2048}
+
+check.benchmark<@ggml_flash_attention_decode_split_f32_f16_wmma_long_benchmark_case> @ggml_flash_attention_decode_split_f32_f16_wmma_decode_32768 {key_value_token_count = 32768}

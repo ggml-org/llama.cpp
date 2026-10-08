@@ -1,0 +1,10 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Loads four adjacent F16 weights for FP16 matrix staging.
+func.def inline @ggml_f16_f16_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf16>) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %row_view = buffer.view %weight[%row_byte_base] : buffer -> view<[%bounded_input_size]xf16>
+  %values = vector.load %row_view[%k] : view<[%bounded_input_size]xf16> -> vector<4xf16>
+  func.return %values : vector<4xf16>
+}

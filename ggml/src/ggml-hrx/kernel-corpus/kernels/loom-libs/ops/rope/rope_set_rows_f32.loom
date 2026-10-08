@@ -1,0 +1,30 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rope_set_rows_f32.body(%token_count: index, %cache_row_count: index, %positions: buffer, %indices: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %cache: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rope_set_rows_f32_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rope_set_rows_f32.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_set_rows_f32.n_dims : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_set_rows_f32.head_count : %value: index where [range(%value, 1, 64)]
+config.decl @ggml.rope_set_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+config.decl @ggml.rope_set_rows_f32.input_stride1 : %value: index where [range(%value, 4, 1073741824)]
+config.decl @ggml.rope_set_rows_f32.input_stride2 : %value: index where [range(%value, 4, 1073741824)]
+config.decl @ggml.rope_set_rows_f32.input_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_set_rows_f32.mscale : f32
+config.decl @ggml.rope_set_rows_f32.output_format : %value: index where [range(%value, 16, 32)]
+config.decl @ggml.rope_set_rows_f32.mode : %value: index where [range(%value, 0, 2)]
+
+kernel.def target(@ggml_rope_set_rows_f32_gfx11_wave32) @ggml_rope_set_rows_f32(%token_count: index, %cache_row_count: index) {
+  %token_capacity = config.get @ggml.rope_set_rows_f32.token_capacity : index
+  %head_count = config.get @ggml.rope_set_rows_f32.head_count : index
+  %head_size = config.get @ggml.rope_set_rows_f32.head_size : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %pair_packet_count = index.div %head_size, %c4 : index
+  kernel.launch.config workgroups(%head_count, %token_capacity, %c1) workgroup_size(%pair_packet_count, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %positions: buffer, %indices: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %cache: buffer) where [range(%token_count, 1, 2048)] {
+  template.apply<@ggml.rope_set_rows_f32.body>(%token_count, %cache_row_count, %positions, %indices, %input, %theta, %freq_factors, %cache) : (index, index, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -1,0 +1,178 @@
+// Common MoE routing table preparation.
+//
+// The expert table stores [expert_count] assignment counts followed by
+// [expert_count][token_count] compact assignment ordinals. The partition table
+// stores a descriptor count followed by compact 32-row expert partitions.
+amdgpu.target<gfx11-generic> @ggml_moe_routing_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.moe_routing.route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @ggml.moe_routing.expert_count : %value: index where [range(%value, 1, 512)]
+
+config.decl @ggml.moe_routing.descriptor_expert_mask : %value: i32
+
+config.decl @ggml.moe_routing.descriptor_partition_shift : %value: i32
+
+config.decl @ggml.moe_routing.descriptor_row_count_shift : %value: i32
+
+config.decl @ggml.moe_routing.partition_workgroup_size : %value: index where [range(%value, 1, 1024)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+kernel.def target(@ggml_moe_routing_gfx11_wave32) @ggml_moe_build_expert_table(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) {
+  %configured_expert_count = config.get @ggml.moe_routing.expert_count : index
+  %c1 = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  kernel.launch.config workgroups(%configured_expert_count, %c1, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %expert_table: buffer) where [range(%token_count, 1, 2048)] {
+  %configured_route_count0 = config.get @ggml.moe_routing.route_count : index
+  %configured_expert_count0 = config.get @ggml.moe_routing.expert_count : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 32), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_stride = index.assume %route_stride [range(%route_stride, 1, 512), ge(%route_stride, %bounded_route_count)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %expert0 = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %workgroup_size = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %cn1_i32 = scalar.constant -1 : i32
+  %c0_offset = index.constant 0 : offset
+  %c4_bytes = index.constant 4 : offset
+  %assignment_count = index.mul %bounded_token_count, %bounded_route_count : index
+  %expert, %table_expert_count = index.assume %expert0, %bounded_expert_count [lt(%expert0, %bounded_expert_count)] : index, index
+  %assignment_table_byte_base = index.scale %table_expert_count, %c4_bytes : index, offset -> offset
+  %route_view = buffer.view %route_ids[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_route_stride]xi32>
+  %count_view = buffer.view %expert_table[%c0_offset] : buffer -> view<[%table_expert_count]xi32>
+  %assignment_view = buffer.view %expert_table[%assignment_table_byte_base] : buffer -> view<[%table_expert_count]x[%bounded_token_count]xi32>
+  %expert_route_count = scf.for %block_base = [%c0 to %assignment_count step %workgroup_size](%matched_base = %c0_i32 : i32) -> (i32) {
+    %assignment = index.add %block_base, %lane : index
+    %in_range = index.cmp ult, %assignment, %assignment_count : index
+    %route_expert_i32 = scf.if %in_range -> (i32) {
+      %token0 = index.div %assignment, %configured_route_count : index
+      %route0 = index.rem %assignment, %configured_route_count : index
+      %token, %route_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+      %route, %route_row_stride = index.assume %route0, %bounded_route_stride [lt(%route0, %bounded_route_stride)] : index, index
+      %loaded = view.load %route_view[%token, %route] : view<[%bounded_token_count]x[%bounded_route_stride]xi32> -> i32
+      scf.yield %loaded : i32
+    } else {
+      scf.yield %cn1_i32 : i32
+    }
+    %route_expert0 = index.cast %route_expert_i32 : i32 to index
+    %route_expert = index.assume %route_expert0 [range(%route_expert0, -1, 511)] : index
+    %matches = index.cmp eq, %route_expert, %expert : index
+    %match_i32 = scf.if %matches -> (i32) {
+      scf.yield %c1_i32 : i32
+    } else {
+      scf.yield %c0_i32 : i32
+    }
+    %block_prefix = kernel.workgroup.scan<addi> %match_i32 {direction = forward, mode = exclusive} : i32
+    %block_match_count_reduced = kernel.workgroup.reduce<addi> %match_i32 : i32
+    %block_match_count = kernel.subgroup.broadcast.first %block_match_count_reduced : i32
+    scf.if %matches {
+      %match_ordinal_i32 = scalar.addi %matched_base, %block_prefix : i32
+      %match_ordinal0 = index.cast %match_ordinal_i32 : i32 to index
+      %match_ordinal = index.assume %match_ordinal0 [range(%match_ordinal0, 0, 2047)] : index
+      %bounded_match_ordinal, %table_token_count = index.assume %match_ordinal, %bounded_token_count [lt(%match_ordinal, %bounded_token_count)] : index, index
+      %assignment_i32 = index.cast %assignment : index to i32
+      view.store %assignment_i32, %assignment_view[%expert, %bounded_match_ordinal] : i32, view<[%table_expert_count]x[%bounded_token_count]xi32>
+    }
+    %next_matched_base = scalar.addi %matched_base, %block_match_count : i32
+    scf.yield %next_matched_base : i32
+  }
+  %is_lane_zero = index.cmp eq, %lane, %c0 : index
+  scf.if %is_lane_zero {
+    view.store %expert_route_count, %count_view[%expert] : i32, view<[%table_expert_count]xi32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_moe_routing_gfx11_wave32) @ggml_moe_build_expert_partition_table(%token_count: index, %route_count: index, %expert_count: index) {
+  %c1 = index.constant 1 : index
+  %workgroup_size = config.get @ggml.moe_routing.partition_workgroup_size : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %route_count: index, %expert_count: index, %expert_table: buffer, %partition_table: buffer) where [range(%token_count, 1, 2048)] {
+  %configured_route_count0 = config.get @ggml.moe_routing.route_count : index
+  %configured_expert_count0 = config.get @ggml.moe_routing.expert_count : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 32), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %lane = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %descriptor_expert_mask = config.get @ggml.moe_routing.descriptor_expert_mask : i32
+  %descriptor_partition_shift = config.get @ggml.moe_routing.descriptor_partition_shift : i32
+  %descriptor_row_count_shift = config.get @ggml.moe_routing.descriptor_row_count_shift : i32
+  %c0_offset = index.constant 0 : offset
+  %c4_bytes = index.constant 4 : offset
+  %assignment_count = index.mul %bounded_token_count, %bounded_route_count : index
+  %rounded_assignment_count = index.add %assignment_count, %c31 : index
+  %assignment_partition_count = index.div %rounded_assignment_count, %c32 : index
+  %maximum_partition_count = index.add %assignment_partition_count, %bounded_expert_count : index
+  %count_view = buffer.view %expert_table[%c0_offset] : buffer -> view<[%bounded_expert_count]xi32>
+  %partition_count_view = buffer.view %partition_table[%c0_offset] : buffer -> view<1xi32>
+  %partition_descriptor_view = buffer.view %partition_table[%c4_bytes] : buffer -> view<[%maximum_partition_count]xi32>
+  %has_expert = index.cmp ult, %lane, %bounded_expert_count : index
+  %expert_assignment_count_i32 = scf.if %has_expert -> (i32) {
+    %expert, %table_expert_count = index.assume %lane, %bounded_expert_count [lt(%lane, %bounded_expert_count)] : index, index
+    %loaded = view.load %count_view[%expert] : view<[%bounded_expert_count]xi32> -> i32
+    scf.yield %loaded : i32
+  } else {
+    scf.yield %c0_i32 : i32
+  }
+  %expert_assignment_count0 = index.cast %expert_assignment_count_i32 : i32 to index
+  %expert_assignment_count = index.assume %expert_assignment_count0 [range(%expert_assignment_count0, 0, 2048)] : index
+  %rounded_expert_assignment_count = index.add %expert_assignment_count, %c31 : index
+  %expert_partition_count = index.div %rounded_expert_assignment_count, %c32 : index
+  %expert_partition_count_i32 = index.cast %expert_partition_count : index to i32
+  %expert_partition_base_i32 = kernel.workgroup.scan<addi> %expert_partition_count_i32 {direction = forward, mode = exclusive} : i32
+  %partition_count_i32 = kernel.workgroup.reduce<addi> %expert_partition_count_i32 : i32
+  %partition_count0 = index.cast %partition_count_i32 : i32 to index
+  %partition_count, %table_partition_capacity = index.assume %partition_count0, %maximum_partition_count [le(%partition_count0, %maximum_partition_count)] : index, index
+  %expert_partition_base0 = index.cast %expert_partition_base_i32 : i32 to index
+  %expert_partition_base = index.assume %expert_partition_base0 [range(%expert_partition_base0, 0, 2559)] : index
+  scf.if %has_expert {
+    %expert, %table_expert_count = index.assume %lane, %bounded_expert_count [lt(%lane, %bounded_expert_count)] : index, index
+    %expert_i32 = index.cast %expert : index to i32
+    scf.for %partition = [%c0 to %expert_partition_count step %c1] {
+      %descriptor_ordinal0 = index.add %expert_partition_base, %partition : index
+      %descriptor_ordinal, %descriptor_count = index.assume %descriptor_ordinal0, %partition_count [lt(%descriptor_ordinal0, %partition_count)] : index, index
+      %table_descriptor_ordinal, %table_descriptor_capacity = index.assume %descriptor_ordinal, %maximum_partition_count [lt(%descriptor_ordinal, %maximum_partition_count)] : index, index
+      %partition_remainder = index.rem %expert_assignment_count, %c32 : index
+      %has_partial_tail = index.cmp ne, %partition_remainder, %c0 : index
+      %partition_row_count = scf.if %has_partial_tail -> (index) {
+        %next_partition = index.add %partition, %c1 : index
+        %is_tail_partition = index.cmp eq, %next_partition, %expert_partition_count : index
+        %tail_row_count = scf.if %is_tail_partition -> (index) {
+          scf.yield %partition_remainder : index
+        } else {
+          scf.yield %c32 : index
+        }
+        scf.yield %tail_row_count : index
+      } else {
+        scf.yield %c32 : index
+      }
+      %partition_i32 = index.cast %partition : index to i32
+      %partition_row_count_i32 = index.cast %partition_row_count : index to i32
+      %bounded_expert_i32 = scalar.andi %expert_i32, %descriptor_expert_mask : i32
+      %packed_partition = scalar.shli %partition_i32, %descriptor_partition_shift : i32
+      %partition_row_count_minus_one = scalar.subi %partition_row_count_i32, %c1_i32 : i32
+      %packed_row_count = scalar.shli %partition_row_count_minus_one, %descriptor_row_count_shift : i32
+      %packed_expert_partition = scalar.ori %bounded_expert_i32, %packed_partition : i32
+      %packed_descriptor = scalar.ori %packed_expert_partition, %packed_row_count : i32
+      view.store %packed_descriptor, %partition_descriptor_view[%table_descriptor_ordinal] : i32, view<[%maximum_partition_count]xi32>
+    }
+  }
+  %is_lane_zero = index.cmp eq, %lane, %c0 : index
+  scf.if %is_lane_zero {
+    view.store %partition_count_i32, %partition_count_view[%c0] : i32, view<1xi32>
+  }
+  kernel.return
+}

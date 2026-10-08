@@ -10,28 +10,17 @@
 // gfx1151 uses descriptor-backed MUBUF accesses for the decode schedule. The
 // generic gfx11 provider retains global addressing where descriptor setup costs
 // more than it saves.
+template.decl @qwen3_moe.router_projection.storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer)
+
 amdgpu.target<gfx11-generic> @qwen3_moe_router_projection_gfx11_wave32 {subgroup_size = 32}
 
 amdgpu.target<gfx11-generic> @qwen3_moe_router_projection_gfx11_wave64 {subgroup_size = 64}
 
-amdgpu.target<gfx1151> @qwen3_moe_router_projection_gfx1151
+target.decl @qwen3_moe_router_projection_gfx1151
 
 config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
 
 config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
-
-// Selects the target's preferred storage contract without exposing addressing
-// policy at the projection call site.
-func.template<qwen3_moe.router_projection.storage> target(@qwen3_moe_router_projection_gfx1151) priority(20) @qwen3_moe_router_projection_descriptor_storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer) {
-  %input_descriptor = buffer.assume.memory_space<descriptor> %input : buffer
-  %weight_descriptor = buffer.assume.memory_space<descriptor> %weight : buffer
-  %output_descriptor = buffer.assume.memory_space<descriptor> %output : buffer
-  func.return %input_descriptor, %weight_descriptor, %output_descriptor : buffer, buffer, buffer
-}
-
-func.template<qwen3_moe.router_projection.storage> priority(1) @qwen3_moe_router_projection_global_storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer) {
-  func.return %input, %weight, %output : buffer, buffer, buffer
-}
 
 // Scalar differential oracle. It is reachable only from check cases and keeps
 // production validation independent of the packetized wave schedule.
@@ -95,7 +84,7 @@ kernel.def target(@qwen3_moe_router_projection_gfx11_wave64) @qwen3_moe_router_p
   %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
   %expert = index.assume %expert0 [lt(%expert0, %expert_count)] : index
   %lane_channel = index.mul %lane, %c4 : index
-  %input_storage, %weight_storage, %output_storage = func.apply<qwen3_moe.router_projection.storage>(%input, %weight, %output) : (buffer, buffer, buffer) -> (buffer, buffer, buffer)
+  %input_storage, %weight_storage, %output_storage = template.apply<@qwen3_moe.router_projection.storage>(%input, %weight, %output) : (buffer, buffer, buffer) -> (buffer, buffer, buffer)
   %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input_storage, %weight_storage, %output_storage : buffer, buffer, buffer
   %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
   %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%expert_count]x[%hidden_size]xf32>

@@ -1,0 +1,44 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.prefill_window(%packet_width: index, %state: buffer, %x: buffer, %filt: buffer, %dst: buffer)
+
+config.decl @llm.ssm_conv.prefill.d_conv : %value: index where [range(%value, 4, 4)]
+
+config.decl @llm.ssm_conv.prefill.d_inner : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
+config.decl @llm.ssm_conv.prefill.n_t : %value: index where [range(%value, 512, 512)]
+
+config.decl @llm.ssm_conv.prefill.n_s : %value: index where [range(%value, 1, 1)]
+
+config.decl @llm.ssm_conv.prefill.state_row_stride : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
+config.decl @llm.ssm_conv.prefill.x_row_stride : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+
+func.def inline @llm_ssm_conv_prefill_channel_packet(%channels: index) -> (index) {
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %alignment = index.constant 64 : index
+  %remainder = index.rem %channels, %alignment : index
+  %aligned = index.cmp eq, %remainder, %zero : index
+  %width = scf.select %aligned, %two, %one : index
+  func.return %width : index
+}
+
+kernel.def export("llm_ssm_conv_dconv4_silu_prefill_512_wg1024") @llm_ssm_conv_dconv4_silu_prefill_512_wg1024() {
+  %c1 = index.constant 1 : index
+  %channel_lanes = index.constant 32 : index
+  %threads = index.constant 1024 : index
+  %d_inner = config.get @llm.ssm_conv.prefill.d_inner : index
+  %n_s = config.get @llm.ssm_conv.prefill.n_s : index
+  %packet_width = func.call pure @llm_ssm_conv_prefill_channel_packet(%d_inner) : (index) -> (index)
+  %channels = index.mul %packet_width, %channel_lanes : index
+  %groups_x = index.div %d_inner, %channels : index
+  kernel.launch.config workgroups(%groups_x, %n_s, %c1) workgroup_size(%threads, %c1, %c1) : index
+} launch(%state: buffer, %x: buffer, %filt: buffer, %dst: buffer) {
+  %d_inner = config.get @llm.ssm_conv.prefill.d_inner : index
+  %packet_width = func.call pure @llm_ssm_conv_prefill_channel_packet(%d_inner) : (index) -> (index)
+  template.apply<@llm.ssm_conv.prefill_window>(%packet_width, %state, %x, %filt, %dst) : (index, buffer, buffer, buffer, buffer)
+  kernel.return
+}

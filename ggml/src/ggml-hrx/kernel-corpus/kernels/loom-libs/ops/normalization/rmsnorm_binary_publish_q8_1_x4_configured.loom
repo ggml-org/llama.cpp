@@ -1,0 +1,56 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_binary_q8_1_x4.body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer, %f16_output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
+
+config.decl @ggml.rmsnorm_binary_q8_1_x4.op : %value: index where [range(%value, 0, 3)]
+
+config.decl @ggml.rmsnorm_binary_q8_1_x4.publish_f16 : %value: index where [range(%value, 0, 1)]
+
+kernel.decl @ggml_rmsnorm_binary_f32(%token_count$binary: index) launch(%token_count$binary_launch: index, %input$binary: buffer, %rhs$binary: buffer, %output$binary: buffer)
+
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$quantize: index, %input_size$quantize: index) launch(%token_count$quantize_launch: index, %input_size$quantize_launch: index, %input$quantize: buffer, %output$quantize: buffer)
+
+kernel.def target(@ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32) export("ggml_rmsnorm_binary_q8_1_x4_publish") @ggml_rmsnorm_binary_q8_1_x4_publish(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %hidden = config.get @ggml.rmsnorm_binary_q8_1_x4.hidden_size : index
+  %tile_width = index.constant 1024 : index
+  %tile_round = index.constant 1023 : index
+  %decode_limit = index.constant 6 : index
+  %rounded_hidden = index.add %hidden, %tile_round : index
+  %stripe_count = index.div %rounded_hidden, %tile_width : index
+  %is_decode = index.cmp ult, %token_count, %decode_limit : index
+  %groups_per_row = scf.select %is_decode, %stripe_count, %c1 : index
+  %groups = index.mul %token_count, %groups_per_row : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer, %f16_output: buffer) where [range(%token_count, 1, 2048)] {
+  %publish_f16_value = config.get @ggml.rmsnorm_binary_q8_1_x4.publish_f16 : index
+  %c1 = index.constant 1 : index
+  %publish_f16 = index.cmp eq, %publish_f16_value, %c1 : index
+  template.apply<@ggml.rmsnorm_binary_q8_1_x4.body>(%publish_f16, %token_count, %input, %rhs, %output, %q8_output, %f16_output) : (i1, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+check.case public @ggml_rmsnorm_binary_q8_1_x4_publish_mul_case {
+  %token_count = check.literal value(1) : index
+  %hidden_size = check.literal value(128) : index
+  %input = check.generate.fill value(2.0) : tensor<128xf32>
+  %rhs = check.generate.iota offset(-1.0) step(0.015625) : tensor<128xf32>
+  %f32 = check.generate.fill value(0.0) : tensor<128xf32>
+  %expected = check.generate.fill value(0) : tensor<144xi8>
+  %actual = check.generate.fill value(1) : tensor<144xi8>
+  kernel.launch @ggml_rmsnorm_binary_f32[%token_count](%token_count, %input, %rhs, %f32) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %f32, %expected) : [index, index](index, index, tensor<128xf32>, tensor<144xi8>)
+  %actual_f32 = check.generate.fill value(0.0) : tensor<128xf32>
+  kernel.launch @ggml_rmsnorm_binary_q8_1_x4_publish[%token_count](%token_count, %input, %rhs, %actual_f32, %actual, %actual) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<144xi8>, tensor<144xi8>)
+  check.expect.equal actual(%actual_f32) expected(%f32) : tensor<128xf32>
+  check.expect.equal actual(%actual) expected(%expected) : tensor<144xi8>
+  check.return
+}

@@ -1,0 +1,96 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.binary_f32.apply(%arg0: index, %arg1: f32, %arg2: f32) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_binary_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.binary_f32.op : %value: index where [range(%value, 0, 8)]
+
+config.decl @ggml.binary_f32.ne0 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.ne1 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.ne2 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src0_stride2 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src0_stride3 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src1_stride2 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src1_stride3 : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.binary_f32.src1_span : %value: index where [range(%value, 1, 134217728)]
+
+kernel.def target(@ggml_binary_f32_gfx11_wave64) export("ggml_binary_f32") @ggml_binary_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %n0 = config.get @ggml.binary_f32.ne0 : index
+  %n1 = config.get @ggml.binary_f32.ne1 : index
+  %n2 = config.get @ggml.binary_f32.ne2 : index
+  %s0_1 = config.get @ggml.binary_f32.src0_stride1 : index
+  %s0_2 = config.get @ggml.binary_f32.src0_stride2 : index
+  %s0_3 = config.get @ggml.binary_f32.src0_stride3 : index
+  %s1_1 = config.get @ggml.binary_f32.src1_stride1 : index
+  %s1_2 = config.get @ggml.binary_f32.src1_stride2 : index
+  %s1_3 = config.get @ggml.binary_f32.src1_stride3 : index
+  %src0_count = config.get @ggml.binary_f32.src0_span : index
+  %src1_count = config.get @ggml.binary_f32.src1_span : index
+  %op = config.get @ggml.binary_f32.op : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %zero = index.constant 0 : index
+  %base0 = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base0, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %lhs_view = buffer.view %lhs[%zero_offset] : buffer -> view<[%src0_count]xf32>
+  %rhs_view = buffer.view %rhs[%zero_offset] : buffer -> view<[%src1_count]xf32>
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %coord0 = index.rem %linear, %n0 : index
+    %linear_div_n0 = index.div %linear, %n0 : index
+    %coord1 = index.rem %linear_div_n0, %n1 : index
+    %linear_div_n01 = index.div %linear_div_n0, %n1 : index
+    %coord2 = index.rem %linear_div_n01, %n2 : index
+    %coord3 = index.div %linear_div_n01, %n2 : index
+    %src0_term1 = index.mul %coord1, %s0_1 : index
+    %src0_term2 = index.mul %coord2, %s0_2 : index
+    %src0_term3 = index.mul %coord3, %s0_3 : index
+    %src0_linear01 = index.add %coord0, %src0_term1 : index
+    %src0_linear012 = index.add %src0_linear01, %src0_term2 : index
+    %src0_linear = index.add %src0_linear012, %src0_term3 : index
+    %src1_term1 = index.mul %coord1, %s1_1 : index
+    %src1_term2 = index.mul %coord2, %s1_2 : index
+    %src1_term3 = index.mul %coord3, %s1_3 : index
+    %src1_linear01 = index.add %coord0, %src1_term1 : index
+    %src1_linear012 = index.add %src1_linear01, %src1_term2 : index
+    %src1_linear = index.add %src1_linear012, %src1_term3 : index
+    %src0_in_bounds = index.cmp ult, %src0_linear, %src0_count : index
+    scf.if %src0_in_bounds {
+      %src1_in_bounds = index.cmp ult, %src1_linear, %src1_count : index
+      scf.if %src1_in_bounds {
+        %lhs_value = view.load %lhs_view[%src0_linear] : view<[%src0_count]xf32> -> f32
+        %rhs_value = view.load %rhs_view[%src1_linear] : view<[%src1_count]xf32> -> f32
+        %result = template.apply<@ggml.binary_f32.apply>(%op, %lhs_value, %rhs_value) : (index, f32, f32) -> (f32)
+        view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+      }
+    }
+  }
+  kernel.return
+}

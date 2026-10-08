@@ -1,0 +1,81 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.publish_f32.f16_vector4(%publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %output: buffer)
+
+template.decl @ggml.publish_f32.f32_vector4(%publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %output: buffer)
+
+template.decl @ggml.publish_f32.next_vector4(%format: index, %publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @ggml.publish_f32.q8_1_x4_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%arg0: i1, %arg1: offset, %arg2: index, %arg3: vector<4xf32>, %arg4: view<256xf32>, %arg5: view<32xf32>, %arg6: buffer)
+
+template.def<@ggml.publish_f32.f32_vector4> device @ggml_publish_f32_f32_vector4(%publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 1073741824), mul(%hidden_size, 128)] : index
+  %c0_offset = index.constant 0 : offset
+  scf.if %publish_word {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    vector.store %values, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  }
+  template.return
+}
+
+template.def<@ggml.publish_f32.f16_vector4> device @ggml_publish_f32_f16_vector4(%publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 32768), mul(%hidden_size, 128)] : index
+  %c0_offset = index.constant 0 : offset
+  scf.if %publish_word {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf16>
+    %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %truncated, %output_view[%token, %channel] : vector<4xf16>, view<[%bounded_token_count]x[%bounded_hidden_size]xf16>
+  }
+  template.return
+}
+
+template.def<@ggml.publish_f32.q8_1_x4_vector4> device @ggml_publish_f32_q8_1_x4_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}
+
+func.def inline @ggml_publish_f32_row_bytes(%format: index, %hidden_size: index) -> (offset) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c81 = index.constant 81 : index
+  %c128 = index.constant 128 : index
+  %zero_bytes = index.constant 0 : offset
+  %f16_element_bytes = index.constant 2 : offset
+  %f32_element_bytes = index.constant 4 : offset
+  %q8_group_bytes = index.constant 144 : offset
+  %is_f16 = index.cmp eq, %format, %c16 : index
+  %is_f32 = index.cmp eq, %format, %c32 : index
+  %is_q8_1 = index.cmp eq, %format, %c81 : index
+  %f16_row_bytes = index.scale %hidden_size, %f16_element_bytes : index, offset -> offset
+  %f32_row_bytes = index.scale %hidden_size, %f32_element_bytes : index, offset -> offset
+  %q8_group_count = index.div %hidden_size, %c128 : index
+  %q8_row_bytes = index.scale %q8_group_count, %q8_group_bytes : index, offset -> offset
+  %selected_f16 = scf.select %is_f16, %f16_row_bytes, %zero_bytes : offset
+  %selected_f32 = scf.select %is_f32, %f32_row_bytes, %selected_f16 : offset
+  %selected = scf.select %is_q8_1, %q8_row_bytes, %selected_f32 : offset
+  func.return %selected : offset
+}
+
+template.def<@ggml.publish_f32.next_vector4> device @ggml_publish_f32_next_vector4(%format: index, %publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c81 = index.constant 81 : index
+  %is_f16 = index.cmp eq, %format, %c16 : index
+  %is_f32 = index.cmp eq, %format, %c32 : index
+  %is_q8_1 = index.cmp eq, %format, %c81 : index
+  %publish_f16 = scalar.andi %publish_word, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish_word, %is_f32 : i1
+  template.apply<@ggml.publish_f32.f16_vector4>(%publish_f16, %token, %channel, %token_count, %hidden_size, %values, %output) : (i1, index, index, index, index, vector<4xf32>, buffer)
+  template.apply<@ggml.publish_f32.f32_vector4>(%publish_f32, %token, %channel, %token_count, %hidden_size, %values, %output) : (i1, index, index, index, index, vector<4xf32>, buffer)
+  scf.if %is_q8_1 {
+    %row_bytes = func.call @ggml_publish_f32_row_bytes(%format, %hidden_size) : (index, index) -> (offset)
+    %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
+    template.apply<@ggml.publish_f32.q8_1_x4_vector4>(%publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  }
+  template.return
+}

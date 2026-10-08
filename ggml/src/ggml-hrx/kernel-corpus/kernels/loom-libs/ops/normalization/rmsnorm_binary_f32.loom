@@ -1,0 +1,42 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_binary_f32.body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_f32.rms_epsilon : f32
+config.decl @ggml.rmsnorm_binary_f32.op : %value: index where [range(%value, 0, 3)]
+
+kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary_f32") @ggml_rmsnorm_binary_f32(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer) where [range(%token_count, 1, 1048576)] {
+  %publish_f16 = scalar.constant false : i1
+  template.apply<@ggml.rmsnorm_binary_f32.body>(%publish_f16, %token_count, %input, %rhs, %output, %output) : (i1, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+check.case public @ggml_rmsnorm_binary_f32_mul_case {
+  %token_count = check.literal value(1) : index
+  %input = check.generate.fill value(2.0) : tensor<128xf32>
+  %rhs = check.generate.iota offset(-1.0) step(0.015625) : tensor<128xf32>
+  %output = check.generate.fill value(0.0) : tensor<128xf32>
+  %expected = check.generate.iota offset(-1.0) step(0.015625) : tensor<128xf32>
+  kernel.launch @ggml_rmsnorm_binary_f32[%token_count](%token_count, %input, %rhs, %output) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(9.9999999999999995e-07) rtol(9.9999999999999995e-07) nan(same) : tensor<128xf32>
+  check.return
+}
+
+check.case public @ggml_rmsnorm_binary_f32_add_case {
+  %token_count = check.literal value(1) : index
+  %input = check.generate.fill value(2.0) : tensor<128xf32>
+  %rhs = check.generate.iota offset(0.0) step(0.015625) : tensor<128xf32>
+  %output = check.generate.fill value(0.0) : tensor<128xf32>
+  %expected = check.generate.iota offset(1.0) step(0.015625) : tensor<128xf32>
+  kernel.launch @ggml_rmsnorm_binary_f32[%token_count](%token_count, %input, %rhs, %output) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(9.9999999999999995e-07) rtol(9.9999999999999995e-07) nan(same) : tensor<128xf32>
+  check.return
+}

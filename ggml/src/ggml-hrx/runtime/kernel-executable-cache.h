@@ -22,7 +22,7 @@ struct KernelExecutable {
     hrx_executable_t                executable     = nullptr;
     uint32_t                        export_ordinal = 0;
     hrx_executable_export_info_t    export_info    = {};
-    ggml_hrx_loom_jit_launch_config launch;
+    ggml_hrx_loom_jit_launch_program * launch_program = nullptr;
 };
 
 struct KernelExecutablePrepareContext {
@@ -44,17 +44,19 @@ class KernelExecutableCache {
 
     KernelExecutableRef get_or_compile(const KernelExecutablePrepareContext & context,
                                        const KernelDefinition &               definition,
-                                       const Dispatch &                       dispatch,
-                                       std::vector<uint8_t> &                 constants);
+                                       const Dispatch &                       dispatch);
 
     std::shared_ptr<KernelExecutable> materialize(const KernelExecutablePrepareContext & context,
                                                   const KernelExecutableRef &            ref,
-                                                  const std::vector<uint8_t> &           constants);
+                                                  const KernelSpecialization &           specialization,
+                                                  std::vector<uint8_t> &                 constants,
+                                                  ggml_hrx_loom_jit_launch_config &      launch);
 
     std::shared_ptr<KernelExecutable> prepare(const KernelExecutablePrepareContext & context,
                                               const KernelDefinition &               definition,
                                               const Dispatch &                       dispatch,
-                                              std::vector<uint8_t> &                 constants);
+                                              std::vector<uint8_t> &                 constants,
+                                              ggml_hrx_loom_jit_launch_config &      launch);
 
     void clear();
 

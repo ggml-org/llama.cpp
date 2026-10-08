@@ -3,6 +3,7 @@
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
+#include <cstdlib>
 #include <utility>
 
 namespace ggml::hrx {
@@ -39,6 +40,10 @@ void TransientArena::clear() {
         hrx_buffer_release(buffer_);
         buffer_ = nullptr;
     }
+    for (hrx_buffer_t buffer : diagnostic_retired_buffers_) {
+        hrx_buffer_release(buffer);
+    }
+    diagnostic_retired_buffers_.clear();
     allocation_capacity_ = 0;
     allocation_id_       = kInvalidTransientArenaAllocationId;
 }
@@ -62,7 +67,8 @@ TransientArena::AllocationLease TransientArena::acquire_allocation_lease() {
 
 Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t stream, size_t required_size) {
     Status status;
-    if (required_size == 0 || allocation_capacity_ >= required_size) {
+    const bool diagnostic_fresh = std::getenv("GGML_HRX_DIAGNOSTIC_FRESH_TRANSIENT_ARENA") != nullptr;
+    if (required_size == 0 || (!diagnostic_fresh && allocation_capacity_ >= required_size)) {
         return status;
     }
     if (device == nullptr) {
@@ -74,11 +80,15 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         return status;
     }
     if (buffer_ != nullptr) {
+        if (diagnostic_fresh) {
+            diagnostic_retired_buffers_.push_back(buffer_);
+        } else {
         if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
             status.log("synchronize before growing transient arena: %s", error->c_str());
             return status;
         }
         hrx_buffer_release(buffer_);
+        }
         buffer_              = nullptr;
         allocation_capacity_ = 0;
         allocation_id_       = kInvalidTransientArenaAllocationId;

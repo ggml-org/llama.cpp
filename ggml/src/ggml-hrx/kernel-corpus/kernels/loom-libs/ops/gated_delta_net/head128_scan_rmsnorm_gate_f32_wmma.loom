@@ -1,0 +1,41 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.f32_wmma_head128.body(%state_inplace: i1, %publish_snapshots: i1, %projection_epilogue: i1, %snapshot_stride: index, %scale: f32, %q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %bias: buffer, %a_scale: buffer, %state_in: buffer, %dst: buffer, %snapshot_cache: buffer, %rmsnorm_gate: i1, %rms_epsilon: f32, %rms_gate_op: index, %rms_weight: buffer, %raw_gate: buffer, %norm_output: buffer, %half_output: buffer, %select_state: i1, %state_row_count: index, %state_ids: buffer, %publish_q8: i1)
+
+config.decl @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+
+config.decl @ggml.rmsnorm_gate_f32.gate_op : %value: index where [range(%value, 0, 23)]
+
+config.decl @llm.gated_delta_net.head_width : %value: index where [range(%value, 1, 4096)]
+
+config.decl @llm.gated_delta_net.head_count : %value: index where [range(%value, 1, 4096)]
+
+config.decl @llm.gated_delta_net.sequence_count : %value: index where [range(%value, 1, 4096)]
+
+kernel.def export("llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate") @llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate() {
+  %unit = index.constant 1 : index
+  %wg = index.constant 256 : index
+  %blk = index.constant 128 : index
+  %blk_m = index.constant 127 : index
+  %s_v = config.get @llm.gated_delta_net.head_width : index
+  %n_heads = config.get @llm.gated_delta_net.head_count : index
+  %n_seqs = config.get @llm.gated_delta_net.sequence_count : index
+  %cr = index.add %s_v, %blk_m : index
+  %col_blocks = index.div %cr, %blk : index
+  kernel.launch.config workgroups(%n_heads, %n_seqs, %col_blocks) workgroup_size(%wg, %unit, %unit) : index
+} launch(%q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %state_in: buffer, %dst: buffer, %rms_weight: buffer, %raw_gate: buffer, %norm_output: buffer, %half_output: buffer) {
+  %state_inplace = scalar.constant false : i1
+  %publish_snapshots = scalar.constant false : i1
+  %projection_epilogue = scalar.constant false : i1
+  %snapshot_stride = index.constant 1 : index
+  %scale = scalar.constant 0.0883883461356163 : f32
+  %rmsnorm_gate = scalar.constant true : i1
+  %rms_epsilon = config.get @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+  %rms_gate_op = config.get @ggml.rmsnorm_gate_f32.gate_op : index
+  %select_state = scalar.constant false : i1
+  %state_row_count = index.constant 1 : index
+  %publish_q8 = scalar.constant false : i1
+  template.apply<@llm.gated_delta_net.f32_wmma_head128.body>(%state_inplace, %publish_snapshots, %projection_epilogue, %snapshot_stride, %scale, %q, %k, %v, %g, %beta, %g, %beta, %state_in, %dst, %state_in, %rmsnorm_gate, %rms_epsilon, %rms_gate_op, %rms_weight, %raw_gate, %norm_output, %half_output, %select_state, %state_row_count, %dst, %publish_q8) : (i1, i1, i1, index, f32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, i1, f32, index, buffer, buffer, buffer, buffer, i1, index, buffer, i1)
+  kernel.return
+}

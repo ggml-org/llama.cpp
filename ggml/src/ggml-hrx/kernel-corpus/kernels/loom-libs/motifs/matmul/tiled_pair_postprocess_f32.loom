@@ -1,0 +1,84 @@
+// Pairwise tiled matmul postprocess for gate/up projections.
+template.decl @ggml.matmul.tiled_pair_postprocess_f32.apply_vector4(%op: index, %lhs: vector<4xf32>, %rhs: vector<4xf32>) -> (vector<4xf32>)
+
+template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>)
+
+template.def<@ggml.matmul.tiled_pair_postprocess_f32.apply_vector4> device @ggml_matmul_tiled_pair_postprocess_f32_apply_vector4(%op: index, %lhs: vector<4xf32>, %rhs: vector<4xf32>) -> (vector<4xf32>) {
+  %c0_5_f32x4 = vector.constant 0.5 : vector<4xf32>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
+  %c2_f32x4 = vector.constant 2.0 : vector<4xf32>
+  %cn2_f32x4 = vector.constant -2.0 : vector<4xf32>
+  %gelu_coef = vector.constant 0.044715 : vector<4xf32>
+  %sqrt_2_over_pi = vector.constant 0.79788456080286544 : vector<4xf32>
+
+  %op_add = index.constant 0 : index
+  %sum = vector.addf %lhs, %rhs : vector<4xf32>
+  %is_add = index.cmp eq, %op, %op_add : index
+  %add_selected = scf.select %is_add, %sum, %lhs : vector<4xf32>
+
+  %op_sub = index.constant 1 : index
+  %difference = vector.subf %lhs, %rhs : vector<4xf32>
+  %is_sub = index.cmp eq, %op, %op_sub : index
+  %sub_selected = scf.select %is_sub, %difference, %add_selected : vector<4xf32>
+
+  %op_mul = index.constant 2 : index
+  %product = vector.mulf %lhs, %rhs : vector<4xf32>
+  %is_mul = index.cmp eq, %op, %op_mul : index
+  %mul_selected = scf.select %is_mul, %product, %sub_selected : vector<4xf32>
+
+  %op_div = index.constant 3 : index
+  %quotient = vector.divf<reassoc|nnan|ninf|nsz|arcp> %lhs, %rhs : vector<4xf32>
+  %is_div = index.cmp eq, %op, %op_div : index
+  %div_selected = scf.select %is_div, %quotient, %mul_selected : vector<4xf32>
+
+  %op_swiglu = index.constant 4 : index
+  %negative_lhs = vector.subf %c0_f32x4, %lhs : vector<4xf32>
+  %lhs_exp = vector.expf<afn> %negative_lhs : vector<4xf32>
+  %denominator = vector.addf %c1_f32x4, %lhs_exp : vector<4xf32>
+  %sigmoid = vector.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32x4, %denominator : vector<4xf32>
+  %silu = vector.mulf<reassoc|nnan|ninf|nsz|contract> %lhs, %sigmoid : vector<4xf32>
+  %swiglu = vector.mulf<reassoc|nnan|ninf|nsz|contract> %silu, %rhs : vector<4xf32>
+  %is_swiglu = index.cmp eq, %op, %op_swiglu : index
+  %swiglu_selected = scf.select %is_swiglu, %swiglu, %div_selected : vector<4xf32>
+
+  %op_geglu = index.constant 5 : index
+  %gelu_x2 = vector.mulf %lhs, %lhs : vector<4xf32>
+  %gelu_poly0 = vector.mulf %gelu_coef, %gelu_x2 : vector<4xf32>
+  %gelu_poly = vector.addf %c1_f32x4, %gelu_poly0 : vector<4xf32>
+  %gelu_inner0 = vector.mulf %lhs, %gelu_poly : vector<4xf32>
+  %gelu_inner = vector.mulf %sqrt_2_over_pi, %gelu_inner0 : vector<4xf32>
+  %gelu_tanh_scaled = vector.mulf %cn2_f32x4, %gelu_inner : vector<4xf32>
+  %gelu_tanh_exp = vector.expf<afn> %gelu_tanh_scaled : vector<4xf32>
+  %gelu_tanh_denominator = vector.addf %c1_f32x4, %gelu_tanh_exp : vector<4xf32>
+  %gelu_tanh_ratio = vector.divf<reassoc|nnan|ninf|nsz|arcp> %c2_f32x4, %gelu_tanh_denominator : vector<4xf32>
+  %gelu_tanh = vector.subf %gelu_tanh_ratio, %c1_f32x4 : vector<4xf32>
+  %gelu_one_plus = vector.addf %c1_f32x4, %gelu_tanh : vector<4xf32>
+  %gelu_half_x = vector.mulf %c0_5_f32x4, %lhs : vector<4xf32>
+  %gelu = vector.mulf %gelu_half_x, %gelu_one_plus : vector<4xf32>
+  %geglu = vector.mulf %gelu, %rhs : vector<4xf32>
+  %is_geglu = index.cmp eq, %op, %op_geglu : index
+  %geglu_selected = scf.select %is_geglu, %geglu, %swiglu_selected : vector<4xf32>
+
+  %op_reglu = index.constant 6 : index
+  %unary_relu = index.constant 2 : index
+  %relu_lhs = template.apply<@ggml.unary_f32.apply_vector4>(%unary_relu, %lhs) : (index, vector<4xf32>) -> (vector<4xf32>)
+  %reglu = vector.mulf %relu_lhs, %rhs : vector<4xf32>
+  %is_reglu = index.cmp eq, %op, %op_reglu : index
+  %reglu_selected = scf.select %is_reglu, %reglu, %geglu_selected : vector<4xf32>
+
+  %op_geglu_erf = index.constant 7 : index
+  %unary_gelu_erf = index.constant 20 : index
+  %gelu_erf_lhs = template.apply<@ggml.unary_f32.apply_vector4>(%unary_gelu_erf, %lhs) : (index, vector<4xf32>) -> (vector<4xf32>)
+  %geglu_erf = vector.mulf %gelu_erf_lhs, %rhs : vector<4xf32>
+  %is_geglu_erf = index.cmp eq, %op, %op_geglu_erf : index
+  %geglu_erf_selected = scf.select %is_geglu_erf, %geglu_erf, %reglu_selected : vector<4xf32>
+
+  %op_geglu_quick = index.constant 8 : index
+  %unary_gelu_quick = index.constant 14 : index
+  %gelu_quick_lhs = template.apply<@ggml.unary_f32.apply_vector4>(%unary_gelu_quick, %lhs) : (index, vector<4xf32>) -> (vector<4xf32>)
+  %geglu_quick = vector.mulf %gelu_quick_lhs, %rhs : vector<4xf32>
+  %is_geglu_quick = index.cmp eq, %op, %op_geglu_quick : index
+  %result = scf.select %is_geglu_quick, %geglu_quick, %geglu_erf_selected : vector<4xf32>
+  template.return %result : vector<4xf32>
+}

@@ -1,0 +1,133 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Publishes both the indexed residual and its RMS-normalized learned-scale
+// output. Each output row may select any valid source row independently.
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_gather_add_rmsnorm_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.gather_add_rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.gather_add_rmsnorm_binary_f32.rms_epsilon : f32
+config.decl @ggml.gather_add_rmsnorm_binary_f32.gather_op : %value: index where [range(%value, 0, 3)]
+
+kernel.def target(@ggml_gather_add_rmsnorm_gfx11_wave32) export("ggml_gather_add_rmsnorm_binary_f32") @ggml_gather_add_rmsnorm_binary_f32(%source_token_count: index, %output_token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%output_token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%source_token_count: index, %output_token_count: index, %attention: buffer, %residual: buffer, %output_ids: buffer, %raw_output: buffer, %weight: buffer, %normalized_output: buffer) where [range(%source_token_count, 1, 2048), range(%output_token_count, 1, 2048)] {
+  %source_count = index.assume %source_token_count [range(%source_token_count, 1, 2048)] : index
+  %output_count = index.assume %output_token_count [range(%output_token_count, 1, 2048)] : index
+  %hidden0 = config.get @ggml.gather_add_rmsnorm_binary_f32.hidden_size : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 128, 32768), mul(%hidden0, 128)] : index
+  %epsilon = config.get @ggml.gather_add_rmsnorm_binary_f32.rms_epsilon : f32
+  %gather_op = config.get @ggml.gather_add_rmsnorm_binary_f32.gather_op : index
+  %output_row0 = kernel.workgroup.id<x> : index
+  %output_row = index.assume %output_row0 [lt(%output_row0, %output_count)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %base = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %scratch_bytes = index.constant 1024 : offset
+
+  %attention_noalias, %residual_noalias, %ids_noalias, %raw_noalias, %weight_noalias, %normalized_noalias = buffer.assume.noalias %attention, %residual, %output_ids, %raw_output, %weight, %normalized_output : buffer, buffer, buffer, buffer, buffer, buffer
+  %attention_view = buffer.view %attention_noalias[%base] : buffer -> view<[%source_count]x[%hidden]xf32>
+  %residual_view = buffer.view %residual_noalias[%base] : buffer -> view<[%source_count]x[%hidden]xf32>
+  %ids_view = buffer.view %ids_noalias[%base] : buffer -> view<[%output_count]xi32>
+  %raw_view = buffer.view %raw_noalias[%base] : buffer -> view<[%output_count]x[%hidden]xf32>
+  %weight_view = buffer.view %weight_noalias[%base] : buffer -> view<[%hidden]xf32>
+  %normalized_view = buffer.view %normalized_noalias[%base] : buffer -> view<[%output_count]x[%hidden]xf32>
+  %source_row_i32 = view.load %ids_view[%output_row] : view<[%output_count]xi32> -> i32
+  %source_row0 = index.cast %source_row_i32 : i32 to index
+  %source_row = index.assume %source_row0 [range(%source_row0, 0, 2047), lt(%source_row0, %source_count)] : index
+
+  %thread_sum = scf.for %channel = [%workitem to %hidden step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+    %attention_value = view.load %attention_view[%source_row, %channel] : view<[%source_count]x[%hidden]xf32> -> f32
+    %residual_value = view.load %residual_view[%source_row, %channel] : view<[%source_count]x[%hidden]xf32> -> f32
+    %combined = template.apply<@ggml.binary_f32.apply>(%gather_op, %attention_value, %residual_value) : (index, f32, f32) -> (f32)
+    view.store %combined, %raw_view[%output_row, %channel] : f32, view<[%output_count]x[%hidden]xf32>
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %combined, %combined : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_view = buffer.view %scratch[%base] : buffer -> view<256xf32>
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_view[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %c8 : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_view[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %hidden_i32 = index.cast %hidden : index to i32
+    %hidden_f32 = scalar.sitofp %hidden_i32 : i32 to f32
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %scale, %scratch_view[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %row_scale = view.load %scratch_view[%c0] : view<256xf32> -> f32
+  scf.for %channel = [%workitem to %hidden step %c256] {
+    %value = view.load %raw_view[%output_row, %channel] : view<[%output_count]x[%hidden]xf32> -> f32
+    %learned_weight = view.load %weight_view[%channel] : view<[%hidden]xf32> -> f32
+    %normalized = scalar.mulf %value, %row_scale : f32
+    %result = scalar.mulf %normalized, %learned_weight : f32
+    view.store %result, %normalized_view[%output_row, %channel] : f32, view<[%output_count]x[%hidden]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_gather_add_rmsnorm_binary_f32_index_case {
+  %source_count = check.literal value(3) : index
+  %output_count = check.literal value(3) : index
+  %attention = check.generate.fill value(1.0) : tensor<3x128xf32>
+  %residual = check.generate.fill value(3.0) : tensor<3x128xf32>
+  %ids = check.generate.iota offset(2) step(-1) : tensor<3xi32>
+  %raw = check.generate.fill value(0.0) : tensor<3x128xf32>
+  %weight = check.generate.fill value(2.0) : tensor<128xf32>
+  %normalized = check.generate.fill value(0.0) : tensor<3x128xf32>
+  %expected_raw = check.generate.fill value(4.0) : tensor<3x128xf32>
+  %expected_normalized = check.generate.fill value(2.0) : tensor<3x128xf32>
+  kernel.launch @ggml_gather_add_rmsnorm_binary_f32[%source_count, %output_count](%source_count, %output_count, %attention, %residual, %ids, %raw, %weight, %normalized) : [index, index](index, index, tensor<3x128xf32>, tensor<3x128xf32>, tensor<3xi32>, tensor<3x128xf32>, tensor<128xf32>, tensor<3x128xf32>)
+  check.expect.close actual(%raw) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<3x128xf32>
+  check.expect.close actual(%normalized) expected(%expected_normalized) atol(0.000001) rtol(0.000001) nan(same) : tensor<3x128xf32>
+  check.return
+}
+
+check.benchmark<@ggml_gather_add_rmsnorm_binary_f32_index_case> @ggml_gather_add_rmsnorm_binary_f32_index
+
+check.case public @ggml_gather_add_rmsnorm_binary_f32_repeated_index_case {
+  %source_count = check.literal value(3) : index
+  %output_count = check.literal value(3) : index
+  %attention = check.generate.fill value(1.0) : tensor<3x128xf32>
+  %residual = check.generate.fill value(3.0) : tensor<3x128xf32>
+  %ids = check.generate.fill value(2) : tensor<3xi32>
+  %raw = check.generate.fill value(0.0) : tensor<3x128xf32>
+  %weight = check.generate.fill value(2.0) : tensor<128xf32>
+  %normalized = check.generate.fill value(0.0) : tensor<3x128xf32>
+  %expected_raw = check.generate.fill value(4.0) : tensor<3x128xf32>
+  %expected_normalized = check.generate.fill value(2.0) : tensor<3x128xf32>
+  kernel.launch @ggml_gather_add_rmsnorm_binary_f32[%source_count, %output_count](%source_count, %output_count, %attention, %residual, %ids, %raw, %weight, %normalized) : [index, index](index, index, tensor<3x128xf32>, tensor<3x128xf32>, tensor<3xi32>, tensor<3x128xf32>, tensor<128xf32>, tensor<3x128xf32>)
+  check.expect.close actual(%raw) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<3x128xf32>
+  check.expect.close actual(%normalized) expected(%expected_normalized) atol(0.000001) rtol(0.000001) nan(same) : tensor<3x128xf32>
+  check.return
+}
+
+check.benchmark<@ggml_gather_add_rmsnorm_binary_f32_repeated_index_case> @ggml_gather_add_rmsnorm_binary_f32_repeated_index

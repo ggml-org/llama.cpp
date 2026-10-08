@@ -1,0 +1,55 @@
+template.decl @ggml.mul_mat_f32_f32_decode.dispatch(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer, %aux0: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_decode.publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output: buffer, %residual_input: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_mul_mat_add_f32_f32_decode_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.mul_mat_f32_f32_decode.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+config.decl @ggml.mul_mat_f32_f32_decode.output_capacity : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.mul_mat_f32_f32_decode.weight_format : %value: index where [range(%value, 4, 81)]
+
+template.def<@ggml.mul_mat_f32_f32_decode.publish_pair2> device priority(20) @ggml_mul_mat_add_f32_f32_decode_publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output: buffer, %residual_input: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 1048576)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %residual_input_noalias = buffer.assume.noalias %residual_input : buffer
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%output_size]xf32>
+  %residual_input_view = buffer.view %residual_input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%output_size]xf32>
+  scf.if %publish_pair {
+    %residual0 = view.load %residual_input_view[%token, %channel] : view<[%launch_token_count]x[%output_size]xf32> -> f32
+    %sum0 = scalar.addf %value0, %residual0 : f32
+    view.store %sum0, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%output_size]xf32>
+  }
+  scf.if %row1_valid {
+    scf.if %publish_pair {
+      %row1 = index.add %channel, %c1 : index
+      %residual1 = view.load %residual_input_view[%token, %row1] : view<[%launch_token_count]x[%output_size]xf32> -> f32
+      %sum1 = scalar.addf %value1, %residual1 : f32
+      view.store %sum1, %output_view[%token, %row1] : f32, view<[%launch_token_count]x[%output_size]xf32>
+    }
+  }
+  template.return
+}
+
+kernel.def target(@ggml_mul_mat_add_f32_f32_decode_gfx11_wave64) @ggml_mul_mat_add_f32_f32_decode_wave64(%token_count: index, %input_size: index, %output_size: index) {
+  %token_capacity = config.get @ggml.mul_mat_f32_f32_decode.token_capacity : index
+  %output_capacity = config.get @ggml.mul_mat_f32_f32_decode.output_capacity : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %padded_output_size = index.add %output_capacity, %c1 : index
+  %output_pairs = index.div %padded_output_size, %c2 : index
+  %padded_token_count = index.add %token_capacity, %c63 : index
+  %launch_tokens = index.div %padded_token_count, %c64 : index
+  kernel.launch.config workgroups(%output_pairs, %launch_tokens, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %residual_input: buffer, %residual_output: buffer) {
+  %weight_format = config.get @ggml.mul_mat_f32_f32_decode.weight_format : index
+  template.apply<@ggml.mul_mat_f32_f32_decode.dispatch>(%weight_format, %token_count, %input_size, %output_size, %input, %weight, %residual_output, %residual_input, %residual_output, %residual_output, %residual_output) : (index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

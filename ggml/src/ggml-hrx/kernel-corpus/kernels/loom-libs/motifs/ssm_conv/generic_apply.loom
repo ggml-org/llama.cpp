@@ -1,0 +1,39 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.unary_f32.apply(%op: index, %value: f32) -> (f32)
+
+template.decl @llm.ssm_conv.generic_apply(%channel: index, %token: index, %sequence: index, %d_conv: index, %d_inner: index, %n_t: index, %unary_op: index, %window: view<1073741824xf32>, %filter: view<1048576xf32>) -> (f32)
+
+template.def<@llm.ssm_conv.generic_apply> device @llm_ssm_conv_generic_apply(%channel: index, %token: index, %sequence: index, %d_conv: index, %d_inner: index, %n_t: index, %unary_op: index, %window_v: view<1073741824xf32>, %filter_v: view<1048576xf32>) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_n_t = index.assume %n_t [range(%n_t, 1, 512)] : index
+  %window_rows0 = index.add %bounded_n_t, %d_conv : index
+  %window_rows = index.sub %window_rows0, %c1 : index
+  %window_sequence_span0 = index.mul %window_rows, %d_inner : index
+  %window_sequence_span = index.assume %window_sequence_span0 [range(%window_sequence_span0, 32, 34603008), mul(%window_sequence_span0, 32)] : index
+  %window_sequence_base = index.mul %sequence, %window_sequence_span : index
+  %window_channel_base0 = index.mul %channel, %window_rows : index
+  %window_channel_base = index.assume %window_channel_base0 [range(%window_channel_base0, 0, 34603008)] : index
+
+  %filter_channel_base0 = index.mul %channel, %d_conv : index
+  %filter_channel_base = index.assume %filter_channel_base0 [range(%filter_channel_base0, 0, 1048560)] : index
+
+  %acc = scf.for %tap = [%c0 to %d_conv step %c1](%running = %c0_f32 : f32) -> (f32) {
+    %window_row = index.add %token, %tap : index
+    %window_index0 = index.add %window_sequence_base, %window_channel_base : index
+    %window_index1 = index.add %window_index0, %window_row : index
+    %window_index = index.assume %window_index1 [range(%window_index1, 0, 1073741823)] : index
+    %filter_index0 = index.add %filter_channel_base, %tap : index
+    %filter_index = index.assume %filter_index0 [range(%filter_index0, 0, 1048575)] : index
+    %window_value = view.load %window_v[%window_index] : view<1073741824xf32> -> f32
+    %filter_value = view.load %filter_v[%filter_index] : view<1048576xf32> -> f32
+    %product = scalar.mulf %window_value, %filter_value : f32
+    %next = scalar.addf %running, %product : f32
+    scf.yield %next : f32
+  }
+  %activated = template.apply<@ggml.unary_f32.apply>(%unary_op, %acc) : (index, f32) -> (f32)
+  template.return %activated : f32
+}

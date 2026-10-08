@@ -1,0 +1,626 @@
+{
+  "command_count": 451,
+  "dispatch_count": 14,
+  "dispatches": [
+    {
+      "benchmark": "@llama32_3b_f16_tg8_000_ggml_get_rows_f32",
+      "compile_parameters": {
+        "ggml.get_rows_f32.hidden_capacity": "3072",
+        "ggml.get_rows_f32.token_capacity": "1",
+        "ggml.get_rows_f32.weight_format": "16"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "hidden_size": 3072,
+        "row_count": 128256,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_get_rows_f32",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/get_rows_f32.loom"
+      ],
+      "sources": [
+        "ops/rows/get_rows_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/publish_f32.loom",
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_get_rows_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_001_ggml_rmsnorm_binary_f32",
+      "compile_parameters": {
+        "ggml.rmsnorm_binary_f32.hidden_size": "3072",
+        "ggml.rmsnorm_binary_f32.op": "2",
+        "ggml.rmsnorm_binary_f32.rms_epsilon": "9.99999975e-06"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 57,
+      "integer_parameters": {
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
+      "library_sources": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_binary.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ],
+      "primary_sources": [
+        "ops/normalization/rmsnorm_binary_f32.loom"
+      ],
+      "sources": [
+        "ops/normalization/rmsnorm_binary_f32.loom",
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_binary.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ],
+      "symbol": "ggml_rmsnorm_binary_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_002_ggml_mul_mat_f32_f32_decode_wave64",
+      "compile_parameters": {
+        "ggml.mul_mat_f32_f32_decode.output_capacity": "3072",
+        "ggml.mul_mat_f32_f32_decode.token_capacity": "1",
+        "ggml.mul_mat_f32_f32_decode.weight_format": "16"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 56,
+      "integer_parameters": {
+        "input_size": 3072,
+        "output_size": 3072,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_f32_f32_decode.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_f32_f32_decode.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_f32_f32_decode_wave64",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_003_ggml_mul_mat_f32_f32_decode_wave64",
+      "compile_parameters": {
+        "ggml.mul_mat_f32_f32_decode.output_capacity": "1024",
+        "ggml.mul_mat_f32_f32_decode.token_capacity": "1",
+        "ggml.mul_mat_f32_f32_decode.weight_format": "16"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 56,
+      "integer_parameters": {
+        "input_size": 3072,
+        "output_size": 1024,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_f32_f32_decode.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_f32_f32_decode.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_f32_f32_decode_wave64",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_004_ggml_rope_f32",
+      "compile_parameters": {
+        "ggml.rope_f32.head_count": "24",
+        "ggml.rope_f32.head_size": "128",
+        "ggml.rope_f32.mode": "0",
+        "ggml.rope_f32.token_capacity": "1"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_rope_f32",
+      "library_sources": [
+        "motifs/rope/rope_f32.loom"
+      ],
+      "primary_sources": [
+        "ops/rope/rope_f32.loom"
+      ],
+      "sources": [
+        "ops/rope/rope_f32.loom",
+        "motifs/rope/rope_f32.loom"
+      ],
+      "symbol": "ggml_rope_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_005_ggml_rope_set_rows_f32",
+      "compile_parameters": {
+        "ggml.rope_set_rows_f32.head_count": "8",
+        "ggml.rope_set_rows_f32.head_size": "128",
+        "ggml.rope_set_rows_f32.mode": "0",
+        "ggml.rope_set_rows_f32.output_format": "16",
+        "ggml.rope_set_rows_f32.token_capacity": "1"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "cache_row_count": 256,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_rope_set_rows_f32",
+      "library_sources": [
+        "motifs/rope/rope_f32.loom",
+        "motifs/rows/cache_publish.loom"
+      ],
+      "primary_sources": [
+        "ops/rope/rope_set_rows_f32.loom"
+      ],
+      "sources": [
+        "ops/rope/rope_set_rows_f32.loom",
+        "motifs/rope/rope_f32.loom",
+        "motifs/rows/cache_publish.loom"
+      ],
+      "symbol": "ggml_rope_set_rows_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_006_ggml_set_rows",
+      "compile_parameters": {
+        "ggml.set_rows.hidden_capacity": "1024",
+        "ggml.set_rows.input_format": "32",
+        "ggml.set_rows.output_format": "16",
+        "ggml.set_rows.token_capacity": "1"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "cache_row_count": 256,
+        "hidden_size": 1024,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_set_rows",
+      "library_sources": [
+        "motifs/rows/cache_publish.loom"
+      ],
+      "primary_sources": [
+        "ops/rows/set_rows.loom"
+      ],
+      "sources": [
+        "ops/rows/set_rows.loom",
+        "motifs/rows/cache_publish.loom"
+      ],
+      "symbol": "ggml_set_rows",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_007_ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
+      "compile_parameters": {
+        "ggml.flash_attention.decode.key_value_token_capacity": "256",
+        "ggml.flash_attention.key_value_head_count": "8",
+        "ggml.flash_attention.query_head_count": "24"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "key_value_token_count": 256
+      },
+      "kernel": "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
+      "library_sources": [
+        "motifs/flash_attention/decode_partials.loom",
+        "motifs/flash_attention/decode_reduce.loom",
+        "motifs/flash_attention/publish_f32.loom",
+        "motifs/flash_attention/publish_q8.loom",
+        "motifs/flash_attention/completion_counter_reduce.loom",
+        "motifs/quantize_q8_1_x4.loom"
+      ],
+      "primary_sources": [
+        "ops/flash_attention/decode_split_f32_f16_wmma_next_q8.loom"
+      ],
+      "sources": [
+        "ops/flash_attention/decode_split_f32_f16_wmma_next_q8.loom",
+        "motifs/flash_attention/decode_partials.loom",
+        "motifs/flash_attention/decode_reduce.loom",
+        "motifs/flash_attention/publish_f32.loom",
+        "motifs/flash_attention/publish_q8.loom",
+        "motifs/flash_attention/completion_counter_reduce.loom",
+        "motifs/quantize_q8_1_x4.loom"
+      ],
+      "symbol": "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
+      "workload_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_008_ggml_binary_f32",
+      "compile_parameters": {
+        "ggml.binary_f32.op": "0"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 55,
+      "integer_parameters": {
+        "element_count": 3072
+      },
+      "kernel": "loom_libs:ggml_binary_f32",
+      "library_sources": [
+        "motifs/binary_f32_apply.loom"
+      ],
+      "primary_sources": [
+        "ops/binary_f32.loom"
+      ],
+      "sources": [
+        "ops/binary_f32.loom",
+        "motifs/binary_f32_apply.loom"
+      ],
+      "symbol": "ggml_binary_f32",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_009_ggml_mul_mat_f32_f32_decode_wave64",
+      "compile_parameters": {
+        "ggml.mul_mat_f32_f32_decode.output_capacity": "8192",
+        "ggml.mul_mat_f32_f32_decode.token_capacity": "1",
+        "ggml.mul_mat_f32_f32_decode.weight_format": "16"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 56,
+      "integer_parameters": {
+        "input_size": 3072,
+        "output_size": 8192,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_f32_f32_decode.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_f32_f32_decode.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_f32_f32_decode_wave64",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_010_ggml_binary_f32",
+      "compile_parameters": {
+        "ggml.binary_f32.op": "4"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "element_count": 8192
+      },
+      "kernel": "loom_libs:ggml_binary_f32",
+      "library_sources": [
+        "motifs/binary_f32_apply.loom"
+      ],
+      "primary_sources": [
+        "ops/binary_f32.loom"
+      ],
+      "sources": [
+        "ops/binary_f32.loom",
+        "motifs/binary_f32_apply.loom"
+      ],
+      "symbol": "ggml_binary_f32",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_011_ggml_mul_mat_f32_f32_decode_wave64",
+      "compile_parameters": {
+        "ggml.mul_mat_f32_f32_decode.output_capacity": "3072",
+        "ggml.mul_mat_f32_f32_decode.token_capacity": "1",
+        "ggml.mul_mat_f32_f32_decode.weight_format": "16"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "input_size": 8192,
+        "output_size": 3072,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_f32_f32_decode.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_f32_f32_decode.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_f32_f32_decode_wave64",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_012_ggml_gather_add_f32",
+      "compile_parameters": {},
+      "corpus_dir": "kernel-corpus/kernels/hrx",
+      "count": 1,
+      "integer_parameters": {
+        "hidden_size": 3072,
+        "output_token_count": 1,
+        "source_token_count": 1
+      },
+      "kernel": "hrx:ggml_gather_add_f32",
+      "library_sources": [],
+      "primary_sources": [
+        "gather_add_f32.loom"
+      ],
+      "sources": [
+        "gather_add_f32.loom"
+      ],
+      "symbol": "ggml_gather_add_f32",
+      "workload_parameters": [
+        {
+          "name": "source_token_count",
+          "type": "index"
+        },
+        {
+          "name": "output_token_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@llama32_3b_f16_tg8_013_ggml_mul_mat_f32_f32_decode_wave64",
+      "compile_parameters": {
+        "ggml.mul_mat_f32_f32_decode.output_capacity": "128256",
+        "ggml.mul_mat_f32_f32_decode.token_capacity": "1",
+        "ggml.mul_mat_f32_f32_decode.weight_format": "16"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "input_size": 3072,
+        "output_size": 128256,
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_f32_f32_decode.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_f32_f32_decode.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_f32_f32_decode_wave64",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ]
+    }
+  ],
+  "generated_count": 14,
+  "kernel_counts": {
+    "hrx:ggml_gather_add_f32": 1,
+    "loom_libs:ggml_binary_f32": 83,
+    "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8": 28,
+    "loom_libs:ggml_get_rows_f32": 1,
+    "loom_libs:ggml_mul_mat_f32_f32_decode_wave64": 197,
+    "loom_libs:ggml_rmsnorm_binary_f32": 57,
+    "loom_libs:ggml_rope_f32": 28,
+    "loom_libs:ggml_rope_set_rows_f32": 28,
+    "loom_libs:ggml_set_rows": 28
+  },
+  "loom_source": "benchmarks/loom/llama32_3b_f16.loom",
+  "model": "llama32_3b_f16",
+  "scenario": "tg8",
+  "schema": "ggml-hrx-model-loom-benchmarks-v2"
+}

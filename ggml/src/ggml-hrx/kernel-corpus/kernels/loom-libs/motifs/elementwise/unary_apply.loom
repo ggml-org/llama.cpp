@@ -1,0 +1,380 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.unary_f32.apply(%op: index, %value: f32) -> (f32)
+
+template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>)
+
+template.def<@ggml.unary_f32.apply> device priority(1) @ggml_unary_f32_apply(%op: index, %value: f32) -> (f32) {
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_5_f32 = scalar.constant 0.5 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c2_f32 = scalar.constant 2.0 : f32
+  %c3_f32 = scalar.constant 3.0 : f32
+  %c6_f32 = scalar.constant 6.0 : f32
+  %cn1_f32 = scalar.constant -1.0 : f32
+  %cn2_f32 = scalar.constant -2.0 : f32
+  %gelu_coef = scalar.constant 0.044715 : f32
+  %gelu_quick_coef = scalar.constant -1.702 : f32
+  %sqrt_2_over_pi = scalar.constant 0.79788456080286544 : f32
+  %sqrt_2_inv = scalar.constant 0.70710678118654745 : f32
+
+  %op_neg = index.constant 0 : index
+  %negated = scalar.negf %value : f32
+  %is_neg = index.cmp eq, %op, %op_neg : index
+  %neg_selected = scf.select %is_neg, %negated, %value : f32
+
+  %op_abs = index.constant 1 : index
+  %abs_is_negative = scalar.cmpf olt, %value, %c0_f32 : f32
+  %absolute = scf.select %abs_is_negative, %negated, %value : f32
+  %is_abs = index.cmp eq, %op, %op_abs : index
+  %abs_selected = scf.select %is_abs, %absolute, %neg_selected : f32
+
+  %op_relu = index.constant 2 : index
+  %relu_is_positive = scalar.cmpf ogt, %value, %c0_f32 : f32
+  %relu = scf.select %relu_is_positive, %value, %c0_f32 : f32
+  %is_relu = index.cmp eq, %op, %op_relu : index
+  %relu_selected = scf.select %is_relu, %relu, %abs_selected : f32
+
+  %op_step = index.constant 3 : index
+  %step_is_positive = scalar.cmpf ogt, %value, %c0_f32 : f32
+  %step = scf.select %step_is_positive, %c1_f32, %c0_f32 : f32
+  %is_step = index.cmp eq, %op, %op_step : index
+  %step_selected = scf.select %is_step, %step, %relu_selected : f32
+
+  %op_sqr = index.constant 4 : index
+  %squared = scalar.mulf %value, %value : f32
+  %is_sqr = index.cmp eq, %op, %op_sqr : index
+  %sqr_selected = scf.select %is_sqr, %squared, %step_selected : f32
+
+  %op_sgn = index.constant 5 : index
+  %sgn_is_negative = scalar.cmpf olt, %value, %c0_f32 : f32
+  %sgn_is_positive = scalar.cmpf ogt, %value, %c0_f32 : f32
+  %negative_sgn = scf.select %sgn_is_negative, %cn1_f32, %c0_f32 : f32
+  %sgn = scf.select %sgn_is_positive, %c1_f32, %negative_sgn : f32
+  %is_sgn = index.cmp eq, %op, %op_sgn : index
+  %sgn_selected = scf.select %is_sgn, %sgn, %sqr_selected : f32
+
+  %op_floor = index.constant 6 : index
+  %floored = scalar.floorf %value : f32
+  %is_floor = index.cmp eq, %op, %op_floor : index
+  %floor_selected = scf.select %is_floor, %floored, %sgn_selected : f32
+
+  %op_ceil = index.constant 7 : index
+  %ceiled = scalar.ceilf %value : f32
+  %is_ceil = index.cmp eq, %op, %op_ceil : index
+  %ceil_selected = scf.select %is_ceil, %ceiled, %floor_selected : f32
+
+  %op_round = index.constant 8 : index
+  %rounded = scalar.roundf %value : f32
+  %is_round = index.cmp eq, %op, %op_round : index
+  %round_selected = scf.select %is_round, %rounded, %ceil_selected : f32
+
+  %op_trunc = index.constant 9 : index
+  %truncated = scalar.truncf %value : f32
+  %is_trunc = index.cmp eq, %op, %op_trunc : index
+  %trunc_selected = scf.select %is_trunc, %truncated, %round_selected : f32
+
+  %op_tanh = index.constant 10 : index
+  %tanh_scaled = scalar.mulf %cn2_f32, %value : f32
+  %tanh_exp = scalar.expf<afn> %tanh_scaled : f32
+  %tanh_denominator = scalar.addf %c1_f32, %tanh_exp : f32
+  %tanh_ratio = scalar.divf %c2_f32, %tanh_denominator : f32
+  %tanh = scalar.subf %tanh_ratio, %c1_f32 : f32
+  %is_tanh = index.cmp eq, %op, %op_tanh : index
+  %tanh_selected = scf.select %is_tanh, %tanh, %trunc_selected : f32
+
+  %op_elu = index.constant 11 : index
+  %elu_is_positive = scalar.cmpf ogt, %value, %c0_f32 : f32
+  %elu_exp = scalar.expf<afn> %value : f32
+  %elu_expm1 = scalar.subf %elu_exp, %c1_f32 : f32
+  %elu = scf.select %elu_is_positive, %value, %elu_expm1 : f32
+  %is_elu = index.cmp eq, %op, %op_elu : index
+  %elu_selected = scf.select %is_elu, %elu, %tanh_selected : f32
+
+  %op_sigmoid = index.constant 12 : index
+  %sigmoid_negative = scalar.negf %value : f32
+  %sigmoid_exp = scalar.expf<afn> %sigmoid_negative : f32
+  %sigmoid_denominator = scalar.addf %c1_f32, %sigmoid_exp : f32
+  %sigmoid = scalar.divf %c1_f32, %sigmoid_denominator : f32
+  %is_sigmoid = index.cmp eq, %op, %op_sigmoid : index
+  %sigmoid_selected = scf.select %is_sigmoid, %sigmoid, %elu_selected : f32
+
+  %op_gelu = index.constant 13 : index
+  %gelu_x2 = scalar.mulf %value, %value : f32
+  %gelu_poly0 = scalar.mulf %gelu_coef, %gelu_x2 : f32
+  %gelu_poly = scalar.addf %c1_f32, %gelu_poly0 : f32
+  %gelu_inner0 = scalar.mulf %value, %gelu_poly : f32
+  %gelu_inner = scalar.mulf %sqrt_2_over_pi, %gelu_inner0 : f32
+  %gelu_tanh_scaled = scalar.mulf %cn2_f32, %gelu_inner : f32
+  %gelu_tanh_exp = scalar.expf<afn> %gelu_tanh_scaled : f32
+  %gelu_tanh_denominator = scalar.addf %c1_f32, %gelu_tanh_exp : f32
+  %gelu_tanh_ratio = scalar.divf %c2_f32, %gelu_tanh_denominator : f32
+  %gelu_tanh = scalar.subf %gelu_tanh_ratio, %c1_f32 : f32
+  %gelu_one_plus = scalar.addf %c1_f32, %gelu_tanh : f32
+  %gelu_half_x = scalar.mulf %c0_5_f32, %value : f32
+  %gelu = scalar.mulf %gelu_half_x, %gelu_one_plus : f32
+  %is_gelu = index.cmp eq, %op, %op_gelu : index
+  %gelu_selected = scf.select %is_gelu, %gelu, %sigmoid_selected : f32
+
+  %op_gelu_quick = index.constant 14 : index
+  %gelu_quick_scaled = scalar.mulf %gelu_quick_coef, %value : f32
+  %gelu_quick_exp = scalar.expf<afn> %gelu_quick_scaled : f32
+  %gelu_quick_denominator = scalar.addf %c1_f32, %gelu_quick_exp : f32
+  %gelu_quick_sigmoid = scalar.divf %c1_f32, %gelu_quick_denominator : f32
+  %gelu_quick = scalar.mulf %value, %gelu_quick_sigmoid : f32
+  %is_gelu_quick = index.cmp eq, %op, %op_gelu_quick : index
+  %gelu_quick_selected = scf.select %is_gelu_quick, %gelu_quick, %gelu_selected : f32
+
+  %op_silu = index.constant 15 : index
+  %silu_negative = scalar.negf %value : f32
+  %silu_exp = scalar.expf<afn> %silu_negative : f32
+  %silu_denominator = scalar.addf %c1_f32, %silu_exp : f32
+  %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
+  %silu = scalar.mulf %value, %silu_sigmoid : f32
+  %is_silu = index.cmp eq, %op, %op_silu : index
+  %silu_selected = scf.select %is_silu, %silu, %gelu_quick_selected : f32
+
+  %op_hardswish = index.constant 16 : index
+  %hardswish_bias = scalar.addf %value, %c3_f32 : f32
+  %hardswish_scaled = scalar.divf %hardswish_bias, %c6_f32 : f32
+  %hardswish_above_zero = scalar.cmpf ogt, %hardswish_scaled, %c0_f32 : f32
+  %hardswish_low = scf.select %hardswish_above_zero, %hardswish_scaled, %c0_f32 : f32
+  %hardswish_above_one = scalar.cmpf ogt, %hardswish_low, %c1_f32 : f32
+  %hardswish_gate = scf.select %hardswish_above_one, %c1_f32, %hardswish_low : f32
+  %hardswish = scalar.mulf %value, %hardswish_gate : f32
+  %is_hardswish = index.cmp eq, %op, %op_hardswish : index
+  %hardswish_selected = scf.select %is_hardswish, %hardswish, %silu_selected : f32
+
+  %op_hardsigmoid = index.constant 17 : index
+  %hardsigmoid_bias = scalar.addf %value, %c3_f32 : f32
+  %hardsigmoid_scaled = scalar.divf %hardsigmoid_bias, %c6_f32 : f32
+  %hardsigmoid_above_zero = scalar.cmpf ogt, %hardsigmoid_scaled, %c0_f32 : f32
+  %hardsigmoid_low = scf.select %hardsigmoid_above_zero, %hardsigmoid_scaled, %c0_f32 : f32
+  %hardsigmoid_above_one = scalar.cmpf ogt, %hardsigmoid_low, %c1_f32 : f32
+  %hardsigmoid = scf.select %hardsigmoid_above_one, %c1_f32, %hardsigmoid_low : f32
+  %is_hardsigmoid = index.cmp eq, %op, %op_hardsigmoid : index
+  %hardsigmoid_selected = scf.select %is_hardsigmoid, %hardsigmoid, %hardswish_selected : f32
+
+  %op_exp = index.constant 18 : index
+  %exp_value = scalar.expf<afn> %value : f32
+  %is_exp = index.cmp eq, %op, %op_exp : index
+  %exp_selected = scf.select %is_exp, %exp_value, %hardsigmoid_selected : f32
+
+  %op_expm1 = index.constant 19 : index
+  %expm1_exp = scalar.expf<afn> %value : f32
+  %expm1 = scalar.subf %expm1_exp, %c1_f32 : f32
+  %is_expm1 = index.cmp eq, %op, %op_expm1 : index
+  %expm1_selected = scf.select %is_expm1, %expm1, %exp_selected : f32
+
+  %op_gelu_erf = index.constant 20 : index
+  %gelu_erf_scaled = scalar.mulf %sqrt_2_inv, %value : f32
+  %gelu_erf_value = scalar.erff %gelu_erf_scaled : f32
+  %gelu_erf_one_plus = scalar.addf %c1_f32, %gelu_erf_value : f32
+  %gelu_erf_half_x = scalar.mulf %c0_5_f32, %value : f32
+  %gelu_erf = scalar.mulf %gelu_erf_half_x, %gelu_erf_one_plus : f32
+  %is_gelu_erf = index.cmp eq, %op, %op_gelu_erf : index
+  %gelu_erf_selected = scf.select %is_gelu_erf, %gelu_erf, %expm1_selected : f32
+
+  %op_sqrt = index.constant 21 : index
+  %sqrt = scalar.sqrtf %value : f32
+  %is_sqrt = index.cmp eq, %op, %op_sqrt : index
+  %sqrt_selected = scf.select %is_sqrt, %sqrt, %gelu_erf_selected : f32
+
+  %op_log = index.constant 22 : index
+  %log = scalar.logf<afn> %value : f32
+  %is_log = index.cmp eq, %op, %op_log : index
+  %log_selected = scf.select %is_log, %log, %sqrt_selected : f32
+
+  %op_identity = index.constant 23 : index
+  %is_identity = index.cmp eq, %op, %op_identity : index
+  %result = scf.select %is_identity, %value, %log_selected : f32
+  template.return %result : f32
+}
+
+template.def<@ggml.unary_f32.apply_vector4> device priority(1) @ggml_unary_f32_apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>) {
+  %c0_f32 = vector.constant 0.0 : vector<4xf32>
+  %c0_5_f32 = vector.constant 0.5 : vector<4xf32>
+  %c1_f32 = vector.constant 1.0 : vector<4xf32>
+  %c2_f32 = vector.constant 2.0 : vector<4xf32>
+  %c3_f32 = vector.constant 3.0 : vector<4xf32>
+  %c6_f32 = vector.constant 6.0 : vector<4xf32>
+  %cn1_f32 = vector.constant -1.0 : vector<4xf32>
+  %cn2_f32 = vector.constant -2.0 : vector<4xf32>
+  %gelu_coef = vector.constant 0.044715 : vector<4xf32>
+  %gelu_quick_coef = vector.constant -1.702 : vector<4xf32>
+  %sqrt_2_over_pi = vector.constant 0.79788456080286544 : vector<4xf32>
+  %sqrt_2_inv = vector.constant 0.70710678118654745 : vector<4xf32>
+
+  %op_neg = index.constant 0 : index
+  %negated = vector.negf %values : vector<4xf32>
+  %is_neg = index.cmp eq, %op, %op_neg : index
+  %neg_selected = scf.select %is_neg, %negated, %values : vector<4xf32>
+
+  %op_abs = index.constant 1 : index
+  %abs_is_negative = vector.cmpf olt, %values, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %absolute = vector.select %abs_is_negative, %negated, %values : vector<4xf32>
+  %is_abs = index.cmp eq, %op, %op_abs : index
+  %abs_selected = scf.select %is_abs, %absolute, %neg_selected : vector<4xf32>
+
+  %op_relu = index.constant 2 : index
+  %relu_is_positive = vector.cmpf ogt, %values, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %relu = vector.select %relu_is_positive, %values, %c0_f32 : vector<4xf32>
+  %is_relu = index.cmp eq, %op, %op_relu : index
+  %relu_selected = scf.select %is_relu, %relu, %abs_selected : vector<4xf32>
+
+  %op_step = index.constant 3 : index
+  %step_is_positive = vector.cmpf ogt, %values, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %step = vector.select %step_is_positive, %c1_f32, %c0_f32 : vector<4xf32>
+  %is_step = index.cmp eq, %op, %op_step : index
+  %step_selected = scf.select %is_step, %step, %relu_selected : vector<4xf32>
+
+  %op_sqr = index.constant 4 : index
+  %squared = vector.mulf %values, %values : vector<4xf32>
+  %is_sqr = index.cmp eq, %op, %op_sqr : index
+  %sqr_selected = scf.select %is_sqr, %squared, %step_selected : vector<4xf32>
+
+  %op_sgn = index.constant 5 : index
+  %sgn_is_negative = vector.cmpf olt, %values, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %sgn_is_positive = vector.cmpf ogt, %values, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %negative_sgn = vector.select %sgn_is_negative, %cn1_f32, %c0_f32 : vector<4xf32>
+  %sgn = vector.select %sgn_is_positive, %c1_f32, %negative_sgn : vector<4xf32>
+  %is_sgn = index.cmp eq, %op, %op_sgn : index
+  %sgn_selected = scf.select %is_sgn, %sgn, %sqr_selected : vector<4xf32>
+
+  %op_floor = index.constant 6 : index
+  %floored = vector.floorf %values : vector<4xf32>
+  %is_floor = index.cmp eq, %op, %op_floor : index
+  %floor_selected = scf.select %is_floor, %floored, %sgn_selected : vector<4xf32>
+
+  %op_ceil = index.constant 7 : index
+  %ceiled = vector.ceilf %values : vector<4xf32>
+  %is_ceil = index.cmp eq, %op, %op_ceil : index
+  %ceil_selected = scf.select %is_ceil, %ceiled, %floor_selected : vector<4xf32>
+
+  %op_round = index.constant 8 : index
+  %rounded = vector.roundf %values : vector<4xf32>
+  %is_round = index.cmp eq, %op, %op_round : index
+  %round_selected = scf.select %is_round, %rounded, %ceil_selected : vector<4xf32>
+
+  %op_trunc = index.constant 9 : index
+  %truncated = vector.truncf %values : vector<4xf32>
+  %is_trunc = index.cmp eq, %op, %op_trunc : index
+  %trunc_selected = scf.select %is_trunc, %truncated, %round_selected : vector<4xf32>
+
+  %op_tanh = index.constant 10 : index
+  %tanh_scaled = vector.mulf %cn2_f32, %values : vector<4xf32>
+  %tanh_exp = vector.expf<afn> %tanh_scaled : vector<4xf32>
+  %tanh_denominator = vector.addf %c1_f32, %tanh_exp : vector<4xf32>
+  %tanh_ratio = vector.divf %c2_f32, %tanh_denominator : vector<4xf32>
+  %tanh = vector.subf %tanh_ratio, %c1_f32 : vector<4xf32>
+  %is_tanh = index.cmp eq, %op, %op_tanh : index
+  %tanh_selected = scf.select %is_tanh, %tanh, %trunc_selected : vector<4xf32>
+
+  %op_elu = index.constant 11 : index
+  %elu_is_positive = vector.cmpf ogt, %values, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %elu_exp = vector.expf<afn> %values : vector<4xf32>
+  %elu_expm1 = vector.subf %elu_exp, %c1_f32 : vector<4xf32>
+  %elu = vector.select %elu_is_positive, %values, %elu_expm1 : vector<4xf32>
+  %is_elu = index.cmp eq, %op, %op_elu : index
+  %elu_selected = scf.select %is_elu, %elu, %tanh_selected : vector<4xf32>
+
+  %op_sigmoid = index.constant 12 : index
+  %sigmoid_negative = vector.negf %values : vector<4xf32>
+  %sigmoid_exp = vector.expf<afn> %sigmoid_negative : vector<4xf32>
+  %sigmoid_denominator = vector.addf %c1_f32, %sigmoid_exp : vector<4xf32>
+  %sigmoid = vector.divf %c1_f32, %sigmoid_denominator : vector<4xf32>
+  %is_sigmoid = index.cmp eq, %op, %op_sigmoid : index
+  %sigmoid_selected = scf.select %is_sigmoid, %sigmoid, %elu_selected : vector<4xf32>
+
+  %op_gelu = index.constant 13 : index
+  %gelu_x2 = vector.mulf %values, %values : vector<4xf32>
+  %gelu_poly0 = vector.mulf %gelu_coef, %gelu_x2 : vector<4xf32>
+  %gelu_poly = vector.addf %c1_f32, %gelu_poly0 : vector<4xf32>
+  %gelu_inner0 = vector.mulf %values, %gelu_poly : vector<4xf32>
+  %gelu_inner = vector.mulf %sqrt_2_over_pi, %gelu_inner0 : vector<4xf32>
+  %gelu_tanh_scaled = vector.mulf %cn2_f32, %gelu_inner : vector<4xf32>
+  %gelu_tanh_exp = vector.expf<afn> %gelu_tanh_scaled : vector<4xf32>
+  %gelu_tanh_denominator = vector.addf %c1_f32, %gelu_tanh_exp : vector<4xf32>
+  %gelu_tanh_ratio = vector.divf %c2_f32, %gelu_tanh_denominator : vector<4xf32>
+  %gelu_tanh = vector.subf %gelu_tanh_ratio, %c1_f32 : vector<4xf32>
+  %gelu_one_plus = vector.addf %c1_f32, %gelu_tanh : vector<4xf32>
+  %gelu_half_x = vector.mulf %c0_5_f32, %values : vector<4xf32>
+  %gelu = vector.mulf %gelu_half_x, %gelu_one_plus : vector<4xf32>
+  %is_gelu = index.cmp eq, %op, %op_gelu : index
+  %gelu_selected = scf.select %is_gelu, %gelu, %sigmoid_selected : vector<4xf32>
+
+  %op_gelu_quick = index.constant 14 : index
+  %gelu_quick_scaled = vector.mulf %gelu_quick_coef, %values : vector<4xf32>
+  %gelu_quick_exp = vector.expf<afn> %gelu_quick_scaled : vector<4xf32>
+  %gelu_quick_denominator = vector.addf %c1_f32, %gelu_quick_exp : vector<4xf32>
+  %gelu_quick_sigmoid = vector.divf %c1_f32, %gelu_quick_denominator : vector<4xf32>
+  %gelu_quick = vector.mulf %values, %gelu_quick_sigmoid : vector<4xf32>
+  %is_gelu_quick = index.cmp eq, %op, %op_gelu_quick : index
+  %gelu_quick_selected = scf.select %is_gelu_quick, %gelu_quick, %gelu_selected : vector<4xf32>
+
+  %op_silu = index.constant 15 : index
+  %silu_negative = vector.negf %values : vector<4xf32>
+  %silu_exp = vector.expf<afn> %silu_negative : vector<4xf32>
+  %silu_denominator = vector.addf %c1_f32, %silu_exp : vector<4xf32>
+  %silu_sigmoid = vector.divf %c1_f32, %silu_denominator : vector<4xf32>
+  %silu = vector.mulf %values, %silu_sigmoid : vector<4xf32>
+  %is_silu = index.cmp eq, %op, %op_silu : index
+  %silu_selected = scf.select %is_silu, %silu, %gelu_quick_selected : vector<4xf32>
+
+  %op_hardswish = index.constant 16 : index
+  %hardswish_bias = vector.addf %values, %c3_f32 : vector<4xf32>
+  %hardswish_scaled = vector.divf %hardswish_bias, %c6_f32 : vector<4xf32>
+  %hardswish_above_zero = vector.cmpf ogt, %hardswish_scaled, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %hardswish_low = vector.select %hardswish_above_zero, %hardswish_scaled, %c0_f32 : vector<4xf32>
+  %hardswish_above_one = vector.cmpf ogt, %hardswish_low, %c1_f32 : vector<4xf32> -> vector<4xi1>
+  %hardswish_gate = vector.select %hardswish_above_one, %c1_f32, %hardswish_low : vector<4xf32>
+  %hardswish = vector.mulf %values, %hardswish_gate : vector<4xf32>
+  %is_hardswish = index.cmp eq, %op, %op_hardswish : index
+  %hardswish_selected = scf.select %is_hardswish, %hardswish, %silu_selected : vector<4xf32>
+
+  %op_hardsigmoid = index.constant 17 : index
+  %hardsigmoid_bias = vector.addf %values, %c3_f32 : vector<4xf32>
+  %hardsigmoid_scaled = vector.divf %hardsigmoid_bias, %c6_f32 : vector<4xf32>
+  %hardsigmoid_above_zero = vector.cmpf ogt, %hardsigmoid_scaled, %c0_f32 : vector<4xf32> -> vector<4xi1>
+  %hardsigmoid_low = vector.select %hardsigmoid_above_zero, %hardsigmoid_scaled, %c0_f32 : vector<4xf32>
+  %hardsigmoid_above_one = vector.cmpf ogt, %hardsigmoid_low, %c1_f32 : vector<4xf32> -> vector<4xi1>
+  %hardsigmoid = vector.select %hardsigmoid_above_one, %c1_f32, %hardsigmoid_low : vector<4xf32>
+  %is_hardsigmoid = index.cmp eq, %op, %op_hardsigmoid : index
+  %hardsigmoid_selected = scf.select %is_hardsigmoid, %hardsigmoid, %hardswish_selected : vector<4xf32>
+
+  %op_exp = index.constant 18 : index
+  %exp_value = vector.expf<afn> %values : vector<4xf32>
+  %is_exp = index.cmp eq, %op, %op_exp : index
+  %exp_selected = scf.select %is_exp, %exp_value, %hardsigmoid_selected : vector<4xf32>
+
+  %op_expm1 = index.constant 19 : index
+  %expm1_exp = vector.expf<afn> %values : vector<4xf32>
+  %expm1 = vector.subf %expm1_exp, %c1_f32 : vector<4xf32>
+  %is_expm1 = index.cmp eq, %op, %op_expm1 : index
+  %expm1_selected = scf.select %is_expm1, %expm1, %exp_selected : vector<4xf32>
+
+  %op_gelu_erf = index.constant 20 : index
+  %gelu_erf_scaled = vector.mulf %sqrt_2_inv, %values : vector<4xf32>
+  %gelu_erf_value = vector.erff %gelu_erf_scaled : vector<4xf32>
+  %gelu_erf_one_plus = vector.addf %c1_f32, %gelu_erf_value : vector<4xf32>
+  %gelu_erf_half_x = vector.mulf %c0_5_f32, %values : vector<4xf32>
+  %gelu_erf = vector.mulf %gelu_erf_half_x, %gelu_erf_one_plus : vector<4xf32>
+  %is_gelu_erf = index.cmp eq, %op, %op_gelu_erf : index
+  %gelu_erf_selected = scf.select %is_gelu_erf, %gelu_erf, %expm1_selected : vector<4xf32>
+
+  %op_sqrt = index.constant 21 : index
+  %sqrt = vector.sqrtf %values : vector<4xf32>
+  %is_sqrt = index.cmp eq, %op, %op_sqrt : index
+  %sqrt_selected = scf.select %is_sqrt, %sqrt, %gelu_erf_selected : vector<4xf32>
+
+  %op_log = index.constant 22 : index
+  %log = vector.logf<afn> %values : vector<4xf32>
+  %is_log = index.cmp eq, %op, %op_log : index
+  %log_selected = scf.select %is_log, %log, %sqrt_selected : vector<4xf32>
+
+  %op_identity = index.constant 23 : index
+  %is_identity = index.cmp eq, %op, %op_identity : index
+  %result = scf.select %is_identity, %values, %log_selected : vector<4xf32>
+  template.return %result : vector<4xf32>
+}

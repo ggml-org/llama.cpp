@@ -1,0 +1,60 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.get_rows_f32.body(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_get_rows_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), mul(%value, 4)]
+config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
+
+kernel.def target(@ggml_get_rows_f32_gfx11_wave64) @ggml_get_rows_f32(%token_count: index, %row_count: index, %hidden_size: index) {
+  %token_capacity = config.get @ggml.get_rows_f32.token_capacity : index
+  %hidden_capacity = config.get @ggml.get_rows_f32.hidden_capacity : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c255 = index.constant 255 : index
+  %workgroup_size = index.constant 256 : index
+  %packet_count = index.div %hidden_capacity, %c4 : index
+  %padded_packet_count = index.add %packet_count, %c255 : index
+  %packet_tiles = index.div %padded_packet_count, %workgroup_size : index
+  kernel.launch.config workgroups(%packet_tiles, %token_capacity, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  template.apply<@ggml.get_rows_f32.body>(%token_count, %row_count, %hidden_size, %token_ids, %weight, %output) : (index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Uniform 0x55 Q4_K bytes encode d=dmin=85.3125, scale=minimum=21,
+// and q=5 in every group, producing 85.3125 * 21 * (5 - 1) = 7166.25.
+check.case public @ggml_get_rows_f32_q4k_decode_case {
+  %token_count = check.literal value(1) : index
+  %row_count = check.literal value(1) : index
+  %hidden_size = check.literal value(2048) : index
+  %token_ids = check.generate.fill value(0) : tensor<1xi32>
+  %weight = check.generate.fill value(85) : tensor<1x8x144xi8>
+  %output = check.generate.fill value(0.0) : tensor<1x2048xf32>
+  %expected = check.generate.fill value(7166.25) : tensor<1x2048xf32>
+  kernel.launch @ggml_get_rows_f32[%token_count, %row_count, %hidden_size](%token_count, %row_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<1xi32>, tensor<1x8x144xi8>, tensor<1x2048xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
+  check.return
+}
+
+// Reverse-order IDs exercise the first, interior, and final legal row while
+// remaining suitable for access-sanitized execution.
+check.case public @ggml_get_rows_f32_q4k_row_access_case {
+  %token_count = check.literal value(3) : index
+  %row_count = check.literal value(3) : index
+  %hidden_size = check.literal value(2048) : index
+  %token_ids = check.generate.iota offset(2) step(-1) : tensor<3xi32>
+  %weight = check.generate.fill value(0) : tensor<3x8x144xi8>
+  %output = check.generate.fill value(1.0) : tensor<3x2048xf32>
+  %expected = check.generate.fill value(0.0) : tensor<3x2048xf32>
+  kernel.launch @ggml_get_rows_f32[%token_count, %row_count, %hidden_size](%token_count, %row_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<3xi32>, tensor<3x8x144xi8>, tensor<3x2048xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3x2048xf32>
+  check.return
+}
+
+check.benchmark<@ggml_get_rows_f32_q4k_decode_case> @ggml_get_rows_f32_q4k_decode
+
+check.benchmark<@ggml_get_rows_f32_q4k_row_access_case> @ggml_get_rows_f32_q4k_row_access

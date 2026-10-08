@@ -1,0 +1,27 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_binary_f32.lowtoken_striped_body(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_lowtoken_striped_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @ggml.rmsnorm_binary_f32.rms_epsilon : f32
+
+config.decl @ggml.rmsnorm_binary_f32.op : %value: index where [range(%value, 0, 3)]
+
+kernel.def target(@ggml_rmsnorm_binary_lowtoken_striped_gfx11_wave32) export("ggml_rmsnorm_binary_f32_lowtoken_striped") @ggml_rmsnorm_binary_f32_lowtoken_striped(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %c1023 = index.constant 1023 : index
+  %c1024 = index.constant 1024 : index
+  %hidden_size = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
+  %rounded_hidden = index.add %hidden_size, %c1023 : index
+  %stripe_count = index.div %rounded_hidden, %c1024 : index
+  %group_count = index.mul %token_count, %stripe_count : index
+  kernel.launch.config workgroups(%group_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer) where [range(%token_count, 1, 5)] {
+  template.apply<@ggml.rmsnorm_binary_f32.lowtoken_striped_body>(%token_count, %input, %rhs, %output) : (index, buffer, buffer, buffer)
+  kernel.return
+}

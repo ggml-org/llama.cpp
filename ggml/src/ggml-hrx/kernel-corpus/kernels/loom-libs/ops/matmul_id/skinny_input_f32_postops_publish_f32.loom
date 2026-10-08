@@ -1,0 +1,93 @@
+template.decl @ggml.matmul_id.skinny_f32_f32.add_bias_vector4(%arg0: index, %arg1: index, %arg2: vector<4xf32>, %arg3: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.matmul_id.skinny_f32_f32.add_residual_vector4(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: vector<4xf32>, %arg6: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.matmul_id.skinny_f32_f32.core(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: f32, %arg8: index, %arg9: index, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer, %arg20: buffer)
+
+template.decl @ggml.matmul_id.skinny_f32_f32.finish_tile(%token_count: index, %route_count: index, %output_size: index, %expert_count: index, %output_tile_count: index, %maximum_partition_count: index, %epsilon: f32, %channel_tile: index, %descriptor_ordinal: index, %expert: index, %route_tile_base: index, %partition_row_count: index, %expert_table: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+
+template.decl @ggml.matmul_id.skinny_f32_f32.publish_vector4(%publish_word: i1, %assignment: index, %token: index, %route: index, %channel: index, %token_count0: index, %route_count0: index, %output_size0: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+
+template.decl @ggml.matmul_id.skinny_f32_f32.store_vector4(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: vector<4xf32>, %arg6: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_mul_mat_id_skinny_input_f32_postops_publish_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.mul_mat_id_postops.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+
+config.decl @ggml.mul_mat_id_postops.output_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @ggml.mul_mat_id_postops.expert_count : %value: index where [range(%value, 1, 512)]
+
+config.decl @ggml.mul_mat_id_postops.route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @ggml.mul_mat_id_postops.input_route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @ggml.mul_mat_id_postops.weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.mul_mat_id_postops.has_bias : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.mul_mat_id_postops.has_residual : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+template.def<@ggml.matmul_id.skinny_f32_f32.publish_vector4> device @ggml_mul_mat_id_skinny_postops_publish_vector4(%publish_word: i1, %assignment: index, %token: index, %route: index, %channel: index, %token_count0: index, %route_count0: index, %output_size0: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  %has_bias_value = config.get @ggml.mul_mat_id_postops.has_bias : index
+  %has_residual_value = config.get @ggml.mul_mat_id_postops.has_residual : index
+  %c0 = index.constant 0 : index
+  %has_bias = index.cmp ne, %has_bias_value, %c0 : index
+  %has_residual = index.cmp ne, %has_residual_value, %c0 : index
+  scf.if %publish_word {
+    %with_bias = scf.if %has_bias -> (vector<4xf32>) {
+      %biased = template.apply<@ggml.matmul_id.skinny_f32_f32.add_bias_vector4>(%output_size0, %channel, %values, %bias) : (index, index, vector<4xf32>, buffer) -> (vector<4xf32>)
+      scf.yield %biased : vector<4xf32>
+    } else {
+      scf.yield %values : vector<4xf32>
+    }
+    %published = scf.if %has_residual -> (vector<4xf32>) {
+      %added = template.apply<@ggml.matmul_id.skinny_f32_f32.add_residual_vector4>(%token_count0, %route_count0, %output_size0, %assignment, %channel, %with_bias, %residual_input) : (index, index, index, index, index, vector<4xf32>, buffer) -> (vector<4xf32>)
+      scf.yield %added : vector<4xf32>
+    } else {
+      scf.yield %with_bias : vector<4xf32>
+    }
+    template.apply<@ggml.matmul_id.skinny_f32_f32.store_vector4>(%token_count0, %route_count0, %output_size0, %assignment, %channel, %published, %output) : (index, index, index, index, index, vector<4xf32>, buffer)
+  }
+  template.return
+}
+
+template.def<@ggml.matmul_id.skinny_f32_f32.finish_tile> device @ggml_mul_mat_id_skinny_postops_finish_tile(%token_count: index, %route_count: index, %output_size: index, %expert_count: index, %output_tile_count: index, %maximum_partition_count: index, %epsilon: f32, %channel_tile: index, %descriptor_ordinal: index, %expert: index, %route_tile_base: index, %partition_row_count: index, %expert_table: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  template.return
+}
+
+kernel.def target(@ggml_mul_mat_id_skinny_input_f32_postops_publish_f32_gfx11_wave64) @ggml_mul_mat_id_skinny_input_f32_postops_publish_f32(%token_count: index) {
+  %expert_count = config.get @ggml.mul_mat_id_postops.expert_count : index
+  %route_count = config.get @ggml.mul_mat_id_postops.route_count : index
+  %output_size = config.get @ggml.mul_mat_id_postops.output_size : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %assignment_count = index.mul %token_count, %route_count : index
+  %rounded_assignment_count = index.add %assignment_count, %c31 : index
+  %assignment_partition_count = index.div %rounded_assignment_count, %c32 : index
+  %has_more_assignment_partitions = index.cmp ugt, %assignment_partition_count, %expert_count : index
+  %launch_partition_count = scf.select %has_more_assignment_partitions, %assignment_partition_count, %expert_count : index
+  kernel.launch.config workgroups(%output_tiles, %launch_partition_count, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %weight: buffer, %bias: buffer, %residual_input: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %input_size = config.get @ggml.mul_mat_id_postops.input_size : index
+  %route_count = config.get @ggml.mul_mat_id_postops.route_count : index
+  %input_route_count = config.get @ggml.mul_mat_id_postops.input_route_count : index
+  %expert_count = config.get @ggml.mul_mat_id_postops.expert_count : index
+  %output_size = config.get @ggml.mul_mat_id_postops.output_size : index
+  %weight_format = config.get @ggml.mul_mat_id_postops.weight_format : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %partition_ordinal = kernel.workgroup.id<y> : index
+  template.apply<@ggml.matmul_id.skinny_f32_f32.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %c0_f32, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %weight, %bias, %output, %residual_input, %output, %output, %output, %output) : (index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

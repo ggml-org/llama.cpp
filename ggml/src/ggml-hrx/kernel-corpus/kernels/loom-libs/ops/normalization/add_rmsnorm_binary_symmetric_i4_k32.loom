@@ -1,0 +1,19 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.add_rmsnorm_binary_symmetric_i4_k32.body(%token_count: index, %lhs: buffer, %rhs: buffer, %residual_output: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon : f32
+
+// Publishes residual ADD, RMSNorm, learned scale, and a signed-I4/K64 alternate.
+kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_add_rmsnorm_binary_symmetric_i4_k32") @ggml_add_rmsnorm_binary_symmetric_i4_k32(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %lhs: buffer, %rhs: buffer, %residual_output: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) where [range(%token_count, 1, 16)] {
+  template.apply<@ggml.add_rmsnorm_binary_symmetric_i4_k32.body>(%token_count, %lhs, %rhs, %residual_output, %weight, %output, %i4_qs, %i4_ds, %i4_sums) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

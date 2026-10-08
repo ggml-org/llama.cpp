@@ -1,0 +1,221 @@
+// Shared routed F16 pair Q5_K single-projection WMMA step.
+//
+// Callers own the outer routing and fusion schedule. This motif stages one
+// projected Q5_K weight tile, optionally stages the shared routed activation
+// tile, performs the 16x16 WMMA update, and returns the updated accumulator.
+
+func.def inline @ggml_q5k_split_wmma_high_bit_f32(%qh: i8, %qh_bit: i32) -> (f32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %qh_i32 = scalar.extui %qh : i8 to i32
+  %masked = scalar.andi %qh_i32, %qh_bit : i32
+  %is_set = scalar.cmpi ne, %masked, %c0_i32 : i32
+  %high = scf.select %is_set, %c16_i32, %c0_i32 : i32
+  %high_f32 = scalar.uitofp %high : i32 to f32
+  func.return %high_f32 : f32
+}
+
+func.def inline @ggml_q5k_scale_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q5_group: index) -> (i32, i32) {
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c48_i32 = scalar.constant 48 : i32
+  %bounded_group = index.assume %q5_group [range(%q5_group, 0, 7)] : index
+  %is_low_group = index.cmp ult, %bounded_group, %c4 : index
+  %scale_lane = index.rem %bounded_group, %c4 : index
+  %scale_shift_index = index.mul %scale_lane, %c8 : index
+  %scale_shift = index.cast %scale_shift_index : index to i32
+  %high_shift = scalar.addi %scale_shift, %c2_i32 : i32
+  %minimum_shift = scalar.addi %scale_shift, %c4_i32 : i32
+  %selected_scale_source = scf.select %is_low_group, %scale0, %scale2 : i32
+  %selected_minimum_source = scf.select %is_low_group, %scale1, %scale2 : i32
+  %selected_scale_high_shift = scf.select %is_low_group, %scale_shift, %high_shift : i32
+  %selected_minimum_low_shift = scf.select %is_low_group, %scale_shift, %minimum_shift : i32
+  %scale_low0 = scalar.shrui %selected_scale_source, %scale_shift : i32
+  %scale_low = scalar.andi %scale_low0, %c15_i32 : i32
+  %scale_high0 = scalar.shrui %scale0, %selected_scale_high_shift : i32
+  %scale_high = scalar.andi %scale_high0, %c48_i32 : i32
+  %scale = scalar.ori %scale_low, %scale_high : i32
+  %minimum_low0 = scalar.shrui %selected_minimum_source, %selected_minimum_low_shift : i32
+  %minimum_low = scalar.andi %minimum_low0, %c15_i32 : i32
+  %minimum_high0 = scalar.shrui %scale1, %selected_scale_high_shift : i32
+  %minimum_high = scalar.andi %minimum_high0, %c48_i32 : i32
+  %minimum = scalar.ori %minimum_low, %minimum_high : i32
+  func.return %scale, %minimum : i32, i32
+}
+
+// Acquires the packed low-bit code word shared by one adjacent Q5_K group pair.
+func.def inline @ggml_q5k_split_wmma_load_code(%weight: buffer, %row_byte_base: offset, %q5_block: index, %q5_group_pair: index, %packet: index) -> (vector<1xi32>) {
+  %c8 = index.constant 8 : index
+  %block_bytes = index.constant 176 : offset
+  %code_offset = index.constant 48 : offset
+  %bounded_group_pair = index.assume %q5_group_pair [range(%q5_group_pair, 0, 3)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %q5_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %code_byte_base = index.add %block_byte_base, %code_offset : offset
+  %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<32xi32>
+  %q_page = index.mul %bounded_group_pair, %c8 : index
+  %q_word_index0 = index.add %q_page, %bounded_packet : index
+  %q_word_index = index.assume %q_word_index0 [range(%q_word_index0, 0, 31)] : index
+  %q_word = vector.load %code_view[%q_word_index] : view<32xi32> -> vector<1xi32>
+  func.return %q_word : vector<1xi32>
+}
+
+// Acquires the four Q5_K high-bit bytes owned by one packet. The same bytes are
+// reused by all eight groups in the block.
+func.def inline @ggml_q5k_split_wmma_load_high_bits(%weight: buffer, %row_byte_base: offset, %q5_block: index, %packet: index) -> (vector<4xi8>) {
+  %c4 = index.constant 4 : index
+  %block_bytes = index.constant 176 : offset
+  %qh_offset = index.constant 16 : offset
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %q5_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %qh_byte_base = index.add %block_byte_base, %qh_offset : offset
+  %qh_view = buffer.view %weight[%qh_byte_base] : buffer -> view<32xi8>
+  %packet_base = index.mul %bounded_packet, %c4 : index
+  %qh_bytes = vector.load %qh_view[%packet_base] : view<32xi8> -> vector<4xi8>
+  func.return %qh_bytes : vector<4xi8>
+}
+
+// Decodes the four adjacent Q5_K values owned by one load packet from retained
+// block metadata and packed code.
+func.def inline @ggml_q5k_split_wmma_vector4_from_header_code(%q5_group: index, %header_words: vector<4xi32>, %q_word: vector<1xi32>, %qh_bytes: vector<4xi8>) -> (vector<4xf16>) {
+  %c1_i32 = scalar.constant 1 : i32
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %bounded_group = index.assume %q5_group [range(%q5_group, 0, 7)] : index
+  %header_halves = vector.bitcast %header_words : vector<4xi32> to vector<8xf16>
+  %d_f16 = vector.extract %header_halves[0] : vector<8xf16> -> f16
+  %dmin_f16 = vector.extract %header_halves[1] : vector<8xf16> -> f16
+  %scale0 = vector.extract %header_words[1] : vector<4xi32> -> i32
+  %scale1 = vector.extract %header_words[2] : vector<4xi32> -> i32
+  %scale2 = vector.extract %header_words[3] : vector<4xi32> -> i32
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dmin = scalar.extf %dmin_f16 : f16 to f32
+  %scale, %minimum = func.call @ggml_q5k_scale_from_header(%scale0, %scale1, %scale2, %bounded_group) : (i32, i32, i32, index) -> (i32, i32)
+  %scale_f32 = scalar.uitofp %scale : i32 to f32
+  %minimum_f32 = scalar.uitofp %minimum : i32 to f32
+  %d_scale = scalar.mulf %d, %scale_f32 : f32
+  %minimum_scale = scalar.mulf %dmin, %minimum_f32 : f32
+  %q_half = index.rem %bounded_group, %c2 : index
+  %q_shift_index = index.mul %q_half, %c4 : index
+  %q_shift_i32 = index.cast %q_shift_index : index to i32
+  %q_shift = vector.splat %q_shift_i32 : vector<1xi32>
+  %shifted_q = vector.shrui %q_word, %q_shift : vector<1xi32>
+  %masked_q = vector.andi %shifted_q, %q4_mask : vector<1xi32>
+  %q_i8 = vector.bitcast %masked_q : vector<1xi32> to vector<4xi8>
+  %q_f32 = vector.uitofp %q_i8 : vector<4xi8> to vector<4xf32>
+  %qh_shift_i32 = index.cast %bounded_group : index to i32
+  %qh_bit = scalar.shli %c1_i32, %qh_shift_i32 : i32
+  %qh0 = vector.extract %qh_bytes[0] : vector<4xi8> -> i8
+  %qh1 = vector.extract %qh_bytes[1] : vector<4xi8> -> i8
+  %qh2 = vector.extract %qh_bytes[2] : vector<4xi8> -> i8
+  %qh3 = vector.extract %qh_bytes[3] : vector<4xi8> -> i8
+  %high0 = func.call @ggml_q5k_split_wmma_high_bit_f32(%qh0, %qh_bit) : (i8, i32) -> (f32)
+  %high1 = func.call @ggml_q5k_split_wmma_high_bit_f32(%qh1, %qh_bit) : (i8, i32) -> (f32)
+  %high2 = func.call @ggml_q5k_split_wmma_high_bit_f32(%qh2, %qh_bit) : (i8, i32) -> (f32)
+  %high3 = func.call @ggml_q5k_split_wmma_high_bit_f32(%qh3, %qh_bit) : (i8, i32) -> (f32)
+  %q0_low = vector.extract %q_f32[0] : vector<4xf32> -> f32
+  %q1_low = vector.extract %q_f32[1] : vector<4xf32> -> f32
+  %q2_low = vector.extract %q_f32[2] : vector<4xf32> -> f32
+  %q3_low = vector.extract %q_f32[3] : vector<4xf32> -> f32
+  %q0 = scalar.addf %q0_low, %high0 : f32
+  %q1 = scalar.addf %q1_low, %high1 : f32
+  %q2 = scalar.addf %q2_low, %high2 : f32
+  %q3 = scalar.addf %q3_low, %high3 : f32
+  %negative_minimum_scale = scalar.negf %minimum_scale : f32
+  %value0 = scalar.fmaf %q0, %d_scale, %negative_minimum_scale : f32
+  %value1 = scalar.fmaf %q1, %d_scale, %negative_minimum_scale : f32
+  %value2 = scalar.fmaf %q2, %d_scale, %negative_minimum_scale : f32
+  %value3 = scalar.fmaf %q3, %d_scale, %negative_minimum_scale : f32
+  %half0 = scalar.fptrunc %value0 : f32 to f16
+  %half1 = scalar.fptrunc %value1 : f32 to f16
+  %half2 = scalar.fptrunc %value2 : f32 to f16
+  %half3 = scalar.fptrunc %value3 : f32 to f16
+  %result = vector.from_elements %half0, %half1, %half2, %half3 : vector<4xf16>
+  func.return %result : vector<4xf16>
+}
+
+// Acquires one naturally aligned Q5_K block header as a single 16-byte packet.
+func.def inline @ggml_q5k_split_wmma_load_header(%weight: buffer, %row_byte_base: offset, %q5_block: index) -> (vector<4xi32>) {
+  %c0 = index.constant 0 : index
+  %block_bytes = index.constant 176 : offset
+  %block_byte_add = index.scale %q5_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %header_view = buffer.view %weight[%block_byte_base] : buffer -> view<4xi32>
+  %header_words = vector.load %header_view[%c0] : view<4xi32> -> vector<4xi32>
+  func.return %header_words : vector<4xi32>
+}
+
+template.decl @ggml.mul_mat_id_q5k_f16_wmma.project_vector16(%stage_activation: i1, %q5_group: index, %k_origin: index, %load_row: index, %load_k: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %header0: vector<4xi32>, %header1: vector<4xi32>, %q_word0: vector<1xi32>, %q_word1: vector<1xi32>, %qh_bytes0: vector<4xi8>, %qh_bytes1: vector<4xi8>, %accumulator: vector<16xf16>) -> (vector<16xf16>)
+
+template.def<@ggml.mul_mat_id_q5k_f16_wmma.project_vector16> device @ggml_mul_mat_id_q5k_f16_wmma_project_vector16(%stage_activation: i1, %q5_group: index, %k_origin: index, %load_row: index, %load_k: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %header0: vector<4xi32>, %header1: vector<4xi32>, %q_word0: vector<1xi32>, %q_word1: vector<1xi32>, %qh_bytes0: vector<4xi8>, %qh_bytes1: vector<4xi8>, %accumulator: vector<16xf16>) -> (vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c40 = index.constant 40 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %input_noalias, %route_stage_noalias, %weight_stage_noalias, %activation_stage_noalias = buffer.assume.noalias %input, %route_stage, %weight_stage, %activation_stage : buffer, buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%token_count]x[%input_size]xf32>
+  %route_stage_view = buffer.view %route_stage_noalias[%c0_offset] : buffer -> view<32xi32>
+  %weight_stage_view = buffer.view %weight_stage_noalias[%c0_offset] : buffer -> view<64x40xf16>
+  %activation_stage_physical_view = buffer.view %activation_stage_noalias[%c0_offset] : buffer -> view<32x40xf16>
+  %activation_fragment_layout = encoding.layout.strided [1, %c40] : encoding<layout>
+  %activation_fragment_view = buffer.view %activation_stage_noalias[%c0_offset] : buffer -> view<32x32xf16, %activation_fragment_layout>
+  %bounded_group = index.assume %q5_group [range(%q5_group, 0, 7)] : index
+  scf.for %row_offset = [%c0 to %c64 step %c32] unroll {
+    %local_row0 = index.add %load_row, %row_offset : index
+    %local_row = index.assume %local_row0 [range(%local_row0, 0, 63)] : index
+    %selects_first_row = index.cmp eq, %row_offset, %c0 : index
+    %selected_header = scf.select %selects_first_row, %header0, %header1 : vector<4xi32>
+    %selected_q_word = scf.select %selects_first_row, %q_word0, %q_word1 : vector<1xi32>
+    %selected_qh_bytes = scf.select %selects_first_row, %qh_bytes0, %qh_bytes1 : vector<4xi8>
+    %channel = index.add %channel_tile_base, %local_row : index
+    %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+    %weight_values = scf.if %valid_channel -> (vector<4xf16>) {
+      %decoded = func.call @ggml_q5k_split_wmma_vector4_from_header_code(%bounded_group, %selected_header, %selected_q_word, %selected_qh_bytes) : (index, vector<4xi32>, vector<1xi32>, vector<4xi8>) -> (vector<4xf16>)
+      scf.yield %decoded : vector<4xf16>
+    } else {
+      scf.yield %c0_f16x4 : vector<4xf16>
+    }
+    vector.store %weight_values, %weight_stage_view[%local_row, %load_k] : vector<4xf16>, view<64x40xf16>
+  }
+  scf.if %stage_activation {
+    %assignment_i32 = view.load %route_stage_view[%load_row] : view<32xi32> -> i32
+    %valid_assignment = scalar.cmpi sge, %assignment_i32, %c0_i32 : i32
+    %activation_values = scf.if %valid_assignment -> (vector<4xf16>) {
+      %assignment0 = index.cast %assignment_i32 : i32 to index
+      %assignment = index.assume %assignment0 [range(%assignment0, 0, 16383)] : index
+      %bounded_assignment, %bounded_assignment_count = index.assume %assignment, %assignment_count [lt(%assignment, %assignment_count)] : index, index
+      %token0 = index.div %bounded_assignment, %route_count : index
+      %token, %input_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+      %input_k = index.add %k_origin, %load_k : index
+      %loaded = vector.load %input_view[%token, %input_k] : view<[%token_count]x[%input_size]xf32> -> vector<4xf32>
+      %converted = vector.fptrunc %loaded : vector<4xf32> to vector<4xf16>
+      scf.yield %converted : vector<4xf16>
+    } else {
+      scf.yield %c0_f16x4 : vector<4xf16>
+    }
+    vector.store %activation_values, %activation_stage_physical_view[%load_row, %load_k] : vector<4xf16>, view<32x40xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %next_accumulator = scf.for %k_half = [%c0 to %c32 step %c16](%half_accumulator = %accumulator : vector<16xf16>) -> (vector<16xf16>) unroll {
+    %lhs = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half] shape [%m, %k] : view<64x40xf16> -> vector<16xf16>
+    %rhs = vector.fragment.load<rhs> %activation_fragment_view[%k_half, %subgroup_route_add] shape [%k, %n] : view<32x32xf16, %activation_fragment_layout> -> vector<16xf16>
+    %next = vector.mma %lhs, %rhs, %half_accumulator : vector<16xf16>, vector<16xf16>, vector<16xf16>
+    scf.yield %next : vector<16xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  template.return %next_accumulator : vector<16xf16>
+}

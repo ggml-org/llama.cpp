@@ -1,0 +1,24 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.ssm_conv.state_materialized_body(%d_inner0: index, %n_t0: index, %n_s0: index, %cache_count0: index, %state: buffer, %x: buffer, %filt: buffer, %dst: buffer, %cache0: buffer, %cache1: buffer, %cache2: buffer, %cache3: buffer, %cache4: buffer)
+
+config.decl @llm.ssm_conv.decode.d_inner : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+
+config.decl @llm.ssm_conv.decode.workgroup_size : %value: index where [range(%value, 256, 256)]
+
+kernel.def export("llm_ssm_conv_dconv4_silu_decode_f32") @llm_ssm_conv_dconv4_silu_decode_f32() {
+  %c1 = index.constant 1 : index
+  %cneg1 = index.constant -1 : index
+  %d_inner = config.get @llm.ssm_conv.decode.d_inner : index
+  %wg = config.get @llm.ssm_conv.decode.workgroup_size : index
+  %rounding = index.add %wg, %cneg1 : index
+  %rounded = index.add %d_inner, %rounding : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%wg, %c1, %c1) : index
+} launch(%state: buffer, %x: buffer, %filt: buffer, %dst: buffer, %cache: buffer) {
+  %c1 = index.constant 1 : index
+  %d_inner = config.get @llm.ssm_conv.decode.d_inner : index
+  template.apply<@llm.ssm_conv.state_materialized_body>(%d_inner, %c1, %c1, %c1, %state, %x, %filt, %dst, %cache, %cache, %cache, %cache, %cache) : (index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

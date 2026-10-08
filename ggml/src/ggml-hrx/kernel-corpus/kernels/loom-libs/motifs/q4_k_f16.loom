@@ -1,0 +1,100 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Decodes four adjacent values from one 32-value Q4_K group for FP16 matrix
+// staging. The group and packet coordinates match the contiguous K dimension
+// consumed by WMMA tiles.
+func.def inline @ggml_q4k_f16_vector4(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group: index, %packet: index) -> (vector<4xf16>) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %block_bytes = index.constant 144 : offset
+  %scale_offset = index.constant 4 : offset
+  %code_offset = index.constant 16 : offset
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c15 = vector.constant 15 : vector<1xi32>
+  %c48 = vector.constant 48 : vector<1xi32>
+  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %q4_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %scale_byte_base = index.add %block_byte_base, %scale_offset : offset
+  %code_byte_base = index.add %block_byte_base, %code_offset : offset
+  %dm_view = buffer.view %weight[%block_byte_base] : buffer -> view<2xf16>
+  %scale_view = buffer.view %weight[%scale_byte_base] : buffer -> view<3xi32>
+  %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<32xi32>
+  %dm = vector.load %dm_view[%c0] : view<2xf16> -> vector<2xf16>
+  %scales = vector.load %scale_view[%c0] : view<3xi32> -> vector<3xi32>
+  %d_f16 = vector.extract %dm[0] : vector<2xf16> -> f16
+  %dmin_f16 = vector.extract %dm[1] : vector<2xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dmin = scalar.extf %dmin_f16 : f16 to f32
+  %q_page0 = index.div %bounded_group, %c2 : index
+  %q_page = index.mul %q_page0, %c8 : index
+  %q_word_index0 = index.add %q_page, %bounded_packet : index
+  %q_word_index = index.assume %q_word_index0 [range(%q_word_index0, 0, 31)] : index
+  %is_low = index.cmp ult, %bounded_group, %c4 : index
+  %scale_lane = index.rem %bounded_group, %c4 : index
+  %scale_shift_index = index.mul %scale_lane, %c8 : index
+  %scale_shift_i32 = index.cast %scale_shift_index : index to i32
+  %scale_shift = vector.splat %scale_shift_i32 : vector<1xi32>
+  %scale0_i32 = vector.extract %scales[0] : vector<3xi32> -> i32
+  %scale1_i32 = vector.extract %scales[1] : vector<3xi32> -> i32
+  %scale2_i32 = vector.extract %scales[2] : vector<3xi32> -> i32
+  %scale0 = vector.splat %scale0_i32 : vector<1xi32>
+  %scale1 = vector.splat %scale1_i32 : vector<1xi32>
+  %scale2 = vector.splat %scale2_i32 : vector<1xi32>
+  %high_shift_i32 = scalar.addi %scale_shift_i32, %c2_i32 : i32
+  %minimum_shift_i32 = scalar.addi %scale_shift_i32, %c4_i32 : i32
+  %selected_scale_source = scf.select %is_low, %scale0, %scale2 : vector<1xi32>
+  %selected_minimum_source = scf.select %is_low, %scale1, %scale2 : vector<1xi32>
+  %selected_scale_high_shift_i32 = scf.select %is_low, %scale_shift_i32, %high_shift_i32 : i32
+  %selected_minimum_low_shift_i32 = scf.select %is_low, %scale_shift_i32, %minimum_shift_i32 : i32
+  %selected_scale_high_shift = vector.splat %selected_scale_high_shift_i32 : vector<1xi32>
+  %selected_minimum_low_shift = vector.splat %selected_minimum_low_shift_i32 : vector<1xi32>
+  %scale_low0 = vector.shrui %selected_scale_source, %scale_shift : vector<1xi32>
+  %scale_low = vector.andi %scale_low0, %c15 : vector<1xi32>
+  %scale_high0 = vector.shrui %scale0, %selected_scale_high_shift : vector<1xi32>
+  %scale_high = vector.andi %scale_high0, %c48 : vector<1xi32>
+  %scale = vector.ori %scale_low, %scale_high : vector<1xi32>
+  %minimum_low0 = vector.shrui %selected_minimum_source, %selected_minimum_low_shift : vector<1xi32>
+  %minimum_low = vector.andi %minimum_low0, %c15 : vector<1xi32>
+  %minimum_high0 = vector.shrui %scale1, %selected_scale_high_shift : vector<1xi32>
+  %minimum_high = vector.andi %minimum_high0, %c48 : vector<1xi32>
+  %minimum = vector.ori %minimum_low, %minimum_high : vector<1xi32>
+  %scale_f32 = vector.uitofp %scale : vector<1xi32> to vector<1xf32>
+  %minimum_f32 = vector.uitofp %minimum : vector<1xi32> to vector<1xf32>
+  %d_vector1 = vector.splat %d : vector<1xf32>
+  %dmin_vector1 = vector.splat %dmin : vector<1xf32>
+  %d_scale_vector1 = vector.mulf %d_vector1, %scale_f32 : vector<1xf32>
+  %minimum_scale_vector1 = vector.mulf %dmin_vector1, %minimum_f32 : vector<1xf32>
+  %d_scale = vector.extract %d_scale_vector1[0] : vector<1xf32> -> f32
+  %minimum_scale = vector.extract %minimum_scale_vector1[0] : vector<1xf32> -> f32
+  %q_word = vector.load %code_view[%q_word_index] : view<32xi32> -> vector<1xi32>
+  %q_half = index.rem %bounded_group, %c2 : index
+  %q_shift_index = index.mul %q_half, %c4 : index
+  %q_shift_i32 = index.cast %q_shift_index : index to i32
+  %q_shift = vector.splat %q_shift_i32 : vector<1xi32>
+  %shifted_q = vector.shrui %q_word, %q_shift : vector<1xi32>
+  %masked_q = vector.andi %shifted_q, %q4_mask : vector<1xi32>
+  %q_i8 = vector.bitcast %masked_q : vector<1xi32> to vector<4xi8>
+  %q_f32 = vector.uitofp %q_i8 : vector<4xi8> to vector<4xf32>
+  %negative_minimum_scale = scalar.negf %minimum_scale : f32
+  %q0 = vector.extract %q_f32[0] : vector<4xf32> -> f32
+  %q1 = vector.extract %q_f32[1] : vector<4xf32> -> f32
+  %q2 = vector.extract %q_f32[2] : vector<4xf32> -> f32
+  %q3 = vector.extract %q_f32[3] : vector<4xf32> -> f32
+  %value0 = scalar.fmaf %q0, %d_scale, %negative_minimum_scale : f32
+  %value1 = scalar.fmaf %q1, %d_scale, %negative_minimum_scale : f32
+  %value2 = scalar.fmaf %q2, %d_scale, %negative_minimum_scale : f32
+  %value3 = scalar.fmaf %q3, %d_scale, %negative_minimum_scale : f32
+  %half0 = scalar.fptrunc %value0 : f32 to f16
+  %half1 = scalar.fptrunc %value1 : f32 to f16
+  %half2 = scalar.fptrunc %value2 : f32 to f16
+  %half3 = scalar.fptrunc %value3 : f32 to f16
+  %result = vector.from_elements %half0, %half1, %half2, %half3 : vector<4xf16>
+  func.return %result : vector<4xf16>
+}

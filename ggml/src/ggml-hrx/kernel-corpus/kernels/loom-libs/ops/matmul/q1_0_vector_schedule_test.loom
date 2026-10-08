@@ -1,0 +1,476 @@
+// Test-only controls for the Q1_0 vector schedule used by Vulkan.
+func.decl @ggml_q1_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>)
+
+amdgpu.target<gfx11-generic> @ggml_q1_0_vector_schedule_gfx11_wave32 {subgroup_size = 32}
+
+func.def inline @ggml_q1_0_f32_x4_row_lane(%input_size: index, %input: buffer, %weight: buffer, %weight_row_byte_base: offset, %lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf32>
+  %iteration_count = index.div %bounded_input_size, %c128 : index
+  %lane_k = index.mul %bounded_lane, %c4 : index
+  %last_vector_origin = index.sub %bounded_input_size, %c4 : index
+  %result = scf.for %iteration = [%c0 to %iteration_count step %c1](%acc = %c0_f32 : f32) -> (f32) unroll(%c4) {
+    %iteration_k = index.mul %iteration, %c128 : index
+    %k0 = index.add %iteration_k, %lane_k : index
+    %k = index.assume %k0 [range(%k0, 0, %last_vector_origin)] : index
+    %weights = func.call @ggml_q1_0_f32_vector4(%weight, %weight_row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
+    %mask = vector.mask.range [%k to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %activations = vector.load.mask %input_view[%k], %mask, %c0_f32x4 : view<[%bounded_input_size]xf32>, vector<4xi1>, vector<4xf32>
+    %products = vector.mulf %weights, %activations : vector<4xf32>
+    %contribution = vector.reduce<addf> %products, %c0_f32 : vector<4xf32>, f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %contribution : f32
+    scf.yield %next : f32
+  }
+  func.return %result : f32
+}
+
+func.def inline @ggml_q1_0_f32_x8_row_lane(%input_size: index, %input: buffer, %weight: buffer, %weight_row_byte_base: offset, %lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf32>
+  %iteration_count = index.div %bounded_input_size, %c256 : index
+  %lane_k = index.mul %bounded_lane, %c8 : index
+  %last_vector_origin = index.sub %bounded_input_size, %c4 : index
+  %result = scf.for %iteration = [%c0 to %iteration_count step %c1](%acc = %c0_f32 : f32) -> (f32) unroll(%c4) {
+    %iteration_k = index.mul %iteration, %c256 : index
+    %k00 = index.add %iteration_k, %lane_k : index
+    %k10 = index.add %k00, %c4 : index
+    %k0 = index.assume %k00 [range(%k00, 0, %last_vector_origin)] : index
+    %k1 = index.assume %k10 [range(%k10, 0, %last_vector_origin)] : index
+    %weights0 = func.call @ggml_q1_0_f32_vector4(%weight, %weight_row_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %weights1 = func.call @ggml_q1_0_f32_vector4(%weight, %weight_row_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %mask0 = vector.mask.range [%k0 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %mask1 = vector.mask.range [%k1 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %activations0 = vector.load.mask %input_view[%k0], %mask0, %c0_f32x4 : view<[%bounded_input_size]xf32>, vector<4xi1>, vector<4xf32>
+    %activations1 = vector.load.mask %input_view[%k1], %mask1, %c0_f32x4 : view<[%bounded_input_size]xf32>, vector<4xi1>, vector<4xf32>
+    %products0 = vector.mulf %weights0, %activations0 : vector<4xf32>
+    %products1 = vector.mulf %weights1, %activations1 : vector<4xf32>
+    %contribution0 = vector.reduce<addf> %products0, %c0_f32 : vector<4xf32>, f32
+    %contribution1 = vector.reduce<addf> %products1, %c0_f32 : vector<4xf32>, f32
+    %pair = scalar.addf<reassoc|nnan|ninf|nsz> %contribution0, %contribution1 : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %pair : f32
+    scf.yield %next : f32
+  }
+  func.return %result : f32
+}
+
+func.def inline @ggml_q1_0_f16_x8_row_lane(%input_size: index, %input: buffer, %weight: buffer, %weight_row_byte_base: offset, %lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
+  %iteration_count = index.div %bounded_input_size, %c256 : index
+  %lane_k = index.mul %bounded_lane, %c8 : index
+  %last_vector_origin = index.sub %bounded_input_size, %c4 : index
+  %result = scf.for %iteration = [%c0 to %iteration_count step %c1](%acc = %c0_f32 : f32) -> (f32) unroll(%c4) {
+    %iteration_k = index.mul %iteration, %c256 : index
+    %k00 = index.add %iteration_k, %lane_k : index
+    %k10 = index.add %k00, %c4 : index
+    %k0 = index.assume %k00 [range(%k00, 0, %last_vector_origin)] : index
+    %k1 = index.assume %k10 [range(%k10, 0, %last_vector_origin)] : index
+    %weights0 = func.call @ggml_q1_0_f32_vector4(%weight, %weight_row_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %weights1 = func.call @ggml_q1_0_f32_vector4(%weight, %weight_row_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %mask0 = vector.mask.range [%k0 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %mask1 = vector.mask.range [%k1 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %activations0_f16 = vector.load.mask %input_view[%k0], %mask0, %c0_f16x4 : view<[%bounded_input_size]xf16>, vector<4xi1>, vector<4xf16>
+    %activations1_f16 = vector.load.mask %input_view[%k1], %mask1, %c0_f16x4 : view<[%bounded_input_size]xf16>, vector<4xi1>, vector<4xf16>
+    %activations0 = vector.extf %activations0_f16 : vector<4xf16> to vector<4xf32>
+    %activations1 = vector.extf %activations1_f16 : vector<4xf16> to vector<4xf32>
+    %products0 = vector.mulf %weights0, %activations0 : vector<4xf32>
+    %products1 = vector.mulf %weights1, %activations1 : vector<4xf32>
+    %contribution0 = vector.reduce<addf> %products0, %c0_f32 : vector<4xf32>, f32
+    %contribution1 = vector.reduce<addf> %products1, %c0_f32 : vector<4xf32>, f32
+    %pair = scalar.addf<reassoc|nnan|ninf|nsz> %contribution0, %contribution1 : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %pair : f32
+    scf.yield %next : f32
+  }
+  func.return %result : f32
+}
+
+func.def inline @ggml_q1_0_f16_x8_rows2_lane(%input_size: index, %input: buffer, %weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %lane: index) -> (f32, f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
+  %iteration_count = index.div %bounded_input_size, %c256 : index
+  %lane_k = index.mul %bounded_lane, %c8 : index
+  %last_vector_origin = index.sub %bounded_input_size, %c4 : index
+  %result0, %result1 = scf.for %iteration = [%c0 to %iteration_count step %c1](%acc0 = %c0_f32 : f32, %acc1 = %c0_f32 : f32) -> (f32, f32) unroll(%c4) {
+    %iteration_k = index.mul %iteration, %c256 : index
+    %k00 = index.add %iteration_k, %lane_k : index
+    %k10 = index.add %k00, %c4 : index
+    %k0 = index.assume %k00 [range(%k00, 0, %last_vector_origin)] : index
+    %k1 = index.assume %k10 [range(%k10, 0, %last_vector_origin)] : index
+    %mask0 = vector.mask.range [%k0 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %mask1 = vector.mask.range [%k1 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %activations0_f16 = vector.load.mask %input_view[%k0], %mask0, %c0_f16x4 : view<[%bounded_input_size]xf16>, vector<4xi1>, vector<4xf16>
+    %activations1_f16 = vector.load.mask %input_view[%k1], %mask1, %c0_f16x4 : view<[%bounded_input_size]xf16>, vector<4xi1>, vector<4xf16>
+    %activations0 = vector.extf %activations0_f16 : vector<4xf16> to vector<4xf32>
+    %activations1 = vector.extf %activations1_f16 : vector<4xf16> to vector<4xf32>
+    %weights00 = func.call @ggml_q1_0_f32_vector4(%weight, %row0_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %weights01 = func.call @ggml_q1_0_f32_vector4(%weight, %row0_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %weights10 = func.call @ggml_q1_0_f32_vector4(%weight, %row1_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %weights11 = func.call @ggml_q1_0_f32_vector4(%weight, %row1_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %p00 = vector.mulf %weights00, %activations0 : vector<4xf32>
+    %p01 = vector.mulf %weights01, %activations1 : vector<4xf32>
+    %p10 = vector.mulf %weights10, %activations0 : vector<4xf32>
+    %p11 = vector.mulf %weights11, %activations1 : vector<4xf32>
+    %s00 = vector.reduce<addf> %p00, %c0_f32 : vector<4xf32>, f32
+    %s01 = vector.reduce<addf> %p01, %c0_f32 : vector<4xf32>, f32
+    %s10 = vector.reduce<addf> %p10, %c0_f32 : vector<4xf32>, f32
+    %s11 = vector.reduce<addf> %p11, %c0_f32 : vector<4xf32>, f32
+    %sum0 = scalar.addf<reassoc|nnan|ninf|nsz> %s00, %s01 : f32
+    %sum1 = scalar.addf<reassoc|nnan|ninf|nsz> %s10, %s11 : f32
+    %next0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc0, %sum0 : f32
+    %next1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc1, %sum1 : f32
+    scf.yield %next0, %next1 : f32, f32
+  }
+  func.return %result0, %result1 : f32, f32
+}
+
+func.def inline @ggml_q1_0_f16_x8_rows4_lane(%input_size: index, %input: buffer, %weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %row2_byte_base: offset, %row3_byte_base: offset, %lane: index) -> (f32, f32, f32, f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
+  %iteration_count = index.div %bounded_input_size, %c256 : index
+  %lane_k = index.mul %bounded_lane, %c8 : index
+  %last_vector_origin = index.sub %bounded_input_size, %c4 : index
+  %result0, %result1, %result2, %result3 = scf.for %iteration = [%c0 to %iteration_count step %c1](%acc0 = %c0_f32 : f32, %acc1 = %c0_f32 : f32, %acc2 = %c0_f32 : f32, %acc3 = %c0_f32 : f32) -> (f32, f32, f32, f32) unroll(%c4) {
+    %iteration_k = index.mul %iteration, %c256 : index
+    %k00 = index.add %iteration_k, %lane_k : index
+    %k10 = index.add %k00, %c4 : index
+    %k0 = index.assume %k00 [range(%k00, 0, %last_vector_origin)] : index
+    %k1 = index.assume %k10 [range(%k10, 0, %last_vector_origin)] : index
+    %mask0 = vector.mask.range [%k0 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %mask1 = vector.mask.range [%k1 to %bounded_input_size step %c1] : index -> vector<4xi1>
+    %a0_f16 = vector.load.mask %input_view[%k0], %mask0, %c0_f16x4 : view<[%bounded_input_size]xf16>, vector<4xi1>, vector<4xf16>
+    %a1_f16 = vector.load.mask %input_view[%k1], %mask1, %c0_f16x4 : view<[%bounded_input_size]xf16>, vector<4xi1>, vector<4xf16>
+    %a0 = vector.extf %a0_f16 : vector<4xf16> to vector<4xf32>
+    %a1 = vector.extf %a1_f16 : vector<4xf16> to vector<4xf32>
+    %w00 = func.call @ggml_q1_0_f32_vector4(%weight, %row0_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %w01 = func.call @ggml_q1_0_f32_vector4(%weight, %row0_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %w10 = func.call @ggml_q1_0_f32_vector4(%weight, %row1_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %w11 = func.call @ggml_q1_0_f32_vector4(%weight, %row1_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %w20 = func.call @ggml_q1_0_f32_vector4(%weight, %row2_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %w21 = func.call @ggml_q1_0_f32_vector4(%weight, %row2_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %w30 = func.call @ggml_q1_0_f32_vector4(%weight, %row3_byte_base, %k0) : (buffer, offset, index) -> (vector<4xf32>)
+    %w31 = func.call @ggml_q1_0_f32_vector4(%weight, %row3_byte_base, %k1) : (buffer, offset, index) -> (vector<4xf32>)
+    %p00 = vector.mulf %w00, %a0 : vector<4xf32>
+    %p01 = vector.mulf %w01, %a1 : vector<4xf32>
+    %p10 = vector.mulf %w10, %a0 : vector<4xf32>
+    %p11 = vector.mulf %w11, %a1 : vector<4xf32>
+    %p20 = vector.mulf %w20, %a0 : vector<4xf32>
+    %p21 = vector.mulf %w21, %a1 : vector<4xf32>
+    %p30 = vector.mulf %w30, %a0 : vector<4xf32>
+    %p31 = vector.mulf %w31, %a1 : vector<4xf32>
+    %s00 = vector.reduce<addf> %p00, %c0_f32 : vector<4xf32>, f32
+    %s01 = vector.reduce<addf> %p01, %c0_f32 : vector<4xf32>, f32
+    %s10 = vector.reduce<addf> %p10, %c0_f32 : vector<4xf32>, f32
+    %s11 = vector.reduce<addf> %p11, %c0_f32 : vector<4xf32>, f32
+    %s20 = vector.reduce<addf> %p20, %c0_f32 : vector<4xf32>, f32
+    %s21 = vector.reduce<addf> %p21, %c0_f32 : vector<4xf32>, f32
+    %s30 = vector.reduce<addf> %p30, %c0_f32 : vector<4xf32>, f32
+    %s31 = vector.reduce<addf> %p31, %c0_f32 : vector<4xf32>, f32
+    %sum0 = scalar.addf<reassoc|nnan|ninf|nsz> %s00, %s01 : f32
+    %sum1 = scalar.addf<reassoc|nnan|ninf|nsz> %s10, %s11 : f32
+    %sum2 = scalar.addf<reassoc|nnan|ninf|nsz> %s20, %s21 : f32
+    %sum3 = scalar.addf<reassoc|nnan|ninf|nsz> %s30, %s31 : f32
+    %next0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc0, %sum0 : f32
+    %next1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc1, %sum1 : f32
+    %next2 = scalar.addf<reassoc|nnan|ninf|nsz> %acc2, %sum2 : f32
+    %next3 = scalar.addf<reassoc|nnan|ninf|nsz> %acc3, %sum3 : f32
+    scf.yield %next0, %next1, %next2, %next3 : f32, f32, f32, f32
+  }
+  func.return %result0, %result1, %result2, %result3 : f32, f32, f32, f32
+}
+
+kernel.def target(@ggml_q1_0_vector_schedule_gfx11_wave32) @ggml_q1_0_f32_x4_rows1(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size = index.assume %row0, %output_size [lt(%row0, %output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %block_bytes = index.constant 18 : offset
+  %blocks = index.div %bounded_input_size, %c128 : index
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row_base = index.scale %row, %row_bytes : index, offset -> offset
+  %partial = func.call @ggml_q1_0_f32_x4_row_lane(%bounded_input_size, %input, %weight, %row_base, %lane) : (index, buffer, buffer, offset, index) -> (f32)
+  %sum = kernel.subgroup.reduce<addf> %partial : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_output_size]xf32>
+    view.store %sum, %output_view[%row] : f32, view<[%bounded_output_size]xf32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_vector_schedule_gfx11_wave32) @ggml_q1_0_f32_x8_rows1(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size = index.assume %row0, %output_size [lt(%row0, %output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %block_bytes = index.constant 18 : offset
+  %blocks = index.div %bounded_input_size, %c128 : index
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row_base = index.scale %row, %row_bytes : index, offset -> offset
+  %partial = func.call @ggml_q1_0_f32_x8_row_lane(%bounded_input_size, %input, %weight, %row_base, %lane) : (index, buffer, buffer, offset, index) -> (f32)
+  %sum = kernel.subgroup.reduce<addf> %partial : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_output_size]xf32>
+    view.store %sum, %output_view[%row] : f32, view<[%bounded_output_size]xf32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_vector_schedule_gfx11_wave32) @ggml_q1_0_f16_x8_rows1(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size = index.assume %row0, %output_size [lt(%row0, %output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %block_bytes = index.constant 18 : offset
+  %blocks = index.div %bounded_input_size, %c128 : index
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row_base = index.scale %row, %row_bytes : index, offset -> offset
+  %partial = func.call @ggml_q1_0_f16_x8_row_lane(%bounded_input_size, %input, %weight, %row_base, %lane) : (index, buffer, buffer, offset, index) -> (f32)
+  %sum = kernel.subgroup.reduce<addf> %partial : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_output_size]xf32>
+    view.store %sum, %output_view[%row] : f32, view<[%bounded_output_size]xf32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_vector_schedule_gfx11_wave32) @ggml_q1_0_f16_x8_rows2(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c32 = index.constant 32 : index
+  %output_size_rounded = index.add %output_size, %c1 : index
+  %groups = index.div %output_size_rounded, %c2 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %block_bytes = index.constant 18 : offset
+  %row00 = index.mul %group, %c2 : index
+  %row0, %bounded_output_size = index.assume %row00, %output_size [lt(%row00, %output_size)] : index, index
+  %row1 = index.add %row0, %c1 : index
+  %blocks = index.div %bounded_input_size, %c128 : index
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row0_base = index.scale %row0, %row_bytes : index, offset -> offset
+  %row1_base = index.scale %row1, %row_bytes : index, offset -> offset
+  %partial0, %partial1 = func.call @ggml_q1_0_f16_x8_rows2_lane(%bounded_input_size, %input, %weight, %row0_base, %row1_base, %lane) : (index, buffer, buffer, offset, offset, index) -> (f32, f32)
+  %sum0 = kernel.subgroup.reduce<addf> %partial0 : f32
+  %sum1 = kernel.subgroup.reduce<addf> %partial1 : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_output_size]xf32>
+    view.store %sum0, %output_view[%row0] : f32, view<[%bounded_output_size]xf32>
+    %has_row1 = index.cmp ult, %row1, %bounded_output_size : index
+    scf.if %has_row1 {
+      %bounded_row1 = index.assume %row1 [lt(%row1, %bounded_output_size)] : index
+      view.store %sum1, %output_view[%bounded_row1] : f32, view<[%bounded_output_size]xf32>
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_vector_schedule_gfx11_wave32) @ggml_q1_0_f16_x8_rows4(%input_size: index, %output_size: index) {
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %rounded = index.add %output_size, %c3 : index
+  %groups = index.div %rounded, %c4 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %block_bytes = index.constant 18 : offset
+  %row00 = index.mul %group, %c4 : index
+  %row0, %bounded_output_size = index.assume %row00, %output_size [lt(%row00, %output_size)] : index, index
+  %row1 = index.add %row0, %c1 : index
+  %row2 = index.add %row0, %c2 : index
+  %row3 = index.add %row0, %c3 : index
+  %bounded_row1 = index.assume %row1 [lt(%row1, %bounded_output_size)] : index
+  %bounded_row2 = index.assume %row2 [lt(%row2, %bounded_output_size)] : index
+  %bounded_row3 = index.assume %row3 [lt(%row3, %bounded_output_size)] : index
+  %blocks = index.div %bounded_input_size, %c128 : index
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row0_base = index.scale %row0, %row_bytes : index, offset -> offset
+  %row1_base = index.scale %bounded_row1, %row_bytes : index, offset -> offset
+  %row2_base = index.scale %bounded_row2, %row_bytes : index, offset -> offset
+  %row3_base = index.scale %bounded_row3, %row_bytes : index, offset -> offset
+  %partial0, %partial1, %partial2, %partial3 = func.call @ggml_q1_0_f16_x8_rows4_lane(%bounded_input_size, %input, %weight, %row0_base, %row1_base, %row2_base, %row3_base, %lane) : (index, buffer, buffer, offset, offset, offset, offset, index) -> (f32, f32, f32, f32)
+  %sum0 = kernel.subgroup.reduce<addf> %partial0 : f32
+  %sum1 = kernel.subgroup.reduce<addf> %partial1 : f32
+  %sum2 = kernel.subgroup.reduce<addf> %partial2 : f32
+  %sum3 = kernel.subgroup.reduce<addf> %partial3 : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_output_size]xf32>
+    view.store %sum0, %output_view[%row0] : f32, view<[%bounded_output_size]xf32>
+    view.store %sum1, %output_view[%bounded_row1] : f32, view<[%bounded_output_size]xf32>
+    view.store %sum2, %output_view[%bounded_row2] : f32, view<[%bounded_output_size]xf32>
+    view.store %sum3, %output_view[%bounded_row3] : f32, view<[%bounded_output_size]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_q1_0_vector_schedule_2560x4096_differential {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %input_f32 = check.generate.fill value(0.25) : tensor<2560xf32>
+  %input_f16 = check.generate.fill value(0.25) : tensor<2560xf16>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %reference = check.generate.fill value(0.0) : tensor<4096xf32>
+  %f32_x8 = check.generate.fill value(1.0) : tensor<4096xf32>
+  %f16_x8 = check.generate.fill value(2.0) : tensor<4096xf32>
+  %f16_rows2 = check.generate.fill value(3.0) : tensor<4096xf32>
+  %f16_rows4 = check.generate.fill value(4.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_f32_x4_rows1[%input_size, %output_size](%input_size, %output_size, %input_f32, %weight, %reference) : [index, index](index, index, tensor<2560xf32>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  kernel.launch @ggml_q1_0_f32_x8_rows1[%input_size, %output_size](%input_size, %output_size, %input_f32, %weight, %f32_x8) : [index, index](index, index, tensor<2560xf32>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  kernel.launch @ggml_q1_0_f16_x8_rows1[%input_size, %output_size](%input_size, %output_size, %input_f16, %weight, %f16_x8) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  kernel.launch @ggml_q1_0_f16_x8_rows2[%input_size, %output_size](%input_size, %output_size, %input_f16, %weight, %f16_rows2) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  kernel.launch @ggml_q1_0_f16_x8_rows4[%input_size, %output_size](%input_size, %output_size, %input_f16, %weight, %f16_rows4) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.expect.close actual(%f32_x8) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
+  check.expect.close actual(%f16_x8) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
+  check.expect.close actual(%f16_rows2) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
+  check.expect.close actual(%f16_rows4) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
+  check.return
+}
+
+check.case public @ggml_q1_0_vector_schedule_2560x4096_f32_x4_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %input = check.generate.fill value(0.25) : tensor<2560xf32>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_f32_x4_rows1[%input_size, %output_size](%input_size, %output_size, %input, %weight, %output) : [index, index](index, index, tensor<2560xf32>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_vector_schedule_2560x4096_f32_x8_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %input = check.generate.fill value(0.25) : tensor<2560xf32>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_f32_x8_rows1[%input_size, %output_size](%input_size, %output_size, %input, %weight, %output) : [index, index](index, index, tensor<2560xf32>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_vector_schedule_2560x4096_f16_x8_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %input = check.generate.fill value(0.25) : tensor<2560xf16>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_f16_x8_rows1[%input_size, %output_size](%input_size, %output_size, %input, %weight, %output) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_vector_schedule_2560x4096_f16_x8_rows2_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %input = check.generate.fill value(0.25) : tensor<2560xf16>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_f16_x8_rows2[%input_size, %output_size](%input_size, %output_size, %input, %weight, %output) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.case public @ggml_q1_0_vector_schedule_2560x4096_f16_x8_rows4_case {
+  %input_size = check.literal value(2560) : index
+  %output_size = check.literal value(4096) : index
+  %input = check.generate.fill value(0.25) : tensor<2560xf16>
+  %weight = check.generate.fill value(62) : tensor<4096x20x18xi8>
+  %output = check.generate.fill value(0.0) : tensor<4096xf32>
+  kernel.launch @ggml_q1_0_f16_x8_rows4[%input_size, %output_size](%input_size, %output_size, %input, %weight, %output) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
+  check.return
+}
+
+check.benchmark<@ggml_q1_0_vector_schedule_2560x4096_f32_x4_case> @ggml_q1_0_vector_schedule_2560x4096_f32_x4
+
+check.benchmark<@ggml_q1_0_vector_schedule_2560x4096_f32_x8_case> @ggml_q1_0_vector_schedule_2560x4096_f32_x8
+
+check.benchmark<@ggml_q1_0_vector_schedule_2560x4096_f16_x8_case> @ggml_q1_0_vector_schedule_2560x4096_f16_x8
+
+check.benchmark<@ggml_q1_0_vector_schedule_2560x4096_f16_x8_rows2_case> @ggml_q1_0_vector_schedule_2560x4096_f16_x8_rows2
+
+check.benchmark<@ggml_q1_0_vector_schedule_2560x4096_f16_x8_rows4_case> @ggml_q1_0_vector_schedule_2560x4096_f16_x8_rows4
+
+check.benchmark<@ggml_q1_0_vector_schedule_2560x4096_differential> @ggml_q1_0_vector_schedule_2560x4096_correctness

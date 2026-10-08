@@ -1,0 +1,75 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+
+config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+
+config.decl @qwen3_moe.dense_quantized.output_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.dense_quantized.output_accumulation : %value: index where [range(%value, 0, 1)]
+
+func.decl @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+
+template.def<@qwen3_moe.dense.q4k_q8_1_x4.body> device @qwen3_moe_dense_linear_q4k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @qwen3_moe.dense_quantized.input_size : index
+  %output_size = config.get @qwen3_moe.dense_quantized.output_size : index
+  %output_accumulation = config.get @qwen3_moe.dense_quantized.output_accumulation : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c144_bytes = index.constant 144 : offset
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %token, %launch_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %channel_base = index.mul %channel_tile, %c8 : index
+  %channel = index.add %channel_base, %subgroup : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %q4_block_count = index.div %bounded_input_size, %c256 : index
+  %weight_row_bytes = index.scale %q4_block_count, %c144_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %channel, %weight_row_bytes : index, offset -> offset
+  %q8_group_count = index.div %bounded_input_size, %c128 : index
+  %q8_row_bytes = index.scale %q8_group_count, %c144_bytes : index, offset -> offset
+  %q8_row_byte_base = index.scale %token, %q8_row_bytes : index, offset -> offset
+  %q8_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %q8_input, %weight, %output : buffer, buffer, buffer
+  %lane_sum = scf.if %publish_output -> (f32) {
+    %channel_sum = scf.if %valid_channel -> (f32) {
+      %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%bounded_input_size, %weight_noalias, %weight_row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+      scf.yield %sum : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    scf.yield %channel_sum : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %dot = kernel.subgroup.reduce<addf> %lane_sum : f32
+  %accumulates_output = index.cmp eq, %output_accumulation, %c1 : index
+  scf.if %publish_output {
+    scf.if %valid_channel {
+      scf.if %is_lane_zero {
+        %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%bounded_output_size]xf32>
+        %result = scf.if %accumulates_output -> (f32) {
+          %residual = view.load %output_view[%token, %channel] : view<[%launch_token_count]x[%bounded_output_size]xf32> -> f32
+          %sum = scalar.addf %residual, %dot : f32
+          scf.yield %sum : f32
+        } else {
+          scf.yield %dot : f32
+        }
+        view.store %result, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%bounded_output_size]xf32>
+      }
+    }
+  }
+  template.return
+}

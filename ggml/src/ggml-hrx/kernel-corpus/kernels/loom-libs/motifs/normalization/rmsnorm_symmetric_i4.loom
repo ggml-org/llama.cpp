@@ -1,0 +1,496 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: f32, %arg5: buffer) -> (f32, index, index, i1)
+
+config.decl @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon : f32
+config.decl @ggml.rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_symmetric_i4.rms_epsilon : f32
+config.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4.rms_epsilon : f32
+
+template.decl @ggml.rmsnorm_binary_symmetric_i4_k32.body(%token_count: index, %input: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer)
+
+template.def<@ggml.rmsnorm_binary_symmetric_i4_k32.body> device @ggml_rmsnorm_binary_symmetric_i4_k32_body(%token_count: index, %input: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
+  %hidden_size0 = config.get @ggml.rmsnorm_binary_symmetric_i4.hidden_size : index
+  %epsilon = config.get @ggml.rmsnorm_binary_symmetric_i4.rms_epsilon : f32
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 16)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %scratch_bytes = index.constant 1024 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %amax_epsilon = scalar.constant 1.0000000000000001e-30 : f32
+  %one_seventh = scalar.constant 0.14285714285714285 : f32
+  %seven = scalar.constant 7.0 : f32
+  %xor1 = scalar.constant 1 : i32
+  %xor2 = scalar.constant 2 : i32
+  %xor4 = scalar.constant 4 : i32
+  %xor8 = scalar.constant 8 : i32
+  %shuffle_width = scalar.constant 32 : i32
+  %shift4 = scalar.constant 4 : i32
+  %shift8 = scalar.constant 8 : i32
+  %shift12 = scalar.constant 12 : i32
+  %nibble_mask = vector.constant 15 : vector<4xi32>
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token = index.assume %safe_token0 [lt(%safe_token0, %bounded_token_count)] : index
+
+  %input_noalias, %weight_noalias, %output_noalias, %i4_qs_noalias, %i4_ds_noalias, %i4_sums_noalias = buffer.assume.noalias %input, %weight, %output, %i4_qs, %i4_ds, %i4_sums : buffer, buffer, buffer, buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %element_count = index.mul %bounded_token_count, %hidden_size : index
+  %group32_count = index.div %element_count, %c32 : index
+  %group64_count_per_row = index.div %hidden_size, %c64 : index
+  %qs_halfword_count = index.div %element_count, %c4 : index
+  %i4_qs_view = buffer.view %i4_qs_noalias[%c0_offset] : buffer -> view<[%qs_halfword_count]xi16>
+  %i4_ds_view = buffer.view %i4_ds_noalias[%c0_offset] : buffer -> view<[%group32_count]xf32>
+  %i4_sums_view = buffer.view %i4_sums_noalias[%c0_offset] : buffer -> view<[%group32_count]xi32>
+
+  %thread_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+    %input_value = view.load %input_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %input_value, %input_value : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_view = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_view[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %c8 : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_view[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %hidden_size_i32 = index.cast %hidden_size : index to i32
+    %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %row_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %row_scale, %scratch_view[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %row_scale = view.load %scratch_view[%c0] : view<256xf32> -> f32
+
+  %wave = index.div %workitem, %c32 : index
+  %group_in_wave = index.div %lane, %c16 : index
+  %lane_in_group = index.rem %lane, %c16 : index
+  %group_half = index.div %lane_in_group, %c8 : index
+  %lane_in_half = index.rem %lane_in_group, %c8 : index
+  %is_scale_leader = index.cmp eq, %lane_in_group, %c0 : index
+  %is_sum_leader = index.cmp eq, %lane_in_half, %c0 : index
+  %wave_group_base = index.mul %wave, %c2 : index
+  %local_group = index.add %wave_group_base, %group_in_wave : index
+  %token_group_base = index.mul %token, %group64_count_per_row : index
+  scf.if %valid_token {
+    scf.for %group_base = [%c0 to %group64_count_per_row step %c16] {
+      %group_in_row = index.add %group_base, %local_group : index
+      %in_range = index.cmp ult, %group_in_row, %group64_count_per_row : index
+      scf.if %in_range {
+        %channel_base = index.mul %group_in_row, %c64 : index
+        %lane_channel = index.mul %lane_in_group, %c4 : index
+        %channel = index.add %channel_base, %lane_channel : index
+        %input_values = vector.load %input_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+        %learned_weights = vector.load %weight_view[%channel] : view<[%hidden_size]xf32> -> vector<4xf32>
+        %scale_vector = vector.splat %row_scale : vector<4xf32>
+        %normalized = vector.mulf %input_values, %scale_vector : vector<4xf32>
+        %result = vector.mulf %normalized, %learned_weights : vector<4xf32>
+        vector.store %result, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%hidden_size]xf32>
+
+        %absolute_values = vector.absf %result : vector<4xf32>
+        %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute_values, %c0_f32 : vector<4xf32>, f32
+        %max_x1_peer, %max_x1_valid = kernel.subgroup.shuffle<xor> %lane_max, %xor1, %shuffle_width : f32, i32, i32
+        %max_x1 = scalar.maxnumf %lane_max, %max_x1_peer : f32
+        %max_x2_peer, %max_x2_valid = kernel.subgroup.shuffle<xor> %max_x1, %xor2, %shuffle_width : f32, i32, i32
+        %max_x2 = scalar.maxnumf %max_x1, %max_x2_peer : f32
+        %max_x4_peer, %max_x4_valid = kernel.subgroup.shuffle<xor> %max_x2, %xor4, %shuffle_width : f32, i32, i32
+        %max_x4 = scalar.maxnumf %max_x2, %max_x4_peer : f32
+        %max_x8_peer, %max_x8_valid = kernel.subgroup.shuffle<xor> %max_x4, %xor8, %shuffle_width : f32, i32, i32
+        %group_max = scalar.maxnumf %max_x4, %max_x8_peer : f32
+        %amax = scalar.maxnumf %group_max, %amax_epsilon : f32
+        %activation_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %amax, %one_seventh : f32
+        %activation_rscale = scalar.divf<reassoc|nnan|ninf|nsz> %seven, %amax : f32
+        %group64 = index.add %token_group_base, %group_in_row : index
+        %group32_base = index.mul %group64, %c2 : index
+        %group32_high = index.add %group32_base, %c1 : index
+        scf.if %is_scale_leader {
+          view.store %activation_scale, %i4_ds_view[%group32_base] : f32, view<[%group32_count]xf32>
+          view.store %activation_scale, %i4_ds_view[%group32_high] : f32, view<[%group32_count]xf32>
+        }
+
+        %rscale_vector = vector.splat %activation_rscale : vector<4xf32>
+        %scaled = vector.mulf %result, %rscale_vector : vector<4xf32>
+        %rounded = vector.roundf %scaled : vector<4xf32>
+        %quantized_i32 = vector.fptosi %rounded : vector<4xf32> to vector<4xi32>
+        %quantized_nibbles = vector.andi %quantized_i32, %nibble_mask : vector<4xi32>
+        %q0 = vector.extract %quantized_nibbles[0] : vector<4xi32> -> i32
+        %q1 = vector.extract %quantized_nibbles[1] : vector<4xi32> -> i32
+        %q2 = vector.extract %quantized_nibbles[2] : vector<4xi32> -> i32
+        %q3 = vector.extract %quantized_nibbles[3] : vector<4xi32> -> i32
+        %q1_shifted = scalar.shli %q1, %shift4 : i32
+        %q2_shifted = scalar.shli %q2, %shift8 : i32
+        %q3_shifted = scalar.shli %q3, %shift12 : i32
+        %q01 = scalar.ori %q0, %q1_shifted : i32
+        %q23 = scalar.ori %q2_shifted, %q3_shifted : i32
+        %packed_i32 = scalar.ori %q01, %q23 : i32
+        %packed_i16 = scalar.trunci %packed_i32 : i32 to i16
+        %word_base = index.mul %group64, %c16 : index
+        %word_index = index.add %word_base, %lane_in_group : index
+        view.store %packed_i16, %i4_qs_view[%word_index] : i16, view<[%qs_halfword_count]xi16>
+
+        %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %c0_f32 : vector<4xf32>, f32
+        %sum_x1_peer, %sum_x1_valid = kernel.subgroup.shuffle<xor> %lane_sum, %xor1, %shuffle_width : f32, i32, i32
+        %sum_x1 = scalar.addf<reassoc|nnan|nsz> %lane_sum, %sum_x1_peer : f32
+        %sum_x2_peer, %sum_x2_valid = kernel.subgroup.shuffle<xor> %sum_x1, %xor2, %shuffle_width : f32, i32, i32
+        %sum_x2 = scalar.addf<reassoc|nnan|nsz> %sum_x1, %sum_x2_peer : f32
+        %sum_x4_peer, %sum_x4_valid = kernel.subgroup.shuffle<xor> %sum_x2, %xor4, %shuffle_width : f32, i32, i32
+        %group_sum = scalar.addf<reassoc|nnan|nsz> %sum_x2, %sum_x4_peer : f32
+        scf.if %is_sum_leader {
+          %sum_value = scalar.fptosi %group_sum : f32 to i32
+          %sum_index = index.add %group32_base, %group_half : index
+          view.store %sum_value, %i4_sums_view[%sum_index] : i32, view<[%group32_count]xi32>
+        }
+      }
+    }
+  }
+  template.return
+}
+
+
+template.decl @ggml.add_rmsnorm_binary_symmetric_i4_k32.body(%token_count: index, %lhs: buffer, %rhs: buffer, %residual_output: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer)
+
+template.def<@ggml.add_rmsnorm_binary_symmetric_i4_k32.body> device @ggml_add_rmsnorm_binary_symmetric_i4_k32_body(%token_count: index, %lhs: buffer, %rhs: buffer, %residual_output: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
+  %hidden_size0 = config.get @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : index
+  %epsilon = config.get @ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon : f32
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 16)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %scratch_bytes = index.constant 1024 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %amax_epsilon = scalar.constant 1.0000000000000001e-30 : f32
+  %one_seventh = scalar.constant 0.14285714285714285 : f32
+  %seven = scalar.constant 7.0 : f32
+  %xor1 = scalar.constant 1 : i32
+  %xor2 = scalar.constant 2 : i32
+  %xor4 = scalar.constant 4 : i32
+  %xor8 = scalar.constant 8 : i32
+  %shuffle_width = scalar.constant 32 : i32
+  %shift4 = scalar.constant 4 : i32
+  %shift8 = scalar.constant 8 : i32
+  %shift12 = scalar.constant 12 : i32
+  %nibble_mask = vector.constant 15 : vector<4xi32>
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token = index.assume %safe_token0 [lt(%safe_token0, %bounded_token_count)] : index
+
+  %lhs_noalias, %rhs_noalias, %residual_noalias, %weight_noalias, %output_noalias, %i4_qs_noalias, %i4_ds_noalias, %i4_sums_noalias = buffer.assume.noalias %lhs, %rhs, %residual_output, %weight, %output, %i4_qs, %i4_ds, %i4_sums : buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %lhs_view = buffer.view %lhs_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %rhs_view = buffer.view %rhs_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %residual_view = buffer.view %residual_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %element_count = index.mul %bounded_token_count, %hidden_size : index
+  %group32_count = index.div %element_count, %c32 : index
+  %group64_count_per_row = index.div %hidden_size, %c64 : index
+  %qs_halfword_count = index.div %element_count, %c4 : index
+  %i4_qs_view = buffer.view %i4_qs_noalias[%c0_offset] : buffer -> view<[%qs_halfword_count]xi16>
+  %i4_ds_view = buffer.view %i4_ds_noalias[%c0_offset] : buffer -> view<[%group32_count]xf32>
+  %i4_sums_view = buffer.view %i4_sums_noalias[%c0_offset] : buffer -> view<[%group32_count]xi32>
+
+  %thread_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+    %lhs_value = view.load %lhs_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> f32
+    %rhs_value = view.load %rhs_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> f32
+    %residual = scalar.addf %lhs_value, %rhs_value : f32
+    view.store %residual, %residual_view[%token, %channel] : f32, view<[%bounded_token_count]x[%hidden_size]xf32>
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %residual, %residual : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_view = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_view[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %c8 : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_view[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %hidden_size_i32 = index.cast %hidden_size : index to i32
+    %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %row_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %row_scale, %scratch_view[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %row_scale = view.load %scratch_view[%c0] : view<256xf32> -> f32
+  kernel.barrier<global> scope(workgroup) ordering(acq_rel)
+
+  %wave = index.div %workitem, %c32 : index
+  %group_in_wave = index.div %lane, %c16 : index
+  %lane_in_group = index.rem %lane, %c16 : index
+  %group_half = index.div %lane_in_group, %c8 : index
+  %lane_in_half = index.rem %lane_in_group, %c8 : index
+  %is_scale_leader = index.cmp eq, %lane_in_group, %c0 : index
+  %is_sum_leader = index.cmp eq, %lane_in_half, %c0 : index
+  %wave_group_base = index.mul %wave, %c2 : index
+  %local_group = index.add %wave_group_base, %group_in_wave : index
+  %token_group_base = index.mul %token, %group64_count_per_row : index
+  scf.if %valid_token {
+    scf.for %group_base = [%c0 to %group64_count_per_row step %c16] {
+      %group_in_row = index.add %group_base, %local_group : index
+      %in_range = index.cmp ult, %group_in_row, %group64_count_per_row : index
+      scf.if %in_range {
+        %channel_base = index.mul %group_in_row, %c64 : index
+        %lane_channel = index.mul %lane_in_group, %c4 : index
+        %channel = index.add %channel_base, %lane_channel : index
+        %residual_values = vector.load %residual_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+        %learned_weights = vector.load %weight_view[%channel] : view<[%hidden_size]xf32> -> vector<4xf32>
+        %scale_vector = vector.splat %row_scale : vector<4xf32>
+        %normalized = vector.mulf %residual_values, %scale_vector : vector<4xf32>
+        %result = vector.mulf %normalized, %learned_weights : vector<4xf32>
+        vector.store %result, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%hidden_size]xf32>
+
+        %absolute_values = vector.absf %result : vector<4xf32>
+        %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute_values, %c0_f32 : vector<4xf32>, f32
+        %max_x1_peer, %max_x1_valid = kernel.subgroup.shuffle<xor> %lane_max, %xor1, %shuffle_width : f32, i32, i32
+        %max_x1 = scalar.maxnumf %lane_max, %max_x1_peer : f32
+        %max_x2_peer, %max_x2_valid = kernel.subgroup.shuffle<xor> %max_x1, %xor2, %shuffle_width : f32, i32, i32
+        %max_x2 = scalar.maxnumf %max_x1, %max_x2_peer : f32
+        %max_x4_peer, %max_x4_valid = kernel.subgroup.shuffle<xor> %max_x2, %xor4, %shuffle_width : f32, i32, i32
+        %max_x4 = scalar.maxnumf %max_x2, %max_x4_peer : f32
+        %max_x8_peer, %max_x8_valid = kernel.subgroup.shuffle<xor> %max_x4, %xor8, %shuffle_width : f32, i32, i32
+        %group_max = scalar.maxnumf %max_x4, %max_x8_peer : f32
+        %amax = scalar.maxnumf %group_max, %amax_epsilon : f32
+        %activation_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %amax, %one_seventh : f32
+        %activation_rscale = scalar.divf<reassoc|nnan|ninf|nsz> %seven, %amax : f32
+        %group64 = index.add %token_group_base, %group_in_row : index
+        %group32_base = index.mul %group64, %c2 : index
+        %group32_high = index.add %group32_base, %c1 : index
+        scf.if %is_scale_leader {
+          view.store %activation_scale, %i4_ds_view[%group32_base] : f32, view<[%group32_count]xf32>
+          view.store %activation_scale, %i4_ds_view[%group32_high] : f32, view<[%group32_count]xf32>
+        }
+
+        %rscale_vector = vector.splat %activation_rscale : vector<4xf32>
+        %scaled = vector.mulf %result, %rscale_vector : vector<4xf32>
+        %rounded = vector.roundf %scaled : vector<4xf32>
+        %quantized_i32 = vector.fptosi %rounded : vector<4xf32> to vector<4xi32>
+        %quantized_nibbles = vector.andi %quantized_i32, %nibble_mask : vector<4xi32>
+        %q0 = vector.extract %quantized_nibbles[0] : vector<4xi32> -> i32
+        %q1 = vector.extract %quantized_nibbles[1] : vector<4xi32> -> i32
+        %q2 = vector.extract %quantized_nibbles[2] : vector<4xi32> -> i32
+        %q3 = vector.extract %quantized_nibbles[3] : vector<4xi32> -> i32
+        %q1_shifted = scalar.shli %q1, %shift4 : i32
+        %q2_shifted = scalar.shli %q2, %shift8 : i32
+        %q3_shifted = scalar.shli %q3, %shift12 : i32
+        %q01 = scalar.ori %q0, %q1_shifted : i32
+        %q23 = scalar.ori %q2_shifted, %q3_shifted : i32
+        %packed_i32 = scalar.ori %q01, %q23 : i32
+        %packed_i16 = scalar.trunci %packed_i32 : i32 to i16
+        %word_base = index.mul %group64, %c16 : index
+        %word_index = index.add %word_base, %lane_in_group : index
+        view.store %packed_i16, %i4_qs_view[%word_index] : i16, view<[%qs_halfword_count]xi16>
+
+        %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %c0_f32 : vector<4xf32>, f32
+        %sum_x1_peer, %sum_x1_valid = kernel.subgroup.shuffle<xor> %lane_sum, %xor1, %shuffle_width : f32, i32, i32
+        %sum_x1 = scalar.addf<reassoc|nnan|nsz> %lane_sum, %sum_x1_peer : f32
+        %sum_x2_peer, %sum_x2_valid = kernel.subgroup.shuffle<xor> %sum_x1, %xor2, %shuffle_width : f32, i32, i32
+        %sum_x2 = scalar.addf<reassoc|nnan|nsz> %sum_x1, %sum_x2_peer : f32
+        %sum_x4_peer, %sum_x4_valid = kernel.subgroup.shuffle<xor> %sum_x2, %xor4, %shuffle_width : f32, i32, i32
+        %group_sum = scalar.addf<reassoc|nnan|nsz> %sum_x2, %sum_x4_peer : f32
+        scf.if %is_sum_leader {
+          %sum_value = scalar.fptosi %group_sum : f32 to i32
+          %sum_index = index.add %group32_base, %group_half : index
+          view.store %sum_value, %i4_sums_view[%sum_index] : i32, view<[%group32_count]xi32>
+        }
+      }
+    }
+  }
+  template.return
+}
+
+
+template.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4_k32.body(%token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer)
+
+template.def<@ggml.rmsnorm_gate_silu_mul_symmetric_i4_k32.body> device @ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32_body(%token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
+  %hidden_size0 = config.get @ggml.rmsnorm_gate_silu_mul_symmetric_i4.hidden_size : index
+  %epsilon = config.get @ggml.rmsnorm_gate_silu_mul_symmetric_i4.rms_epsilon : f32
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %amax_epsilon = scalar.constant 1.0000000000000001e-30 : f32
+  %one_seventh = scalar.constant 0.14285714285714285 : f32
+  %seven = scalar.constant 7.0 : f32
+  %xor1 = scalar.constant 1 : i32
+  %xor2 = scalar.constant 2 : i32
+  %xor4 = scalar.constant 4 : i32
+  %xor8 = scalar.constant 8 : i32
+  %shuffle_width = scalar.constant 32 : i32
+  %shift4 = scalar.constant 4 : i32
+  %shift8 = scalar.constant 8 : i32
+  %shift12 = scalar.constant 12 : i32
+  %nibble_mask = vector.constant 15 : vector<4xi32>
+
+  %input_noalias, %weight_noalias, %raw_gate_noalias, %output_noalias, %i4_qs_noalias, %i4_ds_noalias, %i4_sums_noalias = buffer.assume.noalias %input, %weight, %raw_gate, %output, %i4_qs, %i4_ds, %i4_sums : buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %row_scale, %token, %bounded_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %raw_gate_view = buffer.view %raw_gate_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
+  %element_count = index.mul %bounded_token_count, %hidden_size : index
+  %group32_count = index.div %element_count, %c32 : index
+  %group64_count_per_row = index.div %hidden_size, %c64 : index
+  %qs_halfword_count = index.div %element_count, %c4 : index
+  %i4_qs_view = buffer.view %i4_qs_noalias[%c0_offset] : buffer -> view<[%qs_halfword_count]xi16>
+  %i4_ds_view = buffer.view %i4_ds_noalias[%c0_offset] : buffer -> view<[%group32_count]xf32>
+  %i4_sums_view = buffer.view %i4_sums_noalias[%c0_offset] : buffer -> view<[%group32_count]xi32>
+
+  %wave = index.div %workitem, %c32 : index
+  %group_in_wave = index.div %lane, %c16 : index
+  %lane_in_group = index.rem %lane, %c16 : index
+  %group_half = index.div %lane_in_group, %c8 : index
+  %lane_in_half = index.rem %lane_in_group, %c8 : index
+  %is_scale_leader = index.cmp eq, %lane_in_group, %c0 : index
+  %is_sum_leader = index.cmp eq, %lane_in_half, %c0 : index
+  %wave_group_base = index.mul %wave, %c2 : index
+  %local_group = index.add %wave_group_base, %group_in_wave : index
+  %token_group_base = index.mul %token, %group64_count_per_row : index
+  scf.if %valid_token {
+    scf.for %group_base = [%c0 to %group64_count_per_row step %c16] {
+      %group_in_row = index.add %group_base, %local_group : index
+      %in_range = index.cmp ult, %group_in_row, %group64_count_per_row : index
+      scf.if %in_range {
+        %channel_base = index.mul %group_in_row, %c64 : index
+        %lane_channel = index.mul %lane_in_group, %c4 : index
+        %channel = index.add %channel_base, %lane_channel : index
+        %values = vector.load %input_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+        %learned_weights = vector.load %weight_view[%channel] : view<[%hidden_size]xf32> -> vector<4xf32>
+        %raw_gate_values = vector.load %raw_gate_view[%token, %channel] : view<[%bounded_token_count]x[%hidden_size]xf32> -> vector<4xf32>
+        %scale_vector = vector.splat %row_scale : vector<4xf32>
+        %normalized = vector.mulf<reassoc|nnan|ninf|nsz> %values, %scale_vector : vector<4xf32>
+        %side = vector.mulf %normalized, %learned_weights : vector<4xf32>
+        %activated = vector.siluf<afn> %raw_gate_values : vector<4xf32>
+        %result = vector.mulf %side, %activated : vector<4xf32>
+        vector.store %result, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%hidden_size]xf32>
+
+        %absolute_values = vector.absf %result : vector<4xf32>
+        %lane_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %absolute_values, %c0_f32 : vector<4xf32>, f32
+        %max_x1_peer, %max_x1_valid = kernel.subgroup.shuffle<xor> %lane_max, %xor1, %shuffle_width : f32, i32, i32
+        %max_x1 = scalar.maxnumf %lane_max, %max_x1_peer : f32
+        %max_x2_peer, %max_x2_valid = kernel.subgroup.shuffle<xor> %max_x1, %xor2, %shuffle_width : f32, i32, i32
+        %max_x2 = scalar.maxnumf %max_x1, %max_x2_peer : f32
+        %max_x4_peer, %max_x4_valid = kernel.subgroup.shuffle<xor> %max_x2, %xor4, %shuffle_width : f32, i32, i32
+        %max_x4 = scalar.maxnumf %max_x2, %max_x4_peer : f32
+        %max_x8_peer, %max_x8_valid = kernel.subgroup.shuffle<xor> %max_x4, %xor8, %shuffle_width : f32, i32, i32
+        %group_max = scalar.maxnumf %max_x4, %max_x8_peer : f32
+        %amax = scalar.maxnumf %group_max, %amax_epsilon : f32
+        %activation_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %amax, %one_seventh : f32
+        %activation_rscale = scalar.divf<reassoc|nnan|ninf|nsz> %seven, %amax : f32
+        %group64 = index.add %token_group_base, %group_in_row : index
+        %group32_base = index.mul %group64, %c2 : index
+        %group32_high = index.add %group32_base, %c1 : index
+        scf.if %is_scale_leader {
+          view.store %activation_scale, %i4_ds_view[%group32_base] : f32, view<[%group32_count]xf32>
+          view.store %activation_scale, %i4_ds_view[%group32_high] : f32, view<[%group32_count]xf32>
+        }
+
+        %rscale_vector = vector.splat %activation_rscale : vector<4xf32>
+        %scaled = vector.mulf %result, %rscale_vector : vector<4xf32>
+        %rounded = vector.roundf %scaled : vector<4xf32>
+        %quantized_i32 = vector.fptosi %rounded : vector<4xf32> to vector<4xi32>
+        %quantized_nibbles = vector.andi %quantized_i32, %nibble_mask : vector<4xi32>
+        %q0 = vector.extract %quantized_nibbles[0] : vector<4xi32> -> i32
+        %q1 = vector.extract %quantized_nibbles[1] : vector<4xi32> -> i32
+        %q2 = vector.extract %quantized_nibbles[2] : vector<4xi32> -> i32
+        %q3 = vector.extract %quantized_nibbles[3] : vector<4xi32> -> i32
+        %q1_shifted = scalar.shli %q1, %shift4 : i32
+        %q2_shifted = scalar.shli %q2, %shift8 : i32
+        %q3_shifted = scalar.shli %q3, %shift12 : i32
+        %q01 = scalar.ori %q0, %q1_shifted : i32
+        %q23 = scalar.ori %q2_shifted, %q3_shifted : i32
+        %packed_i32 = scalar.ori %q01, %q23 : i32
+        %packed_i16 = scalar.trunci %packed_i32 : i32 to i16
+        %word_base = index.mul %group64, %c16 : index
+        %word_index = index.add %word_base, %lane_in_group : index
+        view.store %packed_i16, %i4_qs_view[%word_index] : i16, view<[%qs_halfword_count]xi16>
+
+        %lane_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %c0_f32 : vector<4xf32>, f32
+        %sum_x1_peer, %sum_x1_valid = kernel.subgroup.shuffle<xor> %lane_sum, %xor1, %shuffle_width : f32, i32, i32
+        %sum_x1 = scalar.addf<reassoc|nnan|nsz> %lane_sum, %sum_x1_peer : f32
+        %sum_x2_peer, %sum_x2_valid = kernel.subgroup.shuffle<xor> %sum_x1, %xor2, %shuffle_width : f32, i32, i32
+        %sum_x2 = scalar.addf<reassoc|nnan|nsz> %sum_x1, %sum_x2_peer : f32
+        %sum_x4_peer, %sum_x4_valid = kernel.subgroup.shuffle<xor> %sum_x2, %xor4, %shuffle_width : f32, i32, i32
+        %group_sum = scalar.addf<reassoc|nnan|nsz> %sum_x2, %sum_x4_peer : f32
+        scf.if %is_sum_leader {
+          %sum_value = scalar.fptosi %group_sum : f32 to i32
+          %sum_index = index.add %group32_base, %group_half : index
+          view.store %sum_value, %i4_sums_view[%sum_index] : i32, view<[%group32_count]xi32>
+        }
+      }
+    }
+  }
+  template.return
+}

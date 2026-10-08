@@ -28,7 +28,8 @@ CommandProgramBindings CommandProgramBindings::from_value_map(const ValueMap & v
             continue;
         }
         bindings.push_back({ value->id, buffer->buffer, buffer->offset, buffer->length, buffer->identity,
-                             buffer->generation, buffer->capacity, buffer->host_data, buffer->weight });
+                             buffer->generation, buffer->capacity, buffer->host_data, buffer->weight,
+                             value->byte_count == 0 });
     }
     return from_bindings(std::move(bindings), result.status);
 }
@@ -42,7 +43,7 @@ CommandProgramBindings CommandProgramBindings::from_bindings(std::vector<Command
         if (binding.buffer == nullptr && binding.host_data == nullptr) {
             result.status.log("external value %d has a null binding", binding.value.value);
         }
-        if (binding.length == 0) {
+        if (binding.length == 0 && !binding.empty_value) {
             result.status.log("external value %d has an empty binding", binding.value.value);
         }
     }
@@ -70,6 +71,7 @@ CommandProgramBindingsHash command_program_bindings_hash(const CommandProgramBin
         mix_hash(hash, static_cast<uint64_t>(binding.offset));
         mix_hash(hash, static_cast<uint64_t>(binding.length));
         mix_hash(hash, binding.weight ? 1 : 0);
+        mix_hash(hash, binding.empty_value ? 1 : 0);
     }
     mix_hash(hash, static_cast<uint64_t>(bindings.bindings().size()));
     return { hash };
@@ -82,7 +84,7 @@ CommandProgramBindingsFingerprint command_program_bindings_fingerprint(const Com
         out << "|value=" << binding.value.value << "|kind=" << (binding.host_data != nullptr ? "host" : "device")
             << "|identity=" << binding.identity << "|generation=" << binding.generation
             << "|capacity=" << binding.capacity << "|offset=" << binding.offset << "|length=" << binding.length
-            << "|weight=" << (binding.weight ? 1 : 0);
+            << "|weight=" << (binding.weight ? 1 : 0) << "|empty=" << (binding.empty_value ? 1 : 0);
     }
     return { out.str() };
 }

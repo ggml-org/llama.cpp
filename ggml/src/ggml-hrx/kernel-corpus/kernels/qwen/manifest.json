@@ -1,0 +1,195 @@
+{
+  "schema": "ggml-hrx-kernel-corpus-v1",
+  "upstream_revision": "local",
+  "files": [
+    {
+      "path": "token_embedding_bringup_workaround.loom"
+    },
+    {
+      "path": "attention_state_initialize.loom"
+    },
+    {
+      "path": "attention_metadata_bringup_workaround.loom"
+    }
+  ],
+  "exports": [
+    {
+      "name": "qwen_attention_context_base_capture",
+      "symbol": "qwen_attention_context_base_capture",
+      "source": "attention_state_initialize.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "positions",
+        "control"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "attention_state_initialize.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": [],
+      "family": "qwen"
+    },
+    {
+      "name": "qwen_attention_decode_state_initialize",
+      "symbol": "qwen_attention_decode_state_initialize",
+      "source": "attention_state_initialize.loom",
+      "workload_parameters": [
+        {
+          "name": "context_capacity",
+          "type": "index"
+        },
+        {
+          "name": "completion_counter_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "context_capacity",
+          "type": "index"
+        },
+        {
+          "name": "completion_counter_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "positions",
+        "key_cache_indices",
+        "value_cache_indices",
+        "attention_mask",
+        "completion_counters"
+      ],
+      "binding_access": [
+        "read",
+        "write",
+        "write",
+        "write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "attention_state_initialize.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": [],
+      "family": "qwen"
+    },
+    {
+      "name": "qwen_attention_metadata_bringup_workaround",
+      "symbol": "qwen_attention_metadata_bringup_workaround",
+      "source": "attention_metadata_bringup_workaround.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "context_capacity",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "context_capacity",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "control",
+        "positions",
+        "key_cache_indices",
+        "value_cache_indices",
+        "attention_mask"
+      ],
+      "binding_access": [
+        "read",
+        "read_write",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "attention_metadata_bringup_workaround.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": [],
+      "family": "qwen"
+    },
+    {
+      "name": "qwen_token_embedding_q4k_bringup_workaround",
+      "symbol": "qwen_token_embedding_q4k_bringup_workaround",
+      "source": "token_embedding_bringup_workaround.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "vocabulary_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "vocabulary_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "token_ids",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "token_embedding_bringup_workaround.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": [],
+      "family": "qwen"
+    }
+  ],
+  "link_modules": [],
+  "plan_cases": []
+}

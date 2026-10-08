@@ -4,9 +4,11 @@
 #include "dispatch/command-program-resolver.h"
 #include "dispatch/command-program.h"
 #include "kernel-corpus/kernel-corpus.h"
+#include "loom-jit.h"
 #include "runtime/graph-replay.h"
 #include "runtime/host-memory.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,6 +17,7 @@
 typedef struct hrx_device_s *     hrx_device_t;
 typedef struct hrx_stream_s *     hrx_stream_t;
 typedef struct hrx_buffer_s *     hrx_buffer_t;
+typedef struct hrx_executable_s * hrx_executable_t;
 typedef struct hrx_graph_s *      hrx_graph_t;
 typedef struct hrx_graph_exec_s * hrx_graph_exec_t;
 struct ggml_hrx_loom_jit_amdgpu;
@@ -24,6 +27,29 @@ namespace ggml::hrx {
 class KernelExecutableCache;
 struct KernelExecutable;
 class TransientArena;
+class HostBufferRegistry;
+
+struct PendingHostWriteback {
+    void *       host_destination = nullptr;
+    const void * mapped_source    = nullptr;
+    size_t       size             = 0;
+    hrx_buffer_t retained_buffer  = nullptr;
+};
+
+struct GraphReplayStreamState {
+    GraphReplayStreamState() = default;
+    ~GraphReplayStreamState();
+
+    GraphReplayStreamState(const GraphReplayStreamState &)             = delete;
+    GraphReplayStreamState & operator=(const GraphReplayStreamState &) = delete;
+
+    void mark_stream_synchronized();
+    void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
+    void clear();
+
+  private:
+    std::vector<PendingHostWriteback> pending_host_writebacks_;
+};
 
 struct CommandProgramExecutionContext {
     hrx_device_t            device             = nullptr;
@@ -34,6 +60,8 @@ struct CommandProgramExecutionContext {
     TransientArena *        transient_arena    = nullptr;
     HostTransferManager *   host_transfers     = nullptr;
     HostWeightCache *       host_weights       = nullptr;
+    HostBufferRegistry *    host_buffers       = nullptr;
+    GraphReplayStreamState * graph_replay_state = nullptr;
 };
 
 struct PreparedCommandBinding {
@@ -44,6 +72,7 @@ struct PreparedCommandBinding {
 struct PreparedKernelCommand {
     KernelSpecialization                specialization;
     std::shared_ptr<KernelExecutable>   executable;
+    ggml_hrx_loom_jit_launch_config     launch;
     std::vector<uint8_t>                constants;
     std::vector<PreparedCommandBinding> bindings;
 };
@@ -85,6 +114,8 @@ struct PreparedCommandProgram {
 struct RecordedCommandGraph {
     hrx_graph_t      graph                               = nullptr;
     hrx_graph_exec_t exec                                = nullptr;
+    std::vector<hrx_buffer_t>     retained_buffers;
+    std::vector<hrx_executable_t> retained_executables;
     uint64_t         bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
     size_t           dispatch_count                      = 0;
     Status           status;
@@ -136,6 +167,8 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     const CommandProgramBindings &         bindings,
     PreparedCommandProgram &               prepared,
     RecordedCommandGraph &                 recorded);
+
+bool debug_serial_command_execution_enabled();
 
 bool execute_command_program(const CommandProgramExecutionContext & context,
                              const CommandProgram &                 commands,

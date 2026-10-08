@@ -1,0 +1,120 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Publishes four F32 values into GGML's block_q8_1_x4 layout. The caller must
+// execute complete eight-lane cohorts with four consecutive channels per lane.
+template.decl @ggml.quantize_q8_1_x4.publish_vector4.body(%strict_scaling: i1, %publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.def<@ggml.quantize_q8_1_x4.publish_vector4> device @ggml_quantize_q8_1_x4_publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  %strict_scaling = scalar.constant false : i1
+  template.apply<@ggml.quantize_q8_1_x4.publish_vector4.body>(%strict_scaling, %publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %output) : (i1, i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.def<@ggml.quantize_q8_1_x4.publish_vector4_strict> device @ggml_quantize_q8_1_x4_publish_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  %strict_scaling = scalar.constant true : i1
+  template.apply<@ggml.quantize_q8_1_x4.publish_vector4.body>(%strict_scaling, %publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %output) : (i1, i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  template.return
+}
+
+template.def<@ggml.quantize_q8_1_x4.publish_vector4.body> device @ggml_quantize_q8_1_x4_publish_vector4_body(%strict_scaling: i1, %publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer) {
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %word_in_block = index.rem %workitem, %c8 : index
+  %absolute_values = vector.absf %values : vector<4xf32>
+  %thread_max = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
+  %shuffle_width = scalar.constant 8 : i32
+  %xor1 = scalar.constant 1 : i32
+  %max_peer1, %max_valid1 = kernel.subgroup.shuffle<xor> %thread_max, %xor1, %shuffle_width : f32, i32, i32
+  %max1 = scalar.maxnumf %thread_max, %max_peer1 : f32
+  %xor2 = scalar.constant 2 : i32
+  %max_peer2, %max_valid2 = kernel.subgroup.shuffle<xor> %max1, %xor2, %shuffle_width : f32, i32, i32
+  %max2 = scalar.maxnumf %max1, %max_peer2 : f32
+  %xor4 = scalar.constant 4 : i32
+  %max_peer4, %max_valid4 = kernel.subgroup.shuffle<xor> %max2, %xor4, %shuffle_width : f32, i32, i32
+  %max4 = scalar.maxnumf %max2, %max_peer4 : f32
+  %d0 = scf.if %strict_scaling -> (f32) {
+    %precise = scalar.divf %max4, %c127 : f32
+    scf.yield %precise : f32
+  } else {
+    %fast = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %max4, %c127 : f32
+    scf.yield %fast : f32
+  }
+  %d = scf.select %publish_word, %d0, %c0_f32 : f32
+  %is_block_leader = index.cmp eq, %word_in_block, %c0 : index
+  %writes_block_d = scalar.andi %publish_word, %is_block_leader : i1
+  %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
+  %d_inverse = scf.if %d_nonzero -> (f32) {
+    %inverse = scf.if %strict_scaling -> (f32) {
+      %precise = scalar.divf %c1_f32, %d : f32
+      scf.yield %precise : f32
+    } else {
+      %fast = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32, %d : f32
+      scf.yield %fast : f32
+    }
+    scf.yield %inverse : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
+  %scaled_values = vector.mulf %values, %d_inverse_vector : vector<4xf32>
+  %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+  %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
+  %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
+  scf.if %publish_word {
+    %q8_block = index.div %channel, %c32 : index
+    %physical_group = index.div %q8_block, %c4 : index
+    %block_in_group = index.rem %q8_block, %c4 : index
+    %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+    %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+    %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
+    %group_qs = buffer.view %output[%payload_byte_offset] : buffer -> view<32xi32>
+    %block_word_base = index.mul %block_in_group, %c8 : index
+    %packed_word_index0 = index.add %block_word_base, %word_in_block : index
+    %packed_word_index = index.assume %packed_word_index0 [range(%packed_word_index0, 0, 31)] : index
+    vector.store %packed_word, %group_qs[%packed_word_index] : vector<1xi32>, view<32xi32>
+  }
+  %thread_quantized_sum = vector.reduce<addf> %rounded_values, %c0_f32 : vector<4xf32>, f32
+  %sum_peer1, %sum_valid1 = kernel.subgroup.shuffle<xor> %thread_quantized_sum, %xor1, %shuffle_width : f32, i32, i32
+  %sum1 = scalar.addf %thread_quantized_sum, %sum_peer1 : f32
+  %sum_peer2, %sum_valid2 = kernel.subgroup.shuffle<xor> %sum1, %xor2, %shuffle_width : f32, i32, i32
+  %sum2 = scalar.addf %sum1, %sum_peer2 : f32
+  %sum_peer4, %sum_valid4 = kernel.subgroup.shuffle<xor> %sum2, %xor4, %shuffle_width : f32, i32, i32
+  %quantized_sum = scalar.addf %sum2, %sum_peer4 : f32
+  scf.if %writes_block_d {
+    %s = scf.if %strict_scaling -> (f32) {
+      %precise = scalar.mulf %quantized_sum, %d : f32
+      scf.yield %precise : f32
+    } else {
+      %fast = scalar.mulf<reassoc|nnan|ninf|nsz> %quantized_sum, %d : f32
+      scf.yield %fast : f32
+    }
+    %q8_block = index.div %channel, %c32 : index
+    %physical_group = index.div %q8_block, %c4 : index
+    %block_in_group = index.rem %q8_block, %c4 : index
+    %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+    %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+    %group_ds = buffer.view %output[%group_byte_offset] : buffer -> view<8xf16>
+    %d_f16 = scalar.fptrunc %d : f32 to f16
+    %s_f16 = scalar.fptrunc %s : f32 to f16
+    %ds_index = index.mul %block_in_group, %c2 : index
+    %s_index = index.add %ds_index, %c1 : index
+    view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
+    view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+  }
+  template.return
+}

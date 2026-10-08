@@ -1,0 +1,14 @@
+// SwiGLU activation and F16 publication for routed pair results.
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.binary_publish_vector8(%gate: vector<8xf32>, %up: vector<8xf32>, %assignment: index, %channel: index, %output_row_count: index, %output_size: index, %output: buffer)
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.binary_publish_vector8> device @ggml_mul_mat_id_swiglu_f16_f16_binary_publish_vector8(%gate: vector<8xf32>, %up: vector<8xf32>, %assignment: index, %channel: index, %output_row_count: index, %output_size: index, %output: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %activated = vector.siluf %gate : vector<8xf32>
+  %wide_values = vector.mulf %activated, %up : vector<8xf32>
+  %values = vector.fptrunc %wide_values : vector<8xf32> to vector<8xf16>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%output_row_count]x[%output_size]xf16>
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<8xi1>
+  vector.store.mask %values, %output_view[%assignment, %channel], %mask : vector<8xf16>, view<[%output_row_count]x[%output_size]xf16>, vector<8xi1>
+  template.return
+}

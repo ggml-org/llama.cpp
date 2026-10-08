@@ -1,0 +1,91 @@
+func.decl @ggml_q1_0_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+
+func.decl @ggml_q1_0_q8_1_x4_rows2_lane(%input_size: index, %weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32)
+
+amdgpu.target<gfx11-generic> @ggml_q1_0_q8_1_x4_vector_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.matmul.q1_0_q8_1_x4.input_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @ggml.matmul.q1_0_q8_1_x4.output_size : %value: index where [range(%value, 1, 524288)]
+
+kernel.def target(@ggml_q1_0_q8_1_x4_vector_gfx11_wave32) @ggml_mul_mat_vector_q1_0_q8_1_x4_f32(%token_count: index) {
+  %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.matmul.q1_0_q8_1_x4.input_size : index
+  %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %bounded_output_size = index.assume %row0, %output_size [lt(%row0, %output_size)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c128 = index.constant 128 : index
+  %weight_block_bytes = index.constant 18 : offset
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %lane_value = func.call @ggml_q1_0_q8_1_x4_row_lane(%bounded_input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+  %dot = kernel.subgroup.reduce<addf> %lane_value : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%q8_row_byte_base] : buffer -> view<[%bounded_token_count]x[%bounded_output_size]xf32>
+    view.store %dot, %output_view[%c0, %row] : f32, view<[%bounded_token_count]x[%bounded_output_size]xf32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_q1_0_q8_1_x4_vector_gfx11_wave32) @ggml_mul_mat_vector_q1_0_q8_1_x4_rows2_f32(%token_count: index) {
+  %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c32 = index.constant 32 : index
+  %rounded = index.add %output_size, %c1 : index
+  %groups = index.div %rounded, %c2 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.matmul.q1_0_q8_1_x4.input_size : index
+  %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %weight_block_bytes = index.constant 18 : offset
+  %q8_row_byte_base = index.constant 0 : offset
+  %row00 = index.mul %group, %c2 : index
+  %row0, %bounded_output_size = index.assume %row00, %output_size [lt(%row00, %output_size)] : index, index
+  %row1 = index.add %row0, %c1 : index
+  %has_row1 = index.cmp ult, %row1, %bounded_output_size : index
+  %weight_block_count = index.div %bounded_input_size, %c128 : index
+  %weight_row_bytes = index.scale %weight_block_count, %weight_block_bytes : index, offset -> offset
+  %row0_base = index.scale %row0, %weight_row_bytes : index, offset -> offset
+  %partial0, %partial1 = scf.if %has_row1 -> (f32, f32) {
+    %bounded_row1 = index.assume %row1 [lt(%row1, %bounded_output_size)] : index
+    %row1_base = index.scale %bounded_row1, %weight_row_bytes : index, offset -> offset
+    %pair0, %pair1 = func.call @ggml_q1_0_q8_1_x4_rows2_lane(%bounded_input_size, %weight, %row0_base, %row1_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, offset, buffer, offset, index) -> (f32, f32)
+    scf.yield %pair0, %pair1 : f32, f32
+  } else {
+    %single = func.call @ggml_q1_0_q8_1_x4_row_lane(%bounded_input_size, %weight, %row0_base, %q8_input, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+    scf.yield %single, %c0_f32 : f32, f32
+  }
+  %sum0 = kernel.subgroup.reduce<addf> %partial0 : f32
+  %sum1 = kernel.subgroup.reduce<addf> %partial1 : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %output_view = buffer.view %output[%q8_row_byte_base] : buffer -> view<[%bounded_token_count]x[%bounded_output_size]xf32>
+    view.store %sum0, %output_view[%c0, %row0] : f32, view<[%bounded_token_count]x[%bounded_output_size]xf32>
+    scf.if %has_row1 {
+      %bounded_row1 = index.assume %row1 [lt(%row1, %bounded_output_size)] : index
+      view.store %sum1, %output_view[%c0, %bounded_row1] : f32, view<[%bounded_token_count]x[%bounded_output_size]xf32>
+    }
+  }
+  kernel.return
+}

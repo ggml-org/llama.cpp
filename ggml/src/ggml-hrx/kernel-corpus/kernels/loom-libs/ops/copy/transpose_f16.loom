@@ -1,0 +1,22 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.transpose_tile.f16_body(%rows: index, %columns: index, %input: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_copy_f32_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16") @ggml_copy_transpose_f16(%row_count: index, %column_count: index) {
+  %rows = index.assume %row_count [range(%row_count, 32, 32768), mul(%row_count, 32)] : index
+  %columns = index.assume %column_count [range(%column_count, 32, 32768), mul(%column_count, 32)] : index
+  %tile_size = index.constant 32 : index
+  %one = index.constant 1 : index
+  %x = index.div %columns, %tile_size : index
+  %gy = index.div %rows, %tile_size : index
+  %y = index.constant 256 : index
+  kernel.launch.config workgroups(%x, %gy, %one) workgroup_size(%y, %one, %one) : index
+} launch(%row_count: index, %column_count: index, %input: buffer, %output: buffer) {
+  %rows = index.assume %row_count [range(%row_count, 32, 32768), mul(%row_count, 32)] : index
+  %columns = index.assume %column_count [range(%column_count, 32, 32768), mul(%column_count, 32)] : index
+  template.apply<@ggml.copy.transpose_tile.f16_body>(%rows, %columns, %input, %output) : (index, index, buffer, buffer)
+  kernel.return
+}

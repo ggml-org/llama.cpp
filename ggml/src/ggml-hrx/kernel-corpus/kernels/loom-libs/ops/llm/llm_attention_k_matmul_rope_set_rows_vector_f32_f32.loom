@@ -1,0 +1,126 @@
+template.decl @ggml.matmul.vector_activation.core(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+template.decl @ggml.matmul.vector_activation.finish_output_group(%token_count: index, %output_size: index, %output_group_count: index, %token_group_count: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+template.decl @ggml.matmul.vector_activation.launch(%token_capacity: index, %input_size: index, %output_size: index, %weight_format: index) -> (index, index, index, index)
+template.decl @ggml.matmul.vector_activation.publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+template.decl @ggml.matmul.vector_activation.publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+
+template.decl @llm.attention_qkv.rope_vector4(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: buffer, %arg6: buffer, %arg7: buffer, %arg8: vector<4xf32>) -> (vector<4xf32>)
+template.decl @llm.attention_qkv.store_cache_vector4(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: buffer, %arg7: vector<4xf32>, %arg8: buffer)
+
+func.decl @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+
+amdgpu.target<gfx11-generic> @llm_attention_k_matmul_rope_set_rows_vector_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @llm.attention_qkv.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @llm.attention_qkv.output_size : %value: index where [range(%value, 4, 32768), mul(%value, 4)]
+config.decl @llm.attention_qkv.weight_format : %value: index where [range(%value, 4, 81)]
+config.decl @llm.attention_qkv.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @llm.attention_qkv.head_count : %value: index where [range(%value, 1, 64)]
+config.decl @llm.attention_qkv.cache_row_count : %value: index where [range(%value, 1, 1048576)]
+config.decl @llm.attention_qkv.cache_output_format : %value: index where [range(%value, 16, 32)]
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 1)]
+
+template.def<@ggml.matmul.vector_activation.publish_vector4> device @llm_attention_k_matmul_rope_set_rows_vector_publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %values: vector<4xf32>, %positions: buffer, %cache: buffer, %indices: buffer, %theta: buffer, %freq_factors: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %head_size = config.get @llm.attention_qkv.head_size : index
+  %head_count = config.get @llm.attention_qkv.head_count : index
+  %cache_row_count = config.get @llm.attention_qkv.cache_row_count : index
+  %cache_output_format = config.get @llm.attention_qkv.cache_output_format : index
+  scf.if %publish_word {
+    %rotated = template.apply<@llm.attention_qkv.rope_vector4>(%token0, %channel, %token_count0, %head_size, %head_count, %positions, %theta, %freq_factors, %values) : (index, index, index, index, index, buffer, buffer, buffer, vector<4xf32>) -> (vector<4xf32>)
+    template.apply<@llm.attention_qkv.store_cache_vector4>(%cache_output_format, %token0, %channel, %token_count0, %cache_row_count, %output_size0, %indices, %rotated, %cache) : (index, index, index, index, index, index, buffer, vector<4xf32>, buffer)
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_activation.publish_pair2> device @llm_attention_k_matmul_rope_set_rows_vector_publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output_accumulation: index, %output_unary_op: index, %publish_format: index, %positions: buffer, %cache: buffer, %indices: buffer, %theta: buffer, %freq_factors: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 1)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 4, 32768), mul(%output_size0, 4)] : index
+  %head_size0 = config.get @llm.attention_qkv.head_size : index
+  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), mul(%head_size0, 4)] : index
+  %cache_row_count0 = config.get @llm.attention_qkv.cache_row_count : index
+  %cache_row_count = index.assume %cache_row_count0 [range(%cache_row_count0, 1, 1048576)] : index
+  %cache_output_format = config.get @llm.attention_qkv.cache_output_format : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_i64 = scalar.constant 0 : i64
+  %c1048575_i64 = scalar.constant 1048575 : i64
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %publish0 = scalar.andi %publish_pair, %row1_valid : i1
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %head_channel = index.rem %channel, %head_size : index
+  %theta_channel = index.div %head_channel, %c2 : index
+  %half_head_size = index.div %head_size, %c2 : index
+  %is_f16 = index.cmp eq, %cache_output_format, %c16 : index
+  %is_f32 = index.cmp eq, %cache_output_format, %c32 : index
+  %positions_noalias, %indices_noalias, %theta_noalias, %freq_factors_noalias, %cache_noalias = buffer.assume.noalias %positions, %indices, %theta, %freq_factors, %cache : buffer, buffer, buffer, buffer, buffer
+  %indices_view = buffer.view %indices_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi64>
+  %index_raw = view.load %indices_view[%token] : view<[%launch_token_count]xi64> -> i64
+  %index_nonnegative = scalar.cmpi sge, %index_raw, %c0_i64 : i64
+  %index_in_cast_range = scalar.cmpi sle, %index_raw, %c1048575_i64 : i64
+  %valid_index = scalar.andi %index_nonnegative, %index_in_cast_range : i1
+  %safe_index0_i64 = scf.select %valid_index, %index_raw, %c0_i64 : i64
+  %safe_index_i64 = scalar.assume %safe_index0_i64 [range(%safe_index0_i64, 0, 1048575)] : i64
+  %cache_row0 = index.cast %safe_index_i64 : i64 to index
+  %valid_row = index.cmp ult, %cache_row0, %cache_row_count : index
+  %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
+  %publish1 = scalar.andi %publish0, %valid_index : i1
+  %publish = scalar.andi %publish1, %valid_row : i1
+  scf.if %publish {
+    %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi32>
+    %theta_view = buffer.view %theta_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+    %freq_factors_view = buffer.view %freq_factors_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+    %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
+    %position = scalar.sitofp %position_i32 : i32 to f32
+    %theta_scalar = view.load %theta_view[%theta_channel] : view<[%half_head_size]xf32> -> f32
+    %freq_factors_scalar = view.load %freq_factors_view[%theta_channel] : view<[%half_head_size]xf32> -> f32
+    %theta_packet = vector.splat %theta_scalar : vector<2xf32>
+    %freq_factors_packet = vector.splat %freq_factors_scalar : vector<2xf32>
+    %x_values = vector.from_elements %value0, %c0_f32 : vector<2xf32>
+    %y_values = vector.from_elements %value1, %c0_f32 : vector<2xf32>
+    %rotated_x, %rotated_y = func.call @ggml_rope_f32_pair_packet(%position, %theta_packet, %freq_factors_packet, %x_values, %y_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+    %rx0 = vector.extract %rotated_x[0] : vector<2xf32> -> f32
+    %ry0 = vector.extract %rotated_y[0] : vector<2xf32> -> f32
+    %values = vector.from_elements %rx0, %ry0 : vector<2xf32>
+    %publish_f16 = scalar.andi %publish, %is_f16 : i1
+    %publish_f32 = scalar.andi %publish, %is_f32 : i1
+    scf.if %publish_f16 {
+      %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf16>
+      %truncated = vector.fptrunc %values : vector<2xf32> to vector<2xf16>
+      vector.store %truncated, %cache_view[%cache_row, %channel] : vector<2xf16>, view<[%cache_row_count]x[%output_size]xf16>
+    }
+    scf.if %publish_f32 {
+      %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf32>
+      vector.store %values, %cache_view[%cache_row, %channel] : vector<2xf32>, view<[%cache_row_count]x[%output_size]xf32>
+    }
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_activation.finish_output_group> device @llm_attention_k_matmul_rope_set_rows_vector_finish_output_group(%token_count: index, %output_size: index, %output_group_count: index, %token_group_count: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  template.return
+}
+
+kernel.def target(@llm_attention_k_matmul_rope_set_rows_vector_gfx11_wave64) @llm_attention_k_matmul_rope_set_rows_vector_f32_f32(%token_count: index) {
+  %input_size = config.get @llm.attention_qkv.input_size : index
+  %output_size = config.get @llm.attention_qkv.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %weight_format = config.get @llm.attention_qkv.weight_format : index
+  %c1 = index.constant 1 : index
+  %launch_x, %launch_y, %launch_z, %workgroup_size = template.apply<@ggml.matmul.vector_activation.launch>(%token_capacity, %input_size, %output_size, %weight_format) pure : (index, index, index, index) -> (index, index, index, index)
+  kernel.launch.config workgroups(%launch_x, %launch_y, %launch_z) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %positions: buffer, %indices: buffer, %theta: buffer, %freq_factors: buffer, %cache: buffer) {
+  %input_size = config.get @llm.attention_qkv.input_size : index
+  %output_size = config.get @llm.attention_qkv.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %weight_format = config.get @llm.attention_qkv.weight_format : index
+  %c0 = index.constant 0 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1), le(%token_count, %token_capacity)] : index
+  %channel_group = kernel.workgroup.id<x> : index
+  %token_group = kernel.workgroup.id<y> : index
+  template.apply<@ggml.matmul.vector_activation.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %c0, %c0, %c0_f32, %channel_group, %token_group, %input, %weight, %positions, %cache, %indices, %theta, %freq_factors, %cache, %cache, %cache) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -1,0 +1,38 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @ggml_flash_attention_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), mul(%value, 16)]
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+config.decl @ggml.flash_attention.attention_scale : f32
+config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value, 0, 1)]
+config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(%value, 1, 16777216)]
+config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
+
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+
+kernel.def target(@ggml_flash_attention_gfx11_wave64) export("ggml_flash_attention_f32_f16_wmma_publish_f16") @ggml_flash_attention_f32_f16_wmma_publish_f16(%query_token_count: index, %key_value_token_count: index) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_query_token_count = index.add %query_token_count, %c15 : index
+  %query_tile_count = index.div %padded_query_token_count, %c16 : index
+  %output_tile_count = index.div %value_head_size, %c64 : index
+  %padded_output_tile_count = index.add %output_tile_count, %c3 : index
+  %output_group_count = index.div %padded_output_tile_count, %c4 : index
+  kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) where [range(%query_token_count, 1, 2048)] {
+  %publish_f16 = scalar.constant true : i1
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %f16_output) : (i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

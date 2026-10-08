@@ -1,0 +1,68 @@
+// Dense GGML decode gate/up matmul fused with an ordered binary op.
+//
+// The shared dual decode core computes the two adjacent gate/up row pairs.
+// This file supplies the SwiGLU-specific publish hook and launcher.
+template.decl @ggml.mul_mat_f32_f32_decode.dual_dispatch(%op: index, %lhs_weight_format: index, %rhs_weight_format: index, %token_capacity: index, %token_count: index, %input_size: index, %output_size: index, %input: buffer, %lhs_weight: buffer, %rhs_weight: buffer, %output: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_decode.publish_dual_pair2(%op: index, %publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %lhs0: f32, %lhs1: f32, %rhs0: f32, %rhs1: f32, %output: buffer)
+
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_mul_mat_swiglu_decode_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 1)]
+
+config.decl @ggml.mul_mat_swiglu.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+
+config.decl @ggml.mul_mat_swiglu.output_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @ggml.mul_mat_swiglu.gate_weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.mul_mat_swiglu.up_weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.mul_mat_swiglu.op : %value: index where [range(%value, 0, 8)]
+
+template.def<@ggml.mul_mat_f32_f32_decode.publish_dual_pair2> device priority(20) @ggml_mul_mat_swiglu_decode_publish_dual_pair2(%op: index, %publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %gate0: f32, %gate1: f32, %up0: f32, %up1: f32, %output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 1048576)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%output_size]xf32>
+  scf.if %publish_pair {
+    %value0 = template.apply<@ggml.binary_f32.apply>(%op, %gate0, %up0) : (index, f32, f32) -> (f32)
+    view.store %value0, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%output_size]xf32>
+  }
+  scf.if %row1_valid {
+    scf.if %publish_pair {
+      %row1 = index.add %channel, %c1 : index
+      %value1 = template.apply<@ggml.binary_f32.apply>(%op, %gate1, %up1) : (index, f32, f32) -> (f32)
+      view.store %value1, %output_view[%token, %row1] : f32, view<[%launch_token_count]x[%output_size]xf32>
+    }
+  }
+  template.return
+}
+
+kernel.def target(@ggml_mul_mat_swiglu_decode_gfx11_wave64) @ggml_mul_mat_swiglu_f32_f32_decode_wave64(%token_count: index) {
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %output_capacity = config.get @ggml.mul_mat_swiglu.output_size : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %padded_output_size = index.add %output_capacity, %c1 : index
+  %output_pairs = index.div %padded_output_size, %c2 : index
+  %padded_token_count = index.add %token_capacity, %c63 : index
+  %launch_tokens = index.div %padded_token_count, %c64 : index
+  kernel.launch.config workgroups(%output_pairs, %launch_tokens, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) where [range(%token_count, 1, 1)] {
+  %input_size = config.get @ggml.mul_mat_swiglu.input_size : index
+  %output_size = config.get @ggml.mul_mat_swiglu.output_size : index
+  %gate_weight_format = config.get @ggml.mul_mat_swiglu.gate_weight_format : index
+  %up_weight_format = config.get @ggml.mul_mat_swiglu.up_weight_format : index
+  %op = config.get @ggml.mul_mat_swiglu.op : index
+  %launch_token_capacity = config.get @ggml.workload.token_capacity : index
+  template.apply<@ggml.mul_mat_f32_f32_decode.dual_dispatch>(%op, %gate_weight_format, %up_weight_format, %launch_token_capacity, %token_count, %input_size, %output_size, %input, %gate_weight, %up_weight, %output) : (index, index, index, index, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}

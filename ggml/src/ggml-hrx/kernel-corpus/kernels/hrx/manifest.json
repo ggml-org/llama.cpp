@@ -1,0 +1,68 @@
+{
+  "schema": "ggml-hrx-kernel-corpus-v1",
+  "upstream_revision": "local",
+  "files": [
+    {
+      "path": "gather_add_f32.loom"
+    }
+  ],
+  "exports": [
+    {
+      "name": "ggml_gather_add_f32",
+      "symbol": "ggml_gather_add_f32",
+      "source": "gather_add_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "source_token_count",
+          "type": "index"
+        },
+        {
+          "name": "output_token_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "source_token_count",
+          "type": "index"
+        },
+        {
+          "name": "output_token_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "attention",
+        "residual",
+        "output_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "gather_add_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": [],
+      "family": "hrx"
+    }
+  ],
+  "link_modules": [],
+  "plan_cases": []
+}

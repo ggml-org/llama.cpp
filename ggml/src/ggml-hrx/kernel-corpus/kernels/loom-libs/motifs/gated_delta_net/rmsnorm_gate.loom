@@ -1,0 +1,62 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.publish_q8.vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+template.decl @ggml.rmsnorm_f32.subgroup_row_scale(%token_count: index, %token: index, %hidden_size: index, %epsilon: f32, %input: buffer) -> (f32)
+
+template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>)
+
+template.decl @llm.gated_delta_net.rmsnorm_gate.publish_head128(%base: offset, %n_tokens: index, %n_heads: index, %n_seqs: index, %lane: index, %wave: index, %time_base: index, %seq: index, %zero: index, %head: index, %c4: index, %c8: index, %c16: index, %c128: index, %rms_epsilon: f32, %gate_op: index, %publish_q8: i1, %lds: buffer, %rms_weight: buffer, %raw_gate: buffer, %norm_output: buffer, %half_output: buffer)
+
+template.def<@llm.gated_delta_net.rmsnorm_gate.publish_head128> device @llm_gated_delta_net_rmsnorm_gate_publish_head128(%base: offset, %n_tokens: index, %n_heads: index, %n_seqs: index, %lane: index, %wave: index, %time_base: index, %seq: index, %zero: index, %head: index, %c4: index, %c8: index, %c16: index, %c128: index, %rms_epsilon: f32, %gate_op: index, %publish_q8: i1, %lds: buffer, %rms_weight: buffer, %raw_gate: buffer, %norm_output: buffer, %half_output: buffer) {
+  // One native subgroup handles each local attention row, using the
+  // standalone RMS reduction and unary implementation without a global read.
+  %post_rows0 = index.mul %n_tokens, %n_heads : index
+  %post_rows = index.mul %post_rows0, %n_seqs : index
+  %post_tokens = index.mul %n_tokens, %n_seqs : index
+  %post_groups = index.mul %n_heads, %c8 : index
+  %post_channel0 = index.mul %lane, %c4 : index
+  %post_channel = index.assume %post_channel0 [range(%post_channel0, 0, 124), mul(%post_channel0, 4)] : index
+  %post_attention = buffer.view %lds[%base] : buffer -> view<16x128xf32>
+  %post_weights = buffer.view %rms_weight[%base] : buffer -> view<128xf32>
+  %post_gates = buffer.view %raw_gate[%base] : buffer -> view<[%post_rows]x128xf32>
+  %post_f32 = buffer.view %norm_output[%base] : buffer -> view<[%post_rows]x128xf32>
+  %post_f16 = buffer.view %half_output[%base] : buffer -> view<[%post_groups]x[%post_tokens]x16xf16>
+  scf.for %post_local0 = [%wave to %c16 step %c8] {
+    %post_local = index.assume %post_local0 [range(%post_local0, 0, 15)] : index
+    %post_time0 = index.add %time_base, %post_local : index
+    %post_valid = index.cmp ult, %post_time0, %n_tokens : index
+    %post_time_safe = scf.select %post_valid, %post_time0, %zero : index
+    %post_time = index.assume %post_time_safe [lt(%post_time_safe, %n_tokens)] : index
+    %post_token0 = index.madd %seq, %n_tokens, %post_time : index
+    %post_token = index.assume %post_token0 [lt(%post_token0, %post_tokens)] : index
+    %post_row0 = index.madd %post_token, %n_heads, %head : index
+    %post_row = index.assume %post_row0 [lt(%post_row0, %post_rows)] : index
+    %post_scale = template.apply<@ggml.rmsnorm_f32.subgroup_row_scale>(%c16, %post_local, %c128, %rms_epsilon, %lds) : (index, index, index, f32, buffer) -> (f32)
+    scf.if %post_valid {
+      %post_x = vector.load %post_attention[%post_local, %post_channel] : view<16x128xf32> -> vector<4xf32>
+      %post_w = vector.load %post_weights[%post_channel] : view<128xf32> -> vector<4xf32>
+      %post_g = vector.load %post_gates[%post_row, %post_channel] : view<[%post_rows]x128xf32> -> vector<4xf32>
+      %post_scale_v = vector.splat %post_scale : vector<4xf32>
+      %post_normalized = vector.mulf<reassoc|nnan|ninf|nsz> %post_x, %post_scale_v : vector<4xf32>
+      %post_weighted = vector.mulf %post_normalized, %post_w : vector<4xf32>
+      %post_activated = template.apply<@ggml.unary_f32.apply_vector4>(%gate_op, %post_g) : (index, vector<4xf32>) -> (vector<4xf32>)
+      %post_result = vector.mulf %post_weighted, %post_activated : vector<4xf32>
+      vector.store %post_result, %post_f32[%post_row, %post_channel] : vector<4xf32>, view<[%post_rows]x128xf32>
+      scf.if %publish_q8 {
+        %post_flat_channel = index.madd %post_row, %c128, %post_channel : index
+        %post_scratch_values = buffer.view %lds[%base] : buffer -> view<256xf32>
+        %post_scratch_d = buffer.view %lds[%base] : buffer -> view<32xf32>
+        template.apply<@llm.gated_delta_net.publish_q8.vector4_strict>(%post_valid, %base, %post_flat_channel, %post_result, %post_scratch_values, %post_scratch_d, %half_output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+      } else {
+        %post_half = vector.fptrunc %post_result : vector<4xf32> to vector<4xf16>
+        %post_head_channel = index.madd %head, %c128, %post_channel : index
+        %post_group = index.div %post_head_channel, %c16 : index
+        %post_group_lane = index.rem %post_head_channel, %c16 : index
+        vector.store %post_half, %post_f16[%post_group, %post_token, %post_group_lane] : vector<4xf16>, view<[%post_groups]x[%post_tokens]x16xf16>
+      }
+    }
+  }
+  template.return
+}

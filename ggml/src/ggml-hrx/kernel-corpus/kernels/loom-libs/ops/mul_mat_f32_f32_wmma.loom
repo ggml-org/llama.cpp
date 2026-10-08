@@ -1,0 +1,217 @@
+func.decl @ggml_mul_mat_quantized_f16_prefill_conv4_interior(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %channel_tile: index, %input: buffer, %weight: buffer, %filter: buffer, %output: buffer, %edges: buffer)
+
+func.decl @ggml_mul_mat_quantized_f16_prefill_wave32(%weight_format: index, %binary_op: index, %paired: i1, %packed_input: i1, %packed_output: i1, %token_count: index, %input_size: index, %output_size: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %up_weight: buffer, %output: buffer, %f16_output: buffer)
+
+// Dense GGML matmul for contiguous 2D F32 activations.
+//
+// Each two-wave workgroup computes 64 output channels for 32 contiguous
+// tokens. GGUF weight rows are decoded or converted directly into a padded
+// FP16 LDS tile, while the same workgroup converts the corresponding F32
+// activation tile to FP16. Four wave64 WMMA accumulators cover the 32x32 result
+// owned by each wave. A wave-private LDS slice transposes each accumulator for
+// coalesced F32 publication.
+//
+// Weight contracts use the unmodified GGUF layout:
+//   Q3_K: [output channel][input size / 256][110 bytes]
+//   Q4_K: [output channel][input size / 256][144 bytes]
+//   Q5_K: [output channel][input size / 256][176 bytes]
+//   Q6_K: [output channel][input size / 256][210 bytes]
+//   IQ4_NL: [output channel][input size / 32][18 bytes]
+//   IQ3_S: [output channel][input size / 256][110 bytes]
+//   IQ4_XS: [output channel][input size / 256][136 bytes]
+//   Q8_0: [output channel][input size / 32][34 bytes]
+//   Q8_1: [output channel][input size / 32][36 bytes]
+//   F16:  [output channel][input size][2 bytes]
+//   BF16: [output channel][input size][2 bytes]
+//   F32:  [output channel][input size][4 bytes]
+// The configured weight format selects the storage reader before the shared
+// device template is instantiated, so inactive decode logic is absent from the
+// emitted kernel. No persistent repacking or expanded-weight allocation is
+// required.
+template.decl @ggml.mul_mat_f32_f32_wmma.core(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: f32, %arg7: index, %arg8: index, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_wmma.finish_tile(%token_count: index, %output_size: index, %output_tile_count: index, %token_tile_count: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_tile: index, %token_tile: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_wmma.launch(%token_capacity: index, %input_size: index, %output_size: index, %weight_format: index) -> (index, index, index, index)
+
+template.decl @ggml.mul_mat_f32_f32_wmma.publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+
+template.decl @ggml.unary_f32.apply_vector4(%arg0: index, %arg1: vector<4xf32>) -> (vector<4xf32>)
+
+amdgpu.target<gfx11-generic> @ggml_mul_mat_gfx11_wave64 {subgroup_size = 64}
+amdgpu.target<gfx11-generic> @ggml_mul_mat_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.mul_mat.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+
+config.decl @ggml.mul_mat.output_size : %value: index where [range(%value, 1, 262144)]
+
+// Private F16 activation storage for the Q4 prefill entry: row-major (0) or
+// K16-major [K/16, tokens, 16] (1). The latter uses full 512-token tiles.
+config.decl @ggml.mul_mat.f16_input_layout : %value: index where [range(%value, 0, 1)]
+
+// Selects whether publication overwrites the output (0) or accumulates the
+// projection into a caller-provided residual (1).
+config.decl @ggml.mul_mat.output_accumulation : %value: index where [range(%value, 0, 1)]
+
+// Unary op applied to the published F32 output. Identity is op 23.
+config.decl @ggml.mul_mat.output_unary_op : %value: index where [range(%value, 0, 23)]
+
+config.decl @ggml.mul_mat.weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+template.def<@ggml.mul_mat_f32_f32_wmma.publish_vector4> device @ggml_mul_mat_f32_f32_wmma_publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %partition = kernel.workgroup.id<z> : index
+  %element_bytes = index.constant 4 : offset
+  %plane_elements = index.mul %token_count, %output_size : index
+  %plane_bytes = index.scale %plane_elements, %element_bytes : index, offset -> offset
+  %plane_offset = index.scale %partition, %plane_bytes : index, offset -> offset
+  %output_view = buffer.view %output_noalias[%plane_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %accumulates_output = index.cmp eq, %output_accumulation, %c1 : index
+  scf.if %publish_word {
+    %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+    %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+    %published = scf.if %accumulates_output -> (vector<4xf32>) {
+      %residual = vector.load.mask %output_view[%token, %channel], %mask, %c0_f32x4 : view<[%token_count]x[%output_size]xf32>, vector<4xi1>, vector<4xf32>
+      %sum = vector.addf %residual, %values : vector<4xf32>
+      scf.yield %sum : vector<4xf32>
+    } else {
+      scf.yield %values : vector<4xf32>
+    }
+    %activated = template.apply<@ggml.unary_f32.apply_vector4>(%output_unary_op, %published) : (index, vector<4xf32>) -> (vector<4xf32>)
+    vector.store.mask %activated, %output_view[%token, %channel], %mask : vector<4xf32>, view<[%token_count]x[%output_size]xf32>, vector<4xi1>
+  }
+  template.return
+}
+
+template.def<@ggml.mul_mat_f32_f32_wmma.finish_tile> device @ggml_mul_mat_f32_f32_wmma_finish_tile(%token_count: index, %output_size: index, %output_tile_count: index, %token_tile_count: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_tile: index, %token_tile: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  template.return
+}
+
+// Shape and format configs specialize the native code once while token count
+// remains the only per-dispatch scalar.
+kernel.def target(@ggml_mul_mat_gfx11_wave64) @ggml_mul_mat_f32_f32_wmma(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %input_size = config.get @ggml.mul_mat.input_size : index
+  %weight_format = config.get @ggml.mul_mat.weight_format : index
+  %launch_x, %launch_y, %launch_z, %workgroup_size = template.apply<@ggml.mul_mat_f32_f32_wmma.launch>(%token_capacity, %input_size, %output_size, %weight_format) pure : (index, index, index, index) -> (index, index, index, index)
+  kernel.launch.config workgroups(%launch_x, %launch_y, %launch_z) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.mul_mat.input_size : index
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %output_accumulation = config.get @ggml.mul_mat.output_accumulation : index
+  %output_unary_op = config.get @ggml.mul_mat.output_unary_op : index
+  %weight_format = config.get @ggml.mul_mat.weight_format : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  template.apply<@ggml.mul_mat_f32_f32_wmma.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %output_accumulation, %output_unary_op, %c0_f32, %channel_tile, %token_tile, %input, %weight, %output, %output, %output, %output, %output, %output, %output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_q4_k_f16_wmma_prefill_wave32(%token_count: index) {
+  %input_size = config.get @ggml.mul_mat.input_size : index
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c512 = index.constant 512 : index
+  %c1024 = index.constant 1024 : index
+  %minimum_workgroups = index.constant 32 : index
+  %twice_input_size = index.mul %input_size, %c2 : index
+  %contracts = index.cmp ule, %output_size, %input_size : index
+  %large_expansion = index.cmp uge, %output_size, %twice_input_size : index
+  %wide_shape = scalar.ori %contracts, %large_expansion : i1
+  %output_tail = index.rem %output_size, %c128 : index
+  %full_wide_tile = index.cmp eq, %output_tail, %c0 : index
+  %wide_tile = scalar.andi %wide_shape, %full_wide_tile : i1
+  %ordinary_tile_channels = scf.select %wide_tile, %c128, %c64 : index
+  %ordinary_workgroup_size = scf.select %wide_tile, %c512, %c256 : index
+  %active_token_tiles = index.div %token_count, %c256 : index
+  %larger_output_tiles = index.div %output_size, %c256 : index
+  %larger_grid = index.mul %active_token_tiles, %larger_output_tiles : index
+  %enough_workgroups = index.cmp uge, %larger_grid, %minimum_workgroups : index
+  %larger_channel_tail = index.rem %output_size, %c256 : index
+  %full_larger_channels = index.cmp eq, %larger_channel_tail, %c0 : index
+  %multiple_token_tiles = index.cmp ugt, %active_token_tiles, %c1 : index
+  %larger_shape = scalar.andi %contracts, %full_larger_channels : i1
+  %larger_grid_tile = scalar.andi %larger_shape, %enough_workgroups : i1
+  %larger_tile = scalar.andi %larger_grid_tile, %multiple_token_tiles : i1
+  %staged_tile_channels = scf.select %larger_tile, %c256, %ordinary_tile_channels : index
+  %staged_workgroup_size = scf.select %larger_tile, %c1024, %ordinary_workgroup_size : index
+  %staged_output_tiles = index.div %output_size, %staged_tile_channels : index
+  %staged_token_tiles = index.div %token_capacity, %c256 : index
+  %input_layout = config.get @ggml.mul_mat.f16_input_layout : index
+  %packed = index.cmp eq, %input_layout, %c1 : index
+  %workgroup_size = scf.select %packed, %c512, %staged_workgroup_size : index
+  %token_tiles = scf.select %packed, %c1, %staged_token_tiles : index
+  %packed_output_tiles = index.div %output_size, %c64 : index
+  %output_tiles = scf.select %packed, %packed_output_tiles, %staged_output_tiles : index
+  kernel.launch.config workgroups(%token_tiles, %output_tiles, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.mul_mat.input_size : index
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 256, 2048), mul(%token_count, 256), le(%token_count, %token_capacity)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 64, 262144), mul(%output_size, 64)] : index
+  %channel_tile = kernel.workgroup.id<y> : index
+  %token_tile = kernel.workgroup.id<x> : index
+  %paired = scalar.constant false : i1
+  %input_layout = config.get @ggml.mul_mat.f16_input_layout : index
+  %packed_layout = index.constant 1 : index
+  %packed_input = index.cmp eq, %input_layout, %packed_layout : index
+  %prefill_weight_format = index.constant 44 : index
+  %prefill_binary_op = index.constant 0 : index
+  func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%prefill_weight_format, %prefill_binary_op, %paired, %packed_input, %paired, %bounded_token_count, %input_size, %bounded_output_size, %channel_tile, %token_tile, %input, %weight, %weight, %output, %output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+func.decl @ggml_mul_mat_quantized_f16_prefill_conv4(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %channel_tile: index, %input: buffer, %weight: buffer, %state: buffer, %filter: buffer, %output: buffer, %cache: buffer)
+
+kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_quantized_f16_wmma_prefill_conv4(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %threads = index.constant 512 : index
+  %groups = index.div %output_size, %sixtyfour : index
+  kernel.launch.config workgroups(%one, %groups, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %state: buffer, %filter: buffer, %output: buffer, %cache: buffer) {
+  %input_size = config.get @ggml.mul_mat.input_size : index
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %weight_format = config.get @ggml.mul_mat.weight_format : index
+  %channel_tile = kernel.workgroup.id<y> : index
+  func.call @ggml_mul_mat_quantized_f16_prefill_conv4(%weight_format, %token_count, %input_size, %output_size, %channel_tile, %input, %weight, %state, %filter, %output, %cache) : (index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Recurrent state is consumed by the later finish dispatch.
+kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_quantized_f16_wmma_prefill_conv4_interior(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %threads = index.constant 512 : index
+  %groups = index.div %output_size, %sixtyfour : index
+  kernel.launch.config workgroups(%one, %groups, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %filter: buffer, %output: buffer, %edges: buffer) {
+  %input_size = config.get @ggml.mul_mat.input_size : index
+  %output_size = config.get @ggml.mul_mat.output_size : index
+  %weight_format = config.get @ggml.mul_mat.weight_format : index
+  %channel_tile = kernel.workgroup.id<y> : index
+  func.call @ggml_mul_mat_quantized_f16_prefill_conv4_interior(%weight_format, %token_count, %input_size, %output_size, %channel_tile, %input, %weight, %filter, %output, %edges) : (index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -14,6 +14,8 @@
 
 namespace ggml::hrx {
 
+uint64_t command_program_shape_hash(const std::string & command_shape);
+
 struct PreparedCommandProgramCacheStats {
     uint64_t builds = 0;
     uint64_t hits   = 0;
@@ -45,6 +47,12 @@ class PreparedCommandProgramCache {
                                                                    const CommandProgram &                 commands,
                                                                    const CommandProgramBindings &         bindings);
 
+    PreparedCommandProgramCacheExecutionResult execute_with_result(const CommandProgramExecutionContext & context,
+                                                                   uint64_t                               graph_uid,
+                                                                   uint64_t                               command_shape_hash,
+                                                                   const CommandProgram &                 commands,
+                                                                   const CommandProgramBindings &         bindings);
+
     PreparedCommandProgramCacheStats stats() const;
 
     void clear();
@@ -68,7 +76,7 @@ class PreparedCommandProgramCache {
 
     Key cache_key(uint64_t                               graph_uid,
                   const CommandProgramExecutionContext & context,
-                  const std::string &                    command_shape,
+                  uint64_t                               command_shape_hash,
                   const CommandProgramBindings &         bindings) const;
 
     struct Entry {

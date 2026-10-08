@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <vector>
 
 typedef struct hrx_device_s * hrx_device_t;
 typedef struct hrx_stream_s * hrx_stream_t;
@@ -58,6 +59,7 @@ class TransientArena {
 
     mutable std::mutex mutex_;
     hrx_buffer_t       buffer_              = nullptr;
+    std::vector<hrx_buffer_t> diagnostic_retired_buffers_;
     size_t             allocation_capacity_ = 0;
     uint64_t           allocation_id_       = kInvalidTransientArenaAllocationId;
     uint64_t           next_allocation_id_  = 1;

@@ -1,0 +1,22 @@
+// F32 publication stages shared across vector implementations.
+template.decl @ggml.matmul.vector_publish.f32_scatter_selected_outputs_wave32(%selected_count: index, %output_size: index, %selected_outputs: buffer, %values: buffer, %output: buffer)
+
+template.def<@ggml.matmul.vector_publish.f32_scatter_selected_outputs_wave32> device @ggml_matmul_vector_publish_f32_scatter_selected_outputs_wave32(%selected_count: index, %output_size: index, %selected_outputs: buffer, %values: buffer, %output: buffer) {
+  %base = index.constant 0 : offset
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 127)] : index
+  %publishes = index.cmp ult, %tid, %selected_count : index
+  %selected_noalias, %values_noalias, %output_noalias = buffer.assume.noalias %selected_outputs, %values, %output : buffer, buffer, buffer
+  %selected_view = buffer.view %selected_noalias[%base] : buffer -> view<64xi32>
+  %values_view = buffer.view %values_noalias[%base] : buffer -> view<64xf32>
+  scf.if %publishes {
+    %output_i32 = view.load %selected_view[%tid] : view<64xi32> -> i32
+    %output0 = index.cast %output_i32 : i32 to index
+    %output1 = index.assume %output0 [range(%output0, 0, 262143)] : index
+    %selected_output, %bounded_output_size = index.assume %output1, %output_size [lt(%output1, %output_size)] : index, index
+    %output_view = buffer.view %output_noalias[%base] : buffer -> view<[%bounded_output_size]xf32>
+    %value = view.load %values_view[%tid] : view<64xf32> -> f32
+    view.store %value, %output_view[%selected_output] : f32, view<[%bounded_output_size]xf32>
+  }
+  template.return
+}

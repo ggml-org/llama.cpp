@@ -1,0 +1,28 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.binary_swiglu_symmetric_i4_k32.body(%lhs: buffer, %rhs: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_binary_swiglu_i4_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.binary_swiglu_symmetric_i4.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 64)]
+
+config.decl @ggml.binary_swiglu_symmetric_i4.token_count : %value: index where [range(%value, 1, 16)]
+
+kernel.def target(@ggml_binary_swiglu_i4_gfx11_wave32) export("ggml_binary_swiglu_symmetric_i4_k32") @ggml_binary_swiglu_symmetric_i4_k32() {
+  %c1 = index.constant 1 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %input_size = config.get @ggml.binary_swiglu_symmetric_i4.input_size : index
+  %token_count = config.get @ggml.binary_swiglu_symmetric_i4.token_count : index
+  %element_count = index.mul %input_size, %token_count : index
+  %group_count = index.div %element_count, %c64 : index
+  %rounded_group_count = index.add %group_count, %c7 : index
+  %workgroup_count = index.div %rounded_group_count, %c8 : index
+  kernel.launch.config workgroups(%workgroup_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%lhs: buffer, %rhs: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
+  template.apply<@ggml.binary_swiglu_symmetric_i4_k32.body>(%lhs, %rhs, %output, %i4_qs, %i4_ds, %i4_sums) : (buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

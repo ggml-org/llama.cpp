@@ -1,0 +1,23 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @llm.gated_delta_net.projection_epilogue.standalone_body(%element_count: index, %alpha_raw: buffer, %beta_raw: buffer, %bias: buffer, %a_scale: buffer, %gate_dst: buffer, %beta_dst: buffer)
+
+config.decl @llm.gated_delta_net.epilogue_head_count : %value: index where [range(%value, 1, 4096)]
+
+config.decl @llm.gated_delta_net.epilogue_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("llm_gated_delta_net_projection_epilogue_f32") @llm_gated_delta_net_projection_epilogue_f32(%element_count: index) {
+  %unit = index.constant 1 : index
+  %cneg1 = index.constant -1 : index
+  %elements = index.assume %element_count [range(%element_count, 1, 1048576)] : index
+  %workgroup_size = config.get @llm.gated_delta_net.epilogue_workgroup_size : index
+  %rounding = index.add %workgroup_size, %cneg1 : index
+  %rounded = index.add %elements, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%element_count: index, %alpha_raw: buffer, %beta_raw: buffer, %bias: buffer, %a_scale: buffer, %gate_dst: buffer, %beta_dst: buffer) {
+  %elements = index.assume %element_count [range(%element_count, 1, 1048576)] : index
+  template.apply<@llm.gated_delta_net.projection_epilogue.standalone_body>(%elements, %alpha_raw, %beta_raw, %bias, %a_scale, %gate_dst, %beta_dst) : (index, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -1,0 +1,19 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @qwen3_moe.router_projection.storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer)
+
+amdgpu.target<gfx1151> @qwen3_moe_router_projection_gfx1151
+
+// Selects the target's preferred storage contract without exposing addressing
+// policy at the projection call site.
+template.def<@qwen3_moe.router_projection.storage> target(@qwen3_moe_router_projection_gfx1151) priority(20) @qwen3_moe_router_projection_descriptor_storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer) {
+  %input_descriptor = buffer.assume.memory_space<descriptor> %input : buffer
+  %weight_descriptor = buffer.assume.memory_space<descriptor> %weight : buffer
+  %output_descriptor = buffer.assume.memory_space<descriptor> %output : buffer
+  template.return %input_descriptor, %weight_descriptor, %output_descriptor : buffer, buffer, buffer
+}
+
+template.def<@qwen3_moe.router_projection.storage> priority(1) @qwen3_moe_router_projection_global_storage(%input: buffer, %weight: buffer, %output: buffer) -> (buffer, buffer, buffer) {
+  template.return %input, %weight, %output : buffer, buffer, buffer
+}

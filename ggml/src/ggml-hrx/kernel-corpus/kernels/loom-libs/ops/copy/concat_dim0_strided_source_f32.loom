@@ -1,0 +1,37 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.concat_dim0.strided_source_f32_body(%lhs_span: index, %rhs_span: index, %lhs: buffer, %rhs: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_copy_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.concat_dim0_strided_source_f32.lhs_width : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.concat_dim0_strided_source_f32.rhs_width : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.concat_dim0_strided_source_f32.row_count : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.concat_dim0_strided_source_f32.row_ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.concat_dim0_strided_source_f32.row_ne2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.concat_dim0_strided_source_f32.lhs_stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.lhs_stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.lhs_stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.lhs_stride3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.rhs_stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.rhs_stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.rhs_stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.concat_dim0_strided_source_f32.rhs_stride3 : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_concat_dim0_strided_source_f32") @ggml_concat_dim0_strided_source_f32(%lhs_span: index, %rhs_span: index) {
+  %one = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %lhs_width = config.get @ggml.concat_dim0_strided_source_f32.lhs_width : index
+  %rhs_width = config.get @ggml.concat_dim0_strided_source_f32.rhs_width : index
+  %row_count = config.get @ggml.concat_dim0_strided_source_f32.row_count : index
+  %output_width = index.add %lhs_width, %rhs_width : index
+  %element_count = index.mul %output_width, %row_count : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%workgroup_size, %one, %one) : index
+} launch(%lhs_span: index, %rhs_span: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
+  template.apply<@ggml.copy.concat_dim0.strided_source_f32_body>(%lhs_span, %rhs_span, %lhs, %rhs, %output) : (index, index, buffer, buffer, buffer)
+  kernel.return
+}

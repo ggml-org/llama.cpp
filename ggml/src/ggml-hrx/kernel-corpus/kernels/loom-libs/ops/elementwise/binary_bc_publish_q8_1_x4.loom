@@ -1,0 +1,103 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.binary_f32.apply(%arg0: index, %arg1: f32, %arg2: f32) -> (f32)
+
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_binary_bc_publish_q8_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.binary_bc_f32.op : %value: index where [range(%value, 0, 3)]
+config.decl @ggml.binary_bc_f32.src0_broadcast_dim0 : %value: index where [range(%value, 0, 1)]
+config.decl @ggml.binary_bc_f32.src0_broadcast_dim1 : %value: index where [range(%value, 0, 1)]
+config.decl @ggml.binary_bc_f32.src1_broadcast_dim0 : %value: index where [range(%value, 0, 1)]
+config.decl @ggml.binary_bc_f32.src1_broadcast_dim1 : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@ggml_binary_bc_publish_q8_gfx11_wave32) export("ggml_binary_bc_f32_publish_q8_1_x4") @ggml_binary_bc_f32_publish_q8_1_x4(%token_count: index, %hidden_size: index, %src0_element_count: index, %src1_element_count: index) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %hidden_size: index, %src0_element_count: index, %src1_element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer) where [range(%token_count, 1, 5), range(%hidden_size, 128, 32768), mul(%hidden_size, 128), range(%src0_element_count, 1, 134217728), range(%src1_element_count, 1, 134217728)] {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 5)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 32768), mul(%hidden_size, 128)] : index
+  %lhs_count = index.assume %src0_element_count [range(%src0_element_count, 1, 134217728)] : index
+  %rhs_count = index.assume %src1_element_count [range(%src1_element_count, 1, 134217728)] : index
+  %op = config.get @ggml.binary_bc_f32.op : index
+  %lhs_bc0 = config.get @ggml.binary_bc_f32.src0_broadcast_dim0 : index
+  %lhs_bc1 = config.get @ggml.binary_bc_f32.src0_broadcast_dim1 : index
+  %rhs_bc0 = config.get @ggml.binary_bc_f32.src1_broadcast_dim0 : index
+  %rhs_bc1 = config.get @ggml.binary_bc_f32.src1_broadcast_dim1 : index
+  %token = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c1024 = index.constant 1024 : index
+  %group_bytes = index.constant 144 : offset
+  %scratch_d_byte_add = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %lhs_bc0_set = index.cmp ne, %lhs_bc0, %c0 : index
+  %lhs_bc1_set = index.cmp ne, %lhs_bc1, %c0 : index
+  %rhs_bc0_set = index.cmp ne, %rhs_bc0, %c0 : index
+  %rhs_bc1_set = index.cmp ne, %rhs_bc1, %c0 : index
+  %lhs_row_width = scf.select %lhs_bc0_set, %c1, %bounded_hidden_size : index
+  %rhs_row_width = scf.select %rhs_bc0_set, %c1, %bounded_hidden_size : index
+  %lhs_token = scf.select %lhs_bc1_set, %c0, %token : index
+  %rhs_token = scf.select %rhs_bc1_set, %c0, %token : index
+  %lhs_token_base = index.mul %lhs_token, %lhs_row_width : index
+  %rhs_token_base = index.mul %rhs_token, %rhs_row_width : index
+  %word_element_add = index.mul %workitem, %c4 : index
+  %physical_group_count = index.div %bounded_hidden_size, %c128 : index
+  %row_bytes = index.scale %physical_group_count, %group_bytes : index, offset -> offset
+  %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
+  %lhs_view = buffer.view %lhs[%c0_offset] : buffer -> view<[%lhs_count]xf32>
+  %rhs_view = buffer.view %rhs[%c0_offset] : buffer -> view<[%rhs_count]xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  scf.for %channel = [%word_element_add to %bounded_hidden_size step %c1024] {
+    %channel1 = index.add %channel, %c1 : index
+    %channel2 = index.add %channel, %c2 : index
+    %channel3 = index.add %channel, %c3 : index
+    %lhs_channel0 = scf.select %lhs_bc0_set, %c0, %channel : index
+    %lhs_channel1 = scf.select %lhs_bc0_set, %c0, %channel1 : index
+    %lhs_channel2 = scf.select %lhs_bc0_set, %c0, %channel2 : index
+    %lhs_channel3 = scf.select %lhs_bc0_set, %c0, %channel3 : index
+    %rhs_channel0 = scf.select %rhs_bc0_set, %c0, %channel : index
+    %rhs_channel1 = scf.select %rhs_bc0_set, %c0, %channel1 : index
+    %rhs_channel2 = scf.select %rhs_bc0_set, %c0, %channel2 : index
+    %rhs_channel3 = scf.select %rhs_bc0_set, %c0, %channel3 : index
+    %lhs_index0 = index.add %lhs_token_base, %lhs_channel0 : index
+    %lhs_index1 = index.add %lhs_token_base, %lhs_channel1 : index
+    %lhs_index2 = index.add %lhs_token_base, %lhs_channel2 : index
+    %lhs_index3 = index.add %lhs_token_base, %lhs_channel3 : index
+    %rhs_index0 = index.add %rhs_token_base, %rhs_channel0 : index
+    %rhs_index1 = index.add %rhs_token_base, %rhs_channel1 : index
+    %rhs_index2 = index.add %rhs_token_base, %rhs_channel2 : index
+    %rhs_index3 = index.add %rhs_token_base, %rhs_channel3 : index
+    %lhs0 = view.load %lhs_view[%lhs_index0] : view<[%lhs_count]xf32> -> f32
+    %lhs1 = view.load %lhs_view[%lhs_index1] : view<[%lhs_count]xf32> -> f32
+    %lhs2 = view.load %lhs_view[%lhs_index2] : view<[%lhs_count]xf32> -> f32
+    %lhs3 = view.load %lhs_view[%lhs_index3] : view<[%lhs_count]xf32> -> f32
+    %rhs0 = view.load %rhs_view[%rhs_index0] : view<[%rhs_count]xf32> -> f32
+    %rhs1 = view.load %rhs_view[%rhs_index1] : view<[%rhs_count]xf32> -> f32
+    %rhs2 = view.load %rhs_view[%rhs_index2] : view<[%rhs_count]xf32> -> f32
+    %rhs3 = view.load %rhs_view[%rhs_index3] : view<[%rhs_count]xf32> -> f32
+    %result0 = template.apply<@ggml.binary_f32.apply>(%op, %lhs0, %rhs0) : (index, f32, f32) -> (f32)
+    %result1 = template.apply<@ggml.binary_f32.apply>(%op, %lhs1, %rhs1) : (index, f32, f32) -> (f32)
+    %result2 = template.apply<@ggml.binary_f32.apply>(%op, %lhs2, %rhs2) : (index, f32, f32) -> (f32)
+    %result3 = template.apply<@ggml.binary_f32.apply>(%op, %lhs3, %rhs3) : (index, f32, f32) -> (f32)
+    %result = vector.from_elements %result0, %result1, %result2, %result3 : vector<4xf32>
+    vector.store %result, %output_view[%token, %channel] : vector<4xf32>, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+    %publish_word = index.cmp ult, %channel, %bounded_hidden_size : index
+    template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%publish_word, %token_output_byte_base, %channel, %result, %scratch_values, %scratch_d, %q8_output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+  }
+  kernel.return
+}

@@ -1,0 +1,62 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_f32.subgroup_row_scale(%token_count: index, %token: index, %hidden_size: index, %epsilon: f32, %input: buffer) -> (f32)
+template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>)
+template.decl @ggml.normalization.publish_f16.gate_vector4(%values: vector<4xf32>, %row: index, %channel: index, %token_count: index, %hidden_size: index, %row_width: index, %output: buffer)
+template.decl @ggml.normalization.publish_q8.gate_vector4(%publish_word: i1, %row: index, %hidden_size: index, %channel: index, %values: vector<4xf32>, %output: buffer)
+template.decl @ggml.rmsnorm_gate_f32.publish_body(%publish_q8: i1, %token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %alternate_output: buffer)
+
+config.decl @ggml.rmsnorm_gate_f32.hidden_size : %value: index where [range(%value, 128, 1024), mul(%value, 128)]
+config.decl @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+config.decl @ggml.rmsnorm_gate_f32.gate_op : %value: index where [range(%value, 0, 23)]
+config.decl @ggml.rmsnorm_gate_f32.f16_output_row_width : %value: index where [range(%value, 0, 32768), mul(%value, 128)]
+
+template.def<@ggml.rmsnorm_gate_f32.publish_body> device @ggml_rmsnorm_gate_f32_publish_body(%publish_q8: i1, %token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %alternate_output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1048576)] : index
+  %hidden0 = config.get @ggml.rmsnorm_gate_f32.hidden_size : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 128, 1024), mul(%hidden0, 128)] : index
+  %epsilon = config.get @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+  %gate_op = config.get @ggml.rmsnorm_gate_f32.gate_op : index
+  %row_width = config.get @ggml.rmsnorm_gate_f32.f16_output_row_width : index
+  %z = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %wg = kernel.workgroup.id<x> : index
+  %wave = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %row0 = index.madd %wg, %eight, %wave : index
+  %valid = index.cmp ult, %row0, %bounded_token_count : index
+  %safe = scf.select %valid, %row0, %z : index
+  %row = index.assume %safe [lt(%safe, %bounded_token_count)] : index
+  %channel0 = index.mul %lane, %four : index
+  %input_n, %weight_n, %raw_gate_n, %output_n, %alternate_n = buffer.assume.noalias %input, %weight, %raw_gate, %output, %alternate_output : buffer, buffer, buffer, buffer, buffer
+  %iv = buffer.view %input_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %wv = buffer.view %weight_n[%zero_offset] : buffer -> view<[%hidden]xf32>
+  %gv = buffer.view %raw_gate_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %ov = buffer.view %output_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %scale = template.apply<@ggml.rmsnorm_f32.subgroup_row_scale>(%bounded_token_count, %row, %hidden, %epsilon, %input_n) : (index, index, index, f32, buffer) -> (f32)
+  %scale_v = vector.splat %scale : vector<4xf32>
+  %last_channel = index.sub %hidden, %four : index
+  scf.if %valid {
+    scf.for %channel = [%channel0 to %hidden step %c128] {
+      %bounded_channel = index.assume %channel [range(%channel, 0, 1020), mul(%channel, 4), le(%channel, %last_channel)] : index
+      %x = vector.load %iv[%row, %bounded_channel] : view<[%bounded_token_count]x[%hidden]xf32> -> vector<4xf32>
+      %w = vector.load %wv[%bounded_channel] : view<[%hidden]xf32> -> vector<4xf32>
+      %g = vector.load %gv[%row, %bounded_channel] : view<[%bounded_token_count]x[%hidden]xf32> -> vector<4xf32>
+      %norm = vector.mulf<reassoc|nnan|ninf|nsz> %x, %scale_v : vector<4xf32>
+      %side = vector.mulf %norm, %w : vector<4xf32>
+      %activated = template.apply<@ggml.unary_f32.apply_vector4>(%gate_op, %g) : (index, vector<4xf32>) -> (vector<4xf32>)
+      %out = vector.mulf %side, %activated : vector<4xf32>
+      vector.store %out, %ov[%row, %bounded_channel] : vector<4xf32>, view<[%bounded_token_count]x[%hidden]xf32>
+      scf.if %publish_q8 {
+        template.apply<@ggml.normalization.publish_q8.gate_vector4>(%valid, %row, %hidden, %bounded_channel, %out, %alternate_n) : (i1, index, index, index, vector<4xf32>, buffer)
+      } else {
+        template.apply<@ggml.normalization.publish_f16.gate_vector4>(%out, %row, %bounded_channel, %bounded_token_count, %hidden, %row_width, %alternate_n) : (vector<4xf32>, index, index, index, index, index, buffer)
+      }
+    }
+  }
+  template.return
+}

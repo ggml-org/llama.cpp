@@ -1,0 +1,213 @@
+// Common direct Q6_K/F32 decode helpers used by dense and routed vector kernels.
+// Computes an ordered four-element F32 dot product. The scalar recurrence
+// mirrors the GLSL oracle and gives target scheduling four independent dot
+// chains per decoded Q6_K block.
+func.def inline @ggml_q6k_dot4_f32(%lhs: vector<4xf32>, %rhs: vector<4xf32>) -> (f32) {
+  %c0 = scalar.constant 0.0 : f32
+  %lhs0 = vector.extract %lhs[0] : vector<4xf32> -> f32
+  %lhs1 = vector.extract %lhs[1] : vector<4xf32> -> f32
+  %lhs2 = vector.extract %lhs[2] : vector<4xf32> -> f32
+  %lhs3 = vector.extract %lhs[3] : vector<4xf32> -> f32
+  %rhs0 = vector.extract %rhs[0] : vector<4xf32> -> f32
+  %rhs1 = vector.extract %rhs[1] : vector<4xf32> -> f32
+  %rhs2 = vector.extract %rhs[2] : vector<4xf32> -> f32
+  %rhs3 = vector.extract %rhs[3] : vector<4xf32> -> f32
+  %sum0 = scalar.fmaf %lhs0, %rhs0, %c0 : f32
+  %sum1 = scalar.fmaf %lhs1, %rhs1, %sum0 : f32
+  %sum2 = scalar.fmaf %lhs2, %rhs2, %sum1 : f32
+  %sum3 = scalar.fmaf %lhs3, %rhs3, %sum2 : f32
+  func.return %sum3 : f32
+}
+
+// Loads one row contraction's activation packet. The two output rows read the
+// same packet, but each load remains adjacent to its consumer. Hoisting the
+// packet across the intervening LDS barrier halves issued activation traffic
+// while extending sixteen F32 live values across synchronization; on gfx1151
+// that longer live range is slower than the repeated cache-hot read.
+func.def inline @ggml_q6k_load_f32_block(%token_count: index, %input_size: index, %token: index, %block: index, %lane: index, %input: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c96 = index.constant 96 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
+  %block_count = index.div %input_size, %c256 : index
+  %valid_block = index.cmp ult, %block, %block_count : index
+  %safe_block0 = scf.select %valid_block, %block, %c0 : index
+  %safe_block, %launch_block_count = index.assume %safe_block0, %block_count [lt(%safe_block0, %block_count)] : index, index
+  %itid = index.rem %bounded_lane, %c16 : index
+  %vector_half = index.div %itid, %c8 : index
+  %vector_index = index.rem %itid, %c8 : index
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%launch_block_count]x256xf32>
+  %vector_half_base = index.mul %vector_half, %c128 : index
+  %vector_offset = index.mul %vector_index, %c4 : index
+  %input_index0 = index.add %vector_half_base, %vector_offset : index
+  %input_index1 = index.add %input_index0, %c32 : index
+  %input_index2 = index.add %input_index0, %c64 : index
+  %input_index3 = index.add %input_index0, %c96 : index
+  %input0 = vector.load %input_view[%token, %safe_block, %input_index0] : view<[%token_count]x[%launch_block_count]x256xf32> -> vector<4xf32>
+  %input1 = vector.load %input_view[%token, %safe_block, %input_index1] : view<[%token_count]x[%launch_block_count]x256xf32> -> vector<4xf32>
+  %input2 = vector.load %input_view[%token, %safe_block, %input_index2] : view<[%token_count]x[%launch_block_count]x256xf32> -> vector<4xf32>
+  %input3 = vector.load %input_view[%token, %safe_block, %input_index3] : view<[%token_count]x[%launch_block_count]x256xf32> -> vector<4xf32>
+  func.return %input0, %input1, %input2, %input3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+// Loads the signed group scale owned by one lane of a Q6_K block.
+func.def inline @ggml_q6k_load_f32_scale(%input_size: index, %row: index, %block: index, %lane: index, %weight: buffer) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c192 = index.constant 192 : offset
+  %c210_bytes = index.constant 210 : offset
+  %c256 = index.constant 256 : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
+  %block_count = index.div %input_size, %c256 : index
+  %valid_block = index.cmp ult, %block, %block_count : index
+  %safe_block = scf.if %valid_block -> (index) {
+    scf.yield %block : index
+  } else {
+    scf.yield %c0 : index
+  }
+  %itid = index.rem %bounded_lane, %c16 : index
+  %weight_row_bytes = index.scale %block_count, %c210_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %block_byte_add = index.scale %safe_block, %c210_bytes : index, offset -> offset
+  %weight_block_byte_base = index.add %weight_row_byte_base, %block_byte_add : offset
+  %scale_byte_base = index.add %weight_block_byte_base, %c192 : offset
+  %scale_view = buffer.view %weight[%scale_byte_base] : buffer -> view<16xi8>
+  %scale_i8 = view.load %scale_view[%itid] : view<16xi8> -> i8
+  %scale = scalar.sitofp %scale_i8 : i8 to f32
+  func.return %scale : f32
+}
+
+// Stages one row's group scales and synchronizes before contraction.
+func.def inline @ggml_q6k_stage_f32_scales(%input_size: index, %row: index, %block: index, %frame_count: index, %frame: index, %lane: index, %weight: buffer, %scale_stage: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
+  %scale_stage_view = buffer.view %scale_stage[%c0_offset] : buffer -> view<[%frame_count]x64xf32>
+  %scale = func.call @ggml_q6k_load_f32_scale(%input_size, %row, %block, %bounded_lane, %weight) : (index, index, index, index, buffer) -> (f32)
+  view.store %scale, %scale_stage_view[%frame, %bounded_lane] : f32, view<[%frame_count]x64xf32>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  func.return
+}
+
+// Computes one lane contribution for one output row and one four-block
+// cohort after its group scales have been staged.
+func.def inline @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block: index, %frame_count: index, %frame: index, %lane: index, %weight: buffer, %scale_stage: buffer, %input0: vector<4xf32>, %input1: vector<4xf32>, %input2: vector<4xf32>, %input3: vector<4xf32>) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c6 = index.constant 6 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c128 = index.constant 128 : offset
+  %c208 = index.constant 208 : offset
+  %c210_bytes = index.constant 210 : offset
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c4_i32v = vector.constant 4 : vector<1xi32>
+  %c2_i32v = vector.constant 2 : vector<1xi32>
+  %nibble_mask = vector.constant 252645135 : vector<1xi32>
+  %high0_mask = vector.constant 50529027 : vector<1xi32>
+  %high2_mask = vector.constant 202116108 : vector<1xi32>
+  %high4_mask = vector.constant 808464432 : vector<1xi32>
+  %high6_mask = vector.constant -1061109568 : vector<1xi32>
+  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
+  %block_count = index.div %input_size, %c256 : index
+  %valid_block = index.cmp ult, %block, %block_count : index
+  %safe_block = scf.if %valid_block -> (index) {
+    scf.yield %block : index
+  } else {
+    scf.yield %c0 : index
+  }
+  %itid = index.rem %bounded_lane, %c16 : index
+  %cohort = index.div %bounded_lane, %c16 : index
+  %vector_half = index.div %itid, %c8 : index
+  %vector_index = index.rem %itid, %c8 : index
+  %vector_quarter = index.div %vector_index, %c4 : index
+  %weight_row_bytes = index.scale %block_count, %c210_bytes : index, offset -> offset
+  %weight_row_byte_base = index.scale %row, %weight_row_bytes : index, offset -> offset
+  %block_byte_add = index.scale %safe_block, %c210_bytes : index, offset -> offset
+  %weight_block_byte_base = index.add %weight_row_byte_base, %block_byte_add : offset
+  %qh_byte_base = index.add %weight_block_byte_base, %c128 : offset
+  %d_byte_base = index.add %weight_block_byte_base, %c208 : offset
+  %ql_view = buffer.view %weight[%weight_block_byte_base] : buffer -> view<32xi32>
+  %qh_view = buffer.view %weight[%qh_byte_base] : buffer -> view<16xi32>
+  %d_view = buffer.view %weight[%d_byte_base] : buffer -> view<1xf16>
+  %scale_stage_view = buffer.view %scale_stage[%c0_offset] : buffer -> view<[%frame_count]x64xf32>
+  %scale_cohort_base = index.mul %cohort, %c16 : index
+  %scale_half_base = index.mul %vector_half, %c8 : index
+  %scale_index0 = index.add %scale_half_base, %vector_quarter : index
+  %scale_index1 = index.add %scale_index0, %c2 : index
+  %scale_index2 = index.add %scale_index0, %c4 : index
+  %scale_index3 = index.add %scale_index0, %c6 : index
+  %stage_scale_index0 = index.add %scale_cohort_base, %scale_index0 : index
+  %stage_scale_index1 = index.add %scale_cohort_base, %scale_index1 : index
+  %stage_scale_index2 = index.add %scale_cohort_base, %scale_index2 : index
+  %stage_scale_index3 = index.add %scale_cohort_base, %scale_index3 : index
+  %scale0 = view.load %scale_stage_view[%frame, %stage_scale_index0] : view<[%frame_count]x64xf32> -> f32
+  %scale1 = view.load %scale_stage_view[%frame, %stage_scale_index1] : view<[%frame_count]x64xf32> -> f32
+  %scale2 = view.load %scale_stage_view[%frame, %stage_scale_index2] : view<[%frame_count]x64xf32> -> f32
+  %scale3 = view.load %scale_stage_view[%frame, %stage_scale_index3] : view<[%frame_count]x64xf32> -> f32
+  %ql_half_word_base = index.mul %vector_half, %c16 : index
+  %ql_word_index00 = index.add %ql_half_word_base, %vector_index : index
+  %ql_word_index10 = index.add %ql_word_index00, %c8 : index
+  %qh_half_word_base = index.mul %vector_half, %c8 : index
+  %qh_word_index0 = index.add %qh_half_word_base, %vector_index : index
+  %ql_word_index0, %ql_word_index1, %qh_word_index = index.assume %ql_word_index00, %ql_word_index10, %qh_word_index0 [range(%ql_word_index00, 0, 23), range(%ql_word_index10, 8, 31), range(%qh_word_index0, 0, 15)] : index, index, index
+  %ql_word0 = vector.load %ql_view[%ql_word_index0] : view<32xi32> -> vector<1xi32>
+  %ql_word1 = vector.load %ql_view[%ql_word_index1] : view<32xi32> -> vector<1xi32>
+  %qh_word = vector.load %qh_view[%qh_word_index] : view<16xi32> -> vector<1xi32>
+  %ql0 = vector.andi %ql_word0, %nibble_mask : vector<1xi32>
+  %ql1 = vector.andi %ql_word1, %nibble_mask : vector<1xi32>
+  %ql_word0_high = vector.shrui %ql_word0, %c4_i32v : vector<1xi32>
+  %ql_word1_high = vector.shrui %ql_word1, %c4_i32v : vector<1xi32>
+  %ql2 = vector.andi %ql_word0_high, %nibble_mask : vector<1xi32>
+  %ql3 = vector.andi %ql_word1_high, %nibble_mask : vector<1xi32>
+  %qh0_low = vector.andi %qh_word, %high0_mask : vector<1xi32>
+  %qh1_low = vector.andi %qh_word, %high2_mask : vector<1xi32>
+  %qh2 = vector.andi %qh_word, %high4_mask : vector<1xi32>
+  %qh3_high = vector.andi %qh_word, %high6_mask : vector<1xi32>
+  %qh0 = vector.shli %qh0_low, %c4_i32v : vector<1xi32>
+  %qh1 = vector.shli %qh1_low, %c2_i32v : vector<1xi32>
+  %qh3 = vector.shrui %qh3_high, %c2_i32v : vector<1xi32>
+  %code0 = vector.ori %ql0, %qh0 : vector<1xi32>
+  %code1 = vector.ori %ql1, %qh1 : vector<1xi32>
+  %code2 = vector.ori %ql2, %qh2 : vector<1xi32>
+  %code3 = vector.ori %ql3, %qh3 : vector<1xi32>
+  %code0_i8 = vector.bitcast %code0 : vector<1xi32> to vector<4xi8>
+  %code1_i8 = vector.bitcast %code1 : vector<1xi32> to vector<4xi8>
+  %code2_i8 = vector.bitcast %code2 : vector<1xi32> to vector<4xi8>
+  %code3_i8 = vector.bitcast %code3 : vector<1xi32> to vector<4xi8>
+  %code0_f32 = vector.uitofp %code0_i8 : vector<4xi8> to vector<4xf32>
+  %code1_f32 = vector.uitofp %code1_i8 : vector<4xi8> to vector<4xf32>
+  %code2_f32 = vector.uitofp %code2_i8 : vector<4xi8> to vector<4xf32>
+  %code3_f32 = vector.uitofp %code3_i8 : vector<4xi8> to vector<4xf32>
+  %q0 = vector.subf %code0_f32, %c32_f32v : vector<4xf32>
+  %q1 = vector.subf %code1_f32, %c32_f32v : vector<4xf32>
+  %q2 = vector.subf %code2_f32, %c32_f32v : vector<4xf32>
+  %q3 = vector.subf %code3_f32, %c32_f32v : vector<4xf32>
+  %dot0 = func.call @ggml_q6k_dot4_f32(%input0, %q0) : (vector<4xf32>, vector<4xf32>) -> (f32)
+  %dot1 = func.call @ggml_q6k_dot4_f32(%input1, %q1) : (vector<4xf32>, vector<4xf32>) -> (f32)
+  %dot2 = func.call @ggml_q6k_dot4_f32(%input2, %q2) : (vector<4xf32>, vector<4xf32>) -> (f32)
+  %dot3 = func.call @ggml_q6k_dot4_f32(%input3, %q3) : (vector<4xf32>, vector<4xf32>) -> (f32)
+  %scaled3 = scalar.mulf<reassoc|nnan|ninf|nsz> %dot3, %scale3 : f32
+  %scaled2 = scalar.fmaf<reassoc|nnan|ninf|nsz> %dot2, %scale2, %scaled3 : f32
+  %scaled1 = scalar.fmaf<reassoc|nnan|ninf|nsz> %dot1, %scale1, %scaled2 : f32
+  %scaled0 = scalar.fmaf<reassoc|nnan|ninf|nsz> %dot0, %scale0, %scaled1 : f32
+  %d_f16 = view.load %d_view[0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %contribution0 = scalar.mulf<reassoc|nnan|ninf|nsz> %scaled0, %d : f32
+  %contribution = scf.if %valid_block -> (f32) {
+    scf.yield %contribution0 : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  func.return %contribution : f32
+}

@@ -1,0 +1,31 @@
+template.decl @ggml.matmul.skinny_postprocess_f32.add_bias_vector4(%output_size0: index, %channel: index, %values: vector<4xf32>, %bias: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.matmul.skinny_postprocess_f32.add_residual_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %residual_input: buffer) -> (vector<4xf32>)
+
+template.def<@ggml.matmul.skinny_postprocess_f32.add_bias_vector4> device @ggml_matmul_skinny_postprocess_f32_add_bias_vector4(%output_size0: index, %channel: index, %values: vector<4xf32>, %bias: buffer) -> (vector<4xf32>) {
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %bias_noalias = buffer.assume.noalias %bias : buffer
+  %bias_view = buffer.view %bias_noalias[%c0_offset] : buffer -> view<[%output_size]xf32>
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+  %bias_values = vector.load.mask %bias_view[%channel], %mask, %c0_f32x4 : view<[%output_size]xf32>, vector<4xi1>, vector<4xf32>
+  %sum = vector.addf %values, %bias_values : vector<4xf32>
+  template.return %sum : vector<4xf32>
+}
+
+template.def<@ggml.matmul.skinny_postprocess_f32.add_residual_vector4> device @ggml_matmul_skinny_postprocess_f32_add_residual_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %residual_input: buffer) -> (vector<4xf32>) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 5)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %residual_input_noalias = buffer.assume.noalias %residual_input : buffer
+  %residual_input_view = buffer.view %residual_input_noalias[%c0_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+  %residual = vector.load.mask %residual_input_view[%token, %channel], %mask, %c0_f32x4 : view<[%token_count]x[%output_size]xf32>, vector<4xi1>, vector<4xf32>
+  %sum = vector.addf %values, %residual : vector<4xf32>
+  template.return %sum : vector<4xf32>
+}

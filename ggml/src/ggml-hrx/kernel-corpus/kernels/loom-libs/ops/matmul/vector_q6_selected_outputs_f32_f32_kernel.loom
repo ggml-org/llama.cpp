@@ -1,0 +1,30 @@
+config.decl @ggml.matmul.vector.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+
+config.decl @ggml.matmul.vector.output_size : %value: index where [range(%value, 64, 262144), mul(%value, 64)]
+
+config.decl @ggml.matmul.vector.output_accumulation : %value: index where [range(%value, 0, 1)]
+
+config.def @ggml.matmul.vector.packed_layout = 1 : index
+
+config.decl @ggml.matmul.vector.weight_offset : %value: index where [range(%value, 0, 2147483647), mul(%value, 256)]
+
+template.decl @ggml.matmul.vector_q6_f32.body_selected_outputs(%token_count: index, %input_size0: index, %output_size0: index, %scale_row_layout: index, %selected_count0: index, %input: buffer, %weight: buffer, %selected_outputs: buffer, %output: buffer)
+
+template.decl @ggml.matmul.vector_publish.f32_scatter_selected_outputs_wave32(%selected_count: index, %output_size: index, %selected_outputs: buffer, %values: buffer, %output: buffer)
+
+kernel.def export("ggml_mul_mat_vector_q6_selected_outputs_f32_f32") @ggml_mul_mat_vector_q6_selected_outputs_f32_f32(%token_count: index, %selected_count: index) {
+  %c1 = index.constant 1 : index
+  %c128 = index.constant 128 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %selected_count: index, %input: buffer, %weight: buffer, %selected_outputs: buffer, %selected_values: buffer, %output: buffer) {
+  %input_size = config.get @ggml.matmul.vector.input_size : index
+  %output_size0 = config.get @ggml.matmul.vector.output_size : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %scale_row_layout = config.get @ggml.matmul.vector.packed_layout : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_selected_count = index.assume %selected_count [range(%selected_count, 1, 64)] : index
+  template.apply<@ggml.matmul.vector_q6_f32.body_selected_outputs>(%bounded_token_count, %input_size, %output_size, %scale_row_layout, %bounded_selected_count, %input, %weight, %selected_outputs, %selected_values) : (index, index, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  template.apply<@ggml.matmul.vector_publish.f32_scatter_selected_outputs_wave32>(%bounded_selected_count, %output_size, %selected_outputs, %selected_values, %output) : (index, index, buffer, buffer, buffer)
+  kernel.return
+}

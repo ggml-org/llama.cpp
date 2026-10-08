@@ -1,0 +1,748 @@
+// Shared Q6-weight vector matmul reductions.
+config.decl @ggml.matmul.vector.output_accumulation : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.matmul.vector.weight_offset : %value: index where [range(%value, 0, 2147483647), mul(%value, 256)]
+
+template.decl @ggml.matmul.vector_q6_f32.store_fragment_outputs_wave32(%result: vector<16xf16>, %token_offset: index, %token_start: index, %bounded_token_count: index, %bounded_output_size: index, %channel_base: index, %subgroup_channel_add: index, %result_stage: buffer, %output_noalias: buffer, %output_accumulation: index)
+
+template.decl @ggml.matmul.vector_q6_f32.store_dense_outputs_wave32(%result: vector<8xf32>, %token_offset: index, %token_start: index, %token_count: index, %output_size: index, %channel_base: index, %subgroup_channel_add: index, %output: buffer, %output_accumulation: index)
+
+template.decl @ggml.matmul.vector_q6_f32.store_single_row_overwrite_wave32(%result: vector<8xf32>, %output_size: index, %channel_base: index, %subgroup_channel_add: index, %output: buffer)
+
+template.decl @ggml.matmul.vector_q6_f32.body_packed_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %scale_row_layout: index, %input: buffer, %weight: buffer, %output: buffer)
+
+template.decl @ggml.matmul.vector_q6_f32.body_i8_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %input: buffer, %weight: buffer, %output: buffer)
+
+template.decl @ggml.matmul.vector_q6_f32.body_selected_outputs(%token_count: index, %input_size0: index, %output_size0: index, %scale_row_layout: index, %selected_count0: index, %input: buffer, %weight: buffer, %selected_outputs: buffer, %output: buffer)
+
+template.def<@ggml.matmul.vector_q6_f32.store_fragment_outputs_wave32> device @ggml_matmul_vector_q6_f32_store_fragment_outputs_wave32(%result: vector<16xf16>, %token_offset: index, %token_start: index, %bounded_token_count: index, %bounded_output_size: index, %channel_base: index, %subgroup_channel_add: index, %result_stage: buffer, %output_noalias: buffer, %output_accumulation: index) {
+  %lane = kernel.subgroup.lane.id : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c0_offset = index.constant 0 : offset
+  %wave_result_stage_bytes = index.constant 512 : offset
+  %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %wave_result_stage_offset = index.scale %subgroup, %wave_result_stage_bytes : index, offset -> offset
+  %result_fragment_layout = encoding.layout.strided [1, %c16] : encoding<layout>
+  %result_fragment_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf16, %result_fragment_layout>
+  %result_physical_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf16>
+  %publish_token0 = index.div %lane, %c2 : index
+  %publish_token = index.assume %publish_token0 [range(%publish_token0, 0, 15)] : index
+  %publish_packet0 = index.rem %lane, %c2 : index
+  %publish_packet = index.assume %publish_packet0 [range(%publish_packet0, 0, 1)] : index
+  %publish_channel_add = index.mul %publish_packet, %c8 : index
+  %token_base = index.add %token_start, %token_offset : index
+  %token = index.add %token_base, %publish_token : index
+  %subgroup_channel_base = index.add %channel_base, %subgroup_channel_add : index
+  %channel = index.add %subgroup_channel_base, %publish_channel_add : index
+  %valid_token = index.cmp ult, %token, %bounded_token_count : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %writes = scalar.andi %valid_token, %valid_channel : i1
+  %accumulates_output = index.cmp eq, %output_accumulation, %c1 : index
+  vector.fragment.store<result> %result, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<16xf16>, view<16x16xf16, %result_fragment_layout>
+  kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+  scf.if %writes {
+    %bounded_token, %published_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
+    %bounded_output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%published_token_count]x[%bounded_output_size]xf32>
+    %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf16> -> vector<8xf16>
+    %wide = vector.extf %values : vector<8xf16> to vector<8xf32>
+    %mask = vector.mask.range [%channel to %bounded_output_size step %c1] : index -> vector<8xi1>
+    %published = scf.if %accumulates_output -> (vector<8xf32>) {
+      %residual = vector.load.mask %bounded_output_view[%bounded_token, %channel], %mask, %c0_f32x8 : view<[%published_token_count]x[%bounded_output_size]xf32>, vector<8xi1>, vector<8xf32>
+      %sum = vector.addf %residual, %wide : vector<8xf32>
+      scf.yield %sum : vector<8xf32>
+    } else {
+      scf.yield %wide : vector<8xf32>
+    }
+    vector.store.mask %published, %bounded_output_view[%bounded_token, %channel], %mask : vector<8xf32>, view<[%published_token_count]x[%bounded_output_size]xf32>, vector<8xi1>
+  }
+  kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+  template.return
+}
+
+template.def<@ggml.matmul.vector_q6_f32.store_single_row_overwrite_wave32> device @ggml_matmul_vector_q6_f32_store_single_row_overwrite_wave32(%result: vector<8xf32>, %output_size: index, %channel_base: index, %subgroup_channel_add: index, %output: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %channel = index.add %channel_base, %subgroup_channel_add : index
+  %lane = kernel.subgroup.lane.id : index
+  %lane_token = index.rem %lane, %c16 : index
+  %lane_channel = index.div %lane, %c16 : index
+  %partial_channel_base = index.add %channel, %lane_channel : index
+  %stores_token0 = index.cmp eq, %lane_token, %c0 : index
+  scf.if %stores_token0 {
+    %dst = buffer.view %output[%base] : buffer -> view<1x[%output_size]xf32>
+    scf.for %element = [%c0 to %c8 step %c1] unroll {
+      %channel_step = index.mul %element, %c2 : index
+      %partial_channel = index.add %partial_channel_base, %channel_step : index
+      %channel_valid = index.cmp ult, %partial_channel, %output_size : index
+      scf.if %channel_valid {
+        %bounded_channel, %output_channels = index.assume %partial_channel, %output_size [lt(%partial_channel, %output_size)] : index, index
+        %value = vector.extract %result[%element] : vector<8xf32> -> f32
+        view.store %value, %dst[%c0, %bounded_channel] : f32, view<1x[%output_size]xf32>
+      }
+    }
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_q6_f32.store_dense_outputs_wave32> device @ggml_matmul_vector_q6_f32_store_dense_outputs_wave32(%result: vector<8xf32>, %token_offset: index, %token_start: index, %token_count: index, %output_size: index, %channel_base: index, %subgroup_channel_add: index, %output: buffer, %output_accumulation: index) {
+  %base = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
+  %token = index.add %token_start, %token_offset : index
+  %channel = index.add %channel_base, %subgroup_channel_add : index
+  %token_end = index.add %token, %c16 : index
+  %channel_end = index.add %channel, %c16 : index
+  %valid_token = index.cmp ule, %token_end, %token_count : index
+  %valid_channel = index.cmp ule, %channel_end, %output_size : index
+  %valid = scalar.andi %valid_token, %valid_channel : i1
+  scf.if %valid {
+    %layout = encoding.layout.strided [1, %output_size] : encoding<layout>
+    %dst = buffer.view %output[%base] : buffer -> view<[%output_size]x[%token_count]xf32, %layout>
+    %accumulates = index.cmp eq, %output_accumulation, %c1 : index
+    %published = scf.if %accumulates -> (vector<8xf32>) {
+      %old = vector.fragment.load<result> %dst[%channel, %token] shape [%c16, %c16] : view<[%output_size]x[%token_count]xf32, %layout> -> vector<8xf32>
+      %sum = vector.addf %old, %result : vector<8xf32>
+      scf.yield %sum : vector<8xf32>
+    } else {
+      scf.yield %result : vector<8xf32>
+    }
+    vector.fragment.store<result> %published, %dst[%channel, %token] shape [%c16, %c16] : vector<8xf32>, view<[%output_size]x[%token_count]xf32, %layout>
+  } else {
+    %c0 = index.constant 0 : index
+    %c2 = index.constant 2 : index
+    %c8 = index.constant 8 : index
+    %lane = kernel.subgroup.lane.id : index
+    %lane_token = index.rem %lane, %c16 : index
+    %lane_channel = index.div %lane, %c16 : index
+    %partial_token = index.add %token, %lane_token : index
+    %partial_channel_base = index.add %channel, %lane_channel : index
+    %token_valid = index.cmp ult, %partial_token, %token_count : index
+    %accumulates = index.cmp eq, %output_accumulation, %c1 : index
+    scf.if %token_valid {
+      %bounded_token, %published_token_count = index.assume %partial_token, %token_count [lt(%partial_token, %token_count)] : index, index
+      %dst = buffer.view %output[%base] : buffer -> view<[%published_token_count]x[%output_size]xf32>
+      scf.for %element = [%c0 to %c8 step %c1] unroll {
+        %channel_step = index.mul %element, %c2 : index
+        %partial_channel = index.add %partial_channel_base, %channel_step : index
+        %channel_valid = index.cmp ult, %partial_channel, %output_size : index
+        scf.if %channel_valid {
+          %bounded_channel, %output_channels = index.assume %partial_channel, %output_size [lt(%partial_channel, %output_size)] : index, index
+          %value = vector.extract %result[%element] : vector<8xf32> -> f32
+          %published = scf.if %accumulates -> (f32) {
+            %old = view.load %dst[%bounded_token, %bounded_channel] : view<[%published_token_count]x[%output_size]xf32> -> f32
+            %sum = scalar.addf %value, %old : f32
+            scf.yield %sum : f32
+          } else {
+            scf.yield %value : f32
+          }
+          view.store %published, %dst[%bounded_token, %bounded_channel] : f32, view<[%published_token_count]x[%output_size]xf32>
+        }
+      }
+    }
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_q6_f32.body_packed_storage> device @ggml_matmul_vector_q6_f32_body_packed_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %scale_row_layout: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %output_accumulation = config.get @ggml.matmul.vector.output_accumulation : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 127)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c72 = index.constant 72 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c128_bytes = index.constant 128 : offset
+  %c1152_bytes = index.constant 1152 : offset
+  %c13440_bytes = index.constant 13440 : offset
+  %weight_stage_bytes = index.constant 9216 : offset
+  %activation_stage_bytes = index.constant 2304 : offset
+  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  %empty_words = vector.constant 0 : vector<4xi32>
+  %zero_scale_bytes = vector.constant 0 : vector<8xi8>
+  %nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %high0_mask = vector.constant 50529027 : vector<4xi32>
+  %high1_mask = vector.constant 202116108 : vector<4xi32>
+  %high2_mask = vector.constant 808464432 : vector<4xi32>
+  %high3_mask = vector.constant -1061109568 : vector<4xi32>
+  %shift2 = vector.constant 2 : vector<4xi32>
+  %shift4 = vector.constant 4 : vector<4xi32>
+  %negative32_f32 = vector.constant -32.0 : vector<16xf32>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+
+  %quant_block_count = index.div %bounded_input_size, %c256 : index
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_size]xf32>
+  %weight_stage = buffer.alloca<workgroup> align(16) %weight_stage_bytes : buffer
+  %activation_stage = buffer.alloca<workgroup> align(16) %activation_stage_bytes : buffer
+  %weight_stage_view = buffer.view %weight_stage[%c0_offset] : buffer -> view<64x72xf16>
+  %activation_stage_physical_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<16x72xf16>
+  %activation_fragment_layout = encoding.layout.strided [1, %c72] : encoding<layout>
+  %activation_fragment_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<64x16xf16, %activation_fragment_layout>
+
+  %channel_base = index.mul %output_block, %c64 : index
+  %weight_half = index.rem %workitem, %c2 : index
+  %weight_local_row0 = index.div %workitem, %c2 : index
+  %weight_local_row = index.assume %weight_local_row0 [range(%weight_local_row0, 0, 63)] : index
+  %weight_k = index.mul %weight_half, %c16 : index
+  %weight_k_next = index.add %weight_k, %c32 : index
+  %channel = index.add %channel_base, %weight_local_row : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %use_scale_row_layout = index.cmp eq, %scale_row_layout, %c1 : index
+  %activation_row0 = index.div %workitem, %c8 : index
+  %activation_row = index.assume %activation_row0 [range(%activation_row0, 0, 15)] : index
+  %activation_packet = index.rem %workitem, %c8 : index
+  %activation_k = index.mul %activation_packet, %c4 : index
+  %activation_k_next = index.add %activation_k, %c32 : index
+  %valid_token = index.cmp ult, %activation_row, %bounded_token_count : index
+  %subgroup_channel_add = index.mul %subgroup, %c16 : index
+  %init = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
+
+  %result = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc = %init : vector<8xf32>) -> (vector<8xf32>) {
+    %row_group_block0 = index.mul %output_block, %quant_block_count : index
+    %row_group_block = index.add %row_group_block0, %quant_block : index
+    %row_group_byte_base = index.scale %row_group_block, %c13440_bytes : index, offset -> offset
+    %scale_byte_base = index.add %row_group_byte_base, %c128_bytes : offset
+    %raw_byte_base = index.add %row_group_byte_base, %c1152_bytes : offset
+    %d_view = buffer.view %weight_noalias[%row_group_byte_base] : buffer -> view<64xf16>
+    %scale_view = buffer.view %weight_noalias[%scale_byte_base] : buffer -> view<8x64x2xi8>
+    %scale_row_view = buffer.view %weight_noalias[%scale_byte_base] : buffer -> view<64x2x8xi8>
+    %raw_view = buffer.view %weight_noalias[%raw_byte_base] : buffer -> view<2x3x64x32xi8>
+    %d = scf.if %valid_channel -> (f32) {
+      %d_f16 = view.load %d_view[%weight_local_row] : view<64xf16> -> f16
+      %d_f32 = scalar.extf %d_f16 : f16 to f32
+      scf.yield %d_f32 : f32
+    } else {
+      %c0_f32 = scalar.constant 0.0 : f32
+      scf.yield %c0_f32 : f32
+    }
+    %load_scale_row = scalar.andi %valid_channel, %use_scale_row_layout : i1
+    %scale_bytes = scf.if %load_scale_row -> (vector<8xi8>) {
+      %loaded_scale_bytes = vector.load %scale_row_view[%weight_local_row, %weight_half, %c0] : view<64x2x8xi8> -> vector<8xi8>
+      scf.yield %loaded_scale_bytes : vector<8xi8>
+    } else {
+      scf.yield %zero_scale_bytes : vector<8xi8>
+    }
+    %block_result, %final_ql0_words, %final_ql1_words, %final_qh_words = scf.for %quant_group = [%c0 to %c8 step %c2](%acc = %block_acc : vector<8xf32>, %cached_ql0_words = %empty_words : vector<4xi32>, %cached_ql1_words = %empty_words : vector<4xi32>, %cached_qh_words = %empty_words : vector<4xi32>) -> (vector<8xf32>, vector<4xi32>, vector<4xi32>, vector<4xi32>) unroll {
+      %quant_group_next = index.add %quant_group, %c1 : index
+      %half128 = index.div %quant_group, %c4 : index
+      %group_in_half = index.rem %quant_group, %c4 : index
+      %is_low_pair = index.cmp eq, %group_in_half, %c0 : index
+      %is_first_group = index.cmp eq, %quant_group, %c0 : index
+      %prefetch_second_half = index.cmp eq, %quant_group, %c2 : index
+      %weight_values0, %weight_values1, %next_ql0_words, %next_ql1_words, %next_qh_words = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+        %ql0_words, %ql1_words, %qh_words = scf.if %is_first_group -> (vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+          %ql0_bytes = vector.load %raw_view[%half128, %c0, %weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %ql1_bytes = vector.load %raw_view[%half128, %c1, %weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %qh_bytes = vector.load %raw_view[%half128, %c2, %weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %loaded_ql0_words = vector.bitcast %ql0_bytes : vector<16xi8> to vector<4xi32>
+          %loaded_ql1_words = vector.bitcast %ql1_bytes : vector<16xi8> to vector<4xi32>
+          %loaded_qh_words = vector.bitcast %qh_bytes : vector<16xi8> to vector<4xi32>
+          scf.yield %loaded_ql0_words, %loaded_ql1_words, %loaded_qh_words : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        } else {
+          scf.yield %cached_ql0_words, %cached_ql1_words, %cached_qh_words : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        }
+        %codes0_words, %codes1_words = scf.if %is_low_pair -> (vector<4xi32>, vector<4xi32>) {
+          %ql0_low = vector.andi %ql0_words, %nibble_mask : vector<4xi32>
+          %ql1_low = vector.andi %ql1_words, %nibble_mask : vector<4xi32>
+          %qh0_bits0 = vector.andi %qh_words, %high0_mask : vector<4xi32>
+          %qh1_bits0 = vector.andi %qh_words, %high1_mask : vector<4xi32>
+          %qh0_bits = vector.shli %qh0_bits0, %shift4 : vector<4xi32>
+          %qh1_bits = vector.shli %qh1_bits0, %shift2 : vector<4xi32>
+          %codes0 = vector.ori %ql0_low, %qh0_bits : vector<4xi32>
+          %codes1 = vector.ori %ql1_low, %qh1_bits : vector<4xi32>
+          scf.yield %codes0, %codes1 : vector<4xi32>, vector<4xi32>
+        } else {
+          %ql0_high0 = vector.shrui %ql0_words, %shift4 : vector<4xi32>
+          %ql1_high0 = vector.shrui %ql1_words, %shift4 : vector<4xi32>
+          %ql0_high = vector.andi %ql0_high0, %nibble_mask : vector<4xi32>
+          %ql1_high = vector.andi %ql1_high0, %nibble_mask : vector<4xi32>
+          %qh2_bits = vector.andi %qh_words, %high2_mask : vector<4xi32>
+          %qh3_bits0 = vector.andi %qh_words, %high3_mask : vector<4xi32>
+          %qh3_bits = vector.shrui %qh3_bits0, %shift2 : vector<4xi32>
+          %codes0 = vector.ori %ql0_high, %qh2_bits : vector<4xi32>
+          %codes1 = vector.ori %ql1_high, %qh3_bits : vector<4xi32>
+          scf.yield %codes0, %codes1 : vector<4xi32>, vector<4xi32>
+        }
+        %codes0_u8 = vector.bitcast %codes0_words : vector<4xi32> to vector<16xi8>
+        %codes1_u8 = vector.bitcast %codes1_words : vector<4xi32> to vector<16xi8>
+        %codes0_unsigned_f32 = vector.uitofp %codes0_u8 : vector<16xi8> to vector<16xf32>
+        %codes1_unsigned_f32 = vector.uitofp %codes1_u8 : vector<16xi8> to vector<16xf32>
+        %codes0_f32 = vector.addf %codes0_unsigned_f32, %negative32_f32 : vector<16xf32>
+        %codes1_f32 = vector.addf %codes1_unsigned_f32, %negative32_f32 : vector<16xf32>
+        %scale0_i8, %scale1_i8 = scf.if %use_scale_row_layout -> (i8, i8) {
+          %row_scale0_i8 = vector.extract %scale_bytes[%quant_group] : vector<8xi8> -> i8
+          %row_scale1_i8 = vector.extract %scale_bytes[%quant_group_next] : vector<8xi8> -> i8
+          scf.yield %row_scale0_i8, %row_scale1_i8 : i8, i8
+        } else {
+          %group_scale0_i8 = view.load %scale_view[%quant_group, %weight_local_row, %weight_half] : view<8x64x2xi8> -> i8
+          %group_scale1_i8 = view.load %scale_view[%quant_group_next, %weight_local_row, %weight_half] : view<8x64x2xi8> -> i8
+          scf.yield %group_scale0_i8, %group_scale1_i8 : i8, i8
+        }
+        %scale0 = scalar.sitofp %scale0_i8 : i8 to f32
+        %scale1 = scalar.sitofp %scale1_i8 : i8 to f32
+        %combined0 = scalar.mulf %scale0, %d : f32
+        %combined1 = scalar.mulf %scale1, %d : f32
+        %combined0_vector = vector.splat %combined0 : vector<16xf32>
+        %combined1_vector = vector.splat %combined1 : vector<16xf32>
+        %values0_f32 = vector.mulf %codes0_f32, %combined0_vector : vector<16xf32>
+        %values1_f32 = vector.mulf %codes1_f32, %combined1_vector : vector<16xf32>
+        %values0 = vector.fptrunc %values0_f32 : vector<16xf32> to vector<16xf16>
+        %values1 = vector.fptrunc %values1_f32 : vector<16xf32> to vector<16xf16>
+        %prefetched_ql0_words, %prefetched_ql1_words, %prefetched_qh_words = scf.if %prefetch_second_half -> (vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+          %next_ql0_bytes = vector.load %raw_view[%c1, %c0, %weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %next_ql1_bytes = vector.load %raw_view[%c1, %c1, %weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %next_qh_bytes = vector.load %raw_view[%c1, %c2, %weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %next_ql0 = vector.bitcast %next_ql0_bytes : vector<16xi8> to vector<4xi32>
+          %next_ql1 = vector.bitcast %next_ql1_bytes : vector<16xi8> to vector<4xi32>
+          %next_qh = vector.bitcast %next_qh_bytes : vector<16xi8> to vector<4xi32>
+          scf.yield %next_ql0, %next_ql1, %next_qh : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        } else {
+          scf.yield %ql0_words, %ql1_words, %qh_words : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        }
+        scf.yield %values0, %values1, %prefetched_ql0_words, %prefetched_ql1_words, %prefetched_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+      } else {
+        %zeros0 = vector.constant 0.0 : vector<16xf16>
+        %zeros1 = vector.constant 0.0 : vector<16xf16>
+        scf.yield %zeros0, %zeros1, %cached_ql0_words, %cached_ql1_words, %cached_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+      }
+      vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k] : vector<16xf16>, view<64x72xf16>
+      vector.store %weight_values1, %weight_stage_view[%weight_local_row, %weight_k_next] : vector<16xf16>, view<64x72xf16>
+
+      %activation_values0, %activation_values1 = scf.if %valid_token -> (vector<4xf16>, vector<4xf16>) {
+        %bounded_token, %input_token_count = index.assume %activation_row, %bounded_token_count [lt(%activation_row, %bounded_token_count)] : index, index
+        %block_k_base = index.mul %quant_block, %c256 : index
+        %group_k_add = index.mul %quant_group, %c32 : index
+        %input_k0 = index.add %block_k_base, %group_k_add : index
+        %input_k = index.add %input_k0, %activation_k : index
+        %input_k_next = index.add %input_k0, %activation_k_next : index
+        %loaded0 = vector.load %input_view[%bounded_token, %input_k] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
+        %loaded1 = vector.load %input_view[%bounded_token, %input_k_next] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
+        %narrow0 = vector.fptrunc %loaded0 : vector<4xf32> to vector<4xf16>
+        %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
+        scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
+      } else {
+        %zeros0 = vector.constant 0.0 : vector<4xf16>
+        %zeros1 = vector.constant 0.0 : vector<4xf16>
+        scf.yield %zeros0, %zeros1 : vector<4xf16>, vector<4xf16>
+      }
+      vector.store %activation_values0, %activation_stage_physical_view[%activation_row, %activation_k] : vector<4xf16>, view<16x72xf16>
+      vector.store %activation_values1, %activation_stage_physical_view[%activation_row, %activation_k_next] : vector<4xf16>, view<16x72xf16>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %next = scf.for %k_half = [%c0 to %c64 step %c16](%half_acc = %acc : vector<8xf32>) -> (vector<8xf32>) unroll {
+        %lhs = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
+        %rhs = vector.fragment.load<rhs> %activation_fragment_view[%k_half, %c0] shape [%k, %n] : view<64x16xf16, %activation_fragment_layout> -> vector<16xf16>
+        %half_next = vector.mma %lhs, %rhs, %half_acc : vector<16xf16>, vector<16xf16>, vector<8xf32>
+        scf.yield %half_next : vector<8xf32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      scf.yield %next, %next_ql0_words, %next_ql1_words, %next_qh_words : vector<8xf32>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+    }
+    scf.yield %block_result : vector<8xf32>
+  }
+
+  %overwrites_output = index.cmp eq, %output_accumulation, %c0 : index
+  %has_one_token = index.cmp eq, %bounded_token_count, %c1 : index
+  %use_single_token_overwrite = scalar.andi %overwrites_output, %has_one_token : i1
+  scf.if %use_single_token_overwrite {
+    template.apply<@ggml.matmul.vector_q6_f32.store_single_row_overwrite_wave32>(%result, %bounded_output_size, %channel_base, %subgroup_channel_add, %output_noalias) : (vector<8xf32>, index, index, index, buffer)
+  } else {
+    template.apply<@ggml.matmul.vector_q6_f32.store_dense_outputs_wave32>(%result, %c0, %c0, %bounded_token_count, %bounded_output_size, %channel_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_q6_f32.body_i8_storage> device @ggml_matmul_vector_q6_f32_body_i8_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %output_accumulation = config.get @ggml.matmul.vector.output_accumulation : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 127)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c72 = index.constant 72 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c128_bytes = index.constant 128 : offset
+  %c1152_bytes = index.constant 1152 : offset
+  %c17536_bytes = index.constant 17536 : offset
+  %weight_stage_bytes = index.constant 9216 : offset
+  %activation_stage_bytes = index.constant 2304 : offset
+  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+
+  %quant_block_count = index.div %bounded_input_size, %c256 : index
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_size]xf32>
+  %weight_stage = buffer.alloca<workgroup> align(16) %weight_stage_bytes : buffer
+  %activation_stage = buffer.alloca<workgroup> align(16) %activation_stage_bytes : buffer
+  %weight_stage_view = buffer.view %weight_stage[%c0_offset] : buffer -> view<64x72xf16>
+  %activation_stage_physical_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<16x72xf16>
+  %activation_fragment_layout = encoding.layout.strided [1, %c72] : encoding<layout>
+  %activation_fragment_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<64x16xf16, %activation_fragment_layout>
+
+  %channel_base = index.mul %output_block, %c64 : index
+  %weight_half = index.rem %workitem, %c2 : index
+  %weight_local_row0 = index.div %workitem, %c2 : index
+  %weight_local_row = index.assume %weight_local_row0 [range(%weight_local_row0, 0, 63)] : index
+  %weight_k = index.mul %weight_half, %c16 : index
+  %weight_k_next = index.add %weight_k, %c32 : index
+  %channel = index.add %channel_base, %weight_local_row : index
+  %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+  %activation_row0 = index.div %workitem, %c8 : index
+  %activation_row = index.assume %activation_row0 [range(%activation_row0, 0, 15)] : index
+  %activation_packet = index.rem %workitem, %c8 : index
+  %activation_k = index.mul %activation_packet, %c4 : index
+  %activation_k_next = index.add %activation_k, %c32 : index
+  %valid_token = index.cmp ult, %activation_row, %bounded_token_count : index
+  %subgroup_channel_add = index.mul %subgroup, %c16 : index
+  %init = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
+
+  %result = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc = %init : vector<8xf32>) -> (vector<8xf32>) {
+    %row_group_block0 = index.mul %output_block, %quant_block_count : index
+    %row_group_block = index.add %row_group_block0, %quant_block : index
+    %row_group_byte_base = index.scale %row_group_block, %c17536_bytes : index, offset -> offset
+    %scale_byte_base = index.add %row_group_byte_base, %c128_bytes : offset
+    %code_byte_base = index.add %row_group_byte_base, %c1152_bytes : offset
+    %d_view = buffer.view %weight_noalias[%row_group_byte_base] : buffer -> view<64xf16>
+    %scale_view = buffer.view %weight_noalias[%scale_byte_base] : buffer -> view<8x64x2xi8>
+    %code_view = buffer.view %weight_noalias[%code_byte_base] : buffer -> view<8x64x32xi8>
+    %d = scf.if %valid_channel -> (f32) {
+      %d_f16 = view.load %d_view[%weight_local_row] : view<64xf16> -> f16
+      %d_f32 = scalar.extf %d_f16 : f16 to f32
+      scf.yield %d_f32 : f32
+    } else {
+      %c0_f32 = scalar.constant 0.0 : f32
+      scf.yield %c0_f32 : f32
+    }
+    %block_result = scf.for %quant_group = [%c0 to %c8 step %c2](%acc = %block_acc : vector<8xf32>) -> (vector<8xf32>) {
+      %quant_group_next = index.add %quant_group, %c1 : index
+      %weight_values0, %weight_values1 = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>) {
+        %codes0 = vector.load %code_view[%quant_group, %weight_local_row, %weight_k] : view<8x64x32xi8> -> vector<16xi8>
+        %codes1 = vector.load %code_view[%quant_group_next, %weight_local_row, %weight_k] : view<8x64x32xi8> -> vector<16xi8>
+        %codes0_f32 = vector.sitofp %codes0 : vector<16xi8> to vector<16xf32>
+        %codes1_f32 = vector.sitofp %codes1 : vector<16xi8> to vector<16xf32>
+        %scale0_i8 = view.load %scale_view[%quant_group, %weight_local_row, %weight_half] : view<8x64x2xi8> -> i8
+        %scale1_i8 = view.load %scale_view[%quant_group_next, %weight_local_row, %weight_half] : view<8x64x2xi8> -> i8
+        %scale0 = scalar.sitofp %scale0_i8 : i8 to f32
+        %scale1 = scalar.sitofp %scale1_i8 : i8 to f32
+        %combined0 = scalar.mulf %scale0, %d : f32
+        %combined1 = scalar.mulf %scale1, %d : f32
+        %combined0_vector = vector.splat %combined0 : vector<16xf32>
+        %combined1_vector = vector.splat %combined1 : vector<16xf32>
+        %values0_f32 = vector.mulf %codes0_f32, %combined0_vector : vector<16xf32>
+        %values1_f32 = vector.mulf %codes1_f32, %combined1_vector : vector<16xf32>
+        %values0 = vector.fptrunc %values0_f32 : vector<16xf32> to vector<16xf16>
+        %values1 = vector.fptrunc %values1_f32 : vector<16xf32> to vector<16xf16>
+        scf.yield %values0, %values1 : vector<16xf16>, vector<16xf16>
+      } else {
+        %zeros0 = vector.constant 0.0 : vector<16xf16>
+        %zeros1 = vector.constant 0.0 : vector<16xf16>
+        scf.yield %zeros0, %zeros1 : vector<16xf16>, vector<16xf16>
+      }
+      vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k] : vector<16xf16>, view<64x72xf16>
+      vector.store %weight_values1, %weight_stage_view[%weight_local_row, %weight_k_next] : vector<16xf16>, view<64x72xf16>
+
+      %activation_values0, %activation_values1 = scf.if %valid_token -> (vector<4xf16>, vector<4xf16>) {
+        %bounded_token, %input_token_count = index.assume %activation_row, %bounded_token_count [lt(%activation_row, %bounded_token_count)] : index, index
+        %block_k_base = index.mul %quant_block, %c256 : index
+        %group_k_add = index.mul %quant_group, %c32 : index
+        %input_k0 = index.add %block_k_base, %group_k_add : index
+        %input_k = index.add %input_k0, %activation_k : index
+        %input_k_next = index.add %input_k0, %activation_k_next : index
+        %loaded0 = vector.load %input_view[%bounded_token, %input_k] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
+        %loaded1 = vector.load %input_view[%bounded_token, %input_k_next] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
+        %narrow0 = vector.fptrunc %loaded0 : vector<4xf32> to vector<4xf16>
+        %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
+        scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
+      } else {
+        %zeros0 = vector.constant 0.0 : vector<4xf16>
+        %zeros1 = vector.constant 0.0 : vector<4xf16>
+        scf.yield %zeros0, %zeros1 : vector<4xf16>, vector<4xf16>
+      }
+      vector.store %activation_values0, %activation_stage_physical_view[%activation_row, %activation_k] : vector<4xf16>, view<16x72xf16>
+      vector.store %activation_values1, %activation_stage_physical_view[%activation_row, %activation_k_next] : vector<4xf16>, view<16x72xf16>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %next = scf.for %k_half = [%c0 to %c64 step %c16](%half_acc = %acc : vector<8xf32>) -> (vector<8xf32>) unroll {
+        %lhs_fragment = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
+        %rhs_fragment = vector.fragment.load<rhs> %activation_fragment_view[%k_half, %c0] shape [%k, %n] : view<64x16xf16, %activation_fragment_layout> -> vector<16xf16>
+        %half_next = vector.mma %lhs_fragment, %rhs_fragment, %half_acc : vector<16xf16>, vector<16xf16>, vector<8xf32>
+        scf.yield %half_next : vector<8xf32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      scf.yield %next : vector<8xf32>
+    }
+    scf.yield %block_result : vector<8xf32>
+  }
+
+  template.apply<@ggml.matmul.vector_q6_f32.store_dense_outputs_wave32>(%result, %c0, %c0, %bounded_token_count, %bounded_output_size, %channel_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+  template.return
+}
+
+
+template.def<@ggml.matmul.vector_q6_f32.body_selected_outputs> device @ggml_matmul_vector_q6_f32_body_selected_outputs(%token_count: index, %input_size0: index, %output_size0: index, %scale_row_layout: index, %selected_count0: index, %input: buffer, %weight: buffer, %selected_outputs: buffer, %output: buffer) {
+  %output_accumulation = config.get @ggml.matmul.vector.output_accumulation : index
+  %weight_offset_index = config.get @ggml.matmul.vector.weight_offset : index
+  %weight_offset = index.cast %weight_offset_index : index to offset
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %bounded_selected_count = index.assume %selected_count0 [range(%selected_count0, 1, 64)] : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 127)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c72 = index.constant 72 : index
+  %c256 = index.constant 256 : index
+  %base = index.constant 0 : offset
+  %c128_bytes = index.constant 128 : offset
+  %c1152_bytes = index.constant 1152 : offset
+  %c13440_bytes = index.constant 13440 : offset
+  %weight_stage_bytes = index.constant 9216 : offset
+  %activation_stage_bytes = index.constant 2304 : offset
+  %result_stage_bytes = index.constant 2048 : offset
+  %zero_accumulator = vector.constant 0.0 : vector<16xf16>
+  %empty_words = vector.constant 0 : vector<4xi32>
+  %zero_scale_bytes = vector.constant 0 : vector<8xi8>
+  %nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %high0_mask = vector.constant 50529027 : vector<4xi32>
+  %high1_mask = vector.constant 202116108 : vector<4xi32>
+  %high2_mask = vector.constant 808464432 : vector<4xi32>
+  %high3_mask = vector.constant -1061109568 : vector<4xi32>
+  %shift2 = vector.constant 2 : vector<4xi32>
+  %shift4 = vector.constant 4 : vector<4xi32>
+  %negative32_f32 = vector.constant -32.0 : vector<16xf32>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %quant_block_count = index.div %bounded_input_size, %c256 : index
+  %input_noalias, %weight_noalias, %selected_outputs_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %selected_outputs, %output : buffer, buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%base] : buffer -> view<[%bounded_token_count]x[%bounded_input_size]xf32>
+  %selected_outputs_view = buffer.view %selected_outputs_noalias[%base] : buffer -> view<64xi32>
+  %weight_stage = buffer.alloca<workgroup> align(16) %weight_stage_bytes : buffer
+  %activation_stage = buffer.alloca<workgroup> align(16) %activation_stage_bytes : buffer
+  %result_stage = buffer.alloca<workgroup> align(16) %result_stage_bytes : buffer
+  %weight_stage_view = buffer.view %weight_stage[%base] : buffer -> view<64x72xf16>
+  %activation_stage_physical_view = buffer.view %activation_stage[%base] : buffer -> view<16x72xf16>
+  %activation_fragment_layout = encoding.layout.strided [1, %c72] : encoding<layout>
+  %activation_fragment_view = buffer.view %activation_stage[%base] : buffer -> view<64x16xf16, %activation_fragment_layout>
+  %weight_half = index.rem %workitem, %c2 : index
+  %weight_local_row0 = index.div %workitem, %c2 : index
+  %weight_local_row = index.assume %weight_local_row0 [range(%weight_local_row0, 0, 63)] : index
+  %weight_k = index.mul %weight_half, %c16 : index
+  %weight_k_next = index.add %weight_k, %c32 : index
+  %valid_selected_output = index.cmp ult, %weight_local_row, %bounded_selected_count : index
+  %channel0 = scf.if %valid_selected_output -> (index) {
+    %selected_output_i32 = view.load %selected_outputs_view[%weight_local_row] : view<64xi32> -> i32
+    %selected_output_index0 = index.cast %selected_output_i32 : i32 to index
+    %selected_output_index = index.assume %selected_output_index0 [range(%selected_output_index0, 0, 262143)] : index
+    scf.yield %selected_output_index : index
+  } else {
+    scf.yield %c0 : index
+  }
+  %channel = index.assume %channel0 [range(%channel0, 0, 262143)] : index
+  %channel_in_range = index.cmp ult, %channel, %bounded_output_size : index
+  %valid_channel = scalar.andi %valid_selected_output, %channel_in_range : i1
+  %selected_output_block = index.div %channel, %c64 : index
+  %selected_weight_local_row = index.rem %channel, %c64 : index
+  %use_scale_row_layout = index.cmp eq, %scale_row_layout, %c1 : index
+  %activation_row0 = index.div %workitem, %c8 : index
+  %activation_row = index.assume %activation_row0 [range(%activation_row0, 0, 15)] : index
+  %activation_packet = index.rem %workitem, %c8 : index
+  %activation_k = index.mul %activation_packet, %c4 : index
+  %activation_k_next = index.add %activation_k, %c32 : index
+  %valid_token = index.cmp ult, %activation_row, %bounded_token_count : index
+  %subgroup_channel_add = index.mul %subgroup, %c16 : index
+  %init = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<16xf16>
+  %result = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc = %init : vector<16xf16>) -> (vector<16xf16>) {
+    %row_group_block0 = index.mul %selected_output_block, %quant_block_count : index
+    %row_group_block = index.add %row_group_block0, %quant_block : index
+    %row_group_byte_relative = index.scale %row_group_block, %c13440_bytes : index, offset -> offset
+    %row_group_byte_base = index.add %weight_offset, %row_group_byte_relative : offset
+    %scale_byte_base = index.add %row_group_byte_base, %c128_bytes : offset
+    %raw_byte_base = index.add %row_group_byte_base, %c1152_bytes : offset
+    %d_view = buffer.view %weight_noalias[%row_group_byte_base] : buffer -> view<64xf16>
+    %scale_view = buffer.view %weight_noalias[%scale_byte_base] : buffer -> view<8x64x2xi8>
+    %scale_row_view = buffer.view %weight_noalias[%scale_byte_base] : buffer -> view<64x2x8xi8>
+    %raw_view = buffer.view %weight_noalias[%raw_byte_base] : buffer -> view<2x3x64x32xi8>
+    %d = scf.if %valid_channel -> (f32) {
+      %d_f16 = view.load %d_view[%selected_weight_local_row] : view<64xf16> -> f16
+      %d_f32 = scalar.extf %d_f16 : f16 to f32
+      scf.yield %d_f32 : f32
+    } else {
+      %zero_f32 = scalar.constant 0.0 : f32
+      scf.yield %zero_f32 : f32
+    }
+    %load_scale_row = scalar.andi %valid_channel, %use_scale_row_layout : i1
+    %scale_bytes = scf.if %load_scale_row -> (vector<8xi8>) {
+      %loaded_scale_bytes = vector.load %scale_row_view[%selected_weight_local_row, %weight_half, %c0] : view<64x2x8xi8> -> vector<8xi8>
+      scf.yield %loaded_scale_bytes : vector<8xi8>
+    } else {
+      scf.yield %zero_scale_bytes : vector<8xi8>
+    }
+    %block_result, %final_ql0_words, %final_ql1_words, %final_qh_words = scf.for %quant_group = [%c0 to %c8 step %c2](%acc = %block_acc : vector<16xf16>, %cached_ql0_words = %empty_words : vector<4xi32>, %cached_ql1_words = %empty_words : vector<4xi32>, %cached_qh_words = %empty_words : vector<4xi32>) -> (vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>) unroll {
+      %quant_group_next = index.add %quant_group, %c1 : index
+      %half128 = index.div %quant_group, %c4 : index
+      %group_in_half = index.rem %quant_group, %c4 : index
+      %is_low_pair = index.cmp eq, %group_in_half, %c0 : index
+      %is_first_group = index.cmp eq, %quant_group, %c0 : index
+      %prefetch_second_half = index.cmp eq, %quant_group, %c2 : index
+      %weight_values0, %weight_values1, %next_ql0_words, %next_ql1_words, %next_qh_words = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+        %ql0_words, %ql1_words, %qh_words = scf.if %is_first_group -> (vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+          %ql0_bytes = vector.load %raw_view[%half128, %c0, %selected_weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %ql1_bytes = vector.load %raw_view[%half128, %c1, %selected_weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %qh_bytes = vector.load %raw_view[%half128, %c2, %selected_weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %loaded_ql0_words = vector.bitcast %ql0_bytes : vector<16xi8> to vector<4xi32>
+          %loaded_ql1_words = vector.bitcast %ql1_bytes : vector<16xi8> to vector<4xi32>
+          %loaded_qh_words = vector.bitcast %qh_bytes : vector<16xi8> to vector<4xi32>
+          scf.yield %loaded_ql0_words, %loaded_ql1_words, %loaded_qh_words : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        } else {
+          scf.yield %cached_ql0_words, %cached_ql1_words, %cached_qh_words : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        }
+        %codes0_words, %codes1_words = scf.if %is_low_pair -> (vector<4xi32>, vector<4xi32>) {
+          %ql0_low = vector.andi %ql0_words, %nibble_mask : vector<4xi32>
+          %ql1_low = vector.andi %ql1_words, %nibble_mask : vector<4xi32>
+          %qh0_bits0 = vector.andi %qh_words, %high0_mask : vector<4xi32>
+          %qh1_bits0 = vector.andi %qh_words, %high1_mask : vector<4xi32>
+          %qh0_bits = vector.shli %qh0_bits0, %shift4 : vector<4xi32>
+          %qh1_bits = vector.shli %qh1_bits0, %shift2 : vector<4xi32>
+          %codes0 = vector.ori %ql0_low, %qh0_bits : vector<4xi32>
+          %codes1 = vector.ori %ql1_low, %qh1_bits : vector<4xi32>
+          scf.yield %codes0, %codes1 : vector<4xi32>, vector<4xi32>
+        } else {
+          %ql0_high0 = vector.shrui %ql0_words, %shift4 : vector<4xi32>
+          %ql1_high0 = vector.shrui %ql1_words, %shift4 : vector<4xi32>
+          %ql0_high = vector.andi %ql0_high0, %nibble_mask : vector<4xi32>
+          %ql1_high = vector.andi %ql1_high0, %nibble_mask : vector<4xi32>
+          %qh2_bits = vector.andi %qh_words, %high2_mask : vector<4xi32>
+          %qh3_bits0 = vector.andi %qh_words, %high3_mask : vector<4xi32>
+          %qh3_bits = vector.shrui %qh3_bits0, %shift2 : vector<4xi32>
+          %codes0 = vector.ori %ql0_high, %qh2_bits : vector<4xi32>
+          %codes1 = vector.ori %ql1_high, %qh3_bits : vector<4xi32>
+          scf.yield %codes0, %codes1 : vector<4xi32>, vector<4xi32>
+        }
+        %codes0_u8 = vector.bitcast %codes0_words : vector<4xi32> to vector<16xi8>
+        %codes1_u8 = vector.bitcast %codes1_words : vector<4xi32> to vector<16xi8>
+        %codes0_unsigned_f32 = vector.uitofp %codes0_u8 : vector<16xi8> to vector<16xf32>
+        %codes1_unsigned_f32 = vector.uitofp %codes1_u8 : vector<16xi8> to vector<16xf32>
+        %codes0_f32 = vector.addf %codes0_unsigned_f32, %negative32_f32 : vector<16xf32>
+        %codes1_f32 = vector.addf %codes1_unsigned_f32, %negative32_f32 : vector<16xf32>
+        %scale0_i8, %scale1_i8 = scf.if %use_scale_row_layout -> (i8, i8) {
+          %row_scale0_i8 = vector.extract %scale_bytes[%quant_group] : vector<8xi8> -> i8
+          %row_scale1_i8 = vector.extract %scale_bytes[%quant_group_next] : vector<8xi8> -> i8
+          scf.yield %row_scale0_i8, %row_scale1_i8 : i8, i8
+        } else {
+          %group_scale0_i8 = view.load %scale_view[%quant_group, %selected_weight_local_row, %weight_half] : view<8x64x2xi8> -> i8
+          %group_scale1_i8 = view.load %scale_view[%quant_group_next, %selected_weight_local_row, %weight_half] : view<8x64x2xi8> -> i8
+          scf.yield %group_scale0_i8, %group_scale1_i8 : i8, i8
+        }
+        %scale0 = scalar.sitofp %scale0_i8 : i8 to f32
+        %scale1 = scalar.sitofp %scale1_i8 : i8 to f32
+        %combined0 = scalar.mulf %scale0, %d : f32
+        %combined1 = scalar.mulf %scale1, %d : f32
+        %combined0_vector = vector.splat %combined0 : vector<16xf32>
+        %combined1_vector = vector.splat %combined1 : vector<16xf32>
+        %values0_f32 = vector.mulf %codes0_f32, %combined0_vector : vector<16xf32>
+        %values1_f32 = vector.mulf %codes1_f32, %combined1_vector : vector<16xf32>
+        %values0 = vector.fptrunc %values0_f32 : vector<16xf32> to vector<16xf16>
+        %values1 = vector.fptrunc %values1_f32 : vector<16xf32> to vector<16xf16>
+        %prefetched_ql0_words, %prefetched_ql1_words, %prefetched_qh_words = scf.if %prefetch_second_half -> (vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+          %next_ql0_bytes = vector.load %raw_view[%c1, %c0, %selected_weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %next_ql1_bytes = vector.load %raw_view[%c1, %c1, %selected_weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %next_qh_bytes = vector.load %raw_view[%c1, %c2, %selected_weight_local_row, %weight_k] : view<2x3x64x32xi8> -> vector<16xi8>
+          %next_ql0 = vector.bitcast %next_ql0_bytes : vector<16xi8> to vector<4xi32>
+          %next_ql1 = vector.bitcast %next_ql1_bytes : vector<16xi8> to vector<4xi32>
+          %next_qh = vector.bitcast %next_qh_bytes : vector<16xi8> to vector<4xi32>
+          scf.yield %next_ql0, %next_ql1, %next_qh : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        } else {
+          scf.yield %ql0_words, %ql1_words, %qh_words : vector<4xi32>, vector<4xi32>, vector<4xi32>
+        }
+        scf.yield %values0, %values1, %prefetched_ql0_words, %prefetched_ql1_words, %prefetched_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+      } else {
+        %zeros0 = vector.constant 0.0 : vector<16xf16>
+        %zeros1 = vector.constant 0.0 : vector<16xf16>
+        scf.yield %zeros0, %zeros1, %cached_ql0_words, %cached_ql1_words, %cached_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+      }
+      vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k] : vector<16xf16>, view<64x72xf16>
+      vector.store %weight_values1, %weight_stage_view[%weight_local_row, %weight_k_next] : vector<16xf16>, view<64x72xf16>
+      %activation_values0, %activation_values1 = scf.if %valid_token -> (vector<4xf16>, vector<4xf16>) {
+        %bounded_token, %input_token_count = index.assume %activation_row, %bounded_token_count [lt(%activation_row, %bounded_token_count)] : index, index
+        %block_k_base = index.mul %quant_block, %c256 : index
+        %group_k_add = index.mul %quant_group, %c32 : index
+        %input_k0 = index.add %block_k_base, %group_k_add : index
+        %input_k = index.add %input_k0, %activation_k : index
+        %input_k_next = index.add %input_k0, %activation_k_next : index
+        %loaded0 = vector.load %input_view[%bounded_token, %input_k] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
+        %loaded1 = vector.load %input_view[%bounded_token, %input_k_next] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
+        %narrow0 = vector.fptrunc %loaded0 : vector<4xf32> to vector<4xf16>
+        %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
+        scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
+      } else {
+        %zeros0 = vector.constant 0.0 : vector<4xf16>
+        %zeros1 = vector.constant 0.0 : vector<4xf16>
+        scf.yield %zeros0, %zeros1 : vector<4xf16>, vector<4xf16>
+      }
+      vector.store %activation_values0, %activation_stage_physical_view[%activation_row, %activation_k] : vector<4xf16>, view<16x72xf16>
+      vector.store %activation_values1, %activation_stage_physical_view[%activation_row, %activation_k_next] : vector<4xf16>, view<16x72xf16>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %next = scf.for %k_half = [%c0 to %c64 step %c16](%half_acc = %acc : vector<16xf16>) -> (vector<16xf16>) unroll {
+        %lhs = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
+        %rhs = vector.fragment.load<rhs> %activation_fragment_view[%k_half, %c0] shape [%k, %n] : view<64x16xf16, %activation_fragment_layout> -> vector<16xf16>
+        %half_next = vector.mma %lhs, %rhs, %half_acc : vector<16xf16>, vector<16xf16>, vector<16xf16>
+        scf.yield %half_next : vector<16xf16>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      scf.yield %next, %next_ql0_words, %next_ql1_words, %next_qh_words : vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+    }
+    scf.yield %block_result : vector<16xf16>
+  }
+  template.apply<@ggml.matmul.vector_q6_f32.store_fragment_outputs_wave32>(%result, %c0, %c0, %bounded_token_count, %c64, %c0, %subgroup_channel_add, %result_stage, %output_noalias, %output_accumulation) : (vector<16xf16>, index, index, index, index, index, index, buffer, buffer, index)
+  template.return
+}

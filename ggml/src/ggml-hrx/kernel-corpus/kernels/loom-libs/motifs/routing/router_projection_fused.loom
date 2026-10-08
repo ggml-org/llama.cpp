@@ -1,0 +1,91 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @qwen3_moe.router.fused.experts_per_wave() -> (index)
+
+template.decl @qwen3_moe.router.fused.projection(%hidden_size: index, %expert_count: index, %token_count: index, %token: index, %expert_tile: index, %lane: index, %writes_projection: i1, %input: buffer, %weight: buffer, %logits: buffer)
+
+amdgpu.target<gfx1151> @qwen3_moe_router_fused_gfx1151
+
+template.def<@qwen3_moe.router.fused.experts_per_wave> target(@qwen3_moe_router_fused_gfx1151) requires [#target.subgroup.size<64>] priority(20) @qwen3_moe_router_fused_two_experts_per_wave() -> (index) {
+  %c2 = index.constant 2 : index
+  template.return %c2 : index
+}
+
+template.def<@qwen3_moe.router.fused.experts_per_wave> requires [#target.subgroup.size<64>] priority(1) @qwen3_moe_router_fused_four_experts_per_wave() -> (index) {
+  %c4 = index.constant 4 : index
+  template.return %c4 : index
+}
+
+template.def<@qwen3_moe.router.fused.projection> device target(@qwen3_moe_router_fused_gfx1151) requires [#target.subgroup.size<64>] priority(20) @qwen3_moe_router_fused_two_expert_projection(%hidden_size: index, %expert_count: index, %token_count: index, %token: index, %expert_tile: index, %lane: index, %writes_projection: i1, %input: buffer, %weight: buffer, %logits: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %expert_base = index.mul %expert_tile, %c2 : index
+  %expert1 = index.add %expert_base, %c1 : index
+  %lane_channel = index.mul %lane, %c4 : index
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight[%c0_offset] : buffer -> view<[%expert_count]x[%hidden_size]xf32>
+  %logits_view = buffer.view %logits[%c0_offset] : buffer -> view<[%token_count]x[%expert_count]xf32>
+  %c0_f32x2 = vector.splat %c0_f32 : vector<2xf32>
+  %lane_sums = scf.for %channel = [%lane_channel to %hidden_size step %c256](%accumulators = %c0_f32x2 : vector<2xf32>) -> (vector<2xf32>) unroll(%c4) schedule(interleaved) {
+    %input_values = vector.load %input_view[%token, %channel] : view<[%token_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values0 = vector.load %weight_view[%expert_base, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values1 = vector.load %weight_view[%expert1, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %accumulator0 = vector.extract %accumulators[0] : vector<2xf32> -> f32
+    %accumulator1 = vector.extract %accumulators[1] : vector<2xf32> -> f32
+    %next0 = vector.dotf %input_values, %weight_values0, %accumulator0 : vector<4xf32>, vector<4xf32>, f32
+    %next1 = vector.dotf %input_values, %weight_values1, %accumulator1 : vector<4xf32>, vector<4xf32>, f32
+    %next_accumulators = vector.from_elements %next0, %next1 : vector<2xf32>
+    scf.yield %next_accumulators : vector<2xf32>
+  }
+  %sums = kernel.subgroup.reduce<addf> %lane_sums : vector<2xf32>
+  scf.if %writes_projection {
+    vector.store %sums, %logits_view[%token, %expert_base] : vector<2xf32>, view<[%token_count]x[%expert_count]xf32>
+  }
+  template.return
+}
+
+template.def<@qwen3_moe.router.fused.projection> device requires [#target.subgroup.size<64>] priority(1) @qwen3_moe_router_fused_four_expert_projection(%hidden_size: index, %expert_count: index, %token_count: index, %token: index, %expert_tile: index, %lane: index, %writes_projection: i1, %input: buffer, %weight: buffer, %logits: buffer) {
+  %c0_offset = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %expert_base = index.mul %expert_tile, %c4 : index
+  %expert1 = index.add %expert_base, %c1 : index
+  %expert2 = index.add %expert_base, %c2 : index
+  %expert3 = index.add %expert_base, %c3 : index
+  %lane_channel = index.mul %lane, %c4 : index
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight[%c0_offset] : buffer -> view<[%expert_count]x[%hidden_size]xf32>
+  %logits_view = buffer.view %logits[%c0_offset] : buffer -> view<[%token_count]x[%expert_count]xf32>
+  %c0_f32x4 = vector.splat %c0_f32 : vector<4xf32>
+  %lane_sums = scf.for %channel = [%lane_channel to %hidden_size step %c256](%accumulators = %c0_f32x4 : vector<4xf32>) -> (vector<4xf32>) unroll(%c4) schedule(interleaved) {
+    %input_values = vector.load %input_view[%token, %channel] : view<[%token_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values0 = vector.load %weight_view[%expert_base, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values1 = vector.load %weight_view[%expert1, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values2 = vector.load %weight_view[%expert2, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %weight_values3 = vector.load %weight_view[%expert3, %channel] : view<[%expert_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %accumulator0 = vector.extract %accumulators[0] : vector<4xf32> -> f32
+    %accumulator1 = vector.extract %accumulators[1] : vector<4xf32> -> f32
+    %accumulator2 = vector.extract %accumulators[2] : vector<4xf32> -> f32
+    %accumulator3 = vector.extract %accumulators[3] : vector<4xf32> -> f32
+    %next0 = vector.dotf %input_values, %weight_values0, %accumulator0 : vector<4xf32>, vector<4xf32>, f32
+    %next1 = vector.dotf %input_values, %weight_values1, %accumulator1 : vector<4xf32>, vector<4xf32>, f32
+    %next2 = vector.dotf %input_values, %weight_values2, %accumulator2 : vector<4xf32>, vector<4xf32>, f32
+    %next3 = vector.dotf %input_values, %weight_values3, %accumulator3 : vector<4xf32>, vector<4xf32>, f32
+    %next_accumulators = vector.from_elements %next0, %next1, %next2, %next3 : vector<4xf32>
+    scf.yield %next_accumulators : vector<4xf32>
+  }
+  %sums = kernel.subgroup.reduce<addf> %lane_sums : vector<4xf32>
+  scf.if %writes_projection {
+    vector.store %sums, %logits_view[%token, %expert_base] : vector<4xf32>, view<[%token_count]x[%expert_count]xf32>
+  }
+  template.return
+}

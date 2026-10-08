@@ -1,0 +1,21 @@
+// Shared publication helpers for vector-shaped matmul outputs.
+template.decl @ggml.matmul.vector_publish.next_vector4(%publish_word: i1, %publish_format: index, %token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %next_output: buffer)
+
+template.def<@ggml.matmul.vector_publish.next_vector4> device @ggml_matmul_vector_publish_next_vector4(%publish_word: i1, %publish_format: index, %token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %next_output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 5)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 524288)] : index
+  %c1 = index.constant 1 : index
+  %f16_format = index.constant 1 : index
+  %base = index.constant 0 : offset
+  %publishes_f16 = index.cmp eq, %publish_format, %f16_format : index
+  %publishes_next = scalar.andi %publish_word, %publishes_f16 : i1
+  scf.if %publishes_next {
+    %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+    %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+    %next_output_noalias = buffer.assume.noalias %next_output : buffer
+    %next_output_view = buffer.view %next_output_noalias[%base] : buffer -> view<[%token_count]x[%output_size]xf16>
+    %f16_values = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store.mask %f16_values, %next_output_view[%token, %channel], %mask : vector<4xf16>, view<[%token_count]x[%output_size]xf16>, vector<4xi1>
+  }
+  template.return
+}

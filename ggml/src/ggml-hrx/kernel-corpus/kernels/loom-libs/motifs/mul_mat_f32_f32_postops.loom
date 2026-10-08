@@ -1,0 +1,149 @@
+template.decl @ggml.mul_mat_f32_f32_wmma.add_bias_vector4(%output_size0: index, %channel: index, %values: vector<4xf32>, %bias: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.mul_mat_f32_f32_wmma.add_residual_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %residual_input: buffer) -> (vector<4xf32>)
+
+template.decl @ggml.mul_mat_f32_f32_wmma.finish_rmsnorm_weight(%token_count0: index, %output_size0: index, %output_tile_count0: index, %token_tile_count0: index, %epsilon: f32, %token_tile: index, %source: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_wmma.store_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %output: buffer)
+
+template.def<@ggml.mul_mat_f32_f32_wmma.add_bias_vector4> device @ggml_mul_mat_f32_f32_wmma_add_bias_vector4(%output_size0: index, %channel: index, %values: vector<4xf32>, %bias: buffer) -> (vector<4xf32>) {
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %bias_noalias = buffer.assume.noalias %bias : buffer
+  %bias_view = buffer.view %bias_noalias[%c0_offset] : buffer -> view<[%output_size]xf32>
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+  %bias_values = vector.load.mask %bias_view[%channel], %mask, %c0_f32x4 : view<[%output_size]xf32>, vector<4xi1>, vector<4xf32>
+  %sum = vector.addf %values, %bias_values : vector<4xf32>
+  template.return %sum : vector<4xf32>
+}
+
+template.def<@ggml.mul_mat_f32_f32_wmma.add_residual_vector4> device @ggml_mul_mat_f32_f32_wmma_add_residual_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %residual_input: buffer) -> (vector<4xf32>) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %residual_input_noalias = buffer.assume.noalias %residual_input : buffer
+  %residual_input_view = buffer.view %residual_input_noalias[%c0_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+  %residual = vector.load.mask %residual_input_view[%token, %channel], %mask, %c0_f32x4 : view<[%token_count]x[%output_size]xf32>, vector<4xi1>, vector<4xf32>
+  %sum = vector.addf %values, %residual : vector<4xf32>
+  template.return %sum : vector<4xf32>
+}
+
+template.def<@ggml.mul_mat_f32_f32_wmma.store_vector4> device @ggml_mul_mat_f32_f32_wmma_store_vector4(%token_count0: index, %output_size0: index, %token0: index, %channel: index, %values: vector<4xf32>, %output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+  vector.store.mask %values, %output_view[%token, %channel], %mask : vector<4xf32>, view<[%token_count]x[%output_size]xf32>, vector<4xi1>
+  template.return
+}
+
+template.def<@ggml.mul_mat_f32_f32_wmma.finish_rmsnorm_weight> device @ggml_mul_mat_f32_f32_wmma_finish_rmsnorm_weight(%token_count0: index, %output_size0: index, %output_tile_count0: index, %token_tile_count0: index, %epsilon: f32, %token_tile: index, %source: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 128, 32768), mul(%output_size0, 128)] : index
+  %output_tile_count = index.assume %output_tile_count0 [range(%output_tile_count0, 1, 4096)] : index
+  %token_tile_count = index.assume %token_tile_count0 [range(%token_tile_count0, 1, 64)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %workgroup_size = kernel.workgroup.size<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %subgroup_count = index.div %workgroup_size, %c64 : index
+  %c0_offset = index.constant 0 : offset
+  %counter_scratch_bytes = index.constant 4 : offset
+  %rms_scratch_bytes = index.constant 512 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %hidden_size_i32 = index.cast %output_size : index to i32
+  %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+  %output_tile_count_i32 = index.cast %output_tile_count : index to i32
+  %last_channel_ordinal_i32 = scalar.subi %output_tile_count_i32, %c1_i32 : i32
+  %negative_output_tile_count_i32 = scalar.subi %c0_i32, %output_tile_count_i32 : i32
+  %source_noalias, %norm_weight_noalias, %normalized_output_noalias, %completion_counters_noalias = buffer.assume.noalias %source, %norm_weight, %normalized_output, %completion_counters : buffer, buffer, buffer, buffer
+  %completion_counters_aligned = buffer.assume.alignment %completion_counters_noalias {minimum_alignment = 16} : buffer
+  %source_view = buffer.view %source_noalias[%c0_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %norm_weight_view = buffer.view %norm_weight_noalias[%c0_offset] : buffer -> view<[%output_size]xf32>
+  %normalized_output_view = buffer.view %normalized_output_noalias[%c0_offset] : buffer -> view<[%token_count]x[%output_size]xf32>
+  %completion_counter_view = buffer.view %completion_counters_aligned[%c0_offset] : buffer -> view<[%token_tile_count]xi32>
+  %counter_scratch = buffer.alloca<workgroup> align(4) %counter_scratch_bytes : buffer
+  %rms_scratch = buffer.alloca<workgroup> align(16) %rms_scratch_bytes : buffer
+  %counter_scratch_view = buffer.view %counter_scratch[%c0_offset] : buffer -> view<1xi32>
+  %rms_scratch_view = buffer.view %rms_scratch[%c0_offset] : buffer -> view<128xf32>
+  %token_tile_base = index.mul %token_tile, %c32 : index
+  kernel.barrier<global> scope(workgroup) ordering(release)
+  %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
+  scf.if %workitem_is_zero {
+    %old_counter = view.atomic.rmw<addi> %c1_i32, %completion_counter_view[%token_tile] {ordering = acq_rel, scope = device} : i32, view<[%token_tile_count]xi32> -> i32
+    view.store %old_counter, %counter_scratch_view[%c0] : i32, view<1xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %old_counter = view.load %counter_scratch_view[%c0] : view<1xi32> -> i32
+  %is_last_channel_tile = scalar.cmpi eq, %old_counter, %last_channel_ordinal_i32 : i32
+  scf.if %is_last_channel_tile {
+    kernel.barrier<global> scope(workgroup) ordering(acquire)
+    scf.for %token_offset = [%c0 to %c32 step %c1] {
+      %token0 = index.add %token_tile_base, %token_offset : index
+      %valid_token = index.cmp ult, %token0, %token_count : index
+      scf.if %valid_token {
+        %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+        %thread_sum = scf.for %channel = [%workitem to %output_size step %workgroup_size](%running_sum = %c0_f32 : f32) -> (f32) {
+          %value = view.load %source_view[%token, %channel] : view<[%token_count]x[%output_size]xf32> -> f32
+          %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+          %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+          scf.yield %next_sum : f32
+        }
+        %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+        %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+        scf.if %is_subgroup_leader {
+          view.store %subgroup_sum, %rms_scratch_view[%subgroup] : f32, view<128xf32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+        %is_reduction_lane = index.cmp ult, %lane, %subgroup_count : index
+        %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+        %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+          %value = view.load %rms_scratch_view[%lane] : view<128xf32> -> f32
+          scf.yield %value : f32
+        } else {
+          scf.yield %c0_f32 : f32
+        }
+        %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+        %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+        scf.if %writes_scale {
+          %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+          %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+          %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+          view.store %scale, %rms_scratch_view[%c0] : f32, view<128xf32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %scale = view.load %rms_scratch_view[%c0] : view<128xf32> -> f32
+        scf.for %channel = [%workitem to %output_size step %workgroup_size] {
+          %value = view.load %source_view[%token, %channel] : view<[%token_count]x[%output_size]xf32> -> f32
+          %weight_value = view.load %norm_weight_view[%channel] : view<[%output_size]xf32> -> f32
+          %scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %scale : f32
+          %normalized = scalar.mulf<reassoc|nnan|ninf|nsz> %scaled, %weight_value : f32
+          view.store %normalized, %normalized_output_view[%token, %channel] : f32, view<[%token_count]x[%output_size]xf32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      }
+    }
+    kernel.barrier<global> scope(workgroup) ordering(release)
+    scf.if %workitem_is_zero {
+      view.atomic.reduce<addi> %negative_output_tile_count_i32, %completion_counter_view[%token_tile] {ordering = release, scope = device} : i32, view<[%token_tile_count]xi32>
+    }
+  }
+  template.return
+}

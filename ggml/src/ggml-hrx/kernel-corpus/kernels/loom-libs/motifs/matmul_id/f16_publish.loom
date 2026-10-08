@@ -1,0 +1,25 @@
+// F16 publication for routed down-projection results.
+template.decl @ggml.mul_mat_id_f16_f16_wmma.finish_tile(%token_count: index, %route_count: index, %output_size: index, %expert_count: index, %channel_tile: index, %expert: index, %route_tile_base: index, %expert_route_count: index, %expert_table: buffer, %output: buffer)
+
+template.decl @ggml.mul_mat_id_f16_f16_wmma.publish_vector4(%publish_word: i1, %assignment: index, %channel: index, %token_count: index, %route_count: index, %output_size: index, %values: vector<4xf16>, %output: buffer)
+
+template.def<@ggml.mul_mat_id_f16_f16_wmma.publish_vector4> device @ggml_mul_mat_id_f16_f16_wmma_publish_vector4(%publish_word: i1, %assignment: index, %channel: index, %token_count0: index, %route_count0: index, %output_size0: index, %values: vector<4xf16>, %output: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %route_count = index.assume %route_count0 [range(%route_count0, 1, 8)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 4096)] : index
+  %c0_offset = index.constant 0 : offset
+  %c1 = index.constant 1 : index
+  %assignment_count = index.mul %token_count, %route_count : index
+  %output_noalias = buffer.assume.noalias %output : buffer
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%assignment_count]x[%output_size]xf16>
+  scf.if %publish_word {
+    %bounded_assignment, %bounded_assignment_count = index.assume %assignment, %assignment_count [lt(%assignment, %assignment_count)] : index, index
+    %mask = vector.mask.range [%channel to %output_size step %c1] : index -> vector<4xi1>
+    vector.store.mask %values, %output_view[%bounded_assignment, %channel], %mask : vector<4xf16>, view<[%assignment_count]x[%output_size]xf16>, vector<4xi1>
+  }
+  template.return
+}
+
+template.def<@ggml.mul_mat_id_f16_f16_wmma.finish_tile> device @ggml_mul_mat_id_f16_f16_wmma_finish_tile(%token_count: index, %route_count: index, %output_size: index, %expert_count: index, %channel_tile: index, %expert: index, %route_tile_base: index, %expert_route_count: index, %expert_table: buffer, %output: buffer) {
+  template.return
+}

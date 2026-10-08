@@ -1,0 +1,49 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.normalization.publish_f16.k16_vector4(%values: vector<4xf32>, %channel: index, %token: index, %token_count: index, %hidden_size: index, %packet: index, %output: buffer)
+
+template.def<@ggml.normalization.publish_f16.k16_vector4> device @ggml_normalization_publish_f16_k16_vector4(%values: vector<4xf32>, %channel: index, %token: index, %token_count: index, %hidden_size: index, %packet: index, %output: buffer) {
+  %base = index.constant 0 : offset
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %packed_columns = index.div %hidden_size, %c16 : index
+  %packed_view = buffer.view %output[%base] : buffer -> view<[%packed_columns]x[%token_count]x16xf16>
+  %packed_column = index.div %channel, %c16 : index
+  %packed_lane = index.rem %channel, %c16 : index
+  %half = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+  vector.store %half, %packed_view[%packed_column, %token, %packed_lane] : vector<4xf16>, view<[%packed_columns]x[%token_count]x16xf16>
+  %fence_pos = index.rem %packet, %c4 : index
+  %end_packet = index.cmp eq, %fence_pos, %c3 : index
+  scf.if %end_packet {
+    scf.schedule.fence
+  }
+  template.return
+}
+
+template.decl @ggml.normalization.publish_f16.gate_vector4(%values: vector<4xf32>, %row: index, %channel: index, %token_count: index, %hidden_size: index, %row_width: index, %output: buffer)
+
+template.def<@ggml.normalization.publish_f16.gate_vector4> device @ggml_normalization_publish_f16_gate_vector4(%values: vector<4xf32>, %row: index, %channel: index, %token_count: index, %hidden_size: index, %row_width: index, %output: buffer) {
+  %z = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %c16 = index.constant 16 : index
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%token_count]x[%hidden_size]xf16>
+  %half = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+  %packed = index.cmp ugt, %row_width, %z : index
+  scf.if %packed {
+    %element_count = index.mul %token_count, %hidden_size : index
+    %packed_rows = index.div %element_count, %row_width : index
+    %packed_columns = index.div %row_width, %c16 : index
+    %packed_view = buffer.view %output[%zero_offset] : buffer -> view<[%packed_columns]x[%packed_rows]x16xf16>
+    %flat = index.madd %row, %hidden_size, %channel : index
+    %packed_row = index.div %flat, %row_width : index
+    %packed_channel = index.rem %flat, %row_width : index
+    %packed_column = index.div %packed_channel, %c16 : index
+    %packed_lane = index.rem %packed_channel, %c16 : index
+    vector.store %half, %packed_view[%packed_column, %packed_row, %packed_lane] : vector<4xf16>, view<[%packed_columns]x[%packed_rows]x16xf16>
+  } else {
+    vector.store %half, %output_view[%row, %channel] : vector<4xf16>, view<[%token_count]x[%hidden_size]xf16>
+  }
+  template.return
+}

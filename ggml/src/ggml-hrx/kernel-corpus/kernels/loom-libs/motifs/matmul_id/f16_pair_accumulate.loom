@@ -1,0 +1,395 @@
+// Compile-time selected routed F16 pair accumulator.
+
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.accumulate_block(%quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %gate_weight_row_bytes: offset, %up_weight_row_bytes: offset, %gate_weight_format: index, %up_weight_format: index, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.accumulate_q4k_block(%quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.accumulate_q5k_block(%quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.accumulate_q6k_block(%quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.accumulate_generic_block(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %gate_weight_row_bytes: offset, %up_weight_row_bytes: offset, %gate_weight_format: index, %up_weight_format: index, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+
+func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
+
+func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_block> device @ggml_mul_mat_id_swiglu_f16_f16_accumulate_block(%quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %gate_weight_row_bytes: offset, %up_weight_row_bytes: offset, %gate_weight_format: index, %up_weight_format: index, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %same_weight_format = index.cmp eq, %gate_weight_format, %up_weight_format : index
+  %gate_is_q4k = index.cmp eq, %gate_weight_format, %c4 : index
+  %gate_is_q5k = index.cmp eq, %gate_weight_format, %c5 : index
+  %gate_is_q6k = index.cmp eq, %gate_weight_format, %c6 : index
+  %is_q4k = scalar.andi %same_weight_format, %gate_is_q4k : i1
+  %is_q5k = scalar.andi %same_weight_format, %gate_is_q5k : i1
+  %is_q6k = scalar.andi %same_weight_format, %gate_is_q6k : i1
+  %q4_gate, %q4_up = scf.if %is_q4k -> (vector<16xf16>, vector<16xf16>) {
+    %q4_gate, %q4_up = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q4k_block>(%quant_block, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_weight, %up_weight, %expert_byte_base, %gate_weight_row_bytes, %gate_accumulator, %up_accumulator) : (index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<16xf16>, vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+    scf.yield %q4_gate, %q4_up : vector<16xf16>, vector<16xf16>
+  } else {
+    scf.yield %gate_accumulator, %up_accumulator : vector<16xf16>, vector<16xf16>
+  }
+  %q5_gate, %q5_up = scf.if %is_q5k -> (vector<16xf16>, vector<16xf16>) {
+    %q5_gate, %q5_up = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q5k_block>(%quant_block, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_weight, %up_weight, %expert_byte_base, %gate_weight_row_bytes, %gate_accumulator, %up_accumulator) : (index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<16xf16>, vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+    scf.yield %q5_gate, %q5_up : vector<16xf16>, vector<16xf16>
+  } else {
+    scf.yield %gate_accumulator, %up_accumulator : vector<16xf16>, vector<16xf16>
+  }
+  %q6_gate, %q6_up = scf.if %is_q6k -> (vector<16xf16>, vector<16xf16>) {
+    %q6_gate, %q6_up = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q6k_block>(%quant_block, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_weight, %up_weight, %expert_byte_base, %gate_weight_row_bytes, %gate_accumulator, %up_accumulator) : (index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<16xf16>, vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+    scf.yield %q6_gate, %q6_up : vector<16xf16>, vector<16xf16>
+  } else {
+    scf.yield %gate_accumulator, %up_accumulator : vector<16xf16>, vector<16xf16>
+  }
+  %is_q4_or_q5 = scalar.ori %is_q4k, %is_q5k : i1
+  %uses_fast_path = scalar.ori %is_q4_or_q5, %is_q6k : i1
+  %generic_gate, %generic_up = scf.if %uses_fast_path -> (vector<16xf16>, vector<16xf16>) {
+    scf.yield %gate_accumulator, %up_accumulator : vector<16xf16>, vector<16xf16>
+  } else {
+    %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
+    %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+    %generic_gate, %generic_up = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_generic_block>(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %quant_block, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_weight, %up_weight, %expert_byte_base, %gate_weight_row_bytes, %up_weight_row_bytes, %gate_weight_format, %up_weight_format, %gate_accumulator, %up_accumulator) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, offset, offset, offset, index, index, vector<16xf16>, vector<16xf16>) -> (vector<16xf16>, vector<16xf16>)
+    scf.yield %generic_gate, %generic_up : vector<16xf16>, vector<16xf16>
+  }
+  %q4_or_generic_gate = scf.select %is_q4k, %q4_gate, %generic_gate : vector<16xf16>
+  %q4_or_generic_up = scf.select %is_q4k, %q4_up, %generic_up : vector<16xf16>
+  %q5_or_prior_gate = scf.select %is_q5k, %q5_gate, %q4_or_generic_gate : vector<16xf16>
+  %q5_or_prior_up = scf.select %is_q5k, %q5_up, %q4_or_generic_up : vector<16xf16>
+  %next_gate = scf.select %is_q6k, %q6_gate, %q5_or_prior_gate : vector<16xf16>
+  %next_up = scf.select %is_q6k, %q6_up, %q5_or_prior_up : vector<16xf16>
+  template.return %next_gate, %next_up : vector<16xf16>, vector<16xf16>
+}
+// Generic routed gate/up SwiGLU accumulation for FP16 WMMA.
+//
+// This path covers formats whose values can be staged directly through the
+// shared dequant helper. Q4_K and Q6_K keep specialized retained-packet paths.
+
+template.decl @ggml.mul_mat_id_swiglu_f16_f16.project_generic_vector16(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %stage_activation: i1, %weight_format: index, %quant_block: index, %quant_group: index, %k_origin: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %accumulator: vector<16xf16>) -> (vector<16xf16>)
+
+func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>)
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.project_generic_vector16> device @ggml_mul_mat_id_swiglu_f16_f16_project_generic_vector16(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %stage_activation: i1, %weight_format: index, %quant_block: index, %quant_group: index, %k_origin: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %accumulator: vector<16xf16>) -> (vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c40 = index.constant 40 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %input_noalias, %route_stage_noalias, %weight_stage_noalias, %activation_stage_noalias, %weight_noalias = buffer.assume.noalias %input, %route_stage, %weight_stage, %activation_stage, %weight : buffer, buffer, buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%token_count]x[%input_size]xf32>
+  %route_stage_view = buffer.view %route_stage_noalias[%c0_offset] : buffer -> view<32xi32>
+  %weight_stage_view = buffer.view %weight_stage_noalias[%c0_offset] : buffer -> view<64x40xf16>
+  %activation_stage_physical_view = buffer.view %activation_stage_noalias[%c0_offset] : buffer -> view<32x40xf16>
+  %activation_fragment_layout = encoding.layout.strided [1, %c40] : encoding<layout>
+  %activation_fragment_view = buffer.view %activation_stage_noalias[%c0_offset] : buffer -> view<32x32xf16, %activation_fragment_layout>
+  %bounded_group = index.assume %quant_group [range(%quant_group, 0, 7)] : index
+  scf.for %row_offset = [%c0 to %c64 step %c32] unroll {
+    %local_row0 = index.add %load_row, %row_offset : index
+    %local_row = index.assume %local_row0 [range(%local_row0, 0, 63)] : index
+    %channel = index.add %channel_tile_base, %local_row : index
+    %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+    %weight_values = scf.if %valid_channel -> (vector<4xf16>) {
+      %channel_byte_add = index.scale %channel, %weight_row_bytes : index, offset -> offset
+      %row_byte_base = index.add %expert_byte_base, %channel_byte_add : offset
+      %weight_k = index.add %k_origin, %load_k : index
+      %decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %input_size, %quant_block, %bounded_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+      scf.yield %decoded : vector<4xf16>
+    } else {
+      scf.yield %c0_f16x4 : vector<4xf16>
+    }
+    vector.store %weight_values, %weight_stage_view[%local_row, %load_k] : vector<4xf16>, view<64x40xf16>
+  }
+  scf.if %stage_activation {
+    %assignment_i32 = view.load %route_stage_view[%load_row] : view<32xi32> -> i32
+    %valid_assignment = scalar.cmpi sge, %assignment_i32, %c0_i32 : i32
+    %activation_values = scf.if %valid_assignment -> (vector<4xf16>) {
+      %assignment0 = index.cast %assignment_i32 : i32 to index
+      %assignment = index.assume %assignment0 [range(%assignment0, 0, 16383)] : index
+      %bounded_assignment, %bounded_assignment_count = index.assume %assignment, %assignment_count [lt(%assignment, %assignment_count)] : index, index
+      %token0 = index.div %bounded_assignment, %route_count : index
+      %token, %input_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+      %input_k = index.add %k_origin, %load_k : index
+      %loaded = vector.load %input_view[%token, %input_k] : view<[%token_count]x[%input_size]xf32> -> vector<4xf32>
+      %converted = vector.fptrunc %loaded : vector<4xf32> to vector<4xf16>
+      scf.yield %converted : vector<4xf16>
+    } else {
+      scf.yield %c0_f16x4 : vector<4xf16>
+    }
+    vector.store %activation_values, %activation_stage_physical_view[%load_row, %load_k] : vector<4xf16>, view<32x40xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %next_accumulator = scf.for %k_half = [%c0 to %c32 step %c16](%half_accumulator = %accumulator : vector<16xf16>) -> (vector<16xf16>) unroll {
+    %lhs = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half] shape [%m, %k] : view<64x40xf16> -> vector<16xf16>
+    %rhs = vector.fragment.load<rhs> %activation_fragment_view[%k_half, %subgroup_route_add] shape [%k, %n] : view<32x32xf16, %activation_fragment_layout> -> vector<16xf16>
+    %next = vector.mma %lhs, %rhs, %half_accumulator : vector<16xf16>, vector<16xf16>, vector<16xf16>
+    scf.yield %next : vector<16xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  template.return %next_accumulator : vector<16xf16>
+}
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_generic_block> device @ggml_mul_mat_id_swiglu_f16_f16_accumulate_generic_block(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %quant_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %gate_weight_row_bytes: offset, %up_weight_row_bytes: offset, %gate_weight_format: index, %up_weight_format: index, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %c256 = index.constant 256 : index
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %next_block_gate, %next_block_up = scf.for %quant_group = [%c0 to %c8 step %c1](%group_gate = %gate_accumulator : vector<16xf16>, %group_up = %up_accumulator : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+    %bounded_group = index.assume %quant_group [range(%quant_group, 0, 7)] : index
+    %block_k_base = index.mul %quant_block, %c256 : index
+    %group_k_add = index.mul %bounded_group, %c32 : index
+    %k_origin = index.add %block_k_base, %group_k_add : index
+    %gate_next = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.project_generic_vector16>(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %true, %gate_weight_format, %quant_block, %bounded_group, %k_origin, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_weight, %expert_byte_base, %gate_weight_row_bytes, %group_gate) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, i1, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<16xf16>) -> (vector<16xf16>)
+    %up_next = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.project_generic_vector16>(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %false, %up_weight_format, %quant_block, %bounded_group, %k_origin, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %up_weight, %expert_byte_base, %up_weight_row_bytes, %group_up) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, i1, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<16xf16>) -> (vector<16xf16>)
+    scf.yield %gate_next, %up_next : vector<16xf16>, vector<16xf16>
+  }
+  template.return %next_block_gate, %next_block_up : vector<16xf16>, vector<16xf16>
+}
+// Q4_K routed gate/up SwiGLU accumulation.
+//
+// The shared body owns routing and publish. This file only binds Q4_K block
+// accumulation to that common schedule.
+
+template.decl @ggml.mul_mat_id_q4k_f16_wmma.project_vector16(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: index, %arg9: index, %arg10: index, %arg11: index, %arg12: index, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: vector<4xi32>, %arg18: vector<4xi32>, %arg19: vector<1xi32>, %arg20: vector<1xi32>, %arg21: vector<16xf16>) -> (vector<16xf16>)
+
+func.decl @ggml_q4k_split_wmma_load_header(%weight: buffer, %row_byte_base: offset, %q4_block: index) -> (vector<4xi32>)
+
+func.decl @ggml_q4k_split_wmma_load_code(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %packet: index) -> (vector<1xi32>)
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q4k_block> device @ggml_mul_mat_id_swiglu_f16_f16_accumulate_q4k_block(%q4_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %c0_i32x1 = vector.constant 0 : vector<1xi32>
+  %c0_i32x4 = vector.constant 0 : vector<4xi32>
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %gate_header0, %gate_header1, %up_header0, %up_header1 = scf.for %header_row_offset = [%c0 to %c64 step %c32](%prior_gate_header0 = %c0_i32x4 : vector<4xi32>, %prior_gate_header1 = %c0_i32x4 : vector<4xi32>, %prior_up_header0 = %c0_i32x4 : vector<4xi32>, %prior_up_header1 = %c0_i32x4 : vector<4xi32>) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>) unroll {
+    %header_local_row0 = index.add %load_row, %header_row_offset : index
+    %header_local_row = index.assume %header_local_row0 [range(%header_local_row0, 0, 63)] : index
+    %header_channel = index.add %channel_tile_base, %header_local_row : index
+    %valid_header_channel = index.cmp ult, %header_channel, %bounded_output_size : index
+    %loaded_gate_header, %loaded_up_header = scf.if %valid_header_channel -> (vector<4xi32>, vector<4xi32>) {
+      %header_channel_byte_add = index.scale %header_channel, %weight_row_bytes : index, offset -> offset
+      %header_row_byte_base = index.add %expert_byte_base, %header_channel_byte_add : offset
+      %gate_header = func.call @ggml_q4k_split_wmma_load_header(%gate_weight, %header_row_byte_base, %q4_block) : (buffer, offset, index) -> (vector<4xi32>)
+      %up_header = func.call @ggml_q4k_split_wmma_load_header(%up_weight, %header_row_byte_base, %q4_block) : (buffer, offset, index) -> (vector<4xi32>)
+      scf.yield %gate_header, %up_header : vector<4xi32>, vector<4xi32>
+    } else {
+      scf.yield %c0_i32x4, %c0_i32x4 : vector<4xi32>, vector<4xi32>
+    }
+    %updates_header0 = index.cmp eq, %header_row_offset, %c0 : index
+    %next_gate_header0 = scf.select %updates_header0, %loaded_gate_header, %prior_gate_header0 : vector<4xi32>
+    %next_gate_header1 = scf.select %updates_header0, %prior_gate_header1, %loaded_gate_header : vector<4xi32>
+    %next_up_header0 = scf.select %updates_header0, %loaded_up_header, %prior_up_header0 : vector<4xi32>
+    %next_up_header1 = scf.select %updates_header0, %prior_up_header1, %loaded_up_header : vector<4xi32>
+    scf.yield %next_gate_header0, %next_gate_header1, %next_up_header0, %next_up_header1 : vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+  }
+  %next_block_gate, %next_block_up = scf.for %q4_group_pair = [%c0 to %c4 step %c1](%pair_gate_acc = %gate_accumulator : vector<16xf16>, %pair_up_acc = %up_accumulator : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+    %gate_q_word0, %gate_q_word1, %up_q_word0, %up_q_word1 = scf.for %code_row_offset = [%c0 to %c64 step %c32](%prior_gate_q_word0 = %c0_i32x1 : vector<1xi32>, %prior_gate_q_word1 = %c0_i32x1 : vector<1xi32>, %prior_up_q_word0 = %c0_i32x1 : vector<1xi32>, %prior_up_q_word1 = %c0_i32x1 : vector<1xi32>) -> (vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>) unroll {
+      %code_local_row0 = index.add %load_row, %code_row_offset : index
+      %code_local_row = index.assume %code_local_row0 [range(%code_local_row0, 0, 63)] : index
+      %code_channel = index.add %channel_tile_base, %code_local_row : index
+      %valid_code_channel = index.cmp ult, %code_channel, %bounded_output_size : index
+      %loaded_gate_q_word, %loaded_up_q_word = scf.if %valid_code_channel -> (vector<1xi32>, vector<1xi32>) {
+        %bounded_q4_group_pair = index.assume %q4_group_pair [range(%q4_group_pair, 0, 3)] : index
+        %code_channel_byte_add = index.scale %code_channel, %weight_row_bytes : index, offset -> offset
+        %code_row_byte_base = index.add %expert_byte_base, %code_channel_byte_add : offset
+        %gate_q_word = func.call @ggml_q4k_split_wmma_load_code(%gate_weight, %code_row_byte_base, %q4_block, %bounded_q4_group_pair, %load_packet) : (buffer, offset, index, index, index) -> (vector<1xi32>)
+        %up_q_word = func.call @ggml_q4k_split_wmma_load_code(%up_weight, %code_row_byte_base, %q4_block, %bounded_q4_group_pair, %load_packet) : (buffer, offset, index, index, index) -> (vector<1xi32>)
+        scf.yield %gate_q_word, %up_q_word : vector<1xi32>, vector<1xi32>
+      } else {
+        scf.yield %c0_i32x1, %c0_i32x1 : vector<1xi32>, vector<1xi32>
+      }
+      %updates_q_word0 = index.cmp eq, %code_row_offset, %c0 : index
+      %next_gate_q_word0 = scf.select %updates_q_word0, %loaded_gate_q_word, %prior_gate_q_word0 : vector<1xi32>
+      %next_gate_q_word1 = scf.select %updates_q_word0, %prior_gate_q_word1, %loaded_gate_q_word : vector<1xi32>
+      %next_up_q_word0 = scf.select %updates_q_word0, %loaded_up_q_word, %prior_up_q_word0 : vector<1xi32>
+      %next_up_q_word1 = scf.select %updates_q_word0, %prior_up_q_word1, %loaded_up_q_word : vector<1xi32>
+      scf.yield %next_gate_q_word0, %next_gate_q_word1, %next_up_q_word0, %next_up_q_word1 : vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>
+    }
+    %next_pair_gate, %next_pair_up = scf.for %group_within_pair = [%c0 to %c2 step %c1](%group_gate = %pair_gate_acc : vector<16xf16>, %group_up = %pair_up_acc : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+      %q4_group_base = index.mul %q4_group_pair, %c2 : index
+      %q4_group0 = index.add %q4_group_base, %group_within_pair : index
+      %q4_group = index.assume %q4_group0 [range(%q4_group0, 0, 7)] : index
+      %block_k_base = index.mul %q4_block, %c256 : index
+      %group_k_add = index.mul %q4_group, %c32 : index
+      %k_origin = index.add %block_k_base, %group_k_add : index
+      %gate_next = template.apply<@ggml.mul_mat_id_q4k_f16_wmma.project_vector16>(%true, %q4_group, %k_origin, %load_row, %load_k, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_header0, %gate_header1, %gate_q_word0, %gate_q_word1, %group_gate) : (i1, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, vector<4xi32>, vector<4xi32>, vector<1xi32>, vector<1xi32>, vector<16xf16>) -> (vector<16xf16>)
+      %up_next = template.apply<@ggml.mul_mat_id_q4k_f16_wmma.project_vector16>(%false, %q4_group, %k_origin, %load_row, %load_k, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %up_header0, %up_header1, %up_q_word0, %up_q_word1, %group_up) : (i1, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, vector<4xi32>, vector<4xi32>, vector<1xi32>, vector<1xi32>, vector<16xf16>) -> (vector<16xf16>)
+      scf.yield %gate_next, %up_next : vector<16xf16>, vector<16xf16>
+    }
+    scf.yield %next_pair_gate, %next_pair_up : vector<16xf16>, vector<16xf16>
+  }
+  template.return %next_block_gate, %next_block_up : vector<16xf16>, vector<16xf16>
+}
+// Q5_K routed gate/up SwiGLU accumulation.
+//
+// Q5_K reuses the Q4_K group-pair low-bit schedule and additionally retains the
+// per-packet high-bit bytes across all groups in the block.
+
+template.decl @ggml.mul_mat_id_q5k_f16_wmma.project_vector16(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: index, %arg9: index, %arg10: index, %arg11: index, %arg12: index, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: vector<4xi32>, %arg18: vector<4xi32>, %arg19: vector<1xi32>, %arg20: vector<1xi32>, %arg21: vector<4xi8>, %arg22: vector<4xi8>, %arg23: vector<16xf16>) -> (vector<16xf16>)
+
+func.decl @ggml_q5k_split_wmma_load_header(%weight: buffer, %row_byte_base: offset, %q5_block: index) -> (vector<4xi32>)
+
+func.decl @ggml_q5k_split_wmma_load_high_bits(%weight: buffer, %row_byte_base: offset, %q5_block: index, %packet: index) -> (vector<4xi8>)
+
+func.decl @ggml_q5k_split_wmma_load_code(%weight: buffer, %row_byte_base: offset, %q5_block: index, %q5_group_pair: index, %packet: index) -> (vector<1xi32>)
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q5k_block> device @ggml_mul_mat_id_swiglu_f16_f16_accumulate_q5k_block(%q5_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %c0_i32x1 = vector.constant 0 : vector<1xi32>
+  %c0_i32x4 = vector.constant 0 : vector<4xi32>
+  %c0_i8x4 = vector.constant 0 : vector<4xi8>
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %gate_header0, %gate_header1, %up_header0, %up_header1, %gate_qh_bytes0, %gate_qh_bytes1, %up_qh_bytes0, %up_qh_bytes1 = scf.for %header_row_offset = [%c0 to %c64 step %c32](%prior_gate_header0 = %c0_i32x4 : vector<4xi32>, %prior_gate_header1 = %c0_i32x4 : vector<4xi32>, %prior_up_header0 = %c0_i32x4 : vector<4xi32>, %prior_up_header1 = %c0_i32x4 : vector<4xi32>, %prior_gate_qh_bytes0 = %c0_i8x4 : vector<4xi8>, %prior_gate_qh_bytes1 = %c0_i8x4 : vector<4xi8>, %prior_up_qh_bytes0 = %c0_i8x4 : vector<4xi8>, %prior_up_qh_bytes1 = %c0_i8x4 : vector<4xi8>) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>) unroll {
+    %header_local_row0 = index.add %load_row, %header_row_offset : index
+    %header_local_row = index.assume %header_local_row0 [range(%header_local_row0, 0, 63)] : index
+    %header_channel = index.add %channel_tile_base, %header_local_row : index
+    %valid_header_channel = index.cmp ult, %header_channel, %bounded_output_size : index
+    %loaded_gate_header, %loaded_up_header, %loaded_gate_qh_bytes, %loaded_up_qh_bytes = scf.if %valid_header_channel -> (vector<4xi32>, vector<4xi32>, vector<4xi8>, vector<4xi8>) {
+      %header_channel_byte_add = index.scale %header_channel, %weight_row_bytes : index, offset -> offset
+      %header_row_byte_base = index.add %expert_byte_base, %header_channel_byte_add : offset
+      %gate_header = func.call @ggml_q5k_split_wmma_load_header(%gate_weight, %header_row_byte_base, %q5_block) : (buffer, offset, index) -> (vector<4xi32>)
+      %up_header = func.call @ggml_q5k_split_wmma_load_header(%up_weight, %header_row_byte_base, %q5_block) : (buffer, offset, index) -> (vector<4xi32>)
+      %gate_qh_bytes = func.call @ggml_q5k_split_wmma_load_high_bits(%gate_weight, %header_row_byte_base, %q5_block, %load_packet) : (buffer, offset, index, index) -> (vector<4xi8>)
+      %up_qh_bytes = func.call @ggml_q5k_split_wmma_load_high_bits(%up_weight, %header_row_byte_base, %q5_block, %load_packet) : (buffer, offset, index, index) -> (vector<4xi8>)
+      scf.yield %gate_header, %up_header, %gate_qh_bytes, %up_qh_bytes : vector<4xi32>, vector<4xi32>, vector<4xi8>, vector<4xi8>
+    } else {
+      scf.yield %c0_i32x4, %c0_i32x4, %c0_i8x4, %c0_i8x4 : vector<4xi32>, vector<4xi32>, vector<4xi8>, vector<4xi8>
+    }
+    %updates_header0 = index.cmp eq, %header_row_offset, %c0 : index
+    %next_gate_header0 = scf.select %updates_header0, %loaded_gate_header, %prior_gate_header0 : vector<4xi32>
+    %next_gate_header1 = scf.select %updates_header0, %prior_gate_header1, %loaded_gate_header : vector<4xi32>
+    %next_up_header0 = scf.select %updates_header0, %loaded_up_header, %prior_up_header0 : vector<4xi32>
+    %next_up_header1 = scf.select %updates_header0, %prior_up_header1, %loaded_up_header : vector<4xi32>
+    %next_gate_qh_bytes0 = scf.select %updates_header0, %loaded_gate_qh_bytes, %prior_gate_qh_bytes0 : vector<4xi8>
+    %next_gate_qh_bytes1 = scf.select %updates_header0, %prior_gate_qh_bytes1, %loaded_gate_qh_bytes : vector<4xi8>
+    %next_up_qh_bytes0 = scf.select %updates_header0, %loaded_up_qh_bytes, %prior_up_qh_bytes0 : vector<4xi8>
+    %next_up_qh_bytes1 = scf.select %updates_header0, %prior_up_qh_bytes1, %loaded_up_qh_bytes : vector<4xi8>
+    scf.yield %next_gate_header0, %next_gate_header1, %next_up_header0, %next_up_header1, %next_gate_qh_bytes0, %next_gate_qh_bytes1, %next_up_qh_bytes0, %next_up_qh_bytes1 : vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>
+  }
+  %next_block_gate, %next_block_up = scf.for %q5_group_pair = [%c0 to %c4 step %c1](%pair_gate_acc = %gate_accumulator : vector<16xf16>, %pair_up_acc = %up_accumulator : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+    %gate_q_word0, %gate_q_word1, %up_q_word0, %up_q_word1 = scf.for %code_row_offset = [%c0 to %c64 step %c32](%prior_gate_q_word0 = %c0_i32x1 : vector<1xi32>, %prior_gate_q_word1 = %c0_i32x1 : vector<1xi32>, %prior_up_q_word0 = %c0_i32x1 : vector<1xi32>, %prior_up_q_word1 = %c0_i32x1 : vector<1xi32>) -> (vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>) unroll {
+      %code_local_row0 = index.add %load_row, %code_row_offset : index
+      %code_local_row = index.assume %code_local_row0 [range(%code_local_row0, 0, 63)] : index
+      %code_channel = index.add %channel_tile_base, %code_local_row : index
+      %valid_code_channel = index.cmp ult, %code_channel, %bounded_output_size : index
+      %loaded_gate_q_word, %loaded_up_q_word = scf.if %valid_code_channel -> (vector<1xi32>, vector<1xi32>) {
+        %bounded_q5_group_pair = index.assume %q5_group_pair [range(%q5_group_pair, 0, 3)] : index
+        %code_channel_byte_add = index.scale %code_channel, %weight_row_bytes : index, offset -> offset
+        %code_row_byte_base = index.add %expert_byte_base, %code_channel_byte_add : offset
+        %gate_q_word = func.call @ggml_q5k_split_wmma_load_code(%gate_weight, %code_row_byte_base, %q5_block, %bounded_q5_group_pair, %load_packet) : (buffer, offset, index, index, index) -> (vector<1xi32>)
+        %up_q_word = func.call @ggml_q5k_split_wmma_load_code(%up_weight, %code_row_byte_base, %q5_block, %bounded_q5_group_pair, %load_packet) : (buffer, offset, index, index, index) -> (vector<1xi32>)
+        scf.yield %gate_q_word, %up_q_word : vector<1xi32>, vector<1xi32>
+      } else {
+        scf.yield %c0_i32x1, %c0_i32x1 : vector<1xi32>, vector<1xi32>
+      }
+      %updates_q_word0 = index.cmp eq, %code_row_offset, %c0 : index
+      %next_gate_q_word0 = scf.select %updates_q_word0, %loaded_gate_q_word, %prior_gate_q_word0 : vector<1xi32>
+      %next_gate_q_word1 = scf.select %updates_q_word0, %prior_gate_q_word1, %loaded_gate_q_word : vector<1xi32>
+      %next_up_q_word0 = scf.select %updates_q_word0, %loaded_up_q_word, %prior_up_q_word0 : vector<1xi32>
+      %next_up_q_word1 = scf.select %updates_q_word0, %prior_up_q_word1, %loaded_up_q_word : vector<1xi32>
+      scf.yield %next_gate_q_word0, %next_gate_q_word1, %next_up_q_word0, %next_up_q_word1 : vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>
+    }
+    %next_pair_gate, %next_pair_up = scf.for %group_within_pair = [%c0 to %c2 step %c1](%group_gate = %pair_gate_acc : vector<16xf16>, %group_up = %pair_up_acc : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+      %q5_group_base = index.mul %q5_group_pair, %c2 : index
+      %q5_group0 = index.add %q5_group_base, %group_within_pair : index
+      %q5_group = index.assume %q5_group0 [range(%q5_group0, 0, 7)] : index
+      %block_k_base = index.mul %q5_block, %c256 : index
+      %group_k_add = index.mul %q5_group, %c32 : index
+      %k_origin = index.add %block_k_base, %group_k_add : index
+      %gate_next = template.apply<@ggml.mul_mat_id_q5k_f16_wmma.project_vector16>(%true, %q5_group, %k_origin, %load_row, %load_k, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_header0, %gate_header1, %gate_q_word0, %gate_q_word1, %gate_qh_bytes0, %gate_qh_bytes1, %group_gate) : (i1, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, vector<4xi32>, vector<4xi32>, vector<1xi32>, vector<1xi32>, vector<4xi8>, vector<4xi8>, vector<16xf16>) -> (vector<16xf16>)
+      %up_next = template.apply<@ggml.mul_mat_id_q5k_f16_wmma.project_vector16>(%false, %q5_group, %k_origin, %load_row, %load_k, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %up_header0, %up_header1, %up_q_word0, %up_q_word1, %up_qh_bytes0, %up_qh_bytes1, %group_up) : (i1, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, vector<4xi32>, vector<4xi32>, vector<1xi32>, vector<1xi32>, vector<4xi8>, vector<4xi8>, vector<16xf16>) -> (vector<16xf16>)
+      scf.yield %gate_next, %up_next : vector<16xf16>, vector<16xf16>
+    }
+    scf.yield %next_pair_gate, %next_pair_up : vector<16xf16>, vector<16xf16>
+  }
+  template.return %next_block_gate, %next_block_up : vector<16xf16>, vector<16xf16>
+}
+// Q6_K routed gate/up SwiGLU accumulation.
+//
+// The shared body owns routing and publish. This file only binds Q6_K block
+// accumulation to that common schedule.
+
+template.decl @ggml.mul_mat_id_q6k_f16_wmma.project_vector16(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: index, %arg9: index, %arg10: index, %arg11: index, %arg12: index, %arg13: index, %arg14: index, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer, %arg20: offset, %arg21: offset, %arg22: vector<1xi32>, %arg23: vector<1xi32>, %arg24: vector<1xi32>, %arg25: vector<1xi32>, %arg26: vector<1xi32>, %arg27: vector<1xi32>, %arg28: vector<16xf16>) -> (vector<16xf16>)
+
+func.decl @ggml_q6k_split_wmma_load_half_codes(%weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_half: index, %packet: index) -> (vector<1xi32>, vector<1xi32>, vector<1xi32>)
+
+template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q6k_block> device @ggml_mul_mat_id_swiglu_f16_f16_accumulate_q6k_block(%q6_block: index, %load_row: index, %load_k: index, %load_packet: index, %channel_tile_base: index, %bounded_output_size: index, %assignment_count: index, %token_count: index, %route_count: index, %input_size: index, %subgroup_channel_add: index, %subgroup_route_add: index, %input: buffer, %route_stage: buffer, %weight_stage: buffer, %activation_stage: buffer, %gate_weight: buffer, %up_weight: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %gate_accumulator: vector<16xf16>, %up_accumulator: vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %c0_i32x1 = vector.constant 0 : vector<1xi32>
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %next_block_gate, %next_block_up = scf.for %q6_half = [%c0 to %c2 step %c1](%half_gate_acc = %gate_accumulator : vector<16xf16>, %half_up_acc = %up_accumulator : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+    %gate_ql0_word0, %gate_ql1_word0, %gate_qh_word0, %gate_ql0_word1, %gate_ql1_word1, %gate_qh_word1, %up_ql0_word0, %up_ql1_word0, %up_qh_word0, %up_ql0_word1, %up_ql1_word1, %up_qh_word1 = scf.for %code_row_offset = [%c0 to %c64 step %c32](%prior_gate_ql0_word0 = %c0_i32x1 : vector<1xi32>, %prior_gate_ql1_word0 = %c0_i32x1 : vector<1xi32>, %prior_gate_qh_word0 = %c0_i32x1 : vector<1xi32>, %prior_gate_ql0_word1 = %c0_i32x1 : vector<1xi32>, %prior_gate_ql1_word1 = %c0_i32x1 : vector<1xi32>, %prior_gate_qh_word1 = %c0_i32x1 : vector<1xi32>, %prior_up_ql0_word0 = %c0_i32x1 : vector<1xi32>, %prior_up_ql1_word0 = %c0_i32x1 : vector<1xi32>, %prior_up_qh_word0 = %c0_i32x1 : vector<1xi32>, %prior_up_ql0_word1 = %c0_i32x1 : vector<1xi32>, %prior_up_ql1_word1 = %c0_i32x1 : vector<1xi32>, %prior_up_qh_word1 = %c0_i32x1 : vector<1xi32>) -> (vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>) unroll {
+      %code_local_row0 = index.add %load_row, %code_row_offset : index
+      %code_local_row = index.assume %code_local_row0 [range(%code_local_row0, 0, 63)] : index
+      %code_channel = index.add %channel_tile_base, %code_local_row : index
+      %valid_code_channel = index.cmp ult, %code_channel, %bounded_output_size : index
+      %loaded_gate_ql0, %loaded_gate_ql1, %loaded_gate_qh, %loaded_up_ql0, %loaded_up_ql1, %loaded_up_qh = scf.if %valid_code_channel -> (vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>) {
+        %bounded_q6_half = index.assume %q6_half [range(%q6_half, 0, 1)] : index
+        %code_channel_byte_add = index.scale %code_channel, %weight_row_bytes : index, offset -> offset
+        %code_row_byte_base = index.add %expert_byte_base, %code_channel_byte_add : offset
+        %gate_ql0, %gate_ql1, %gate_qh = func.call @ggml_q6k_split_wmma_load_half_codes(%gate_weight, %code_row_byte_base, %q6_block, %bounded_q6_half, %load_packet) : (buffer, offset, index, index, index) -> (vector<1xi32>, vector<1xi32>, vector<1xi32>)
+        %up_ql0, %up_ql1, %up_qh = func.call @ggml_q6k_split_wmma_load_half_codes(%up_weight, %code_row_byte_base, %q6_block, %bounded_q6_half, %load_packet) : (buffer, offset, index, index, index) -> (vector<1xi32>, vector<1xi32>, vector<1xi32>)
+        scf.yield %gate_ql0, %gate_ql1, %gate_qh, %up_ql0, %up_ql1, %up_qh : vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>
+      } else {
+        scf.yield %c0_i32x1, %c0_i32x1, %c0_i32x1, %c0_i32x1, %c0_i32x1, %c0_i32x1 : vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>
+      }
+      %updates_word0 = index.cmp eq, %code_row_offset, %c0 : index
+      %next_gate_ql0_word0 = scf.select %updates_word0, %loaded_gate_ql0, %prior_gate_ql0_word0 : vector<1xi32>
+      %next_gate_ql1_word0 = scf.select %updates_word0, %loaded_gate_ql1, %prior_gate_ql1_word0 : vector<1xi32>
+      %next_gate_qh_word0 = scf.select %updates_word0, %loaded_gate_qh, %prior_gate_qh_word0 : vector<1xi32>
+      %next_gate_ql0_word1 = scf.select %updates_word0, %prior_gate_ql0_word1, %loaded_gate_ql0 : vector<1xi32>
+      %next_gate_ql1_word1 = scf.select %updates_word0, %prior_gate_ql1_word1, %loaded_gate_ql1 : vector<1xi32>
+      %next_gate_qh_word1 = scf.select %updates_word0, %prior_gate_qh_word1, %loaded_gate_qh : vector<1xi32>
+      %next_up_ql0_word0 = scf.select %updates_word0, %loaded_up_ql0, %prior_up_ql0_word0 : vector<1xi32>
+      %next_up_ql1_word0 = scf.select %updates_word0, %loaded_up_ql1, %prior_up_ql1_word0 : vector<1xi32>
+      %next_up_qh_word0 = scf.select %updates_word0, %loaded_up_qh, %prior_up_qh_word0 : vector<1xi32>
+      %next_up_ql0_word1 = scf.select %updates_word0, %prior_up_ql0_word1, %loaded_up_ql0 : vector<1xi32>
+      %next_up_ql1_word1 = scf.select %updates_word0, %prior_up_ql1_word1, %loaded_up_ql1 : vector<1xi32>
+      %next_up_qh_word1 = scf.select %updates_word0, %prior_up_qh_word1, %loaded_up_qh : vector<1xi32>
+      scf.yield %next_gate_ql0_word0, %next_gate_ql1_word0, %next_gate_qh_word0, %next_gate_ql0_word1, %next_gate_ql1_word1, %next_gate_qh_word1, %next_up_ql0_word0, %next_up_ql1_word0, %next_up_qh_word0, %next_up_ql0_word1, %next_up_ql1_word1, %next_up_qh_word1 : vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>
+    }
+    %next_half_gate, %next_half_up = scf.for %group_within_half = [%c0 to %c4 step %c1](%group_gate = %half_gate_acc : vector<16xf16>, %group_up = %half_up_acc : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {
+      %q6_group_base = index.mul %q6_half, %c4 : index
+      %q6_group0 = index.add %q6_group_base, %group_within_half : index
+      %q6_group = index.assume %q6_group0 [range(%q6_group0, 0, 7)] : index
+      %block_k_base = index.mul %q6_block, %c256 : index
+      %group_k_add = index.mul %q6_group, %c32 : index
+      %k_origin = index.add %block_k_base, %group_k_add : index
+      %gate_next = template.apply<@ggml.mul_mat_id_q6k_f16_wmma.project_vector16>(%true, %q6_group, %q6_block, %k_origin, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %gate_weight, %expert_byte_base, %weight_row_bytes, %gate_ql0_word0, %gate_ql1_word0, %gate_qh_word0, %gate_ql0_word1, %gate_ql1_word1, %gate_qh_word1, %group_gate) : (i1, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<16xf16>) -> (vector<16xf16>)
+      %up_next = template.apply<@ggml.mul_mat_id_q6k_f16_wmma.project_vector16>(%false, %q6_group, %q6_block, %k_origin, %load_row, %load_k, %load_packet, %channel_tile_base, %bounded_output_size, %assignment_count, %token_count, %route_count, %input_size, %subgroup_channel_add, %subgroup_route_add, %input, %route_stage, %weight_stage, %activation_stage, %up_weight, %expert_byte_base, %weight_row_bytes, %up_ql0_word0, %up_ql1_word0, %up_qh_word0, %up_ql0_word1, %up_ql1_word1, %up_qh_word1, %group_up) : (i1, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, offset, offset, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<1xi32>, vector<16xf16>) -> (vector<16xf16>)
+      scf.yield %gate_next, %up_next : vector<16xf16>, vector<16xf16>
+    }
+    scf.yield %next_half_gate, %next_half_up : vector<16xf16>, vector<16xf16>
+  }
+  template.return %next_block_gate, %next_block_up : vector<16xf16>, vector<16xf16>
+}

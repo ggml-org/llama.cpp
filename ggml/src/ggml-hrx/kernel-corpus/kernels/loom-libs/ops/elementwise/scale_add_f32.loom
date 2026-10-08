@@ -1,0 +1,96 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.elementwise.scale_apply(%value: f32, %scale: f32, %bias: f32) -> (f32)
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_scale_add_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.scale_add_f32.ne0 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.ne1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.ne2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.input_stride1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.input_stride2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.input_stride3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.input_span : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.residual_stride1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.residual_stride2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.residual_stride3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.residual_span : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.scale_add_f32.scale : f32
+config.decl @ggml.scale_add_f32.bias : f32
+config.decl @ggml.scale_add_f32.binary_op : %value: index where [range(%value, 0, 3)]
+config.decl @ggml.scale_add_f32.scaled_lhs : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@ggml_scale_add_f32_gfx11_wave64) export("ggml_scale_add_f32") @ggml_scale_add_f32(%element_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %c255 = index.constant 255 : index
+  %rounded = index.add %element_count, %c255 : index
+  %workgroup_count = index.div %rounded, %c256 : index
+  kernel.launch.config workgroups(%workgroup_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%element_count: index, %input: buffer, %residual: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %n0 = config.get @ggml.scale_add_f32.ne0 : index
+  %n1 = config.get @ggml.scale_add_f32.ne1 : index
+  %n2 = config.get @ggml.scale_add_f32.ne2 : index
+  %input_stride1 = config.get @ggml.scale_add_f32.input_stride1 : index
+  %input_stride2 = config.get @ggml.scale_add_f32.input_stride2 : index
+  %input_stride3 = config.get @ggml.scale_add_f32.input_stride3 : index
+  %input_count = config.get @ggml.scale_add_f32.input_span : index
+  %residual_stride1 = config.get @ggml.scale_add_f32.residual_stride1 : index
+  %residual_stride2 = config.get @ggml.scale_add_f32.residual_stride2 : index
+  %residual_stride3 = config.get @ggml.scale_add_f32.residual_stride3 : index
+  %residual_count = config.get @ggml.scale_add_f32.residual_span : index
+  %scale = config.get @ggml.scale_add_f32.scale : f32
+  %bias = config.get @ggml.scale_add_f32.bias : f32
+  %binary_op = config.get @ggml.scale_add_f32.binary_op : index
+  %scaled_lhs = config.get @ggml.scale_add_f32.scaled_lhs : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %c256 = index.constant 256 : index
+  %base0 = index.mul %workgroup, %c256 : index
+  %linear0 = index.add %base0, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %c0_offset = index.constant 0 : offset
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%input_count]xf32>
+  %residual_view = buffer.view %residual[%c0_offset] : buffer -> view<[%residual_count]xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %coord0 = index.rem %linear, %n0 : index
+    %linear_div_n0 = index.div %linear, %n0 : index
+    %coord1 = index.rem %linear_div_n0, %n1 : index
+    %linear_div_n01 = index.div %linear_div_n0, %n1 : index
+    %coord2 = index.rem %linear_div_n01, %n2 : index
+    %coord3 = index.div %linear_div_n01, %n2 : index
+    %input_term1 = index.mul %coord1, %input_stride1 : index
+    %input_term2 = index.mul %coord2, %input_stride2 : index
+    %input_term3 = index.mul %coord3, %input_stride3 : index
+    %input_linear01 = index.add %coord0, %input_term1 : index
+    %input_linear012 = index.add %input_linear01, %input_term2 : index
+    %input_linear = index.add %input_linear012, %input_term3 : index
+    %residual_term1 = index.mul %coord1, %residual_stride1 : index
+    %residual_term2 = index.mul %coord2, %residual_stride2 : index
+    %residual_term3 = index.mul %coord3, %residual_stride3 : index
+    %residual_linear01 = index.add %coord0, %residual_term1 : index
+    %residual_linear012 = index.add %residual_linear01, %residual_term2 : index
+    %residual_linear = index.add %residual_linear012, %residual_term3 : index
+    %input_in_bounds = index.cmp ult, %input_linear, %input_count : index
+    scf.if %input_in_bounds {
+      %residual_in_bounds = index.cmp ult, %residual_linear, %residual_count : index
+      scf.if %residual_in_bounds {
+        %input_value = view.load %input_view[%input_linear] : view<[%input_count]xf32> -> f32
+        %scaled = template.apply<@ggml.elementwise.scale_apply>(%input_value, %scale, %bias) : (f32, f32, f32) -> (f32)
+        %residual_value = view.load %residual_view[%residual_linear] : view<[%residual_count]xf32> -> f32
+        %c1 = index.constant 1 : index
+        %is_scaled_lhs = index.cmp eq, %scaled_lhs, %c1 : index
+        %lhs = scf.select %is_scaled_lhs, %scaled, %residual_value : f32
+        %rhs = scf.select %is_scaled_lhs, %residual_value, %scaled : f32
+        %result = template.apply<@ggml.binary_f32.apply>(%binary_op, %lhs, %rhs) : (index, f32, f32) -> (f32)
+        view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+      }
+    }
+  }
+  kernel.return
+}

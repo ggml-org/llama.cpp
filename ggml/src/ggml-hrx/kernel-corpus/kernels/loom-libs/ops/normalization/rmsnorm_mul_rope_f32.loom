@@ -1,0 +1,43 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_mul_rope_f32.body(%input: buffer, %weight: buffer, %positions: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rmsnorm_gfx11_wave32 {subgroup_size = 32}
+
+// One workgroup preserves each strided RMSNorm row before scale and RoPE.
+config.decl @ggml.rmsnorm_mul_rope.hidden_size : %value: index where [range(%value, 2, 512)]
+config.decl @ggml.rmsnorm_mul_rope.ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.rmsnorm_mul_rope.ne2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.rmsnorm_mul_rope.ne3 : %value: index where [range(%value, 1, 1024)]
+config.decl @ggml.rmsnorm_mul_rope.input_stride1 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.input_stride2 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.input_stride3 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.output_stride1 : %value: index where [range(%value, 0, 268435456)]
+config.decl @ggml.rmsnorm_mul_rope.output_stride2 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.output_stride3 : %value: index where [range(%value, 0, 1073741823)]
+config.decl @ggml.rmsnorm_mul_rope.n_dims : %value: index where [range(%value, 2, 512)]
+config.decl @ggml.rmsnorm_mul_rope.section0 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.section1 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.section2 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.section3 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rmsnorm_mul_rope.mode : %value: index where [range(%value, 2, 40)]
+config.decl @ggml.rmsnorm_mul_rope.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @ggml.rmsnorm_mul_rope.epsilon : f32
+config.decl @ggml.rmsnorm_mul_rope.freq_base : f32
+config.decl @ggml.rmsnorm_mul_rope.freq_scale : f32
+config.decl @ggml.rmsnorm_mul_rope.attn_factor : f32
+
+kernel.def target(@ggml_rmsnorm_gfx11_wave32) export("ggml_rmsnorm_mul_rope_f32") @ggml_rmsnorm_mul_rope_f32() {
+  %unit = index.constant 1 : index
+  %ne1 = config.get @ggml.rmsnorm_mul_rope.ne1 : index
+  %ne2 = config.get @ggml.rmsnorm_mul_rope.ne2 : index
+  %ne3 = config.get @ggml.rmsnorm_mul_rope.ne3 : index
+  %wg = config.get @ggml.rmsnorm_mul_rope.workgroup_size : index
+  %n12 = index.mul %ne1, %ne2 : index
+  %rows = index.mul %n12, %ne3 : index
+  kernel.launch.config workgroups(%rows, %unit, %unit) workgroup_size(%wg, %unit, %unit) : index
+} launch(%input: buffer, %weight: buffer, %positions: buffer, %output: buffer) {
+  template.apply<@ggml.rmsnorm_mul_rope_f32.body>(%input, %weight, %positions, %output) : (buffer, buffer, buffer, buffer)
+  kernel.return
+}

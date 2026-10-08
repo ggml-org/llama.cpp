@@ -1,0 +1,39 @@
+config.decl @ggml.matmul.vector.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+
+config.decl @ggml.matmul.vector.output_size : %value: index where [range(%value, 64, 262144), mul(%value, 64)]
+
+config.decl @ggml.matmul.vector.output_accumulation : %value: index where [range(%value, 0, 1)]
+
+config.def @ggml.matmul.vector.packed_layout = 1 : index
+
+config.decl @ggml.matmul.vector.q6_storage : %value: index where [range(%value, 0, 1)]
+
+template.decl @ggml.matmul.vector_q6_f32.body_packed_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %scale_row_layout: index, %input: buffer, %weight: buffer, %output: buffer)
+
+template.decl @ggml.matmul.vector_q6_f32.body_i8_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %input: buffer, %weight: buffer, %output: buffer)
+
+kernel.def export("ggml_mul_mat_vector_q6_f32_f32") @ggml_mul_mat_vector_q6_f32_f32(%token_count: index) {
+  %output_size = config.get @ggml.matmul.vector.output_size : index
+  %c1 = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_blocks = index.div %padded_output_size, %c64 : index
+  kernel.launch.config workgroups(%output_blocks, %c1, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.matmul.vector.input_size : index
+  %output_size = config.get @ggml.matmul.vector.output_size : index
+  %scale_row_layout = config.get @ggml.matmul.vector.packed_layout : index
+  %q6_storage = config.get @ggml.matmul.vector.q6_storage : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %output_block = kernel.workgroup.id<x> : index
+  %c1 = index.constant 1 : index
+  %uses_i8_storage = index.cmp eq, %q6_storage, %c1 : index
+  scf.if %uses_i8_storage {
+    template.apply<@ggml.matmul.vector_q6_f32.body_i8_storage>(%bounded_token_count, %input_size, %output_size, %output_block, %input, %weight, %output) : (index, index, index, index, buffer, buffer, buffer)
+  } else {
+    template.apply<@ggml.matmul.vector_q6_f32.body_packed_storage>(%bounded_token_count, %input_size, %output_size, %output_block, %scale_row_layout, %input, %weight, %output) : (index, index, index, index, index, buffer, buffer, buffer)
+  }
+  kernel.return
+}
