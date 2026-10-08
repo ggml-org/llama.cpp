@@ -1540,7 +1540,7 @@ static void test_json_schema_unordered_properties() {
         });
 
     test_schema_unordered(
-        "too many properties: keep declared order",
+        "many properties: required tracked, the rest in any order",
         R"""({
             "type": "object",
             "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
@@ -1549,11 +1549,43 @@ static void test_json_schema_unordered_properties() {
         })""",
         {
             R"""({"a": 1, "b": 2})""",
-            R"""({"a": 1, "b": 2, "g": 3})""",
+            R"""({"b": 2, "a": 1})""",
+            R"""({"g": 3, "b": 2, "a": 1})""",
+            R"""({"a": 1, "g": 3, "b": 2, "f": 4})""",
         },
         {
-            R"""({"b": 2, "a": 1})""",
             R"""({"a": 1})""",
+            R"""({"g": 3, "a": 1})""",
+            R"""({"a": 1, "a": 2, "b": 3})""",
+            R"""({"a": 1, "b": 2, "x": 3})""",
+        });
+
+    test_schema_unordered(
+        "column-like object: 14 properties, 2 required, additional allowed",
+        R"""({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}, "column_type": {"type": "string"}, "drop": {"type": "boolean"},
+                "expr": {"type": "string"}, "dtype": {"type": "string"}, "sampler_type": {"type": "string"},
+                "params": {"type": "object"}, "code_lang": {"type": "string"}, "scores": {"type": "array"},
+                "output_format": {"type": "object"}, "prompt": {"type": "string"}, "model_alias": {"type": "string"},
+                "system_prompt": {"type": "string"}, "extract_reasoning_content": {"type": "boolean"}
+            },
+            "required": ["name", "column_type"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"name": "n", "column_type": "expression", "expr": "0", "dtype": "int"})""",
+            R"""({"name": "n", "column_type": "expression", "dtype": "int", "expr": "0"})""",
+            R"""({"column_type": "llm-text", "model_alias": "m", "prompt": "p", "name": "q"})""",
+            R"""({"name": "n", "column_type": "sampler", "params": {"values": ["a"]}, "sampler_type": "category"})""",
+            R"""({"name": "n", "column_type": "x", "extract_reasoning_content": true, "other": 1})""",
+        },
+        {
+            R"""({"name": "n"})""",
+            R"""({"name": "n", "dtype": "int"})""",
+            R"""({"name": "n", "name": "m", "column_type": "x"})""",
+            R"""({"name": "n", "column_type": "x", "prompt": 1})""",
         });
 
     test_schema(

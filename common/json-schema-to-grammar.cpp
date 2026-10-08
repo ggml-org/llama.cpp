@@ -741,22 +741,43 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        // one rule per set of seen keys (2^n rules), so above this limit keep the declared order
-        constexpr size_t max_unordered_props = 6;
-        if (_unordered_properties && prop_names.size() <= max_unordered_props) {
-            const size_t n = prop_names.size();
-            size_t required_mask = 0;
-            for (size_t i = 0; i < n; i++) {
-                if (required.count(prop_names[i])) {
-                    required_mask |= size_t(1) << i;
+        if (_unordered_properties) {
+            // track which of up to max_tracked keys were seen (2^n rules), required keys first;
+            // the other properties and additional keys are "free": any order, repeats allowed
+            constexpr size_t max_tracked = 6;
+            std::vector<std::string> tracked;
+            for (const auto & prop_name : prop_names) {
+                if (required.count(prop_name) && tracked.size() < max_tracked) {
+                    tracked.push_back(prop_name);
                 }
             }
-            std::string additional_kvs;
+            for (const auto & prop_name : prop_names) {
+                if (!required.count(prop_name) && tracked.size() < max_tracked) {
+                    tracked.push_back(prop_name);
+                }
+            }
+            const size_t n = tracked.size();
+            size_t required_mask = 0;
+            std::vector<std::string> free_kvs;
+            for (const auto & prop_name : prop_names) {
+                auto it = std::find(tracked.begin(), tracked.end(), prop_name);
+                if (it == tracked.end()) {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
+                } else if (required.count(prop_name)) {
+                    required_mask |= size_t(1) << (it - tracked.begin());
+                }
+            }
             if (prop_kv_rule_names.count("*")) {
-                additional_kvs = "( \",\" space " + prop_kv_rule_names["*"] + " )*";
+                free_kvs.push_back(prop_kv_rule_names["*"]);
+            }
+            std::string free_kv;
+            std::string free_loop;
+            if (!free_kvs.empty()) {
+                free_kv = _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
+                free_loop = "( \",\" space " + free_kv + " )*";
             }
 
-            // rest of the object after the keys in `seen`: each key at most once, close only when all required keys are seen
+            // rest of the object after the keys in `seen`: tracked keys at most once, close only when all required keys are seen
             std::map<size_t, std::string> rest_rules;
             std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
                 auto it = rest_rules.find(seen);
@@ -766,10 +787,10 @@ private:
                 std::vector<std::string> alts;
                 for (size_t i = 0; i < n; i++) {
                     if (!(seen & (size_t(1) << i))) {
-                        alts.push_back("\",\" space " + prop_kv_rule_names[prop_names[i]] + " " + get_rest(seen | (size_t(1) << i)));
+                        alts.push_back("\",\" space " + prop_kv_rule_names[tracked[i]] + " " + get_rest(seen | (size_t(1) << i)));
                     }
                 }
-                std::string body = additional_kvs;
+                std::string body = free_loop;
                 if (!alts.empty()) {
                     body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )" + ((seen & required_mask) == required_mask ? "?" : "");
                 }
@@ -780,10 +801,10 @@ private:
 
             std::vector<std::string> firsts;
             for (size_t i = 0; i < n; i++) {
-                firsts.push_back(prop_kv_rule_names[prop_names[i]] + " " + get_rest(size_t(1) << i));
+                firsts.push_back(prop_kv_rule_names[tracked[i]] + " " + get_rest(size_t(1) << i));
             }
-            if (prop_kv_rule_names.count("*")) {
-                firsts.push_back(prop_kv_rule_names["*"] + " " + get_rest(0));
+            if (!free_kvs.empty()) {
+                firsts.push_back(free_kv + " " + get_rest(0));
             }
             return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (required_mask == 0 ? "?" : "") + " space \"}\"";
         }
