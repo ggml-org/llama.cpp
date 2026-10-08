@@ -37,7 +37,7 @@ using namespace cub;
 #    endif  // CCCL >= 3.4.3
 #endif      // GGML_CUDA_USE_CUB
 
-// max rows for the per-row DeviceTopK / CUB argsort path before switching to radix
+// max rows for the per-row DeviceTopK / CUB argsort path before switching to radix / bitonic
 #ifndef GGML_CUDA_TOP_K_NROWS_THRESHOLD
 #    ifdef CUB_TOP_K_AVAILABLE
 #        define GGML_CUDA_TOP_K_NROWS_THRESHOLD 2
@@ -123,7 +123,7 @@ static __global__ void top_k_radix_histogram(
     __syncthreads();
 
     const top_k_radix_state state = states[row];
-    for (int col = row_block * BLOCK_SIZE + tid;
+    for (int64_t col = row_block * BLOCK_SIZE + tid;
          col < ncols;
          col += blocks_per_row * BLOCK_SIZE) {
         const uint32_t key = top_k_float_to_ordered(row_src[col]);
@@ -193,7 +193,7 @@ static __global__ void top_k_radix_gather(
     int * row_dst = dst + (size_t) row * k;
     top_k_radix_state * state = &states[row];
 
-    for (int col = row_block * BLOCK_SIZE + tid;
+    for (int64_t col = row_block * BLOCK_SIZE + tid;
          col < ncols;
          col += blocks_per_row * BLOCK_SIZE) {
         const uint32_t key = top_k_float_to_ordered(row_src[col]);
