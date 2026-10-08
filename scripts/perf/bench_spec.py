@@ -319,13 +319,13 @@ def analyze_native_response(resp: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_prompt(prompt: dict[str, Any]) -> dict[str, Any]:
+def run_prompt(prompt: dict[str, Any], repeats: int | None = None) -> dict[str, Any]:
     n_predict = int(prompt.get("n_predict", 256))
     messages = prompt.get("messages") or [{"role": "user", "content": prompt.get("prompt", "")}]
     formatted_prompt = apply_chat_template(messages)
     runs: list[dict[str, Any]] = []
     last_text = ""
-    for _ in range(REPEATS):
+    for _ in range(REPEATS if repeats is None else repeats):
         t0 = time.perf_counter()
         resp = post_completion(formatted_prompt, n_predict)
         elapsed = time.perf_counter() - t0
@@ -450,31 +450,30 @@ def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
             stdout=logf,
             stderr=subprocess.STDOUT,
             env=env,
-            start_new_session=True,
+            # Keep curve servers inside the wrapper timeout's process group so its
+            # final SIGKILL reaches the server even if Python cannot finish cleanup.
+            start_new_session=MODE != "acceptance-curve",
         )
 
 
 def stop_server(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
-    try:
-        # SIGINT triggers clean shutdown + spec stats; fall back to TERM/KILL.
-        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
-        proc.wait(timeout=20)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        proc.wait(timeout=10)
-    except (subprocess.TimeoutExpired, ProcessLookupError, PermissionError):
+    for sig, grace in ((signal.SIGINT, 20), (signal.SIGTERM, 10), (signal.SIGKILL, 5)):
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+            group = os.getpgid(proc.pid)
+            if group == os.getpgrp():
+                proc.send_signal(sig)  # shared timeout group: do not signal ourselves
+            else:
+                os.killpg(group, sig)
+        except ProcessLookupError:
             pass
+        try:
+            proc.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            if sig == signal.SIGKILL:
+                raise  # do not report successful cleanup while the child is alive
 
 
 def curve_path(arm_name: str) -> Path:
@@ -509,8 +508,10 @@ def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]], tag: str = "") -
                   flush=True)
             return {"arm": arm, "error": "warmup response failed the target-argmax verifier", "prompts": []}
         results = []
-        for p in prompts:
-            r = run_prompt(p)
+        interleave = MODE == "acceptance-curve"
+        requests = (p for _ in range(REPEATS if interleave else 1) for p in prompts)
+        for p in requests:
+            r = run_prompt(p, repeats=1) if interleave else run_prompt(p)
             tg = r["tg_median"]
             acc = r["accept_rate_median"]
             print(f"  {r['id']:<12} tg={tg:.2f} t/s" if tg is not None else f"  {r['id']:<12} tg=n/a",
@@ -545,7 +546,8 @@ def run_arm_curve(arm: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[st
     for prompt in launch["prompts"]:
         for run in prompt["runs"]:
             drafted, accepted = run.get("draft_n"), run.get("draft_n_accepted")
-            if (type(drafted) is not int or type(accepted) is not int or
+            if (not isinstance(drafted, int) or isinstance(drafted, bool) or
+                    not isinstance(accepted, int) or isinstance(accepted, bool) or
                     drafted <= 0 or not 0 <= accepted <= drafted):
                 problems.append(f"{prompt['id']}: invalid or missing draft statistics")
                 continue
@@ -914,6 +916,9 @@ def main() -> int:
         print(f"SERVER_BIN={SERVER_BIN}")
         print(f"PORT={PORT} CTX={CTX} THREADS={THREADS} REPEATS={REPEATS}")
         print(f"arms: {[a['name'] for a in arms]}")
+        # Invalidate the complete old campaign before any arm can publish new data.
+        for arm in arms:
+            curve_path(arm["name"]).unlink(missing_ok=True)
         driver = render_driver(RENDER_NODE)
         if driver not in {"xe", "i915"} or not prompts or REPEATS < 1:
             print("!! requires xe/i915, a nonempty prompt set and positive REPEATS")

@@ -94,12 +94,15 @@ are required so discarding sample 0 leaves two values for a Student-t interval.
 ### MTP request acceptance
 
 `run-spec-curve.sh` runs adaptive depths 3-7, fixed 3, and fixed 7 in sequence.
-It restores an initially active `llama-sycl.cpp.service` on exit, defaults to
-context 2048, and limits the campaign to two hours (`CURVE_TIMEOUT` overrides).
-Set `SKIP_STOP_SERVICE=1` when service management is handled externally.
+The wrapper always selects acceptance-curve mode. It restores an initially active
+`llama-sycl.cpp.service` on exit, defaults to context 2048, and limits the campaign
+to two hours (`CURVE_TIMEOUT` overrides).
+The server stays in the timeout process group so forced termination also reaches
+it if Python cleanup stalls. Set `SKIP_STOP_SERVICE=1` when service management
+is handled externally.
 
 ```bash
-SERVER_BIN=./build-sycl/bin/llama-server MODEL=/path/model.gguf REPEATS=25 \
+SERVER_BIN=./build-sycl/bin/llama-server MODEL=/path/model.gguf REPEATS=67 \
   bash scripts/run-spec-curve.sh
 ./build-cpu/bin/test-spec-adaptive-curve \
   --curve-file scripts/perf/results/acceptance_curve_model_adaptive-3-7.jsonl \
@@ -107,8 +110,11 @@ SERVER_BIN=./build-sycl/bin/llama-server MODEL=/path/model.gguf REPEATS=25 \
 ```
 
 Use an MTP-capable model and enough prompts times repeats for at least 200
-requests per arm. Each JSONL row contains **request totals**, not verification
-rounds; the analyzer cannot replay the adaptive controller. It compares token
+requests per arm (67 repeats for the supplied three-prompt fixture). Requests
+cycle through the prompt suite once per repeat, so the final window represents
+the suite to within one request per prompt when the suite fits in the window.
+Old traces for all arms are removed before the first launch. Each JSONL row
+contains **request totals**, not verification rounds; the analyzer cannot replay the adaptive controller. It compares token
 acceptance over the last 50 requests: adaptive >= 0.80 and an adaptive-minus-fixed
 7 gap >= 0.20. These are experimental hypotheses, not established A770 thresholds.
 Exit 77 means insufficient data, 1 means invalid input or a failed threshold,

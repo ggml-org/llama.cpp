@@ -8,7 +8,7 @@ if [[ -z "${SERVER_BIN:-}" || -z "${MODEL:-}" ]]; then
     echo "SERVER_BIN and MODEL must be set" >&2
     exit 2
 fi
-export MODE="${MODE:-acceptance-curve}"
+export MODE=acceptance-curve
 export CTX="${CTX:-2048}"
 SERVICE=llama-sycl.cpp.service
 restore_service=0
