@@ -231,16 +231,21 @@
 		uiStore.requestComposerFocus();
 	}
 
-	/** Switch the open chat to this model, the way the desktop model dropdown does. */
-	async function useInChat(option: ModelOption): Promise<void> {
-		await modelsStore.selectModelById(option.id, { recordRecent: true });
-
+	/** Load the model when the server can take load requests, without waiting for it. */
+	function loadInBackground(option: ModelOption): void {
 		// only the built-in server loads on request, and only in router mode
 		if (serverStore.isRouterMode && !modelsStore.isModelLoaded(option.model)) {
 			modelsStore.status
 				.load(option.model)
 				.catch((error) => console.error('Failed to load model:', error));
 		}
+	}
+
+	/** Switch the open chat to this model, the way the desktop model dropdown does. */
+	async function useInChat(option: ModelOption): Promise<void> {
+		await modelsStore.selectModelById(option.id, { recordRecent: true });
+
+		loadInBackground(option);
 
 		returnToChat();
 	}
@@ -248,6 +253,9 @@
 	async function useInNewChat(option: ModelOption): Promise<void> {
 		await modelsStore.selectModelById(option.id);
 		await conversationsStore.openNewChat();
+
+		loadInBackground(option);
+
 		returnToChat();
 	}
 </script>
