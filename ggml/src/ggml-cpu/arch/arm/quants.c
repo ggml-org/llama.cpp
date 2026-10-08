@@ -925,18 +925,22 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 // it reads past qh.
 static inline svbool_t load_as_svbool(const uint8_t * p) {
 #if defined(__GNUC__) || defined(__clang__)
-    svbool_t r;
-    __asm__("ldr %0, %1"
-            : "=Upa"(r)
-            : "Q"(*(const char (*)[32]) p));
-    return r;
-#else
-    const svbool_t  ptrue  = svptrue_b8();
-    const svuint8_t raw = svld1_u8(svwhilelt_b8_u64(0, svcntd()), p);
-    const svuint8_t sel = svlsr_n_u8_x(ptrue, svindex_u8(0, 1), 3);
-    const svuint8_t msk = svdupq_n_u8(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
-    return svcmpne_n_u8(ptrue, svand_u8_x(ptrue, svtbl_u8(raw, sel), msk), 0);
+    if (ggml_cpu_get_sve_cnt() * 8 < 512) {
+        svbool_t r;
+        __asm__("ldr %0, %1"
+                : "=Upa"(r)
+                : "Q"(*(const char (*)[32]) p));
+        return r;
+    }
 #endif
+    const uint64_t vector_length = ggml_cpu_get_sve_cnt() * 8;
+    const svbool_t active = vector_length >= 512 ? svptrue_pat_b8(SV_VL32) : svptrue_b8();
+    const uint64_t load_bytes = vector_length >= 512 ? 4 : svcntd();
+    const svbool_t load = svwhilelt_b8_u64(0, load_bytes);
+    const svuint8_t raw = svld1_u8(load, p);
+    const svuint8_t sel = svlsr_n_u8_x(active, svindex_u8(0, 1), 3);
+    const svuint8_t msk = svdupq_n_u8(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
+    return svcmpne_n_u8(active, svand_u8_x(active, svtbl_u8(raw, sel), msk), 0);
 }
 #endif
 
@@ -1015,6 +1019,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 sumf = svaddv_f32(p4, svadd_f32_x(p4, sumv0, sumv1));
             } break;
         case 256:
+        case 512:
             {
                 const svbool_t p32  = svptrue_pat_b8(SV_VL32);
                 const svbool_t p16h = svptrue_pat_b8(SV_VL16);
@@ -1232,6 +1237,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 sumf = svaddv_f32(p4, svadd_f32_x(p4, sumv0, sumv1)) + summs0 + summs1;
             } break;
         case 256:
+        case 512:
             {
                 const svbool_t p32  = svptrue_pat_b8(SV_VL32);
                 const svbool_t p16h = svptrue_pat_b8(SV_VL16);
