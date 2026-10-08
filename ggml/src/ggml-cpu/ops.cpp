@@ -12093,6 +12093,254 @@ static void ggml_compute_forward_dsv4_hc_comb_f32(
     }
 }
 
+// ggml_compute_forward_gated_delta_net_back
+
+static void ggml_compute_forward_gated_delta_net_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src_q     = dst->src[0];
+    const ggml_tensor * src_k     = dst->src[1];
+    const ggml_tensor * src_v     = dst->src[2];
+    const ggml_tensor * src_g     = dst->src[3];
+    const ggml_tensor * src_beta  = dst->src[4];
+    const ggml_tensor * src_state = dst->src[5];
+    const ggml_tensor * src_d     = dst->src[6];
+
+    const int64_t S_v      = src_v->ne[0];
+    const int64_t H        = src_v->ne[1];
+    const int64_t n_tokens = src_v->ne[2];
+    const int64_t n_seqs   = src_v->ne[3];
+
+    GGML_ASSERT(ggml_is_contiguous(src_d));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    GGML_TENSOR_LOCALS(int64_t, neq, src_q, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbq, src_q, nb);
+    GGML_TENSOR_LOCALS(int64_t, nek, src_k, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbk, src_k, nb);
+    GGML_TENSOR_LOCALS(int64_t, nev, src_v, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbv, src_v, nb);
+    GGML_TENSOR_LOCALS(int64_t, neg, src_g, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbg, src_g, nb);
+    GGML_TENSOR_LOCALS(size_t,  nbb, src_beta, nb);
+
+    const bool    kda = (neg0 == S_v);
+    // K (snapshot slot count) is set as an op param by ggml_gated_delta_net_back().
+    const int64_t K   = ggml_get_op_params_i32(dst, 0);
+    // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
+    const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
+
+    const int64_t H_k = neq1;
+    const int64_t rq3 = nev3 / neq3;
+    const int64_t rk3 = nev3 / nek3;
+    GGML_ASSERT(neq1 == nek1);
+    GGML_ASSERT(neq3 == nek3);
+    GGML_ASSERT(rq3  == rk3);
+    GGML_ASSERT(H % H_k == 0);
+
+    const float scale = 1.0f / sqrtf((float) S_v);
+
+    const size_t  tsize = sizeof(float);
+    const int64_t pad_q = GGML_PAD(ggml_nelements(src_q)    * tsize, GGML_MEM_ALIGN) / tsize;
+    const int64_t pad_k = GGML_PAD(ggml_nelements(src_k)    * tsize, GGML_MEM_ALIGN) / tsize;
+    const int64_t pad_v = GGML_PAD(ggml_nelements(src_v)    * tsize, GGML_MEM_ALIGN) / tsize;
+    const int64_t pad_g = GGML_PAD(ggml_nelements(src_g)    * tsize, GGML_MEM_ALIGN) / tsize;
+    const int64_t pad_b = GGML_PAD(ggml_nelements(src_beta) * tsize, GGML_MEM_ALIGN) / tsize;
+    float * dq_base = (float *) dst->data;
+    float * dk_base = dq_base + pad_q;
+    float * dv_base = dk_base + pad_k;
+    float * dg_base = dv_base + pad_v;
+    float * db_base = dg_base + pad_g;
+    float * ds_base = db_base + pad_b;
+
+    const int64_t attn_score_elems    = S_v * H * n_tokens * n_seqs;
+    const int64_t state_size_per_snap = S_v * S_v * H * n_seqs;
+    const float * d_attn_base  = (const float *) src_d->data;
+    const float * d_state_base = (const float *) src_d->data + attn_score_elems;
+
+    const float * state_in_base = (const float *) src_state->data;
+
+    const int     ith = params->ith;
+    const int     nth = params->nth;
+
+    const int64_t per_thread = (n_tokens + 2) * S_v * S_v + 8 * S_v;
+    float * wbase  = (float *) params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
+    float * S_hist = wbase;
+    float * Am     = S_hist + n_tokens * S_v * S_v;
+    float * Spm    = Am     + S_v * S_v;
+    float * eg     = Spm    + S_v * S_v;
+    float * uvec   = eg     + S_v;
+    float * dvec   = uvec   + S_v;
+    float * ddvec  = dvec   + S_v;
+    float * wvec   = ddvec  + S_v;
+
+    const int64_t nr = H_k * neq3;
+
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t iqh = ir % H_k;
+        const int64_t iq3 = ir / H_k;
+
+        for (int64_t t = 0; t < n_tokens; ++t) {
+            const int64_t row = S_v * (iqh + H_k * (t + n_tokens * iq3));
+            memset(dq_base + row, 0, S_v * sizeof(float));
+            memset(dk_base + row, 0, S_v * sizeof(float));
+        }
+
+        for (int64_t iv1 = iqh; iv1 < H; iv1 += H_k) {
+            for (int64_t iv3 = iq3 * rq3; iv3 < iq3 * rq3 + rq3; ++iv3) {
+                const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
+
+                for (int64_t t = 0; t < n_tokens; ++t) {
+                    const float * prev = (t == 0) ? s_in : (S_hist + (t - 1) * S_v * S_v);
+                    float       * St   = S_hist + t * S_v * S_v;
+
+                    const float * k_d = (const float *)((const char *)src_k->data + iv3 / rk3 * nbk3 + t * nbk2 + iqh * nbk1);
+                    const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
+                    const float   beta_val = *(const float *)((const char *)src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
+                    const float * g_d = (const float *)((const char *)src_g->data + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
+
+                    const float eg0 = kda ? 0.0f : expf(g_d[0]);
+                    if (kda) {
+                        for (int64_t i = 0; i < S_v; ++i) { eg[i] = expf(g_d[i]); }
+                    }
+                    // S' = diag(exp(g)) S_{t-1}
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        for (int64_t i = 0; i < S_v; ++i) {
+                            St[j * S_v + i] = (kda ? eg[i] : eg0) * prev[j * S_v + i];
+                        }
+                    }
+                    // delta = beta (v - S'^T k); S_t = S' + k delta^T
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        float s = 0.0f;
+                        for (int64_t i = 0; i < S_v; ++i) { s += St[j * S_v + i] * k_d[i]; }
+                        const float delta_j = (v_d[j] - s) * beta_val;
+                        for (int64_t i = 0; i < S_v; ++i) { St[j * S_v + i] += delta_j * k_d[i]; }
+                    }
+                }
+
+                memset(Am, 0, S_v * S_v * sizeof(float));
+                for (int64_t t = n_tokens - 1; t >= 0; --t) {
+                    const float * prev = (t == 0) ? s_in : (S_hist + (t - 1) * S_v * S_v);
+                    const float * St   = S_hist + t * S_v * S_v;
+
+                    const float * q_d = (const float *)((const char *)src_q->data + iq3 * nbq3 + t * nbq2 + iqh * nbq1);
+                    const float * k_d = (const float *)((const char *)src_k->data + iv3 / rk3 * nbk3 + t * nbk2 + iqh * nbk1);
+                    const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
+                    const float   beta_val = *(const float *)((const char *)src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
+                    const float * g_d = (const float *)((const char *)src_g->data + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
+
+                    const float * do_d = d_attn_base + (iv3 * n_tokens * H + iv1) * S_v + t * S_v * H;
+
+                    float * dq = dq_base + S_v * (iqh + H_k * (t + n_tokens * iq3));
+                    float * dk = dk_base + S_v * (iqh + H_k * (t + n_tokens * iq3));
+                    float * dv = dv_base + S_v * (iv1 + H * (t + n_tokens * iv3));
+
+                    // d_q = scale S_t d_o ; A += scale q (x) d_o
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        float s = 0.0f;
+                        for (int64_t j = 0; j < S_v; ++j) { s += St[j * S_v + i] * do_d[j]; }
+                        dq[i] += scale * s;
+                    }
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        const float sdo = scale * do_d[j];
+                        for (int64_t i = 0; i < S_v; ++i) { Am[j * S_v + i] += q_d[i] * sdo; }
+                    }
+
+                    // matches the forward op's slot mapping: slot 0 = most recent state (t = n_tokens-1).
+                    const int64_t target_slot = n_tokens - 1 - t;
+                    if (target_slot >= 0 && target_slot < K) {
+                        const float * dss = d_state_base + target_slot * state_size_per_snap + (iv3 * H + iv1) * S_v * S_v;
+                        for (int64_t idx = 0; idx < S_v * S_v; ++idx) { Am[idx] += dss[idx]; }
+                    }
+
+                    // recompute S'_t and exp(g) from S_{t-1}
+                    const float eg0 = kda ? 0.0f : expf(g_d[0]);
+                    if (kda) {
+                        for (int64_t i = 0; i < S_v; ++i) { eg[i] = expf(g_d[i]); }
+                    }
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        for (int64_t i = 0; i < S_v; ++i) {
+                            Spm[j * S_v + i] = (kda ? eg[i] : eg0) * prev[j * S_v + i];
+                        }
+                    }
+                    // u = v - S'^T k ; delta = beta u ; d_delta = A^T k ; w = beta d_delta
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        float su = 0.0f, sd = 0.0f;
+                        for (int64_t i = 0; i < S_v; ++i) {
+                            su += Spm[j * S_v + i] * k_d[i];
+                            sd += Am [j * S_v + i] * k_d[i];
+                        }
+                        uvec[j]  = v_d[j] - su;
+                        dvec[j]  = beta_val * uvec[j];
+                        ddvec[j] = sd;
+                        wvec[j]  = beta_val * sd;
+                        dv[j]    = wvec[j];     // d_v = w
+                    }
+                    // d_beta = <d_delta, u>
+                    float dbeta = 0.0f;
+                    for (int64_t j = 0; j < S_v; ++j) { dbeta += ddvec[j] * uvec[j]; }
+                    db_base[iv1 + H * (t + n_tokens * iv3)] = dbeta;
+
+                    // d_k = A delta - S' w
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        float a = 0.0f, b = 0.0f;
+                        for (int64_t j = 0; j < S_v; ++j) {
+                            a += Am [j * S_v + i] * dvec[j];
+                            b += Spm[j * S_v + i] * wvec[j];
+                        }
+                        dk[i] += a - b;
+                    }
+                    // d_g (using dS' = A - k w^T), then A_{t-1} = diag(exp(g)) dS'
+                    if (kda) {
+                        float * dg = dg_base + S_v * (iv1 + H * (t + n_tokens * iv3));
+                        for (int64_t i = 0; i < S_v; ++i) {
+                            float s = 0.0f;
+                            for (int64_t j = 0; j < S_v; ++j) {
+                                const float dsp = Am[j * S_v + i] - k_d[i] * wvec[j];
+                                s += dsp * Spm[j * S_v + i];
+                                Am[j * S_v + i] = eg[i] * dsp;
+                            }
+                            dg[i] = s;
+                        }
+                    } else {
+                        float s = 0.0f;
+                        for (int64_t j = 0; j < S_v; ++j) {
+                            for (int64_t i = 0; i < S_v; ++i) {
+                                const float dsp = Am[j * S_v + i] - k_d[i] * wvec[j];
+                                s += dsp * Spm[j * S_v + i];
+                                Am[j * S_v + i] = eg0 * dsp;
+                            }
+                        }
+                        dg_base[iv1 + H * (t + n_tokens * iv3)] = s;
+                    }
+                }
+
+                // state's gradient has layout [S_v, S_v, H, n_seqs] (no K factor, unlike the forward output).
+                float * ds0 = ds_base + (iv3 * H + iv1) * S_v * S_v;
+                memcpy(ds0, Am, S_v * S_v * sizeof(float));
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_gated_delta_net_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_gated_delta_net_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 void ggml_compute_forward_dsv4_hc_comb(
         const ggml_compute_params * params,
         ggml_tensor * dst) {

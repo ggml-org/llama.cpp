@@ -1095,6 +1095,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV7",
     "SOLVE_TRI",
     "GATED_DELTA_NET",
+    "GATED_DELTA_NET_BACK",
     "LIGHTNING_INDEXER",
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
@@ -1119,7 +1120,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1220,6 +1221,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rwkv_wkv7(r, w, k, v, a, b, s)",
     "A X = B, A triangular, solve X",
     "gated_delta_net(q, k, v, g, beta, s)",
+    "gated_delta_net_back(q, k, v, g, beta, s, d)",
     "lightning_indexer(q, k, weights, mask)",
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
@@ -1244,7 +1246,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6924,6 +6926,69 @@ struct ggml_tensor * ggml_top_k_mask(
     return result;
 }
 
+// ggml_gated_delta_net_back
+
+struct ggml_tensor * ggml_gated_delta_net_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * d) {
+    GGML_ASSERT(q->type     == GGML_TYPE_F32);
+    GGML_ASSERT(k->type     == GGML_TYPE_F32);
+    GGML_ASSERT(v->type     == GGML_TYPE_F32);
+    GGML_ASSERT(g->type     == GGML_TYPE_F32);
+    GGML_ASSERT(beta->type  == GGML_TYPE_F32);
+    GGML_ASSERT(state->type == GGML_TYPE_F32);
+    GGML_ASSERT(d->type     == GGML_TYPE_F32);
+
+    GGML_ASSERT(q->ne[1] == k->ne[1]);
+    GGML_ASSERT(q->ne[3] == k->ne[3]);
+    GGML_ASSERT(v->ne[1] % q->ne[1] == 0);
+
+    // Gradients of all six inputs are packed as contiguous, MEM_ALIGN-padded
+    // slices of a single 1D result, in src order: q, k, v, g, beta, state.
+    // ggml_compute_backward re-derives the same offsets to scatter into grads.
+    const size_t tsize = ggml_type_size(GGML_TYPE_F32);
+    size_t end = 0;
+    end += GGML_PAD(ggml_nelements(q)     * tsize, GGML_MEM_ALIGN);
+    end += GGML_PAD(ggml_nelements(k)     * tsize, GGML_MEM_ALIGN);
+    end += GGML_PAD(ggml_nelements(v)     * tsize, GGML_MEM_ALIGN);
+    end += GGML_PAD(ggml_nelements(g)     * tsize, GGML_MEM_ALIGN);
+    end += GGML_PAD(ggml_nelements(beta)  * tsize, GGML_MEM_ALIGN);
+    end += GGML_PAD(ggml_nelements(state) * tsize, GGML_MEM_ALIGN);
+
+    const int64_t gdn_S_v       = v->ne[0];
+    const int64_t gdn_H         = v->ne[1];
+    const int64_t gdn_n_tokens  = v->ne[2];
+    const int64_t gdn_n_seqs    = v->ne[3];
+
+    const int64_t nelements = (end + tsize - 1) / tsize;
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nelements);
+
+    GGML_ASSERT(d->ne[0] == gdn_S_v * gdn_H);
+    const int64_t gdn_state_rows = d->ne[1] - gdn_n_tokens * gdn_n_seqs;
+    GGML_ASSERT(gdn_state_rows > 0);
+    GGML_ASSERT(gdn_state_rows % (gdn_S_v * gdn_n_seqs) == 0);
+    const int64_t gdn_K = gdn_state_rows / (gdn_S_v * gdn_n_seqs);
+    ggml_set_op_params_i32(result, 0, (int32_t) gdn_K);
+
+    result->op     = GGML_OP_GATED_DELTA_NET_BACK;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = g;
+    result->src[4] = beta;
+    result->src[5] = state;
+    result->src[6] = d;
+
+    return result;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ggml_hash_set ggml_hash_set_new(size_t size) {
@@ -7612,6 +7677,33 @@ static void ggml_compute_backward(
             }
             if (src1_needs_grads) { // c
                 ggml_add_or_set(ctx, cgraph, isrc1, ggml_ssm_conv_back_c(ctx, grad_cont, src0, src1));
+            }
+        } break;
+        case GGML_OP_GATED_DELTA_NET: {
+            struct ggml_tensor * srcs[6] = {
+                tensor->src[0], tensor->src[1], tensor->src[2],
+                tensor->src[3], tensor->src[4], tensor->src[5],
+            };
+            size_t isrc[6];
+            bool   need[6];
+            bool   any = false;
+            for (int j = 0; j < 6; ++j) {
+                isrc[j] = ggml_hash_find(hash_set, srcs[j]);
+                need[j] = isrc[j] != GGML_HASHSET_FULL && ggml_bitset_get(hash_set->used, isrc[j]) && grads_needed[isrc[j]];
+                any = any || need[j];
+            }
+            if (any) {
+                struct ggml_tensor * d    = ggml_cont(ctx, grad);
+                struct ggml_tensor * back = ggml_gated_delta_net_back(ctx,
+                    srcs[0], srcs[1], srcs[2], srcs[3], srcs[4], srcs[5], d);
+                size_t off = 0;
+                for (int j = 0; j < 6; ++j) {
+                    if (need[j]) {
+                        struct ggml_tensor * view = ggml_view_1d(ctx, back, ggml_nelements(srcs[j]), off);
+                        ggml_add_or_set(ctx, cgraph, isrc[j], ggml_reshape(ctx, view, srcs[j]));
+                    }
+                    off += GGML_PAD(ggml_nelements(srcs[j]) * sizeof(float), GGML_MEM_ALIGN);
+                }
             }
         } break;
         case GGML_OP_NONE: {
