@@ -1741,7 +1741,9 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
                 }
-                return builder.add_schema(p.name, *p.node);
+                // tool-call schemas: models do not reliably follow the declared property order
+                bool is_tool_schema = p.name.rfind("tool-", 0) == 0;
+                return (is_tool_schema ? builder.add_schema_unordered : builder.add_schema)(p.name, *p.node);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 return p.name;
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {

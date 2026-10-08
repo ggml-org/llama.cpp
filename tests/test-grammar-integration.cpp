@@ -192,6 +192,10 @@ static void test_schema(const std::string & test_desc, const std::string & schem
     test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
 }
 
+static void test_schema_unordered(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
+    test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true, true), passing_strings, failing_strings);
+}
+
 static void test_simple_grammar() {
     test_schema(
         "min 0",
@@ -1478,6 +1482,55 @@ static void test_json_schema() {
     );
 }
 
+static void test_json_schema_unordered_properties() {
+    auto make_schema = [](const std::string & extra) {
+        return R"""({
+            "type": "object",
+            "properties": {
+                "expr": {"type": "string"},
+                "dtype": {"type": "string"},
+                "n": {"type": "integer"}
+            })""" + extra + "}";
+    };
+
+    test_schema_unordered(
+        "properties in any order, additional allowed",
+        make_schema(R"""(, "additionalProperties": true)"""),
+        {
+            R"""({})""",
+            R"""({"expr": "0", "dtype": "int"})""",
+            R"""({"dtype": "int", "expr": "0"})""",
+            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
+            R"""({"dtype": "int", "other": 1, "expr": "0"})""",
+        },
+        {
+            R"""({"n": "x"})""",
+            R"""({"expr": "0",})""",
+        });
+
+    test_schema_unordered(
+        "properties in any order, no additional",
+        make_schema(R"""(, "additionalProperties": false)"""),
+        {
+            R"""({"dtype": "int", "expr": "0"})""",
+            R"""({"n": 1, "expr": "0"})""",
+        },
+        {
+            R"""({"dtype": "int", "other": 1})""",
+            R"""({"expr": 0})""",
+        });
+
+    test_schema(
+        "ordered (default) still rejects out-of-order keys",
+        make_schema(R"""(, "additionalProperties": false)"""),
+        {
+            R"""({"expr": "0", "dtype": "int"})""",
+        },
+        {
+            R"""({"dtype": "int", "expr": "0"})""",
+        });
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1490,6 +1543,7 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_json_schema_unordered_properties();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }

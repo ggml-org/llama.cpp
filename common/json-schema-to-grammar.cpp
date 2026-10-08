@@ -343,6 +343,7 @@ class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     bool _dotall;
+    bool _unordered_properties = false;
     std::map<std::string, std::string> _rules;
     std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
@@ -740,6 +741,19 @@ private:
             return "\"{\" space \"}\"";
         }
 
+        if (_unordered_properties) {
+            // any property in any order; required and uniqueness are not enforced
+            std::vector<std::string> kvs;
+            for (const auto & prop_name : prop_names) {
+                kvs.push_back(prop_kv_rule_names[prop_name]);
+            }
+            if (prop_kv_rule_names.count("*")) {
+                kvs.push_back(prop_kv_rule_names["*"]);
+            }
+            std::string any_kv = _add_rule(name + (name.empty() ? "" : "-") + "any-kv", string_join(kvs, " | "));
+            return "\"{\" space ( " + any_kv + " ( \",\" space " + any_kv + " )* )? space \"}\"";
+        }
+
         std::string rule = "\"{\" space ";
         for (size_t i = 0; i < required_props.size(); i++) {
             if (i > 0) {
@@ -819,6 +833,13 @@ public:
 
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
         return visit(schema, name);
+    }
+
+    std::string add_schema_unordered(const std::string & name, const common_chat_schema & schema) {
+        _unordered_properties = true;
+        auto rule = visit(schema, name);
+        _unordered_properties = false;
+        return rule;
     }
 
     static std::string _generate_constant_rule(const json & value) {
@@ -990,7 +1011,7 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf, bool unordered_properties) {
 #ifdef LLAMA_USE_LLGUIDANCE
     if (!force_gbnf) {
         return "%llguidance {}\nstart: %json " + schema.dump();
@@ -999,15 +1020,15 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     try {
-        return json_schema_to_grammar(common_chat_schema_from_json(schema));
+        return json_schema_to_grammar(common_chat_schema_from_json(schema), unordered_properties);
     } catch (const std::runtime_error & e) {
         throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
     }
 }
 
-std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
+std::string json_schema_to_grammar(const common_chat_schema_document & schema, bool unordered_properties) {
     common_chat_schema_converter converter(false);
-    converter.visit(*schema.root, "");
+    (unordered_properties ? converter.add_schema_unordered("", *schema.root) : converter.add_schema("", *schema.root));
     converter.check_errors();
     return converter.format_grammar();
 }
@@ -1020,6 +1041,9 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
         },
         /* .add_schema = */ [&](const std::string & name, const common_chat_schema & schema) {
             return converter.add_schema(name == "root" ? "" : name, schema);
+        },
+        /* .add_schema_unordered = */ [&](const std::string & name, const common_chat_schema & schema) {
+            return converter.add_schema_unordered(name == "root" ? "" : name, schema);
         },
     };
     cb(builder);
