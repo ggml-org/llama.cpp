@@ -768,51 +768,55 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        // one rule per set of seen keys (2^n rules), so above this limit keep the declared order
-        constexpr size_t max_unordered_props = 6;
-        if (_unordered_properties && prop_names.size() <= max_unordered_props) {
-            const size_t n = prop_names.size();
-            size_t required_mask = 0;
-            for (size_t i = 0; i < n; i++) {
-                if (required.count(prop_names[i])) {
-                    required_mask |= size_t(1) << i;
+        // up to max_tracked keys, required first: in any order, at most once, close only when all required keys are seen (like common_chat_peg_builder::permute)
+        // other keys: anywhere, repeats allowed; with more than max_tracked required keys, those keep the declared order
+        constexpr size_t max_tracked = 6;
+        if (_unordered_properties) {
+            const size_t n_required = required_props.size();
+            const bool any_order = n_required <= max_tracked;
+            std::vector<std::string> tracked = required_props;
+            std::vector<std::string> free_kvs;
+            for (const auto & prop_name : optional_props) {
+                if (any_order && prop_name != "*" && tracked.size() < max_tracked) {
+                    tracked.push_back(prop_name);
+                } else {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
                 }
             }
-            std::string additional_kvs;
-            if (prop_kv_rule_names.count("*")) {
-                additional_kvs = "( \",\" space " + prop_kv_rule_names["*"] + " )*";
-            }
+            std::string free_kv = free_kvs.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
+            std::string free_loop = free_kv.empty() ? "" : "( \",\" space " + free_kv + " )*";
 
-            // rest of the object after the keys in `seen`: each key at most once, close only when all required keys are seen
+            // seen: bitmask of tracked keys, or with any_order == false the count of required keys
+            const size_t required_mask = any_order ? (size_t(1) << n_required) - 1 : 0;
+            auto all_required = [&](size_t seen) { return any_order ? (seen & required_mask) == required_mask : seen == n_required; };
+            auto tracked_alts = [&](size_t seen, const std::function<std::string(size_t)> & rest) {
+                std::vector<std::string> alts;
+                for (size_t i = 0; i < tracked.size(); i++) {
+                    if (any_order ? !(seen & (size_t(1) << i)) : i == seen) {
+                        alts.push_back(prop_kv_rule_names[tracked[i]] + " " + rest(any_order ? seen | (size_t(1) << i) : seen + 1));
+                    }
+                }
+                return alts;
+            };
             std::map<size_t, std::string> rest_rules;
-            std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
+            std::function<std::string(size_t)> rest = [&](size_t seen) -> std::string {
                 auto it = rest_rules.find(seen);
                 if (it != rest_rules.end()) {
                     return it->second;
                 }
-                std::vector<std::string> alts;
-                for (size_t i = 0; i < n; i++) {
-                    if (!(seen & (size_t(1) << i))) {
-                        alts.push_back("\",\" space " + prop_kv_rule_names[prop_names[i]] + " " + get_rest(seen | (size_t(1) << i)));
-                    }
-                }
-                std::string body = additional_kvs;
+                auto alts = tracked_alts(seen, rest);
+                std::string body = free_loop;
                 if (!alts.empty()) {
-                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )" + ((seen & required_mask) == required_mask ? "?" : "");
+                    body += (body.empty() ? "" : " ") + std::string("( \",\" space ( ") + string_join(alts, " | ") + " ) )" + (all_required(seen) ? "?" : "");
                 }
-                std::string res = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
-                rest_rules[seen] = res;
-                return res;
+                return rest_rules[seen] = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
             };
 
-            std::vector<std::string> firsts;
-            for (size_t i = 0; i < n; i++) {
-                firsts.push_back(prop_kv_rule_names[prop_names[i]] + " " + get_rest(size_t(1) << i));
+            auto firsts = tracked_alts(0, rest);
+            if (!free_kv.empty()) {
+                firsts.push_back(free_kv + " " + rest(0));
             }
-            if (prop_kv_rule_names.count("*")) {
-                firsts.push_back(prop_kv_rule_names["*"] + " " + get_rest(0));
-            }
-            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (required_mask == 0 ? "?" : "") + " space \"}\"";
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n_required == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
@@ -1078,25 +1082,24 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf, bool unordered_properties) {
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
 #ifdef LLAMA_USE_LLGUIDANCE
-    // llguidance %json keeps the declared order, so use GBNF for unordered
-    if (!force_gbnf && !unordered_properties) {
+    if (!force_gbnf) {
         return "%llguidance {}\nstart: %json " + schema.dump();
     }
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     try {
-        return json_schema_to_grammar(common_chat_schema_from_json(schema), unordered_properties);
+        return json_schema_to_grammar(common_chat_schema_from_json(schema));
     } catch (const std::runtime_error & e) {
         throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
     }
 }
 
-std::string json_schema_to_grammar(const common_chat_schema_document & schema, bool unordered_properties) {
+std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
     common_chat_schema_converter converter(false);
-    (unordered_properties ? converter.add_schema_unordered("", *schema.root) : converter.add_schema("", *schema.root));
+    converter.visit(*schema.root, "");
     converter.check_errors();
     return converter.format_grammar();
 }
