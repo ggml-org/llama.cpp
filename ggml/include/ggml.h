@@ -431,6 +431,9 @@ extern "C" {
 
         GGML_OP_SLEEP,
 
+        GGML_OP_SSM_CONV_BACK_SX,
+        GGML_OP_SSM_CONV_BACK_C,
+
         GGML_OP_COUNT,
     };
 
@@ -2292,6 +2295,20 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * sx,
             struct ggml_tensor  * c);
+
+    // Backward of ggml_ssm_conv w.r.t. `sx` (conv input).
+    GGML_API struct ggml_tensor * ggml_ssm_conv_back_sx(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * grad_out,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * sx_like);
+
+    // Backward of ggml_ssm_conv w.r.t. `c` (conv weight).
+    GGML_API struct ggml_tensor * ggml_ssm_conv_back_c(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * grad_out,
+            struct ggml_tensor  * sx,
+            struct ggml_tensor  * c_like);
 
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,

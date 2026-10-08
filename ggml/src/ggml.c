@@ -1114,9 +1114,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 
     "SLEEP",
+
+    "SSM_CONV_BACK_SX",
+    "SSM_CONV_BACK_C",
 };
 
-static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1229,9 +1232,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 
     "sleep(x)",
+
+    "ssm_conv_back_sx(x)",
+    "ssm_conv_back_c(x)",
 };
 
-static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5623,6 +5629,82 @@ struct ggml_tensor * ggml_ssm_conv(
     return result;
 }
 
+// ggml_ssm_conv_back_sx
+
+/*
+    grad_sx = ggml_ssm_conv_back_sx(ctx, grad_out, c, sx_like);
+
+    grad_out -> {d_inner, n_t, n_s}
+    c        -> {d_conv, d_inner}
+    sx_like  -> {d_conv - 1 + n_t, d_inner, n_s}
+    grad_sx  -> {d_conv - 1 + n_t, d_inner, n_s}
+*/
+struct ggml_tensor * ggml_ssm_conv_back_sx(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * grad_out,
+        struct ggml_tensor  * c,
+        struct ggml_tensor  * sx_like) {
+    GGML_ASSERT(ggml_is_3d(grad_out));
+    GGML_ASSERT(ggml_is_matrix(c));
+    GGML_ASSERT(ggml_is_3d(sx_like));
+
+    const int64_t d_conv  = c->ne[0];
+    const int64_t d_inner = c->ne[1];
+    const int64_t n_t     = grad_out->ne[1];
+    const int64_t n_s     = grad_out->ne[2];
+
+    GGML_ASSERT(grad_out->ne[0] == d_inner);
+    GGML_ASSERT(sx_like->ne[0]  == d_conv - 1 + n_t);
+    GGML_ASSERT(sx_like->ne[1]  == d_inner);
+    GGML_ASSERT(sx_like->ne[2]  == n_s);
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, sx_like->ne[0], d_inner, n_s);
+
+    result->op     = GGML_OP_SSM_CONV_BACK_SX;
+    result->src[0] = grad_out;
+    result->src[1] = c;
+
+    return result;
+}
+
+// ggml_ssm_conv_back_c
+
+/*
+    grad_c = ggml_ssm_conv_back_c(ctx, grad_out, sx, c_like);
+
+    grad_out -> {d_inner, n_t, n_s}
+    sx       -> {d_conv - 1 + n_t, d_inner, n_s}
+    c_like   -> {d_conv, d_inner}
+    grad_c   -> {d_conv, d_inner}
+*/
+struct ggml_tensor * ggml_ssm_conv_back_c(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * grad_out,
+        struct ggml_tensor  * sx,
+        struct ggml_tensor  * c_like) {
+    GGML_ASSERT(ggml_is_3d(grad_out));
+    GGML_ASSERT(ggml_is_3d(sx));
+    GGML_ASSERT(ggml_is_matrix(c_like));
+
+    const int64_t d_conv  = c_like->ne[0];
+    const int64_t d_inner = c_like->ne[1];
+    const int64_t n_t     = grad_out->ne[1];
+    const int64_t n_s     = grad_out->ne[2];
+
+    GGML_ASSERT(grad_out->ne[0] == d_inner);
+    GGML_ASSERT(sx->ne[0]       == d_conv - 1 + n_t);
+    GGML_ASSERT(sx->ne[1]       == d_inner);
+    GGML_ASSERT(sx->ne[2]       == n_s);
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_conv, d_inner);
+
+    result->op     = GGML_OP_SSM_CONV_BACK_C;
+    result->src[0] = grad_out;
+    result->src[1] = sx;
+
+    return result;
+}
+
 // ggml_ssm_scan
 
 struct ggml_tensor * ggml_ssm_scan(
@@ -7188,6 +7270,15 @@ static void ggml_compute_backward(
                 default: {
                     GGML_ABORT("unsupported glu op for backward pass: %s", ggml_glu_op_name(ggml_get_glu_op(tensor)));
                 } //break;
+            }
+        } break;
+        case GGML_OP_SSM_CONV: {
+            struct ggml_tensor * grad_cont = ggml_cont(ctx, grad);
+            if (src0_needs_grads) { // sx
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_ssm_conv_back_sx(ctx, grad_cont, src1, src0));
+            }
+            if (src1_needs_grads) { // c
+                ggml_add_or_set(ctx, cgraph, isrc1, ggml_ssm_conv_back_c(ctx, grad_cont, src0, src1));
             }
         } break;
         case GGML_OP_NONE: {
