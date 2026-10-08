@@ -425,7 +425,7 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     if (copy_cnt > 0) {                                                                                                  \
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct_end);                                                       \
         if (src2) {                                                                                                      \
-            hvx_add_f32_uaa((uint8_t *) &dst_col[src0_start_row],                                                        \
+            hvx_add_f32_uuu((uint8_t *) &dst_col[src0_start_row],                                                        \
                             (const uint8_t *) tmp,                                                                       \
                             (const uint8_t *) ((const float *) mmctx->vtcm_bias + src0_start_row),                       \
                             copy_cnt);                                                                                   \
@@ -1108,7 +1108,7 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     if (copy_cnt > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, src0_end_row);
         if (src2) {
-            hvx_add_f32_uaa((uint8_t *) &dst_col[src0_start_row],
+            hvx_add_f32_uuu((uint8_t *) &dst_col[src0_start_row],
                             (const uint8_t *) tmp,
                             (const uint8_t *) ((const float *) mmctx->vtcm_bias + src0_start_row),
                             copy_cnt);
