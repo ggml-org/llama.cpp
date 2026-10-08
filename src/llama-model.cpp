@@ -1067,6 +1067,7 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
 // Maps GGUF activation names to the FFN op type used by the graph builders.
 static const std::map<std::string, llm_ffn_op_type> LLM_FFN_OP_TYPES_FROM_STRING = {
     { "gelu",              LLM_FFN_GEGLU_ERF },
+    { "gelu_python",       LLM_FFN_GEGLU_ERF },
     { "gelu_pytorch_tanh", LLM_FFN_GEGLU     },
     { "gelu_new",          LLM_FFN_GEGLU     },
     { "gelu_fast",         LLM_FFN_GEGLU     },
