@@ -54,6 +54,7 @@ struct mtmd_audio_preprocessor {
     const clip_hparams & hparams;
 
     mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_audio_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_audio_preprocessor() = default;
     virtual void initialize() = 0; // NOT thread-safe
@@ -71,11 +72,18 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_conformer(const clip_hparams & hparams) : mtmd_audio_preprocessor(hparams) {}
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
+};
+
+// same as conformer, the audio is cut to 30 s and padded to 0.5 s (d1-omni audio.py)
+struct mtmd_audio_preprocessor_d1omni : mtmd_audio_preprocessor_conformer {
+    using mtmd_audio_preprocessor_conformer::mtmd_audio_preprocessor_conformer;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
 struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {

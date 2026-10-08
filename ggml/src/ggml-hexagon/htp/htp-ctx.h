@@ -150,7 +150,9 @@ int op_matmul_nx(struct htp_ops_context * octx);
 int op_matmul_id_nx(struct htp_ops_context * octx);
 int op_binary(struct htp_ops_context * octx);
 int op_unary(struct htp_ops_context * octx);
+int op_sum(struct htp_ops_context * octx);
 int op_sum_rows(struct htp_ops_context * octx);
+int op_argmax(struct htp_ops_context * octx);
 int op_activations(struct htp_ops_context * octx);
 int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
@@ -171,6 +173,8 @@ int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
+int op_pool_2d(struct htp_ops_context * octx);
+int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
 

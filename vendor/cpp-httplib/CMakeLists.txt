@@ -43,7 +43,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
-    set(BORINGSSL_VERSION "0.20260903.0" CACHE STRING "BoringSSL version")
+    set(BORINGSSL_VERSION "0.20260929.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 
@@ -83,7 +83,7 @@ if (LLAMA_BUILD_BORINGSSL)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
 elseif (LLAMA_BUILD_LIBRESSL)
-    set(LIBRESSL_VERSION "4.3.2" CACHE STRING "LibreSSL version")
+    set(LIBRESSL_VERSION "4.3.3" CACHE STRING "LibreSSL version")
 
     message(STATUS "Fetching LibreSSL version ${LIBRESSL_VERSION}")
 

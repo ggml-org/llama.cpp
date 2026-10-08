@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import numpy as np
@@ -10,7 +11,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, logger
+from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, jinja_str_or_json, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
@@ -469,6 +470,21 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         shape = list(tensor.shape)
         if dim < 0:
             dim += len(shape)
+
+        # LoRA tensors (W ≈ B @ A) cannot reshape their row dimension.
+        # Instead, build a permutation index and apply it to A (column reorder) or B (row reorder) directly.
+        if hasattr(tensor, 'get_lora_A_B'):
+            n = shape[dim]
+            idx = torch.arange(n).reshape(num_k_heads, num_v_per_k, head_dim)
+            idx = idx.permute(1, 0, 2).contiguous().reshape(n)
+            lora_A, lora_B = tensor.get_lora_A_B()  # ty: ignore[call-non-callable]
+            if dim == len(shape) - 1:
+                return type(tensor)(lora_A[:, idx], lora_B)
+            elif dim == 0:
+                return type(tensor)(lora_A, lora_B[idx])
+            else:
+                raise NotImplementedError(f"_reorder_v_heads on dim={dim} not supported for LoRA tensors")
+
         new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
         tensor = tensor.reshape(*new_shape)
         perm = list(range(len(new_shape)))
@@ -634,10 +650,79 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel")
 @ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def __init__(self, dir_model, *args, **kwargs):
+        # Inner TextModel does not own mtp.*. Set no_mtp before mixin bumps block_count.
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, self.is_mistral_format)
+        if get_model_architecture(hparams, ModelType.TEXT) == "Qwen3_5TextModel":
+            self.no_mtp = True
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+
+
+def _is_openjev_checkpoint(dir_model: Path) -> bool:
+    return (dir_model / "helper" / "shim.py").is_file() and (dir_model / "config.json").is_file()
+
+
+@ModelBase.register_hparams_loader(_is_openjev_checkpoint)
+def _load_openjev_hparams(dir_model: Path) -> dict[str, Any]:
+    logger.info("gguf: detected OpenJev checkpoint")
+    hparams = ModelBase.load_hparams(dir_model, False, guess=False)
+    hparams["architectures"] = ["OpenJevModel"]
+    return hparams
+
+
+@ModelBase.register("OpenJevModel")
+@ModelBase.example("openjev/openjev")
+class OpenJevModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True  # the checkpoint has no MTP head
+
+    # prompt and calibration follow helper/shim.py of the model repo (text lane)
+    _LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    _TEMPERATURE = 0.85
+    _TEMPERATURE_NOUL = 1.829074  # applied on top of _TEMPERATURE
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        description = jinja_str_or_json("o.description")
+        option = (
+            "{% if type != 'noul' %}{{ o.key }}: {% if o.description %}" + description + "{% endif %}"
+            "{% elif o.key == 'true' %}yes: {% if o.description %}" + description + "{% else %}The statement is true.{% endif %}"
+            "{% else %}no: {% if o.description %}" + description + "{% else %}The statement is false.{% endif %}{% endif %}"
+        )
+        # TODO: only the layout with one image is known (image first), the one with several images is not verified
+        images = (
+            "{% for image in images %}{{ image }}{% endfor %}"
+            "{% if images %}{{ 'The screenshot shows the current screen.\\n' }}{% endif %}"
+        )
+        return (
+            "{% set letters = '" + self._LETTERS + "' %}"
+            "<|im_start|>user\n" + images + "State:\n" + jinja_str_or_json("state") + "\n\nQuestion: " + jinja_str_or_json("instructions")
+            + "{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}"
+            "{{ '\\nOptions:\\n' }}"
+            "{% for o in options %}[{{ letters[loop.index0] }}] " + option + "{{ '\\n' }}{% endfor %}"
+            "{{ '\\nAnswer with the letter of the best option only.<|im_end|>\\n<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n' }}"
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_decision_type(gguf.DecisionType.OPENJEV)
+        self.gguf_writer.add_decision_temperature("choice", self._TEMPERATURE)
+        self.gguf_writer.add_decision_temperature("score",  self._TEMPERATURE)
+        self.gguf_writer.add_decision_temperature("noul",   self._TEMPERATURE * self._TEMPERATURE_NOUL)
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
@@ -686,6 +771,12 @@ class DFlashModel(Qwen3Model):
         super().set_gguf_parameters()
 
         dflash_config = self.hparams.get("dflash_config", {})
+        if (partial_rotary_factor := self.rope_parameters.get("partial_rotary_factor")) is not None:
+            head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+            self.gguf_writer.add_rope_dimension_count(int(head_dim * partial_rotary_factor))
+        if (value_scale := dflash_config.get("attention_value_scale")) is not None:
+            self.gguf_writer.add_attn_value_scale(float(value_scale))
+
         block_size = dflash_config.get("block_size", self.hparams.get("block_size", 16))
         self.gguf_writer.add_block_size(block_size)
 
@@ -708,6 +799,12 @@ class DFlashModel(Qwen3Model):
         embedding_scale = dflash_config.get(
             "input_embedding_scale", self.hparams.get("input_embedding_scale")
         )
+        if embedding_scale is None and self.target_model_dir is not None:
+            # the draft shares the target's token embeddings, and Gemma scales them by sqrt(hidden_size) in the forward pass
+            target_hparams = ModelBase.load_hparams(self.target_model_dir, False)
+            if get_model_architecture(target_hparams, ModelType.TEXT).startswith("Gemma"):
+                target_hparams = {**target_hparams, **target_hparams.get("text_config", {})}
+                embedding_scale = target_hparams["hidden_size"] ** 0.5
         if embedding_scale is not None:
             self.gguf_writer.add_embedding_scale(float(embedding_scale))
 
@@ -736,6 +833,62 @@ class DFlashModel(Qwen3Model):
         if self._target_uses_mrope():
             head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
             self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        yield from super().generate_extra_tensors()
+
+        mask_path = self.dir_model / "mask_embedding.pt"
+        if not mask_path.is_file():
+            return
+
+        mask = torch.load(mask_path, map_location="cpu", weights_only=True)
+        mask_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
+        if mask_id is None or mask["mask_token_id"] != mask_id:
+            raise ValueError("mask_embedding.pt mask_token_id does not match dflash_config")
+        if tuple(mask["embedding"].shape) != (self.hparams["hidden_size"],):
+            raise ValueError("mask_embedding.pt has an unexpected embedding shape")
+        if not 0 <= mask_id < self.hparams["vocab_size"]:
+            raise ValueError("mask_embedding.pt mask_token_id is outside the vocabulary")
+
+        def target_tensor(name: str) -> Tensor:
+            if self.target_model_dir is None:
+                raise ValueError("mask_embedding.pt requires --target-model-dir with the target embeddings and output head")
+            index_path = self.target_model_dir / "model.safetensors.index.json"
+            if index_path.is_file():
+                with open(index_path, encoding="utf-8") as f:
+                    weight_map = json.load(f)["weight_map"]
+                part_names = [weight_map[name]]
+            else:
+                part_names = self.get_model_part_names(self.target_model_dir, "model", ".safetensors")
+
+            for part_name in part_names:
+                with gguf.utility.SafetensorsLocal(self.target_model_dir / part_name) as part:
+                    if name in part:
+                        return LazyTorchTensor.from_local_tensor(part[name])
+            raise ValueError(f"Target tensor {name!r} was not found in safetensors")
+
+        embedding_name = "model.embed_tokens.weight"
+        if embedding_name in self.model_tensors:
+            embeddings = self.model_tensors.pop(embedding_name)()
+        else:
+            embeddings = target_tensor(embedding_name)
+
+        if "model.lm_head.weight" not in self.model_tensors:
+            if self.target_model_dir is None:
+                raise ValueError("mask_embedding.pt requires --target-model-dir to obtain the output head")
+            target_config = ModelBase.load_hparams(self.target_model_dir, False)
+            target_config = {**target_config, **target_config.get("text_config", {})}
+            head_name = embedding_name if target_config.get("tie_word_embeddings", False) else "lm_head.weight"
+            # Keep the output head separate from the patched input embedding table.
+            yield "model.lm_head.weight", target_tensor(head_name)
+
+        embeddings = LazyTorchTensor.to_eager(embeddings).clone()
+        if tuple(embeddings.shape) != (self.hparams["vocab_size"], self.hparams["hidden_size"]):
+            raise ValueError("Target token embedding shape does not match the DFlash draft")
+        # MiMo's target mask row is untrained; the draft provides its own vector.
+        embeddings[mask_id] = mask["embedding"].to(embeddings.dtype)
+        self.hparams["has_embed_tokens"] = True
+        yield embedding_name, embeddings
 
     def _target_uses_mrope(self) -> bool:
         if self.target_model_dir is None:

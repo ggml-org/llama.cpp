@@ -43,9 +43,10 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
 
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-    auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
-    // Constrained grammar whenever tools are offered.
-    auto include_grammar = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    // Constrained grammar whenever tools are offered or a response format is requested.
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start = p.rule("start", p.literal("<|start|>assistant"));
@@ -65,24 +66,33 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") +
                                               p.content(p.until_one_of({ "<|eot|>", "<|eom|>" })));
 
+        if (has_response_format) {
+            auto response_json   = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
+            auto response_format = p.rule("response-format",
+                recipient + p.literal("<|message|>") +
+                ((p.literal("```json") + p.space() + response_json + p.space() + p.literal("```")) | response_json));
+
+            return p.zero_or_more(start + analysis) + start + response_format;
+        }
+
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto string_value = p.ac(
                 p.tool_arg_string_value(p.until("</atem:parameter>")) + p.tool_arg_close(p.literal("</atem:parameter>")),
                 "</atem:parameter>");
 
             auto tool_choice = p.choice();
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto &      function = tool.at("function");
                 const std::string name     = function.at("name");
 
                 std::vector<common_peg_parser> arg_rules;
-                foreach_parameter(function, [&](const common_chat_schema_property & prop, const common_chat_schema_document_ptr & doc) {
+                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & prop, const common_chat_schema_document_ptr & doc) {
                     auto value_parser = p.eps();
                     if (prop.schema->may_be_string()) {
                         value_parser = string_value;
                     } else {
                         value_parser = p.tool_arg_json_value(
-                                p.schema(p.json(), "tool-" + name + "-arg-" + prop.name + "-schema", doc, *prop.schema))
+                                p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema", doc, *prop.schema))
                             + p.tool_arg_close(p.literal("</atem:parameter>"));
                     }
 
@@ -103,7 +113,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
                     << p.tool_args(args)
                     << p.tool_close(p.literal("</atem:invoke>") + p.space() + p.literal("</atem:function_calls>")));
 
-                tool_choice |= p.rule("tool-" + name, tool_parser);
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_parser);
             });
 
             auto tool_calls = inputs.parallel_tool_calls
@@ -124,7 +134,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             parser.build_grammar(builder, data.grammar_lazy);
         });

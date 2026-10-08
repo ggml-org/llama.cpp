@@ -107,6 +107,14 @@ typedef struct {
 #define DMA_MAX_STRIDE_24B     0x00FFFFFFu    // 24-bit HW descriptor limit for strides (16MB - 1)
 #define DMA_SAFE_CHUNK_SIZE    0x00F00000u    // ~15MB safe contiguous chunk size
 
+#if __HVX_ARCH__ < 75
+#define DMA_MAX_2D_ROW_SIZE    DMA_MAX_SIZE_16B
+#define DMA_MAX_2D_STRIDE      DMA_MAX_STRIDE_16B
+#else
+#define DMA_MAX_2D_ROW_SIZE    DMA_MAX_SIZE_24B
+#define DMA_MAX_2D_STRIDE      DMA_MAX_STRIDE_24B
+#endif
+
 #define DMA_FALLBACK_CAPACITY  16u            // descriptors in secondary fallback ring
 
 typedef struct dma_ring_s dma_ring;
@@ -216,13 +224,10 @@ static inline bool dma_ring_push_single_1d(dma_ring * r, dma_data ddata, size_t 
 
 static inline bool dma_ring_push_single_2d(dma_ring * r, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
 #if __HVX_ARCH__ > 79
+    assert(!((ddata.src | ddata.dst) >> 40) || nrows == 0);
     const uint32_t src_hi = (uint32_t) (ddata.src >> 32);
     const uint32_t dst_hi = (uint32_t) (ddata.dst >> 32);
     const bool is_ext     = (src_hi | dst_hi) != 0;
-
-    if (is_ext && ((ddata.src >> 40) || (ddata.dst >> 40))) {
-        return false;
-    }
 #endif
 
     if (((r->push_idx + 1) & r->idx_mask) == r->pop_idx) {
@@ -283,6 +288,16 @@ static inline bool dma_ring_push_single_2d(dma_ring * r, dma_data ddata, size_t 
     r->push_idx = (r->push_idx + 1) & r->idx_mask;
     return true;
 }
+
+#if __HVX_ARCH__ < 75
+static inline bool dma_ring_push_single_contig(dma_ring * r, dma_data ddata, size_t size) {
+    return dma_ring_push_single_1d(r, ddata, size);
+}
+#else
+static inline bool dma_ring_push_single_contig(dma_ring * r, dma_data ddata, size_t size) {
+    return dma_ring_push_single_2d(r, ddata, size, size, size, 1);
+}
+#endif
 
 static inline dma_data dma_ring_pop(dma_ring * r) {
     dma_data ddata = { 0 };
@@ -374,57 +389,52 @@ static inline uint32_t dma_queue_capacity(dma_queue * q) {
     return dma_ring_capacity(q->ring0);
 }
 
-#if __HVX_ARCH__ < 75
-
-static inline bool dma_queue_push(dma_queue *q, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
-    // Fast path: everything fits in 16 bits
-    if (nrows == 0 || __builtin_expect(
-            nrows      <= DMA_MAX_NROWS &&
-            row_size   <= DMA_MAX_SIZE_16B &&
-            src_stride <= DMA_MAX_STRIDE_16B &&
-            dst_stride <= DMA_MAX_STRIDE_16B, 1)) {
-        return dma_ring_push_single_2d(q->ring0, ddata, dst_stride, src_stride, row_size, nrows);
+static inline bool dma_queue_push(dma_queue * q, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
+    if (__builtin_expect(nrows == 0, 0)) {
+        return dma_ring_push_single_1d(q->ring0, ddata, 0);
     }
 
-    // Contiguous block: 1D DMA mode supports up to 24-bit size (16MB)
-    if (nrows == 1 || (row_size == src_stride && row_size == dst_stride)) {
-        size_t total = row_size * nrows;
-        if (total <= DMA_MAX_SIZE_24B) {
-            return dma_ring_push_single_1d(q->ring0, ddata, total);
+    // 1. Hot path: Contiguous or single-row (80-90% of calls)
+    if (nrows == 1 || !((row_size ^ src_stride) | (row_size ^ dst_stride))) {
+        const size_t total = row_size * nrows;
+        if (__builtin_expect(total <= DMA_MAX_SIZE_24B, 1)) {
+            return dma_ring_push_single_contig(q->ring0, ddata, total);
         }
         return dma_queue_push_fallback_contig(q, ddata, total);
     }
 
-    // Row count overflow with 16-bit strides: chunk 2D descriptors via fallback ring
-    if (row_size <= DMA_MAX_SIZE_16B && src_stride <= DMA_MAX_STRIDE_16B && dst_stride <= DMA_MAX_STRIDE_16B) {
-        return dma_queue_push_fallback_2d(q, ddata, dst_stride, src_stride, row_size, nrows);
-    }
-
-    // Stride or row_size overflow: row-by-row 1D via fallback ring
-    return dma_queue_push_fallback_1d(q, ddata, dst_stride, src_stride, row_size, nrows);
-}
-
-#else // HVX_ARCH >= 75
-
-static inline bool dma_queue_push(dma_queue *q, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
-    if (nrows == 0 || __builtin_expect(
-            nrows      <= DMA_MAX_NROWS &&
-            row_size   <= DMA_MAX_SIZE_24B &&
-            src_stride <= DMA_MAX_STRIDE_24B &&
-            dst_stride <= DMA_MAX_STRIDE_24B, 1)) {
+    // 2. Hot path: Standard strided 2D (10-20% of calls)
+    if (__builtin_expect(nrows <= DMA_MAX_NROWS &&
+                         (row_size | src_stride | dst_stride) <= DMA_MAX_2D_ROW_SIZE, 1)) {
         return dma_ring_push_single_2d(q->ring0, ddata, dst_stride, src_stride, row_size, nrows);
     }
 
-    // Contiguous block exceeding 24 bits
-    if (nrows == 1 || (row_size == src_stride && row_size == dst_stride)) {
-        size_t total = row_size * nrows;
-        return dma_queue_push_fallback_contig(q, ddata, total);
+    // 3. Cold path: Descriptor chunking fallbacks (< 0.1%)
+#if __HVX_ARCH__ < 75
+    if (row_size <= DMA_MAX_SIZE_16B && (src_stride | dst_stride) <= DMA_MAX_STRIDE_16B) {
+        return dma_queue_push_fallback_2d(q, ddata, dst_stride, src_stride, row_size, nrows);
     }
-
+    return dma_queue_push_fallback_1d(q, ddata, dst_stride, src_stride, row_size, nrows);
+#else
     return dma_queue_push_fallback_2d(q, ddata, dst_stride, src_stride, row_size, nrows);
+#endif
 }
 
-#endif
+static inline void dma_sync_read(dma_queue * dma_q, void * dst, dma_addr_t src, size_t bytes) {
+    const uint32_t b = (uint32_t) bytes;
+    if (b > 0) {
+        dma_queue_push(dma_q, dma_make_data(dst, src), b, b, b, 1);
+        dma_queue_pop(dma_q);
+    }
+}
+
+static inline void dma_sync_write(dma_queue * dma_q, dma_addr_t dst, const void * src, size_t bytes) {
+    const uint32_t b = (uint32_t) bytes;
+    if (b > 0) {
+        dma_queue_push(dma_q, dma_make_data(dst, src), b, b, b, 1);
+        dma_queue_pop(dma_q);
+    }
+}
 
 #define DMA_CACHE_MAX_SIZE 256U
 
