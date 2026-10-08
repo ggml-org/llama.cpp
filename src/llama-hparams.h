@@ -58,6 +58,7 @@ struct llama_hparams {
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
+    bool tie_word_embeddings  = false;
     bool norm_before_residual = false;
     bool norm_before_fc       = false;
 
