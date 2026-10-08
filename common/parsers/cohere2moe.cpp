@@ -124,12 +124,12 @@ common_chat_params common_chat_params_init_cohere2moe(const common_chat_template
         return generation_prompt + reasoning + body + p.optional(p.literal(TURN_END)) + end;
     });
 
-    data.parser = parser.save();
+    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

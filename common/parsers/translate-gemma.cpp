@@ -57,7 +57,7 @@ common_chat_params common_chat_params_init_translate_gemma(
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         return p.literal(data.generation_prompt) << p.content(p.rest());
     });
-    data.parser = parser.save();
+    data.parser = std::move(parser);
 
     return data;
 }

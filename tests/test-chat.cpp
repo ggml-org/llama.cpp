@@ -1100,7 +1100,7 @@ struct make_peg_parser {
                     bool                                 detailed_debug = false) {
         detailed_debug_ = detailed_debug;
         params_         = common_chat_templates_apply(tmpls, inputs);
-        arena_.load(params_.parser);
+        arena_          = params_.parser;
     }
 
     common_chat_msg parse(const std::string & msg, bool is_partial) const {
@@ -4644,8 +4644,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             inputs.messages = { msg };
 
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
-            common_peg_arena arena;
-            arena.load(params.parser);
+            const common_peg_arena & arena = params.parser;
             common_chat_parser_params pp(params);
 
             // generation_prompt is non-empty for thinking models, so result.end
@@ -7791,6 +7790,81 @@ static void test_deepseek_v4_tool_result_ordering() {
     }
 }
 
+static void test_chat_session() {
+    LOG_DBG("%s\n", __func__);
+    auto tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
+
+    common_chat_templates_inputs inputs;
+    inputs.messages         = { message_user };
+    inputs.tools            = { special_function_tool };
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+    const std::string output =
+        "I'm\nthinking\n</think>\n\n"
+        "<tool_call>\n"
+        "<function=special_function>\n"
+        "<parameter=arg1>\n1\n</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+
+    // fed in small chunks, the session matches a parse of each prefix from scratch
+    {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+
+        auto applied = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_equals(applied.prompt, session.prompt());
+        assert_equals(applied.grammar, session.sampling().grammar);
+        assert_equals(applied.generation_prompt, session.sampling().generation_prompt);
+
+        common_chat_parser_params parser_params(applied);
+        parser_params.parser = applied.parser;
+
+        for (size_t i = 0; i < output.size(); i += 3) {
+            const auto & msg = session.feed(common_chat_input(output.substr(i, 3)));
+            auto expected = common_chat_parse(common_chat_input(output.substr(0, i + 3)), true, parser_params);
+            if (!expected.empty()) {
+                assert_msg_equals(expected, msg);
+            }
+        }
+        assert_msg_equals(common_chat_parse(common_chat_input(output), false, parser_params), session.finish());
+        assert_equals(std::string("special_function"), session.msg().tool_calls.at(0).name);
+    }
+
+    // a copy does not see what is fed to the original
+    {
+        common_chat_session a(tmpls.get(), nullptr, inputs);
+        common_chat_session b = a;
+        a.feed(common_chat_input(output));
+        assert_equals(true, b.msg().empty());
+        b.feed(common_chat_input("I'm\nthinking\n</think>\n\nHello"));
+        assert_equals(std::string("Hello"), b.msg().content);
+        assert_equals(std::string("special_function"), a.finish().tool_calls.at(0).name);
+    }
+
+    // a continued message starts from the prefill, unless it is echoed
+    {
+        common_chat_templates_inputs cont;
+        cont.messages               = { message_user, message_assist_prefill_content };
+        cont.add_generation_prompt  = false;
+        cont.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+        cont.reasoning_format       = COMMON_REASONING_FORMAT_AUTO;
+
+        common_chat_session session(tmpls.get(), nullptr, cont);
+        auto applied = common_chat_templates_apply(tmpls.get(), cont);
+        common_chat_parser_params parser_params(applied);
+        parser_params.parser = applied.parser;
+        assert_msg_equals(common_chat_parse(common_chat_input(), true, parser_params), session.msg());
+        assert_equals(message_assist_prefill_content.content, session.msg().content);
+        session.feed(common_chat_input("world!"));
+        assert_equals(std::string("Hello, world!"), session.msg().content);
+
+        common_chat_session_params echo;
+        echo.echo = true;
+        common_chat_session echoed(tmpls.get(), nullptr, cont, echo);
+        assert_equals(true, echoed.msg().empty());
+    }
+}
+
 static void test_reasoning_budget_tokens_per_request() {
     LOG_DBG("%s\n", __func__);
     // Use Qwen3 template which has <think>...</think> reasoning markers.
@@ -7811,7 +7885,8 @@ static void test_reasoning_budget_tokens_per_request() {
         {"reasoning_budget_tokens", 0},
     };
     std::vector<raw_buffer> out_files;
-    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+    std::optional<common_chat_session> out_session;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, nullptr, out_files, out_session);
 
     // The per-request value must win over the server default (-1).
     if (!llama_params.contains("reasoning_budget_tokens")) {
@@ -7844,7 +7919,8 @@ static void test_reasoning_budget_message_per_request() {
         {"reasoning_budget_message", per_request_message},
     };
     std::vector<raw_buffer> out_files;
-    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+    std::optional<common_chat_session> out_session;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, nullptr, out_files, out_session);
 
     // The per-request value must win over the server default.
     if (!llama_params.contains("reasoning_budget_message")) {
@@ -8035,6 +8111,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
         test_reasoning_effort_caps();
+        test_chat_session();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);

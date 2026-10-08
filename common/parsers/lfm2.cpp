@@ -93,12 +93,12 @@ common_chat_params common_chat_params_init_lfm2(const common_chat_template &    
         return generation_prompt + reasoning + content + tool_calls + end;
     });
 
-    data.parser = parser.save();
+    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

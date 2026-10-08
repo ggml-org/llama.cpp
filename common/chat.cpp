@@ -1396,7 +1396,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         auto parser                    = build_chat_peg_parser([&data](common_chat_peg_builder &p) {
             return p.literal(data.generation_prompt) << p.content(p.rest());
         });
-        data.parser                    = parser.save();
+        data.parser                    = std::move(parser);
         return data;
     }
 
@@ -1431,8 +1431,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
                 auto_params.thinking_end_tags = {std::move(end_tag)};
             }
         }
-        common_peg_arena arena;
-        arena.load(auto_params.parser);
+        const auto & arena = auto_params.parser;
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
         return auto_params;
     } catch (const std::exception & e) {
@@ -1650,6 +1649,57 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat({ msg }).at(0).dump().c_str());
     }
     return msg;
+}
+
+common_chat_session::common_chat_session(const common_chat_templates *        tmpls,
+                                         const llama_vocab *                  vocab,
+                                         const common_chat_templates_inputs & inputs,
+                                         const common_chat_session_params &   params) {
+    auto applied = common_chat_templates_apply(tmpls, inputs);
+
+    prompt_text = std::move(applied.prompt);
+
+    sampling_params.grammar            = std::move(applied.grammar);
+    sampling_params.grammar_lazy       = applied.grammar_lazy;
+    sampling_params.grammar_triggers   = std::move(applied.grammar_triggers);
+    sampling_params.preserved_tokens   = std::move(applied.preserved_tokens);
+    sampling_params.additional_stops   = std::move(applied.additional_stops);
+    sampling_params.generation_prompt  = applied.generation_prompt;
+    sampling_params.thinking_start_tag = std::move(applied.thinking_start_tag);
+    sampling_params.thinking_end_tags  = std::move(applied.thinking_end_tags);
+    sampling_params.message_delimiters = std::move(applied.message_delimiters);
+
+    parser_params.format            = applied.format;
+    parser_params.generation_prompt = vocab ? common_chat_input_tokenize(vocab, applied.generation_prompt)
+                                            : common_chat_input(applied.generation_prompt);
+    parser_params.debug             = params.debug;
+    parser_params.parser            = std::move(applied.parser);
+
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !params.echo) {
+        // start from the prefill so it is not emitted as part of the first delta
+        cur = common_chat_parse(input, true, parser_params);
+    }
+}
+
+const common_chat_msg & common_chat_session::feed(const common_chat_input & chunk) {
+    GGML_ASSERT(!finished && "feed() after finish()");
+    input.append(chunk);
+    auto msg = common_chat_parse(input, true, parser_params);
+    if (!msg.empty()) {
+        cur = std::move(msg);
+    }
+    return cur;
+}
+
+const common_chat_msg & common_chat_session::finish(const common_chat_input & chunk) {
+    GGML_ASSERT(!finished && "finish() called twice");
+    finished = true;
+    input.append(chunk);
+    auto msg = common_chat_parse(input, false, parser_params);
+    if (!msg.empty()) {
+        cur = std::move(msg);
+    }
+    return cur;
 }
 
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {

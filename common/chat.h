@@ -283,7 +283,7 @@ struct common_chat_params {
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
-    std::string                         parser;
+    common_peg_arena                    parser;
     common_chat_msg_delimiters          message_delimiters;
 };
 
@@ -369,6 +369,57 @@ std::string common_chat_format_example(const struct common_chat_templates *     
 const char *    common_chat_format_name(common_chat_format format);
 common_chat_msg common_chat_parse(const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
+
+// what the sampler needs from an applied chat template
+struct common_chat_sampling {
+    std::string                         grammar;
+    bool                                grammar_lazy = false;
+    std::vector<common_grammar_trigger> grammar_triggers;
+    std::vector<std::string>            preserved_tokens;
+    std::vector<std::string>            additional_stops;
+    std::string                         generation_prompt;
+    std::string                         thinking_start_tag;
+    std::vector<std::string>            thinking_end_tags;
+    common_chat_msg_delimiters          message_delimiters;
+};
+
+struct common_chat_session_params {
+    bool echo  = false; // include the assistant prefill in the output when continuing a message
+    bool debug = false; // enable debug output for the PEG parser
+};
+
+// parses the output of a single generation
+// the input only grows: each feed() appends to everything fed before
+class common_chat_session {
+  public:
+    // plain content, no chat template
+    common_chat_session() = default;
+
+    // applies the chat template and keeps everything needed to parse its output
+    common_chat_session(const common_chat_templates *        tmpls,
+                        const llama_vocab *                  vocab,
+                        const common_chat_templates_inputs & inputs,
+                        const common_chat_session_params &   params = {});
+
+    const std::string &          prompt()   const { return prompt_text; }
+    const common_chat_sampling & sampling() const { return sampling_params; }
+    common_chat_format           format()   const { return parser_params.format; }
+    const common_chat_msg &      msg()      const { return cur; }
+
+    // appends a chunk and parses leniently, the message keeps its last value if nothing parses
+    const common_chat_msg & feed(const common_chat_input & chunk);
+
+    // appends the last chunk and parses strictly, throws if the output does not match the format
+    const common_chat_msg & finish(const common_chat_input & chunk = {});
+
+  private:
+    std::string               prompt_text;
+    common_chat_sampling      sampling_params;
+    common_chat_parser_params parser_params;
+    common_chat_input         input;
+    common_chat_msg           cur;
+    bool                      finished = false;
+};
 
 // used by arg and server
 const char *            common_reasoning_format_name(common_reasoning_format format);

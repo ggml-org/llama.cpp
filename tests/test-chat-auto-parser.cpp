@@ -484,8 +484,7 @@ static int debug_single_template(const debug_options & opts) {
 
         if (!std::empty(parser_data.parser)) {
             LOG_ERR("\n=== Generated Parser ===\n");
-            common_peg_arena arena;
-            arena.load(parser_data.parser);
+            const common_peg_arena & arena = parser_data.parser;
             LOG_ERR("%s\n", arena.dump(arena.root()).c_str());
 
             LOG_ERR("\n=== Generated Grammar ===\n");

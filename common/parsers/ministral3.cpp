@@ -108,13 +108,13 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
         return generation_prompt + (reasoning << p.content(p.rest()));
     });
 
-    data.parser = parser.save();
+    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

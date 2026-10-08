@@ -185,12 +185,12 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
         return opener + reasoning + content + tools + tail + end;
     });
 
-    data.parser = parser.save();
+    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

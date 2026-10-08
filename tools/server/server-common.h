@@ -354,10 +354,13 @@ struct server_chat_params {
 json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
+// the applied chat template is returned as a session, its sampling values are not added to the JSON
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    const llama_vocab * vocab,
+    std::vector<raw_buffer> & out_files,
+    std::optional<common_chat_session> & out_session);
 
 // used by /embeddings endpoint, content has the same format as a chat message content array
 server_tokens tokenize_oai_content_array(
