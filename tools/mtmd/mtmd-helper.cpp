@@ -316,6 +316,8 @@ static bool is_audio_file(const char * buf, size_t len) {
     return is_wav || is_mp3 || is_flac;
 }
 
+static constexpr int max_audio_seconds = 3600;
+
 // returns true if the buffer is a valid audio file
 static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono) {
     ma_result result;
@@ -336,9 +338,27 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
         return false;
     }
 
-    pcmf32_mono.resize(frame_count);
-    result = ma_decoder_read_pcm_frames(&decoder, pcmf32_mono.data(), frame_count, &frames_read);
-    if (result != MA_SUCCESS) {
+    // the length comes from the file header (e.g. FLAC STREAMINFO), so it can claim far more samples than the input holds
+    if (frame_count > (ma_uint64) max_audio_seconds * target_sampler_rate) {
+        LOG_ERR("%s: audio is longer than %d seconds\n", __func__, max_audio_seconds);
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+    // grow the buffer one second at a time so that it only holds frames that were actually decoded
+    pcmf32_mono.clear();
+    while (pcmf32_mono.size() < frame_count) {
+        const size_t    offset = pcmf32_mono.size();
+        const ma_uint64 wanted = std::min<ma_uint64>(target_sampler_rate, frame_count - offset);
+        pcmf32_mono.resize(offset + wanted);
+        frames_read = 0;
+        result = ma_decoder_read_pcm_frames(&decoder, pcmf32_mono.data() + offset, wanted, &frames_read);
+        pcmf32_mono.resize(offset + frames_read);
+        if (result != MA_SUCCESS || frames_read < wanted) {
+            break;
+        }
+    }
+    if ((result != MA_SUCCESS && result != MA_AT_END) || pcmf32_mono.empty()) {
         ma_decoder_uninit(&decoder);
         return false;
     }
