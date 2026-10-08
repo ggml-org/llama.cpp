@@ -623,6 +623,10 @@ struct clip_model {
     ggml_tensor * mm_3_b = nullptr;
     ggml_tensor * mm_4_w = nullptr;
     ggml_tensor * mm_4_b = nullptr;
+    ggml_tensor * mm_5_w = nullptr;
+    ggml_tensor * mm_5_b = nullptr;
+    ggml_tensor * mm_6_w = nullptr;
+    ggml_tensor * mm_6_b = nullptr;
 
     // GLMV-Edge projection
     ggml_tensor * mm_model_adapter_conv_w = nullptr;

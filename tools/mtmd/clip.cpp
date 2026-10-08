@@ -939,6 +939,7 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_COHERE2V:
         case PROJECTOR_TYPE_LFM2:
+        case PROJECTOR_TYPE_D1OMNI_V:
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_PHI4:
             {
@@ -1073,6 +1074,7 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
                 builder = std::make_unique<clip_graph_deepseekocr2>(ctx, img);
             } break;
         case PROJECTOR_TYPE_LFM2A:
+        case PROJECTOR_TYPE_D1OMNI_A:
             {
                 builder = std::make_unique<clip_graph_conformer>(ctx, img);
             } break;
@@ -1525,6 +1527,7 @@ struct clip_model_loader {
                         }
                     } break;
                 case PROJECTOR_TYPE_LFM2:
+                case PROJECTOR_TYPE_D1OMNI_V:
                     {
                         // default for older GGUFs
                         std::string resize_algo = "bilinear";
@@ -1540,6 +1543,10 @@ struct clip_model_loader {
                         }
                         hparams.image_resize_algo_rf = hparams.image_resize_algo;
                         hparams.image_resize_algo_ov = hparams.image_resize_algo;
+                        // the tiles stretch the image to the grid (d1-omni vision.py)
+                        if (model.proj_type == PROJECTOR_TYPE_D1OMNI_V) {
+                            hparams.image_pad_rf = PAD_NONE;
+                        }
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
                         hparams.set_limit_image_tokens(64, 256);
@@ -1980,6 +1987,7 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
                 case PROJECTOR_TYPE_LFM2A:
+                case PROJECTOR_TYPE_D1OMNI_A:
                     {
                         // audio preprocessing params
                         hparams.audio_chunk_len        = 1; // in seconds
@@ -2799,6 +2807,7 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM2:
+            case PROJECTOR_TYPE_D1OMNI_V:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM, false);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
@@ -3411,6 +3420,7 @@ struct clip_model_loader {
                     model.mm_input_proj_w = get_tensor(string_format(TN_A_MM_INP_PROJ, "weight"));
                 } break;
             case PROJECTOR_TYPE_LFM2A:
+            case PROJECTOR_TYPE_D1OMNI_A:
                 {
                     for (int i : {0, 2, 3, 5, 6}) {
                         model.pre_encode_conv_X_w[i] = get_tensor(string_format(TN_CONV1D, i, "weight"));
@@ -3425,6 +3435,16 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
                     model.mm_3_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
                     model.mm_3_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
+
+                    // residual block after the projector: norm, down, up
+                    if (model.proj_type == PROJECTOR_TYPE_D1OMNI_A) {
+                        model.mm_4_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 4, "weight"));
+                        model.mm_4_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 4, "bias"));
+                        model.mm_5_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 5, "weight"));
+                        model.mm_5_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 5, "bias"));
+                        model.mm_6_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 6, "weight"));
+                        model.mm_6_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 6, "bias"));
+                    }
 
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
@@ -4277,6 +4297,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 n_patches = ctx->model.hparams.image_size / ctx->model.hparams.patch_size;
             } break;
         case PROJECTOR_TYPE_LFM2:
+        case PROJECTOR_TYPE_D1OMNI_V:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
             {
@@ -4400,6 +4421,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             }
         } break;
         case PROJECTOR_TYPE_LFM2A:
+        case PROJECTOR_TYPE_D1OMNI_A:
             {
                 n_patches = ((((img->nx() + 1) / 2) + 1) / 2 + 1) / 2;
             } break;
@@ -5358,6 +5380,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_LFM2:
+        case PROJECTOR_TYPE_D1OMNI_V:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_MERALION:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
@@ -5617,6 +5640,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_LFM2A:
+        case PROJECTOR_TYPE_D1OMNI_A:
             {
                 GGML_ASSERT(imgs.entries.size() == 1);
                 const auto n_frames = clip_n_output_tokens(ctx, &imgs.entries.front());
@@ -6080,6 +6104,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_LFM2:
+        case PROJECTOR_TYPE_D1OMNI_V:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
@@ -6096,6 +6121,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
+        case PROJECTOR_TYPE_D1OMNI_A:
+            return ctx->model.mm_3_w->ne[1];
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GRANITE4_VISION:

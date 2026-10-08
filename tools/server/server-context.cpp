@@ -5660,7 +5660,7 @@ void server_routes::init_routes() {
                 scores.push_back(result->scores);
                 n_tokens += result->n_tokens;
             }
-            answers[question.id] = decision.format_answer(question, scores);
+            answers[question.id] = decision.format_answer(question, scores, !files.empty());
         }
 
         res->ok(json{
