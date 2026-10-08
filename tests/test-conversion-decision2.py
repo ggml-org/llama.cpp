@@ -103,8 +103,11 @@ class TestDecision2Conversion(unittest.TestCase):
             self.assertEqual(tensor.tensor_type, gguf.GGMLQuantizationType.F32)
             np.testing.assert_array_equal(tensor.data.reshape(expected.shape), expected.numpy())
         self.assertEqual(tensors["token_embd.weight"].tensor_type, gguf.GGMLQuantizationType.BF16)
-        self.assertEqual(reader.get_field("qwen3.decision.type").contents(), "decision2")
-        self.assertEqual(reader.get_field("qwen3.decision.head_dim").contents(), 2)
+        decision_type = reader.get_field("qwen3.decision.type")
+        head_dim = reader.get_field("qwen3.decision.head_dim")
+        assert decision_type is not None and head_dim is not None
+        self.assertEqual(decision_type.contents(), "decision2")
+        self.assertEqual(head_dim.contents(), 2)
 
     def test_malformed_head_is_rejected(self):
         self.head["key.weight"] = torch.ones(3, 4)

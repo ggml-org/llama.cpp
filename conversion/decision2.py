@@ -70,7 +70,7 @@ def _load_decision2_hparams(dir_model: Path) -> dict[str, Any]:
     return hparams
 
 
-class _Decision2Mixin:
+class _Decision2Mixin(ModelBase if TYPE_CHECKING else object):
     no_mtp = True
 
     def __init__(self, dir_model: Path, *args, **kwargs):
@@ -105,7 +105,7 @@ class _Decision2Mixin:
             self._load_adapter(dir_model, config["adapter"])
         else:
             dir_backbone = _package_file(dir_model, config["backbone"]["config"]).parent
-        super().__init__(dir_backbone, *args, hparams=hparams, **kwargs)  # ty: ignore[too-many-positional-arguments]
+        super().__init__(dir_backbone, *args, hparams=hparams, **kwargs)
         self.dir_model = dir_model
         self.dir_model_card = dir_model
         self._validate_head()
@@ -177,10 +177,10 @@ class _Decision2Mixin:
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         if item[0] == "lm_head.weight":
             return None
-        return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
+        return super().filter_tensors(item)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        yield from super().generate_extra_tensors()  # ty: ignore[unresolved-attribute]
+        yield from super().generate_extra_tensors()
         for name, tensor in self.head.items():
             yield "decision2." + name, tensor.float()
 
@@ -198,20 +198,20 @@ class _Decision2Mixin:
                 data_torch = LazyTorchTensor.from_eager(data_torch)
             data_torch = data_torch.float() + self.lora_scale * (b @ a)
             self.lora_merged.add(key)
-        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         if new_name.startswith("decision2."):
             return gguf.GGMLQuantizationType.F32
-        return super().tensor_force_quant(name, new_name, bid, n_dims)  # ty: ignore[unresolved-attribute]
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def prepare_tensors(self):
-        super().prepare_tensors()  # ty: ignore[unresolved-attribute]
+        super().prepare_tensors()
         if self.lora_merged != set(self.lora):
             raise ValueError(f"Unmerged Decision 2.0 LoRA tensors: {sorted(set(self.lora) - self.lora_merged)}")
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()
         self.gguf_writer.add_decision_type(gguf.DecisionType.DECISION2)
         self.gguf_writer.add_decision_head_dim(self.head_dim)
         self.gguf_writer.add_layer_norm_eps(1e-5)
