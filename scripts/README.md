@@ -91,6 +91,35 @@ are required so discarding sample 0 leaves two values for a Student-t interval.
 | `perf/FINDINGS.md` | Preserved interpretation and reproduction commands for the speculative-decoding experiments. |
 | `perf/results/` | Generated/specimen output directory for speculative-decoding campaigns. |
 
+### MTP request acceptance
+
+`run-spec-curve.sh` runs adaptive depths 3-7, fixed 3, and fixed 7 in sequence.
+It restores an initially active `llama-sycl.cpp.service` on exit, defaults to
+context 2048, and limits the campaign to two hours (`CURVE_TIMEOUT` overrides).
+Set `SKIP_STOP_SERVICE=1` when service management is handled externally.
+
+```bash
+SERVER_BIN=./build-sycl/bin/llama-server MODEL=/path/model.gguf REPEATS=25 \
+  bash scripts/run-spec-curve.sh
+./build-cpu/bin/test-spec-adaptive-curve \
+  --curve-file scripts/perf/results/acceptance_curve_model_adaptive-3-7.jsonl \
+  --fixed-curve-file scripts/perf/results/acceptance_curve_model_fixed-7.jsonl
+```
+
+Use an MTP-capable model and enough prompts times repeats for at least 200
+requests per arm. Each JSONL row contains **request totals**, not verification
+rounds; the analyzer cannot replay the adaptive controller. It compares token
+acceptance over the last 50 requests: adaptive >= 0.80 and an adaptive-minus-fixed
+7 gap >= 0.20. These are experimental hypotheses, not established A770 thresholds.
+Exit 77 means insufficient data, 1 means invalid input or a failed threshold,
+and 0 means the supplied traces meet both thresholds. CTest always runs synthetic
+analyzer checks; the real-trace check is skipped when files are not supplied.
+
+Traces are published only after response verification, draft-count validation,
+and the xe/i915 kernel-log delta gate pass. Compare files from the same run,
+model, and prompt suite. Sequential launches and repeated prompts do not prove
+a throughput improvement, independent samples, or generalization to other work.
+
 ## Server behavior tests
 
 These scripts target an already running server and do not configure the model

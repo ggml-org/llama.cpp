@@ -377,6 +377,11 @@ endif()
 
 llama_build_and_test(test-speculative-adaptive.cpp)
 
+# Synthetic checks always run; absent GPU traces are explicitly skipped.
+llama_build_and_test(test-spec-adaptive-curve.cpp)
+set_tests_properties(test-spec-adaptive-curve PROPERTIES SKIP_RETURN_CODE 77)
+llama_test(test-spec-adaptive-curve NAME test-spec-adaptive-curve-self-test ARGS --self-test)
+
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)

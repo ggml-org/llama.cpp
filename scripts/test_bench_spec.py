@@ -83,6 +83,56 @@ class BenchSpecEvidenceTests(unittest.TestCase):
             "deadoff3-q8_0",
         ])
 
+    def test_curve_arms_enable_the_adaptive_controller(self) -> None:
+        with mock.patch.object(BENCH_SPEC, "MODE", "acceptance-curve"):
+            arms = BENCH_SPEC.build_arms()
+        self.assertEqual(arms[0]["extra"][:2], ["--spec-type", "draft-mtp-adaptive"])
+        for arm, depth in zip(arms[1:], ("3", "7")):
+            self.assertEqual(arm["extra"], ["--spec-type", "draft-mtp", "--spec-draft-n-min", depth,
+                                             "--spec-draft-n-max", depth])
+
+    def test_curve_publishes_only_validated_request_totals(self) -> None:
+        arm = {"name": "adaptive-3-7"}
+        run = {"draft_n": 100, "draft_n_accepted": 90}
+        prompt = {"id": "p", "tg_median": 10.0, "all_verifier_invariants_ok": True, "runs": [run]}
+        good = {"error": None, "spec_stats_missing": False, "prompts": [prompt]}
+        cases = [
+            (good, [], True),
+            ({**good, "error": "health_timeout", "prompts": []}, [], False),
+            ({**good, "prompts": [{**prompt, "all_verifier_invariants_ok": False}]}, [], False),
+            (good, None, False),
+            (good, ["xe: reset"], False),
+        ]
+        for drafted, accepted in ((100, 101), (True, 1), (100, False), (0, 0), (100, None), (1.5, 1)):
+            cases.append(({**good, "prompts": [{**prompt, "runs": [
+                {"draft_n": drafted, "draft_n_accepted": accepted}]}]}, [], False))
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(BENCH_SPEC, "RESULTS", Path(root)):
+            path = BENCH_SPEC.curve_path(arm["name"])
+            for launch, faults, valid in cases:
+                path.write_text("stale evidence", encoding="utf-8")
+                with mock.patch.multiple(BENCH_SPEC, run_arm=mock.Mock(return_value=launch),
+                                         dmesg_lines=mock.Mock(return_value=["boot"]),
+                                         new_gpu_faults=mock.Mock(return_value=faults)):
+                    result = BENCH_SPEC.run_arm_curve(arm, [{"id": "p"}])
+                self.assertEqual(result["error"] is None, valid)
+                self.assertEqual(path.exists(), valid)
+                if valid:
+                    self.assertEqual(BENCH_SPEC.json.loads(path.read_text()),
+                                     {"n_draft": 100, "n_accepted": 90, "prompt_id": "p"})
+
+    def test_curve_main_propagates_arm_failures(self) -> None:
+        arm = {"name": "adaptive-3-7"}
+        with mock.patch.multiple(BENCH_SPEC, MODE="acceptance-curve", REPEATS=1,
+                                 load_prompts=mock.Mock(return_value=[{"id": "p"}]),
+                                 build_arms=mock.Mock(return_value=[arm]),
+                                 render_driver=mock.Mock(return_value="xe"),
+                                 gpu_holders=mock.Mock(return_value=[])):
+            for error, expected in (("health_timeout", 1), (None, 0)):
+                with mock.patch.object(BENCH_SPEC, "run_arm_curve",
+                                       return_value={"arm": arm, "error": error, "rows": 1}):
+                    self.assertEqual(BENCH_SPEC.main(), expected)
+
     def test_scan_log_records_hard_off_trips(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             logpath = Path(tmpdir) / "server.log"

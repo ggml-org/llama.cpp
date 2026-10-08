@@ -23,7 +23,7 @@ Config via environment:
   CTX            context size (default 16384)
   THREADS        CPU threads (default 12)
   REPEATS        measured runs per prompt, median reported (default 2)
-  MODE           'baseline' (6-arm sweep) | 'deadoff' | 'stress' | 'ab' (default baseline)
+  MODE           'baseline' (6-arm sweep) | 'deadoff' | 'stress' | 'ab' | 'acceptance-curve' (default baseline)
   KV             KV cache type for MODE=deadoff/stress (default q8_0)
   SETVARS        oneAPI setvars.sh (default /opt/intel/oneapi/setvars.sh);
                  empty = inherit the caller's oneAPI environment
@@ -159,6 +159,23 @@ def build_arms() -> list[dict[str, Any]]:
                 "extra": ["--spec-type", "none"],
             })
         return arms
+    if MODE == "acceptance-curve":
+        # Request-total traces, not individual controller verification rounds.
+        mtp_base = ["--spec-type", "draft-mtp"]
+        return [
+            {"name": "adaptive-3-7", "kv": KV, "spec_label": "draft-mtp adaptive 3-7",
+             "extra": ["--spec-type", "draft-mtp-adaptive",
+                       "--spec-draft-n-min-adaptive", "3",
+                       "--spec-draft-n-max", "7"]},
+            {"name": "fixed-3", "kv": KV, "spec_label": "draft-mtp fixed 3",
+             "extra": [*mtp_base,
+                       "--spec-draft-n-min", "3",
+                       "--spec-draft-n-max", "3"]},
+            {"name": "fixed-7", "kv": KV, "spec_label": "draft-mtp fixed 7",
+             "extra": [*mtp_base,
+                       "--spec-draft-n-min", "7",
+                       "--spec-draft-n-max", "7"]},
+        ]
     # baseline: {none, ngram-mod, ngram-mod+ngram-map-k4v} x {q8_0, f16}
     spec_variants = [
         ("none", "none", ["--spec-type", "none"]),
@@ -460,6 +477,11 @@ def stop_server(proc: subprocess.Popen) -> None:
             pass
 
 
+def curve_path(arm_name: str) -> Path:
+    """Per-request JSONL totals consumed by test-spec-adaptive-curve."""
+    return RESULTS / f"acceptance_curve_{Path(MODEL).stem}_{arm_name}.jsonl"
+
+
 def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]], tag: str = "") -> dict[str, Any]:
     logpath = RESULTS / f"{arm['name']}{tag}.log"
     print(f"\n=== arm {arm['name']}  (kv={arm['kv']}, spec={arm['spec_label']}) ===", flush=True)
@@ -505,6 +527,35 @@ def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]], tag: str = "") -
     finally:
         stop_server(proc)
         time.sleep(2.0)  # let the GPU/Level-Zero context fully release before next arm
+
+
+def run_arm_curve(arm: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Publish a trace only after the launch and GPU fault gates pass."""
+    path = curve_path(arm["name"])
+    path.unlink(missing_ok=True)
+    before = dmesg_lines()
+    if not before:
+        return {"arm": arm, "error": "kernel log unreadable or empty", "rows": 0}
+    launch = run_arm(arm, prompts, tag="-curve")
+    problems = launch_problems(launch)
+    faults = new_gpu_faults(before, dmesg_lines())
+    if faults is None or faults:
+        problems.append(f"GPU fault gate failed: {faults}")
+    rows = []
+    for prompt in launch["prompts"]:
+        for run in prompt["runs"]:
+            drafted, accepted = run.get("draft_n"), run.get("draft_n_accepted")
+            if (type(drafted) is not int or type(accepted) is not int or
+                    drafted <= 0 or not 0 <= accepted <= drafted):
+                problems.append(f"{prompt['id']}: invalid or missing draft statistics")
+                continue
+            rows.append({"n_draft": drafted, "n_accepted": accepted, "prompt_id": prompt["id"]})
+    if not rows:
+        problems.append("no measured requests")
+    if problems:
+        return {"arm": arm, "error": "; ".join(problems), "rows": 0}
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return {"arm": arm, "error": None, "curve_path": str(path), "rows": len(rows)}
 
 
 def md_table(summary: list[dict[str, Any]], prompt_ids: list[str], field: str, fmt: str) -> str:
@@ -858,6 +909,36 @@ def main() -> int:
         print(f"MODE=ab  MODEL={MODEL}  DRAFT_MODEL={DRAFT_MODEL or '-'}")
         print(f"PORT={PORT} CTX={CTX} THREADS={THREADS} REPEATS={REPEATS} LAUNCHES={LAUNCHES} PLACEMENT={PLACEMENT}")
         return run_ab(arms, prompts)
+    if MODE == "acceptance-curve":
+        print(f"MODE=acceptance-curve  MODEL={MODEL}")
+        print(f"SERVER_BIN={SERVER_BIN}")
+        print(f"PORT={PORT} CTX={CTX} THREADS={THREADS} REPEATS={REPEATS}")
+        print(f"arms: {[a['name'] for a in arms]}")
+        driver = render_driver(RENDER_NODE)
+        if driver not in {"xe", "i915"} or not prompts or REPEATS < 1:
+            print("!! requires xe/i915, a nonempty prompt set and positive REPEATS")
+            return EXIT_USAGE
+        print(f"kernel driver: {driver}")
+        print("Request totals only; sequential arms do not establish a throughput improvement.")
+        results = []
+        for arm in arms:
+            holders = gpu_holders()
+            if holders:
+                print(f"!! {RENDER_NODE} is held by {' '.join(holders)}; "
+                      "refusing to time a shared GPU", flush=True)
+                return EXIT_GPU_BUSY
+            results.append(run_arm_curve(arm, prompts))
+        print("\n## Acceptance curve summary\n")
+        for r in results:
+            name = r["arm"]["name"]
+            err = r.get("error")
+            path = r.get("curve_path", curve_path(name))
+            rows = r.get("rows", 0)
+            if err:
+                print(f"  {name}: ERROR ({err}); no trace published")
+            else:
+                print(f"  {name}: {rows} rows -> {path}")
+        return 1 if any(r.get("error") for r in results) else 0
     only = os.environ.get("ONLY", "").strip()
     if only:
         arms = [a for a in arms if only in a["name"]]
