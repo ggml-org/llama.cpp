@@ -4,7 +4,7 @@
 
 Download [MiniCPM-V-4.7](https://huggingface.co/openbmb/MiniCPM-V-4.7) PyTorch model from huggingface to "MiniCPM-V-4.7" folder.
 
-The model must be the standard `transformers` checkpoint (no `trust_remote_code` for the text and vision graph used here); the architecture in `config.json` is `MiniCPMV4_7ForConditionalGeneration` with a `qwen3_5_text` (or `qwen3_5_moe_text`) text model and a SigLIP-based vision tower plus a window-attention `vit_merger`, same as MiniCPM-V 4.6. The text tower uses canvas M-RoPE.
+The model must be the standard `transformers` checkpoint (no `trust_remote_code` for the text and vision graph used here); the architecture in `config.json` is `MiniCPMV4_7ForConditionalGeneration` with a `qwen3_5_text` (or `qwen3_5_moe_text`) text model and a SigLIP-based vision tower plus a window-attention `vit_merger`, same as MiniCPM-V 4.6.
 
 If the checkpoint ships no MTP weights, pass `--no-mtp` to skip the nextn layers.
 
