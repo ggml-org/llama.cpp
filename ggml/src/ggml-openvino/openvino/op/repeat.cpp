@@ -3,10 +3,7 @@
 #include "../utils.h"
 
 #include <memory>
-#include <openvino/op/broadcast.hpp>
 #include <openvino/op/constant.hpp>
-#include <openvino/op/divide.hpp>
-#include <openvino/op/shape_of.hpp>
 #include <openvino/op/tile.hpp>
 #include <vector>
 
@@ -22,12 +19,17 @@ OutputVector translate_repeat(const NodeContext & context) {
 
     auto input = process_view_input_new(context, 0);
 
-    const auto input_shape = context.get_input_shape(0).to_shape();
+    // The decoder builds both shapes from the captured ggml extents, so they are static
+    // rank 4 in every mode; the runtime-sized axis is reported by get_op_dynamic_dim().
+    const auto input_shape  = context.get_input_shape(0).to_shape();
     const auto output_shape = context.get_output_shape().to_shape();
+
+    FRONT_END_OP_CONVERSION_CHECK(input_shape.size() == 4 && output_shape.size() == 4,
+                                  "REPEAT expects rank-4 shapes, got ", input_shape, " and ", output_shape);
 
     std::vector<int64_t> repeats(4, 1);
     for (size_t axis = 0; axis < 4; ++axis) {
-        const int64_t input_dim = input_shape[axis];
+        const int64_t input_dim  = input_shape[axis];
         const int64_t output_dim = output_shape[axis];
 
         FRONT_END_OP_CONVERSION_CHECK(input_dim > 0 && output_dim > 0 && output_dim % input_dim == 0,
@@ -36,6 +38,7 @@ OutputVector translate_repeat(const NodeContext & context) {
         repeats[axis] = output_dim / input_dim;
     }
 
+    // Keep the captured multiplier so a dynamic output grows with its source.
     auto repeats_node = ov::op::v0::Constant::create(ov::element::i64, {repeats.size()}, repeats);
     ov::Output<ov::Node> res = std::make_shared<ov::op::v0::Tile>(input, repeats_node);
     return rename_outputs_with_suffix({res}, context.get_name());
