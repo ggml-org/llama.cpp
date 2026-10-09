@@ -1741,10 +1741,13 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->ne[0] != 576) {
                 return false;
             }
-            if (op->src[1]->ne[0] == 72 && op->src[1]->ne[0] != op->src[2]->ne[0]) {
-                return false;
-            }
-            if (op->src[1]->ne[0] < op->src[2]->ne[0]) {
+            // the kernels exist for K == V and for these K > V pairs only
+            if (op->src[1]->ne[0] != op->src[2]->ne[0] &&
+                !(op->src[1]->ne[0] ==  96 && op->src[2]->ne[0] ==  64) &&
+                !(op->src[1]->ne[0] == 128 && op->src[2]->ne[0] ==  96) &&
+                !(op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) &&
+                !(op->src[1]->ne[0] == 320 && op->src[2]->ne[0] == 256) &&
+                !(op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512)) {
                 return false;
             }
             if (op->src[1]->type != op->src[2]->type) {
