@@ -716,6 +716,9 @@ struct vk_device_struct {
     uint32_t subgroup_size;
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
+    // large-N flash attention at deep KV runs as serialized query-row slices (0 = off)
+    uint32_t fa_qslice_rows {};
+    uint32_t fa_qslice_min_kv {};
     bool uma;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
