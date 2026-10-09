@@ -182,8 +182,12 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     if (model.per_layer_tok_embd) {
         const float tok_embd_scale = sqrtf((float) n_embd_per_layer);
 
+        // note: the raw embd branch in `build_inp_per_layer` needs this cast because we can't apply scale to quantized tensors
+        //       to keep the graph static, we apply the cast unconditionally
+        inp_per_layer = ggml_cast      (ctx0, inp_per_layer, GGML_TYPE_F32);
+
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
+        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
 
         // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
