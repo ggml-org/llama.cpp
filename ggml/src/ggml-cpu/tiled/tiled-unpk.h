@@ -18,7 +18,7 @@ inline void tiled_unpk_sign32(uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g3
 // 8 ternary grid bytes (0 = 0, 1 = +1, 0xFF = -1): dst[j] = 128 + delta + 8 * (int8_t) src[j]
 inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst);
 
-// Each arch should include it's version of unpack primitives here.
+// Each arch should include its version of unpack primitives here.
 #if defined(__AVX2__)
 #    include "../arch/x86/tiled-unpk.h"
 #else

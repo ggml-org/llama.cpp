@@ -436,21 +436,20 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
 template <int SUBBLK, bool HAS_MIN, int BIAS, bool ACTBIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
-    const bool standard = (num_k == 1);
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-    if (standard) {
+    if (num_k == 1) {
         tiled_run_microtile_vnni<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     } else {
         tiled_run_microtile_vnni<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     }
 #elif defined(__AVX2__)
-    if (standard) {
+    if (num_k == 1) {
         tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 1, ACTBIAS>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     } else {
         tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 0, ACTBIAS>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     }
 #elif defined(__AVX__)
-    if (standard) {
+    if (num_k == 1) {
         tiled_run_microtile_avx<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     } else {
         tiled_run_microtile_avx<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);

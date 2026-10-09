@@ -57,6 +57,9 @@ static_assert(sizeof(tiled_ws) <= TILED_WS_SLOT, "tiled workspace exceeds the 51
 static_assert(offsetof(tiled_ws, src0) % 64 == 0, "src0 not 64B-aligned in the workspace");
 static_assert(offsetof(tiled_ws, src1) % 64 == 0, "src1 not 64B-aligned in the workspace");
 static_assert(offsetof(tiled_ws, acc)  % 64 == 0, "acc not 64B-aligned in the workspace");
+// layout guard for the src1 unpack (tiled.cpp reads block_q8_K directly)
+static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
+              "block_q8_K layout changed, fix the src1 unpack");
 
 // Accumulate one 16x16 microtile (src0 rows [i0, i0+16), src1 cols [j0, j0+16))
 // over one 256-K slab held in the tiles into a j-major float buffer

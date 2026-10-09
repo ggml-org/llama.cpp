@@ -618,7 +618,7 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
-            return true;
+            break;
         default:
             return false;
     }
