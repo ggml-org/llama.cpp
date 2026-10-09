@@ -374,20 +374,15 @@ const char *    common_chat_format_name(common_chat_format format);
 common_chat_msg common_chat_parse(const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 
-// what the sampler needs from an applied chat template
 struct common_chat_session_params {
     bool echo  = false; // include the assistant prefill in the output when continuing a message
     bool debug = false; // enable debug output for the PEG parser
 };
 
-// parses the output of a single generation
-// the input only grows: each feed() appends to everything fed before
 class common_chat_session {
   public:
-    // plain content, no chat template
     common_chat_session() { cur.role = "assistant"; }
 
-    // applies the chat template and keeps everything needed to parse its output
     common_chat_session(const common_chat_templates *        tmpls,
                         const llama_vocab *                  vocab,
                         const common_chat_templates_inputs & inputs,
@@ -406,17 +401,12 @@ class common_chat_session {
 
     const common_chat_msg_delimiters & message_delimiters() const { return delimiters; }
 
-    // sets the grammar, its triggers, the preserved tokens and the generation prompt
-    // the preserved tokens and token triggers are only resolved when the session was given a vocab
     void apply_sampling(common_params_sampling & sampling) const;
 
-    // false for a default session, which parses its output as plain content
     bool has_template() const { return templated; }
 
-    // appends a chunk and parses leniently, the message keeps its last value if nothing parses
     const common_chat_msg & feed(const common_chat_input & chunk);
 
-    // appends the last chunk and parses strictly, throws if the output does not match the format
     const common_chat_msg & finish(const common_chat_input & chunk = {});
 
   private:
