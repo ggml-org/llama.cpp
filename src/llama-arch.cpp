@@ -1234,7 +1234,6 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_QWEN3TTS:
-        case LLM_ARCH_K2_HORIZON:
             return false;
         default:
             return true;
