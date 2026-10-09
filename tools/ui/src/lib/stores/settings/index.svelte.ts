@@ -212,7 +212,7 @@ class SettingsStore {
 
 	/**
 	 * Initialize the settings store by loading from localStorage.
-	 * Called by initStores() after migrations have run.
+	 * Called by hydrateStores() after migrations have run.
 	 */
 	initialize() {
 		if (!browser) return;

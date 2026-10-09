@@ -208,7 +208,7 @@
 		</div>
 	{/if}
 
-	<div class="flex items-center gap-1 px-2">
+	<div class="flex items-center gap-1 max-md:pt-1 md:px-1">
 		{#if activeView === ChatMessageStatsView.GENERATION && hasGenerationStats}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
