@@ -362,14 +362,36 @@ ggml_tensor * clip_graph::build_vit(
         cb(inpL, "pre_ln", -1);
     }
 
+    // with flash attention the mask must be f16: cast each distinct mask once here,
+    // not once per layer (build_attn skips the cast when the mask is already f16)
+    ggml_tensor * attn_mask_all = opts.attn_mask;
+    std::vector<ggml_tensor *> attn_mask_layers = opts.attn_mask_layers;
+    if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+        std::map<ggml_tensor *, ggml_tensor *> casted;
+        auto cast_once = [&](ggml_tensor * mask) -> ggml_tensor * {
+            if (!mask || mask->type == GGML_TYPE_F16) {
+                return mask;
+            }
+            auto it = casted.find(mask);
+            if (it == casted.end()) {
+                it = casted.emplace(mask, ggml_cast(ctx0, mask, GGML_TYPE_F16)).first;
+            }
+            return it->second;
+        };
+        attn_mask_all = cast_once(attn_mask_all);
+        for (auto & mask : attn_mask_layers) {
+            mask = cast_once(mask);
+        }
+    }
+
     // loop over layers
     for (int il = 0; il < n_layer; il++) {
         auto & layer = model.layers[il];
         ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
-        ggml_tensor * attn_mask = opts.attn_mask;
-        if (opts.attn_mask_layers.size() > (size_t) il) {
-            attn_mask = opts.attn_mask_layers[il];
+        ggml_tensor * attn_mask = attn_mask_all;
+        if (attn_mask_layers.size() > (size_t) il) {
+            attn_mask = attn_mask_layers[il];
         }
 
         // layernorm1
