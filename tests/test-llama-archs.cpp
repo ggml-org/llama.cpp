@@ -1029,7 +1029,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                             }
                             std::vector<float> logits_mixed;
                             std::vector<float> logits_chunks;
-                            if (llm_arch_supports_mixed_batch(arch)) {
+                            if (llama_model_supports_mixed_batch(model_and_ctx_dev.first.get())) {
                                 if (get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, false, logits_chunks) != 0 ||
                                     get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, true,  logits_mixed)  != 0) {
                                     throw std::runtime_error("failed to decode mixed batch");

@@ -3388,6 +3388,10 @@ bool llama_model_is_diffusion(const llama_model * model) {
     return llm_arch_is_diffusion(model->arch);
 }
 
+bool llama_model_supports_mixed_batch(const llama_model * model) {
+    return llm_arch_supports_mixed_batch(model->arch);
+}
+
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
 }
