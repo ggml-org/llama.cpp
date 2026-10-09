@@ -43,7 +43,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/amx/mmq.h
         ggml-cpu/tiled/tiled.cpp
         ggml-cpu/tiled/tiled.h
-        ggml-cpu/tiled/tiled-kernel.cpp
+        ggml-cpu/tiled/tiled-kernel-generic.cpp
         ggml-cpu/tiled/tiled-kernel.h
         ggml-cpu/ggml-cpu-impl.h
         ggml-cpu/common.h
@@ -283,6 +283,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         list(APPEND GGML_CPU_SOURCES
             ggml-cpu/arch/x86/quants.c
             ggml-cpu/arch/x86/repack.cpp
+            ggml-cpu/arch/x86/tiled-kernel.cpp
             )
 
         if (MSVC)
