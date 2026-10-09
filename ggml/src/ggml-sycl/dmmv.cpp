@@ -10,7 +10,6 @@
     #endif
     #include <sycl/ext/intel/esimd.hpp>
     #include "esimd.hpp"
-    #define GGML_SYCL_DMMV_HAS_ESIMD
 #endif
 
 static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
@@ -1870,7 +1869,7 @@ static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
 using ggml_sycl_esimd::GGML_SYCL_DMMV_ESIMD_WG_SIZE;
 
-// row mapping and epilogue for dequantize_mul_mat_vec_reorder_esimd: which rows a work-group owns and what it does with the two sums
+// policies for dequantize_mul_mat_vec_reorder_esimd: row mapping and what to do with the two sums
 // plain mat-vec: a work-group owns two consecutive rows of one matrix
 struct esimd_dmmv_row_pair_policy {
     const void * vx;

@@ -38,6 +38,10 @@ namespace syclexp = sycl::ext::oneapi::experimental;
     #endif
 #endif
 
+#if defined(__INTEL_LLVM_COMPILER)
+    #define GGML_SYCL_DMMV_HAS_ESIMD
+#endif
+
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"

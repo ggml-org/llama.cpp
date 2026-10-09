@@ -45,9 +45,6 @@
 #    include <sycl/ext/oneapi/virtual_mem/virtual_mem.hpp>
 #    define GGML_SYCL_SUPPORT_VMM
 #endif
-#if defined(__INTEL_LLVM_COMPILER)
-    #define GGML_SYCL_DMMV_HAS_ESIMD
-#endif
 #include <sycl/half_type.hpp>
 
 #include "ggml.h"
@@ -4975,7 +4972,7 @@ static bool ggml_sycl_mul_mat_glu_mmvq_plain(ggml_backend_sycl_context & ctx, gg
 static bool ggml_sycl_mul_mat_glu_dmmv_esimd(ggml_backend_sycl_context & ctx, ggml_tensor * glu,
                                              ggml_tensor * gate, ggml_tensor * up, const ggml_tensor * wu,
                                              const ggml_tensor * wg, const ggml_tensor * act) {
-    // the kernel reads the activation while writing the output, and the allocator may give glu the dead activation's memory
+    // the kernel reads the activation while writing the output; glu may reuse the dead activation's memory
     const char * act_begin = (const char *) act->data;
     const char * glu_begin = (const char *) glu->data;
     if (act_begin < glu_begin + ggml_nbytes(glu) && glu_begin < act_begin + ggml_nbytes(act)) {
