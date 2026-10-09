@@ -11646,6 +11646,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // dim-0 CONCAT with a transposed src1 at gated delta net conv_input shapes:
+    // concat(conv_state {3, channels}, transpose(qkv {channels, n_tokens})) for 8192 and 10240 channels
+    for (int64_t channels : {8192, 10240}) {
+        for (int64_t n_tokens : {512, 2048, 4096}) {
+            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, channels, 1, 1}, n_tokens, 0, 0, true));
+        }
+    }
+
     // CONT of a 0<->2 permute at DeepSeek-V4 lightning-indexer shapes:
     // indexer_kq is [n_kv, n_tokens, n_head=64] and gets ggml_cont(ggml_permute(.., 2,1,0,3)).
     for (int64_t n_kv : { 1024, 1280, 2048, 2304 }) {

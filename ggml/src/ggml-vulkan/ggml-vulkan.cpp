@@ -346,7 +346,7 @@ static bool ggml_vk_concat_transpose_supported(const ggml_tensor * src0, const g
     if (src1->nb[1] != ggml_type_size(src1->type) || src1->nb[0] < (size_t) src1->ne[1] * src1->nb[1]) {
         return false;
     }
-    // the tiled shader reads src0 with a row stride, so src1 must be the larger part
+    // src1 goes through the tiled transpose copy, src0 through a plain strided copy, so src1 must be the larger part
     return src1->ne[0] >= 32 && src0->ne[0] <= src1->ne[0];
 }
 
@@ -3402,7 +3402,6 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_concat_i16, "concat_i16", concat_i16_len, concat_i16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_i32, "concat_i32", concat_i32_len, concat_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_i64, "concat_i64", concat_i64_len, concat_i64_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_concat_transpose_i32, "concat_transpose_i32", concat_transpose_i32_len, concat_transpose_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_upscale_nearest_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_NEAREST}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_upscale_bilinear_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BILINEAR}, 1);
@@ -8719,9 +8718,6 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         if (!ggml_vk_concat_supported(src0, src1, dst)) {
             return nullptr;
         }
-        if (ggml_vk_concat_transpose_supported(src0, src1, dst)) {
-            return ctx->device->pipeline_concat_transpose_i32;
-        }
         switch (ggml_vk_concat_unit_size(src0->type)) {
         case 1:
             return ctx->device->pipeline_concat_i8;
@@ -9684,8 +9680,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 elements[1] = std::min(elements[1], ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
                 elements[2] = std::min(elements[2], ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
             } else if (pipeline == ctx->device->pipeline_cpy_transpose_32 ||
-                pipeline == ctx->device->pipeline_cpy_transpose_16 ||
-                pipeline == ctx->device->pipeline_concat_transpose_i32) {
+                pipeline == ctx->device->pipeline_cpy_transpose_16) {
                 // 32x32 tiles
                 elements[0] = (uint32_t)CEIL_DIV(dst->ne[0], 32);
                 elements[1] = (uint32_t)CEIL_DIV(dst->ne[1], 32);
@@ -10438,6 +10433,24 @@ void ggml_vk_opt_step_sgd(ggml_backend_vk_context * ctx, vk_context& subctx, con
 }
 
 void ggml_vk_concat(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    if (ggml_vk_concat_transpose_supported(src0, src1, dst)) {
+        // dst = [src0 | src1] along dim 0 as two copies into views of dst: a plain copy for src0 and
+        // the tiled transpose copy for the transposed src1. The two copies write disjoint elements.
+        ggml_tensor dst0 = *dst;
+        dst0.ne[0] = src0->ne[0];
+        ggml_vk_cpy(ctx, subctx, src0, &dst0);
+
+        const size_t offs = src0->ne[0] * dst->nb[0];
+        ggml_tensor dst1 = *dst;
+        dst1.ne[0] = src1->ne[0];
+        dst1.data = (char *) dst->data + offs;
+        if (dst->view_src) {
+            dst1.view_offs += offs;
+        }
+        ggml_vk_cpy(ctx, subctx, src1, &dst1);
+        return;
+    }
+
     int * op_params = (int *)dst->op_params;
 
     const uint32_t unit_size = ggml_vk_concat_unit_size(dst->type);
