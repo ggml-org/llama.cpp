@@ -3664,19 +3664,19 @@ ggml_tensor * llm_graph_context::build_rs(
     const int64_t i0 = n_rs - state_copy->ne[0];
 
     ggml_tensor * states_all = ggml_get_rows(ctx0, states, state_copy);
-    if (!get_state_rows) {
-        // expand the gather even when it has no rows, to keep the graph topology constant
-        ggml_build_forward_expand(gf, states_all);
-    }
 
     ggml_tensor * output_states;
-    if (in_place) {
-        // view of the cache: all readers must run before the new states are stored over it
-        output_states = ggml_view_2d(ctx0, states, state_size, n_seqs, states->nb[1], rs_head*states->nb[1]);
-    } else if (get_state_rows) {
+    if (get_state_rows) {
         output_states = get_state_rows(ctx0, states, state_copy_main);
     } else {
-        output_states = ggml_view_2d(ctx0, states_all, state_size, n_seqs, states_all->nb[1], 0);
+        // move the gathered states into their cells, the readers then read them from the cache
+        // when the states are already in place the gather and the move have no rows, so the graph only changes in size
+        const int64_t n_move = in_place ? 0 : n_seqs;
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0,
+                ggml_view_2d(ctx0, states_all, state_size, n_move, states_all->nb[1], 0),
+                ggml_view_2d(ctx0, states,     state_size, n_move, states->nb[1],     rs_head*states->nb[1])));
+        // view of the cache: all readers must run after the move and before the new states are stored over it
+        output_states = ggml_view_2d(ctx0, states, state_size, n_seqs, states->nb[1], rs_head*states->nb[1]);
     }
     ggml_build_forward_expand(gf, output_states);
 
@@ -3733,7 +3733,7 @@ ggml_tensor * llm_graph_context::build_rs(
     const auto * kv_state = inp->mctx;
 
     const bool in_place = inp->rs_in_place && !get_state_rows;
-    GGML_ASSERT(!in_place || s->type == GGML_TYPE_F32); // the gather would convert to F32
+    GGML_ASSERT(get_state_rows || s->type == GGML_TYPE_F32); // the states are read from the cache, the gather is F32
 
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first
     // state: it still holds the n_rs - n_seqs extra states and copies no state of a single sequence ubatch
