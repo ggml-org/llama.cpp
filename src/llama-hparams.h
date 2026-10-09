@@ -72,6 +72,8 @@ struct llama_hparams {
     int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_rel_attn_bkts = 0;
+    uint32_t n_value_expert      = 0; // MoVA value experts (K2 Horizon)
+    uint32_t n_value_expert_used = 0;
 
     // TODO: this needs to be reworked
     int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
@@ -369,6 +371,7 @@ struct llama_hparams {
     // llm_ffn_op_type_from_string() in llama-model.cpp, mirroring how
     // rope_scaling_type_train is handled.
     enum llm_ffn_op_type llm_ffn_op;
+    enum ggml_unary_op   act_cls = GGML_UNARY_OP_TANH; // activation of the classifier head (RANK)
 
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN

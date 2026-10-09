@@ -159,10 +159,16 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
-    inpL = build_inp_embd(model.tok_embd);
+    // do the PLE first to guarantee it is done in the host buffer
+    // ref: https://github.com/ggml-org/llama.cpp/pull/30160
+    ggml_tensor * inp_per_layer = nullptr;
+    if (model.per_layer_tok_embd) {
+        inp_per_layer = build_inp_per_layer();
+        ggml_build_forward_expand(gf, inp_per_layer);
+    }
 
     // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
-    inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
+    inpL = build_inp_embd(model.tok_embd, sqrtf(n_embd));
     cb(inpL, "inp_scaled", -1);
 
     // inp_pos - contains the positions
@@ -173,10 +179,11 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    ggml_tensor * inp_per_layer = nullptr;
     if (model.per_layer_tok_embd) {
-        inp_per_layer = build_inp_per_layer();
-        ggml_build_forward_expand(gf, inp_per_layer);
+        const float tok_embd_scale = sqrtf((float) n_embd_per_layer);
+
+        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
 
         // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
@@ -276,7 +283,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -376,7 +383,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
-            if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+            if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
@@ -414,7 +421,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -450,10 +457,13 @@ public:
                 llama_prefetch_rows(ple, ubatch->token, ubatch->n_tokens);
             }
             ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens * ggml_element_size(tokens));
-        } else if (prefetch) {
-            // [TAG_GEMMA4_IMG_PADDING]
+        } else {
             const int32_t padding = 0;
-            llama_prefetch_rows(ple, &padding, 1);
+            if (prefetch) {
+                // [TAG_GEMMA4_IMG_PADDING]
+                llama_prefetch_rows(ple, &padding, 1);
+            }
+            ggml_backend_tensor_set(token0, &padding, 0, ggml_element_size(token0));
         }
     }
 
@@ -462,6 +472,7 @@ public:
     }
 
     ggml_tensor * tokens = nullptr;
+    ggml_tensor * token0 = nullptr;
 
     const llama_model & model;
 };
@@ -472,29 +483,25 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
     auto inp = std::make_unique<llm_graph_input_gemma4_ple>(model);
 
     ggml_tensor * inp_per_layer;
-    float tok_embd_scale = sqrtf((float) n_embd_per_layer);
+    // mixed ubatch: embd rows have token id 0, same padding row as below
+    // TODO: use ggml_build_forward_select
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
         res->t_inp_tokens = inp->tokens;
 
-        inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
-        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+        inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
     } else {
-        // [TAG_GEMMA4_IMG_PADDING]
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
-        const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_per_layer * n_layer
 
-        // Extract and dequantize padding token embedding (row 0)
-        ggml_tensor * padding = ggml_view_1d(ctx0, model.per_layer_tok_embd, embd_size, 0);
-        inp_per_layer = ggml_cast (ctx0, padding, GGML_TYPE_F32);
-        inp_per_layer = ggml_scale(ctx0, inp_per_layer, tok_embd_scale);
+        // [TAG_GEMMA4_IMG_PADDING]
+        inp->token0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+        ggml_set_input(inp->token0);
+        res->t_inp_tokens = inp->token0;
 
-        // Reshape to [n_embd_per_layer, n_layer, 1]
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, 1);
+        inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->token0);
         cb(inp_per_layer, "inp_per_layer_multimodal", -1);
     }
     res->add_input(std::move(inp));
