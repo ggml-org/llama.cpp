@@ -4703,6 +4703,15 @@ bool llama_kv_stream_mtp_prepare(llama_context * ctx, uint32_t future_tokens) {
     const size_t frontier = stream->tokens();
     if (frontier > ctx->n_ctx()) return false;
     const size_t reserve = std::min<size_t>(future_tokens, ctx->n_ctx() - frontier);
+    // The final short prompt batch still owns the prefill layout. Retire that
+    // workspace before admitting MTP against the larger decode KV grant.
+    auto * owner = llama_context_compute_memory(ctx);
+    const auto transitions = owner ? owner->phase_transition_count() : 0;
+    if (owner && owner->shares_kv_memory() && !owner->prepare_serial_decode()) {
+        LLAMA_LOG_ERROR("%s: failed to activate shared decode layout before MTP admission\n", __func__);
+        return false;
+    }
+    if (owner && owner->phase_transition_count() != transitions) llama_log_memory_phase(owner);
     if (stream->has_mtp_layer()) {
         if (stream->mtp_reserved_tokens() >= frontier + reserve) return true;
         if (!stream->release_mtp_layer()) return false;

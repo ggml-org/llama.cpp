@@ -154,5 +154,12 @@ struct ggml_kv_stream_copy_ops {
     bool (*probe_layer)(void *, const ggml_kv_stream_copy_range * ranges, size_t count);
     // Version 10: one final-consumer fence covers a complete transfer span.
     bool (*release_span)(void *, size_t first_slot, size_t count);
+    // Version 11: reserve native transport/feedback resources without retaining KV views or submitting work.
+    // Backend outlives prepared resources and queues. A bank admits serial replacements, not concurrent owners.
+    void * (*prepare)(ggml_backend_t, size_t max_slots, bool feedback);
+    void (*free_prepared)(void *);
+    // Borrow retained resources; never silently allocate missing capacity or unprepared feedback storage.
+    void * (*create_prepared)(ggml_backend_t, void * prepared, ggml_backend_buffer_t device,
+                             ggml_backend_buffer_t host, const ggml_kv_stream_shape &, size_t slots);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();

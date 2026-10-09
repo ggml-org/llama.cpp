@@ -419,12 +419,18 @@ Mixed Q8_0 K / Q4_0 V requires `GGML_CUDA_FA_ALL_QUANTS=ON`. The similarly named
 | Failure category | Meaning and response |
 | --- | --- |
 | Native attention unavailable, with K/V types and query width | Check compiled kernels, all-quants option, backend and geometry. Increasing the arena does not add missing kernels. |
-| Shared arena quota insufficient | The graph minimum or combined graph/KV/writer/attention minima do not fit. Check the reported phase/resource; increase the quota only if device memory permits. Current logs are not yet a complete additional-byte calculation. |
+| Shared arena quota insufficient | The graph minimum or combined graph/KV/writer/attention minima do not fit. Initial shared-layout validation reports requested, required and additional bytes, including the complete MTP decode KV minimum. These are aligned planned regions, not external driver/native-executable allocations. Increase the quota only if device memory permits. |
 | Host KV allocation/registration or host metadata allocation | Check system/pinned-memory availability and registration errors. A larger device arena is not a host-memory fix. Disabling pinned memory is not a valid streaming fallback. |
 | Device grant allocation/binding or CUDA allocator/driver error | Check total VRAM, other processes and the lower-level CUDA diagnostic. Weights and driver/native-executable allocations can fail outside the arena. |
 | Unsupported configuration | Preserve the serial/single-GPU and qualified model/KV/projector/speculation scope; do not suppress admission to force an unvalidated execution path. |
 
 No-UVM runs qualify physical-budget behavior. Optional `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` enables supported managed model buffers, but the shared parent remains device-local; UVM neither enlarges the quota nor guarantees that driver allocations fit. The CUDA 12.9 reduced-feature profile proves that VMM/capture/PDL are optional, not that disabling them is generally faster. No driver downgrade, global toolkit replacement or numerical-tolerance change is needed for these checks.
+
+Current copy-resource admission prepares and retains a native stream/event/feedback bank for the maximum encoded-page capacity of the admitted parent. Serial repartitions reuse it instead of allocating another copy queue's driver resources near the VRAM limit. Preparation failures report the original CUDA operation/status before context admission; they do not adopt failed handles or abort in partial-construction cleanup. This bounds that resource-creation path, not CUDA graph caches or all process memory.
+
+For Linux CUDA failure-injection checks with dynamically linked CUDART (`GGML_STATIC=OFF`), build/run `test-kv-stream-copy-init`; it returns 77 when no CUDA device is available. The fixture interposes only test-process CUDART calls, covers null and poisoned failure outputs, and checks startup rejection and prepared-resource reuse. `test-kv-stream-transition --cuda --prepared` qualifies phase rollback with the retained bank. These are not Windows/MSVC acceptance tests; no production fault-injection flag is introduced.
+
+`test-kv-stream-model --cuda-mtp-phase-admission` checks final short-prefill catch-up, failed handoff recovery, repeated request phases, lease reuse and exact arena admission. It returns 77 without a CUDA device. With all KV quant kernels compiled, it is also registered as `test-kv-stream-model-mtp-phase-admission` in CTest. The serial coordinator makes the decode layout available before MTP acquires its complete-layer lease; it does not require a full MTP layer to fit beside the retired prefill workspace.
 
 #### Fixing Compatibility Issues with Old CUDA and New glibc
 

@@ -169,7 +169,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         next.binding = std::make_unique<llama_kv_stream_binding>(
             content->host()->cache_id(),ggml_backend_buffer_get_type(buffer),previous_revision);
         if (!next.binding->bind(pool,policy,[&](const auto & view) {
-            auto result = llama_kv_stream_resident::create(view,content,backend,&candidate);
+            auto result = llama_kv_stream_resident::create(view,content,backend,&candidate,config.prepared_copies);
             next.resident = result.get(); return result;
         }) || !next.resident->configure_writes(config.max_batch_rows,next.leases[1].get()) ||
                 !next.resident->configure_feedback(config.measure) ||

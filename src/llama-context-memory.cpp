@@ -506,6 +506,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 auto & requirements = target.plan.stages[i].requirements;
                 const size_t pool_preferred = suspended ? 0 : (kv.shared_device_memory_bytes || i == 2) ?
                     target.budgets[kv_arena].capacity : kv.pool_bytes;
+                const size_t pool_minimum = suspended ? 0 : i == 2 ? kv.pool_decode_min_bytes : kv.pool_bytes;
                 // Graph, gather and writer grants are disjoint even for serial draft execution.
                 requirements.push_back({
                     attention_id,attention,attention,
@@ -516,7 +517,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
                 requirements.push_back({
-                    pool_id,suspended ? 0 : kv.pool_bytes,pool_preferred,
+                    pool_id,pool_minimum,std::max(pool_minimum,pool_preferred),
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
             }
@@ -528,8 +529,17 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 const auto layout = llama_memory_layout_elastic(target.plan,stage.id,target.budgets,target.fixed,candidate);
                 if (layout.status != llama_memory_layout_status::success) {
                     if (layout.status == llama_memory_layout_status::placement_failed) {
-                        LLAMA_LOG_ERROR("%s: shared arena quota insufficient for phase %llu resource %llu: requested=%zu bytes; combined graph/KV/writer/attention minima do not fit\n",
-                            __func__,(unsigned long long)stage.id,(unsigned long long)layout.resource,target.budgets[kv_arena].capacity);
+                        auto budgets = target.budgets;
+                        budgets[kv_arena].capacity = SIZE_MAX;
+                        llama_memory_layout minimum;
+                        size_t required = 0;
+                        if (llama_memory_layout_minimum(target.plan,stage.id,budgets,target.fixed,minimum).status == llama_memory_layout_status::success) {
+                            for (const auto & region : minimum.arenas[kv_arena].regions) required = std::max(required,region.offset+region.size);
+                        }
+                        const size_t available = target.budgets[kv_arena].capacity;
+                        LLAMA_LOG_ERROR("%s: shared arena quota insufficient for phase %llu resource %llu: requested=%zu bytes, required=%zu bytes, additional=%zu bytes, decode KV minimum=%zu bytes; combined graph/KV/writer/attention minima do not fit\n",
+                            __func__,(unsigned long long)stage.id,(unsigned long long)layout.resource,available,
+                            required,required > available ? required-available : 0,kv.pool_decode_min_bytes);
                     } else {
                         LLAMA_LOG_ERROR("%s: shared arena layout rejected for phase %llu: status=%d\n",__func__,
                             (unsigned long long)stage.id,int(layout.status));
@@ -754,6 +764,17 @@ bool llama_context_memory::prepare_serial_target() noexcept {
 
 bool llama_context_memory::prepare_serial_draft(llama_memory_text_phase phase) noexcept {
     return prepare_serial_consumer(phase);
+}
+
+bool llama_context_memory::prepare_serial_decode() noexcept {
+    if (!valid() || impl->serial_borrowed || !impl->shared_stream ||
+            impl->serial_busy || kv_device_suspended()) return false;
+    // An existing MTP lease remains valid throughout catch-up and sequential predictions.
+    if (impl->active_stage == impl->decode_stage) return true;
+    if (!prepare_serial_target()) return false;
+    const auto result = signal_text_phase({llama_memory_text_phase::decode,4,true,true,false});
+    return result.status == llama_memory_text_phase_status::changed ||
+        result.status == llama_memory_text_phase_status::unchanged;
 }
 
 bool llama_context_memory::prepare_serial_consumer(llama_memory_text_phase phase) noexcept {

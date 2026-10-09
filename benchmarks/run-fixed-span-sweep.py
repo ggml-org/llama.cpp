@@ -117,42 +117,60 @@ def is_arena_capacity_failure(log_text: str) -> bool:
     return "invalid resource handle" in log_text and "copy_queue::~copy_queue" in log_text and "acquire_mtp_layer" in log_text
 
 
-def find_max_arena_mib(start: int, probe: Callable[[int], bool]) -> int:
-    if start < 1:
-        raise ValueError("arena search start must be positive")
-    if probe(start):
-        low = start
-        step = 16
-        for _ in range(32):
-            high = low + step
-            if high > 1048576:
-                raise RuntimeError("arena search could not find an upper bound below 1 TiB")
-            if not probe(high):
-                break
-            low = high
+class ArenaTooSmallError(RuntimeError):
+    """A quota rejection supplies a lower bound, not an OOM upper bound."""
+    def __init__(self, minimum_mib: int = 0):
+        self.minimum_mib = minimum_mib
+        super().__init__(f"arena too small; reported minimum={minimum_mib} MiB")
+
+
+def arena_minimum_mib(log_text: str) -> int | None:
+    lines = re.findall(r"shared arena quota insufficient[^\r\n]*", log_text, re.IGNORECASE)
+    if not lines:
+        return None
+    required = [int(value) for line in lines for value in
+                re.findall(r"(?:required|compute minimum)=(\d+) bytes", line, re.IGNORECASE)]
+    # Older binaries may reject the quota without reporting its exact minimum.
+    return (max(required) + 1048575) // 1048576 if required else 0
+
+
+def find_max_arena_mib(start: int, probe: Callable[[int], bool], upper_limit: int = 1048576) -> int:
+    if start < 1 or upper_limit < 1:
+        raise ValueError("arena search start and limit must be positive")
+    low, high = 1, upper_limit
+    candidate, step = min(start, high), 16
+    best = None
+    small_seen = large_seen = False
+    for _ in range(64):
+        try:
+            fits = probe(candidate)
+        except ArenaTooSmallError as error:
+            low = max(low, candidate + 1, error.minimum_mib)
+            small_seen = True
+            direction = 1
+        else:
+            if fits:
+                best = candidate
+                low = candidate + 1
+                direction = 1
+            else:
+                high = candidate - 1
+                large_seen = True
+                direction = -1
+        if low > high:
+            if best is not None:
+                return best
+            raise RuntimeError(f"no allocatable arena found: lower bound={low} MiB exceeds upper bound={high} MiB")
+        # Once both sides are known, bisect instead of jumping past a narrow valid interval.
+        if large_seen and (small_seen or best is not None):
+            candidate = (low + high) // 2
+        elif direction > 0:
+            candidate = min(high, max(low, candidate + step))
             step *= 2
         else:
-            raise RuntimeError("arena search could not find an upper bound")
-    else:
-        high = start
-        step = 16
-        for _ in range(32):
-            low = max(1, high - step)
-            if probe(low):
-                break
-            if low == 1:
-                raise RuntimeError("no allocatable arena found")
-            high = low
+            candidate = max(low, candidate - step)
             step *= 2
-        else:
-            raise RuntimeError("no allocatable arena found")
-    while high - low > 1:
-        middle = (low + high) // 2
-        if probe(middle):
-            low = middle
-        else:
-            high = middle
-    return low
+    raise RuntimeError("arena search did not converge")
 
 
 def log_name(context: int, arena_mib: int, mtp_length: int) -> str:
@@ -298,10 +316,15 @@ def probe_arena(args: argparse.Namespace, context: int, mtp_length: int, arena_m
         finally:
             stop_process(process)
     label = "full" if full_workload else "fast"
-    if is_arena_capacity_failure(log_path.read_text(errors="replace")):
-        print(f"arena probe ({label}): context={context} mtp={mtp_length} arena={arena_mib} MiB -> capacity failure", flush=True)
-        return False
     if failure is not None:
+        log_text = log_path.read_text(errors="replace")
+        minimum = arena_minimum_mib(log_text)
+        if minimum is not None:
+            print(f"arena probe ({label}): context={context} mtp={mtp_length} arena={arena_mib} MiB -> too small (reported minimum={minimum} MiB)", flush=True)
+            raise ArenaTooSmallError(minimum) from failure
+        if is_arena_capacity_failure(log_text):
+            print(f"arena probe ({label}): context={context} mtp={mtp_length} arena={arena_mib} MiB -> capacity failure", flush=True)
+            return False
         raise RuntimeError(f"arena probe failed at context={context}, mtp={mtp_length}, arena={arena_mib} MiB; see {log_path}: {failure}") from failure
     if full_workload and result_cache is not None:
         result_cache[arena_mib] = {
@@ -332,11 +355,7 @@ def arena_for_point(args: argparse.Namespace, context: int, mtp_length: int, log
             checked[candidate] = probe_arena(args, context, mtp_length, candidate, logs, url,
                 article_text, token_cache, full_workload=True, result_cache=result_cache)
         return checked[candidate]
-    if full_fits(fast_max):
-        return fast_max
-    if fast_max == 1:
-        raise RuntimeError("no arena completed the full benchmark workload")
-    return find_max_arena_mib(max(1, fast_max - 16), full_fits)
+    return find_max_arena_mib(fast_max, full_fits, upper_limit=fast_max)
 
 
 def decode_layout(log_path: Path) -> tuple[float, int, int, int, float, int]:

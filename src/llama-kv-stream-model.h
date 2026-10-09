@@ -11,6 +11,8 @@ struct llama_kv_stream_memory_requirements {
     size_t attention_prefill_bytes = 0, attention_decode_bytes = 0;
     size_t alignment = 1;
     size_t shared_device_memory_bytes = 0;
+    // Decode must admit a complete auxiliary layer at the declared maximum context.
+    size_t pool_decode_min_bytes = 0;
 };
 
 // Borrowed candidate leases; the model retains them only after complete session reconstruction.

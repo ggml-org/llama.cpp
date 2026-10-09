@@ -60,6 +60,8 @@ public:
     // Drain the other serial scheduler before either context rewrites shared scratch.
     bool prepare_serial_target() noexcept;
     bool prepare_serial_draft(llama_memory_text_phase phase) noexcept;
+    // Make the decode KV grant available before a serial consumer acquires its ring lease.
+    bool prepare_serial_decode() noexcept;
     LLAMA_API bool prepare_serial_consumer(llama_memory_text_phase phase) noexcept;
     // Retire native graph addresses before the caller replaces graph metadata.
     LLAMA_API bool retire_graph() noexcept;

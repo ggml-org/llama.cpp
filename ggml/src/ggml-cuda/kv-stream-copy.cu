@@ -6,10 +6,45 @@
 #include <chrono>
 
 namespace {
-struct measurement {
+// Preserve the first initialization error before rollback releases any owned resources.
+static bool initialization_ok(cudaError_t status, const char * operation) {
+    if (status == cudaSuccess) return true;
+    GGML_LOG_ERROR("CUDA KV copy resource initialization failed: %s: %s (code %d)\n",
+        operation, cudaGetErrorString(status), int(status));
+    (void) cudaGetLastError();
+    return false;
+}
+
+// Failed CUDA creation may write a non-null invalid handle; publish only successful outputs.
+template<class Handle, class Create, class... Args>
+static bool create_resource(Handle & owned, const char * operation, Create create, Args... args) {
+    Handle candidate = nullptr;
+    if (!initialization_ok(create(&candidate, args...), operation)) return false;
+    owned = candidate;
+    return true;
+}
+
+struct feedback_storage {
     ggml_backend_buffer_t buffer = nullptr, host = nullptr;
     cudaEvent_t start = nullptr, end = nullptr;
     cudaStream_t readback = nullptr;
+    std::array<cudaEvent_t,ggml_kv_stream_feedback_slots::capacity> ready{};
+    // No queued work exists until a measurement view borrows these resources.
+    ~feedback_storage() {
+        for (auto event : ready) if (event) CUDA_CHECK(cudaEventDestroy(event));
+        if (readback) CUDA_CHECK(cudaStreamDestroy(readback));
+        if (start) CUDA_CHECK(cudaEventDestroy(start));
+        if (end) CUDA_CHECK(cudaEventDestroy(end));
+        ggml_backend_buffer_free(host); ggml_backend_buffer_free(buffer);
+    }
+};
+
+struct measurement {
+    std::shared_ptr<feedback_storage> storage;
+    ggml_backend_buffer_t buffer, host;
+    cudaEvent_t start, end;
+    cudaStream_t readback;
+    bool used = false;
     struct snapshot {
         cudaEvent_t ready = nullptr;
         ggml_kv_stream_copy_feedback value;
@@ -29,17 +64,15 @@ struct measurement {
     bool enabled = false;
     ggml_kv_stream_copy_feedback result;
     std::chrono::steady_clock::time_point begin;
-    explicit measurement(size_t slots) : uploads(slots) {}
+    measurement(size_t slots, std::shared_ptr<feedback_storage> storage) : storage(std::move(storage)),
+        buffer(this->storage->buffer), host(this->storage->host), start(this->storage->start),
+        end(this->storage->end), readback(this->storage->readback), uploads(slots) {
+        for (size_t i = 0; i < snapshots.size(); ++i) snapshots[i].ready = this->storage->ready[i];
+    }
     static constexpr size_t counters = 5, readback_counters = 4;
     // The queue drains and selects its device before these diagnostic resources are destroyed.
     ~measurement() {
-        if (readback) CUDA_CHECK(cudaStreamSynchronize(readback));
-        for (auto & snapshot : snapshots) if (snapshot.ready) CUDA_CHECK(cudaEventDestroy(snapshot.ready));
-        if (readback) CUDA_CHECK(cudaStreamDestroy(readback));
-        if (start) CUDA_CHECK(cudaEventDestroy(start));
-        if (end) CUDA_CHECK(cudaEventDestroy(end));
-        ggml_backend_buffer_free(host);
-        ggml_backend_buffer_free(buffer);
+        if (used) CUDA_CHECK(cudaStreamSynchronize(readback));
     }
     uint64_t * data() const { return static_cast<uint64_t *>(ggml_backend_buffer_get_base(buffer)); }
     uint64_t * active_data() const { return data()+slots.current()*(uploads.size()+counters); }
@@ -84,7 +117,29 @@ static __global__ void finish_layer_sample(uint64_t * flags, size_t counters) {
 }
 
 
+struct copy_resources {
+    ggml_backend_cuda_context * context;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t producer = nullptr;
+    std::vector<cudaEvent_t> ready, consumed;
+    std::shared_ptr<feedback_storage> feedback;
+    void * owner = nullptr;
+    bool prepared;
+    copy_resources(ggml_backend_cuda_context * context, size_t slots, bool prepared) :
+        context(context), ready(slots), consumed(slots), prepared(prepared) {}
+    // Queues retire all pointer users before releasing their final shared bank reference.
+    ~copy_resources() {
+        ggml_cuda_set_device(context->device);
+        feedback.reset();
+        for (auto event : ready) if (event) CUDA_CHECK(cudaEventDestroy(event));
+        for (auto event : consumed) if (event) CUDA_CHECK(cudaEventDestroy(event));
+        if (producer) CUDA_CHECK(cudaEventDestroy(producer));
+        if (stream) CUDA_CHECK(cudaStreamDestroy(stream));
+    }
+};
+
 struct copy_queue {
+    std::shared_ptr<copy_resources> resources;
     ggml_backend_cuda_context * context;
     ggml_backend_buffer_t device = nullptr, host = nullptr;
     ggml_kv_stream_layout page, ring;
@@ -97,68 +152,118 @@ struct copy_queue {
     static constexpr size_t no_fence = SIZE_MAX;
     std::vector<size_t> ready_owner,consumed_owner,ready_refs,consumed_refs;
     std::unique_ptr<measurement> timing;
+    bool initialized = false;
     copy_queue(ggml_backend_cuda_context * context, size_t slots) : context(context),state(slots),
         ready(slots),consumed(slots),completed(slots,false),ready_owner(slots,no_fence),
         consumed_owner(slots,no_fence),ready_refs(slots),consumed_refs(slots) {}
     // Retire all pointer users before destroying events or releasing pinned/device backing.
     ~copy_queue() {
         ggml_cuda_set_device(context->device);
-        if (stream) { CUDA_CHECK(cudaStreamSynchronize(stream)); CUDA_CHECK(cudaStreamSynchronize(context->stream())); }
+        if (initialized) {
+            if (!resources->prepared || resources->owner == this) CUDA_CHECK(cudaStreamSynchronize(stream));
+            // Backing may also have direct tensor users that never entered this copy queue.
+            CUDA_CHECK(cudaStreamSynchronize(context->stream()));
+        }
         timing.reset();
-        for (auto e : ready) if (e) CUDA_CHECK(cudaEventDestroy(e));
-        for (auto e : consumed) if (e) CUDA_CHECK(cudaEventDestroy(e));
-        if (producer) CUDA_CHECK(cudaEventDestroy(producer));
-        if (stream) CUDA_CHECK(cudaStreamDestroy(stream));
+        if (resources && resources->owner == this) resources->owner = nullptr;
         ggml_backend_buffer_free(host); ggml_backend_buffer_free(device);
     }
 };
 
 // Allocate O(ring slots) diagnostics through the explicit device-local buffer type, never the KV region.
+static std::shared_ptr<feedback_storage> make_feedback(ggml_backend_cuda_context * context, size_t slots) {
+    try {
+        if (slots > SIZE_MAX/(sizeof(uint64_t)*ggml_kv_stream_feedback_slots::capacity)-
+                measurement::counters) return {};
+        auto m = std::make_shared<feedback_storage>();
+        // Lazy kernel loading can synchronize the context. Resolve kernels before any producer/consumer gate.
+        cudaFuncAttributes attributes;
+        if (!initialization_ok(cudaFuncGetAttributes(&attributes,publish_ready),"cudaFuncGetAttributes(publish_ready)") ||
+                !initialization_ok(cudaFuncGetAttributes(&attributes,sample_deadline),"cudaFuncGetAttributes(sample_deadline)") ||
+                !initialization_ok(cudaFuncGetAttributes(&attributes,sample_layer_range),"cudaFuncGetAttributes(sample_layer_range)") ||
+                !initialization_ok(cudaFuncGetAttributes(&attributes,finish_layer_sample),"cudaFuncGetAttributes(finish_layer_sample)")) return {};
+        m->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_device_buffer_type(context->device),
+            (slots+measurement::counters)*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
+        m->host = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_host_buffer_type(),
+            measurement::readback_counters*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
+        if (!m->buffer || !m->host) {
+            GGML_LOG_ERROR("CUDA KV copy feedback %s allocation failed\n", m->buffer ? "host" : "device");
+            return {};
+        }
+        cudaPointerAttributes host_attributes{};
+        if (!initialization_ok(cudaPointerGetAttributes(&host_attributes,ggml_backend_buffer_get_base(m->host)),
+                "cudaPointerGetAttributes(feedback host)")) return {};
+        if (host_attributes.type != cudaMemoryTypeHost) {
+            GGML_LOG_ERROR("CUDA KV copy feedback requires pinned host storage\n"); return {};
+        }
+        if (!create_resource(m->readback,"cudaStreamCreateWithFlags(feedback)",cudaStreamCreateWithFlags,cudaStreamNonBlocking)) return {};
+        for (auto & event : m->ready) if (!create_resource(event,
+                "cudaEventCreateWithFlags(feedback ready)",cudaEventCreateWithFlags,cudaEventDisableTiming)) return {};
+        if (!create_resource(m->start,"cudaEventCreate(feedback start)",[](cudaEvent_t * event) { return cudaEventCreate(event); }) ||
+                !create_resource(m->end,"cudaEventCreate(feedback end)",[](cudaEvent_t * event) { return cudaEventCreate(event); })) return {};
+        return m;
+    } catch (const std::bad_alloc &) {
+        GGML_LOG_ERROR("CUDA KV copy feedback host metadata allocation failed\n"); return {};
+    }
+}
+
+// Prepared banks never allocate feedback storage or native handles after admission.
 static bool measure(void * handle, bool enable) {
     if (!handle) return false;
     auto & q = *static_cast<copy_queue *>(handle);
     if (q.state.running()) return false;
     ggml_cuda_set_device(q.context->device);
-    if (!enable) { q.timing.reset(); return true; }
-    // Reconfiguration is an idle boundary and may retire outstanding diagnostic storage.
     q.timing.reset();
-    if (enable && !q.timing) {
-        try {
-            const size_t slots = q.ready.size();
-            if (slots > SIZE_MAX/(sizeof(uint64_t)*ggml_kv_stream_feedback_slots::capacity)-
-                    measurement::counters) return false;
-            auto m = std::make_unique<measurement>(slots);
-            // Lazy kernel loading can synchronize the context. Resolve kernels before any producer/consumer gate.
-            cudaFuncAttributes attributes;
-            if (cudaFuncGetAttributes(&attributes,publish_ready) != cudaSuccess ||
-                    cudaFuncGetAttributes(&attributes,sample_deadline) != cudaSuccess ||
-                    cudaFuncGetAttributes(&attributes,sample_layer_range) != cudaSuccess ||
-                    cudaFuncGetAttributes(&attributes,finish_layer_sample) != cudaSuccess) {
-                (void) cudaGetLastError(); return false;
-            }
-            m->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_device_buffer_type(q.context->device),
-                (slots+measurement::counters)*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
-            m->host = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_host_buffer_type(),
-                measurement::readback_counters*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
-            if (!m->buffer || !m->host) return false;
-            cudaPointerAttributes host_attributes{};
-            if (cudaPointerGetAttributes(&host_attributes,ggml_backend_buffer_get_base(m->host)) != cudaSuccess ||
-                    host_attributes.type != cudaMemoryTypeHost) { (void) cudaGetLastError(); return false; }
-            if (cudaStreamCreateWithFlags(&m->readback,cudaStreamNonBlocking) != cudaSuccess) {
-                (void) cudaGetLastError(); return false;
-            }
-            for (auto & snapshot : m->snapshots) if (cudaEventCreateWithFlags(&snapshot.ready,cudaEventDisableTiming) != cudaSuccess) {
-                (void) cudaGetLastError(); return false;
-            }
-            if (cudaEventCreate(&m->start) != cudaSuccess || cudaEventCreate(&m->end) != cudaSuccess) {
-                (void) cudaGetLastError(); return false;
-            }
-            q.timing = std::move(m);
-        } catch (const std::bad_alloc &) { return false; }
+    if (!enable) {
+        if (!q.resources->prepared) q.resources->feedback.reset();
+        return true;
     }
+    auto storage = q.resources->feedback;
+    if (!storage) {
+        if (q.resources->prepared) return false;
+        storage = make_feedback(q.context, q.ready.size());
+        if (!storage) return false;
+    }
+    try { q.timing = std::make_unique<measurement>(q.ready.size(), std::move(storage)); }
+    catch (const std::bad_alloc &) { return false; }
     if (q.timing) { q.timing->enabled = enable; q.timing->result = {}; }
     return true;
 }
+
+// Reserve the maximum native capacity once; the bank contains no KV pointers or arena leases.
+static std::shared_ptr<copy_resources> make_resources(ggml_backend_cuda_context * context, size_t slots, bool feedback, bool prepared) {
+    if (!slots || slots > SIZE_MAX/(8*sizeof(size_t))) return {};
+    ggml_cuda_set_device(context->device);
+    try {
+        if (prepared && !context->streams[context->device][context->curr_stream_no] &&
+                !create_resource(context->streams[context->device][context->curr_stream_no],
+                    "cudaStreamCreateWithFlags(backend producer)",cudaStreamCreateWithFlags,cudaStreamNonBlocking)) return {};
+        auto resources = std::make_shared<copy_resources>(context, slots, prepared);
+        if (!create_resource(resources->stream,"cudaStreamCreateWithFlags(copy)",cudaStreamCreateWithFlags,cudaStreamNonBlocking) ||
+                !create_resource(resources->producer,"cudaEventCreateWithFlags(producer)",cudaEventCreateWithFlags,cudaEventDisableTiming)) return {};
+        for (size_t i = 0; i < slots; ++i) {
+            if (!create_resource(resources->ready[i],"cudaEventCreateWithFlags(ready)",cudaEventCreateWithFlags,cudaEventDisableTiming) ||
+                    !create_resource(resources->consumed[i],"cudaEventCreateWithFlags(consumed)",cudaEventCreateWithFlags,cudaEventDisableTiming)) return {};
+        }
+        if (feedback) {
+            resources->feedback = make_feedback(context, slots);
+            if (!resources->feedback) return {};
+        }
+        return resources;
+    } catch (const std::bad_alloc &) { GGML_LOG_ERROR("CUDA KV copy resource host allocation failed\n"); return {}; }
+}
+
+// Return an independent owner; borrowing queues keep its native bank alive after owner release.
+static void * prepare(ggml_backend_t backend, size_t slots, bool feedback) {
+    if (!backend || !ggml_backend_is_cuda(backend)) return nullptr;
+    auto resources = make_resources(static_cast<ggml_backend_cuda_context *>(backend->context), slots, feedback, true);
+    if (!resources) return nullptr;
+    try { return new std::shared_ptr<copy_resources>(std::move(resources)); }
+    catch (const std::bad_alloc &) { return nullptr; }
+}
+
+// Drop only this owner's reference; do not retire live borrowing queues.
+static void free_prepared(void * prepared) { delete static_cast<std::shared_ptr<copy_resources> *>(prepared); }
 
 // Source spans must remain inside the retained pinned allocation; zero or wrapping ranges are invalid.
 static bool source_range(const copy_queue & q, const void * pointer, size_t bytes) {
@@ -168,11 +273,12 @@ static bool source_range(const copy_queue & q, const void * pointer, size_t byte
 }
 
 // Allocate only stream/event bookkeeping. KV bytes already belong to the caller's device and host buffers.
-static void * create(ggml_backend_t backend, ggml_backend_buffer_t device, ggml_backend_buffer_t host,
-        const ggml_kv_stream_shape & shape, size_t slots) {
+static void * create_queue(ggml_backend_t backend, ggml_backend_buffer_t device, ggml_backend_buffer_t host,
+        const ggml_kv_stream_shape & shape, size_t slots, std::shared_ptr<copy_resources> resources) {
     if (!backend || !ggml_backend_is_cuda(backend) || !device || !host || !slots || shape.page_tokens <= 0 ||
             uint64_t(shape.page_tokens) > SIZE_MAX || slots > SIZE_MAX/size_t(shape.page_tokens) || !ggml_backend_buffer_is_host(host)) return nullptr;
     auto * ctx = static_cast<ggml_backend_cuda_context *>(backend->context);
+    if (resources && (resources->context != ctx || slots > resources->ready.size())) return nullptr;
     if (ggml_backend_buffer_get_type(device) != ggml_backend_cuda_device_buffer_type(ctx->device)) return nullptr;
     ggml_kv_stream_layout page, ring;
     if (ggml_kv_stream_layout_make(shape,size_t(shape.page_tokens),page).status != ggml_kv_stream_status::success ||
@@ -183,26 +289,40 @@ static void * create(ggml_backend_t backend, ggml_backend_buffer_t device, ggml_
     if (!base || base%shape.alignment || base > UINTPTR_MAX-ring.bytes) return nullptr;
     ggml_cuda_set_device(ctx->device);
     cudaPointerAttributes attributes = {};
-    if (cudaPointerGetAttributes(&attributes,ggml_backend_buffer_get_base(host)) != cudaSuccess) {
-        (void) cudaGetLastError(); return nullptr;
+    if (!initialization_ok(cudaPointerGetAttributes(&attributes,ggml_backend_buffer_get_base(host)),
+            "cudaPointerGetAttributes(copy host)")) return nullptr;
+    if (attributes.type != cudaMemoryTypeHost) {
+        GGML_LOG_ERROR("CUDA KV copy requires pinned host storage\n"); return nullptr;
     }
-    if (attributes.type != cudaMemoryTypeHost) return nullptr;
     try {
+        if (!resources) resources = make_resources(ctx, slots, false, false);
+        if (!resources) return nullptr;
         auto q = std::make_unique<copy_queue>(ctx,slots);
+        q->resources = std::move(resources);
         q->page = page; q->ring = ring;
         q->device = ggml_backend_buffer_retain(device); q->host = ggml_backend_buffer_retain(host);
-        if (cudaStreamCreateWithFlags(&q->stream,cudaStreamNonBlocking) != cudaSuccess ||
-                cudaEventCreateWithFlags(&q->producer,cudaEventDisableTiming) != cudaSuccess) {
-            (void) cudaGetLastError(); return nullptr;
-        }
+        q->stream = q->resources->stream; q->producer = q->resources->producer;
         for (size_t i = 0; i < slots; ++i) {
-            if (cudaEventCreateWithFlags(&q->ready[i],cudaEventDisableTiming) != cudaSuccess ||
-                    cudaEventCreateWithFlags(&q->consumed[i],cudaEventDisableTiming) != cudaSuccess) {
-                (void) cudaGetLastError(); return nullptr;
-            }
+            q->ready[i] = q->resources->ready[i]; q->consumed[i] = q->resources->consumed[i];
         }
+        q->initialized = true;
         return q.release();
-    } catch (const std::bad_alloc &) { return nullptr; }
+    } catch (const std::bad_alloc &) {
+        GGML_LOG_ERROR("CUDA KV copy host metadata allocation failed\n"); return nullptr;
+    }
+}
+
+// Preserve direct callers that have not supplied a prepared bank.
+static void * create(ggml_backend_t backend, ggml_backend_buffer_t device, ggml_backend_buffer_t host,
+        const ggml_kv_stream_shape & shape, size_t slots) {
+    return create_queue(backend, device, host, shape, slots, {});
+}
+
+// Validate new KV views against retained native capacity without allocating driver resources.
+static void * create_prepared(ggml_backend_t backend, void * prepared, ggml_backend_buffer_t device,
+        ggml_backend_buffer_t host, const ggml_kv_stream_shape & shape, size_t slots) {
+    if (!prepared) return nullptr;
+    return create_queue(backend, device, host, shape, slots, *static_cast<std::shared_ptr<copy_resources> *>(prepared));
 }
 
 // Extend a running copy window with work published after its original begin fence.
@@ -226,7 +346,8 @@ static bool begin_with_feedback(void * handle, bool eligible) {
     ggml_cuda_set_device(q.context->device);
     cudaStreamCaptureStatus status;
     CUDA_CHECK(cudaStreamIsCapturing(q.context->stream(),&status));
-    if (status != cudaStreamCaptureStatusNone || !q.state.begin()) return false;
+    if (status != cudaStreamCaptureStatusNone || (q.resources->owner && q.resources->owner != &q) || !q.state.begin()) return false;
+    q.resources->owner = &q;
     q.statistics = {};
     if (q.timing && q.timing->enabled) {
         auto & m = *q.timing;
@@ -235,6 +356,7 @@ static bool begin_with_feedback(void * handle, bool eligible) {
         m.begin = std::chrono::steady_clock::now();
         m.result.instrumentation_bytes = ggml_backend_buffer_get_size(m.buffer);
         if (m.active()) {
+            m.used = true;
             // One clear per window, without touching a previous bank whose readback may still be pending.
             CUDA_CHECK(cudaMemsetAsync(m.active_data(),0,(q.ready.size()+measurement::counters)*sizeof(uint64_t),q.context->stream()));
         }
@@ -531,7 +653,7 @@ static void destroy(void * handle) { delete static_cast<copy_queue *>(handle); }
 
 // Expose the CUDA adapter through an opaque, backend-neutral ownership contract.
 const ggml_kv_stream_copy_ops * ggml_cuda_kv_stream_copy_ops() {
-    static const ggml_kv_stream_copy_ops ops{10,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed,measure,acquire_span,feedback,feedback_id,poll_feedback,begin_with_feedback,enqueue_span_with_feedback,fence_producer,probe_layer,release_span};
+    static const ggml_kv_stream_copy_ops ops{11,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed,measure,acquire_span,feedback,feedback_id,poll_feedback,begin_with_feedback,enqueue_span_with_feedback,fence_producer,probe_layer,release_span,prepare,free_prepared,create_prepared};
     return &ops;
 }
 #endif

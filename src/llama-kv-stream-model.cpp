@@ -70,6 +70,8 @@ struct llama_kv_stream_model::implementation {
     size_t decode_bytes = 0;
     size_t span_bytes = 0;
     std::array<model_lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
+    std::shared_ptr<void> prepared_copies;
+    size_t prepared_copy_capacity = 0;
     std::unique_ptr<llama_kv_stream_session> session;
     const ggml_tensor * pending_k = nullptr;
     ggml_backend_buffer_ptr pending_owner;
@@ -118,10 +120,38 @@ struct llama_kv_stream_model::implementation {
         session_config.prefill_stage = prefill_id;
         session_config.decode_stage = decode_id;
         session_config.suspend_stage = suspend_id;
+        session_config.prepared_copies = prepared_copies;
         auto next = llama_kv_stream_session::create(
             config.backend,content,session_config,grants[0].get(),grants[1].get(),grants[2].get());
         if (next && suspended_tokens && !next->restore(suspended_tokens)) return {};
         return next;
+    }
+
+    // Final shared grants may exceed a bootstrap pool; grow only at an unbound admission boundary.
+    bool prepare_copies(size_t budget) {
+        const auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(config.backend)),"ggml_backend_kv_stream_copy_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (!ops || ops->version < 11) return !prepared_copies;
+        ggml_kv_stream_layout page;
+        if (!ops->prepare || !ops->free_prepared || !ops->create_prepared ||
+                ggml_kv_stream_layout_make(config.host.shape,size_t(config.host.shape.page_tokens),page).status !=
+                    ggml_kv_stream_status::success || !page.bytes || budget < page.bytes) return false;
+        const size_t capacity = budget/page.bytes;
+        if (prepared_copies && capacity <= prepared_copy_capacity) return true;
+        if (session) return false;
+        prepared_copies.reset(); prepared_copy_capacity = 0;
+        void * resources = ops->prepare(config.backend,capacity,config.measure);
+        if (!resources) {
+            LLAMA_LOG_ERROR("%s: KV copy-resource preflight failed: capacity=%zu slots, budget=%zu bytes\n",
+                __func__,capacity,budget);
+            return false;
+        }
+        prepared_copies = std::shared_ptr<void>(resources,ops->free_prepared);
+        prepared_copy_capacity = capacity;
+        LLAMA_LOG_INFO("%s: KV copy-resource preflight reserved capacity=%zu slots for budget=%zu bytes\n",
+            __func__,capacity,budget);
+        return true;
     }
 
     bool make_session() {
@@ -164,6 +194,7 @@ struct llama_kv_stream_model::implementation {
     }
 
     bool allocate_private() {
+        if (!prepare_copies(config.shared_device_memory_bytes ? config.shared_device_memory_bytes : config.pool_bytes)) return false;
         if (session || arena || attention_arena || leases[0] || leases[1] || leases[2]) return false;
         auto * type = llama_kv_stream_device_buffer_type(ggml_backend_get_device(config.backend));
         if (!type) return false;
@@ -436,6 +467,8 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
                 s->decode_bytes=std::max(s->decode_bytes,mma_bytes);
             }
         }
+        // No legal ring can exceed the entire configured device budget in encoded pages.
+        if (!s->prepare_copies(config.shared_device_memory_bytes ? config.shared_device_memory_bytes : config.pool_bytes)) return {};
         if (!s->allocate_private()) { LLAMA_LOG_ERROR("%s: device KV grant allocation/binding failed\n",__func__); return {}; }
         const ggml_backend_execution_ops ops{
             [](void * p,const ggml_tensor * t) { return (*static_cast<std::shared_ptr<implementation> *>(p))->supports(t); },
@@ -754,7 +787,19 @@ bool llama_kv_stream_model::memory_requirements(
         impl->decode_bytes,
         std::max(size_t(128),ggml_backend_buft_get_alignment(type)),
         impl->config.shared_device_memory_bytes,
+        impl->config.pool_bytes,
     };
+    if (impl->auxiliary_cache) {
+        ggml_kv_stream_execution page;
+        const auto & shape = impl->physical_policy.shape;
+        if (ggml_kv_stream_resolve(shape,impl->physical_policy.capabilities,
+                size_t(shape.page_tokens),page).status != ggml_kv_stream_status::success) return false;
+        const size_t tokens = impl->config.host.context_tokens;
+        const size_t pages = tokens/size_t(shape.page_tokens) + (tokens%size_t(shape.page_tokens) != 0);
+        if (!page.storage.bytes || pages > (SIZE_MAX-page.conversion.bytes)/page.storage.bytes) return false;
+        output.pool_decode_min_bytes = std::max(output.pool_bytes,
+            pages*page.storage.bytes+page.conversion.bytes);
+    }
     return true;
 }
 
@@ -837,6 +882,7 @@ bool llama_kv_stream_model::attach_shared_memory(
         retained[i].reset(ggml_backend_memory_lease_retain(supplied[i]));
         if (!retained[i]) return false;
     }
+    if (!s.prepare_copies(parent_bytes)) return false;
     auto candidate = s.create_session(
         retained,binding.pool_resource,binding.writer_resource,binding.attention_resource,
         binding.prefill_stage,binding.decode_stage,binding.suspend_stage);

@@ -7,6 +7,7 @@ constexpr llama_memory_domain_id device_domain = 17;
 constexpr llama_memory_resource_id pool_resource = 9;
 constexpr llama_memory_stage_id prefill_stage = 81;
 constexpr llama_memory_stage_id decode_stage = 82;
+bool prepared_queues = false;
 
 llama_memory_transition_target target_for(fixture & f, size_t bytes, bool decode) {
     auto * parent = ggml_backend_memory_arena_parent(f.arena.get());
@@ -31,6 +32,17 @@ std::unique_ptr<llama_kv_stream_session> make_session(
     config.pool_resource = pool_resource;
     config.prefill_stage = prefill_stage;
     config.decode_stage = decode_stage;
+    if (prepared_queues) {
+        auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(f.backend)), "ggml_backend_kv_stream_copy_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (!ops || ops->version < 11) return {};
+        ggml_kv_stream_layout page;
+        GGML_ASSERT(ggml_kv_stream_layout_make(f.policy.shape, 256, page).status == ggml_kv_stream_status::success);
+        void * prepared = ops->prepare(f.backend, ggml_backend_memory_arena_capacity(f.arena.get())/page.bytes, false);
+        if (!prepared) return {};
+        config.prepared_copies = std::shared_ptr<void>(prepared, ops->free_prepared);
+    }
     return llama_kv_stream_session::create(
         f.backend, f.content, config, f.lease.get(), writer.lease.get(), partial.lease.get());
 }
@@ -158,19 +170,26 @@ struct transition_inputs {
 bool generate_next(testing & t, fixture & f, llama_kv_stream_session & session) {
     transition_inputs input(f.backend, 1);
     block_inputs attn(f, 514, 1);
+    std::vector<std::vector<float>> outputs;
     if (!t.assert_true(session.begin(514, 1, true))) return false;
     for (uint32_t layer = 0; layer < f.policy.layers; ++layer) {
         if (!t.assert_true(session.produce(layer, input.k, input.v)) ||
                 !t.assert_true(session.attention(layer, attn.q, attn.mask, attn.output, 1.0f/16))) return false;
-        close_values(t, oracle(f, layer, 514, 1, attn.qdata), attn.read(), 1e-3f);
+        // Intermediate attention queues GPU work; host KV publishes only after the complete append.
+        ggml_backend_synchronize(f.backend);
+        outputs.push_back(attn.read());
     }
-    return t.assert_equal(size_t(514), session.tokens());
+    if (!t.assert_equal(size_t(514), session.tokens())) return false;
+    for (uint32_t layer = 0; layer < f.policy.layers; ++layer)
+        close_values(t, oracle(f, layer, 514, 1, attn.qdata), outputs[layer], 1e-3f);
+    return true;
 }
 
 } // namespace
 
 int main(int argc, char ** argv) {
     const bool cuda = argc > 1 && !std::strcmp(argv[1], "--cuda");
+    prepared_queues = cuda && argc == 3 && !std::strcmp(argv[2], "--prepared");
     ggml_backend_ptr backend;
     if (cuda) {
         ggml_backend_load_all();

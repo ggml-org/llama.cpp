@@ -241,6 +241,7 @@ int main(int argc,char ** argv) {
     const bool cancel_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-cancel") == 0;
     const bool lease_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-lease") == 0;
     const bool admission_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-admission") == 0;
+    const bool phase_admission_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-phase-admission") == 0;
     const bool wide_ubatch_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-wide-ubatch") == 0;
     const bool suspend_only = argc > 1 && std::strcmp(argv[1], "--cuda-suspend") == 0;
     const bool resume_only = argc > 1 && std::strcmp(argv[1], "--cuda-resume") == 0;
@@ -256,14 +257,15 @@ int main(int argc,char ** argv) {
     if (suspend_only) t.set_filter("shared_kv_suspension_releases_device_grants_without_changing_host");
     if (resume_only) t.set_filter("shared_kv_resume_acquires_fresh_phase_grants_and_keeps_host_identity");
     if (admission_only) t.set_filter("mtp_prefill_admission_demotes_resident_pages_before_population");
+    if (phase_admission_only) t.set_filter("mtp_decode_phase_.*");
     if (wide_ubatch_only) t.set_filter("mtp_prefill_uses_configured_microbatch_rows");
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
-    if (argc < 2 || (!native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !phase_admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
-    ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
+    ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return phase_admission_only ? 77 : 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
     if (native_reduced) t.test("native_attention_reduced_build_rejects_mixed_pair_and_keeps_equal_pair", [&](testing & t) {
         fixture mixed(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
@@ -1569,6 +1571,146 @@ int main(int argc,char ** argv) {
         t.assert_true(model->release_mtp_layer());
         t.assert_true(!model->has_mtp_layer());
         t.assert_true(model->reset(false));
+    });
+    t.test("mtp_decode_phase_minimum_tracks_context_and_quant_geometry", [&](testing & t) {
+        for (const auto & pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q8_0},std::pair{GGML_TYPE_Q4_0,GGML_TYPE_Q4_0}}) {
+            fixture f(backend.get(),true,pair.first,pair.second,6145,false,2,2,7);
+            auto policy = f.policy;
+            policy.layers = 3;
+            size_t minimum = 0;
+            if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(policy,minimum).status == llama_kv_stream_policy_status::success)) return;
+            ggml_kv_stream_execution page;
+            if (!t.assert_true(ggml_kv_stream_resolve(policy.shape,policy.capabilities,256,page).status == ggml_kv_stream_status::success)) return;
+            for (uint32_t auxiliary : {0u,1u}) {
+                llama_kv_stream_model_config config{backend.get(),f.host->config(),minimum,4,4};
+                config.auxiliary_cache_layers = auxiliary;
+                config.shared_device_memory_bytes = 48*1048576;
+                auto model = llama_kv_stream_model::create(config);
+                if (!t.assert_true(bool(model))) return;
+                llama_kv_stream_memory_requirements requirements;
+                if (!t.assert_true(model->memory_requirements(requirements))) return;
+                t.assert_equal(auxiliary ? 25*page.storage.bytes+page.conversion.bytes : minimum,
+                    requirements.pool_decode_min_bytes);
+                t.assert_equal(minimum,requirements.pool_bytes);
+            }
+        }
+    });
+    t.test("mtp_decode_phase_preflight_accepts_exact_arena_and_rejects_one_byte_short", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,1025,false,2,2,7);
+        auto policy = f.policy;
+        policy.layers = 3;
+        size_t minimum = 0;
+        if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(policy,minimum).status == llama_kv_stream_policy_status::success)) return;
+        llama_kv_stream_model_config config{backend.get(),f.host->config(),minimum,4,4};
+        config.auxiliary_cache_layers = 1;
+        auto measured = llama_kv_stream_model::create(config);
+        llama_kv_stream_memory_requirements requirements;
+        if (!t.assert_true(measured && measured->memory_requirements(requirements))) return;
+        auto * type = requirements.buffer_type;
+        const size_t alignment = ggml_backend_buft_get_alignment(type);
+        auto align = [&](size_t bytes) { return (bytes+alignment-1)/alignment*alignment; };
+        const size_t compute = 1048576;
+        const size_t initial = compute+align(std::max(requirements.attention_prefill_bytes,requirements.attention_decode_bytes))+
+            align(requirements.writer_bytes)+requirements.pool_bytes;
+        const size_t decode = compute+align(requirements.attention_decode_bytes)+
+            align(requirements.writer_bytes)+requirements.pool_decode_min_bytes;
+        const size_t exact = std::max(initial,decode);
+        measured.reset();
+        std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+        std::vector<ggml_backend_buffer_type_t> types{type,ggml_backend_cpu_buffer_type()};
+        llama_compute_workspace_plan plan;
+        plan.groups = {{type,compute,alignment,0}};
+        plan.phase_sizes = {{compute},{compute}};
+        for (size_t bytes : {exact-1,exact}) {
+            config.shared_device_memory_bytes = bytes;
+            auto model = llama_kv_stream_model::create(config);
+            if (!t.assert_true(bool(model))) return;
+            ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(),types.data(),2,256,false,true));
+            auto owner = llama_context_memory::create(sched.get(),backends,plan,model.get());
+            if (!t.assert_true(bool(owner) == (bytes == exact))) return;
+            if (owner) {
+                t.assert_equal(bytes,owner->shared_parent_capacity());
+                t.assert_true(owner->prepare_serial_decode());
+                t.assert_true(model->pool_grant_bytes() >= requirements.pool_decode_min_bytes);
+            }
+        }
+    });
+    t.test("mtp_decode_phase_admission_reclaims_prefill_before_the_lease", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,6145,false,2,2,7);
+        auto policy = f.policy;
+        policy.layers = 3;
+        size_t minimum = 0;
+        if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(policy,minimum).status == llama_kv_stream_policy_status::success)) return;
+        llama_kv_stream_model_config config{backend.get(),f.host->config(),minimum,4,4};
+        config.auxiliary_cache_layers = 1;
+        config.shared_device_memory_bytes = 48*1048576;
+        auto model = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto * type = llama_kv_stream_device_buffer_type(dev);
+        std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+        std::vector<ggml_backend_buffer_type_t> types{type,ggml_backend_cpu_buffer_type()};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(),types.data(),2,256,false,true));
+        llama_compute_workspace_plan plan;
+        plan.groups = {{type,40*1048576,ggml_backend_buft_get_alignment(type),0}};
+        plan.phase_sizes = {{40*1048576},{1048576}};
+        auto owner = llama_context_memory::create(sched.get(),backends,plan,model.get());
+        if (!t.assert_true(bool(owner))) return;
+        ggml_backend_ptr draft_backend(ggml_backend_dev_init(dev,nullptr)), draft_cpu(ggml_backend_cpu_init());
+        std::vector<ggml_backend_t> draft_backends{draft_backend.get(),draft_cpu.get()};
+        ggml_backend_sched_ptr draft_sched(ggml_backend_sched_new(draft_backends.data(),types.data(),2,256,false,true));
+        auto draft = llama_context_memory::create(draft_sched.get(),draft_backends,plan,nullptr,owner.get());
+        if (!t.assert_true(bool(draft))) return;
+        t.assert_true(!draft->prepare_serial_decode());
+        auto cache = model->auxiliary_cache();
+        llama_kv_stream_host_layer source;
+        if (!t.assert_true(cache && f.host->layer(0,source))) return;
+        const auto & layout = cache->host()->layout();
+        llama_kv_stream_write write;
+        if (!t.assert_true(cache->begin(5120) && cache->content()->prepare({
+                {0,ggml_kv_stream_operand::k,0,source.k,5120*layout.k_token_bytes},
+                {0,ggml_kv_stream_operand::v,0,source.v,5120*layout.v_token_bytes}},write) &&
+                cache->publish_host(write) && cache->finish())) return;
+        ggml_backend_buffer_clear(model->buffer(),0);
+        if (!t.assert_true(model->restore(5121))) return;
+        const auto host_generation = cache->identity().generation;
+        const auto parent = owner->shared_parent();
+        for (size_t round = 0; round < 2; ++round) {
+            if (!t.assert_true(owner->prepare_serial_target())) return;
+            const auto signalled = owner->signal_text_phase({llama_memory_text_phase::prefill,4,true,true,false});
+            if (!t.assert_true(signalled.status == llama_memory_text_phase_status::changed ||
+                    signalled.status == llama_memory_text_phase_status::unchanged)) return;
+            t.assert_true(model->pool_grant_bytes() < 21*256*(layout.k_token_bytes+layout.v_token_bytes));
+            t.assert_true(!model->acquire_mtp_layer(4) && model->complete());
+            if (round == 0) {
+                parent_view_fault fault(parent,1);
+                t.assert_true(!owner->prepare_serial_decode());
+                t.assert_true(fault.calls > 0 && owner->valid() && model->complete());
+                t.assert_true(!model->has_mtp_layer());
+                t.assert_equal(size_t(5121),model->tokens());
+                t.assert_equal(host_generation,cache->identity().generation);
+            }
+            // A completed short target batch still leaves its coordinator in the prefill phase.
+            if (!t.assert_true(owner->prepare_serial_decode())) return;
+            t.assert_true(owner->shared_parent() == parent);
+            t.assert_true(owner->text_phase().phase == llama_memory_text_phase::decode);
+            t.assert_equal(size_t(5121),model->tokens());
+            t.assert_equal(host_generation,cache->identity().generation);
+            if (!t.assert_true(model->acquire_mtp_layer(4))) return;
+            const auto * retained = model->mtp_layer_plan(1);
+            const auto revision = model->binding_view().revision;
+            const auto transitions = owner->phase_transition_count();
+            if (!t.assert_true(draft->prepare_serial_draft(llama_memory_text_phase::decode))) return;
+            t.assert_true(owner->prepare_serial_decode());
+            t.assert_true(model->has_mtp_layer() && retained == model->mtp_layer_plan(1));
+            t.assert_equal(revision,model->binding_view().revision);
+            t.assert_equal(transitions,owner->phase_transition_count());
+            t.assert_true(draft->serial_ready());
+            t.assert_true(model->release_mtp_layer());
+        }
+        t.assert_true(owner->prepare_serial_target() && owner->suspend_kv());
+        t.assert_true(!owner->prepare_serial_decode());
+        t.assert_true(owner->resume_kv(llama_memory_text_phase::prefill));
     });
     t.test("mtp_prefill_admission_demotes_resident_pages_before_population", [&](testing & t) {
         fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 6145, false, 2, 2, 29);

@@ -38,7 +38,7 @@ public:
     // Optional validated placement selects an idle layout; no live repartition or policy publication occurs here.
     static std::unique_ptr<llama_kv_stream_resident> create(const llama_kv_stream_binding_view & binding,
             std::shared_ptr<llama_kv_stream_content> content, ggml_backend_t backend,
-            const llama_kv_stream_policy_state * placement = nullptr);
+            const llama_kv_stream_policy_state * placement = nullptr, std::shared_ptr<void> prepared_copies = {});
 
     // Drain prior backend work, then upload dirty rows into the fixed policy-derived resident planes.
     // Reject contexts that exceed resident capacity; this refresh copies encoded bytes without conversion or repartition.

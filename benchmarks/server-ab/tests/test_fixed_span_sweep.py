@@ -76,6 +76,119 @@ class MtpSweepTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not an OOM"):
             SWEEP.find_max_arena_mib(1024, broken_probe)
 
+    def test_auto_max_search_handles_a_bounded_feasible_interval(self):
+        for seed in (1, 979, 1024, 1200, 4096):
+            tried = []
+            def probe(arena_mib):
+                tried.append(arena_mib)
+                if arena_mib < 979:
+                    raise SWEEP.ArenaTooSmallError(979)
+                return arena_mib <= 1066
+            self.assertEqual(SWEEP.find_max_arena_mib(seed, probe), 1066)
+            self.assertIn(1067, tried)
+            self.assertEqual(len(tried), len(set(tried)))
+            self.assertLess(len(tried), 40)
+
+    def test_auto_max_search_does_not_skip_a_single_viable_mib(self):
+        for minimum in (1, 979, 1066, 2273):
+            for seed in (1, 1024, 4096):
+                def probe(arena_mib):
+                    if arena_mib < minimum:
+                        raise SWEEP.ArenaTooSmallError(minimum)
+                    return arena_mib == minimum
+                self.assertEqual(SWEEP.find_max_arena_mib(seed, probe), minimum)
+
+    def test_auto_max_search_reports_incompatible_lower_and_upper_bounds(self):
+        def probe(arena_mib):
+            if arena_mib < 100:
+                raise SWEEP.ArenaTooSmallError(100)
+            return False
+        with self.assertRaisesRegex(RuntimeError, "no allocatable arena"):
+            SWEEP.find_max_arena_mib(120, probe)
+
+    def test_bounded_search_matches_small_interval_oracle_with_optional_hints(self):
+        for minimum in range(1, 24):
+            for maximum in (minimum, minimum+1, minimum+9):
+                for seed in (1, minimum, maximum, 64):
+                    for hint in (0, minimum):
+                        tried = []
+                        def probe(arena_mib):
+                            tried.append(arena_mib)
+                            if arena_mib < minimum:
+                                raise SWEEP.ArenaTooSmallError(hint)
+                            return arena_mib <= maximum
+                        self.assertEqual(SWEEP.find_max_arena_mib(seed, probe, upper_limit=64), maximum)
+                        self.assertEqual(len(tried), len(set(tried)))
+                        self.assertTrue(all(1 <= arena <= 64 for arena in tried))
+
+    def test_minimum_diagnostic_rounds_bytes_up_and_ignores_unrelated_errors(self):
+        self.assertEqual(SWEEP.arena_minimum_mib("shared arena quota insufficient: compute minimum=1048577 bytes"), 2)
+        self.assertEqual(SWEEP.arena_minimum_mib("shared arena quota insufficient for phase 1"), 0)
+        self.assertEqual(SWEEP.arena_minimum_mib(
+            "shared arena quota insufficient: required=1048576 bytes\n"
+            "shared arena quota insufficient: required=2097153 bytes"), 3)
+        self.assertIsNone(SWEEP.arena_minimum_mib("unsupported attention geometry: required=1048576 bytes"))
+
+    def test_auto_max_refinement_handles_a_higher_full_workload_minimum(self):
+        args = SimpleNamespace(arena_mib=128, auto_max_arena=True)
+        def fits(_args, _context, _mode, arena_mib, _logs, _url, _article, _cache, full_workload=False, result_cache=None):
+            minimum, maximum = (110, 113) if full_workload else (90, 120)
+            if arena_mib < minimum:
+                raise SWEEP.ArenaTooSmallError(minimum)
+            return arena_mib <= maximum
+        with patch.object(SWEEP, "probe_arena", side_effect=fits):
+            self.assertEqual(SWEEP.arena_for_point(args, 8192, 3, Path("/tmp/logs"), "http://localhost", "article", {}), 113)
+
+    def test_auto_max_refinement_does_not_search_above_fast_limit(self):
+        args = SimpleNamespace(arena_mib=128, auto_max_arena=True)
+        full_candidates = []
+        def fits(_args, _context, _mode, arena_mib, _logs, _url, _article, _cache, full_workload=False, result_cache=None):
+            if full_workload:
+                full_candidates.append(arena_mib)
+                raise SWEEP.ArenaTooSmallError(121)
+            return arena_mib <= 120
+        with patch.object(SWEEP, "probe_arena", side_effect=fits):
+            with self.assertRaisesRegex(RuntimeError, "no allocatable arena"):
+                SWEEP.arena_for_point(args, 8192, 3, Path("/tmp/logs"), "http://localhost", "article", {})
+        self.assertEqual(full_candidates, [120])
+
+    def test_probe_reports_required_arena_as_a_lower_bound(self):
+        args = SimpleNamespace(server=Path("/build/llama-server"), model=Path("/models/model.gguf"),
+                               batch_size=256, ubatch_size=256, arena_mib=960, port=1246, uvm=False)
+        class FakeProcess:
+            def poll(self):
+                return 1
+        with tempfile.TemporaryDirectory() as temp:
+            def popen(_command, *, stdout, **_kwargs):
+                stdout.write("create: shared arena quota insufficient for phase 1 resource 5: requested=1006632960 bytes, required=1026154752 bytes, additional=19521792 bytes\n")
+                stdout.flush()
+                return FakeProcess()
+            with patch.object(SWEEP.subprocess, "Popen", side_effect=popen), \
+                 patch.object(SWEEP, "wait_ready", side_effect=RuntimeError("server exited")), \
+                 patch.object(SWEEP, "stop_process") as stop:
+                with self.assertRaises(SWEEP.ArenaTooSmallError) as error:
+                    SWEEP.probe_arena(args, 155648, 3, 960, Path(temp), "http://localhost")
+                self.assertEqual(error.exception.minimum_mib, 979)
+                stop.assert_called_once()
+
+    def test_successful_probe_does_not_misclassify_a_handled_oom(self):
+        args = SimpleNamespace(server=Path("/build/llama-server"), model=Path("/models/model.gguf"),
+                               batch_size=256, ubatch_size=256, arena_mib=100, port=1246,
+                               uvm=False, decode_tokens=4)
+        class FakeProcess:
+            def poll(self):
+                return None
+        with tempfile.TemporaryDirectory() as temp:
+            def popen(_command, *, stdout, **_kwargs):
+                stdout.write("CUDA graph instantiation: out of memory; using eager execution\n")
+                stdout.flush()
+                return FakeProcess()
+            with patch.object(SWEEP.subprocess, "Popen", side_effect=popen), \
+                 patch.object(SWEEP, "wait_ready"), \
+                 patch.object(SWEEP, "stop_process"), \
+                 patch.object(SWEEP, "stream_completion", return_value={"timings": {"predicted_n": 4}}):
+                self.assertTrue(SWEEP.probe_arena(args, 8192, 0, 100, Path(temp), "http://localhost"))
+
     def test_auto_max_searches_each_mtp_mode_independently(self):
         args = SimpleNamespace(arena_mib=100, auto_max_arena=True)
         def fits(_args, _context, mtp_length, arena_mib, _logs, _url, *_extra):

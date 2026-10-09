@@ -254,6 +254,7 @@ int main(int argc, char ** argv) {
             return;
         }
         t.assert_true(!owner->suspend_kv() && !owner->kv_device_suspended());
+        t.assert_true(!owner->prepare_serial_decode());
         const auto bytes = ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get());
         auto result = owner->signal_text_phase({text_phase::prefill, 513, true, true, false});
         t.assert_true(result.status == phase_status::changed);
