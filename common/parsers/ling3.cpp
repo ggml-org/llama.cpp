@@ -80,7 +80,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
 
         // the effective parse input is generation_prompt + model output, so the
@@ -184,8 +184,6 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
         return opener + reasoning + content + tools + tail + end;
     });
-
-    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;

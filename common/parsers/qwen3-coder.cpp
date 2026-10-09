@@ -71,7 +71,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         });
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(GEN_PREFIX);
 
         auto reasoning = p.eps();
@@ -173,8 +173,6 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         // Content only parser
         return generation_prompt + (reasoning << p.content(p.rest()));
     });
-
-    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;

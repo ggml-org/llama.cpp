@@ -56,7 +56,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.prefix(GEN_PROMPT, THINK_START);
         auto end = p.end();
 
@@ -212,8 +212,6 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         auto content_before_tools = p.content(p.until(FC_START));
         return generation_prompt + reasoning + content_before_tools + tool_calls + end;
     });
-
-    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));

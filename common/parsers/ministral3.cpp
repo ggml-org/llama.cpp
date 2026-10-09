@@ -72,7 +72,7 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.eps();
         auto reasoning =
             extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
@@ -107,8 +107,6 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
         include_grammar = false;
         return generation_prompt + (reasoning << p.content(p.rest()));
     });
-
-    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;

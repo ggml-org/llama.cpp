@@ -68,7 +68,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start           = p.rule("start", p.literal("<|start|>assistant"));
         auto end             = p.rule("end", p.literal("<|end|>"));
         auto content         = p.rule("message-content", p.until("<|end|>"));
@@ -137,8 +137,6 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
 
         return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
     });
-
-    data.parser = std::move(parser);
 
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
