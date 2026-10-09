@@ -99,6 +99,12 @@ void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size) {
     }
 }
 
+bool llama_tensor_is_host_weight(const ggml_tensor * t) {
+    return t->buffer != nullptr &&
+        ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+        ggml_backend_buffer_is_host(t->buffer);
+}
+
 void replace_all(std::string & s, const std::string & search, const std::string & replace) {
     if (search.empty()) {
         return;

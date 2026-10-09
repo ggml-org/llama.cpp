@@ -1532,8 +1532,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
-                        // user inputs and host weights are uploaded in order on the stream of the split backend, so one copy is enough
-                        // the copy of a host weight is not kept for the whole graph, so the allocator can reuse its memory
+                        // user inputs and host weights are uploaded in order on the split backend stream, so one copy is enough
                         const bool host_weight = ggml_backend_sched_is_host_weight(src);
                         const bool single_copy = host_weight || ggml_backend_sched_is_user_input(src);
                         for (int c = 0; c < sched->n_copies; c++) {
@@ -1881,43 +1880,47 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
     }
 }
 
+// with pipeline parallelism, upload the user inputs of all the splits before submitting them, so a later split does not wait for the host
+static void ggml_backend_sched_upload_user_inputs(ggml_backend_sched_t sched) {
+    // the user writes the inputs of the next graph to the next host copy, so wait until its previous uploads are done
+    const int next_copy = (sched->cur_copy + 1) % sched->n_copies;
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->input_events[b][next_copy] != NULL) {
+            ggml_backend_event_synchronize(sched->input_events[b][next_copy]);
+        }
+    }
+    bool uploaded[GGML_SCHED_MAX_BACKENDS] = { false };
+    for (int split_id = 0; split_id < sched->n_splits; split_id++) {
+        struct ggml_backend_sched_split * split = &sched->splits[split_id];
+        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            struct ggml_tensor * input = split->inputs[input_id];
+            if (!ggml_backend_sched_is_user_input(input)) {
+                continue;
+            }
+            struct ggml_tensor * input_cpy = tensor_copy(input, split->backend_id, sched->cur_copy);
+            if (ggml_backend_buffer_is_host(input->buffer)) {
+                ggml_backend_tensor_set_async(sched->backends[split->backend_id], input_cpy, input->data, 0, ggml_nbytes(input));
+            } else {
+                ggml_backend_tensor_copy(input, input_cpy);
+            }
+            uploaded[split->backend_id] = true;
+        }
+    }
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (uploaded[b] && sched->input_events[b][sched->cur_copy] != NULL) {
+            ggml_backend_event_record(sched->input_events[b][sched->cur_copy], sched->backends[b]);
+        }
+    }
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
     int prev_backend_id = -1;
 
-    // with pipeline parallelism, upload the user inputs before submitting the splits, to not wait for this graph in a later split
     if (sched->n_copies > 1) {
-        // the user writes the inputs of the next graph to the next host copy, so wait until its previous uploads are done
-        const int next_copy = (sched->cur_copy + 1) % sched->n_copies;
-        for (int b = 0; b < sched->n_backends; b++) {
-            if (sched->input_events[b][next_copy] != NULL) {
-                ggml_backend_event_synchronize(sched->input_events[b][next_copy]);
-            }
-        }
-        bool uploaded[GGML_SCHED_MAX_BACKENDS] = { false };
-        for (int split_id = 0; split_id < sched->n_splits; split_id++) {
-            struct ggml_backend_sched_split * split = &splits[split_id];
-            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-                struct ggml_tensor * input = split->inputs[input_id];
-                if (!ggml_backend_sched_is_user_input(input)) {
-                    continue;
-                }
-                struct ggml_tensor * input_cpy = tensor_copy(input, split->backend_id, sched->cur_copy);
-                if (ggml_backend_buffer_is_host(input->buffer)) {
-                    ggml_backend_tensor_set_async(sched->backends[split->backend_id], input_cpy, input->data, 0, ggml_nbytes(input));
-                } else {
-                    ggml_backend_tensor_copy(input, input_cpy);
-                }
-                uploaded[split->backend_id] = true;
-            }
-        }
-        for (int b = 0; b < sched->n_backends; b++) {
-            if (uploaded[b] && sched->input_events[b][sched->cur_copy] != NULL) {
-                ggml_backend_event_record(sched->input_events[b][sched->cur_copy], sched->backends[b]);
-            }
-        }
+        ggml_backend_sched_upload_user_inputs(sched);
     }
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {

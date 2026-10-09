@@ -16,6 +16,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -34,17 +35,13 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
-// with pipeline parallelism, each device uploads the weights in host memory of its own layers
-// a device with most of them would limit the pipeline, which would then be slower than without it
+// with pipeline parallelism, each device uploads the host weights of its own layers, so they must be spread over the devices
 static bool llama_host_weights_spread(const llama_model & model) {
     std::unordered_map<ggml_backend_dev_t, size_t> dev_bytes;
     size_t total = 0;
     for (const auto & [name, t] : model.tensors_by_name) {
-        if (name.rfind("blk.", 0) != 0 || t->buffer == nullptr || !ggml_backend_buffer_is_host(t->buffer)) {
-            continue;
-        }
-        const int il = std::stoi(name.substr(4));
-        if (il < 0 || il >= (int) model.hparams.n_layer_all) {
+        int il = -1;
+        if (sscanf(name.c_str(), "blk.%d.", &il) != 1 || il < 0 || il >= (int) model.hparams.n_layer_all || !llama_tensor_is_host_weight(t)) {
             continue;
         }
         dev_bytes[model.dev_layer(il)] += ggml_nbytes(t);
@@ -1439,8 +1436,7 @@ bool llama_context::set_adapter_cvec(
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     // [TAG_PIPELINE_RESERVE] with pipeline parallelism, reserve the worst-case graph of sched_reserve again after a different graph
-    // e.g. with weights in host memory, the ops of small batches run in other splits, so their graphs reallocate the compute buffers
-    // otherwise the buffers fit only the last graph, and every ubatch of the prompt reallocates them as the context grows
+    // (e.g. a small batch with host weights), otherwise every ubatch of the prompt reallocates the compute buffers
     if (cparams.pipeline_parallel && gtype == ctx_type_to_graph_type(cparams.ctx_type)) {
         const uint32_t n_tokens_reserve = std::min(cparams.n_ctx, cparams.n_ubatch);
         if (ubatch.n_tokens != n_tokens_reserve) {
@@ -2733,10 +2729,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     const int64_t n_expert    = src->ne[2];
     const size_t  expert_size = src->nb[2];
 
-    // with pipeline parallelism, reading the ids would wait for the split backend and stall the graphs in flight
-    // so upload all the experts in a graph with a large batch, where most of them are used anyway: at least 16 ids per expert if a previous graph
-    // is in flight, else only with the full batch size (more graphs are likely to follow) and 64 ids per expert, as the graph may be alone
-    // this includes the next MoE ops of the graph on a few rows, e.g. the last layer on the output rows
+    // with pipeline parallelism, reading the ids would stall the graphs in flight, so upload all the experts of a large batch:
+    // 16 ids per expert while a previous graph runs, else a full batch with 64 ids per expert (the graph may be alone)
+    // the flag stays for the rest of the graph, e.g. for the last layer on the output rows
     if (lctx->cparams.pipeline_parallel) {
         const int64_t n_ids      = ggml_nelements(ids);
         const bool    full_batch = ids->ne[1] >= (int64_t) std::min(lctx->cparams.n_ctx, lctx->cparams.n_ubatch);
@@ -2805,9 +2800,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
 
 static bool llama_has_host_weight(const ggml_tensor * t) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        const ggml_tensor * src = t->src[i];
-        if (src && src->buffer && ggml_backend_buffer_is_host(src->buffer) &&
-            ggml_backend_buffer_get_usage(src->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        if (t->src[i] && llama_tensor_is_host_weight(t->src[i])) {
             return true;
         }
     }
@@ -2839,8 +2832,8 @@ llm_graph_cb llama_context::graph_get_cb() const {
             }
         }
 
-        // with pipeline parallelism, run the ops with weights in host memory on the device of their layer, also the small ones (an op on the CPU synchronizes the pipeline)
-        // the named tensor can be a bias or a scale applied to the matrix multiplication, row lookups (e.g. token embeddings) copy only the needed rows
+        // with pipeline parallelism, run the ops with host weights on the device of their layer, also the small ones (a CPU op stalls the pipeline)
+        // cur can be a bias or a scale after the matmul, row lookups (e.g. token embeddings) copy only the needed rows
         if (cparams.pipeline_parallel && cparams.op_offload && il != -1 && ubatch.n_tokens >= 32) {
             for (ggml_tensor * t : { cur, cur->src[0] }) {
                 if (t == nullptr || t->op == GGML_OP_GET_ROWS || !llama_has_host_weight(t)) {
