@@ -211,6 +211,11 @@ class MiniCPMV4_6VisionModel(MmprojModel):
 class MiniCPMV4_7TextModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # mtmd puts the time of the image canvas in slot z, slot t stays the KV cache position
+        self.gguf_writer.add_rope_section_order(gguf.RopeSectionOrder.ZYXT)
+
     def __init__(self, dir_model, ftype, fname_out, *, hparams: dict | None = None, **kwargs):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
@@ -238,8 +243,32 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
     projector_type = gguf.VisionProjectorType.MINICPMV4_7
     # MiniCPMV4_7ImageProcessorPil default
     default_scale_resolution = 448
+    # rows of v.tok_embd_sep, the order must match clip_suffix_rows() in clip-impl.h
+    tok_embd_sep = ["</image>", "<slice>", "</slice>", "\n"]
 
     def get_downsample_mode(self) -> str:
         # 4.7 moved downsample_mode to the model config; preprocessor value takes priority
         return self.preprocessor_config.get(
             "downsample_mode", self.global_config.get("downsample_mode", "16x"))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        # keep the text tok_embd, the separator rows are taken from it in modify_tensors
+        if item[0] == "model.language_model.embed_tokens.weight":
+            return item
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.language_model.embed_tokens.weight":
+            # the tile separators are text tokens; clip appends their embeddings so that one chunk holds the whole image
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            ids = []
+            for text in self.tok_embd_sep:
+                tok = tokenizer.encode(text, add_special_tokens=False)
+                if len(tok) != 1:
+                    raise ValueError(f"separator {text!r} must be a single token, got {tok}")
+                ids.append(tok[0])
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.V_TOK_EMBD_SEP, suffix=""), data_torch[ids]
+            return
+        yield from super().modify_tensors(data_torch, name, bid)

@@ -898,6 +898,16 @@ ggml_tensor * clip_graph::build_stack(ggml_tensor * cur, int32_t stack_factor, i
 
 // aka pixel_shuffle / pixel_unshuffle / patch_merger (Kimi-VL)
 // support dynamic resolution
+ggml_tensor * clip_graph::build_suffix(ggml_tensor * cur) {
+    for (int idx : clip_suffix_rows(img.suffix_type)) {
+        GGML_ASSERT(model.tok_embd_sep && idx < model.tok_embd_sep->ne[1]);
+        ggml_tensor * row = ggml_view_2d(ctx0, model.tok_embd_sep, model.tok_embd_sep->ne[0], 1,
+                                         model.tok_embd_sep->nb[1], idx * model.tok_embd_sep->nb[1]);
+        cur = ggml_concat(ctx0, cur, ggml_cast(ctx0, row, cur->type), 1);
+    }
+    return cur;
+}
+
 ggml_tensor * clip_graph::build_patch_merge_permute(ggml_tensor * cur, int scale_factor) {
     GGML_ASSERT(scale_factor > 1);
 
@@ -2524,6 +2534,7 @@ struct clip_model_loader {
                     model.mm_ffn_up_b     = get_tensor(string_format(TN_MM_UP,   "bias"), false);
                     model.mm_ffn_down_w   = get_tensor(string_format(TN_MM_DOWN, "weight"));
                     model.mm_ffn_down_b   = get_tensor(string_format(TN_MM_DOWN, "bias"), false);
+                    model.tok_embd_sep    = get_tensor(TN_TOK_EMBD_SEP, model.proj_type == PROJECTOR_TYPE_MINICPMV4_7);
                 } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
@@ -4167,6 +4178,8 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_MUSE_GLIMMER:
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
+        case PROJECTOR_TYPE_MINICPMV4_6:
+        case PROJECTOR_TYPE_MINICPMV4_7:
             return img->nx() / (params.patch_size * params.n_merge);
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
@@ -4195,6 +4208,8 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_MUSE_GLIMMER:
             return (img->ny() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
+        case PROJECTOR_TYPE_MINICPMV4_6:
+        case PROJECTOR_TYPE_MINICPMV4_7:
             return img->ny() / (params.patch_size * params.n_merge);
         default:
             break;
@@ -4511,6 +4526,8 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         default:
             GGML_ABORT("unsupported projector type");
     }
+
+    n_patches += (int) clip_suffix_rows(img->suffix_type).size();
 
     return n_patches;
 }

@@ -615,6 +615,7 @@ struct clip_model {
 
     ggml_tensor * image_newline = nullptr;
     ggml_tensor * view_seperator = nullptr;
+    ggml_tensor * tok_embd_sep = nullptr; // [n_embd_text, n_sep] rows of the text model tok_embd (MiniCPM-V 4.7)
 
 
     // Yi type models with mlp+normalization projection

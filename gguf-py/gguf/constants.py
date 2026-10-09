@@ -1053,6 +1053,7 @@ class MODEL_TENSOR(IntEnum):
     V_SAM_NET_3          = auto() # Deepseek-OCR
     V_ENC_EMBD_IMGNL     = auto() # Deepseek-OCR
     V_ENC_EMBD_VSEP      = auto() # Deepseek-OCR
+    V_TOK_EMBD_SEP       = auto() # MiniCPM-V 4.7
     V_RESMPL_QUERY_768   = auto() # Deepseek-OCR-2
     V_RESMPL_QUERY_1024  = auto() # Deepseek-OCR-2
 
@@ -1834,6 +1835,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_SAM_NET_3:               "v.sam.net_3",
     MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR, Granite4Vision
     MODEL_TENSOR.V_ENC_EMBD_VSEP:           "v.view_seperator", # Deepseek-OCR
+    MODEL_TENSOR.V_TOK_EMBD_SEP:            "v.tok_embd_sep", # MiniCPM-V 4.7
     MODEL_TENSOR.V_RESMPL_QUERY_768:        "v.resample_query_768", # Deepseek-OCR-2 qwen2
     MODEL_TENSOR.V_RESMPL_QUERY_1024:       "v.resample_query_1024", # Deepseek-OCR-2 qwen2
     # Granite4 Vision
@@ -2081,6 +2083,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_EMBD_IMGNL,
         MODEL_TENSOR.V_ENC_EMBD_VSEP,
+        MODEL_TENSOR.V_TOK_EMBD_SEP,
         MODEL_TENSOR.V_ENC_INPUT_NORM,
         MODEL_TENSOR.V_ENC_ATTN_QKV,
         MODEL_TENSOR.V_ENC_ATTN_Q,
