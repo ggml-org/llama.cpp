@@ -2170,16 +2170,36 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // sparse MoE direct-IO: run the SAME top-k experts out of this layer's
     // compact pool. gate/up/down pools mirror the full-tensor geometry with
     // ne[2] = slots-per-layer; slot_table maps expert -> local slot.
-    // decode-only: prefill (n_tokens > 1) keeps the full tensors, and the
-    // fused gate_up path is unsupported (falls back to full tensors).
+    // decode (n_tokens == 1) always; prefill only for micro-chunks whose row
+    // union cannot overflow the slots (measured worst case 59 < 72 at 8
+    // tokens); larger batches keep the full tensors. the fused gate_up path
+    // is unsupported (falls back to full tensors).
     ggml_tensor * slot_ids = selected_experts;
+    // micro-chunk ceiling: residency check below needs the per-row union in
+    // registers; keep it small and bounded at build time
+    const int64_t moe_chunk_max = 8;
+    bool moe_use_pool = false;
     if (cparams.moe_direct_io && moe_n_layer > il && il >= 0 &&
         moe_gate && moe_up && moe_down && moe_table &&
         moe_gate[il] && moe_up[il] && moe_down[il] && moe_table[il] &&
         // this model family ships separate gate/up tensors (no fused gate_up
         // in the GGUF); a non-null gate_up_exps here is an empty placeholder.
         // detect it by shape: fused would carry ne[1] == 2*n_ff.
-        (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1]) && n_tokens == 1) {
+        (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1])) {
+        // argsort output is contiguous for the decode row but may be strided
+        // for wider batches; reshape_1d asserts contiguity, so fall back
+        // rather than abort graph build.
+        if (n_tokens == 1) {
+            moe_use_pool = true;
+        } else if (n_tokens > 1 && n_tokens <= moe_chunk_max &&
+                   ggml_is_contiguous(selected_experts)) {
+            // prefill micro-chunk: the callback pages every row before its
+            // split runs, so the mapping is consistent by compute time.
+            // chunk<=8 keeps the row union inside the slots (worst 59<72).
+            moe_use_pool = true;
+        }
+    }
+    if (moe_use_pool) {
         gate_up_exps = nullptr; // separate gate/up path; fused tensor is absent or virtual
         gate_exps = (ggml_tensor *) moe_gate[il];
         up_exps   = (ggml_tensor *) moe_up[il];
@@ -2191,7 +2211,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         slot_ids = ggml_reshape_2d(ctx0, slot_flat, n_expert_used, n_tokens);
         cb(slot_ids, "ffn_moe_slot_ids", il);
     }
-
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);

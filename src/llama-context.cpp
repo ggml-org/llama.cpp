@@ -473,14 +473,15 @@ llama_context::llama_context(
                             LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers x %d slots\n",
                                            __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
                                            n_layer, s_pl);
-                        }
-                    }
+                            moe_seed_hot();
+                        } // staging reserved
+                    } // buf ok
                 } else {
                     LLAMA_LOG_ERROR("%s: moe pool alloc failed -> moe_direct_io OFF\n", __func__);
-                }
                 } // pool_ok
                 } // outer else (pager ok)
             } // pager init else
+        } // moe_direct_io if
         } // moe_direct_io if
 
         // create a list of the set_n_threads functions in the backends
@@ -4713,8 +4714,35 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
     }
 }
 
+// Seed every layer's slots with the offline hot profile so the first decode
+// step starts warm. Runs synchronously inside pool setup; each page is a
+// normal demand fetch through the pager, failures tolerated (slot stays -1).
+// Round-robin over layers (top-1 of every layer, then top-2, ...) so a tight
+// budget still covers all layers uniformly: ~2000 pages in 4s give top-40
+// per layer ≈ 70% cold-hit coverage (trace-measured).
+void llama_context::moe_seed_hot() {
+    if (!moe_ready) return;
+#include "moe_hot_profile.h"
+    static_assert(MOE_HOT_NLAYER == 48, "hot profile layer count");
+    const int64_t t0 = ggml_time_us();
+    const int64_t budget_us = 4000000;
+    int seeded = 0;
+    for (int k = 0; k < MOE_HOT_PER_LAYER; k++) {
+        for (int il = 0; il < moe.n_layer; il++) {
+            if (ggml_time_us() - t0 > budget_us) {
+                LLAMA_LOG_WARN("%s: budget hit at round %d, %d seeded\n", __func__, k, seeded);
+                return;
+            }
+            const int32_t e = moe_hot_experts[il][k];
+            if (e < 0 || e >= moe.n_expert) continue;
+            if (moe_page(il, e) >= 0) seeded++;
+        }
+    }
+    LLAMA_LOG_INFO("%s: seeded %d/3456 hot experts in %.2fs\n",
+                   __func__, seeded, (ggml_time_us() - t0) / 1000000.0);
+}
+
 // Queue async reads for experts the next layer(s) will likely need. Runs at
-// the END of layer il's top-k callback, after demand paging for il, so the
 // reads overlap the GPU compute of the layers between il and the target.
 // Predictor: previous-step recency per layer (measured overlap 35% at t-1,
 // 54% at t-1..t-4). Experts already resident or in flight are skipped, and
@@ -4824,16 +4852,21 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         return true;   // split the graph here and sync afterwards
     }
     // data phase: page the selected experts (I32 [n_used, n_tokens]).
-    // prefill (n_tokens > 1) runs on the full tensors, so only decode pages.
     const int64_t ntok = t->ne[1];
-    if (ntok > 1) {
-        return true;
-    }
     const int64_t nw = t->ne[0];
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
-    for (int64_t j = 0; j < ntok; j++) {
-        ctx->moe_page_batch(il, ids.data() + (size_t) j * nw, (int) nw);
+    if (ntok == 1) {
+        // decode: batch-pin + page, same as before
+        ctx->moe_page_batch(il, ids.data(), (int) nw);
+    } else {
+        // prefill micro-chunk: page each <=8-token row through the normal
+        // batch path (pinning holds within the row). the row union fits the
+        // slots (measured worst case 59 < 72), so rows do not evict each
+        // other mid-chunk and the graph sees one consistent mapping.
+        for (int64_t j = 0; j < ntok; j++) {
+            ctx->moe_page_batch(il, ids.data() + (size_t) j * nw, (int) nw);
+        }
     }
     // layer-ahead + token-ahead async reads for the layers after this one;
     // admission-controlled inside, never blocks

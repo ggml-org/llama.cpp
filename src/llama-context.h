@@ -280,13 +280,15 @@ public:
     int  moe_page(int il, int e);
     int  moe_page_pinned(int il, int e, const bool * pinned);
     void moe_page_batch(int il, const int32_t * sel, int n);
-    // queue async reads for experts the next layer(s) will likely need:
-    // same-layer recency (prev step's top-k) for layers il+1..il+2, and
-    // layer-0/1 recency for the next token when il is the last layer.
-    // never blocks; skipped entirely unless MOE_PF=1.
+    // queue async reads for experts the next layer(s) will likely need.
+    // never blocks; admission-controlled inside.
     void moe_prefetch_ahead(int il, const int32_t * sel, int n);
     void moe_publish(int il, int e, int slot);
     const ggml_tensor * moe_pool_tensor(const char * which, int il) const;
+    // pre-populate every layer's slots with the offline hot profile so the
+    // first decode step starts warm; pages synchronously, failures are
+    // tolerated (slots stay -1). capped at 2s to bound server startup.
+    void moe_seed_hot();
 
 private:
     llm_graph_result * get_gf_res_prev();
