@@ -954,6 +954,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mm_q8_kqv = nullptr;
     cl_kernel kernel_mul_mm_q8_kq = nullptr;
     cl_kernel kernel_mul_mm_q8_kq_p8 = nullptr;   // fused-softmax variant, only when KQ_TN == 32
+    cl_kernel kernel_mul_mm_q8_kq_p8_dk512 = nullptr;  // same, KQ_DK_MAX=512, built on first use
     cl_kernel kernel_fa_q8_rows_f16 = nullptr;
     cl_kernel kernel_fa_q8_rows_f32 = nullptr;
     cl_kernel kernel_fa_q8_rows_q8_0 = nullptr;          // q8_0 KV cache -> the int8 K planes
@@ -21092,6 +21093,40 @@ static void ggml_cl_fa_scratch_tensor(
 // Fused KQ + block softmax for the decomposed prefill: mul_mm_f16_f32_kq_p8 over the query chunk
 // (u8 P, per-32-block max/sum), then kernel_fa_p8_fixup (f32 block scales, deferred-norm row sums).
 // K is bound as an RGBA-float image over the packed cache rows, Q as the raw [n][head][dk] buffer.
+// The fused int8 KQ built for heads up to 512, on first use so no other model pays the compile.
+static cl_kernel ggml_cl_fa_kq_p8_dk512(ggml_backend_opencl_context * backend_ctx) {
+    static bool tried = false;
+    if (tried || backend_ctx->fa_kq_tn != 32 || !backend_ctx->has_integer_dot) {
+        return backend_ctx->kernel_mul_mm_q8_kq_p8_dk512;
+    }
+    if (backend_ctx->kernel_compile_opts.empty()) {
+        return nullptr;
+    }
+    tried = true;
+#ifdef GGML_OPENCL_EMBED_KERNELS
+    const std::string kernel_src {
+        #include "mul_mm_q8_kq.cl.h"
+    };
+#else
+    const std::string kernel_src = read_file("mul_mm_q8_kq.cl");
+#endif
+    const std::string opts = backend_ctx->kernel_compile_opts + " -DKQ_TN=32 -DKQ_MB=" +
+        std::to_string(backend_ctx->fa_kq_mb) + " -DKQ_DK_MAX=512";
+    cl_program prog = build_program_from_source_ex(backend_ctx->context, backend_ctx->device,
+        kernel_src.c_str(), opts, /*fatal=*/false, "fa int8 kq_p8 dk512");
+    if (!prog) {
+        return nullptr;
+    }
+    cl_int err;
+    cl_kernel k = clCreateKernel(prog, "kernel_mul_mm_q8_kq_p8", &err);
+    clReleaseProgram(prog);
+    if (err != CL_SUCCESS) {
+        return nullptr;
+    }
+    backend_ctx->kernel_mul_mm_q8_kq_p8_dk512 = k;
+    return k;
+}
+
 static void ggml_cl_fa_kq_p8_dispatch(ggml_backend_t backend,
                                       const ggml_tensor * k, const ggml_tensor * q,
                                       const ggml_tensor * mask, const ggml_tensor * sinks,
@@ -21174,7 +21209,7 @@ static void ggml_cl_fa_kq_p8_dispatch(ggml_backend_t backend,
             size_t lws[3] = { 64, 1, 1 };
             backend_ctx->enqueue_ndrange_kernel(qq8, 3, gws, lws, dst);
         }
-        cl_kernel kk = backend_ctx->kernel_mul_mm_q8_kq_p8;
+        cl_kernel kk = K > 256 ? backend_ctx->kernel_mul_mm_q8_kq_p8_dk512 : backend_ctx->kernel_mul_mm_q8_kq_p8;
         cl_uint i = 0;
         CL_CHECK(clSetKernelArg(kk, i++, sizeof(cl_mem),   &backend_ctx->prealloc_fa_kq_q.buffer));
         CL_CHECK(clSetKernelArg(kk, i++, sizeof(cl_mem),   &backend_ctx->prealloc_fa_kq_d.buffer));
@@ -21387,22 +21422,31 @@ static bool ggml_cl_flash_attn_decompose(
         const char * e = getenv("GGML_OPENCL_FA_KQ_P8");
         return !e || !e[0] || atoi(e) != 0;
     }();
-    // int8 KQ: quantising Q and K to int8 speeds up prefill at depth but moves perplexity against
-    // the f16 reference, so with an f16 KV cache it is opt-in: GGML_OPENCL_FA_KQ_INT8=1 takes it
-    // wherever its fused-softmax kernel fits (head size <= 256 and a multiple of 32). A q8_0 KV
-    // cache already holds K in int8, so there it is the default; "0" turns it off there too.
+    // int8 KQ is faster at depth but shifts perplexity slightly against f16. GGML_OPENCL_FA_KQ_INT8=1
+    // takes it wherever its fused-softmax kernel fits (head size a multiple of 32 up to 256, or 512 with
+    // f16 KV and at least one 32-query tile); "0" turns it off. Default on for a q8_0 KV cache, and on
+    // the X2-90 for f16 KV from n_kv 2048 (GGML_OPENCL_FA_KQ_INT8_MIN_KV; 0 disables that default).
     static const int kq_int8_env_val = []{
         const char * e = getenv("GGML_OPENCL_FA_KQ_INT8");
         if (!e || !e[0]) return -1;
         return atoi(e) != 0 ? 1 : 0;
     }();
-    const bool kq_p8_int8_shape = backend_ctx->kernel_mul_mm_q8_kq_p8 != nullptr && (dk % 32 == 0) && dk <= 256;
+    static const int kq_int8_f16_min_kv = [&]{
+        const char * e = getenv("GGML_OPENCL_FA_KQ_INT8_MIN_KV");
+        if (e && e[0]) { return atoi(e); }
+        return backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 2048 : 0;
+    }();
+    const bool kq_int8_f16_deep = k->type == GGML_TYPE_F16 && kq_int8_f16_min_kv > 0 && n_kv >= kq_int8_f16_min_kv;
+    const bool kq_dk512 = k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 && n_q >= 32 &&
+                          dk > 256 && dk <= 512 && (dk % 32 == 0) && ggml_cl_fa_kq_p8_dk512(backend_ctx) != nullptr;
+    const bool kq_p8_int8_shape = backend_ctx->kernel_mul_mm_q8_kq_p8 != nullptr && (dk % 32 == 0) &&
+                                  (dk <= 256 || kq_dk512);
     // Attention sinks at head size 64 decline the int8 KQ: the sink logit is fixed while the
     // scores move, so int8 score error re-weights sink against keys and the softmax carries that
     // into the output. GGML_OPENCL_FA_KQ_INT8=1 still forces the kernel.
     const bool kq_int8_sinks = sinks != nullptr && dk <= 64;
     const bool kq_int8_env_pre = kq_int8_env_val == 1 ||
-                                 (kq_int8_env_val == -1 && kv_q8 && !kq_int8_sinks &&
+                                 (kq_int8_env_val == -1 && (kv_q8 || kq_int8_f16_deep) && !kq_int8_sinks &&
                                   kq_p8_env && kqv_int8_possible && kq_p8_int8_shape);
     const bool kq_p8_possible = !e17_dec && kq_p8_env && kqv_int8_possible &&
         (kq_int8_env_pre ? kq_p8_int8_shape
@@ -21411,6 +21455,7 @@ static bool ggml_cl_flash_attn_decompose(
         (n_kv % 64 == 0) && dk >= 16 && (dk % 16 == 0) && n_head % n_head_kv == 0 &&
         // The packed-row K layout is for the f16 image GEMM; the int8 K pass reads strided rows.
         (kv_q8 ? kq_int8_env_pre && k->nb[0] == ggml_type_size(GGML_TYPE_Q8_0)
+         : (kq_dk512 && kq_int8_env_pre) ? k->nb[0] == sizeof(ggml_fp16_t)
                : k->nb[0] == sizeof(ggml_fp16_t) && k->nb[2] == (size_t)dk*sizeof(ggml_fp16_t) &&
                  k->nb[1] == (size_t)dk*n_head_kv*sizeof(ggml_fp16_t)) &&
         q->nb[0] == sizeof(float) && q->nb[2] == (size_t)dk*sizeof(float) &&
@@ -21644,10 +21689,11 @@ static bool ggml_cl_flash_attn_decompose(
         }
     }
 
-    // int8 KQ: K quantised once per call, the Q chunk once per chunk, both along dk. The kernel
-    // sizes its local memory for dk <= 256; larger heads keep the f16 GEMM.
+    // int8 KQ: K quantised once per call, the Q chunk once per chunk, both along dk. The separate
+    // kernel is sized for dk <= 256, so a larger head takes int8 only through the fused one.
     const bool kq_int8_env = kq_int8_env_pre;
-    const bool kq_int8 = !e17_dec && kq_int8_env && (dk % 32 == 0) && dk <= 256 && n_head_kv > 0;
+    const bool kq_int8 = !e17_dec && kq_int8_env && (dk % 32 == 0) && (dk <= 256 || (kq_dk512 && kq_p8_possible)) &&
+                         n_head_kv > 0;
     if (kq_int8_env_val != -1 || kq_int8 || kq_int8_sinks) {
         static bool said = false;
         if (!said) {
