@@ -68,10 +68,15 @@ struct common_chat_template {
 
     // Differential analysis, run once here when there is no dedicated handler. Null when there
     // is one, or when the analysis failed, in which case analysis_error says why.
-    std::shared_ptr<const autoparser::autoparser> analysis;
+    std::unique_ptr<autoparser::autoparser> analysis;
     std::string analysis_error;
 
     common_chat_template(const std::string & src, const std::string & bos_token, const std::string & eos_token);
+
+    // autoparser is incomplete here, so these are defined where it is complete
+    ~common_chat_template();
+    common_chat_template(common_chat_template &&);
+    common_chat_template & operator=(common_chat_template &&);
 
     const std::string & source() const { return src; }
     const std::string & bos_token() const { return bos_tok; }

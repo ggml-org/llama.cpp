@@ -1277,13 +1277,17 @@ common_chat_template::common_chat_template(const std::string & src, const std::s
     // The analysis depends only on the template, so run it once here instead of on every apply.
     // A failure is kept for apply to report, so a bad template still loads like it did before.
     try {
-        auto analysis = std::make_shared<autoparser::autoparser>();
+        analysis = std::make_unique<autoparser::autoparser>();
         analysis->analyze_template(*this);
-        this->analysis = std::move(analysis);
     } catch (const std::exception & e) {
-        this->analysis_error = e.what();
+        analysis.reset();
+        analysis_error = e.what();
     }
 }
+
+common_chat_template::~common_chat_template() = default;
+common_chat_template::common_chat_template(common_chat_template &&) = default;
+common_chat_template & common_chat_template::operator=(common_chat_template &&) = default;
 
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
