@@ -96,7 +96,7 @@ void main() {
             uint32_t d = (idx + tid) % (HSK / 4);
             uint32_t r = (idx + tid) / (HSK / 4);
             uint32_t rr = i * Br + r;
-            if (r < Br && d < HSK / 4 && row_tok(rr) < p.nem1 && (rr % 8u) < p.gqa_ratio) {
+            if (r < Br && d < HSK / 4 && row_tok(rr) < p.ne2 && (rr % 8u) < p.gqa_ratio) {
                 uint32_t off = row_tok(rr) * p.nb01 / 4 + (row_head(rr) * p.nb02 + iq3 * p.nb03) / 16;
                 Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[off + d] * p.scale);
             }
@@ -605,7 +605,7 @@ void main() {
                     uint32_t rr = tile_row(r);
                     uint32_t tok = row_tok(rr);
                     uint32_t head = row_head(rr);
-                    if (tok < p.nem1 && (rr % 8u) < p.gqa_ratio) {
+                    if (tok < p.ne2 && (rr % 8u) < p.gqa_ratio) {
                         uint32_t o_off = HSV * p.ne1 * (split_k_index + p.k_num * (tok + p.ne2 * iq3)) / 4;
                         [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
                             const uint d = d0 + col_tid;

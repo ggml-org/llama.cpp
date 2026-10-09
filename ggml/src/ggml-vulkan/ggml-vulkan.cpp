@@ -8148,7 +8148,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     // Prototype (GGML_VK_FA_QTOK_FOLD): fold 2 query tokens into one 16-row GQA tile, 8 rows per
     // token (6 heads + 2 padding rows), so each K/V tile is read once per token pair. gqa_ratio 6,
     // coopmat1 with Br = 16 and the split_k > 1 path only (checked once split_k is known).
-    // The shader bounds token rows by the mask row count, so a mask is required.
+    // Token rows are bounded by the Q token count (dst ne2); the fold is only enabled with a mask.
     uint32_t gqa_tok = 1;
     static const bool fa_qtok_fold = getenv("GGML_VK_FA_QTOK_FOLD") != nullptr;
     // ALiBi is not supported by the folded row mapping.
