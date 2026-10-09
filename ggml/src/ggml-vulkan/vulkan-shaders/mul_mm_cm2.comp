@@ -26,7 +26,6 @@
 #ifdef MULMAT_QUANT
 layout (constant_id = 7) const uint MmTypeA = 0;
 layout (constant_id = 8) const uint MmABlockBytes = 2;
-layout (constant_id = 9) const uint MmQuantK = 1;
 #endif
 
 #include "types.glsl"
@@ -50,17 +49,12 @@ layout (constant_id = 6) const uint subgroup_size = 32;
 #ifdef MULMAT_QUANT
 
 uint mm_quant_k() {
-    switch (MmTypeA) {
-    case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1:
-    case GGML_TYPE_Q8_0:
-        return 32u;
-    case GGML_TYPE_Q1_0:
-        return 128u;
-    case GGML_TYPE_Q2_0:
-        return 64u;
-    default:
-        return 256u;
-    }
+    // Use ternary expressions to avoid switch lowering qk through an OpPhi.
+    return (MmTypeA == GGML_TYPE_Q1_0) ? 128u :
+           (MmTypeA == GGML_TYPE_Q2_0) ?  64u :
+          ((MmTypeA == GGML_TYPE_Q4_0 || MmTypeA == GGML_TYPE_Q4_1 ||
+            MmTypeA == GGML_TYPE_Q5_0 || MmTypeA == GGML_TYPE_Q5_1 ||
+            MmTypeA == GGML_TYPE_Q8_0) ? 32u : 256u);
 }
 #endif
 
@@ -387,7 +381,7 @@ void main() {
 #endif
 
 #ifdef MULMAT_QUANT
-    const uint qk = MmQuantK;
+    const uint qk = mm_quant_k();
 #else
     const uint qk = QUANT_K;
 #endif
