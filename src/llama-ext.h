@@ -128,6 +128,11 @@ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 
+// Read several extracted layers after one synchronization. The borrowed
+// pointers remain valid until the next operation that changes ctx outputs.
+LLAMA_API void llama_get_embeddings_layer_inp_batch(
+        struct llama_context * ctx, const int32_t * lids, uint32_t count, const float ** layers);
+
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 //

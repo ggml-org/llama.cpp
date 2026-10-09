@@ -986,6 +986,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     common_batch batch_inject; // target features for KV cache injection
 
     std::vector<float> features_buf; // [n_chunk, n_embd_enc] gathered target features
+    std::vector<const float *> feature_layers;
 
     std::vector<common_sampler_ptr> smpls;
 
@@ -1030,6 +1031,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         target_layer_ids   = llama_model_target_layer_ids  (model_dft);
         target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
+        feature_layers.resize(target_layer_ids_n);
         GGML_ASSERT(target_layer_ids_n > 0 && "DFlash model has no target_layer_ids");
 
         n_embd_tgt    = llama_model_n_embd(model_tgt);
@@ -1189,6 +1191,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
+        bool features_read = false;
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_batch_beg[seq_id] < 0) {
@@ -1209,8 +1212,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 // gather target features per extract layer; the fused decode encodes and
                 // injects them into the K/V cache at the target positions
                 features_buf.resize((size_t) n_chunk * n_embd_enc);
+                if (!features_read) {
+                    llama_get_embeddings_layer_inp_batch(ctx_tgt, target_layer_ids, target_layer_ids_n, feature_layers.data());
+                    features_read = true;
+                }
                 for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                    const float * layer = feature_layers[k];
                     if (!layer) {
                         GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                     }

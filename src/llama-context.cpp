@@ -4179,6 +4179,14 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     return ctx->get_embeddings_layer_inp(lid);
 }
 
+void llama_get_embeddings_layer_inp_batch(
+        llama_context * ctx, const int32_t * lids, uint32_t count, const float ** layers) {
+    ctx->synchronize();
+    for (uint32_t k = 0; k < count; ++k) {
+        layers[k] = ctx->get_embeddings_layer_inp(lids[k]);
+    }
+}
+
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);
 }

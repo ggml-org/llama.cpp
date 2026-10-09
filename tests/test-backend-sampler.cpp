@@ -1,5 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 #include "llama-cpp.h"
 #include "common.h"
 #include "sampling.h"
@@ -2060,6 +2061,34 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+// The batch getter is the first read after each asynchronous decode. Copy its
+// values before using scalar getters, so a later wait cannot hide stale data.
+static void test_feature_batch_first_read(const test_params & params) {
+    std::vector<llama_sampler_seq_config> configs;
+    test_context t(params, configs, 1);
+    const int32_t lids[] = {0, llama_model_n_layer(params.model.get()) / 2};
+    for (int32_t lid : lids) {
+        llama_set_embeddings_layer_inp(t.ctx.get(), lid, true);
+    }
+    const int n = llama_model_n_embd(params.model.get());
+    for (llama_token token : {1, 2}) {
+        GGML_ASSERT(t.decode_token(token));
+        const float * layers[2];
+        llama_get_embeddings_layer_inp_batch(t.ctx.get(), lids, 2, layers);
+        std::vector<float> snapshots[2];
+        for (int k = 0; k < 2; ++k) {
+            GGML_ASSERT(layers[k]);
+            snapshots[k].assign(layers[k], layers[k] + n);
+        }
+        for (int k = 0; k < 2; ++k) {
+            const float * expected = llama_get_embeddings_layer_inp(t.ctx.get(), lids[k]);
+            GGML_ASSERT(std::all_of(snapshots[k].begin(), snapshots[k].end(), [](float v) { return std::isfinite(v); }));
+            GGML_ASSERT(std::equal(snapshots[k].begin(), snapshots[k].end(), expected));
+        }
+    }
+    printf("feature batch first-read test PASSED\n");
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2068,6 +2097,7 @@ struct backend_test_case {
 
 // note: test names are "test_<suffix>" and match the function implementing them
 static const backend_test_case BACKEND_TESTS[] = {
+    { "test_feature_batch_first_read", test_feature_batch_first_read, true },
     // single sampler
     { "test_greedy",                 test_greedy,                 true },
     { "test_greedy_filtered",        test_greedy_filtered,        true },
