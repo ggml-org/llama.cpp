@@ -622,6 +622,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),
+						// 0 is the server's way of leaving the trained context unknown; a
+						// model-mode listing reports it as meta.n_ctx_train instead
+						contextLength:
+							item.context_length ||
+							(typeof item.meta?.n_ctx_train === 'number' && item.meta.n_ctx_train > 0
+								? item.meta.n_ctx_train
+								: undefined),
 						description: details?.description,
 						details: details?.details,
 						draftSidecars: mergedDraftSidecars(

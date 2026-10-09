@@ -540,6 +540,7 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
 void server_model_meta::update_caps(const common_params & base) {
     // reset to the default so a failed refresh cannot keep old values
     architecture = server_model_architecture_json(false, false, false, {"text"});
+    n_ctx_train  = 0;
 
     // resolve the model file offline; do not download
     common_params params;
@@ -564,10 +565,12 @@ void server_model_meta::update_caps(const common_params & base) {
         return;
     }
 
-    // read the output modalities from the GGUF metadata
+    // read the output modalities and the trained context from the GGUF metadata
     std::vector<std::string> output_modalities = {"text"};
     if (!params.model.path.empty()) {
-        output_modalities = server_model_output_modalities(common_get_decision_type(params.model.path));
+        const common_gguf_info info = common_get_gguf_info(params.model.path);
+        output_modalities = server_model_output_modalities(info.decision_type);
+        n_ctx_train       = info.n_ctx_train;
     }
 
     bool inp_image = false;
@@ -2122,8 +2125,12 @@ void server_models_routes::init_routes() {
                 {"source",        server_model_source_to_string(meta.source)},
                 {"can_remove",    meta.source == SERVER_MODEL_SOURCE_CACHE},
                 // {"need_download", meta.need_download},
-                // TODO: add other fields, may require reading GGUF metadata
+                // TODO: add other fields from the GGUF metadata
             };
+
+            if (meta.n_ctx_train > 0) {
+                model_info["context_length"] = meta.n_ctx_train;
+            }
 
             // merge with loaded_info from the child process if available
             if (meta.is_running()) {

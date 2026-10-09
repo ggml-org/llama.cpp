@@ -177,7 +177,7 @@
 
 	<DropdownMenu.Content
 		align="end"
-		class="w-full md:min-w-80 md:w-112 max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
+		class="w-full md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
 		<DropdownMenuSearchable

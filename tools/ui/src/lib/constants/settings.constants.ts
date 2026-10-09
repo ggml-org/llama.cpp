@@ -129,7 +129,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				// Deliberately off for now: the natural place to turn it on is the first
 				// run experience, once onboarding exists to ask the user about it.
 				defaultValue: false,
-				help: 'Fetch model metadata (avatars, context length, chat template, file sizes) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models and hides the org avatars.',
+				help: 'Fetch model metadata (avatars, context length, chat template) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models and hides the org avatars.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use Hugging Face Hub API for models metadata',
 				type: SettingsFieldType.CHECKBOX

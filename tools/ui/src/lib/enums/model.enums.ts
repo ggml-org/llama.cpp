@@ -80,6 +80,5 @@ export enum ModelRowDownloadState {
 /** Column the models manager table can be ordered by. */
 export enum ModelsTableSortKey {
 	CONTEXT = 'context',
-	NAME = 'name',
-	STATUS = 'status'
+	NAME = 'name'
 }

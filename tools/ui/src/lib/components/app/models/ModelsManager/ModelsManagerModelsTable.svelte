@@ -7,8 +7,7 @@
 		hasActiveFilters,
 		modelContextLength,
 		type ModelQuantGroup,
-		type ModelsTableGroup,
-		statusRank
+		type ModelsTableGroup
 	} from './utils';
 	import {
 		ArrowDown,
@@ -155,10 +154,6 @@
 				return (modelContextLength(a) ?? 0) - (modelContextLength(b) ?? 0);
 			case ModelsTableSortKey.NAME:
 				return a.model.localeCompare(b.model);
-			case ModelsTableSortKey.STATUS:
-				// a running model leads, then one that is being worked on (loading,
-				// sleeping), then the rest; the reported status sorts the row's own cell
-				return statusRank(b) - statusRank(a);
 			default:
 				return 0;
 		}
@@ -357,9 +352,7 @@
 			{@render sortHeader(ModelsTableSortKey.CONTEXT, 'Context')}
 		</span>
 
-		<span class="justify-self-center max-md:hidden">
-			{@render sortHeader(ModelsTableSortKey.STATUS, 'Status')}
-		</span>
+		<span class="justify-self-center max-md:hidden">Status</span>
 
 		<span class="text-center max-md:hidden">Actions</span>
 	</div>
