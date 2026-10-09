@@ -12342,6 +12342,9 @@ static bool ggml_cl_mul_mat_can_use_fwht(const ggml_backend_opencl_context * bac
            ggml_is_contiguous_rows(b) && ggml_is_contiguous(op) && ggml_are_same_shape(b, op);
 }
 
+static bool ggml_cl_fa_decode_decompose(const ggml_backend_opencl_context * backend_ctx,
+                                        const ggml_tensor * q, const ggml_tensor * k);
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
@@ -12908,14 +12911,16 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return false;
                 }
                 if (q->ne[1] == 1) {
+                    // gqa 4 and 8 run the vec / mq decode kernels, and on X2E gqa 2 and 16 too (see
+                    // mq_decode_x2e in ggml_cl_flash_attn); any other group is admitted where the
+                    // decomposition takes it (q1_vec stays the fallback when it declines).
                     const char * decode_env = getenv("GGML_OPENCL_FA_DK512_DECODE");
                     const int64_t gqa = k->ne[2] > 0 ? q->ne[2] / k->ne[2] : 0;
-                    // GQA 2 and 16 decode on the X2E MQ kernels (see mq_decode_x2e in ggml_cl_flash_attn)
                     const bool gqa_ok = gqa == 4 || gqa == 8 ||
                                         (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && (gqa == 2 || gqa == 16));
                     if ((decode_env && decode_env[0] == '0') ||
                         backend_ctx->gpu_family != ADRENO || k->ne[2] <= 0 ||
-                        !gqa_ok || q->ne[2] % k->ne[2] != 0 ||
+                        (!gqa_ok && !ggml_cl_fa_decode_decompose(backend_ctx, q, k)) || q->ne[2] % k->ne[2] != 0 ||
                         !ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx)) {
                         return false;
                     }
@@ -23541,6 +23546,27 @@ static void ggml_cl_fa_trace_once(const char * fmt, ...) {
 }
 #define FA_DECLINE(reason) do { ggml_cl_fa_trace_once("decompose declined [%s] dk=%d dv=%d n_q=%d n_kv=%d heads=%d/%d", reason, (int)q->ne[0], (int)v->ne[0], (int)q->ne[1], (int)k->ne[1], (int)q->ne[2], (int)k->ne[2]); return false; } while (0)
 
+// Decode with a wide GQA group (DK=512, 16 query heads per KV head) through the decomposition:
+// its KQ folds the group's heads into one tile and the direct KQV reads V in row layout, so K and
+// V stream once per KV head. It has a fixed per-call cost, so the default starts at n_kv 4096.
+// GGML_OPENCL_FA_DECODE_DECOMPOSE=0 opts out; =1 forces it for any decode with GQA >= 8.
+static bool ggml_cl_fa_decode_decompose(const ggml_backend_opencl_context * backend_ctx,
+                                        const ggml_tensor * q, const ggml_tensor * k) {
+    static const int env = []{
+        const char * e = getenv("GGML_OPENCL_FA_DECODE_DECOMPOSE");
+        if (!e || !e[0]) return -1;
+        return atoi(e) != 0 ? 1 : 0;
+    }();
+    if (env == 0 || q->ne[1] != 1 || k->ne[2] <= 0 || q->ne[2] % k->ne[2] != 0) {
+        return false;
+    }
+    const int64_t gqa = q->ne[2] / k->ne[2];
+    if (env == 1) {
+        return gqa >= 8;
+    }
+    return backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && q->ne[0] == 512 && gqa >= 16 && k->ne[1] >= 4096;
+}
+
 static bool ggml_cl_flash_attn_decompose(
     ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k,
     const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks,
@@ -23686,7 +23712,7 @@ static bool ggml_cl_flash_attn_decompose(
         const char * e = getenv("GGML_OPENCL_FA_DECOMPOSE_MIN_NQ");
         return (e && e[0]) ? atoi(e) : 2;
     }();
-    if (n_q < min_n_q && !e17_dec) {
+    if (n_q < min_n_q && !e17_dec && !ggml_cl_fa_decode_decompose(backend_ctx, q, k)) {
         FA_DECLINE("n_q");
     }
     // Except where the sinks gate keeps KQ in f16 at head size <= 64 with f16 KV: there the MQ route
@@ -24293,7 +24319,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     // per-variant lazy compile for this (dk, dv)
     // DK=512 decode (n_q==1) needs no prepass
     // DK=512 prefill (n_q>1) does, so compile it only when needed
-    if (!fa_decode_only_512 || n_q > 1) {
+    if (!fa_decode_only_512 || n_q > 1 || ggml_cl_fa_decode_decompose(backend_ctx, q, k)) {
         ggml_opencl_ensure_fa_pre_kernels(backend_ctx, d_head_q, d_head_v);
     }
 
@@ -24301,7 +24327,8 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     // it declines and falls through here whenever the shape does not fit.
     // Placed after the prepass compile because the V transpose it needs ships in
     // that program.
-    if ((n_q > 1 || adreno_e17_compiler_quirks(backend_ctx)) && ggml_cl_flash_attn_decompose(backend, q, k, v, mask, sinks, dst)) {
+    if ((n_q > 1 || adreno_e17_compiler_quirks(backend_ctx) || ggml_cl_fa_decode_decompose(backend_ctx, q, k)) &&
+        ggml_cl_flash_attn_decompose(backend, q, k, v, mask, sinks, dst)) {
         return;
     }
 
