@@ -16,7 +16,7 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { filterModelOptions } from '$lib/utils';
 	import { type Snippet, untrack } from 'svelte';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		class?: string;
@@ -170,16 +170,29 @@
 			if (remaining.length > 0) rest.push({ ...entry, base: remaining[0], quants: remaining });
 		}
 
-		const claimed = new SvelteSet<string>();
-		const favorites = rest.filter((entry) =>
-			entry.quants.some((q) => modelsStore.favoriteModelIds.has(q.model))
-		);
+		// a favorite quant stands on its own, listed flat like a loaded one, and the
+		// quants left behind stay with their repo in the local block
+		const favorites: ModelQuantGroup[] = [];
+		const localRest: ModelQuantGroup[] = [];
 
-		for (const entry of favorites) claimed.add(entry.key);
+		for (const entry of rest) {
+			for (const quant of entry.quants) {
+				if (modelsStore.favoriteModelIds.has(quant.model)) {
+					favorites.push({ ...entry, base: quant, key: quant.id, quants: [quant] });
+				}
+			}
 
-		const { hidden, local } = splitHiddenQuants(
-			rest.filter((entry) => !claimed.has(entry.key)),
-			(option) => modelsStore.isHidden(option.id)
+			const remaining = entry.quants.filter(
+				(quant) => !modelsStore.favoriteModelIds.has(quant.model)
+			);
+
+			if (remaining.length > 0) {
+				localRest.push({ ...entry, base: remaining[0], quants: remaining });
+			}
+		}
+
+		const { hidden, local } = splitHiddenQuants(localRest, (option) =>
+			modelsStore.isHidden(option.id)
 		);
 		const ordered: ModelsTableGroup[] = [];
 		// loaded models lead the table, then favorites, then the local block

@@ -31,6 +31,7 @@ const modelsWithoutContext = models.map((model) => ({ ...model, contextLength: u
 beforeEach(() => {
 	modelsStore.routerModels = [];
 	modelsStore.models = modelsWithoutContext;
+	modelsStore.favoriteModelIds = new Set();
 	settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY] = false;
 });
 
@@ -98,6 +99,25 @@ it('sorts by context with family grouping on', async () => {
 	const descending = rowNames(screen.container);
 
 	expect(ascending).not.toEqual(descending);
+});
+
+it('lists the favorited quants of a repo as flat rows', async () => {
+	// one quant of the beta repo is a favorite, the other stays with the repo
+	modelsStore.favoriteModelIds = new Set(['org/alpha-8b:Q4_K_M', 'org/beta-8b:Q4_K_M']);
+
+	const screen = await renderWithModels([
+		modelsWithoutContext[0],
+		modelsWithoutContext[1],
+		option('org/beta-8b:Q8_0'),
+		modelsWithoutContext[2]
+	]);
+
+	// the favorite quant is a model row of its own, not a repo with subitems
+	expect(screen.container.textContent).not.toContain('2 quants available');
+
+	// the repo appears once in favorites for its favorited quant and once in the
+	// local block for the quant left behind
+	expect(screen.getByText(/beta\s+8B/).elements().length).toBe(2);
 });
 
 it('re-sorts when the Hub details arrive after the sort was clicked', async () => {
