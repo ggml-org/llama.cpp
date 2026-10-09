@@ -76,7 +76,10 @@
 			<ModelCapabilities hideModalities={deviceStore.isMobile} {option} />
 
 			{#if favorite}
-				<Heart class="h-3.5 w-3.5 shrink-0 text-rose-500" />
+				<!-- the heart is decorative, the button's text carries the state -->
+				<Heart aria-hidden="true" class="h-3.5 w-3.5 shrink-0 text-rose-500" />
+
+				<span class="sr-only">favorited</span>
 			{/if}
 		</span>
 	</button>

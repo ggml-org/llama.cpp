@@ -3,8 +3,10 @@
 
 import ModelsManagerWrapper from './components/ModelsManagerWrapper.svelte';
 import { SETTINGS_KEYS } from '$lib/constants';
+import { ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services';
 import { modelsStore, settingsStore } from '$lib/stores';
+import type { ApiModelDataEntry } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 import { SvelteMap } from 'svelte/reactivity';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -118,6 +120,77 @@ it('lists the favorited quants of a repo as flat rows', async () => {
 	// the repo appears once in favorites for its favorited quant and once in the
 	// local block for the quant left behind
 	expect(screen.getByText(/beta\s+8B/).elements().length).toBe(2);
+});
+
+/** A router listing entry carrying only the meta context. */
+function entry(model: string, nCtxTrain: number): ApiModelDataEntry {
+	return {
+		created: 0,
+		id: model,
+		in_cache: false,
+		meta: { n_ctx_train: nCtxTrain },
+		object: 'model',
+		owned_by: 'llamacpp',
+		path: `/models/${model}`,
+		status: { value: ServerModelStatus.UNLOADED }
+	};
+}
+
+it('sorts by the meta context of a listing without the router field', async () => {
+	// a listing that skips the router's GGUF read reports the trained context
+	// only as meta.n_ctx_train, so the option mapping falls back to it
+	vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+		if (url.includes('/props')) {
+			return new Response(
+				JSON.stringify({
+					default_generation_settings: { n_ctx: 0, params: {} },
+					model_alias: 'llama-server',
+					model_path: 'none',
+					role: 'router'
+				}),
+				{ headers: { 'Content-Type': 'application/json' }, status: 200 }
+			);
+		}
+
+		if (url.includes('/server')) {
+			return new Response(
+				JSON.stringify({ git_branch: 'test', git_commit: 'test', mode: 'router', version: 'test' }),
+				{ headers: { 'Content-Type': 'application/json' }, status: 200 }
+			);
+		}
+
+		if (/\/v1\/models|\/models\b/.test(url)) {
+			return new Response(
+				JSON.stringify({
+					data: [
+						entry('org/alpha-8b:Q4_K_M', 8192),
+						entry('org/beta-8b:Q4_K_M', 131072),
+						entry('org/gamma-8b:Q4_K_M', 32768)
+					],
+					object: 'list'
+				}),
+				{ headers: { 'Content-Type': 'application/json' }, status: 200 }
+			);
+		}
+
+		throw new Error(`unexpected fetch in the test: ${url}`);
+	});
+
+	const screen = render(ModelsManagerWrapper);
+
+	// the fetch maps the listing into options, the meta context fills in
+	await modelsStore.fetch(true);
+
+	await expect.element(screen.getByText(/gamma\s+8B/)).toBeVisible();
+
+	await screen.getByTitle('Sort by context, lowest first').click();
+
+	const names = rowNames(screen.container).join(' | ');
+
+	expect(names.indexOf('alpha')).toBeLessThan(names.indexOf('gamma'));
+	expect(names.indexOf('gamma')).toBeLessThan(names.indexOf('beta'));
 });
 
 it('re-sorts when the Hub details arrive after the sort was clicked', async () => {
