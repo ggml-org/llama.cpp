@@ -1064,18 +1064,21 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
     return LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED;
 }
 
-// Maps the GGUF `<arch>.hidden_activation` string to the FFN op type used by the
-// graph builders. Only gated activations that map cleanly to llm_ffn_op_type are
-// listed; unrecognized values fall back to GeGLU, which matches the historical
-// default for ModernBert-style architectures.
+// Maps GGUF activation names to the FFN op type used by the graph builders.
 static const std::map<std::string, llm_ffn_op_type> LLM_FFN_OP_TYPES_FROM_STRING = {
-    { "gelu",   LLM_FFN_GEGLU  },
-    { "geglu",  LLM_FFN_GEGLU  },
-    { "silu",   LLM_FFN_SWIGLU },
-    { "swish",  LLM_FFN_SWIGLU },
-    { "swiglu", LLM_FFN_SWIGLU },
-    { "relu",   LLM_FFN_RELU   },
-    { "reglu",  LLM_FFN_REGLU  },
+    { "gelu",              LLM_FFN_GEGLU_ERF },
+    { "gelu_python",       LLM_FFN_GEGLU_ERF },
+    { "gelu_pytorch_tanh", LLM_FFN_GEGLU     },
+    { "gelu_new",          LLM_FFN_GEGLU     },
+    { "gelu_fast",         LLM_FFN_GEGLU     },
+    { "gelu_accurate",     LLM_FFN_GEGLU     },
+    { "gelu_python_tanh",  LLM_FFN_GEGLU     },
+    { "geglu",             LLM_FFN_GEGLU     },
+    { "silu",              LLM_FFN_SWIGLU    },
+    { "swish",             LLM_FFN_SWIGLU    },
+    { "swiglu",            LLM_FFN_SWIGLU    },
+    { "relu",              LLM_FFN_RELU      },
+    { "reglu",             LLM_FFN_REGLU     },
 };
 
 // transformers names, "gelu" is the exact (erf) variant
