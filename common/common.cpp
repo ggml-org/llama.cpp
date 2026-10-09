@@ -1,8 +1,12 @@
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "gguf.h"
 
 #include "build-info.h"
 #include "common.h"
+
+#include "../src/llama-ext.h"
+
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
@@ -1030,50 +1034,17 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     return cache_directory / std::filesystem::u8path(filename);
 }
 
-std::vector<common_file_info> fs_list(const std::string & path, bool include_directories) {
-    std::vector<common_file_info> files;
-    if (path.empty()) return files;
-
-    std::filesystem::path dir(path);
-    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-        return files;
-    }
-
-    for (const auto & entry : std::filesystem::directory_iterator(dir)) {
-        try {
-            // Only include regular files (skip directories)
-            const auto & p = entry.path();
-            if (std::filesystem::is_regular_file(p)) {
-                common_file_info info;
-                info.path   = p.string();
-                info.name   = p.filename().string();
-                info.is_dir = false;
-                try {
-                    info.size = static_cast<size_t>(std::filesystem::file_size(p));
-                } catch (const std::filesystem::filesystem_error &) {
-                    info.size = 0;
-                }
-                files.push_back(std::move(info));
-            } else if (include_directories && std::filesystem::is_directory(p)) {
-                common_file_info info;
-                info.path   = p.string();
-                info.name   = p.filename().string();
-                info.size   = 0; // Directories have no size
-                info.is_dir = true;
-                files.push_back(std::move(info));
-            }
-        } catch (const std::filesystem::filesystem_error &) {
-            // skip entries we cannot inspect
-            continue;
-        }
-    }
-
-    return files;
-}
-
 //
 // TTY utils
 //
+
+bool common_is_tty(FILE * file) {
+#if defined(_WIN32)
+    return _isatty(_fileno(file));
+#else
+    return isatty(fileno(file));
+#endif
+}
 
 bool tty_can_use_colors() {
     // Check NO_COLOR environment variable (https://no-color.org/)
@@ -1092,10 +1063,21 @@ bool tty_can_use_colors() {
 
     // Check if stdout and stderr are connected to a terminal
     // We check both because log messages can go to either
-    bool stdout_is_tty = isatty(fileno(stdout));
-    bool stderr_is_tty = isatty(fileno(stderr));
+    return common_is_tty(stdout) || common_is_tty(stderr);
+}
 
-    return stdout_is_tty || stderr_is_tty;
+bool tty_enable_ansi() {
+#if defined(_WIN32)
+    // a Windows console renders ANSI sequences only in virtual terminal mode, pipes and files take them as is
+    for (DWORD id : { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) {
+        HANDLE h    = GetStdHandle(id);
+        DWORD  mode = 0;
+        if (GetConsoleMode(h, &mode) && !SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            return false;
+        }
+    }
+#endif
+    return true;
 }
 
 //
@@ -1181,11 +1163,15 @@ struct common_init_result::impl {
 };
 
 static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NAMES = {
-    { COMMON_DECISION_TYPE_OPENJEV, "openjev" },
-    { COMMON_DECISION_TYPE_LEV,     "lev"     },
-    { COMMON_DECISION_TYPE_KEV,     "kev"     },
-    { COMMON_DECISION_TYPE_NIMBLE,  "nimble"  },
-    { COMMON_DECISION_TYPE_LAYA,    "laya"    },
+    { COMMON_DECISION_TYPE_OPENJEV,        "openjev"       },
+    { COMMON_DECISION_TYPE_LEV,            "lev"           },
+    { COMMON_DECISION_TYPE_KEV,            "kev"           },
+    { COMMON_DECISION_TYPE_NIMBLE,         "nimble"        },
+    { COMMON_DECISION_TYPE_LAYA,           "laya"          },
+    { COMMON_DECISION_TYPE_CLEF,           "clef"          },
+    { COMMON_DECISION_TYPE_PPLX_DECIDER,   "pplx-decider"  },
+    { COMMON_DECISION_TYPE_LFM2_D1,        "lfm2-d1"       },
+    { COMMON_DECISION_TYPE_LFM2_D1_OMNI,   "lfm2-d1-omni"  },
 };
 
 static common_decision_type common_decision_type_from_string(const std::string & str) {
@@ -1207,6 +1193,41 @@ common_decision_type common_get_decision_type(const struct llama_model * model) 
         return COMMON_DECISION_TYPE_NONE;
     }
     return common_decision_type_from_string(buf);
+}
+
+common_decision_type common_get_decision_type(const std::string & fname) {
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(fname.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // missing or unreadable file
+    }
+
+    std::string arch;
+    const int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+    if (arch_id < 0) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // no architecture in the metadata
+    }
+    if (gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+    }
+    arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    if (arch.empty()) {
+        return COMMON_DECISION_TYPE_UNKNOWN;
+    }
+
+    const std::string key = arch + ".decision.type";
+    const int64_t type_id = gguf_find_key(gguf_ctx.get(), key.c_str());
+    if (type_id < 0) {
+        return COMMON_DECISION_TYPE_NONE;
+    }
+    if (gguf_get_kv_type(gguf_ctx.get(), type_id) != GGUF_TYPE_STRING) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+    }
+    return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
 }
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
@@ -1261,10 +1282,11 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    // this decision model returns a score for each token via the embeddings output
+    // these decision models return a score for each token via the embeddings output
     // TODO: maybe improve this in the future
     const auto decision_type = common_get_decision_type(model);
-    if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV) {
+    if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF ||
+        decision_type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         params.embedding    = true;
         params.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
@@ -1274,6 +1296,14 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_outputs_max_per_seq = 1;
 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
+    }
+
+    // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
+    // (server.cpp does this check for --embedding, but before the model is loaded)
+    if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
+        LOG_WRN("embeddings enabled: setting n_batch = n_ubatch = %u\n", cparams.n_ubatch);
+        cparams.n_batch = cparams.n_ubatch;
+        params.n_batch  = params.n_ubatch;
     }
 
     // load and optionally apply lora adapters
@@ -1654,7 +1684,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
-    mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    mparams.load_mtp                    = params.load_mtp || std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     return mparams;
 }
@@ -1694,6 +1724,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+
+    cparams.moe_cache_size = params.moe_cache_size;
 
     return cparams;
 }
@@ -2210,6 +2242,9 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
         if (t.output) {
             llama_batch_ext_set_output_logits(res, idx, true);
         }
+        if (t.decision_order != 0) {
+            llama_batch_ext_set_decision_order(res, idx, (llama_decision_order) t.decision_order);
+        }
     }
 
     return res;
@@ -2353,40 +2388,36 @@ void common_prompt_checkpoint::update_dft(
     }
 }
 
-void common_prompt_checkpoint::load_tgt(
+bool common_prompt_checkpoint::load_tgt(
         llama_context * ctx,
         llama_seq_id seq_id,
         llama_state_seq_flags flags) const {
     if (ctx == nullptr) {
-        return;
+        return true;
     }
 
     if (data_tgt.empty()) {
-        return;
+        return true;
     }
 
     const size_t n = llama_state_seq_set_data_ext(ctx, data_tgt.data(), data_tgt.size(), seq_id, flags);
-    if (n != data_tgt.size()) {
-        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_tgt.size(), n);
-    }
+    return n == data_tgt.size();
 }
 
-void common_prompt_checkpoint::load_dft(
+bool common_prompt_checkpoint::load_dft(
         llama_context * ctx,
         llama_seq_id seq_id,
         llama_state_seq_flags flags) const {
     if (ctx == nullptr) {
-        return;
+        return true;
     }
 
     if (data_dft.empty()) {
-        return;
+        return true;
     }
 
     const size_t n = llama_state_seq_set_data_ext(ctx, data_dft.data(), data_dft.size(), seq_id, flags);
-    if (n != data_dft.size()) {
-        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_dft.size(), n);
-    }
+    return n == data_dft.size();
 }
 
 void common_prompt_checkpoint::clear_tgt() {

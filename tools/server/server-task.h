@@ -89,8 +89,9 @@ struct task_params {
     std::string        control_action;
     std::string        control_cmpl_id;
 
-    // per-request parameters for chat parsing
-    common_chat_parser_params chat_parser_params;
+    // reported in generation_settings, parsing itself is owned by the chat session
+    common_chat_format      chat_format      = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
     // message spans for checkpointing
     common_chat_msg_spans message_spans;
@@ -106,9 +107,8 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_parser_params chat_parser_params;
+    common_chat_session chat_session; // owns all parsing for this generation
     common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
 
@@ -124,11 +124,11 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params);
+    task_result_state(common_chat_session session = {});
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
-        const std::string & text_added,
+        const common_chat_input & added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls = false);
@@ -178,8 +178,9 @@ struct server_task {
     // used by SERVER_TASK_TYPE_DECISION
     // where to read the model output of each option, exactly one of the two lists is used
     struct decision {
-        std::vector<llama_token> labels;  // logits of these tokens, at the last prompt token
-        std::vector<int32_t>     markers; // embeddings[column] at these prompt positions
+        std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
+        std::vector<int32_t>     label_groups; // if set, number of labels per output, the output is their max
+        std::vector<int32_t>     markers;      // embeddings[column] at these prompt positions
         int32_t                  column = 0;
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
         int32_t                  pointer = -1;
@@ -192,6 +193,11 @@ struct server_task {
             }
             return pos;
         }
+
+        // for a joint head: one value per prompt token, see llama_batch_ext_set_decision_order()
+        // the scores are the first n_scores rows of the embeddings
+        std::vector<int32_t> order;
+        int32_t              n_scores = 0;
     };
     decision decision;
 
@@ -212,7 +218,7 @@ struct server_task {
             case SERVER_TASK_TYPE_RERANK:
                 return true;
             case SERVER_TASK_TYPE_DECISION:
-                return !decision.markers.empty();
+                return !decision.markers.empty() || !decision.order.empty();
             default:
                 return false;
         }
@@ -252,6 +258,17 @@ struct server_task {
         return ids;
     }
 
+    void apply_chat_session(const common_chat_session & session) {
+        if (!session.has_template()) {
+            return;
+        }
+
+        session.apply_sampling(params.sampling);
+        params.chat_format = session.format();
+        params.antiprompt.insert(params.antiprompt.end(), session.additional_stops().begin(), session.additional_stops().end());
+        params.message_spans = tokens.find_message_spans(session.message_delimiters());
+    }
+
     void add_child(int id_parent, int id_child) {
         server_task copy;
 
@@ -269,12 +286,6 @@ struct server_task {
         }
 
         child_tasks.push_back(std::move(copy));
-    }
-
-    // the task will be moved into queue, then onto slots
-    // however, the state must be kept by caller (e.g., HTTP thread)
-    task_result_state create_state() const {
-        return task_result_state(params.chat_parser_params);
     }
 
     bool is_parent() const {
@@ -345,7 +356,7 @@ struct completion_token_output {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    std::string content;
+    common_chat_input content;
     llama_tokens tokens;
 
     bool stream;
@@ -420,8 +431,8 @@ struct server_task_result_cmpl_final : server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
-    std::string  content;
-    llama_tokens tokens;
+    common_chat_input content;
+    llama_tokens      tokens;
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;

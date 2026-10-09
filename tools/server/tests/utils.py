@@ -65,6 +65,7 @@ class ServerProcess:
     model_url: str | None = None
     model_file: str | None = None
     model_draft: str | None = None
+    model_draft_hf_repo: str | None = None
     n_threads: int | None = None
     n_gpu_layer: int | None = None
     n_batch: int | None = None
@@ -80,6 +81,7 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
+    ctkd: str | None = None
     fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
@@ -171,6 +173,8 @@ class ServerProcess:
             server_args.extend(["--model-url", self.model_url])
         if self.model_draft:
             server_args.extend(["--model-draft", self.model_draft])
+        if self.model_draft_hf_repo:
+            server_args.extend(["--hf-repo-draft", self.model_draft_hf_repo])
         if self.model_hf_repo:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:
@@ -221,6 +225,8 @@ class ServerProcess:
             server_args.extend(["-ctk", self.ctk])
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
+        if self.ctkd:
+            server_args.extend(["-ctkd", self.ctkd])
         if self.fa is not None:
             server_args.extend(["-fa", self.fa])
         if self.n_predict:

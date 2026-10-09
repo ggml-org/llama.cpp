@@ -3,12 +3,15 @@ import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-function mockProps(uiSettings: Record<string, string | number | boolean>) {
+function mockProps(
+	uiSettings: Record<string, string | number | boolean>,
+	params: Record<string, number> = { temperature: 0.8 }
+) {
 	Object.defineProperty(serverStore, 'props', {
 		configurable: true,
 		get: () =>
 			({
-				default_generation_settings: { params: { temperature: 0.8 } },
+				default_generation_settings: { params },
 				ui_settings: uiSettings
 			}) as unknown as typeof serverStore.props
 	});
@@ -22,6 +25,16 @@ describe('server ui_settings application semantics', () => {
 	it('applies the admin defaults once for a new user', () => {
 		settingsStore.initialize();
 		mockProps({ apiKey: '', theme: 'dark' });
+
+		settingsStore.syncWithServerDefaults();
+
+		expect(settingsStore.config.theme).toBe('dark');
+	});
+
+	it('applies the admin defaults when /props carries no sampling defaults', () => {
+		settingsStore.initialize();
+		// router mode: the main instance answers /props with empty params
+		mockProps({ theme: 'dark' }, {});
 
 		settingsStore.syncWithServerDefaults();
 

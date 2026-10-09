@@ -399,8 +399,11 @@ struct common_sampler * common_sampler_init(
             // only if user explicitly included adaptive-p sampler
             samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));
         } else {
-            // default: sample from distribution
-            samplers.push_back(llama_sampler_init_dist(params.seed));
+            // Keep distribution sampling when callers request probabilities.
+            const bool greedy = params.n_probs == 0 && !params.samplers.empty() &&
+                ((params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE && params.temp == 0.0f && params.dynatemp_range == 0.0f) ||
+                 (params.samplers.back() == COMMON_SAMPLER_TYPE_TOP_K && params.top_k == 1));
+            samplers.push_back(greedy ? llama_sampler_init_greedy() : llama_sampler_init_dist(params.seed));
         }
     } else if (params.mirostat == 1) {
         samplers.push_back(llama_sampler_init_temp(params.temp));
@@ -1046,4 +1049,42 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
     }
 
     return samplers;
+}
+
+void common_sampling_add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens) {
+    GGML_ASSERT(vocab != nullptr);
+    for (const auto & t : tokens) {
+        auto ids = common_tokenize(vocab, t, false, true);
+        if (ids.size() == 1) {
+            sampling.preserved_tokens.insert(ids[0]);
+        }
+    }
+}
+
+void common_sampling_add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers) {
+    GGML_ASSERT(vocab != nullptr);
+    for (auto & trigger : triggers) {
+        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
+            const auto & word = trigger.value;
+            auto ids = common_tokenize(vocab, word, false, true);
+            if (ids.size() == 1) {
+                auto token = ids[0];
+                if (std::find(sampling.preserved_tokens.begin(), sampling.preserved_tokens.end(), (llama_token) token) == sampling.preserved_tokens.end()) {
+                    throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
+                }
+                common_grammar_trigger token_trigger;
+                token_trigger.type  = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
+                token_trigger.value = word;
+                token_trigger.token = token;
+                sampling.grammar_triggers.push_back(std::move(token_trigger));
+            } else {
+                sampling.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
+            }
+        } else {
+            sampling.grammar_triggers.push_back(std::move(trigger));
+        }
+    }
+    if (sampling.grammar_lazy && sampling.grammar_triggers.empty()) {
+        throw std::runtime_error("Error: no triggers set for lazy grammar!");
+    }
 }
