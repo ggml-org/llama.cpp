@@ -357,12 +357,6 @@ class common_peg_arena {
 
     std::string dump(common_peg_parser_id id) const;
 
-    common_json to_json() const;
-    static common_peg_arena from_json(const common_json & j);
-
-    std::string save() const;
-    void load(const std::string & data);
-
     friend class common_peg_parser_builder;
 
   private:
