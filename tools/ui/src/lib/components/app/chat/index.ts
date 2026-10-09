@@ -192,11 +192,10 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
 /**
- * Model selector component for the chat form action bar. Renders a dropdown on desktop
- * and a trigger that opens the models manager on a phone, where the list lives.
+ * Model selector component for the chat form action bar and the assistant message
+ * model badge. Renders a dropdown on desktop and a bottom drawer on a phone.
  * Exposes an `open` method for programmatically opening the selector.
  */
-export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
 export { default as ChatFormActionReasoning } from './ChatForm/ChatFormActions/ChatFormActionReasoning.svelte';
 
 /**

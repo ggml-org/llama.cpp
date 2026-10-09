@@ -7,6 +7,7 @@ import {
 	groupModelOptions,
 	type ModelItem
 } from '$lib/utils';
+import { nameOf } from '$lib/utils/model-names';
 import { onMount } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 
@@ -193,7 +194,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					capabilities: [],
 					id: serverModel ? 'current' : 'offline-current',
 					model: displayModel,
-					name: displayModel.split('/').pop() || displayModel
+					name: nameOf(displayModel)
 				};
 			}
 
@@ -206,7 +207,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					capabilities: [],
 					id: 'not-in-cache',
 					model: currentModel,
-					name: currentModel.split('/').pop() || currentModel
+					name: nameOf(currentModel)
 				};
 			}
 

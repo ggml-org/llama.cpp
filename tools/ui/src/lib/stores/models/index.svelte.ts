@@ -12,7 +12,6 @@ import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
-	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
@@ -33,6 +32,12 @@ import { toast } from 'svelte-sonner';
 
 /** Group open states kept before the oldest ones fall off; the map only ever grows. */
 const MAX_GROUP_OPEN_ENTRIES = 200;
+/**
+ * Repos whose Hub details are prefetched on load. The Hub rate limits an
+ * unauthenticated client aggressively, so the warm slice stays far below the
+ * list window and the rest of the rows fetch as they scroll near the viewport.
+ */
+const HUB_WARM_LIMIT = 12;
 
 /** Union of the draft sidecar badges two sources report for one repo. */
 function mergedDraftSidecars(
@@ -548,9 +553,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
 		}
 
-		// a large catalog would fire one request per repo on every load, so warm the ones
-		// the lists mount first and let the rest arrive on demand
-		for (const repo of repos.slice(0, MODEL_ROW_WINDOW)) {
+		// the Hub rate limits aggressively and an unauthenticated burst of requests
+		// leaves every detail uncached for a retry on the next mount, so warm only the
+		// rows the lists show at rest and let the rest arrive near the viewport
+		for (const repo of repos.slice(0, HUB_WARM_LIMIT)) {
 			void HuggingFaceService.getDetails(repo).catch(() => {});
 		}
 	}

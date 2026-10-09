@@ -3,7 +3,13 @@
 	import ModelsManagerQuantRow from './ModelsManagerQuantRow.svelte';
 	import ModelsManagerRepoRow from './ModelsManagerRepoRow.svelte';
 	import ModelsManagerTableToolbar from './ModelsManagerTableToolbar.svelte';
-	import { modelContextLength, type ModelQuantGroup, type ModelsTableGroup } from './utils';
+	import {
+		hasActiveFilters,
+		modelContextLength,
+		type ModelQuantGroup,
+		type ModelsTableGroup,
+		statusRank
+	} from './utils';
 	import {
 		ArrowDown,
 		ArrowUp,
@@ -30,6 +36,7 @@
 		MODEL_ROW_GRID_CLASS,
 		MODEL_ROW_TRAILING_CELL_CLASS,
 		MODEL_ROW_WINDOW,
+		MODELS_TABLE_GROUP_STICKY_OFFSET,
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import {
@@ -74,7 +81,7 @@
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	let hasFilters = $derived(contextLimit > 0 || modalities.length > 0 || capabilities.length > 0);
+	let hasFilters = $derived(hasActiveFilters(contextLimit, modalities, capabilities));
 
 	/** Noun the show-more row counts in, per unit of the grouped list. */
 	const SHOW_MORE_NOUNS: Record<GroupedListUnit, string> = {
@@ -149,9 +156,9 @@
 			case ModelsTableSortKey.NAME:
 				return a.model.localeCompare(b.model);
 			case ModelsTableSortKey.STATUS:
-				return (
-					Number(modelsStore.isModelRunning(b.model)) - Number(modelsStore.isModelRunning(a.model))
-				);
+				// a running model leads, then one that is being worked on (loading,
+				// sleeping), then the rest; the reported status sorts the row's own cell
+				return statusRank(b) - statusRank(a);
 			default:
 				return 0;
 		}
@@ -399,7 +406,7 @@
 							modelsStore.setGroupCollapsed(group.key, key, collapsed)}
 						sectionWindow={MODEL_ROW_WINDOW}
 						stickyClass="bg-muted/30 backdrop-blur-lg"
-						stickyStyle="top: calc(2.25rem - 1px)"
+						stickyStyle={MODELS_TABLE_GROUP_STICKY_OFFSET}
 						weightOf={(entry) => entry.quants.length}
 					/>
 				</ModelsSection>

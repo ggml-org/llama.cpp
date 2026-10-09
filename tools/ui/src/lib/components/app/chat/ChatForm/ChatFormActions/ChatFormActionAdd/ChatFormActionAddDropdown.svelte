@@ -7,6 +7,8 @@
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		ATTACHMENT_FILE_ITEMS,
+		ATTACHMENT_MENU_TEXT,
+		ATTACHMENT_MODALITY_TEXT,
 		ATTACHMENT_TOOLTIP_TEXT,
 		ICON_CLASS_DEFAULT
 	} from '$lib/constants';
@@ -43,9 +45,18 @@
 	);
 
 	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
-		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: { icon: Mic, label: 'Audio' },
-		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: { icon: Video, label: 'Video' },
-		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: { icon: Image, label: 'Vision' }
+		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: {
+			icon: Mic,
+			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]
+		},
+		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: {
+			icon: Video,
+			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]
+		},
+		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: {
+			icon: Image,
+			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]
+		}
 	};
 
 	const supportedModalities = $derived.by(() =>
@@ -100,7 +111,7 @@
 				<File class={ICON_CLASS_DEFAULT} />
 
 				<span class="flex min-w-0 items-center gap-2">
-					<span>Add files</span>
+					<span>{ATTACHMENT_MENU_TEXT.ADD_FILES}</span>
 
 					{#if supportedModalities.length > 0}
 						<span class="flex items-center gap-0.75 text-muted-foreground">
@@ -129,7 +140,7 @@
 			>
 				<MessageSquare class={ICON_CLASS_DEFAULT} />
 
-				<span>System Message</span>
+				<span>{ATTACHMENT_MENU_TEXT.SYSTEM_MESSAGE}</span>
 			</DropdownMenu.Item>
 
 			<ChatFormActionAddToolsSubmenu />

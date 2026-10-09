@@ -156,8 +156,10 @@ export class ModelStatusManager {
 	private stopRequests = new SvelteMap<string, ModelDownloadStopRequest>();
 
 	/**
-	 * Cancel an in-flight download or remove a downloaded/failed entry from
-	 * the cache (ROUTER mode only).
+	 * Cancel an in-flight download, or remove a downloaded/failed entry from the
+	 * cache (ROUTER mode only). The server's remove endpoint covers both: dropping
+	 * a running download discards its partial files, dropping a cached model
+	 * deletes the files on disk, so the delete action resolves through this too.
 	 */
 	async cancelDownload(repoWithTag: string): Promise<boolean> {
 		if (!serverStore.isRouterMode) {

@@ -1,6 +1,7 @@
-/** Model selection UI for the chat form: the dropdown serves a desktop an anchored
- *  menu and a phone a bottom drawer, over their shared parts. */
+/** Model selection UI: a desktop serves an anchored dropdown menu and a phone a
+ *  bottom drawer, over their shared parts. */
 
+export { default as ModelsSelector } from './ModelsSelector.svelte';
 export { default as ModelsSelectorDropdown } from './ModelsSelectorDropdown.svelte';
 export { default as ModelsSelectorDrawer } from './ModelsSelectorDrawer.svelte';
 export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';

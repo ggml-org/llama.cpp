@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
+	import { hasActiveFilters } from './utils';
 	import { X } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
 	import { Button } from '$lib/components/ui/button';
@@ -28,10 +29,12 @@
 		toolbarEnd
 	}: Props = $props();
 
-	let hasFilters = $derived(contextLimit > 0 || modalities.length > 0 || capabilities.length > 0);
+	let hasFilters = $derived(hasActiveFilters(contextLimit, modalities, capabilities));
 	let filterInput = $state<HTMLInputElement | null>(null);
 
-	// the dialog hands focus to its first control, so the filter takes it instead
+	// The search takes the focus the dialog would give its first control: the input
+	// mounts a frame or two after the dialog opens (the toolbar renders below the
+	// table in the DOM), so the poll retries until the ref lands or gives up.
 	$effect(() => {
 		if (!uiStore.manageModelsOpen) return;
 

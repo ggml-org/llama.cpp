@@ -32,6 +32,15 @@ export const CHAT_INPUT_FOCUS_SELECTOR =
 /** Search input of an open dropdown-menu, focused after the menu mounts. */
 export const DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR = '[data-slot="dropdown-menu-content"] input';
 
+/**
+ * Sticky offset of a model-list group heading under the dropdown's search block:
+ * the search header exposes its height as `--dropdown-sticky-height`, and one
+ * section-header row (`py-2` over `text-[13px]` line height) minus the header's
+ * bottom border stacks the two sticky rows without a gap or an overlap.
+ */
+export const SELECTOR_GROUP_STICKY_OFFSET =
+	'top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem - 1px)';
+
 /** Filter controls above the model table: one box, one height, one fill. */
 export const FILTER_TRIGGER_CLASS = `
     h-8

@@ -9,7 +9,12 @@
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import Logo from '$lib/components/app/misc/Logo.svelte';
-	import { LOCAL_BACKEND_ID, MODEL_ROW_WINDOW, SETTINGS_KEYS } from '$lib/constants';
+	import {
+		LOCAL_BACKEND_ID,
+		MODEL_ROW_WINDOW,
+		SELECTOR_GROUP_STICKY_OFFSET,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import {
@@ -138,7 +143,7 @@
 			item={listItem}
 			keyOf={(row) => `${prefix}-${row.option.id}`}
 			onCollapsedChange={(key, collapsed) => modelsStore.setGroupCollapsed(prefix, key, collapsed)}
-			stickyStyle="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem - 1px)"
+			stickyStyle={SELECTOR_GROUP_STICKY_OFFSET}
 		/>
 	{:else}
 		<GroupedList item={listItem} {items} keyOf={(row) => `${prefix}-${row.option.id}`} />

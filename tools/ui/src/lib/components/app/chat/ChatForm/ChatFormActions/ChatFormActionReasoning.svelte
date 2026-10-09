@@ -73,9 +73,9 @@
 {#if isMobile}
 	<Button
 		aria-label="Reasoning effort"
-		class="h-auto gap-1 rounded-sm bg-transparent {isDefault
+		class="h-auto gap-1 rounded-sm bg-transparent! backdrop-blur-none! {isDefault
 			? 'px-1'
-			: 'px-1.75!'} py-1 text-xs max-md:h-8 max-md:hover:bg-transparent"
+			: 'px-1.75!'} py-1 text-xs max-md:h-8"
 		onclick={() => (isOpen = true)}
 		variant="ghost"
 	>
@@ -102,9 +102,9 @@
 				<Button
 					{...props}
 					aria-label="Reasoning effort"
-					class="h-auto gap-1 rounded-sm bg-transparent {isDefault
+					class="h-auto gap-1 rounded-sm bg-transparent! backdrop-blur-none! {isDefault
 						? 'px-1'
-						: 'px-1.75!'} py-1 text-xs max-md:hover:bg-transparent"
+						: 'px-1.75!'} py-1 text-xs hover:bg-transparent!"
 					variant="ghost"
 				>
 					{@render triggerLabel()}

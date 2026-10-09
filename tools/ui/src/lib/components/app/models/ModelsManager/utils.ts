@@ -1,5 +1,10 @@
-import { LOCAL_BACKEND_ID } from '$lib/constants';
-import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '$lib/enums';
+import { LOCAL_BACKEND_ID, type ModalityKey } from '$lib/constants';
+import {
+	ModelCapability,
+	ModelGroupKind,
+	ModelsTableGroupKind,
+	ServerModelStatus
+} from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
 import type { ModelDownloadEntry, ModelDownloadProgress, ModelOption } from '$lib/types/models';
@@ -11,6 +16,29 @@ export interface ModelQuantGroup {
 	key: string;
 	kind: ModelGroupKind;
 	quants: ModelOption[];
+}
+
+/** True when any of the manager's filters narrows the table. */
+export function hasActiveFilters(
+	contextLimit: number,
+	modalities: ModalityKey[],
+	capabilities: ModelCapability[]
+): boolean {
+	return contextLimit > 0 || modalities.length > 0 || capabilities.length > 0;
+}
+
+/**
+ * Order a status sorts behind: loaded first, then a model being worked on
+ * (loading, sleeping), then the rest.
+ */
+export function statusRank(option: ModelOption): number {
+	const status = modelsStore.getModelStatus(option.model);
+
+	if (modelsStore.isModelRunning(option.model)) return 2;
+
+	if (status === ServerModelStatus.LOADING || status === ServerModelStatus.SLEEPING) return 1;
+
+	return 0;
 }
 
 /** Byte counts of a tracked download: live while it runs, frozen while paused. */

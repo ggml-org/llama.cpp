@@ -147,6 +147,7 @@ proxy: {
 | ----------------- | ------------------------------- | -------------------------------------------------------- |
 | **Framework**     | SvelteKit + Svelte 5            | Reactive UI with runes (`$state`, `$derived`, `$effect`) |
 | **UI Components** | shadcn-svelte + bits-ui         | Accessible, customizable component library               |
+| **Drawers**       | vaul-svelte                     | Draggable drawer overlays (mobile pickers, model pane)   |
 | **Styling**       | TailwindCSS 4                   | Utility-first CSS with design tokens                     |
 | **Database**      | IndexedDB (Dexie)               | Client-side storage for conversations and messages       |
 | **Build**         | Vite                            | Fast bundling with static adapter                        |

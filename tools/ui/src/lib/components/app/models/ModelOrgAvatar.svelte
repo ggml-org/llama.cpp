@@ -1,11 +1,23 @@
 <script lang="ts">
 	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 
-	// Orgs whose avatar failed before. A row remounting (scrolling, reopening
-	// the selector) must not re-request them; the monogram renders instead.
-	const failedAvatarOrgs = new SvelteSet<string>();
+	// Avatars a failed request is cooling down for. A failure hides the image
+	// immediately, but the org gets another chance on a later mount: the cooldown
+	// expires on its own, so a transient network blip is not permanent for the
+	// session. A row remounting inside the cooldown renders the monogram instead
+	// of re-requesting the same failing URL.
+	const AVATAR_RETRY_DELAY_MS = 60_000;
+	const failedAvatarOrgs = new SvelteMap<string, number>();
+
+	/** True while an org's failed avatar is still inside its retry cooldown. */
+	function isAvatarCoolingDown(org: string): boolean {
+		const failedAt = failedAvatarOrgs.get(org);
+
+		// a stale entry reads as not failed and is dropped on the next onerror
+		return failedAt !== undefined && Date.now() - failedAt < AVATAR_RETRY_DELAY_MS;
+	}
 
 	interface Props {
 		class?: string;
@@ -32,8 +44,8 @@
 	// With the Hub metadata setting off there is nothing to fetch and nothing to
 	// show: the avatar is hidden entirely instead of falling back to a monogram.
 	let hubEnabled = $derived(HuggingFaceService.isEnabled());
-	let orgAvatarFailed = $derived(failedAvatarOrgs.has(org));
-	let quantAvatarFailed = $derived(failedAvatarOrgs.has(quantOrg ?? ''));
+	let orgAvatarFailed = $derived(isAvatarCoolingDown(org));
+	let quantAvatarFailed = $derived(isAvatarCoolingDown(quantOrg ?? ''));
 
 	let invertAvatar = $derived(DARK_INVERT_AVATAR_ORGS.includes(org));
 	let invertQuant = $derived(DARK_INVERT_AVATAR_ORGS.includes(quantOrg ?? ''));
@@ -79,7 +91,7 @@
 					crossorigin="anonymous"
 					loading="lazy"
 					onerror={() => {
-						failedAvatarOrgs.add(org);
+						failedAvatarOrgs.set(org, Date.now());
 					}}
 					src={HuggingFaceService.getAvatarUrl(org)}
 				/>
@@ -107,7 +119,7 @@
 						crossorigin="anonymous"
 						loading="lazy"
 						onerror={() => {
-							failedAvatarOrgs.add(quantOrg ?? '');
+							failedAvatarOrgs.set(quantOrg ?? '', Date.now());
 						}}
 						src={HuggingFaceService.getAvatarUrl(quantOrg)}
 					/>

@@ -2,17 +2,18 @@
 	import { SkipForward, Square } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import {
-		ChatFormActionModels,
 		ChatFormActionReasoning,
 		ChatFormActionRecord,
 		ChatFormActionsAdd,
 		ChatFormActionSubmit,
-		ChatFormContextGauge
+		ChatFormContextGauge,
+		ModelsSelector
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
+	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
 	import { ChatService } from '$lib/services';
 	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
@@ -53,12 +54,20 @@
 
 	let currentConfig = $derived(settingsStore.config);
 
-	let hasAudioModality = $state(false);
-	let hasVideoModality = $state(false);
-	let hasVisionModality = $state(false);
-	let hasModelSelected = $state(false);
-	let isSelectedModelInCache = $state(true);
-	let submitTooltip = $state('');
+	const formModel = useChatFormModel();
+
+	let hasAudioModality = $derived(formModel.hasAudioModality);
+	let hasVideoModality = $derived(formModel.hasVideoModality);
+	let hasVisionModality = $derived(formModel.hasVisionModality);
+	let hasModelSelected = $derived(formModel.hasModelSelected);
+	let isSelectedModelInCache = $derived(formModel.isSelectedModelInCache);
+	let submitTooltip = $derived.by(() => {
+		if (!hasModelSelected) return 'Please select a model first';
+
+		if (!isSelectedModelInCache) return 'Selected model is not available, please select another';
+
+		return '';
+	});
 
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
@@ -67,7 +76,7 @@
 		hasAudioModality && !canSubmit && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
 
-	let selectorModelRef: ChatFormActionModels | undefined = $state(undefined);
+	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
@@ -158,13 +167,7 @@
 		{#if showModelSelector}
 			<ChatFormActionReasoning />
 
-			<ChatFormActionModels
-				bind:hasAudioModality
-				bind:hasModelSelected
-				bind:hasVideoModality
-				bind:hasVisionModality
-				bind:isSelectedModelInCache
-				bind:submitTooltip
+			<ModelsSelector
 				bind:this={selectorModelRef}
 				{disabled}
 				forceForegroundText

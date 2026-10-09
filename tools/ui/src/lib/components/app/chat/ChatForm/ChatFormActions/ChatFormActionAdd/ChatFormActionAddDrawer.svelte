@@ -13,7 +13,12 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ATTACHMENT_FILE_ITEMS, ICON_CLASS_DEFAULT } from '$lib/constants';
+	import {
+		ATTACHMENT_FILE_ITEMS,
+		ATTACHMENT_MENU_TEXT,
+		ATTACHMENT_MODALITY_TEXT,
+		ICON_CLASS_DEFAULT
+	} from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums/attachment.enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
@@ -49,9 +54,18 @@
 	);
 
 	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
-		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: { icon: Mic, label: 'Audio' },
-		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: { icon: Video, label: 'Video' },
-		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: { icon: Image, label: 'Vision' }
+		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: {
+			icon: Mic,
+			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]
+		},
+		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: {
+			icon: Video,
+			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]
+		},
+		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: {
+			icon: Image,
+			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]
+		}
 	};
 
 	const supportedModalities = $derived.by(() =>
@@ -75,10 +89,10 @@
 
 		<Drawer.Content class="gap-0 overflow-y-auto">
 			<Drawer.Header>
-				<Drawer.Title>Add to chat</Drawer.Title>
+				<Drawer.Title>{ATTACHMENT_MENU_TEXT.ADD_TO_CHAT}</Drawer.Title>
 
 				<Drawer.Description class="sr-only">
-					Add files, system prompt or pick the tools the model may call
+					{ATTACHMENT_MENU_TEXT.DESCRIPTION}
 				</Drawer.Description>
 			</Drawer.Header>
 
@@ -91,7 +105,7 @@
 					<File class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 					<span class="flex min-w-0 items-center gap-2">
-						<span>Add files</span>
+						<span>{ATTACHMENT_MENU_TEXT.ADD_FILES}</span>
 
 						{#if supportedModalities.length > 0}
 							<span class="flex items-center gap-0.75 text-muted-foreground">
@@ -118,7 +132,7 @@
 				>
 					<MessageSquare class="{ICON_CLASS_DEFAULT} shrink-0" />
 
-					<span>System Message</span>
+					<span>{ATTACHMENT_MENU_TEXT.SYSTEM_MESSAGE}</span>
 				</button>
 
 				{#if toolsPanel.totalToolCount > 0}
@@ -132,7 +146,7 @@
 
 							<PencilRuler class="inline {ICON_CLASS_DEFAULT} shrink-0" />
 
-							<span class="flex-1">Tools</span>
+							<span class="flex-1">{ATTACHMENT_MENU_TEXT.TOOLS}</span>
 						</Collapsible.Trigger>
 
 						<Collapsible.Content>

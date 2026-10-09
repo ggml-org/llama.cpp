@@ -243,6 +243,9 @@
 
 	/** Switch the open chat to this model, the way the desktop model dropdown does. */
 	async function useInChat(option: ModelOption): Promise<void> {
+		// a deliberate pick records the recency; useInNewChat skips it because a new
+		// conversation is where the pick is exercised, not a return to a model the
+		// user went looking for
 		await modelsStore.selectModelById(option.id, { recordRecent: true });
 
 		loadInBackground(option);
