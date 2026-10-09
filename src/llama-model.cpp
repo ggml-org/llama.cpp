@@ -1992,8 +1992,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     return true;
 }
 
-// prism.hadamard: read and check the metadata of a GGUF with folded weights, and record which
-// weights need the activation-side transform. load_tensors_hadamard makes the tensors later.
+// read and check the prism.hadamard metadata, and record the folded weights (load_tensors_hadamard makes the tensors)
 void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
     uint32_t hadamard_version = 0;
     ml.get_key(LLM_KV_PRISM_HADAMARD_TIED_OUTPUT, hdmd.tied_output, false);
@@ -2042,8 +2041,7 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
             std::vector<int32_t> sign_values;
             ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_WIDTHS, sign_widths);
             ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_VALUES, sign_values);
-            // explicit mode with no widths would leave the sign table empty, which reads
-            // as identity later and silently changes the model function
+            // explicit mode with no widths gives an empty sign table, which acts as identity and changes the model
             if (sign_widths.empty()) {
                 throw std::runtime_error("prism.hadamard.sign_mode is explicit but sign_widths is empty");
             }
@@ -2068,9 +2066,7 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
 
         ml.get_key(LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED, hdmd.gdn_v_grouped, false);
 
-        // the activation-side transform is applied only by build_lora_mm/build_lora_mm_id;
-        // refuse to load folded weights for architectures or tensor kinds that are not
-        // verified to route every matmul through those helpers, rather than run wrong math
+        // only build_lora_mm/build_lora_mm_id apply the transform: refuse archs and tensor kinds that can skip them
         switch (arch) {
             case LLM_ARCH_LLAMA:
             case LLM_ARCH_QWEN3:
@@ -2085,10 +2081,8 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
                     llm_arch_name(arch)));
         }
 
-        // A folded weight is a weight W that the converter stores as W_f = W*D*H, where D is a
-        // diagonal matrix of +1/-1 signs and H is the normalized block Hadamard matrix.
-        // H*H = I and D*D = I, so W*x = W_f*(H*(D*x)): the graph applies the signs and then H
-        // to the matmul input of each folded weight (see llm_graph_context::build_hadamard_input).
+        // a folded weight W_f = W*D*H is the weight W with the +1/-1 signs D and the normalized block Hadamard H folded in
+        // H*H = I and D*D = I, so W*x = W_f*(H*(D*x)): the graph applies D, then H, to the matmul input
         const auto is_foldable_weight = [](const std::string & name) {
             static const char * kinds[] = {
                 "attn_q", "attn_k", "attn_v", "attn_qkv", "attn_gate", "attn_output",
@@ -2130,13 +2124,11 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
             }
         }
 
-        // tensors consumed by row lookup store latent rows and need the
-        // inverse transform applied to the lookup result instead
+        // tables read by row lookup store latent rows: the inverse transform goes on the lookup result
         std::vector<std::string> inverse_names;
         ml.get_arr(LLM_KV_PRISM_HADAMARD_INVERSE_WEIGHT_NAMES, inverse_names, false);
         for (const auto & name : inverse_names) {
-            // the graph applies the inverse only to the token-embedding lookup; any
-            // other latent table would load and silently stay rotated
+            // the graph applies the inverse only after the token-embedding lookup, other latent tables stay rotated
             if (name != "token_embd.weight") {
                 throw std::runtime_error(format(
                     "prism.hadamard: weight '%s' is not a verified inverse-after-lookup table", name.c_str()));
@@ -2161,13 +2153,8 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
     }
 }
 
-// prism.hadamard: make the tensors for the activation-side transform of the folded weights.
-// The GGUF does not contain these tensors, so this function generates them after the weights load:
-// - one normalized Hadamard matrix for each block size, for the rotation
-// - one sign vector for each input width, from the sign values in the metadata (explicit sign mode)
-// Each tensor goes to the buffer type of the weights that use it, but never to a CPU extra buffer type.
-// Each folded weight then gets its transform in hadamard_rotations (matmul input) or
-// hadamard_inverses (row lookup of a latent table).
+// make one Hadamard matrix per block size and one sign vector per width (the GGUF does not contain them)
+// each tensor goes on the buffer type of its weights (never a CPU extra type), and each transform goes in hdmd.rot or hdmd.inv
 void llama_model_base::load_tensors_hadamard() {
     if (hdmd.weight_blocks.empty() && hdmd.inverse_blocks.empty()) {
         return;
@@ -2186,10 +2173,7 @@ void llama_model_base::load_tensors_hadamard() {
         { &hdmd.weight_blocks,  &hdmd.rot },
         { &hdmd.inverse_blocks, &hdmd.inv  },
     };
-    // inverse (lookup-side) transforms must not inherit a host buffer
-    // type from a CPU-mapped table: the per-token transform would then
-    // ping-pong across the PCIe boundary. Prefer the buffer type the
-    // forward rotations live on (the GPU when layers are offloaded).
+    // inverse transforms use the buffer type of the forward rotations, not the host type of a CPU-mapped table (no PCIe round trip per token)
     ggml_backend_buffer_type_t preferred_buft = nullptr;
 
     for (const auto & [blocks, target] : groups)

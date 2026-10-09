@@ -942,8 +942,7 @@ public:
 
     void add_fused_node(llm_graph_fused_node result);
 
-    // Hadamard-transformed activations built so far, keyed by (input, rotation), so that
-    // folded weights reading the same activation share one transform
+    // Hadamard-transformed activations, keyed by (input, rotation): folded weights that read the same activation share one transform
     ggml_tensor * get_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot) const;
     void          set_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot, ggml_tensor * res);
 

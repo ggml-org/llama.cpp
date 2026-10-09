@@ -26,10 +26,8 @@
 // llama_context
 //
 
-// Verify that every Hadamard-folded weight consumed by the graph receives its
-// activation-side transform, and every latent lookup table gets the inverse.
-// An architecture whose matmul path bypasses the transform helpers would
-// otherwise load cleanly and silently compute wrong results.
+// check that each folded weight in the graph gets its Hadamard transform, and each latent lookup gets the inverse
+// without this check, an arch that skips the transform helpers loads and computes wrong results
 static void llama_verify_hadamard_graph(
         ggml_cgraph * gf,
         const llama_hadamard_rotations & rotations,
@@ -2637,8 +2635,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * gf = model.build_graph(gparams);
 
-    // verify transform coverage on the pristine graph: after scheduling,
-    // cross-backend copies break the producer chain the check follows
+    // check the graph before scheduling: cross-backend copies break the producer chain that the check follows
     if (!hadamard_verified && gf && (!model.hdmd.rot.empty() || !model.hdmd.inv.empty())) {
         llama_verify_hadamard_graph(gf, model.hdmd.rot, model.hdmd.inv);
         hadamard_verified = true;
