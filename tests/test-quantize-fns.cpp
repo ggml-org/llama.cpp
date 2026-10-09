@@ -192,6 +192,7 @@ static int test_vec_dot_q(bool verbose) {
                 type == GGML_TYPE_TQ1_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                 type == GGML_TYPE_TQ2_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                 type == GGML_TYPE_Q2_0    ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
+                type == GGML_TYPE_PTQ1_0  ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                 type == GGML_TYPE_Q2_K    ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
                 type == GGML_TYPE_IQ2_S   ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
                 type == GGML_TYPE_Q3_K    ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
@@ -217,7 +218,7 @@ static int test_vec_dot_q(bool verbose) {
                 ? MAX_DOT_PRODUCT_ERROR_LOWBIT
                 : type == GGML_TYPE_Q1_0
                 ? MAX_DOT_PRODUCT_ERROR_BINARY
-                : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0 || type == GGML_TYPE_Q2_0
+                : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0 || type == GGML_TYPE_Q2_0 || type == GGML_TYPE_PTQ1_0
                 ? MAX_DOT_PRODUCT_ERROR_TERNARY
                 : type == GGML_TYPE_NVFP4
                 ? MAX_DOT_PRODUCT_ERROR_FP4
@@ -279,6 +280,43 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
     return num_failed;
 }
 
+// Weights that are already ternary with one scale per 128 elements must survive a
+// PTQ1_0 round trip exactly. The scales are exact in fp16, so any difference is a codec bug.
+static int test_ptq1_0_roundtrip(bool verbose) {
+    const auto * qfns     = ggml_get_type_traits(GGML_TYPE_PTQ1_0);
+    const auto * qfns_cpu = ggml_get_type_traits_cpu(GGML_TYPE_PTQ1_0);
+
+    const int n_blocks = 64;
+    const int n        = n_blocks * 128;
+
+    std::vector<float>   x(n), y(n);
+    std::vector<uint8_t> q(ggml_row_size(GGML_TYPE_PTQ1_0, n));
+
+    uint32_t seed = 1;
+    for (int b = 0; b < n_blocks; b++) {
+        const float scale = 0.25f * (1 + b % 8);
+        for (int i = 0; i < 128; i++) {
+            seed = seed * 1103515245u + 12345u;
+            x[b*128 + i] = scale * (float) ((int) ((seed >> 16) % 3) - 1);
+        }
+        x[b*128 + b % 128] = scale; // keep the block maximum at the scale
+    }
+
+    qfns_cpu->from_float(x.data(), q.data(), n);
+    qfns->to_float(q.data(), y.data(), n);
+
+    int n_diff = 0;
+    for (int i = 0; i < n; i++) {
+        n_diff += x[i] != y[i];
+    }
+
+    const bool failed = n_diff != 0;
+    if (failed || verbose) {
+        printf("%5s ternary round trip:            %s (%d of %d values differ)\n", ggml_type_name(GGML_TYPE_PTQ1_0), RESULT_STR[failed], n_diff, n);
+    }
+    return failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -301,6 +339,7 @@ int main(int argc, char * argv[]) {
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
     num_failed += test_quantize_imatrix_degenerate(verbose);
+    num_failed += test_ptq1_0_roundtrip(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
