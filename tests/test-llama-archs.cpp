@@ -7,7 +7,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 
-// TODO: replace with #include "llama-ext.h" in the future
+#include "../src/llama-ext.h"
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
 
@@ -651,6 +651,68 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+static bool arch_supports_layer_inp(const llm_arch arch) {
+    switch (arch) {
+        case LLM_ARCH_GLM5_NEXT:
+        case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_LLAMA:
+        case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN4EXP:
+        case LLM_ARCH_MIMO2:
+        case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_OPENAI_MOE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool check_layer_inp(
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+    const uint32_t n_layer = llama_model_n_layer(model);
+    if (n_layer == 0) {
+        return true;
+    }
+
+    llama_memory_clear(llama_get_memory(lctx), true);
+
+    // request layer 0 and layer n_layer - 1
+    llama_set_embeddings_layer_inp(lctx, 0, true);
+    if (n_layer > 1) {
+        llama_set_embeddings_layer_inp(lctx, n_layer - 1, true);
+    }
+
+    common_batch batch(lctx);
+    batch.clear();
+    for (size_t i = 0; i < std::min<size_t>(tokens.size(), 4); i++) {
+        batch.add(tokens[i], (llama_pos) i, 0, true);
+    }
+
+    const int32_t rc = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+
+    // reset settings
+    llama_set_embeddings_layer_inp(lctx, 0, false);
+    if (n_layer > 1) {
+        llama_set_embeddings_layer_inp(lctx, n_layer - 1, false);
+    }
+
+    if (rc != 0) {
+        LOG_ERR("%s: llama_process returned %d\n", __func__, rc);
+        return false;
+    }
+
+    float * embd_0 = llama_get_embeddings_layer_inp(lctx, 0);
+    if (embd_0 == nullptr) {
+        LOG_ERR("%s: layer input embeddings are null\n", __func__);
+        return false;
+    }
+
+    return true;
+}
+
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_LLAMA4:
@@ -1057,6 +1119,13 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         if (!encode && !check_causal_attn_toggle(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens)) {
                             if (test_ok) {
                                 status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
+                            }
+                            test_ok = false;
+                        }
+
+                        if (!encode && arch_supports_layer_inp(arch) && !check_layer_inp(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens)) {
+                            if (test_ok) {
+                                status_nmse = "\033[1;31mFAIL\033[0m (layer_inp)";
                             }
                             test_ok = false;
                         }
