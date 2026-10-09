@@ -1374,6 +1374,7 @@ void llm_graph_result::reset() {
 
     inputs.clear();
     fused_nodes.clear();
+    hdmd_inputs.clear();
 
     buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
 
@@ -1479,6 +1480,15 @@ void llm_graph_result::add_fused_node(llm_graph_fused_node result) {
     fused_nodes.push_back(result);
 }
 
+ggml_tensor * llm_graph_result::get_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot) const {
+    const auto it = hdmd_inputs.find({ cur, rot });
+    return it == hdmd_inputs.end() ? nullptr : it->second;
+}
+
+void llm_graph_result::set_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot, ggml_tensor * res) {
+    hdmd_inputs[{ cur, rot }] = res;
+}
+
 void llm_graph_result::set_params(const llm_graph_params & params) {
     this->params = params;
 }
@@ -1526,8 +1536,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cross            (params.cross),
     moe_cache        (params.moe_cache),
     prec_policy      (params.prec_policy),
-    hadamard_rotations(params.hadamard_rotations),
-    hadamard_inverses(params.hadamard_inverses),
+    hdmd_rot         (params.hdmd_rot),
+    hdmd_inv         (params.hdmd_inv),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1553,17 +1563,16 @@ ggml_tensor * llm_graph_context::build_cvec(
 ggml_tensor * llm_graph_context::build_hadamard_input(
           ggml_tensor * w,
           ggml_tensor * cur) const {
-    if (!hadamard_rotations) {
+    if (!hdmd_rot) {
         return cur;
     }
-    const auto it = hadamard_rotations->find(w);
-    if (it == hadamard_rotations->end()) {
+    const auto it = hdmd_rot->find(w);
+    if (it == hdmd_rot->end()) {
         return cur;
     }
     const auto & t = it->second;
-    const auto key = std::make_pair((const ggml_tensor *) cur, (const ggml_tensor *) t.rot);
-    if (const auto memo = hadamard_memo.find(key); memo != hadamard_memo.end()) {
-        return memo->second;
+    if (ggml_tensor * x = res->get_hdmd_input(cur, t.rot)) {
+        return x;
     }
     ggml_tensor * x = cur;
     if (t.perm_rep > 1) {
@@ -1578,7 +1587,7 @@ ggml_tensor * llm_graph_context::build_hadamard_input(
         x = ggml_mul(ctx0, x, t.signs);
     }
     x = llama_mul_mat_hadamard(ctx0, x, t.rot);
-    hadamard_memo[key] = x;
+    res->set_hdmd_input(cur, t.rot, x);
     return x;
 }
 
@@ -2559,8 +2568,8 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     //       need to add lora tests and refactor the logic to make the lora GET_ROWS go at the front of the graph
     auto build_tok = [&](ggml_tensor * cur, ggml_tensor * ids) {
         // a Hadamard-latent table stores rotated rows: restore the primal basis, h = s * (H z)
-        if (hadamard_inverses) {
-            if (const auto it = hadamard_inverses->find(tok_embd); it != hadamard_inverses->end()) {
+        if (hdmd_inv) {
+            if (const auto it = hdmd_inv->find(tok_embd); it != hdmd_inv->end()) {
                 cur = llama_mul_mat_hadamard(ctx0, cur, it->second.rot);
                 if (it->second.signs) {
                     cur = ggml_mul(ctx0, cur, it->second.signs);

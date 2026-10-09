@@ -24,12 +24,28 @@ struct ggml_tensor;
 struct llama_hadamard_transform {
     ggml_tensor * rot;
     ggml_tensor * signs; // nullptr for identity sign mode
+
     // when perm_rep > 1 the activation arrives with its feature axis in tiled
     // head order [hd, nk, rep] and must be permuted to the grouped order
     // [hd, rep, nk] the fold was computed in, before signs and rotation
     int64_t perm_hd  = 0;
     int64_t perm_nk  = 0;
     int64_t perm_rep = 0;
+
+    // Gated delta net output projection (ssm_out): its input holds the n_v value heads
+    // in the tiled order of the recurrent state, where each of the n_k key heads is
+    // repeated n_v/n_k times, while the fold was computed with the heads grouped per key
+    // head. Record the head geometry so the activation is permuted before the transform.
+    // Returns false if the geometry does not match the input width n_in.
+    bool set_gdn_v_perm(int64_t n_in, int64_t n_v, int64_t n_k) {
+        if (n_k <= 0 || n_v <= 0 || n_v % n_k != 0 || n_in % n_v != 0) {
+            return false;
+        }
+        perm_hd  = n_in / n_v;
+        perm_nk  = n_k;
+        perm_rep = n_v / n_k;
+        return true;
+    }
 };
 using llama_hadamard_rotations = std::unordered_map<const ggml_tensor *, llama_hadamard_transform>;
 
@@ -816,8 +832,8 @@ struct llm_graph_params {
 
     const llama_prec_policy * prec_policy = nullptr;
 
-    const llama_hadamard_rotations * hadamard_rotations = nullptr; // folded weight -> activation transform
-    const llama_hadamard_rotations * hadamard_inverses  = nullptr; // latent lookup table -> inverse transform
+    const llama_hadamard_rotations * hdmd_rot = nullptr; // folded weight -> activation transform
+    const llama_hadamard_rotations * hdmd_inv = nullptr; // latent lookup table -> inverse transform
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -958,6 +974,11 @@ public:
 
     void add_fused_node(llm_graph_fused_node result);
 
+    // Hadamard-transformed activations built so far, keyed by (input, rotation), so that
+    // folded weights reading the same activation share one transform
+    ggml_tensor * get_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot) const;
+    void          set_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot, ggml_tensor * res);
+
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
 
     void set_params(const llm_graph_params & params);
@@ -979,6 +1000,8 @@ public:
 
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
+
+    std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hdmd_inputs;
 
     ggml_context_ptr ctx_compute;
 
@@ -1063,12 +1086,8 @@ struct llm_graph_context {
 
     const llama_prec_policy * prec_policy;
 
-    const llama_hadamard_rotations * hadamard_rotations;
-    const llama_hadamard_rotations * hadamard_inverses;
-
-    // transforms shared by folded weights that read the same activation, keyed by (input, rotation);
-    // valid for one graph build
-    mutable std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hadamard_memo;
+    const llama_hadamard_rotations * hdmd_rot;
+    const llama_hadamard_rotations * hdmd_inv;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 

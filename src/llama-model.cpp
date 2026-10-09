@@ -1332,8 +1332,8 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
 
     uint32_t hadamard_version = 0;
-    ml.get_key("prism.hadamard.tied_output", hadamard_tied_output, false);
-    if (ml.get_key("prism.hadamard.version", hadamard_version, false)) {
+    ml.get_key(LLM_KV_PRISM_HADAMARD_TIED_OUTPUT, hadamard_tied_output, false);
+    if (ml.get_key(LLM_KV_PRISM_HADAMARD_VERSION, hadamard_version, false)) {
         if (hadamard_version != 1 && hadamard_version != 2) {
             throw std::runtime_error(format("unsupported prism.hadamard.version: %u", hadamard_version));
         }
@@ -1351,11 +1351,11 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         std::string sign_mode;
         std::vector<std::string> weight_names;
 
-        ml.get_key("prism.hadamard.block_size", block_size);
-        ml.get_key("prism.hadamard.transform", transform);
-        ml.get_key("prism.hadamard.axis", axis);
-        ml.get_key("prism.hadamard.sign_mode", sign_mode);
-        ml.get_arr("prism.hadamard.weight_names", weight_names);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_BLOCK_SIZE, block_size);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_TRANSFORM, transform);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_AXIS, axis);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_SIGN_MODE, sign_mode);
+        ml.get_arr(LLM_KV_PRISM_HADAMARD_WEIGHT_NAMES, weight_names);
 
         if (block_size == 0 || (block_size & (block_size - 1)) != 0) {
             throw std::runtime_error(format("invalid prism.hadamard.block_size: %u", block_size));
@@ -1376,8 +1376,8 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         if (sign_mode == "explicit") {
             std::vector<int32_t> sign_widths;
             std::vector<int32_t> sign_values;
-            ml.get_arr("prism.hadamard.sign_widths", sign_widths);
-            ml.get_arr("prism.hadamard.sign_values", sign_values);
+            ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_WIDTHS, sign_widths);
+            ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_VALUES, sign_values);
             // explicit mode with no widths would leave the sign table empty, which reads
             // as identity later and silently changes the model function
             if (sign_widths.empty()) {
@@ -1402,7 +1402,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
             }
         }
 
-        ml.get_key("prism.hadamard.gdn_v_grouped", hadamard_gdn_v_grouped, false);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED, hadamard_gdn_v_grouped, false);
 
         // the activation-side transform is applied only by build_lora_mm/build_lora_mm_id;
         // refuse to load folded weights for architectures or tensor kinds that are not
@@ -1465,7 +1465,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         // tensors consumed by row lookup store latent rows and need the
         // inverse transform applied to the lookup result instead
         std::vector<std::string> inverse_names;
-        ml.get_arr("prism.hadamard.inverse_weight_names", inverse_names, false);
+        ml.get_arr(LLM_KV_PRISM_HADAMARD_INVERSE_WEIGHT_NAMES, inverse_names, false);
         for (const auto & name : inverse_names) {
             // the graph applies the inverse only to the token-embedding lookup; any
             // other latent table would load and silently stay rotated
@@ -2297,15 +2297,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
 
             llama_hadamard_transform transform { it->tensor, sign_tensor };
-            if (hadamard_gdn_v_grouped && weight_name.find(".ssm_out.") != std::string::npos) {
-                const int64_t n_v = hparams.ssm_dt_rank;
-                const int64_t n_k = hparams.ssm_n_group;
-                if (n_k <= 0 || n_v <= 0 || n_v % n_k != 0 || weight->ne[0] % n_v != 0) {
-                    throw std::runtime_error(format("prism.hadamard: bad GDN head geometry for %s", weight_name.c_str()));
-                }
-                transform.perm_hd  = weight->ne[0] / n_v;
-                transform.perm_nk  = n_k;
-                transform.perm_rep = n_v / n_k;
+            // the GDN output projection reads its value heads in tiled order, see set_gdn_v_perm
+            if (hadamard_gdn_v_grouped && weight_name.find(".ssm_out.") != std::string::npos &&
+                !transform.set_gdn_v_perm(weight->ne[0], hparams.ssm_dt_rank, hparams.ssm_n_group)) {
+                throw std::runtime_error(format("prism.hadamard: bad GDN head geometry for %s", weight_name.c_str()));
             }
             target->emplace(weight, transform);
         }
