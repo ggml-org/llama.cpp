@@ -115,9 +115,7 @@ const char * common_chat_role_to_string(common_chat_role role) {
 
 void common_chat_msg_delimiters::tokenize(const llama_vocab * vocab) {
     for (auto & d : delimiters) {
-        if (d.tokens.empty()) {
-            d.tokens = common_tokenize(vocab, d.delimiter, false, true);
-        }
+        d.tokens = common_tokenize(vocab, d.delimiter, false, true);
     }
 }
 

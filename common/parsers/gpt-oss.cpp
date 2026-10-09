@@ -45,8 +45,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     data.thinking_start_tag = "<|channel|>analysis<|message|>";
     data.thinking_end_tags  = {"<|end|>"};
 
-    // These special tokens are required to parse properly, so we include them
-    // even if parse_tool_calls is false.
+    // These special tokens are required to parse properly
     data.preserved_tokens = {
         "<|channel|>", "<|constrain|>", "<|message|>", "<|start|>", "<|end|>",
     };
