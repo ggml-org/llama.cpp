@@ -870,6 +870,9 @@ struct llama_model_base : public llama_model {
     };
     nextn_flags_t nextn_flags(llama_model_loader & ml, llm_tensor trunk_probe = LLM_TENSOR_ATTN_NORM) const;
 
+    // helper: make the prism.hadamard rotation and sign tensors for the folded weights
+    void create_hadamard_tensors();
+
     // helper: read the SWA pattern as one flag per layer, or as a period expanded by set_swa_pattern
     void load_swa_pattern(llama_model_loader & ml, uint32_t n_pattern, bool dense_first = false);
 
