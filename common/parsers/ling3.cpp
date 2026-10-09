@@ -75,9 +75,10 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
                      (last_close == std::string::npos || last_open > last_close);
     }
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
@@ -101,6 +102,13 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
         // a trailing end-of-turn token is consumed instead of leaking into content
         auto tail = p.optional(p.content(p.until(ROLE_END))) + p.optional(p.literal(ROLE_END));
 
+        // the think block must close before the JSON, so the turn cannot end inside the reasoning
+        if (has_response_format) {
+            auto closed_reasoning = p.literal(THINK_START) + think_body + p.literal(THINK_END);
+            auto response_format  = p.content(p.schema(p.json(), "response-format", inputs.json_schema));
+            return opener + (closed_reasoning << response_format) + end;
+        }
+
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
             return opener + reasoning + tail + end;
         }
@@ -110,7 +118,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
         auto arg_string   = p.rule("ling3-arg-string",
                                    p.tool_arg_string_value(p.until(ARG_VAL_END)) + arg_close);
 
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
 
@@ -119,8 +127,8 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
             // each argument may be preceded by whitespace: the model emits
             // newlines between arguments, the template history does not
-            foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-                auto rule_name = "ling3-arg-" + name + "-" + param.name;
+            foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                auto rule_name = "ling3-arg-" + std::to_string(tool_index) + "-" + std::to_string(param_index);
 
                 auto types = param.schema->value_types();
 
@@ -151,7 +159,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
             // required arguments in any order (as Qwen3-Coder does), then
             // optional ones in any order and number
-            auto args = p.permute("ling3-" + name + "-args", required_args);
+            auto args = p.permute("ling3-" + std::to_string(tool_index) + "-args", required_args);
             if (!optional_args.empty()) {
                 args = args + p.zero_or_more(p.choice(optional_args));
             }
@@ -161,7 +169,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
                                p.tool_args(args) +
                                p.tool_close(p.optional(p.space()) + p.literal(CALL_END)));
 
-            tool_choices |= p.rule("ling3-tool-" + name, call);
+            tool_choices |= p.rule("ling3-tool-" + std::to_string(tool_index), call);
         });
 
         auto calls = inputs.parallel_tool_calls ?
@@ -180,7 +188,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             parser.build_grammar(builder, data.grammar_lazy);
         });

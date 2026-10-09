@@ -1,5 +1,8 @@
 #include "models.h"
 
+// question types of a decision model: choice, score, noul
+static const uint32_t N_DECISION_TYPES = 3;
+
 void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
     const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
     if (found_swa && hparams.n_swa > 0) {
@@ -18,6 +21,30 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
     std::string hidden_act;
     if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
         hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
+    }
+
+    // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
+    if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+        hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
+    }
+
+    // GGUFs without a classifier activation use gelu, the transformers default
+    std::string act_cls;
+    if (!ml.get_key(LLM_KV_CLASSIFIER_ACTIVATION, act_cls, false)) {
+        hparams.act_cls = GGML_UNARY_OP_GELU_ERF;
+    }
+
+    ml.get_key(LLM_KV_DECISION_BLOCK_COUNT, hparams.n_layer_decision, false);
+    if (hparams.n_layer_decision > 0) {
+        if (hparams.n_layer_decision >= hparams.n_layer()) {
+            throw std::runtime_error("invalid number of decision blocks");
+        }
+        // the head blocks always use full attention
+        for (uint32_t il = hparams.n_layer() - hparams.n_layer_decision; il < hparams.n_layer(); il++) {
+            hparams.is_swa_impl[il] = false;
+        }
+        // the output is one score per question type
+        hparams.n_embd_out_impl = N_DECISION_TYPES;
     }
 
     switch (hparams.n_layer()) {
@@ -39,7 +66,9 @@ void llama_model_modern_bert::load_arch_tensors(llama_model_loader &) {
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
 
-    for(int i = 0; i < n_layer; ++i) {
+    const int n_layer_enc = n_layer - hparams.n_layer_decision;
+
+    for(int i = 0; i < n_layer_enc; ++i) {
         auto& layer = layers[i];
 
         if ( i != 0 ) {
@@ -62,6 +91,43 @@ void llama_model_modern_bert::load_arch_tensors(llama_model_loader &) {
     cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
     cls       = create_tensor(tn(LLM_TENSOR_CLS,      "weight"), {n_embd, n_embd},            TENSOR_NOT_REQUIRED);
     cls_norm  = create_tensor(tn(LLM_TENSOR_CLS_NORM, "weight"), {n_embd},                    TENSOR_NOT_REQUIRED);
+
+    if (hparams.n_layer_decision == 0) {
+        return;
+    }
+
+    // decision head: plain pre-norm blocks with biases
+    for (int i = n_layer_enc; i < n_layer; ++i) {
+        auto & layer = layers[i];
+        const int64_t n_ff_head = hparams.n_ff(i);
+
+        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+        layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "bias",   i), {n_embd}, 0);
+
+        layer.wqkv   = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, 3 * n_embd}, 0);
+        layer.wqkv_b = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {3 * n_embd}, 0);
+        layer.wo     = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+        layer.wo_b   = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, 0);
+
+        layer.ffn_norm   = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_norm_b = create_tensor(tn(LLM_TENSOR_FFN_NORM, "bias",   i), {n_embd}, 0);
+        layer.ffn_up     = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff_head}, 0);
+        layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias",   i), {n_ff_head}, 0);
+        layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff_head, n_embd}, 0);
+        layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias",   i), {n_embd}, 0);
+    }
+
+    if (n_token_types != N_DECISION_TYPES) {
+        throw std::runtime_error("decision model must have one token type per question type");
+    }
+    type_embd = create_tensor(tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, 0);
+
+    cls_b      = create_tensor(tn(LLM_TENSOR_CLS,      "bias"), {n_embd}, 0);
+    cls_norm_b = create_tensor(tn(LLM_TENSOR_CLS_NORM, "bias"), {n_embd}, 0);
+
+    if (!cls || !cls_norm || !cls_out || !cls_out_b) {
+        throw std::runtime_error("decision model is missing the scorer tensors");
+    }
 
 }
 
@@ -90,7 +156,10 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
 
     auto * inp_attn = build_attn_inp_no_cache();
 
-    for (int il = 0; il < n_layer; ++il) {
+    const int n_layer_dec = hparams.n_layer_decision;
+    const int n_layer_enc = n_layer - n_layer_dec;
+
+    for (int il = 0; il < n_layer_enc; ++il) {
         const float freq_base_l  = model.get_rope_freq_base(cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
@@ -167,6 +236,75 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
             LLM_NORM, -1);
     cb(cur, "final_norm_out", -1);
 
+    if (n_layer_dec > 0) {
+        cur = build_decision_head(model, cur, inp_attn, inp_out_ids);
+    }
+
     res->t_embd = cur;
     ggml_build_forward_expand(gf, cur);
+}
+
+// returns one score per question type for each output token, the caller reads them at the option markers
+ggml_tensor * llama_model_modern_bert::graph::build_decision_head(
+        const llama_model & model,
+        ggml_tensor * inp,
+        llm_graph_input_attn_no_cache * inp_attn,
+        ggml_tensor * inp_out_ids) {
+    const int64_t n_embd_head = hparams.n_embd_head_v();
+    const int     n_layer_enc = n_layer - hparams.n_layer_decision;
+
+    ggml_tensor * scores = nullptr;
+
+    // the question type is not a graph input, so the head is evaluated for each of them
+    for (uint32_t it = 0; it < N_DECISION_TYPES; ++it) {
+        ggml_tensor * type_row = ggml_view_1d(ctx0, model.type_embd, n_embd, it * model.type_embd->nb[1]);
+        ggml_tensor * inpL = ggml_add(ctx0, inp, type_row);
+
+        for (int il = n_layer_enc; il < n_layer; ++il) {
+            const auto & layer = model.layers[il];
+
+            ggml_tensor * cur = build_norm(inpL, layer.attn_norm, layer.attn_norm_b, LLM_NORM, il);
+            cb(cur, "attn_norm", il);
+
+            // no positional encoding in the head
+            auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
+
+            cur = build_attn(inp_attn,
+                        layer.wo, layer.wo_b, layer.wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            cb(cur, "kqv_out", il);
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            }
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
+            cb(ffn_inp, "ffn_inp", il);
+
+            cur = build_norm(ffn_inp, layer.ffn_norm, layer.ffn_norm_b, LLM_NORM, il);
+            cb(cur, "ffn_norm", il);
+
+            cur = build_ffn(cur,
+                    layer.ffn_up,   layer.ffn_up_b,   NULL,
+                    NULL,           NULL,             NULL,
+                    layer.ffn_down, layer.ffn_down_b, NULL,
+                    NULL,
+                    LLM_FFN_RELU,
+                    LLM_FFN_SEQ, il);
+
+            inpL = ggml_add(ctx0, cur, ffn_inp);
+        }
+
+        // scorer
+        ggml_tensor * cur = build_norm(inpL, model.cls_norm, model.cls_norm_b, LLM_NORM, -1);
+        cur = ggml_add(ctx0, build_lora_mm(model.cls, cur), model.cls_b);
+        cur = ggml_gelu_erf(ctx0, cur);
+        cur = ggml_add(ctx0, build_lora_mm(model.cls_out, cur), model.cls_out_b);
+
+        scores = scores ? ggml_concat(ctx0, scores, cur, 0) : cur;
+    }
+    cb(scores, "decision_scores", -1);
+
+    return scores;
 }

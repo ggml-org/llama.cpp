@@ -101,7 +101,7 @@ __kernel void kernel_gemm_xmem_f16_f32_os8(
     const int X = get_group_id(1)*get_local_size(0) + get_local_id(0);
     const int Z = get_group_id(0)*get_local_size(2) + get_local_id(2);
 
-    if (X >= N || Z*8 >= npack) {
+    if (Z*8 >= npack) {
         return;
     }
 
@@ -197,6 +197,11 @@ __kernel void kernel_gemm_xmem_f16_f32_os8(
         r7 += src1.z * weights_cache[15].s89ab;
         r7 += src1.w * weights_cache[15].scdef;
     } while (coord_s < kpack);
+
+    // Keep all lanes active until the subgroup loads and syncs are done.
+    if (X >= N) {
+        return;
+    }
 
     int coord_s_out = Z*8;
     if (coord_s_out < npack) { write_imageh(dst_img, (int2)(X, coord_s_out), r0); coord_s_out++; }

@@ -995,6 +995,42 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
 }
 
 //
+// mtmd_audio_preprocessor_d1omni
+//
+
+bool mtmd_audio_preprocessor_d1omni::preprocess(const float *                 samples,
+                                                size_t                        n_samples,
+                                                std::vector<mtmd_audio_mel> & output) const {
+    if (n_samples == 0) {
+        return false;
+    }
+    const size_t n_max = 30 * hparams.audio_sample_rate;
+    const size_t n_min = hparams.audio_sample_rate / 2;
+
+    std::vector<float> buf(samples, samples + std::min(n_samples, n_max));
+    buf.resize(std::max(buf.size(), n_min), 0.0f);
+
+    if (!mtmd_audio_preprocessor_conformer::preprocess(buf.data(), buf.size(), output)) {
+        return false;
+    }
+
+    // the encoder reads one frame per hop, not the extra frame of the centre padding (NeMo: seq_len)
+    const int64_t n_frames = buf.size() / hparams.audio_hop_len;
+    for (auto & mel : output) {
+        if (mel.n_len <= n_frames) {
+            continue;
+        }
+        std::vector<float> data((size_t) mel.n_mel * n_frames);
+        for (int64_t j = 0; j < mel.n_mel; ++j) {
+            std::copy_n(mel.data.begin() + (size_t) j * mel.n_len, n_frames, data.begin() + (size_t) j * n_frames);
+        }
+        mel.n_len = n_frames;
+        mel.data  = std::move(data);
+    }
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_granite_speech
 //
 

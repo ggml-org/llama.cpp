@@ -1,3 +1,6 @@
+// TODO: merge with test-recurrent-state-rollback.cpp
+// TODO: merge with test-state-restore-fragmented.cpp
+
 #include "arg.h"
 #include "common.h"
 #include "log.h"
@@ -69,26 +72,9 @@ static bool get_current_logits(llama_context * ctx, std::vector<float> & out) {
     return true;
 }
 
-struct llama_batch_ptr {
-    llama_batch batch;
-
-    llama_batch_ptr(int32_t n_tokens, int32_t embd, int32_t n_seq_max)
-        : batch{llama_batch_init(n_tokens, embd, n_seq_max)} {}
-
-    ~llama_batch_ptr() { llama_batch_free(batch); }
-
-    llama_batch_ptr(const llama_batch_ptr &) = delete;
-    llama_batch_ptr & operator=(const llama_batch_ptr &) = delete;
-    llama_batch_ptr(llama_batch_ptr &&) = default;
-    llama_batch_ptr & operator=(llama_batch_ptr &&) = default;
-
-    llama_batch & get() { return batch; }
-    const llama_batch & get() const { return batch; }
-};
-
 static generation_result generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
     generation_result result;
-    llama_batch_ptr batch(1, 0, 1);
+    common_batch batch(ctx);
 
     for (int i = 0; i < n_predict; i++) {
         std::vector<float> logits;
@@ -104,10 +90,10 @@ static generation_result generate_tokens(llama_context * ctx, llama_sampler * sm
         result.tokens.push_back(next_token);
         result.logits.push_back(std::move(logits));
 
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), next_token, n_past, {seq_id}, true);
+        batch.clear();
+        batch.add(next_token, n_past, seq_id, true);
 
-        if (llama_decode(ctx, batch.get())) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
@@ -125,7 +111,7 @@ static bool generate_tokens_compare(
         return false;
     }
 
-    llama_batch_ptr batch(1, 0, 1);
+    common_batch batch(ctx);
 
     for (int i = 0; i < n_predict; i++) {
         std::vector<float> logits;
@@ -153,10 +139,10 @@ static bool generate_tokens_compare(
             LOG_TRC("%s: sampled token %d differs from expected %d, using expected token\n", __func__, next_token, expected_token);
         }
 
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), expected_token, n_past, {seq_id}, true);
+        batch.clear();
+        batch.add(expected_token, n_past, seq_id, true);
 
-        if (llama_decode(ctx, batch.get())) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return false;
         }
@@ -222,12 +208,12 @@ static bool test_seq_rm_isolated(
 
     const size_t n_tokens = tokens.size() < 128 ? tokens.size() : 128;
     for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
-        llama_batch_ptr batch(n_tokens, 0, 1);
+        common_batch batch(ctx.get());
         for (size_t i = 0; i < n_tokens; ++i) {
-            common_batch_add(batch.get(), tokens[i], i, { seq_id }, i == n_tokens - 1);
+            batch.add(tokens[i], i, seq_id, i == n_tokens - 1);
         }
 
-        if (llama_decode(ctx.get(), batch.get())) {
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("%s: failed to decode prompt for sequence %d\n", __func__, seq_id);
             return false;
         }
@@ -469,9 +455,9 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
     const uint32_t flags = on_device ? LLAMA_STATE_SEQ_FLAGS_ON_DEVICE : LLAMA_STATE_SEQ_FLAGS_NONE;
 
     auto decode_one = [&](llama_token tok, int pos, llama_seq_id seq) {
-        llama_batch_ptr batch(1, 0, 1);
-        common_batch_add(batch.get(), tok, pos, { seq }, true);
-        return llama_decode(ctx.get(), batch.get()) == 0;
+        common_batch batch(ctx.get());
+        batch.add(tok, pos, seq, true);
+        return llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
     };
 
     // seq 0 cells 0,1,4 interleave the seq 1 cells 2,3,5
@@ -554,7 +540,8 @@ static bool test_state_roundtrip(struct llama_model * model, const struct common
 
     LOGV(LOG_LEVEL_INFO, "\n=== Test 8: state blob round-trip ===\n");
 
-    if (llama_decode(ctx.get(), llama_batch_get_one(const_cast<llama_token *>(tokens.data()), (int32_t) tokens.size()))) {
+    common_batch batch = common_batch_get_one(ctx.get(), tokens);
+    if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         LOG_ERR("\n%s: failed to decode prompt\n", __func__);
         return false;
     }
@@ -643,12 +630,12 @@ static bool test_state_restore_failure(struct llama_model * model, const struct 
     }
 
     const auto decode = [&](const llama_tokens & inp, llama_seq_id seq_id, std::vector<float> * logits_out) {
-        llama_batch_ptr batch(inp.size(), 0, 1);
+        common_batch batch(ctx.get());
         for (size_t i = 0; i < inp.size(); ++i) {
-            common_batch_add(batch.get(), inp[i], i, { seq_id }, i == inp.size() - 1);
+            batch.add(inp[i], i, seq_id, i == inp.size() - 1);
         }
 
-        if (llama_decode(ctx.get(), batch.get())) {
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("%s: failed to decode on sequence %d\n", __func__, seq_id);
             return false;
         }
@@ -760,6 +747,92 @@ static bool test_state_restore_failure(struct llama_model * model, const struct 
 }
 
 
+// Test 10: state rotation
+// a KV state saved with attention rotation enabled must restore only into a context with the same setting;
+// note: rotation is only active for quantized KV caches with a head size that is a multiple of 64,
+//       for other models the restore into the rotation-disabled context is valid and the test passes vacuously
+static bool test_state_rotation(struct llama_model * model, const struct common_params & params) {
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 10: state rotation ===\n");
+
+    const std::string attn_rot_disable = common_get_env("LLAMA_ATTN_ROT_DISABLE");
+    const auto make_context = [&](ggml_type type_k, ggml_type type_v, bool disable_rotation) {
+        common_set_env("LLAMA_ATTN_ROT_DISABLE", disable_rotation ? "1" : "0");
+        auto params_ctx = common_context_params_to_llama(params);
+        params_ctx.n_ctx    = 32;
+        params_ctx.n_batch  = 1;
+        params_ctx.n_ubatch = 1;
+        params_ctx.type_k   = type_k;
+        params_ctx.type_v   = type_v;
+        params_ctx.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        return llama_context_ptr(llama_init_from_model(model, params_ctx));
+    };
+
+    std::vector<std::pair<ggml_type, ggml_type>> type_pairs;
+    for (const auto & types : { std::pair{GGML_TYPE_Q8_0, GGML_TYPE_Q8_0} }) {
+        if (make_context(types.first, types.second, false)) {
+            type_pairs.push_back(types);
+        }
+    }
+    if (type_pairs.empty()) {
+        LOG_WRN("%s: no supported quantized KV cache type combination - skipping\n", __func__);
+        return true;
+    }
+
+    bool success = true;
+    for (const auto & types : type_pairs) {
+        auto src = make_context(types.first, types.second, false);
+        if (!src) {
+            LOG_ERR("%s: failed to create source context\n", __func__);
+            success = false;
+            break;
+        }
+
+        llama_token token = 0;
+        if (llama_decode(src.get(), llama_batch_get_one(&token, 1))) {
+            LOG_ERR("%s: failed to decode token\n", __func__);
+            success = false;
+            break;
+        }
+
+        const size_t state_size = llama_state_seq_get_size(src.get(), 0);
+        if (state_size == 0) {
+            continue; // no KV state to test
+        }
+
+        std::vector<uint8_t> state(state_size);
+        if (llama_state_seq_get_data(src.get(), state.data(), state.size(), 0) != state.size()) {
+            LOG_ERR("%s: failed to save sequence state\n", __func__);
+            success = false;
+            break;
+        }
+
+        auto matching = make_context(types.first, types.second, false);
+        if (!matching || llama_state_seq_set_data(matching.get(), state.data(), state.size(), 0) != state.size()) {
+            LOG_ERR("%s: failed to restore matching rotation\n", __func__);
+            success = false;
+            break;
+        }
+
+        auto mismatched = make_context(types.first, types.second, true);
+        if (!mismatched) {
+            LOG_ERR("%s: failed to create mismatched rotation context\n", __func__);
+            success = false;
+            break;
+        }
+        if (llama_state_seq_set_data(mismatched.get(), state.data(), state.size(), 0) != 0) {
+            LOG_TRC("%s: state restored into rotation-disabled context, model does not use attention rotation\n", __func__);
+        }
+    }
+    common_set_env("LLAMA_ATTN_ROT_DISABLE", attn_rot_disable);
+
+    if (!success) {
+        return false;
+    }
+
+    LOGV(LOG_LEVEL_INFO, "\nPASS\n");
+    return true;
+}
+
 struct test_suite {
     std::vector<test_status> results;
 
@@ -770,10 +843,10 @@ struct test_suite {
 
 // column headers for the --models table, one per test, in the order they are run
 static const std::vector<const char *> test_names = {
-    "baseline", "seq_rm", "state_load", "cp_h", "cp_d", "cp_h_s", "cp_d_s", "rt", "rf",
+    "baseline", "seq_rm", "state_load", "cp_h", "cp_d", "cp_h_s", "cp_d_s", "rt", "rf", "rot",
 };
 
-// Run the full save/load test suite (tests 1-9) for a single model.
+// Run the full save/load test suite (tests 1-10) for a single model.
 // Returns the per-test results.
 static test_suite run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
     test_suite suite;
@@ -851,6 +924,9 @@ static test_suite run_save_load_tests_for_model(const std::string & model_path, 
 
     // Test 9: state restore failure
     suite.results.push_back(test_state_restore_failure(model, params, tokens) ? test_status::PASS : test_status::FAIL);
+
+    // Test 10: state rotation
+    suite.results.push_back(test_state_rotation(model, params) ? test_status::PASS : test_status::FAIL);
 
     return suite;
 }

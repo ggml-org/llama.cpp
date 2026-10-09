@@ -93,6 +93,8 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
+
+    float swiglu_clamp = 0.0f;
     int32_t n_expert_used = 0;
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
@@ -208,8 +210,11 @@ struct clip_hparams {
     void set_warmup_n_tokens(int n_tokens) {
         int n_tok_per_side = static_cast<int>(std::sqrt(n_tokens));
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
+        // do not warmup with more tokens than the max allowed
+        if (custom_image_max_tokens > 0 && n_tokens > custom_image_max_tokens) {
+            n_tok_per_side = std::max(1, static_cast<int>(std::sqrt(custom_image_max_tokens)));
+        }
         warmup_image_size = n_tok_per_side * patch_size * n_merge;
-        // TODO: support warmup size for custom token numbers
     }
     // sam vit deepseek-ocr
     std::vector<int32_t> global_attn_indices() const {
@@ -618,6 +623,10 @@ struct clip_model {
     ggml_tensor * mm_3_b = nullptr;
     ggml_tensor * mm_4_w = nullptr;
     ggml_tensor * mm_4_b = nullptr;
+    ggml_tensor * mm_5_w = nullptr;
+    ggml_tensor * mm_5_b = nullptr;
+    ggml_tensor * mm_6_w = nullptr;
+    ggml_tensor * mm_6_b = nullptr;
 
     // GLMV-Edge projection
     ggml_tensor * mm_model_adapter_conv_w = nullptr;

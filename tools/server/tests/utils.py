@@ -65,6 +65,7 @@ class ServerProcess:
     model_url: str | None = None
     model_file: str | None = None
     model_draft: str | None = None
+    model_draft_hf_repo: str | None = None
     n_threads: int | None = None
     n_gpu_layer: int | None = None
     n_batch: int | None = None
@@ -80,6 +81,7 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
+    ctkd: str | None = None
     fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
@@ -171,6 +173,8 @@ class ServerProcess:
             server_args.extend(["--model-url", self.model_url])
         if self.model_draft:
             server_args.extend(["--model-draft", self.model_draft])
+        if self.model_draft_hf_repo:
+            server_args.extend(["--hf-repo-draft", self.model_draft_hf_repo])
         if self.model_hf_repo:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:
@@ -221,6 +225,8 @@ class ServerProcess:
             server_args.extend(["-ctk", self.ctk])
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
+        if self.ctkd:
+            server_args.extend(["-ctkd", self.ctkd])
         if self.fa is not None:
             server_args.extend(["-fa", self.fa])
         if self.n_predict:
@@ -626,6 +632,37 @@ class ServerPreset:
         server.n_slots = 1
         server.seed = 42
         server.server_reranking = True
+        return server
+
+    @staticmethod
+    def tinylaya() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        local_model = os.environ.get("TINYLAYA_LOCAL_MODEL")
+        server.model_hf_file = None
+        if local_model:
+            server.model_file = local_model
+            server.model_hf_repo = None
+        else:
+            server.model_hf_repo = "ggml-org/tinylaya-for-testing-gguf"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_ubatch = 512
+        server.n_slots = 2
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinyopenjev() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinyopenjev-for-testing-gguf:Q8_0"
+        server.n_ctx = 4096
+        server.n_batch = 512
+        server.n_slots = 4
+        server.seed = 42
         return server
 
     @staticmethod
