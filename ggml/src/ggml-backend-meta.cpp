@@ -1181,6 +1181,10 @@ static bool ggml_backend_meta_is_host_view(const struct ggml_tensor * tensor) {
 }
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync) {
+    // [TAG_META_HOST_VIEWS]
+    // TODO: technically, this check should not be needed if the backend scheduler correctly prevents assigning
+    //       such host-buffer views to the meta backend. figure out how to update the scheduler logic to achieve that
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/30217
     if (!ggml_backend_buffer_is_meta(tensor->buffer)) {
         GGML_ASSERT(ggml_backend_meta_is_host_view(tensor));
 
@@ -2038,6 +2042,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
                 if (!ggml_backend_buffer_is_meta(node->buffer)) {
+                    // [TAG_META_HOST_VIEWS]
                     GGML_ASSERT(ggml_backend_meta_is_host_view(node));
 
                     // keep the node as is, mapping it to a simple tensor is not possible
