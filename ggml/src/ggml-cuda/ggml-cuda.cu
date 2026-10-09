@@ -2820,9 +2820,6 @@ static int ggml_cuda_try_ssm_scan_cache_fusion(
     }
 
     const int64_t K = ggml_get_op_params_i32(ssm, 0); // snapshot slot count
-    if (K <= 1) {
-        return 0; // nothing to scatter
-    }
 
     const ggml_tensor * s = ssm->src[0];
     const ggml_tensor * x = ssm->src[1];
@@ -2833,7 +2830,7 @@ static int ggml_cuda_try_ssm_scan_cache_fusion(
     const int64_t n_tok   = x->ne[2];
     const int64_t n_seqs  = x->ne[3];
 
-    // only the group kernel writes through s_base; mamba-1 and the SSD path still use the cpy
+    // only the mamba-2 kernels (group scan and SSD) write to the cache; mamba-1 still uses the cpy
     if (A->nb[1] != sizeof(float) || (d_state != 96 && d_state != 128 && d_state != 256)) {
         return 0;
     }
@@ -2882,7 +2879,7 @@ static int ggml_cuda_try_ssm_scan_cache_fusion(
     }
 
     fused_state_cpy.data        = (float *) dst->data; // rollback slot 0 (newest)
-    fused_state_cpy.slot_stride = (int64_t) (dst->nb[2] / sizeof(float));
+    fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
     return skip;
 }
 

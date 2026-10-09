@@ -574,12 +574,13 @@ __global__ void ssm_ssd_scale_state_kernel(
 }
 
 // Copy initial state from src0[ids[s]] into s_cur for each sequence.
+// src0 and s_cur can alias when the state is written straight into the cache.
 // Grid: (ceil(d_state * head_dim * n_head / BLOCK), n_seqs)
 template <int BLOCK_SIZE>
 __global__ void ssm_ssd_init_state_kernel(
-        const float * __restrict__ src0,       // {d_state, head_dim, n_head, n_rs}
+        const float * src0,                    // {d_state, head_dim, n_head, n_rs}
         const int32_t * __restrict__ ids,      // {n_seqs}
-        float * __restrict__ s_cur,            // {d_state, head_dim, n_head, n_seqs}
+        float * s_cur,                         // {d_state, head_dim, n_head, n_seqs}
         const int state_size,                  // d_state * head_dim * n_head
         const int64_t s0_stride_seq) {         // elements between state rows
     const int s = blockIdx.y;
@@ -603,7 +604,8 @@ static void ssm_scan_ssd_f32_cuda(
         const int A_stride,                                            // A (src3) stride between heads
         const int B_stride_tok,  const int B_stride_seq,               // B (src4) strides
         const int C_stride_tok,  const int C_stride_seq,               // C (src5) strides
-        const int64_t s_off, const int64_t d_state, const int64_t head_dim,
+        float * s_cur,                                                 // state: dst state tail, or the cache when fused
+        const int64_t d_state, const int64_t head_dim,
         const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq) {
 
     cudaStream_t stream = ctx.stream();
@@ -629,7 +631,6 @@ static void ssm_scan_ssd_f32_cuda(
     matmul_t * X_dt       = X_dt_buf.get();
     matmul_t * B_weighted = B_w_buf.get();
     float    * C_scaled   = C_s_buf.get();
-    float    * s_cur      = (float *)((char *)dst_d + s_off); // write state directly to dst
 
     // Step 1: softplus(dt) and parallel prefix sum over full sequence
     {
@@ -869,7 +870,7 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
             (int)(src3->nb[1] / sizeof(float)),
             (int)(src4->nb[2] / sizeof(float)), (int)(src4->nb[3] / sizeof(float)),
             (int)(src5->nb[2] / sizeof(float)), (int)(src5->nb[3] / sizeof(float)),
-            s_off, nc, nr, nh, ng, n_t, n_s);
+            cache ? cache->data : (float *) ((char *) dst_d + s_off), nc, nr, nh, ng, n_t, n_s);
         return;
     }
 #endif
