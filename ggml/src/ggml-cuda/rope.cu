@@ -625,7 +625,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
     }
 
     rope_corr_dims corr_dims;
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims.v);
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, true, corr_dims.v);
 
     // compute
     if (is_neox) {
@@ -910,7 +910,7 @@ void ggml_cuda_op_rms_norm_mul_rope_fused(ggml_backend_cuda_context & ctx,
     const float * freq_factors = rope->src[2] != nullptr ? (const float *) rope->src[2]->data : nullptr;
 
     rope_corr_dims corr_dims;
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims.v);
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, true, corr_dims.v);
 
     const size_t ts0 = ggml_type_size(x->type);
     GGML_ASSERT(x->nb[0] == ts0);
