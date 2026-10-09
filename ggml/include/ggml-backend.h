@@ -227,6 +227,11 @@ extern "C" {
     // with other instances on the same device ("ggml_backend_init_private_stream", used by the
     // scheduler's expert prefetch). Returns NULL if the device cannot provide one.
     typedef ggml_backend_t               (*ggml_backend_init_private_stream_t)(ggml_backend_dev_t device);
+    // True if every async operation and graph compute of backends on this device runs in issue order
+    // on one stream, or joins any other stream back before the operation returns
+    // ("ggml_backend_async_is_stream_ordered"). Single-copy schedulers can then use set_tensor_async
+    // without a destination wait. Mutable sources also require an upload-completion event.
+    typedef bool                         (*ggml_backend_async_is_stream_ordered_t)(ggml_backend_dev_t device);
 
     //
     // Backend registry

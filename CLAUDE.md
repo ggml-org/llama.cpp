@@ -237,6 +237,21 @@ unrelated `QK_WARP_SIZE` / `WARP_32_SIZE` macros are 32. ~17 files pin
 `[[sycl::reqd_sub_group_size(WARP_SIZE)]]`, so SIMD-width env/compiler overrides are no-ops or
 hazards.
 
+### Scheduler input-copy policy
+
+`GGML_SCHED_COPY_SYNC` defaults to synchronous copies. Only the exact value `0`
+opts into experimental stream-ordered copies; unset, `1`, empty, or other strings
+keep synchronization. It is cached process-wide on first scheduler use, so set
+it before launch. The opt-in requires single-device SYCL, a single-copy scheduler,
+compatible non-mapped host input, and an upload-completion event for mutable
+sources. Disabled mode allocates no extra upload event. CPU lifetime tests and the
+A770 gate pass, but model-output equivalence remains unproven; do not enable this
+by default or claim a speedup from the current evidence. For A/B runs use explicit
+`0` versus `1` and require a nonzero `stream-ordered input copies` counter in the
+opt-in arm (`-lv 5` for completion, `-v` for bench).
+Full contract, examples, exclusions, and evidence:
+[SYCL scheduler input-copy synchronization](docs/backend/SYCL.md#scheduler-input-copy-synchronization).
+
 ### Runtime env knobs (fork-specific)
 
 `GGML_SYCL_FA_XMX`, `GGML_SYCL_FA_XMX_DEBUG`, `GGML_SYCL_FA_ONEDNN`, `GGML_SYCL_FA_Q8_GQA_TILE`,
