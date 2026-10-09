@@ -101,6 +101,13 @@ patches = {
     )],
 }
 
+# local changes too large for the replacements above, kept as diffs and applied with git apply
+patch_files = [
+    # backport of the fix for the stack overflow on deeply nested values (nlohmann/json#5387)
+    # TODO: remove once nlohmann/json releases a version newer than 3.12.0
+    "vendor/nlohmann/json-deep-nesting.patch",
+]
+
 for url, filename in vendor.items():
     print(f"downloading {url} to {filename}") # noqa: NP100
     urllib.request.urlretrieve(url, filename)
@@ -116,6 +123,14 @@ for filename, replacements in patches.items():
         content = content.replace(old, new)
     with open(filename, "w", encoding="utf-8", newline="") as f:
         f.write(content)
+
+for patch_file in patch_files:
+    print(f"applying {patch_file}") # noqa: NP100
+    try:
+        subprocess.check_call(["git", "apply", patch_file])
+    except subprocess.CalledProcessError:
+        print(f"Error: cannot apply {patch_file}, upstream code has changed") # noqa: NP100
+        sys.exit(1)
 
 print("Splitting httplib.h...") # noqa: NP100
 try:
