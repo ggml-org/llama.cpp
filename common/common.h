@@ -970,13 +970,13 @@ enum common_decision_type {
 
 common_decision_type common_get_decision_type(const struct llama_model * model);
 
-// same as above, but reads a GGUF file; it does not load the model
-// returns COMMON_DECISION_TYPE_UNKNOWN if the file is missing, unreadable, or invalid
-common_decision_type common_get_decision_type(const std::string & fname);
+// metadata of a GGUF file, read without loading the model
+struct common_gguf_info {
+    common_decision_type decision_type = COMMON_DECISION_TYPE_UNKNOWN; // UNKNOWN if the file is missing, unreadable, or invalid
+    uint32_t             n_ctx_train   = 0;                            // 0 if unknown
+};
 
-// reads the trained context of a GGUF file from its metadata; it does not load the model
-// returns 0 if the file is missing, unreadable, invalid, or reports no context length
-uint32_t common_get_gguf_n_ctx_train(const std::string & fname);
+common_gguf_info common_get_gguf_info(const std::string & fname);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
