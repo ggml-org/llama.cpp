@@ -1266,7 +1266,7 @@ void GgmlOvDecoder::add_extra_inputs() {
     // 2. `n_seq_active` and `seq_active_start`, used in FLASH_ATTN_EXT to indicate the active sequences in the batch
 
     auto create_1d_input = [this](const std::string & name, int64_t value, bool force_parameter = false) {
-        m_model_extra_inputs[name] = {ov::element::i64, ov::Shape{1}, value, force_parameter || !m_is_static};
+        m_model_extra_inputs[name] = {ov::element::i64, ov::Shape{1}, value, force_parameter || !m_is_static, {}, -1};
     };
 
     if (m_compute_params.attention_size != -1) {
