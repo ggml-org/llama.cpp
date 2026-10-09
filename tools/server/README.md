@@ -191,7 +191,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--tags STRING` | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS) |
 | `--embd-normalize N` | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm) |
 | `--host HOST` | IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock; with multiple TCP addresses, :: binds IPv6 only; overlapping addresses result in undefined behavior (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
-| `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
+| `--port PORT` | port to listen (default: 9931)<br/>(env: LLAMA_ARG_PORT) |
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
@@ -444,7 +444,7 @@ To get started right away, run the following command, making sure to use the cor
 llama-server.exe -m models\7B\ggml-model.gguf -c 2048
 ```
 
-The above command will start a server that by default listens on `127.0.0.1:8080`.
+The above command will start a server that by default listens on `127.0.0.1:9931`.
 You can consume the endpoints with Postman or NodeJS with axios library. You can visit the web front end at the same url.
 
 ### Docker
@@ -462,7 +462,7 @@ Using [curl](https://curl.se/). On Windows, `curl.exe` should be available in th
 
 ```sh
 curl --request POST \
-    --url http://localhost:8080/completion \
+    --url http://localhost:9931/completion \
     --header "Content-Type: application/json" \
     --data '{"prompt": "Building a website can be done in 10 simple steps:","n_predict": 128}'
 ```
@@ -1322,7 +1322,7 @@ Example usage with `openai` python library:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:9931/v1", # "http://<Your api-server IP>:port"
     api_key = "sk-no-key-required"
 )
 
@@ -1380,7 +1380,7 @@ You can use either Python `openai` library with appropriate checkpoints:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:9931/v1", # "http://<Your api-server IP>:port"
     api_key = "sk-no-key-required"
 )
 
@@ -1398,7 +1398,7 @@ print(completion.choices[0].message)
 ... or raw HTTP requests:
 
 ```shell
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:9931/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer no-key" \
 -d '{
@@ -1502,7 +1502,7 @@ You can use either Python `openai` library with appropriate checkpoints:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:9931/v1", # "http://<Your api-server IP>:port"
     api_key = "sk-no-key-required"
 )
 
@@ -1518,7 +1518,7 @@ print(response.output_text)
 ... or raw HTTP requests:
 
 ```shell
-curl http://localhost:8080/v1/responses \
+curl http://localhost:9931/v1/responses \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer no-key" \
 -d '{
@@ -1551,7 +1551,7 @@ Each object gives one embedding. This input shape is not part of the OpenAI Embe
 - input as string
 
   ```shell
-  curl http://localhost:8080/v1/embeddings \
+  curl http://localhost:9931/v1/embeddings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer no-key" \
   -d '{
@@ -1564,7 +1564,7 @@ Each object gives one embedding. This input shape is not part of the OpenAI Embe
 - `input` as string array
 
   ```shell
-  curl http://localhost:8080/v1/embeddings \
+  curl http://localhost:9931/v1/embeddings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer no-key" \
   -d '{
@@ -1577,7 +1577,7 @@ Each object gives one embedding. This input shape is not part of the OpenAI Embe
 - `input` as multimodal content
 
   ```shell
-  curl http://localhost:8080/v1/embeddings \
+  curl http://localhost:9931/v1/embeddings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer no-key" \
   -d '{
@@ -1657,7 +1657,7 @@ See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/mes
 *Examples:*
 
 ```shell
-curl http://localhost:8080/v1/messages \
+curl http://localhost:9931/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-api-key" \
   -d '{
@@ -1679,7 +1679,7 @@ Accepts the same parameters as `/v1/messages`. The `max_tokens` parameter is not
 *Example:*
 
 ```shell
-curl http://localhost:8080/v1/messages/count_tokens \
+curl http://localhost:9931/v1/messages/count_tokens \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4",
@@ -1760,7 +1760,7 @@ The probabilities are scaled with the temperatures stored in the model file. The
 *Examples:*
 
 ```shell
-curl http://127.0.0.1:8080/v1/systemone \
+curl http://127.0.0.1:9931/v1/systemone \
     -H "Content-Type: application/json" \
     -d '{
         "state": "Customer message: I was charged twice for my order last week and nobody has replied.",
@@ -1817,7 +1817,7 @@ Response (values are shortened):
 Example with an image:
 
 ```shell
-curl http://127.0.0.1:8080/v1/systemone \
+curl http://127.0.0.1:9931/v1/systemone \
     -H "Content-Type: application/json" \
     -d '{
         "state": "The document was received by the accounting team this morning.",

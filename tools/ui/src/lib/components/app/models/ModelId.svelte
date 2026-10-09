@@ -1,13 +1,15 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
+	import ModelDraftSidecars from './ModelDraftSidecars.svelte';
 	import { Database, ScrollText } from '@lucide/svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { type ModelSidecar } from '$lib/constants';
+	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import { ModelsService } from '$lib/services/models.service';
 	import { settingsStore } from '$lib/stores';
 	import type { ModelModalities } from '$lib/types/models';
+	import { type ModelSidecarBadge } from '$lib/types/models';
 	import { isAuxSidecar } from '$lib/utils';
 	import { formatParameters } from '$lib/utils';
 
@@ -35,7 +37,10 @@
 		contextLength?: number;
 		/** Min/max GGUF file size (main + draft) across quants; renders a range when set. */
 		sizeRange?: { min: number; max: number } | null;
-		draftSidecars?: ModelSidecar[];
+		/** Draft sidecars available for the model, badged with their own quant. */
+		draftSidecars?: ModelSidecarBadge[];
+		/** Give the id a row of its own, with its badges and icons together under it. */
+		stackId?: boolean;
 		/** Allow badges to wrap onto new lines instead of truncating. */
 		wrap?: boolean;
 		class?: string;
@@ -59,6 +64,7 @@
 		showRaw = undefined,
 		showRawTooltip = false,
 		sizeRange,
+		stackId = false,
 		supportsThinking = false,
 		supportsToolUse = false,
 		tags,
@@ -67,12 +73,10 @@
 		...rest
 	}: Props = $props();
 
-	const badgeClass =
-		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+	const badgeClass = MODEL_BADGE_CLASS;
 	const tagBadgeClass =
 		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
-	const variantBadgeClass =
-		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
+	const variantBadgeClass = MODEL_VARIANT_BADGE_CLASS;
 
 	/** Alias badges beyond this many collapse into a single `+x more` badge. */
 	const MAX_ALIAS_BADGES = 2;
@@ -88,7 +92,7 @@
 
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
-	let uniqueDraftSidecars = $derived([...new Set(draftSidecars)].filter((s) => !isAuxSidecar(s)));
+	let uniqueDraftSidecars = $derived(draftSidecars.filter((badge) => !isAuxSidecar(badge.kind)));
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
 	let displayName = $derived(primaryAlias ?? parsed.modelName ?? modelId);
@@ -109,13 +113,19 @@
 {:else}
 	{#snippet nameAndBadges()}
 		{#if !hideName}
-			<span class="min-w-0 truncate font-medium">
+			<span class="min-w-0 truncate font-medium {stackId ? 'basis-full' : ''}">
 				{#if !hideOrgName && parsed.orgName}{parsed.orgName}/{/if}{displayName}
 			</span>
 		{/if}
 
 		{#if hasBadges}
-			<span class="inline-flex items-center gap-1 {wrap ? 'flex-wrap' : ''}">
+			<!-- the badges keep their width, so a long id truncates around them instead of
+			     a label being cut in half -->
+			<span
+				class="inline-flex min-w-0 items-center gap-1 overflow-hidden {wrap
+					? 'flex-wrap'
+					: 'shrink-0'}"
+			>
 				{#if parsed.sidecar}
 					<span class={variantBadgeClass} title={`${parsed.sidecar.toUpperCase()} draft model`}>
 						{parsed.sidecar}
@@ -128,17 +138,13 @@
 					</span>
 				{/if}
 
-				{#each uniqueDraftSidecars as sidecar (sidecar)}
-					<span class={variantBadgeClass} title={`${sidecar.toUpperCase()} draft model available`}>
-						{sidecar}
-					</span>
-				{/each}
-
 				{#if parsed.quantization && !resolvedHideQuantization}
 					<span class={badgeClass}>
 						{parsed.quantization}
 					</span>
 				{/if}
+
+				<ModelDraftSidecars {draftSidecars} />
 
 				{#if primaryAlias}
 					{#if primaryAlias !== parsed.modelName}
@@ -169,14 +175,17 @@
 		{/if}
 	{/snippet}
 
+	<!-- badges, tags and icons do not shrink, so overflow-hidden bounds the id -->
 	<span
-		class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''} {iconsOnNewLine
-			? 'flex-col items-start'
-			: ''} {className}"
+		class="flex min-w-0 items-center gap-1.5 overflow-hidden {wrap
+			? 'flex-wrap'
+			: ''} {iconsOnNewLine ? 'flex-col items-start' : ''} {className}"
 		{title}
 		{...rest}
 	>
-		<span class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''}">
+		<span
+			class="flex min-w-0 items-center gap-1.5 max-md:gap-0.5 {wrap || stackId ? 'flex-wrap' : ''}"
+		>
 			{#if showRawTooltip}
 				<Tooltip.Root>
 					<Tooltip.Trigger class="flex min-w-0 items-center gap-1.5">

@@ -18,7 +18,7 @@ The client does not launch the server, so start `llama-server` yourself first. I
 llama-server \
   -m target.gguf \
   -c 8192 \
-  --port 8080 \
+  --port 9931 \
   -ngl 99 -fa on \
   --np 1 \
   --jinja
@@ -30,7 +30,7 @@ For speculative decoding, start the server with the appropriate flags for your s
 
 ```bash
 python tools/server/bench/speed-bench/speed_bench.py \
-  --url localhost:8080 \
+  --url localhost:9931 \
   --bench qualitative \
   --category coding \
   --osl 1024 \
@@ -41,7 +41,7 @@ python tools/server/bench/speed-bench/speed_bench.py \
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--url` | `localhost:8080` | Server URL. The scheme and `/v1` are optional and a trailing slash is fine, so `localhost:8080` and `http://localhost:8080/v1/` both work. |
+| `--url` | `localhost:9931` | Server URL. The scheme and `/v1` are optional and a trailing slash is fine, so `localhost:9931` and `http://localhost:9931/v1/` both work. |
 | `--model` | none | Optional `model` field sent in each request. |
 | `--bench` | `qualitative` | SPEED-Bench config, e.g. `qualitative`, `throughput_1k`. See [available dataset variants](https://github.com/ai-dynamo/aiperf/blob/main/docs/tutorials/speed-bench.md#available-dataset-variants). |
 | `--category` | `all` | Category filter within the bench; comma-separated list or `all`. For `qualitative` the categories are `coding`, `humanities`, `math`, `multilingual`, `qa`, `rag`, `reasoning`, `roleplay`, `stem`, `summarization`, `writing`. For the `throughput_{ISL}` splits they are `high_entropy`, `low_entropy`, `mixed`. |
@@ -81,7 +81,7 @@ First, start a plain `llama-server` (no speculative decoding) and save a baselin
 
 ```bash
 python tools/server/bench/speed-bench/speed_bench.py \
-  --url localhost:8080 \
+  --url localhost:9931 \
   --bench qualitative \
   --category all \
   --osl 1024 \
@@ -93,7 +93,7 @@ Then restart `llama-server` with speculative decoding enabled and save another r
 
 ```bash
 python tools/server/bench/speed-bench/speed_bench.py \
-  --url localhost:8080 \
+  --url localhost:9931 \
   --bench qualitative \
   --category all \
   --osl 1024 \

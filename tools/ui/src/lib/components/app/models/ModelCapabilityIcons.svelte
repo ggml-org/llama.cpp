@@ -1,6 +1,14 @@
 <script lang="ts">
-	import { Image, Lightbulb, Mic, Video, Wrench } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import {
+		CAPABILITY_ICONS,
+		CAPABILITY_LABELS,
+		MODALITY_FLAG_KEYS,
+		MODALITY_ICONS,
+		MODALITY_LABELS,
+		MODALITY_ORDER
+	} from '$lib/constants';
+	import { ModelCapability } from '$lib/enums';
 	import type { ModelModalities } from '$lib/types/models';
 
 	interface Props {
@@ -23,71 +31,57 @@
 		supportsToolUse = false
 	}: Props = $props();
 
-	let hasModalityIcons = $derived(modalities?.vision || modalities?.video || modalities?.audio);
+	let capabilities = $derived([
+		...(supportsToolUse ? [ModelCapability.TOOL_USE] : []),
+		...(supportsThinking ? [ModelCapability.REASONING] : [])
+	]);
+
+	let shownModalities = $derived(
+		MODALITY_ORDER.filter((modality) => modalities?.[MODALITY_FLAG_KEYS[modality]])
+	);
+
+	// an icon-less box still takes the gap where its icons would sit, so a caller with
+	// nothing to show renders no box at all
+	let hasIcons = $derived(
+		(!hideCapabilities && capabilities.length > 0) ||
+			(shownModalities.length > 0 && !hideModalities)
+	);
 </script>
 
-<span class="inline-flex items-center {gapClass}">
-	{#if supportsToolUse && !hideCapabilities}
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<Wrench class="{iconSize} text-muted-foreground" />
-			</Tooltip.Trigger>
+{#if hasIcons}
+	<span class="inline-flex items-center {gapClass}">
+		{#if !hideCapabilities}
+			{#each capabilities as capability (capability)}
+				{@const Icon = CAPABILITY_ICONS[capability]}
 
-			<Tooltip.Content>
-				<p>Tool use</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
-	{/if}
-
-	{#if supportsThinking && !hideCapabilities}
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<Lightbulb class="{iconSize} text-muted-foreground" />
-			</Tooltip.Trigger>
-
-			<Tooltip.Content>
-				<p>Reasoning</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
-	{/if}
-
-	{#if hasModalityIcons && !hideModalities}
-		<span class="inline-flex items-center text-muted-foreground">
-			{#if modalities?.vision}
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<Image class={iconSize} />
+						<Icon class="{iconSize} text-muted-foreground" />
 					</Tooltip.Trigger>
 
 					<Tooltip.Content>
-						<p>Vision</p>
+						<p>{CAPABILITY_LABELS[capability]}</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
-			{/if}
+			{/each}
+		{/if}
 
-			{#if modalities?.video}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Video class={iconSize} />
-					</Tooltip.Trigger>
+		{#if shownModalities.length > 0 && !hideModalities}
+			<span class="inline-flex items-center {gapClass} text-muted-foreground">
+				{#each shownModalities as modality (modality)}
+					{@const Icon = MODALITY_ICONS[modality]}
 
-					<Tooltip.Content>
-						<p>Video</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Icon class={iconSize} />
+						</Tooltip.Trigger>
 
-			{#if modalities?.audio}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Mic class={iconSize} />
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>Audio</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-		</span>
-	{/if}
-</span>
+						<Tooltip.Content>
+							<p>{MODALITY_LABELS[modality]}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/each}
+			</span>
+		{/if}
+	</span>
+{/if}
