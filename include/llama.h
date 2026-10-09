@@ -398,8 +398,10 @@ extern "C" {
         void * cb_eval_user_data;
 
         // stream routed-expert weights via O_DIRECT into a VRAM slot pool
-        bool    moe_direct_io;  // enable sparse MoE direct-IO streaming
-        int32_t moe_slots;      // total VRAM slots shared across all MoE layers
+        bool    moe_direct_io = false;  // enable sparse MoE direct-IO streaming
+        int32_t moe_slots     = 4096;     // total VRAM slots shared across all MoE layers
+        // GGUF to stream experts from; must outlive the context
+        const char * moe_gguf_path;
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]

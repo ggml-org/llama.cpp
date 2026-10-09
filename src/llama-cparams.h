@@ -64,5 +64,9 @@ struct llama_cparams {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 
+    bool         moe_direct_io = false;
+    int32_t      moe_slots     = 4096;
+    const char * moe_gguf_path = nullptr;
+
     llama_context * ctx_other;
 };

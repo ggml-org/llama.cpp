@@ -39,29 +39,29 @@ bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_us
     if (!gctx) { err = "gguf_init_from_file failed"; return false; }
 
     const int64_t data_off = gguf_get_data_offset(gctx);
-    idx_.assign((size_t) n_layer * n_expert * 2, moe_expert_slice{0, 0});
+    idx_.assign((size_t) n_layer * n_expert * 3, moe_expert_slice{0, 0, 0});
     size_t per_expert_bytes = 0;
 
-    // role 0 = expert projections (fused gate_up when present, else gate),
-    // role 1 = down. qwen4exp on this box ships SEPARATE gate/up tensors.
+    // role 0 = gate, role 1 = up, role 2 = down. qwen4exp on this box ships
+    // SEPARATE gate/up tensors (no fused gate_up).
     for (int il = 0; il < n_layer; il++) {
-        char n_gu[128], n_gn[128], n_dn[128];
-        snprintf(n_gu, sizeof n_gu, "blk.%d.ffn_gate_up_exps.weight", il);
-        snprintf(n_gn, sizeof n_gn, "blk.%d.ffn_gate_exps.weight", il);
+        char n_g[128], n_u[128], n_dn[128];
+        snprintf(n_g,  sizeof n_g,  "blk.%d.ffn_gate_exps.weight", il);
+        snprintf(n_u,  sizeof n_u,  "blk.%d.ffn_up_exps.weight", il);
         snprintf(n_dn, sizeof n_dn, "blk.%d.ffn_down_exps.weight", il);
 
-        int64_t t_gu = gguf_find_tensor(gctx, n_gu);
-        if (t_gu < 0) t_gu = gguf_find_tensor(gctx, n_gn);
+        const int64_t t_g  = gguf_find_tensor(gctx, n_g);
+        const int64_t t_u  = gguf_find_tensor(gctx, n_u);
         const int64_t t_dn = gguf_find_tensor(gctx, n_dn);
-        if (t_gu < 0 || t_dn < 0) {
+        if (t_g < 0 || t_u < 0 || t_dn < 0) {
             char m[128];
             snprintf(m, sizeof m, "missing expert tensors for layer %d", il);
             err = m; gguf_free(gctx); return false;
         }
-        const int64_t tids[2] = { t_gu, t_dn };
+        const int64_t tids[3] = { t_g, t_u, t_dn };
 
         for (int e = 0; e < n_expert; e++) {
-            for (int r = 0; r < 2; r++) {
+            for (int r = 0; r < 3; r++) {
                 const int64_t tid = tids[r];
                 const size_t tbytes = (size_t) gguf_get_tensor_size(gctx, tid);
                 if (tbytes % (size_t) n_expert) {
@@ -70,13 +70,16 @@ bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_us
                 }
                 const size_t per = tbytes / (size_t) n_expert;
                 // experts of a tensor are contiguous: slice e begins at
-                // base + e*per. Align DOWN for O_DIRECT and keep the pre-pad.
+                // base + e*per. Align DOWN for O_DIRECT and keep the pre-pad;
+                // align the LENGTH up so the read is a whole number of blocks
+                // (a short O_DIRECT read would otherwise DMA stale staging).
                 const uint64_t fo = (uint64_t)(data_off + gguf_get_tensor_offset(gctx, tid)
                                         + (int64_t) e * (int64_t) per);
                 const uint64_t pre = (ALIGN - (fo % ALIGN)) % ALIGN;
-                moe_expert_slice & sl = idx_[((size_t) il * n_expert + e) * 2 + r];
+                moe_expert_slice & sl = idx_[((size_t) il * n_expert + e) * 3 + r];
                 sl.off = fo - pre;
-                sl.len = (uint32_t)(per + pre);
+                sl.len = (uint32_t)(((per + pre + ALIGN - 1) / ALIGN) * ALIGN);
+                sl.pre = (uint32_t) pre;
                 if (il == 0 && e == 0) { per_expert_bytes += per; }
             }
         }
@@ -119,17 +122,22 @@ int moe_pager::submit_(int key) {
     const int ridx = (int) reqs_.size();
     int pending = 0;
     size_t boff = 0;
-    for (int r = 0; r < 2; r++) {
+    for (int r = 0; r < 3; r++) {
         struct io_uring_sqe * sqe = io_uring_get_sqe((struct io_uring *) ring_);
         while (!sqe) {
             io_uring_submit((struct io_uring *) ring_);
             struct io_uring_cqe * cqe = nullptr;
             if (io_uring_wait_cqe((struct io_uring *) ring_, &cqe) == 0) {
                 const uint64_t ud = cqe->user_data;
+                const int res = cqe->res;
                 io_uring_cqe_seen((struct io_uring *) ring_, cqe);
                 const int rr = (int)(ud / 4);
-                if (rr == ridx) pending++;
-                else if (rr < (int) reqs_.size() && reqs_[rr].used) reqs_[rr].done++;
+                const int role = (int)(ud % 4);
+                if (rr == ridx) { pending++; }
+                else if (rr < (int) reqs_.size() && reqs_[rr].used) {
+                    reqs_[rr].done++;
+                    if (role >= 0 && role < 3) reqs_[rr].got[role] = res;
+                }
             }
             sqe = io_uring_get_sqe((struct io_uring *) ring_);
         }
@@ -139,23 +147,40 @@ int moe_pager::submit_(int key) {
         boff += s[r].len;
     }
     Req q; q.il = il; q.e = e; q.stage = st; q.done = pending; q.used = true;
+    q.got[0] = q.got[1] = q.got[2] = -1;
     reqs_.push_back(q);
     io_uring_submit((struct io_uring *) ring_);
-    io_ops_ += 2; io_bytes_ += (long) boff;
+    io_ops_ += 3; io_bytes_ += (long) boff;
     return (int) reqs_.size() - 1;
+}
+
+// returns true when all 3 role reads for req r transferred their full length
+bool moe_pager::wait_ok_(int r) {
+    if (r < 0) return false;
+    const moe_expert_slice * s = slices(reqs_[r].il, reqs_[r].e);
+    while (reqs_[r].done < 3) {
+        struct io_uring_cqe * cqe = nullptr;
+        if (io_uring_wait_cqe((struct io_uring *) ring_, &cqe) < 0) break;
+        const uint64_t ud = cqe->user_data;
+        const int res = cqe->res;
+        io_uring_cqe_seen((struct io_uring *) ring_, cqe);
+        const int rr = (int)(ud / 4);
+        const int role = (int)(ud % 4);
+        if (rr < (int) reqs_.size() && reqs_[rr].used) {
+            reqs_[rr].done++;
+            if (role >= 0 && role < 3) reqs_[rr].got[role] = res;
+        }
+    }
+    for (int k = 0; k < 3; k++) {
+        if (reqs_[r].got[k] != (long) s[k].len) return false;
+    }
+    return true;
 }
 
 double moe_pager::wait_(int r) {
     if (r < 0) return 0.0;
     const double t0 = now_s();
-    while (reqs_[r].done < 2) {
-        struct io_uring_cqe * cqe = nullptr;
-        if (io_uring_wait_cqe((struct io_uring *) ring_, &cqe) < 0) break;
-        const uint64_t ud = cqe->user_data;
-        io_uring_cqe_seen((struct io_uring *) ring_, cqe);
-        const int rr = (int)(ud / 4);
-        if (rr < (int) reqs_.size() && reqs_[rr].used) reqs_[rr].done++;
-    }
+    wait_ok_(r);
     return now_s() - t0;
 }
 
@@ -165,31 +190,41 @@ bool moe_pager::prefetch(int il, int e) {
     return submit_(key) >= 0;
 }
 
-bool moe_pager::commit(int il, int e, void * dst_gu, size_t gu_bytes,
-                                  void * dst_dn, size_t dn_bytes) {
+bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
+                                  void * dst_up,     size_t up_bytes,
+                                  void * dst_down,   size_t down_bytes) {
     const int key = il * n_expert_ + e;
     int r = find_(key);
     if (r < 0) r = submit_(key);
     if (r < 0) return false;
-    wait_(r);
+    if (!wait_ok_(r)) {
+        n_io_fail_++;
+        free_stage_.push_back(reqs_[r].stage);
+        reqs_[r].used = false;
+        return false;
+    }
 
     const moe_expert_slice * s = slices(il, e);
     char * src = stage_ + (size_t) reqs_[r].stage * stage_bytes_;
-    // each slice carries an alignment pre-pad that must be skipped
-    const size_t skip0 = (ALIGN - (s[0].off % ALIGN)) % ALIGN;
-    const size_t skip1 = (ALIGN - (s[1].off % ALIGN)) % ALIGN;
-
-    cudaMemcpy(dst_gu, src + skip0,
-               std::min(gu_bytes, (size_t) s[0].len - skip0), cudaMemcpyHostToDevice);
-    cudaMemcpy(dst_dn, src + s[0].len + skip1,
-               std::min(dn_bytes, (size_t) s[1].len - skip1), cudaMemcpyHostToDevice);
+    // each slice starts at an aligned-down offset; skip the stored pre-pad
+    // to reach the true expert data (len is aligned up for O_DIRECT).
+    size_t off = 0;
+    void * dst[3] = { dst_gate, dst_up, dst_down };
+    size_t want[3] = { gate_bytes, up_bytes, down_bytes };
+    for (int k = 0; k < 3; k++) {
+        const size_t skip = s[k].pre;
+        cudaMemcpy(dst[k], src + off + skip,
+                   std::min(want[k], (size_t) s[k].len - skip), cudaMemcpyHostToDevice);
+        off += s[k].len;
+    }
 
     free_stage_.push_back(reqs_[r].stage);
     reqs_[r].used = false;
     return true;
 }
 
-bool moe_pager::fetch(int il, int e, void * dst_gu, size_t gu_bytes,
-                                void * dst_dn, size_t dn_bytes) {
-    return commit(il, e, dst_gu, gu_bytes, dst_dn, dn_bytes);
+bool moe_pager::fetch(int il, int e, void * dst_gate, size_t gate_bytes,
+                                void * dst_up,     size_t up_bytes,
+                                void * dst_down,   size_t down_bytes) {
+    return commit(il, e, dst_gate, gate_bytes, dst_up, up_bytes, dst_down, down_bytes);
 }

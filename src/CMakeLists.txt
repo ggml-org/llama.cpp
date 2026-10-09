@@ -72,6 +72,8 @@ if (GGML_CUDA)
     # moe_pager.cpp uses the CUDA runtime directly (cudaHostAlloc / cudaMemcpy)
     target_include_directories(llama PRIVATE ${_cmake_CUDAToolkit_include_directories})
     target_link_directories(llama PRIVATE ${_cmake_CUDAToolkit_library_directories})
+    # moe_pager.cpp issues O_DIRECT reads through io_uring
+    target_link_libraries(llama PRIVATE uring)
 endif()
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 

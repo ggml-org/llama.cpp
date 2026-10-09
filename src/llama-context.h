@@ -6,6 +6,7 @@
 #include "llama-graph.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
+#include "moe_pager.h"
 #include "llama-memory.h"
 
 #include "ggml-cpp.h"
@@ -259,6 +260,25 @@ public:
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
+    // ---- sparse MoE direct-IO slot pool ----
+    struct moe_pool {
+        ggml_context        * ctx = nullptr;
+        ggml_backend_buffer_t buf = nullptr;
+        size_t               buf_bytes = 0;
+        std::vector<ggml_tensor *> pool_gate, pool_up, pool_gate_up, pool_down, slot_table;
+        std::vector<int32_t> slot_of, slot_key;
+        int n_layer = 0, n_expert = 0, n_used = 0, s_per_layer = 0;
+        long n_hit = 0, n_miss = 0, n_page_fail = 0;
+    };
+    moe_pool moe;
+    moe_pager pager;
+    bool      moe_ready = false;
+    bool moe_enabled() const { return moe_ready; }
+    int  moe_page(int il, int e);
+    int  moe_page_pinned(int il, int e, const bool * pinned);
+    void moe_page_batch(int il, const int32_t * sel, int n);
+    void moe_publish(int il, int e, int slot);
+    const ggml_tensor * moe_pool_tensor(const char * which, int il) const;
 
 private:
     llm_graph_result * get_gf_res_prev();
@@ -367,6 +387,7 @@ private:
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
+
 
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 

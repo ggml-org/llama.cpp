@@ -18,12 +18,14 @@ struct ggml_tensor;
 struct ggml_context;
 struct ggml_backend_buffer;
 struct ggml_backend;
-typedef void (*ggml_backend_sched_eval_callback)(struct ggml_tensor *, bool, void *);
 
-// one expert slice set: gate/up (fused) + down, raw quantised bytes
+// one expert slice set: gate + up + down, raw quantised bytes.
+// off is 4 KiB aligned-down; len covers the pre-pad plus the expert bytes,
+// aligned UP to 4 KiB so O_DIRECT reads always transfer in full.
 struct moe_expert_slice {
-    uint64_t off;   // 4 KiB aligned-down file offset
-    uint32_t len;   // 4 KiB aligned-up length
+    uint64_t off;   // 4 KiB aligned-down file offset (read starts here)
+    uint32_t len;   // read length, aligned UP to 4 KiB
+    uint32_t pre;   // leading pad bytes before the true expert data (off + pre = true offset)
 };
 
 class moe_pager {
@@ -44,31 +46,35 @@ public:
     size_t bytes_per_expert() const { return bytes_per_expert_; }
 
     // Fetch expert `e` of layer `il` into pinned staging and DMA it into the
-    // supplied device pointers (gate_up first, then down). Blocking.
+    // supplied device pointers (gate, then up, then down). Blocking.
     // Returns true on success.
-    bool fetch(int il, int e, void * dst_gate_up, size_t gate_up_bytes,
-                                  void * dst_down,    size_t down_bytes);
+    bool fetch(int il, int e, void * dst_gate, size_t gate_bytes,
+                                  void * dst_up,     size_t up_bytes,
+                                  void * dst_down,   size_t down_bytes);
 
     // Non-blocking prefetch: queue a read. Returns true if it was queued.
     bool prefetch(int il, int e);
     // Wait for a queued prefetch and DMA it. Returns true on success.
-    bool commit(int il, int e, void * dst_gate_up, size_t gate_up_bytes,
-                                   void * dst_down,    size_t down_bytes);
+    bool commit(int il, int e, void * dst_gate, size_t gate_bytes,
+                                   void * dst_up,     size_t up_bytes,
+                                   void * dst_down,   size_t down_bytes);
 
     // public for verification: exact file range this pager reads for an expert
-    const moe_expert_slice * slices(int il, int e) const { return &idx_[((size_t) il * n_expert_ + e) * 2]; }
+    const moe_expert_slice * slices(int il, int e) const { return &idx_[((size_t) il * n_expert_ + e) * 3]; }
+    const char * path() const { return path_.c_str(); }
 
     long stats_io_ops()   const { return io_ops_; }
     long stats_io_bytes() const { return io_bytes_; }
+    long stats_io_fail()  const { return n_io_fail_; }
 
 private:
-    struct Req { int il, e, stage, done; bool used; };
+    struct Req { int il, e, stage, done; bool used; long got[3]; };
     // public for verification: the exact file range this pager reads for an expert
 
     std::string path_;
     int n_layer_ = 0, n_expert_ = 0, n_used_ = 0;
     int fd_ = -1;
-    std::vector<moe_expert_slice> idx_;   // n_layer * n_expert * 2
+    std::vector<moe_expert_slice> idx_;   // n_layer * n_expert * 3
     size_t bytes_per_expert_ = 0;
 
     void * backend_ = nullptr;
@@ -80,9 +86,10 @@ private:
     std::vector<Req> reqs_;
     std::vector<int> free_stage_;
     void * ring_ = nullptr;
-    long io_ops_ = 0, io_bytes_ = 0;
+    long io_ops_ = 0, io_bytes_ = 0, n_io_fail_ = 0;
 
     int submit_(int key);
     int find_(int key) const;
     double wait_(int r);
+    bool wait_ok_(int r); // true when all 3 roles moved their full length
 };

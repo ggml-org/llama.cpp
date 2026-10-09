@@ -1715,6 +1715,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.cb_eval           = params.cb_eval;
     cparams.moe_direct_io     = params.moe_direct_io;
     cparams.moe_slots         = params.moe_slots;
+    cparams.moe_gguf_path     = params.model.path.c_str();
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.no_perf           = params.no_perf;

@@ -818,6 +818,14 @@ struct llm_graph_params {
     llm_graph_cb cb;
 
     llm_graph_result * res;
+    // sparse MoE direct-IO pool (nullptr when --moe-direct-io is off):
+    // per-layer compact [n_embd,n_ff,s_pl] pools plus the I32 slot table
+    const ggml_tensor * const * moe_gate  = nullptr;
+    const ggml_tensor * const * moe_gate_up = nullptr;
+    const ggml_tensor * const * moe_up    = nullptr;
+    const ggml_tensor * const * moe_down  = nullptr;
+    const ggml_tensor * const * moe_table = nullptr;
+    int32_t moe_n_layer = 0;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
@@ -1029,6 +1037,13 @@ struct llm_graph_context {
     const enum llama_rope_type    rope_type;
 
     ggml_backend_sched_t sched;
+    // sparse MoE direct-IO pool (mirrored from llm_graph_params)
+    const ggml_tensor * const * moe_gate  = nullptr;
+    const ggml_tensor * const * moe_up    = nullptr;
+    const ggml_tensor * const * moe_gate_up = nullptr;
+    const ggml_tensor * const * moe_down  = nullptr;
+    const ggml_tensor * const * moe_table = nullptr;
+    int32_t moe_n_layer = 0;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
 

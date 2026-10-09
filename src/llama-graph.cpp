@@ -1518,6 +1518,12 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     pooling_type     (cparams.pooling_type),
     rope_type        (hparams.rope_type),
     sched            (params.sched),
+    moe_gate           (params.moe_gate),
+    moe_up             (params.moe_up),
+    moe_gate_up        (params.moe_gate_up),
+    moe_down           (params.moe_down),
+    moe_table          (params.moe_table),
+    moe_n_layer        (params.moe_n_layer),
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
     loras            (params.loras),
@@ -2161,6 +2167,30 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(selected_experts->src[0], "ffn_moe_argsort", il);
     }
     cb(selected_experts, "ffn_moe_topk", il);
+    // sparse MoE direct-IO: run the SAME top-k experts out of this layer's
+    // compact pool. gate/up/down pools mirror the full-tensor geometry with
+    // ne[2] = slots-per-layer; slot_table maps expert -> local slot.
+    // decode-only: prefill (n_tokens > 1) keeps the full tensors, and the
+    // fused gate_up path is unsupported (falls back to full tensors).
+    ggml_tensor * slot_ids = selected_experts;
+    if (cparams.moe_direct_io && moe_n_layer > il && il >= 0 &&
+        moe_gate && moe_up && moe_down && moe_table &&
+        moe_gate[il] && moe_up[il] && moe_down[il] && moe_table[il] &&
+        // this model family ships separate gate/up tensors (no fused gate_up
+        // in the GGUF); a non-null gate_up_exps here is an empty placeholder.
+        // detect it by shape: fused would carry ne[1] == 2*n_ff.
+        (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1]) && n_tokens == 1) {
+        gate_up_exps = nullptr; // separate gate/up path; fused tensor is absent or virtual
+        gate_exps = (ggml_tensor *) moe_gate[il];
+        up_exps   = (ggml_tensor *) moe_up[il];
+        down_exps = (ggml_tensor *) moe_down[il];
+        // slot_table is [1, n_expert]; gather through a flattened index so
+        // this holds for any n_tokens, then restore [n_used, n_tokens].
+        ggml_tensor * ids_flat  = ggml_reshape_1d(ctx0, selected_experts, n_expert_used * n_tokens);
+        ggml_tensor * slot_flat = ggml_get_rows(ctx0, (ggml_tensor *) moe_table[il], ids_flat);
+        slot_ids = ggml_reshape_2d(ctx0, slot_flat, n_expert_used, n_tokens);
+        cb(slot_ids, "ffn_moe_slot_ids", il);
+    }
 
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
@@ -2238,7 +2268,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up", il);
     } else {
         // separate gate and up path
-        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
+        up = build_lora_mm_id(up_exps, cur, slot_ids, up_exps_s); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_s) {
@@ -2251,7 +2281,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
+            cur = build_lora_mm_id(gate_exps, cur, slot_ids, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -2352,7 +2382,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    experts = build_lora_mm_id(down_exps, cur, slot_ids, down_exps_s); // [n_embd, n_expert_used, n_tokens]
     if (arch == LLM_ARCH_MISTRAL4) {
         // src1 can exceed F16 range
         ggml_prec_set_src(experts, GGML_PREC_F32, 1);

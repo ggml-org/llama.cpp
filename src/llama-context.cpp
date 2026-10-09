@@ -20,6 +20,12 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <cstdlib>
+#include <vector>
+
+// sparse MoE paging callback (defined near the moe_page helpers below)
+static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud);
+
 
 //
 // llama_context
@@ -98,6 +104,10 @@ llama_context::llama_context(
     t_load_us  = model.t_load_us;
 
     const auto & hparams = model.hparams;
+
+    cparams.moe_direct_io = params.moe_direct_io;
+    cparams.moe_slots     = params.moe_slots;
+    cparams.moe_gguf_path = params.moe_gguf_path;
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
@@ -359,6 +369,111 @@ llama_context::llama_context(
             throw std::runtime_error("failed to initialize CPU backend");
         }
         backends.emplace_back(backend_cpu);
+
+        // ---- sparse MoE direct-IO slot pool (3.2A) -----------------------
+        // Metadata-only ggml_new_tensor calls create nothing; physical VRAM is
+        // claimed below on the GPU backend and its size is verified.
+        if (cparams.moe_direct_io && cparams.moe_gguf_path) {
+            const int n_layer = (int) model.hparams.n_layer();
+            const int n_exp   = (int) model.hparams.n_expert;
+            const int n_used  = (int) model.hparams.n_expert_used();
+            const int s_pl    = std::max(1, (int) cparams.moe_slots / std::max(1, n_layer));
+
+            std::string perr;
+            if (!pager.init(cparams.moe_gguf_path, n_layer, n_exp, n_used, perr)) {
+                LLAMA_LOG_WARN("%s: moe_direct_io OFF: %s\n", __func__, perr.c_str());
+            } else {
+                ggml_init_params ip = {
+                    ggml_tensor_overhead()*(size_t)(n_layer*4 + 8) + ggml_graph_overhead(),
+                    nullptr, /*no_alloc=*/true };
+                moe.ctx = ggml_init(ip);
+                moe.pool_gate.resize(n_layer); moe.pool_up.resize(n_layer);
+                moe.pool_gate_up.resize(n_layer);
+                moe.pool_down.resize(n_layer); moe.slot_table.resize(n_layer);
+
+                const ggml_tensor * gt0 = model.get_tensor("blk.0.ffn_gate_exps.weight");
+                const ggml_tensor * dt0 = model.get_tensor("blk.0.ffn_down_exps.weight");
+                if (!gt0 || !dt0) {
+                    LLAMA_LOG_ERROR("%s: expert tensors not found -> moe_direct_io OFF\n", __func__);
+                } else {
+                // Mixed quants across layers: each layer's pool takes its type
+                // (and ne) from its OWN blk.{il} tensors, not blk.0.
+
+                size_t expect = 0;
+                bool pool_ok = true;
+                for (int il = 0; il < n_layer; il++) {
+                    // qwen4exp has NO fused gate_up tensor; it uses the separate
+                    // gate/up path, so all three pools are needed.
+                    char nb_g[128], nb_u[128], nb_d[128];
+                    snprintf(nb_g, sizeof nb_g, "blk.%d.ffn_gate_exps.weight", il);
+                    snprintf(nb_u, sizeof nb_u, "blk.%d.ffn_up_exps.weight", il);
+                    snprintf(nb_d, sizeof nb_d, "blk.%d.ffn_down_exps.weight", il);
+                    const ggml_tensor * gl = model.get_tensor(nb_g);
+                    const ggml_tensor * ul = model.get_tensor(nb_u);
+                    const ggml_tensor * dl = model.get_tensor(nb_d);
+                    if (!gl || !ul || !dl) {
+                        pool_ok = false;
+                        moe_ready = false;
+                        break;
+                    }
+                    moe.pool_gate[il] = ggml_new_tensor_3d(moe.ctx, gl->type,
+                            (int64_t) gl->ne[0], (int64_t) gl->ne[1], s_pl);
+                    moe.pool_up[il]   = ggml_new_tensor_3d(moe.ctx, ul->type,
+                            (int64_t) ul->ne[0], (int64_t) ul->ne[1], s_pl);
+                    // down_exps is [n_ff, n_embd] transposed relative to gate/up
+                    // (GGUF ne = [640, 2560]), so take its geometry from dl itself.
+                    moe.pool_down[il] = ggml_new_tensor_3d(moe.ctx, dl->type,
+                            (int64_t) dl->ne[0], (int64_t) dl->ne[1], s_pl);
+                    // get_rows needs table->ne[0] == idx->ne[0], so the table is
+                    // laid out [1, n_expert] and looked up by [1, n_used] ids.
+                    moe.slot_table[il] = ggml_new_tensor_2d(moe.ctx, GGML_TYPE_I32, 1, n_exp);
+                    expect += ggml_nbytes(moe.pool_gate[il]) + ggml_nbytes(moe.pool_up[il])
+                            + ggml_nbytes(moe.pool_down[il]) + ggml_nbytes(moe.slot_table[il]);
+                }
+                if (!pool_ok) {
+                    LLAMA_LOG_ERROR("%s: pool incomplete -> moe_direct_io OFF\n", __func__);
+                } else {
+
+                ggml_backend_t pool_be = nullptr;
+                for (auto & b : backends) {
+                    if (b && ggml_backend_get_device(b.get()) &&
+                        ggml_backend_dev_type(ggml_backend_get_device(b.get())) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                        pool_be = b.get(); break;
+                    }
+                }
+                if (!pool_be) pool_be = backends.empty() ? nullptr : backends[0].get();
+
+                if (pool_be) {
+                    moe.buf = ggml_backend_alloc_ctx_tensors(moe.ctx, pool_be);
+                }
+                if (moe.buf) {
+                    moe.buf_bytes = ggml_backend_buffer_get_size(moe.buf);
+                    const size_t tol = expect / 20;
+                    if (moe.buf_bytes + tol < expect) {
+                        LLAMA_LOG_ERROR("%s: moe pool short: got %zu, need %zu -> OFF\n",
+                                        __func__, moe.buf_bytes, expect);
+                        ggml_backend_buffer_free(moe.buf); moe.buf = nullptr;
+                    } else {
+                        moe.n_layer = n_layer; moe.n_expert = n_exp;
+                        moe.n_used = n_used;  moe.s_per_layer = s_pl;
+                        moe.slot_of.assign((size_t) n_layer*n_exp, -1);
+                        moe.slot_key.assign((size_t) s_pl*n_layer, -1);
+                        std::vector<int32_t> tab((size_t) n_exp, -1);
+                        for (int il = 0; il < n_layer; il++)
+                            ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
+                                                    n_exp*sizeof(int32_t));
+                        moe_ready = true;
+                        LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers x %d slots\n",
+                                       __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
+                                       n_layer, s_pl);
+                    }
+                } else {
+                    LLAMA_LOG_ERROR("%s: moe pool alloc failed -> moe_direct_io OFF\n", __func__);
+                }
+                } // pool_ok
+                } // outer else (pager ok)
+            } // pager init else
+        } // moe_direct_io if
 
         // create a list of the set_n_threads functions in the backends
         for (auto & backend : backends) {
@@ -1427,7 +1542,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        if (moe_ready) {
+            ggml_backend_sched_set_eval_callback(sched.get(), llama_moe_page_cb, this);
+        } else {
+            ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        }
 
         //const auto t_start_us = ggml_time_us();
 
@@ -2603,6 +2722,12 @@ llm_graph_params llama_context::graph_params(
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
+        /*.moe_gate     =*/ moe_ready ? (const ggml_tensor * const *) moe.pool_gate.data()     : nullptr,
+        /*.moe_gate_up  =*/ moe_ready ? (const ggml_tensor * const *) moe.pool_gate_up.data() : nullptr,
+        /*.moe_up       =*/ moe_ready ? (const ggml_tensor * const *) moe.pool_up.data()     : nullptr,
+        /*.moe_down     =*/ moe_ready ? (const ggml_tensor * const *) moe.pool_down.data()  : nullptr,
+        /*.moe_table    =*/ moe_ready ? (const ggml_tensor * const *) moe.slot_table.data() : nullptr,
+        /*.moe_n_layer  =*/ moe_ready ? moe.n_layer : 0,
     };
 }
 
@@ -3782,6 +3907,7 @@ llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.moe_direct_io              =*/ false,
         /*.moe_slots                  =*/ 4096,
+        /*.moe_gguf_path              =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.abort_callback              =*/ nullptr,
@@ -4497,4 +4623,150 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
+}
+
+// round-robin victim cursor shared by all layers (decorrelates neighbours)
+static thread_local int moe_rr = 0;
+
+// ----------------------------------------------------------------------------
+// Ensure expert `e` of layer `il` is resident in that layer's pool and publish
+// the mapping. `pinned[local]` marks slots that must not be evicted (experts
+// still needed by the current batch); may be nullptr. Returns the layer-local
+// slot, or -1 on failure.
+int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
+    if (!moe_ready || il < 0 || il >= moe.n_layer || e < 0 || e >= moe.n_expert) {
+        return -1;
+    }
+    const int n_exp = moe.n_expert;
+    const int key = il * n_exp + e;
+    const int cur = moe.slot_of[key];
+    if (cur >= 0) {
+        moe.n_hit++;
+        return cur;
+    }
+    const int s_pl = moe.s_per_layer;
+    const int base = il * s_pl;
+    // round-robin within the layer's slot range, skipping pinned slots.
+    // strictly FIFO, so any future policy change stays bit-exact by construction.
+    // a batch needs at most n_used slots while pinned holds its residents, so a
+    // free victim always exists; the bounded scan is a backstop.
+    int slot = -1;
+    for (int t = 0; t < s_pl; t++) {
+        const int cand = base + ((moe_rr + t) % s_pl);
+        if (!pinned || !pinned[cand - base]) { slot = cand; moe_rr += t + 1; break; }
+    }
+    if (slot < 0) {
+        moe.n_page_fail++;
+        return -1;
+    }
+
+    // DMA into the expert's OWN slot, not the pool base
+    const int local = slot - base;
+    const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) s_pl;
+    const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) s_pl;
+    const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) s_pl;
+    if (!pager.fetch(il, e,
+                     (char *) moe.pool_gate[il]->data + (size_t) local * g_slot, g_slot,
+                     (char *) moe.pool_up[il]->data   + (size_t) local * u_slot, u_slot,
+                     (char *) moe.pool_down[il]->data + (size_t) local * d_slot, d_slot)) {
+        moe.n_page_fail++;
+        return -1;
+    }
+    moe_publish(il, e, slot);
+    moe.n_miss++;
+    return slot;
+}
+
+int llama_context::moe_page(int il, int e) {
+    return moe_page_pinned(il, e, nullptr);
+}
+
+// Page a whole top-k set for one layer, pinning residents first so a later
+// miss in the same batch can never evict an expert the batch still needs.
+// Corrupt ids (< 0 or >= n_expert) are skipped and left unmapped.
+void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
+    if (!moe_ready || il < 0 || il >= moe.n_layer) return;
+    const int n_exp = moe.n_expert;
+    const int s_pl  = moe.s_per_layer;
+    std::vector<char> pinned((size_t) s_pl, 0);
+    for (int k = 0; k < n; k++) {
+        const int32_t e = sel[k];
+        if (e < 0 || e >= n_exp) continue;
+        const int cur = moe.slot_of[(size_t) il * n_exp + e];
+        if (cur >= 0) pinned[(size_t) cur - (size_t) il * s_pl] = 1;
+    }
+    for (int k = 0; k < n; k++) {
+        const int32_t e = sel[k];
+        if (e < 0 || e >= n_exp) continue;
+        moe_page_pinned(il, e, (const bool *) pinned.data());
+    }
+}
+
+void llama_context::moe_publish(int il, int e, int slot) {
+    if (!moe_ready || il < 0 || il >= moe.n_layer) return;
+    const int n_exp = moe.n_expert;
+    const int s_pl  = moe.s_per_layer;
+    const int key = il * n_exp + e;
+    const int base = il * s_pl;
+    if (slot < base || slot >= base + s_pl) return;
+    const int old = moe.slot_key[slot];
+    if (old >= 0 && old != key) moe.slot_of[old] = -1;
+    moe.slot_key[slot] = key;
+    moe.slot_of[key]   = slot;
+    // remap the whole layer table: expert -> local slot, -1 when absent
+    std::vector<int32_t> tab((size_t) n_exp, -1);
+    for (int s = 0; s < s_pl; s++) {
+        const int k = moe.slot_key[(size_t) base + s];
+        if (k >= 0) tab[k - il * n_exp] = s;
+    }
+    ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
+}
+
+const ggml_tensor * llama_context::moe_pool_tensor(const char * which, int il) const {
+    if (!moe_ready || il < 0 || il >= moe.n_layer) return nullptr;
+    if (!strcmp(which, "gate"))  return moe.pool_gate[il];
+    if (!strcmp(which, "up"))    return moe.pool_up[il];
+    if (!strcmp(which, "down"))  return moe.pool_down[il];
+    if (!strcmp(which, "table")) return moe.slot_table[il];
+    return nullptr;
+}
+
+// ----------------------------------------------------------------------------
+// sparse MoE demand pager: installed as the scheduler eval callback when
+// --moe-direct-io is on. On ffn_moe_topk-<il> (data phase) we read the selected
+// expert ids, page any that are not resident into the layer's pool via the
+// O_DIRECT pager, and update the layer slot table before MUL_MAT_ID runs.
+// Chains to any user-supplied cb_eval afterwards.
+static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
+    auto * ctx = (llama_context *) ud;
+    const char * nm = ggml_get_name(t);
+    if (!nm) {
+        return false;
+    }
+    if (!ctx || !ctx->moe_enabled()) {
+        return false;
+    }
+    if (strncmp(nm, "ffn_moe_topk-", 13) != 0) {
+        return false;
+    }
+    int il = atoi(nm + 13);
+    if (il < 0 || il >= ctx->moe.n_layer) {
+        return false;
+    }
+    if (ask) {
+        return true;   // split the graph here and sync afterwards
+    }
+    // data phase: page the selected experts (I32 [n_used, n_tokens]).
+    // prefill (n_tokens > 1) runs on the full tensors, so only decode pages.
+    const int64_t ntok = t->ne[1];
+    if (ntok > 1) {
+        return true;
+    }
+    const int64_t nw = t->ne[0];
+    std::vector<int32_t> ids((size_t) nw * ntok);
+    ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
+    for (int64_t j = 0; j < ntok; j++) {
+        ctx->moe_page_batch(il, ids.data() + (size_t) j * nw, (int) nw);
+    }
+    return true;   // MUST return true in the data phase (per cb_eval contract)
 }
