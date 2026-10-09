@@ -15,6 +15,12 @@
 
 #include "common.hpp"
 
+// q5_K multi-column MMVQ shares weights across columns, pairs rows and fuses gate/up in the reorder
+// layout: faster on Xe2 (BMG), so untested archs keep the per-column kernel
+inline bool ggml_sycl_q5_k_mmvq_reuse(int device) {
+    const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31;
+}
 
 void ggml_sycl_op_mul_mat_vec_q(
     ggml_backend_sycl_context & ctx,
