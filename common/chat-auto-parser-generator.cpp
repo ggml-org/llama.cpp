@@ -61,8 +61,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = autoparser.build_parser(inputs, parser_generation_prompt);
-    data.parser = parser.save();
+    data.parser = autoparser.build_parser(inputs, parser_generation_prompt);
 
     // Build grammar if tools are present
     bool has_tools =
@@ -78,7 +77,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         // Set grammar triggers based on tool section markers (fall back to per-call markers)
@@ -291,7 +290,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](const json & tool) {
+    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
         const auto   schema = common_chat_tool_parameters(func);
@@ -308,7 +307,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
             }
             have_call_id = true;
         }
-        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema));
+        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", schema));
         if (!arguments.start.empty()) {
             args_parser = p.literal(arguments.start) + args_parser;
         }
@@ -318,7 +317,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
         auto atomic_peek = !arguments.start.empty() ? std::optional(p.peek(p.literal(arguments.start))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_parser, atomic_peek);
-        tool_choice |= p.rule("tool-" + name, func_parser);
+        tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
     });
 
     auto require_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -364,14 +363,14 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](const json & tool) {
+    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
         const auto & func = tool.at("function");
         std::string  name = func.at("name");
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
-        foreach_parameter(func, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+        foreach_parameter(func, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
@@ -380,10 +379,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                 p.ac(p.tool_arg_string_value(until_suffix) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param.name + "-schema", doc, *param.schema)) +
+                                    p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema", doc, *param.schema)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
-            auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
+            auto named_arg = p.rule("tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index), arg);
             if (param.required) {
                 required_parsers.push_back(named_arg);
             } else {
@@ -434,7 +433,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         auto atomic_peek = (!arguments.name_prefix.empty() && !required_parsers.empty()) ?
             std::optional(p.peek(p.literal(arguments.name_prefix))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_seq, atomic_peek);
-        tool_choice |= p.rule("tool-" + name, func_parser);
+        tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
     });
 
     auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;

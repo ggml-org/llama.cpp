@@ -105,6 +105,7 @@ export type {
 	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadEntry,
 	ModelDownloadFileProgress,
 	ModelDownloadProgress,
 	ModelLoadProgress,

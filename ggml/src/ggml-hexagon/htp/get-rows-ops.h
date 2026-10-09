@@ -55,7 +55,7 @@ static inline void htp_get_rows_vtcm_layout_build(
     }
 
     if (kernel_type == HTP_GET_ROWS_KERNEL_TILED) {
-        const size_t tile_size   = type == HTP_TYPE_Q4_0 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
+        const size_t tile_size   = htp_mm_get_weight_tile_size(type);
         const size_t tile_stride = (tile_size + 127) & ~127;
         const uint32_t n_k_tiles = ne00 / HTP_MM_HMX_TILE_N_COLS;
         const size_t row_tiles_size = n_k_tiles > 0 ? (n_k_tiles * tile_stride) : tile_stride;

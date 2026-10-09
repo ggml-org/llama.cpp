@@ -439,6 +439,25 @@ class ModelBase:
 
                 return (unpacked * scale.unsqueeze(-1).float()).reshape(shape)
 
+            def dequant_fp8() -> None:
+                for name in self.model_tensors.keys():
+                    if name.endswith(".weight_scale"):
+                        weight_name = name.removesuffix("_scale")
+                        if weight_name not in self.model_tensors:
+                            tensors_to_remove.append(name)
+                            continue
+                        w = self.model_tensors[weight_name]
+                        s = self.model_tensors[name]
+                        is_fp8_weight = False
+                        if self._fp8_as_q8:
+                            is_fp8_weight = w().dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+                        self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
+                        tensors_to_remove.append(name)
+                        if is_fp8_weight:
+                            self._fp8_dequantized.add(weight_name)
+                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
+                        tensors_to_remove.append(name)
+
             if quant_method == "bitnet":
                 for name in self.model_tensors.keys():
                     if name.endswith(".weight_scale"):
@@ -498,18 +517,14 @@ class ModelBase:
             elif quant_method == "compressed-tensors":
                 quant_format = quant_config["format"]
                 groups = quant_config["config_groups"]
-                nvfp4_compressed_tensors = (
-                    quant_format == "nvfp4-pack-quantized"
-                    or quant_format == "mixed-precision"
-                    and bool(groups)
-                    and all(g.get("format") == "nvfp4-pack-quantized" for g in groups.values() if isinstance(g, dict))
-                )
+                nvfp4_compressed_tensors = self._is_nvfp4_compressed_tensors(quant_method, quant_format, groups)
 
-                if len(groups) > 1 and not nvfp4_compressed_tensors:
+                if nvfp4_compressed_tensors:
+                    dequant_fp8()
+                elif len(groups) > 1:
                     raise NotImplementedError("Can't handle multiple config groups for compressed-tensors yet")
-                weight_config = tuple(groups.values())[0]["weights"]
-
-                if quant_format == "float-quantized" or quant_format == "int-quantized" or quant_format == "naive-quantized":
+                elif quant_format == "float-quantized" or quant_format == "int-quantized" or quant_format == "naive-quantized":
+                    weight_config = tuple(groups.values())[0]["weights"]
                     block_size = weight_config.get("block_structure", None)
                     strategy = weight_config.get("strategy")
                     assert strategy == "channel" or strategy == "block"
@@ -529,6 +544,7 @@ class ModelBase:
                             if self._fp8_as_q8 and is_fp8:
                                 self._fp8_dequantized.add(weight_name)
                 elif quant_format == "pack-quantized":
+                    weight_config = tuple(groups.values())[0]["weights"]
                     assert weight_config.get("strategy") == "group"
                     assert weight_config.get("type", "int") == "int"
                     num_bits = weight_config.get("num_bits")
@@ -550,32 +566,10 @@ class ModelBase:
                             tensors_to_remove += [base_name + n for n in ("_packed", "_shape", "_scale")]
                             if (base_name + "_zero_point") in self.model_tensors:
                                 tensors_to_remove.append(base_name + "_zero_point")
-                elif nvfp4_compressed_tensors:
-                    # Don't error from compressed-tensors, we'll handle them in _generate_nvfp4_tensors
-                    pass
                 else:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
             elif quant_method == "modelopt":
-                # Mixed-precision ModelOpt models: NVFP4 tensors are handled by
-                # _generate_nvfp4_tensors; FP8 tensors have 1D weight_scale and
-                # are dequantized here. k/v scale tensors are unused.
-                for name in self.model_tensors.keys():
-                    if name.endswith(".weight_scale"):
-                        weight_name = name.removesuffix("_scale")
-                        if weight_name not in self.model_tensors:
-                            tensors_to_remove.append(name)
-                            continue
-                        w = self.model_tensors[weight_name]
-                        s = self.model_tensors[name]
-                        is_fp8_weight = False
-                        if self._fp8_as_q8:
-                            is_fp8_weight = w().dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
-                        self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
-                        tensors_to_remove.append(name)
-                        if is_fp8_weight:
-                            self._fp8_dequantized.add(weight_name)
-                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
-                        tensors_to_remove.append(name)
+                dequant_fp8()
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
 
@@ -822,6 +816,18 @@ class ModelBase:
         )
 
     @staticmethod
+    def _is_nvfp4_compressed_tensors(quant_method, quant_format, groups) -> bool:
+        # Some models use per-tensor quant_algo (e.g. "MIXED_PRECISION" with
+        # per-layer NVFP4/FP8) instead of a single global "NVFP4" value.
+        if quant_method != "compressed-tensors":
+            return False
+        if quant_format == "nvfp4-pack-quantized":
+            return True
+        if quant_format != "mixed-precision" or not groups:
+            return False
+        return any(g.get("format") == "nvfp4-pack-quantized" for g in groups.values() if isinstance(g, dict))
+
+    @staticmethod
     def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
         Preserves original E4M3 scale bits as UE4M3 (strip sign bit).
@@ -878,8 +884,8 @@ class ModelBase:
             weight = LazyTorchTensor.to_eager(self.model_tensors[name]())
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
 
-            # Skip non-NVFP4 tensors (e.g. FP8 with per-channel 1D scales)
-            if scale.ndim < 2:
+            # Skip non-NVFP4 tensors(e.g. 1D scale, or float8 weight)
+            if scale.ndim < 2 or weight.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
                 continue
 
             scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
@@ -980,14 +986,7 @@ class ModelBase:
                 quant_groups = quant_config.get("config_groups", quant_groups) or {}
                 quant_layers = quant_config.get("quantized_layers", quant_layers) or {}
 
-        # Some models use per-tensor quant_algo (e.g. "MIXED_PRECISION" with
-        # per-layer NVFP4/FP8) instead of a single global "NVFP4" value.
-        nvfp4_compressed_tensors = quant_method == "compressed-tensors" and (
-            quant_format == "nvfp4-pack-quantized"
-            or quant_format == "mixed-precision"
-            and bool(quant_groups)
-            and all(g.get("format") == "nvfp4-pack-quantized" for g in quant_groups.values() if isinstance(g, dict))
-        )
+        nvfp4_compressed_tensors = self._is_nvfp4_compressed_tensors(quant_method, quant_format, quant_groups)
 
         self._nvfp4_global_algo = quant_algo
 
@@ -1529,7 +1528,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -1713,6 +1712,9 @@ class TextModel(ModelBase):
         if chkhsh == "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed":
             # ref: https://huggingface.co/XHToken/Spark-X2.5-1.7B
             res = "spark2_5"
+        if chkhsh == "1f9825a388f700a6b591722f17d470cbbcf10973ece35d2fd14239a14110ae1a":
+            # ref: https://huggingface.co/IFM/K2-Horizon-0.9B
+            res = "k2-horizon"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1941,6 +1943,9 @@ class TextModel(ModelBase):
         if chkhsh == "4b05e02dad1c5ae07d266fd3342ddb644c6f6be058d728bc0a33af31a1d6ee66":
             # ref: https://huggingface.co/jhu-clsp/mmBERT-base
             res = "mmbert"
+        if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
+            # ref: https://huggingface.co/IFM/K2-Horizon-36B
+            res = "k2-horizon"
 
         if res is None:
             logger.warning("\n")
@@ -2330,12 +2335,26 @@ class TextModel(ModelBase):
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
+        else:
+            embedding_config_path = self.dir_model / "embedding_config.json"
+            if embedding_config_path.is_file():
+                with open(embedding_config_path, encoding="utf-8") as f:
+                    embedding_config = json.load(f)
+                pooling = embedding_config.get("pooling")
+                if pooling == "last_token":
+                    self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+                elif pooling is not None:
+                    raise NotImplementedError(f"unsupported embedding_config.json pooling {pooling!r}")
 
         # pooling before a classification head (e.g. ModernBertForSequenceClassification)
         if (classifier_pooling := self.hparams.get("classifier_pooling")) is not None:
             if classifier_pooling not in ("cls", "mean"):
                 raise NotImplementedError(f"Unsupported classifier_pooling: {classifier_pooling}")
             self.gguf_writer.add_classifier_pooling_type(mode_mapping[classifier_pooling])
+        if (classifier_activation := self.hparams.get("classifier_activation")) is not None:
+            if classifier_activation not in ("gelu", "silu", "tanh"):
+                raise NotImplementedError(f"Unsupported classifier_activation: {classifier_activation}")
+            self.gguf_writer.add_classifier_activation(classifier_activation)
 
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer
@@ -2493,7 +2512,11 @@ class TextModel(ModelBase):
         if template is not None:
             self.gguf_writer.add_chat_template(template)
 
-    def _set_vocab_plamo(self):
+    def _set_vocab_plamo(
+        self,
+        eot_token: str,
+        normal_tokens: Iterable[str] = (),
+    ):
         # PLaMo models use a custom tokenizer with a .jsonl file
         tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
         tokenizer_config_path = self.dir_model / "tokenizer_config.json"
@@ -2505,31 +2528,42 @@ class TextModel(ModelBase):
         with open(tokenizer_config_path, "r", encoding="utf-8") as f:
             tokenizer_config = json.load(f)
 
+        tokenizer_class = tokenizer_config.get("tokenizer_class")
+        if tokenizer_class == "Plamo2Tokenizer":
+            tokenizer_model = "plamo2"
+        elif tokenizer_class == "Plamo3Tokenizer":
+            tokenizer_model = "plamo3"
+        else:
+            raise ValueError(f"Unsupported PLaMo tokenizer class: {tokenizer_class}")
+
         # Load tokens from JSONL file (actually a list format)
         tokens = []
         scores = []
         toktypes = []
+        normal_tokens = set(normal_tokens)
 
         with open(tokenizer_jsonl_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f):
                 if line.strip():
                     token_data = json.loads(line)
                     # Format: [token, score, type, ?, ?, ?, ?]
-                    token = token_data[0].encode("utf-8")
+                    token_str = token_data[0]
+                    token = token_str.encode("utf-8")
                     score = float(token_data[1])
                     token_type_str = token_data[2] if len(token_data) > 2 else "NORMAL"
 
                     tokens.append(token)
                     scores.append(score)
 
-                    if token_type_str == "UNKNOWN":
+                    if token_str in normal_tokens:
+                        toktypes.append(gguf.TokenType.NORMAL)
+                    elif token_type_str == "UNKNOWN":
                         toktypes.append(gguf.TokenType.UNKNOWN)
                     elif token_type_str == "CONTROL":
                         toktypes.append(gguf.TokenType.CONTROL)
                     elif token_type_str == "BYTE":
                         toktypes.append(gguf.TokenType.BYTE)
                     else:
-                        token_str = token_data[0]
                         if token_str.startswith("<|plamo:") and token_str.endswith("|>"):
                             toktypes.append(gguf.TokenType.CONTROL)
                         else:
@@ -2544,7 +2578,7 @@ class TextModel(ModelBase):
                 scores.append(-1000.0)
                 toktypes.append(gguf.TokenType.UNUSED)
 
-        self.gguf_writer.add_tokenizer_model("plamo2")
+        self.gguf_writer.add_tokenizer_model(tokenizer_model)
         self.gguf_writer.add_tokenizer_pre("default")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
@@ -2566,8 +2600,7 @@ class TextModel(ModelBase):
             token_id = tokens.index(tokenizer_config["unk_token"].encode("utf-8"))
             self.gguf_writer.add_unk_token_id(token_id)
 
-        # Add <|plamo:op|> as EOT to ensure appropriate end of generation
-        self.gguf_writer.add_eot_token_id(4)
+        self.gguf_writer.add_eot_token_id(tokens.index(eot_token.encode("utf-8")))
 
         self.gguf_writer.add_add_space_prefix(False)
 

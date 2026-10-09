@@ -19,6 +19,7 @@ struct server_context_meta {
     std::set<std::string> model_aliases;
     std::set<std::string> model_tags;
     std::string model_path;
+    std::vector<std::string> model_output_modalities; // output modalities for GET /models
     bool has_mtmd;
     bool has_inp_image;
     bool has_inp_audio;
@@ -165,7 +166,8 @@ private:
             server_task_type type,
             const json & data,
             const std::vector<raw_buffer> & files,
-            task_response_type res_type);
+            task_response_type res_type,
+            const common_chat_session & chat_session = {});
     std::unique_ptr<server_res_generator> handle_slots_save(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
