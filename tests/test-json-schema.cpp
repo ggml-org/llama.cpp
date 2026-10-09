@@ -483,6 +483,40 @@ static void test_errors(testing & t) {
     });
 }
 
+// common_json::parse takes up to 128 levels of arrays and objects
+static void test_depth(testing & t) {
+    // n arrays of the next level, 1 + n objects
+    const auto nested = [](size_t n) {
+        std::string schema;
+        for (size_t i = 0; i < n; i++) {
+            schema += R"({"type": "array", "items": )";
+        }
+        return schema + R"({"type": "string"})" + std::string(n, '}');
+    };
+
+    const auto arrays = [](size_t n) {
+        return std::string(n, '[') + std::string(n, ']');
+    };
+
+    t.test("limit", [&](testing & t) {
+        t.assert_true("128 levels", root<common_chat_schema_array>(t, parse(nested(127))).items != nullptr);
+        assert_error(t, nested(128), "JSON is nested more than 128 levels deep");
+        assert_error(t, nested(100000), "JSON is nested more than 128 levels deep");
+    });
+
+    t.test("arrays", [&](testing & t) {
+        t.assert_true("128 levels", common_json::parse(arrays(128)).is_array());
+        t.assert_true("128 levels, no throw", !common_json::parse_no_throw(arrays(128)).is_discarded());
+        t.assert_true("129 levels, no throw", common_json::parse_no_throw(arrays(129)).is_discarded());
+    });
+
+    // the escaped quote does not end the string
+    t.test("brackets in strings do not count", [&](testing & t) {
+        const std::string brackets = std::string(200, '[') + std::string(200, '{');
+        t.assert_equal("pattern", "\"" + brackets, root<common_chat_schema_string>(t, parse(R"({"type": "string", "pattern": "\")" + brackets + R"("})")).pattern);
+    });
+}
+
 int main(int argc, char * argv[]) {
     testing t(std::cout);
     if (argc >= 2) {
@@ -508,6 +542,7 @@ int main(int argc, char * argv[]) {
     t.test("may_be_string", test_may_be_string);
     t.test("value_types", test_value_types);
     t.test("errors", test_errors);
+    t.test("depth", test_depth);
 
     return t.summary();
 }

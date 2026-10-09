@@ -160,7 +160,7 @@ class common_json {
 
     ~common_json();
 
-    // throws common_json_error if the text is not valid JSON
+    // throws common_json_error if the text is not valid JSON, or nests arrays and objects more than 128 levels deep
     static common_json parse(const std::string & text);
 
     // gives a discarded value instead of throwing, check it with is_discarded()

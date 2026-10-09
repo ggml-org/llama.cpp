@@ -198,7 +198,40 @@ common_json::~common_json() {
     as_json(this).~basic_json();
 }
 
+// parsed values are walked with recursion (dump, jinja, json-schema-to-grammar), a deeper input overflows the stack
+static constexpr int COMMON_JSON_MAX_DEPTH = 128;
+
+// arrays and objects only, brackets in strings do not count
+static bool json_too_deep(const std::string & text) {
+    int  depth     = 0;
+    bool in_string = false;
+    bool escaped   = false;
+    for (const char c : text) {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+        } else if (c == '"') {
+            in_string = true;
+        } else if (c == '[' || c == '{') {
+            if (++depth > COMMON_JSON_MAX_DEPTH) {
+                return true;
+            }
+        } else if (c == ']' || c == '}') {
+            depth--;
+        }
+    }
+    return false;
+}
+
 common_json common_json::parse(const std::string & text) {
+    if (json_too_deep(text)) {
+        throw common_json_error("JSON is nested more than " + std::to_string(COMMON_JSON_MAX_DEPTH) + " levels deep");
+    }
     try {
         // the assignment moves the parsed tree in, it does not copy
         common_json out;
@@ -211,6 +244,10 @@ common_json common_json::parse(const std::string & text) {
 
 common_json common_json::parse_no_throw(const std::string & text) {
     common_json out;
+    if (json_too_deep(text)) {
+        as_json(&out) = ordered_json(ordered_json::value_t::discarded);
+        return out;
+    }
     as_json(&out) = ordered_json::parse(text, nullptr, false);
     return out;
 }
