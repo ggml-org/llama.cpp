@@ -458,14 +458,22 @@ llama_context::llama_context(
                         moe.n_used = n_used;  moe.s_per_layer = s_pl;
                         moe.slot_of.assign((size_t) n_layer*n_exp, -1);
                         moe.slot_key.assign((size_t) s_pl*n_layer, -1);
-                        std::vector<int32_t> tab((size_t) n_exp, -1);
-                        for (int il = 0; il < n_layer; il++)
-                            ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
-                                                    n_exp*sizeof(int32_t));
-                        moe_ready = true;
-                        LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers x %d slots\n",
-                                       __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
-                                       n_layer, s_pl);
+                        moe.step_sel.assign((size_t) n_layer * n_used, -1);
+                        // staging for demand plus lookahead: 2 layers of layer-ahead
+                        // plus token-ahead, all potentially unclaimed (65% predictor
+                        // miss), plus margin so demand never starves
+                        if (!pager.reserve_staging(5 * n_used + 32)) {
+                            LLAMA_LOG_ERROR("%s: staging reserve failed -> moe_direct_io OFF\n", __func__);
+                        } else {
+                            std::vector<int32_t> tab((size_t) n_exp, -1);
+                            for (int il = 0; il < n_layer; il++)
+                                ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
+                                                        n_exp*sizeof(int32_t));
+                            moe_ready = true;
+                            LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers x %d slots\n",
+                                           __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
+                                           n_layer, s_pl);
+                        }
                     }
                 } else {
                     LLAMA_LOG_ERROR("%s: moe pool alloc failed -> moe_direct_io OFF\n", __func__);
@@ -600,6 +608,9 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+    // release the sparse-MoE slot pool (fit-probe contexts must not leak VRAM)
+    if (moe.buf) { ggml_backend_buffer_free(moe.buf); moe.buf = nullptr; }
+    if (moe.ctx) { ggml_free(moe.ctx); moe.ctx = nullptr; }
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.hparams.no_alloc && !opt_ctx) {
@@ -4702,6 +4713,62 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
     }
 }
 
+// Queue async reads for experts the next layer(s) will likely need. Runs at
+// the END of layer il's top-k callback, after demand paging for il, so the
+// reads overlap the GPU compute of the layers between il and the target.
+// Predictor: previous-step recency per layer (measured overlap 35% at t-1,
+// 54% at t-1..t-4). Experts already resident or in flight are skipped, and
+// reap() recycles completions.
+// Always on: admission control (below) plus the pager's victim-drop keep a
+// prefetch burst from ever starving a demand fetch.
+void llama_context::moe_prefetch_ahead(int il, const int32_t * sel, int n) {
+    // prefetch is always on: with admission control below, a prefetch burst
+    // can never starve a demand fetch, and unconverted reads are dropped by
+    // the pager's victim-drop when staging fills
+    if (!moe_ready || il < 0 || il >= moe.n_layer) return;
+    const bool do_issue = true;
+    const int n_exp = moe.n_expert;
+    const int n_used = moe.n_used;
+    // remember this step's routing for the token-ahead predictor below
+    // (top-k width may exceed n_used on some layers; keep what fits)
+    for (int k = 0; k < n && k < n_used; k++) {
+        const int32_t e = sel[k];
+        moe.step_sel[(size_t) il * n_used + k] = (e >= 0 && e < n_exp) ? e : -1;
+    }
+    // admission control: keep at least demand-reserve free stages so a
+    // prefetch burst can never starve a demand fetch (which would corrupt text)
+    const int reserve = 2 * n_used + 4;
+    // layer-ahead: prefetch the PREVIOUS step's top-k for the next layers
+    // (temporal recency: measured 35% overlap at t-1, 54% at t-1..t-4).
+    // same-step/same-id across layers carries no signal (routing is
+    // independent per layer), so this step's own ids are NOT reused here.
+    for (int d = 1; d <= 2 && do_issue && pager.n_free_staging() > reserve; d++) {
+        const int jl = il + d;
+        if (jl >= moe.n_layer) break;
+        for (int k = 0; k < n_used; k++) {
+            const int32_t e = moe.step_sel[(size_t) jl * n_used + k];
+            if (e < 0 || e >= n_exp) continue;
+            if (moe.slot_of[(size_t) jl * n_exp + e] >= 0) continue;
+            if (!pager.prefetch(jl, e)) break;
+            if (pager.n_free_staging() <= reserve) break;
+        }
+    }
+    // token-ahead: at the last layer, warm up layer 0/1 with their own most
+    // recent routing (what token t+1's start most likely repeats)
+    if (do_issue && il == moe.n_layer - 1) {
+        for (int jl = 0; jl < 2 && jl < moe.n_layer; jl++) {
+            for (int k = 0; k < n_used; k++) {
+                const int32_t e = moe.step_sel[(size_t) jl * n_used + k];
+                if (e < 0 || e >= n_exp) continue;
+                if (moe.slot_of[(size_t) jl * n_exp + e] >= 0) continue;
+                if (!pager.prefetch(jl, e)) break;
+                if (pager.n_free_staging() <= reserve) break;
+            }
+        }
+    }
+    pager.reap();
+}
+
 void llama_context::moe_publish(int il, int e, int slot) {
     if (!moe_ready || il < 0 || il >= moe.n_layer) return;
     const int n_exp = moe.n_expert;
@@ -4767,6 +4834,22 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
     for (int64_t j = 0; j < ntok; j++) {
         ctx->moe_page_batch(il, ids.data() + (size_t) j * nw, (int) nw);
+    }
+    // layer-ahead + token-ahead async reads for the layers after this one;
+    // admission-controlled inside, never blocks
+    for (int64_t j = 0; j < ntok; j++) {
+        ctx->moe_prefetch_ahead(il, ids.data() + (size_t) j * nw, (int) nw);
+    }
+    {
+        // prefetch telemetry: hit rate of demand commits against in-flight
+        // prefetches, plus demand hit/miss totals
+        static int n_rep = 0;
+        if ((++n_rep % 200) == 0) {
+            LLAMA_LOG_INFO("%s: pf issued=%ld hit=%ld demand hit=%ld miss=%ld fail=%ld iofail=%ld\n",
+                __func__, ctx->pager.stats_pf_issued(), ctx->pager.stats_pf_hit(),
+                ctx->moe.n_hit, ctx->moe.n_miss, ctx->moe.n_page_fail,
+                ctx->pager.stats_io_fail());
+        }
     }
     return true;   // MUST return true in the data phase (per cb_eval contract)
 }

@@ -90,8 +90,17 @@ bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_us
     fd_ = open(gguf_path, O_RDONLY | O_DIRECT);
     if (fd_ < 0) { err = "open O_DIRECT failed"; return false; }
 
+    // one staging slot must hold ALL THREE role reads of one expert: the
+    // submit path lays them out back-to-back (boff), so sizing by the max
+    // single-slice len would let concurrent requests overwrite each other.
     stage_bytes_ = 0;
-    for (size_t i = 0; i < idx_.size(); i++) stage_bytes_ = std::max(stage_bytes_, (size_t) idx_[i].len);
+    for (int jil = 0; jil < n_layer; jil++) {
+        for (int je = 0; je < n_expert; je++) {
+            const moe_expert_slice * se = &idx_[((size_t) jil * n_expert + je) * 3];
+            stage_bytes_ = std::max(stage_bytes_,
+                (size_t) se[0].len + se[1].len + se[2].len);
+        }
+    }
     if (cudaHostAlloc(&stage_, stage_bytes_ * NSTAGE, cudaHostAllocDefault) != cudaSuccess) {
         err = "cudaHostAlloc staging failed"; return false;
     }
@@ -114,13 +123,26 @@ int moe_pager::find_(int key) const {
 }
 
 int moe_pager::submit_(int key) {
-    if (free_stage_.empty()) return -1;
+    // No free stage: drop the oldest COMPLETED-but-unclaimed prefetch (its
+    // data is stale by definition - nobody demanded it while it sat ready).
+    // Never drop in-flight reads: a later commit may be waiting on them.
+    if (free_stage_.empty()) {
+        for (size_t i = 0; i < reqs_.size(); i++) {
+            if (reqs_[i].used && reqs_[i].done >= 3) {
+                free_stage_.push_back(reqs_[i].stage);
+                reqs_[i].used = false;
+                break;
+            }
+        }
+        if (free_stage_.empty()) return -1;
+    }
     const int il = key / n_expert_, e = key % n_expert_;
     const moe_expert_slice * s = slices(il, e);
 
     const int st = free_stage_.back(); free_stage_.pop_back();
     const int ridx = (int) reqs_.size();
     int pending = 0;
+    long got_self[3] = { -1, -1, -1 };
     size_t boff = 0;
     for (int r = 0; r < 3; r++) {
         struct io_uring_sqe * sqe = io_uring_get_sqe((struct io_uring *) ring_);
@@ -133,7 +155,7 @@ int moe_pager::submit_(int key) {
                 io_uring_cqe_seen((struct io_uring *) ring_, cqe);
                 const int rr = (int)(ud / 4);
                 const int role = (int)(ud % 4);
-                if (rr == ridx) { pending++; }
+                if (rr == ridx) { pending++; if (role >= 0 && role < 3) got_self[role] = res; }
                 else if (rr < (int) reqs_.size() && reqs_[rr].used) {
                     reqs_[rr].done++;
                     if (role >= 0 && role < 3) reqs_[rr].got[role] = res;
@@ -147,7 +169,7 @@ int moe_pager::submit_(int key) {
         boff += s[r].len;
     }
     Req q; q.il = il; q.e = e; q.stage = st; q.done = pending; q.used = true;
-    q.got[0] = q.got[1] = q.got[2] = -1;
+    q.got[0] = got_self[0]; q.got[1] = got_self[1]; q.got[2] = got_self[2];
     reqs_.push_back(q);
     io_uring_submit((struct io_uring *) ring_);
     io_ops_ += 3; io_bytes_ += (long) boff;
@@ -183,11 +205,55 @@ double moe_pager::wait_(int r) {
     wait_ok_(r);
     return now_s() - t0;
 }
+// Balanced submit: prefetch()ed reads stay in flight until a demand commit()
+// consumes them or reap() recycles a completed-but-unclaimed one. reap()
+// must run often enough that free_stage_ never empties under prefetch load;
+// each call also surfaces stuck completions for in-flight requests.
+int moe_pager::reap() {
+    int n = 0;
+    struct io_uring * ring = (struct io_uring *) ring_;
+    for (;;) {
+        struct io_uring_cqe * cqe = nullptr;
+        if (io_uring_peek_cqe(ring, &cqe) != 0 || !cqe) break;
+        const uint64_t ud = cqe->user_data;
+        const int res = cqe->res;
+        io_uring_cqe_seen(ring, cqe);
+        const int rr = (int)(ud / 4);
+        const int role = (int)(ud % 4);
+        if (rr < (int) reqs_.size() && reqs_[rr].used) {
+            reqs_[rr].done++;
+            if (role >= 0 && role < 3) reqs_[rr].got[role] = res;
+            n++;
+        }
+    }
+    return n;
+}
+
+bool moe_pager::reserve_staging(int n) {
+    // Grow the staging arena to `n` slots. Only valid on a quiet ring (no
+    // in-flight reads reference the old arena); the pool reserves once at
+    // startup right after init, when the ring is guaranteed quiet.
+    if (n <= 0) return true;
+    for (size_t i = 0; i < reqs_.size(); i++) {
+        if (reqs_[i].used) return false;
+    }
+    char * stage = nullptr;
+    if (cudaHostAlloc(&stage, stage_bytes_ * (size_t) n, cudaHostAllocDefault) != cudaSuccess) {
+        return false;
+    }
+    cudaFreeHost(stage_);
+    stage_ = stage;
+    free_stage_.clear();
+    for (int i = n - 1; i >= 0; i--) free_stage_.push_back(i);
+    return true;
+}
 
 bool moe_pager::prefetch(int il, int e) {
     const int key = il * n_expert_ + e;
     if (find_(key) >= 0) return true;
-    return submit_(key) >= 0;
+    const int r = submit_(key);
+    if (r >= 0) n_pf_issued_++;
+    return r >= 0;
 }
 
 bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
@@ -195,6 +261,7 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
                                   void * dst_down,   size_t down_bytes) {
     const int key = il * n_expert_ + e;
     int r = find_(key);
+    const bool was_prefetch = (r >= 0); // in flight before demand arrived
     if (r < 0) r = submit_(key);
     if (r < 0) return false;
     if (!wait_ok_(r)) {
@@ -203,7 +270,7 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
         reqs_[r].used = false;
         return false;
     }
-
+    if (was_prefetch) n_pf_hit_++;
     const moe_expert_slice * s = slices(il, e);
     char * src = stage_ + (size_t) reqs_[r].stage * stage_bytes_;
     // each slice starts at an aligned-down offset; skip the stored pre-pad

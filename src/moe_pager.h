@@ -51,13 +51,23 @@ public:
     bool fetch(int il, int e, void * dst_gate, size_t gate_bytes,
                                   void * dst_up,     size_t up_bytes,
                                   void * dst_down,   size_t down_bytes);
-
-    // Non-blocking prefetch: queue a read. Returns true if it was queued.
+    // Non-blocking prefetch: queue a read. Returns true if it was queued
+    // (or already in flight).
     bool prefetch(int il, int e);
     // Wait for a queued prefetch and DMA it. Returns true on success.
     bool commit(int il, int e, void * dst_gate, size_t gate_bytes,
                                    void * dst_up,     size_t up_bytes,
                                    void * dst_down,   size_t down_bytes);
+    // Drain (reap) any completed reads so their staging slots recycle.
+    // Call periodically (e.g. once per layer) to bound staging pressure.
+    // Returns the number of completions reaped.
+    int reap();
+    // Reserve `n` extra staging slots for in-flight prefetches beyond the
+    // demand path's needs. Returns false (and keeps the old size) when the
+    // allocation fails.
+    bool reserve_staging(int n);
+    // Free staging slots right now (for admission control).
+    int n_free_staging() const { return (int) free_stage_.size(); }
 
     // public for verification: exact file range this pager reads for an expert
     const moe_expert_slice * slices(int il, int e) const { return &idx_[((size_t) il * n_expert_ + e) * 3]; }
@@ -66,6 +76,10 @@ public:
     long stats_io_ops()   const { return io_ops_; }
     long stats_io_bytes() const { return io_bytes_; }
     long stats_io_fail()  const { return n_io_fail_; }
+    long stats_pf_issued() const { return n_pf_issued_; }
+    // completed prefetch reads still unconsumed when a demand commit for the
+    // same expert arrived (prefetch hit); cumulative
+    long stats_pf_hit()   const { return n_pf_hit_; }
 
 private:
     struct Req { int il, e, stage, done; bool used; long got[3]; };
@@ -87,6 +101,7 @@ private:
     std::vector<int> free_stage_;
     void * ring_ = nullptr;
     long io_ops_ = 0, io_bytes_ = 0, n_io_fail_ = 0;
+    long n_pf_issued_ = 0, n_pf_hit_ = 0;
 
     int submit_(int key);
     int find_(int key) const;

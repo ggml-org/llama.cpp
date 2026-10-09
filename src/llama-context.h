@@ -269,6 +269,9 @@ public:
         std::vector<int32_t> slot_of, slot_key;
         int n_layer = 0, n_expert = 0, n_used = 0, s_per_layer = 0;
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
+        // previous decode step's top-k per layer, for the recency predictor
+        // (moe_step_sel[il*n_used+k]); empty until the first decode step
+        std::vector<int32_t> step_sel;
     };
     moe_pool moe;
     moe_pager pager;
@@ -277,6 +280,11 @@ public:
     int  moe_page(int il, int e);
     int  moe_page_pinned(int il, int e, const bool * pinned);
     void moe_page_batch(int il, const int32_t * sel, int n);
+    // queue async reads for experts the next layer(s) will likely need:
+    // same-layer recency (prev step's top-k) for layers il+1..il+2, and
+    // layer-0/1 recency for the next token when il is the last layer.
+    // never blocks; skipped entirely unless MOE_PF=1.
+    void moe_prefetch_ahead(int il, const int32_t * sel, int n);
     void moe_publish(int il, int e, int slot);
     const ggml_tensor * moe_pool_tensor(const char * which, int il) const;
 
