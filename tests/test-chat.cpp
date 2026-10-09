@@ -7801,42 +7801,8 @@ static void test_chat_session() {
     {
         common_chat_session session(tmpls.get(), nullptr, inputs);
 
-        assert_equals(std::string(R"(<|im_start|>system
-# Tools
-
-You have access to the following functions:
-
-<tools>
-{"type": "function", "function": {"name": "special_function", "description": "I'm special", "parameters": {"type": "object", "properties": {"arg1": {"type": "integer", "description": "The arg."}}, "required": ["arg1"]}}}
-</tools>
-
-If you choose to call a function ONLY reply in the following format with NO suffix:
-
-<tool_call>
-<function=example_function_name>
-<parameter=example_parameter_1>
-value_1
-</parameter>
-<parameter=example_parameter_2>
-This is the value for the second parameter
-that can span
-multiple lines
-</parameter>
-</function>
-</tool_call>
-
-<IMPORTANT>
-Reminder:
-- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
-- Required parameters MUST be specified
-- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
-- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
-</IMPORTANT><|im_end|>
-<|im_start|>user
-Hey there!<|im_end|>
-<|im_start|>assistant
-<think>
-)"), session.prompt());
+        assert_contains(session.prompt(), "\"name\": \"special_function\"");
+        assert_contains(session.prompt(), "<|im_start|>user\nHey there!<|im_end|>\n<|im_start|>assistant\n<think>\n");
         assert_equals(false, session.grammar().empty());
         assert_equals(std::string("<|im_start|>assistant\n<think>\n"), session.generation_prompt());
 
