@@ -30,6 +30,9 @@
 // remember to bump this if the serialization format changes
 #define MTMD_SERIALIZATION_VERSION 3
 
+// oldest compat version that can be loaded
+#define MTMD_SERIALIZATION_VERSION_MIN 2
+
 struct mtmd_serialization {
     // note: using 64-bit here for future-proofing
     uint64_t version = MTMD_SERIALIZATION_VERSION;
@@ -46,7 +49,7 @@ struct mtmd_serialization {
         // copy buf to data
         data.assign(buf, buf + len);
         uint64_t ver_in = read<uint64_t>();
-        if (ver_in != version) {
+        if (ver_in < MTMD_SERIALIZATION_VERSION_MIN || ver_in > version) {
             throw std::runtime_error("version mismatch");
         }
         this->version = ver_in;
@@ -119,15 +122,17 @@ void clip_image_f32::deserialize(mtmd_serialization & ser) {
     add_viewsep = ser.read<bool>();
     add_newline = ser.read<bool>();
     lead_pad = ser.read<int32_t>();
-    const int32_t suffix_raw = ser.read<int32_t>();
-    if (suffix_raw < 0 || suffix_raw >= CLIP_SUFFIX_COUNT) {
-        throw std::runtime_error("invalid suffix type");
+    if (ser.version >= 3) {
+        const int32_t suffix_raw = ser.read<int32_t>();
+        if (suffix_raw < 0 || suffix_raw >= CLIP_SUFFIX_COUNT) {
+            throw std::runtime_error("invalid suffix type");
+        }
+        suffix_type = (clip_suffix_type)suffix_raw;
+        anyres.grid_x = ser.read<int32_t>();
+        anyres.grid_y = ser.read<int32_t>();
+        anyres.orig_nx = ser.read<int32_t>();
+        anyres.orig_ny = ser.read<int32_t>();
     }
-    suffix_type = (clip_suffix_type)suffix_raw;
-    anyres.grid_x = ser.read<int32_t>();
-    anyres.grid_y = ser.read<int32_t>();
-    anyres.orig_nx = ser.read<int32_t>();
-    anyres.orig_ny = ser.read<int32_t>();
     nx_ = ser.read<int32_t>();
     ny_ = ser.read<int32_t>();
     buf.clear(); // always a placeholder after loading
