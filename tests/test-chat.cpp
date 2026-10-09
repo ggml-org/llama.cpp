@@ -23,48 +23,8 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 using json = common_json;
-
-// Splits before whitespace and punctuation, so markup lands in pieces much like real tokens
-static std::vector<std::string> simple_tokenize(const std::string & input) {
-    std::vector<std::string> result;
-    std::string              current;
-
-    for (char c : input) {
-        switch (c) {
-            case ' ':
-            case '\n':
-            case '\t':
-            case '{':
-            case '}':
-            case ',':
-            case '[':
-            case '"':
-            case ']':
-            case '.':
-            case '<':
-            case '>':
-            case '=':
-            case '/':
-                if (!current.empty()) {
-                    result.push_back(current);
-                    current.clear();
-                }
-                break;
-            default:
-                break;
-        }
-        current += c;
-    }
-
-    if (!current.empty()) {
-        result.push_back(current);
-    }
-
-    return result;
-}
 
 static std::ostream & operator<<(std::ostream & os, const common_chat_msg_diff & diff) {
     os << "{ content_delta: " << diff.content_delta << "; ";
@@ -457,9 +417,7 @@ static void assert_msg_equals(const common_chat_msg & expected,
         const auto & expected_tool_call = expected.tool_calls[i];
         const auto & actual_tool_call   = actual.tool_calls[i];
         assert_equals(expected_tool_call.name, actual_tool_call.name);
-        if (expected_tool_call.arguments != actual_tool_call.arguments) {
-            assert_equals(renormalize_json(expected_tool_call.arguments), renormalize_json(actual_tool_call.arguments));
-        }
+        assert_equals(renormalize_json(expected_tool_call.arguments), renormalize_json(actual_tool_call.arguments));
         assert_equals(expected_tool_call.id, actual_tool_call.id);
     }
 }
@@ -1141,6 +1099,39 @@ static bool g_force_reconstruction_test = false;
 static void test_peg_parser(common_chat_templates *                      tmpls,
                             const std::function<void(peg_test_case &)> & init,
                             bool                                         detailed_debug) {
+    // UTF-8-safe truncation helper (same as in test_parser_with_streaming)
+    constexpr auto utf8_truncate_safe_len = [](const std::string_view s) -> size_t {
+        auto len = s.size();
+        if (len == 0) {
+            return 0;
+        }
+        auto i = len;
+        for (size_t back = 0; back < 4 && i > 0; ++back) {
+            --i;
+            unsigned char c = s[i];
+            if ((c & 0x80) == 0) {
+                return len;
+            }
+            if ((c & 0xC0) == 0xC0) {
+                size_t expected_len = 0;
+                if ((c & 0xE0) == 0xC0) {
+                    expected_len = 2;
+                } else if ((c & 0xF0) == 0xE0) {
+                    expected_len = 3;
+                } else if ((c & 0xF8) == 0xF0) {
+                    expected_len = 4;
+                } else {
+                    return i;
+                }
+                if (len - i >= expected_len) {
+                    return len;
+                }
+                return i;
+            }
+        }
+        return len - std::min(len, size_t(3));
+    };
+
     peg_test_case tc;
     init(tc);
     if (tc.params.messages.empty()) {
@@ -1173,11 +1164,13 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     common_chat_msg msg_prev;
     msg_accum.role = msg_prev.role = "assistant";
 
-    // Feed the input in token-like pieces, as the server would, and check that the deltas add up
-    const auto pieces = simple_tokenize(tc.input);
-    for (size_t i = 0; i < pieces.size(); ++i) {
-        bool is_partial = i + 1 < pieces.size() || tc.is_partial;
-        common_chat_input chunk(pieces[i]);
+    size_t fed = 0;
+    for (size_t i = 1; i <= tc.input.size(); ++i) {
+        auto            is_partial  = i < tc.input.size() || tc.is_partial;
+        // Use UTF-8 safe truncation to avoid corrupting multi-byte characters
+        size_t          safe_len    = utf8_truncate_safe_len(std::string_view(tc.input).substr(0, i));
+        common_chat_input chunk(tc.input.substr(fed, safe_len - fed));
+        fed = safe_len;
         const common_chat_msg & msg_current = is_partial ? session.feed(chunk) : session.finish(chunk);
 
         for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
@@ -1216,7 +1209,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     if (!tc.is_partial) {
-        if (pieces.empty()) {
+        if (tc.input.empty()) {
             session.finish();
         }
         assert_msg_equals(tc.expect, session.msg(), true);
@@ -2881,17 +2874,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call_idx)
             .run();
-
-        tst.test("<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>").expect(message_assist).run();
-        tst.test(
-               "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
-               "<|START_ACTION|>[\n"
-               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
-               "]<|END_ACTION|>")
-            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-            .tools({ special_function_tool })
-            .expect(message_assist_thoughts_call_idx)
-            .run();
     }
 
     {
@@ -3001,7 +2983,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         // Google Gemma 2 2B - does not support tool calling
-        auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja", detailed_debug);
+        auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
 
         tst.test("Hello, world!").expect(simple_assist_msg("Hello, world!")).expect_reconstruction().run();
 
@@ -3014,9 +2996,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
             .expect_content("Hello, world!\nWhat's up?")
             .run();
-
-        // Test simple content-only template
-        tst.test("Hello, world!\nWhat's up?").expect(message_assist).expect_reconstruction().run();
     }
 
     {
@@ -3389,6 +3368,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
             .expect_content("Hello, world!\nWhat's up?")
             .run();
+    }
+    {
+        // Test simple content-only template
+        auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).expect_reconstruction().run();
     }
     {
         // IBM Granite (reasoning and tool calling model)
@@ -3975,7 +3960,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("I'm thinking")
             .expect_content("Hello, world!\nWhat's up?")
             .run();
+    }
 
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test(
                "REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": "
                "\"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
@@ -3984,7 +3972,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ get_time_tool })
             .expect(message_with_tool_calls_and_reasoning("get_time", "{\"city\":\"Tokyo\"}", "REASONING"))
             .run();
+    }
 
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test(
                "REASONING</think>CONTENT<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": "
                "\"Paris\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": "
@@ -3999,13 +3990,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "REASONING", "CONTENT",
                 { { "get_time", "{\"city\":\"Paris\"}" }, { "get_weather", "{\"city\":\"Paris\"}" } }))
             .run();
+    }
 
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test("REASONING</think>\nCONTENT")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(simple_assist_msg("CONTENT", "REASONING\n"))
             .run();
+    }
 
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test("CONTENT").enable_thinking(false).reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
             expect(simple_assist_msg("CONTENT", "")).run();
     }
@@ -5653,68 +5650,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("I'm thinking")
             .expect_content("Hello, world!\nWhat's up?")
             .run();
-
-        tst.test("Hello, world!\nWhat's up?")
-            .enable_thinking(false)
-            .expect(message_assist)
-            .run();
-        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-            .expect(message_assist_thoughts)
-            .run();
-        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
-            .enable_thinking(false)
-            .tools({ special_function_tool })
-            .expect(message_assist_call)
-            .run();
-        tst.test("Hello, world!\nWhat's up?\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
-            .enable_thinking(false)
-            .tools({ special_function_tool })
-            .expect(message_assist_call_content)
-            .run();
-        tst.test("I'm\nthinking\n</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-            .tools({ special_function_tool })
-            .expect(message_assist_call_thoughts)
-            .run();
-        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>\n<tool_call>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1, \"arg2\": 2}}\n</tool_call>")
-            .enable_thinking(false)
-            .parallel_tool_calls(true)
-            .tools({ special_function_tool, special_function_tool_with_optional_param })
-            .expect_tool_calls({
-                { "special_function", R"({"arg1": 1})", {} },
-                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
-            })
-            .run();
-        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg")
-            .enable_thinking(false)
-            .tools({ special_function_tool })
-            .is_partial(true)
-            .expect(message_assist_call_cutoff_args)
-            .run();
-
-        // Continuation tests
-        tst.test("world!\nWhat's up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-            .enable_thinking(true)
-            .messages({ message_user, message_assist_prefill_content })
-            .add_generation_prompt(false)
-            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
-            .expect_reasoning("I'm thinking")
-            .expect_content("Hello, world!\nWhat's up?")
-            .run();
-
-        tst.test(" thinking\n</think>\n\nHello, world!\nWhat's up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-            .enable_thinking(true)
-            .messages({ message_user, message_assist_prefill_reasoning })
-            .add_generation_prompt(false)
-            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
-            .expect_reasoning("I'm thinking")
-            .expect_content("Hello, world!\nWhat's up?")
-            .run();
     }
 
 
@@ -6176,6 +6111,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     // CohereForAI-c4ai-command-r7b (uses START_RESPONSE/END_RESPONSE, START_THINKING/END_THINKING, START_ACTION/END_ACTION)
+    {
+        auto tst = peg_tester("models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja", detailed_debug);
+        tst.test("<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>").expect(message_assist).run();
+        tst.test(
+               "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts_call_idx)
+            .run();
+    }
     // CohereForAI-c4ai-command-r-plus (uses markdown code block format)
     {
         auto tst = peg_tester("models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja", detailed_debug);
@@ -6411,6 +6359,71 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     // Reka Edge
+    {
+        auto tst = peg_tester("models/templates/Reka-Edge.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .expect(message_assist)
+            .run();
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+        tst.test("Hello, world!\nWhat's up?\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_content)
+            .run();
+        tst.test("I'm\nthinking\n</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>\n<tool_call>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1, \"arg2\": 2}}\n</tool_call>")
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(message_assist_call_cutoff_args)
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking\n</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
     // Apriel 1.5
     {
         auto tst = peg_tester("models/templates/unsloth-Apriel-1.5.jinja", detailed_debug);
