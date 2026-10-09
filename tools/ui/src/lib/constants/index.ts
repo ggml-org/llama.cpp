@@ -4,6 +4,7 @@
 export * from './agentic.constants';
 export * from './api-endpoints.constants';
 export * from './app.constants';
+export * from './backend.constants';
 export * from './chat-tabs.constants';
 export * from './database.constants';
 export * from './reasoning-effort.constants';
@@ -45,6 +46,7 @@ export * from './message-export.constants';
 export * from './path-display.constants';
 export * from './model-id.constants';
 export * from './model-loading.constants';
+export * from './models-manager.constants';
 export * from './models-discover.constants';
 export * from './model-compatibility.constants';
 export * from './huggingface.constants';

@@ -54,6 +54,25 @@ export function formatParameters(params: number | unknown): string {
 	return params.toString();
 }
 
+/** Separator between the context values shown for one model, e.g. `8192 / 4096`. */
+const CONTEXT_VALUE_SEPARATOR = ' / ';
+/** Unit the context values are shown in. */
+const CONTEXT_UNIT = 'tokens';
+/** Shown where a value is unknown. */
+const UNKNOWN_VALUE = '-';
+
+/**
+ * Context window of a model: `configured / supported tokens`, or whichever is known.
+ * Equal values collapse to one, `131 072 tokens` instead of `131 072 / 131 072 tokens`.
+ */
+export function formatContextLength(values: number[]): string {
+	const unique = [...new Set(values)];
+
+	return unique.length
+		? `${unique.map((value) => formatNumber(value)).join(CONTEXT_VALUE_SEPARATOR)} ${CONTEXT_UNIT}`
+		: UNKNOWN_VALUE;
+}
+
 /**
  * Format number with locale-specific thousands separators
  *

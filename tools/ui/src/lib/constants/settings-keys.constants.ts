@@ -29,6 +29,7 @@ export const SETTINGS_KEYS = {
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
+	GROUP_MODELS_BY_FAMILY: 'groupModelsByFamily',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	MAX_TOKENS: 'max_tokens',
@@ -37,6 +38,7 @@ export const SETTINGS_KEYS = {
 	MCP_SERVERS: 'mcpServers',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
 	MIN_P: 'min_p',
+	// Display
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	// Performance
@@ -54,7 +56,8 @@ export const SETTINGS_KEYS = {
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
-	SHOW_MODEL_ORG_NAME_IN_TRIGGER: 'showModelOrgNameInTrigger',
+	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
+	SHOW_MODEL_ORG_NAME: 'showModelOrgName',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
@@ -73,6 +76,8 @@ export const SETTINGS_KEYS = {
 	TOP_K: 'top_k',
 	TOP_P: 'top_p',
 	TYP_P: 'typ_p',
+	// General
+	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;
