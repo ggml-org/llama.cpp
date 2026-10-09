@@ -343,6 +343,7 @@ class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     bool _dotall;
+    bool _unordered_properties = false;
     std::map<std::string, std::string> _rules;
     std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
@@ -683,7 +684,7 @@ private:
         auto it = schema.ref.find('#');
         std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
         static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
-        std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
+        std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-") + (_unordered_properties ? "-unordered" : "");
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
             if (!schema.target) {
                 _errors.push_back("Unresolved $ref " + schema.ref);
@@ -738,6 +739,54 @@ private:
 
         if (required_props.empty() && optional_props.empty()) {
             return "\"{\" space \"}\"";
+        }
+
+        // required keys: exactly once, in any order (2^n rules, so above max_required keep the declared order)
+        // optional and additional keys: anywhere, repeats allowed
+        constexpr size_t max_required = 6;
+        if (_unordered_properties && required_props.size() <= max_required) {
+            const size_t n = required_props.size();
+            std::string free_kv;
+            std::string free_loop;
+            if (!optional_props.empty()) {
+                std::vector<std::string> free_kvs;
+                for (const auto & prop_name : optional_props) {
+                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
+                }
+                free_kv = _add_rule(name + (name.empty() ? "" : "-") + "free-kv", string_join(free_kvs, " | "));
+                free_loop = "( \",\" space " + free_kv + " )*";
+            }
+
+            // rest of the object after the required keys in `seen`
+            std::map<size_t, std::string> rest_rules;
+            std::function<std::string(size_t)> get_rest = [&](size_t seen) -> std::string {
+                auto it = rest_rules.find(seen);
+                if (it != rest_rules.end()) {
+                    return it->second;
+                }
+                std::vector<std::string> alts;
+                for (size_t i = 0; i < n; i++) {
+                    if (!(seen & (size_t(1) << i))) {
+                        alts.push_back("\",\" space " + prop_kv_rule_names[required_props[i]] + " " + get_rest(seen | (size_t(1) << i)));
+                    }
+                }
+                std::string body = free_loop;
+                if (!alts.empty()) {
+                    body += (body.empty() ? "" : " ") + std::string("( ") + string_join(alts, " | ") + " )";
+                }
+                std::string res = body.empty() ? "" : _add_rule(name + (name.empty() ? "" : "-") + "rest-" + std::to_string(seen), body);
+                rest_rules[seen] = res;
+                return res;
+            };
+
+            std::vector<std::string> firsts;
+            for (size_t i = 0; i < n; i++) {
+                firsts.push_back(prop_kv_rule_names[required_props[i]] + " " + get_rest(size_t(1) << i));
+            }
+            if (!free_kv.empty()) {
+                firsts.push_back(free_kv + " " + get_rest(0));
+            }
+            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n == 0 ? "?" : "") + " space \"}\"";
         }
 
         std::string rule = "\"{\" space ";
@@ -819,6 +868,14 @@ public:
 
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
         return visit(schema, name);
+    }
+
+    std::string add_schema_unordered(const std::string & name, const common_chat_schema & schema) {
+        bool prev = _unordered_properties;
+        _unordered_properties = true;
+        auto rule = visit(schema, name);
+        _unordered_properties = prev;
+        return rule;
     }
 
     static std::string _generate_constant_rule(const json & value) {
@@ -990,24 +1047,25 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf, bool unordered_properties) {
 #ifdef LLAMA_USE_LLGUIDANCE
-    if (!force_gbnf) {
+    // llguidance %json keeps the declared order, so use GBNF for unordered
+    if (!force_gbnf && !unordered_properties) {
         return "%llguidance {}\nstart: %json " + schema.dump();
     }
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     try {
-        return json_schema_to_grammar(common_chat_schema_from_json(schema));
+        return json_schema_to_grammar(common_chat_schema_from_json(schema), unordered_properties);
     } catch (const std::runtime_error & e) {
         throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
     }
 }
 
-std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
+std::string json_schema_to_grammar(const common_chat_schema_document & schema, bool unordered_properties) {
     common_chat_schema_converter converter(false);
-    converter.visit(*schema.root, "");
+    (unordered_properties ? converter.add_schema_unordered("", *schema.root) : converter.add_schema("", *schema.root));
     converter.check_errors();
     return converter.format_grammar();
 }
@@ -1020,6 +1078,9 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
         },
         /* .add_schema = */ [&](const std::string & name, const common_chat_schema & schema) {
             return converter.add_schema(name == "root" ? "" : name, schema);
+        },
+        /* .add_schema_unordered = */ [&](const std::string & name, const common_chat_schema & schema) {
+            return converter.add_schema_unordered(name == "root" ? "" : name, schema);
         },
     };
     cb(builder);
