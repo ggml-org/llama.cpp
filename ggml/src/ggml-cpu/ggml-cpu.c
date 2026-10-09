@@ -2858,7 +2858,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_CPY:
                 case GGML_OP_DUP:
                     {
-                        if (ggml_is_quantized(node->type) || node->type == GGML_TYPE_F8_E4M3 ||
+                        if (ggml_is_quantized(node->type) ||
                             // F16 -> BF16 and BF16 -> F16 copies go through intermediate F32
                             (node->src[0]->type == GGML_TYPE_F16  && node->src[1] && node->src[1]->type == GGML_TYPE_BF16) ||
                             (node->src[0]->type == GGML_TYPE_BF16 && node->src[1] && node->src[1]->type == GGML_TYPE_F16) ||
