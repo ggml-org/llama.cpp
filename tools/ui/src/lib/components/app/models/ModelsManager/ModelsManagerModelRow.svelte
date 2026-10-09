@@ -7,7 +7,7 @@
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, downloadProgressFor } from './utils';
-	import { MoreHorizontal } from '@lucide/svelte';
+	import { Heart, MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
 	import { ModelRowDownloadState } from '$lib/enums';
@@ -74,6 +74,10 @@
 
 			<!-- a phone has no width for the modality icons, the id needs it more -->
 			<ModelCapabilities hideModalities={deviceStore.isMobile} {option} />
+
+			{#if favorite}
+				<Heart class="h-3.5 w-3.5 shrink-0 text-rose-500" />
+			{/if}
 		</span>
 	</button>
 

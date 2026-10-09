@@ -12,37 +12,38 @@
 	}
 
 	let { isFav, option, revealOnHover = true }: Props = $props();
+
+	// the favorite heart stays visible, so the reveal applies to the other icons
+	const revealClass =
+		'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100';
 </script>
 
 <div
-	class={[
-		'flex items-center justify-center gap-1 max-md:gap-2.5',
-		revealOnHover
-			? 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100'
-			: ''
-	]}
+	class="flex items-center justify-center gap-1 max-md:gap-2.5"
 	onclick={(event) => event.stopPropagation()}
 	onkeydown={(event) => event.stopPropagation()}
 	role="presentation"
 >
-	<ActionIcon
-		class="h-5 w-5 hover:text-foreground"
-		icon={Info}
-		iconSize="h-4 w-4"
-		onclick={() =>
-			// a phone has no manager: its information dialog takes the icon
-			deviceStore.isMobile
-				? uiStore.openModelInformation(option)
-				: uiStore.openModelsManager(option.id)}
-		tooltip="Manage model"
-		tooltipAsTitle
-	/>
+	<span class={revealOnHover ? revealClass : ''}>
+		<ActionIcon
+			class="h-5 w-5 hover:text-foreground"
+			icon={Info}
+			iconSize="h-4 w-4"
+			onclick={() =>
+				// a phone has no manager: its information dialog takes the icon
+				deviceStore.isMobile
+					? uiStore.openModelInformation(option)
+					: uiStore.openModelsManager(option.id)}
+			tooltip="Manage model"
+			tooltipAsTitle
+		/>
+	</span>
 
 	{#if isFav}
 		<span class="flex h-5 w-5 items-center justify-center">
 			<span class="flex group-hover:hidden [@media(pointer:coarse)]:hidden">
 				<ActionIcon
-					class="h-5 w-5 text-rose-500 hover:text-foreground"
+					class="h-5 w-5 text-rose-500"
 					icon={Heart}
 					iconSize="h-4 w-4"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
@@ -63,13 +64,15 @@
 			</span>
 		</span>
 	{:else}
-		<ActionIcon
-			class="h-5 w-5 hover:text-foreground"
-			icon={Heart}
-			iconSize="h-4 w-4"
-			onclick={() => modelsStore.toggleFavorite(option.model)}
-			tooltip="Add to favorites"
-			tooltipAsTitle
-		/>
+		<span class={revealOnHover ? revealClass : ''}>
+			<ActionIcon
+				class="h-5 w-5 hover:text-foreground"
+				icon={Heart}
+				iconSize="h-4 w-4"
+				onclick={() => modelsStore.toggleFavorite(option.model)}
+				tooltip="Add to favorites"
+				tooltipAsTitle
+			/>
+		</span>
 	{/if}
 </div>
