@@ -1536,8 +1536,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cross            (params.cross),
     moe_cache        (params.moe_cache),
     prec_policy      (params.prec_policy),
-    hdmd_rot         (params.hdmd_rot),
-    hdmd_inv         (params.hdmd_inv),
+    hdmd             (params.hdmd),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1563,11 +1562,11 @@ ggml_tensor * llm_graph_context::build_cvec(
 ggml_tensor * llm_graph_context::build_hadamard_input(
           ggml_tensor * w,
           ggml_tensor * cur) const {
-    if (!hdmd_rot) {
+    if (!hdmd) {
         return cur;
     }
-    const auto it = hdmd_rot->find(w);
-    if (it == hdmd_rot->end()) {
+    const auto it = hdmd->rot.find(w);
+    if (it == hdmd->rot.end()) {
         return cur;
     }
     const auto & t = it->second;
@@ -2568,8 +2567,8 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     //       need to add lora tests and refactor the logic to make the lora GET_ROWS go at the front of the graph
     auto build_tok = [&](ggml_tensor * cur, ggml_tensor * ids) {
         // a Hadamard-latent table stores rotated rows: restore the primal basis, h = s * (H z)
-        if (hdmd_inv) {
-            if (const auto it = hdmd_inv->find(tok_embd); it != hdmd_inv->end()) {
+        if (hdmd) {
+            if (const auto it = hdmd->inv.find(tok_embd); it != hdmd->inv.end()) {
                 cur = llama_mul_mat_hadamard(ctx0, cur, it->second.rot);
                 if (it->second.signs) {
                     cur = ggml_mul(ctx0, cur, it->second.signs);

@@ -1996,16 +1996,16 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 // weights need the activation-side transform. load_tensors_hadamard makes the tensors later.
 void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
     uint32_t hadamard_version = 0;
-    ml.get_key(LLM_KV_PRISM_HADAMARD_TIED_OUTPUT, hadamard_tied_output, false);
+    ml.get_key(LLM_KV_PRISM_HADAMARD_TIED_OUTPUT, hdmd.tied_output, false);
     if (ml.get_key(LLM_KV_PRISM_HADAMARD_VERSION, hadamard_version, false)) {
         if (hadamard_version != 1 && hadamard_version != 2) {
             throw std::runtime_error(format("unsupported prism.hadamard.version: %u", hadamard_version));
         }
 
-        if ((hadamard_version == 2) != hadamard_tied_output) {
+        if ((hadamard_version == 2) != hdmd.tied_output) {
             throw std::runtime_error("prism.hadamard version 2 requires tied_output=true; version 1 forbids it");
         }
-        if (hadamard_tied_output && ml.get_weight("output.weight")) {
+        if (hdmd.tied_output && ml.get_weight("output.weight")) {
             throw std::runtime_error("prism.hadamard.tied_output requires output.weight to be absent");
         }
 
@@ -2052,7 +2052,7 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
                 if (width <= 0 || (uint32_t) width % block_size != 0 || off + width > sign_values.size()) {
                     throw std::runtime_error(format("invalid prism.hadamard sign width: %d", width));
                 }
-                auto & vec = hadamard_sign_data[width];
+                auto & vec = hdmd.sign_data[width];
                 vec.assign(sign_values.begin() + off, sign_values.begin() + off + width);
                 for (const int32_t v : vec) {
                     if (v != 1 && v != -1) {
@@ -2066,7 +2066,7 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
             }
         }
 
-        ml.get_key(LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED, hadamard_gdn_v_grouped, false);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED, hdmd.gdn_v_grouped, false);
 
         // the activation-side transform is applied only by build_lora_mm/build_lora_mm_id;
         // refuse to load folded weights for architectures or tensor kinds that are not
@@ -2125,7 +2125,7 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
                 throw std::runtime_error(format(
                     "prism.hadamard: weight '%s' is not on a verified Hadamard-aware matmul path", weight_name.c_str()));
             }
-            if (!hadamard_weight_blocks.emplace(weight_name, block_size).second) {
+            if (!hdmd.weight_blocks.emplace(weight_name, block_size).second) {
                 throw std::runtime_error(format("duplicate prism.hadamard weight: %s", weight_name.c_str()));
             }
         }
@@ -2141,22 +2141,22 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
                 throw std::runtime_error(format(
                     "prism.hadamard: weight '%s' is not a verified inverse-after-lookup table", name.c_str()));
             }
-            if (hadamard_weight_blocks.count(name) || !hadamard_inverse_blocks.emplace(name, block_size).second) {
+            if (hdmd.weight_blocks.count(name) || !hdmd.inverse_blocks.emplace(name, block_size).second) {
                 throw std::runtime_error(format("duplicate prism.hadamard inverse weight: %s", name.c_str()));
             }
         }
     }
 
-    if (hadamard_tied_output) {
+    if (hdmd.tied_output) {
         if (hadamard_version != 2) {
             throw std::runtime_error("prism.hadamard.tied_output requires version 2");
         }
-        const auto it = hadamard_inverse_blocks.find("token_embd.weight");
-        if (it == hadamard_inverse_blocks.end()) {
+        const auto it = hdmd.inverse_blocks.find("token_embd.weight");
+        if (it == hdmd.inverse_blocks.end()) {
             throw std::runtime_error("prism.hadamard.tied_output requires a latent token embedding");
         }
-        hadamard_weight_blocks.emplace("token_embd.weight", it->second);
-    } else if (hadamard_inverse_blocks.count("token_embd.weight") && !ml.get_weight("output.weight")) {
+        hdmd.weight_blocks.emplace("token_embd.weight", it->second);
+    } else if (hdmd.inverse_blocks.count("token_embd.weight") && !ml.get_weight("output.weight")) {
         throw std::runtime_error("a tied Hadamard output requires version 2 and tied_output=true");
     }
 }
@@ -2169,7 +2169,7 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
 // Each folded weight then gets its transform in hadamard_rotations (matmul input) or
 // hadamard_inverses (row lookup of a latent table).
 void llama_model_base::load_tensors_hadamard() {
-    if (hadamard_weight_blocks.empty() && hadamard_inverse_blocks.empty()) {
+    if (hdmd.weight_blocks.empty() && hdmd.inverse_blocks.empty()) {
         return;
     }
 
@@ -2183,8 +2183,8 @@ void llama_model_base::load_tensors_hadamard() {
     std::map<std::pair<uint32_t, ggml_backend_buffer_type_t>, ggml_tensor *> sign_tensors;
 
     const std::pair<const std::unordered_map<std::string, uint32_t> *, llama_hadamard_rotations *> groups[] = {
-        { &hadamard_weight_blocks,  &hadamard_rotations },
-        { &hadamard_inverse_blocks, &hadamard_inverses  },
+        { &hdmd.weight_blocks,  &hdmd.rot },
+        { &hdmd.inverse_blocks, &hdmd.inv  },
     };
     // inverse (lookup-side) transforms must not inherit a host buffer
     // type from a CPU-mapped table: the per-token transform would then
@@ -2197,8 +2197,8 @@ void llama_model_base::load_tensors_hadamard() {
         const std::string & weight_name = entry.first;
         const uint32_t block_size = entry.second;
         const ggml_tensor * weight = get_tensor(weight_name.c_str());
-        if (hadamard_tied_output && weight_name == "token_embd.weight") {
-            weight = target == &hadamard_rotations ? output : tok_embd;
+        if (hdmd.tied_output && weight_name == "token_embd.weight") {
+            weight = target == &hdmd.rot ? output : tok_embd;
             if (!weight || strcmp(weight->name, "token_embd.weight") != 0) {
                 throw std::runtime_error("prism.hadamard.tied_output is not bound to the token embedding");
             }
@@ -2222,7 +2222,7 @@ void llama_model_base::load_tensors_hadamard() {
                 buft = ggml_backend_dev_buffer_type(dev);
             }
         }
-        if (target == &hadamard_rotations) {
+        if (target == &hdmd.rot) {
             preferred_buft = buft;
         } else if (preferred_buft) {
             buft = preferred_buft;
@@ -2277,10 +2277,10 @@ void llama_model_base::load_tensors_hadamard() {
         }
 
         ggml_tensor * sign_tensor = nullptr;
-        if (!hadamard_sign_data.empty()) {
+        if (!hdmd.sign_data.empty()) {
             const uint32_t width = (uint32_t) weight->ne[0];
-            const auto sd = hadamard_sign_data.find(width);
-            if (sd == hadamard_sign_data.end()) {
+            const auto sd = hdmd.sign_data.find(width);
+            if (sd == hdmd.sign_data.end()) {
                 throw std::runtime_error(format(
                     "prism.hadamard has no sign vector for width %u (%s)", width, weight_name.c_str()));
             }
@@ -2324,7 +2324,7 @@ void llama_model_base::load_tensors_hadamard() {
 
         llama_hadamard_transform transform { it->tensor, sign_tensor };
         // the GDN output projection reads its value heads in tiled order, see set_gdn_v_perm
-        if (hadamard_gdn_v_grouped && weight_name.find(".ssm_out.") != std::string::npos &&
+        if (hdmd.gdn_v_grouped && weight_name.find(".ssm_out.") != std::string::npos &&
             !transform.set_gdn_v_perm(weight->ne[0], hparams.ssm_dt_rank, hparams.ssm_n_group)) {
             throw std::runtime_error(format("prism.hadamard: bad GDN head geometry for %s", weight_name.c_str()));
         }
@@ -2332,8 +2332,7 @@ void llama_model_base::load_tensors_hadamard() {
     }
 
     LLAMA_LOG_INFO("%s: loaded %zu Hadamard-folded weight(s) (%zu inverse-lookup) using %zu rotation(s) and %zu sign vector(s)\n",
-            __func__, hadamard_rotations.size() + hadamard_inverses.size(), hadamard_inverses.size(),
-            rotations.size(), sign_tensors.size());
+            __func__, hdmd.rot.size() + hdmd.inv.size(), hdmd.inv.size(), rotations.size(), sign_tensors.size());
 }
 
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {

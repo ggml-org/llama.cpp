@@ -637,6 +637,55 @@ struct llama_prec_policy {
     void load(llama_model_loader & ml, const llama_model & model);
 };
 
+// Maps a folded model weight to the activation-side transform applied
+// immediately before the matmul: optional sign flip, then the normalized
+// blockwise Hadamard rotation.
+struct llama_hadamard_transform {
+    ggml_tensor * rot;
+    ggml_tensor * signs; // nullptr for identity sign mode
+
+    // when perm_rep > 1 the activation arrives with its feature axis in tiled
+    // head order [hd, nk, rep] and must be permuted to the grouped order
+    // [hd, rep, nk] the fold was computed in, before signs and rotation
+    int64_t perm_hd  = 0;
+    int64_t perm_nk  = 0;
+    int64_t perm_rep = 0;
+
+    // Gated delta net output projection (ssm_out): its input holds the n_v value heads
+    // in the tiled order of the recurrent state, where each of the n_k key heads is
+    // repeated n_v/n_k times, while the fold was computed with the heads grouped per key
+    // head. Record the head geometry so the activation is permuted before the transform.
+    // Returns false if the geometry does not match the input width n_in.
+    bool set_gdn_v_perm(int64_t n_in, int64_t n_v, int64_t n_k) {
+        if (n_k <= 0 || n_v <= 0 || n_v % n_k != 0 || n_in % n_v != 0) {
+            return false;
+        }
+        perm_hd  = n_in / n_v;
+        perm_nk  = n_k;
+        perm_rep = n_v / n_k;
+        return true;
+    }
+};
+using llama_hadamard_rotations = std::unordered_map<const ggml_tensor *, llama_hadamard_transform>;
+
+struct llama_hadamard {
+    // Hadamard-folded GGUF weights are matched with persistent model tensors
+    // containing the activation-side transform.  The string map is populated
+    // from GGUF metadata while loading hparams; the pointer map is populated
+    // after model buffers have been allocated.  In explicit sign mode the
+    // per-width sign vectors come from GGUF metadata as well.
+    std::unordered_map<std::string, uint32_t> weight_blocks;
+    std::unordered_map<std::string, uint32_t> inverse_blocks;
+
+    std::map<uint32_t, std::vector<int32_t>> sign_data;
+
+    bool gdn_v_grouped = false;
+    bool tied_output = false;
+
+    llama_hadamard_rotations rot; // folded weight -> activation transform
+    llama_hadamard_rotations inv; // latent lookup table -> inverse transform
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -648,6 +697,8 @@ struct llama_model {
 
     // per-tensor activation precision policy
     llama_prec_policy prec_policy;
+
+    llama_hadamard hdmd;
 
     // for classifier models
     std::vector<std::string> classifier_labels;
@@ -734,20 +785,6 @@ struct llama_model {
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
-
-
-    // Hadamard-folded GGUF weights are matched with persistent model tensors
-    // containing the activation-side transform.  The string map is populated
-    // from GGUF metadata while loading hparams; the pointer map is populated
-    // after model buffers have been allocated.  In explicit sign mode the
-    // per-width sign vectors come from GGUF metadata as well.
-    std::unordered_map<std::string, uint32_t> hadamard_weight_blocks;
-    std::unordered_map<std::string, uint32_t> hadamard_inverse_blocks;
-    std::map<uint32_t, std::vector<int32_t>> hadamard_sign_data;
-    bool hadamard_gdn_v_grouped = false;
-    bool hadamard_tied_output = false;
-    llama_hadamard_rotations hadamard_rotations;
-    llama_hadamard_rotations hadamard_inverses;
 
     // list of devices used in this model
     std::vector<llama_device> devices;
