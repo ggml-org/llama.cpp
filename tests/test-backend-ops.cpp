@@ -9789,6 +9789,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {2, 2, 1536, 729}, {2, 2, 1536, 4096}, 1, 1, 0, 0, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {128, 128, 1, 2}, {32, 33, 1, 2}, 1, 1, 1, 1, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {128, 128, 2, 1}, {33, 34, 2, 1}, 1, 1, 1, 1, 1, 1, true));
+    // non-overlapping (stride == kernel, no pad/dilation) with IC*KH well above 256, e.g. SD1.5 1x1 convs
+    for (ggml_type dst_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, dst_type, {64, 64, 320, 1},  {1, 1, 320, 1},  1, 1, 0, 0, 1, 1, true));
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, dst_type, {16, 16, 1280, 2}, {1, 1, 1280, 1}, 1, 1, 0, 0, 1, 1, true));
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, dst_type, {8, 8, 2560, 1},   {1, 1, 2560, 1}, 1, 1, 0, 0, 1, 1, true));
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, dst_type, {32, 32, 192, 1},  {2, 2, 192, 1},  2, 2, 0, 0, 1, 1, true));
+        test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, dst_type, {64, 512, 1, 1},   {2, 512, 1, 1},  2, 0, 0, 0, 1, 0, false));
+    }
 
     // im2col 3D
     test_cases.emplace_back(new test_im2col_3d(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32));
