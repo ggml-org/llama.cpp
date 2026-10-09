@@ -82,6 +82,7 @@
 			]}
 			{isFavorite}
 			onSelect={(picked: ModelOption) => (selectedId = picked.id)}
+			overrides={{}}
 			{selectedId}
 		/>
 	</div>
@@ -93,6 +94,7 @@
 			groups={[section(ModelsTableGroupKind.LOCAL, [repo(qwen, [qwen, qwenQ8])])]}
 			{isFavorite}
 			onSelect={(picked: ModelOption) => (selectedId = picked.id)}
+			overrides={{}}
 			{selectedId}
 		/>
 	</div>
@@ -104,6 +106,7 @@
 			groups={[]}
 			{isFavorite}
 			onSelect={(picked: ModelOption) => (selectedId = picked.id)}
+			overrides={{}}
 			{selectedId}
 		/>
 	</div>

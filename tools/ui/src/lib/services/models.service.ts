@@ -6,14 +6,21 @@
  * modelsStore and its status manager.
  */
 
-import { base } from '$app/paths';
-import { API_MODELS, MODEL_ID, type ModelSidecar } from '$lib/constants';
+import {
+	API_MODELS,
+	LOCAL_BACKEND_ID,
+	MODEL_ID,
+	type ModelSidecar,
+	SIDECAR_TOKENS
+} from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
-import type { ParsedModelId } from '$lib/types/models';
+import type { ModelSidecarFile, ParsedModelId } from '$lib/types/models';
 import {
 	apiDelete,
 	apiFetch,
+	apiModelsUrl,
 	apiPost,
+	apiUrl,
 	extractSseDataPayload,
 	normalizeModelName,
 	sidecarFromFileToken,
@@ -21,6 +28,25 @@ import {
 	splitSseRecords
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
+import { isAuxSidecar } from '$lib/utils/sidecars';
+
+/** Sidecar token a file name carries, for the forms parsing an id as a model misses. */
+function sidecarTokenInFilename(modelId: string): ModelSidecar | null {
+	// the token can sit after a colon (`org/model:mtp`), a dash or an underscore
+	const name = modelId.toLowerCase();
+	const match = SIDECAR_TOKENS.find((token) =>
+		new RegExp(`(^|[-_:])${token}([-_.:]|$)`).test(name)
+	);
+
+	return (match as ModelSidecar | undefined) ?? null;
+}
+
+/** Parameter label a parsed id reports, e.g. `35B-A3B`. */
+function paramsLabel(parsed: ParsedModelId): string | null {
+	if (!parsed.params) return null;
+
+	return `${parsed.params}${parsed.activatedParams ? `-${parsed.activatedParams}` : ''}`;
+}
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
@@ -65,6 +91,50 @@ export class ModelsService {
 	}
 
 	/**
+	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
+	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
+	 * loadable model, so the selector skips them.
+	 */
+	/**
+	 * Draft sidecars a listing carries as their own entries, keyed by the repo they
+	 * belong to. The router lists a downloaded sidecar as a model of its own, so this
+	 * keeps the pairing that the model list itself is filtered to drop.
+	 */
+	static draftSidecarsByRepo(response: ApiModelsListResponse): Record<string, ModelSidecarFile[]> {
+		const byRepo: Record<string, ModelSidecarFile[]> = {};
+
+		for (const entry of response.data ?? []) {
+			const parsed = ModelsService.parseModelId(entry.id);
+			const sidecar = parsed.sidecar ?? sidecarTokenInFilename(entry.id);
+
+			if (!sidecar || isAuxSidecar(sidecar)) continue;
+
+			// the repo is the id with its quant tag and sidecar token taken off; naming
+			// parts of the id are not touched, a model name may carry `-4b` for instance
+			const model = entry.id
+				.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0]
+				.replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '')
+				.replace(new RegExp(`[-_ ]?${sidecar}([-_ ]?draft)?$`, 'i'), '');
+
+			if (!model) continue;
+
+			const files = (byRepo[model] ??= []);
+
+			if (files.some((file) => file.kind === sidecar)) continue;
+
+			files.push({
+				id: entry.id,
+				kind: sidecar,
+				model,
+				params: paramsLabel(parsed),
+				quant: parsed.quantization
+			});
+		}
+
+		return byRepo;
+	}
+
+	/**
 	 * Check if a model is loaded based on its metadata.
 	 *
 	 * @param model - Model data entry from the API response
@@ -72,10 +142,6 @@ export class ModelsService {
 	 */
 	static isModelLoaded(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADED;
-	}
-
-	static isModelLoading(model: ApiModelDataEntry): boolean {
-		return model.status.value === ServerModelStatus.LOADING;
 	}
 
 	/**
@@ -86,16 +152,24 @@ export class ModelsService {
 	 *
 	 */
 
-	/**
-	 * True when a router entry id marks a downloaded sidecar file, e.g.
-	 * `org/model:Q4_0-mtp` or `org/model:mmproj`, not a loadable model.
-	 */
+	static isModelLoading(model: ApiModelDataEntry): boolean {
+		return model.status.value === ServerModelStatus.LOADING;
+	}
+
 	static isSidecarEntry(modelId: string): boolean {
 		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 
-		if (idx === MODEL_ID.NOT_FOUND) return false;
+		if (idx !== MODEL_ID.NOT_FOUND && sidecarFromTag(modelId.slice(idx + 1))) return true;
 
-		return sidecarFromTag(modelId.slice(idx + 1)) !== null;
+		// the router also lists projector and draft files by filename, e.g.
+		// `org/model-mmproj-F16.gguf` or `mmproj-model.gguf`
+		const name = modelId.split('/').pop() ?? modelId;
+
+		return (
+			MODEL_ID.SIDECAR_INFIX_REGEX.test(name) ||
+			MODEL_ID.SIDECAR_PREFIX_REGEX.test(name) ||
+			MODEL_ID.SIDECAR_SUFFIX_REGEX.test(name)
+		);
 	}
 
 	/**
@@ -105,7 +179,7 @@ export class ModelsService {
 	 * @returns List of available models with basic metadata
 	 */
 	static async list(): Promise<ApiModelsListResponse> {
-		return apiFetch<ApiModelsListResponse>(API_MODELS.LIST);
+		return apiFetch<ApiModelsListResponse>(apiModelsUrl());
 	}
 
 	/**
@@ -115,16 +189,21 @@ export class ModelsService {
 	 *
 	 * @param modelId - Model identifier to load
 	 * @param extraArgs - Optional additional arguments to pass to the model instance
+	 * @param backendId - Backend serving the model; the active one when omitted
 	 * @returns Load response from the server
 	 */
-	static async load(modelId: string, extraArgs?: string[]): Promise<ApiModelsLoadResponse> {
+	static async load(
+		modelId: string,
+		extraArgs?: string[],
+		backendId?: string
+	): Promise<ApiModelsLoadResponse> {
 		const payload: { model: string; extra_args?: string[] } = { model: modelId };
 
 		if (extraArgs && extraArgs.length > 0) {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload);
+		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload, { backendId });
 	}
 
 	/**
@@ -290,10 +369,11 @@ export class ModelsService {
 	 * before unloading completes — use polling to await actual unload status.
 	 *
 	 * @param modelId - Model identifier to unload
+	 * @param backendId - Backend serving the model; the active one when omitted
 	 * @returns Unload response from the server
 	 */
-	static async unload(modelId: string): Promise<ApiModelsUnloadResponse> {
-		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
+	static async unload(modelId: string, backendId?: string): Promise<ApiModelsUnloadResponse> {
+		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId }, { backendId });
 	}
 
 	/**
@@ -310,8 +390,10 @@ export class ModelsService {
 
 		while (!signal.aborted) {
 			try {
-				const response = await fetch(`${base}${API_MODELS.SSE}`, {
-					headers: getAuthHeaders(),
+				// the status feed only exists on the local llama.cpp server; pin the
+				// request so an active external backend cannot redirect it
+				const response = await fetch(apiUrl(API_MODELS.SSE, LOCAL_BACKEND_ID), {
+					headers: getAuthHeaders(LOCAL_BACKEND_ID),
 					signal
 				});
 

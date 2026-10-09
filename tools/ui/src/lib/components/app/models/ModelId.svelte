@@ -38,7 +38,7 @@
 		contextLength?: number;
 		/** Min/max GGUF file size (main + draft) across quants; renders a range when set. */
 		sizeRange?: { min: number; max: number } | null;
-		/** Draft sidecars available for the model, badged with their own quant. */
+		/** Draft sidecars available for the model, badged as `+ [KIND] [QUANT]`. */
 		draftSidecars?: ModelSidecarBadge[];
 		/** Draft sidecar kinds the repo offers, one badge per kind and no quant. */
 		draftKinds?: ModelDraftSidecar[];
@@ -109,6 +109,7 @@
 		parsed.sidecar ||
 			uniqueDraftKinds.length > 0 ||
 			uniqueDraftSidecars.length > 0 ||
+			uniqueDraftKinds.length > 0 ||
 			(parsed.params && !hideParameters) ||
 			(parsed.quantization && !resolvedHideQuantization) ||
 			primaryAlias ||
