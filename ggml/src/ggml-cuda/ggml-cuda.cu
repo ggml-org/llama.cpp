@@ -2780,7 +2780,7 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
         return false;
     }
 
-    return ggml_rope_get_truncate(rope);
+    return true;
 }
 
 static bool ggml_cuda_should_fuse_rms_norm_mul_rope(const ggml_tensor * rms_norm,
@@ -2832,7 +2832,7 @@ static bool ggml_cuda_should_fuse_rms_norm_mul_rope(const ggml_tensor * rms_norm
         return false;
     }
 
-    return ggml_rope_get_truncate(rope);
+    return true;
 }
 
 // match gated_delta_net + the strided cpy that scatters its state snapshots into the cache
@@ -5665,9 +5665,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return false;
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK: {
-            if (!ggml_rope_get_truncate(op)) {
-                return false;
-            }
             return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
         case GGML_OP_IM2COL:
