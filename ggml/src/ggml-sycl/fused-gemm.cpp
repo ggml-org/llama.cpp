@@ -411,6 +411,8 @@ template <> struct fg_block_traits<block_iq2_s>   { static constexpr int qk = QK
 template <> struct fg_block_traits<block_iq1_s>   { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_iq1_m>   { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q8_0>    { static constexpr int qk = QK8_0; };
+template <> struct fg_block_traits<block_q2_K>    { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_q3_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q4_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q5_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q6_K>    { static constexpr int qk = QK_K; };
@@ -595,6 +597,39 @@ static __dpct_inline__ void fg_scale_min_k4(const int j, const uint8_t * __restr
     }
 }
 
+template <typename E>
+static __dpct_inline__ void fg_decode_q2_K(const uint8_t * __restrict__ qs, const uint8_t * __restrict__ scales,
+                                           const float d, const float dmin, const int ib, typename E::pair * a) {
+    const uint8_t * q = qs + 32 * (ib / 4);
+    const int shift = 2 * (ib % 4);
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t sc = scales[2 * ib + j / 8];
+        const float dl = d * (sc & 0xF);
+        const float ml = dmin * (sc >> 4);
+        a[j] = E::make(dl * ((q[2 * j] >> shift) & 3) - ml,
+                       dl * ((q[2 * j + 1] >> shift) & 3) - ml);
+    }
+}
+
+template <typename E>
+static __dpct_inline__ void fg_decode_q3_K(const uint8_t * __restrict__ qs, const uint8_t * __restrict__ hmask,
+                                           const uint8_t * __restrict__ scales, const float d, const int ib,
+                                           typename E::pair * a) {
+    const uint8_t * q = qs + 32 * (ib / 4);
+    const int shift = 2 * (ib % 4);
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+        const int s = 2 * ib + j / 8;
+        const int sc = ((scales[s % 8] >> (4 * (s / 8))) & 0xF) |
+                       (((scales[8 + s % 4] >> (2 * (s / 4))) & 3) << 4);
+        const float dl = d * (sc - 32);
+        const int q0 = ((q[2 * j] >> shift) & 3) - ((hmask[2 * j] & (1 << ib)) ? 0 : 4);
+        const int q1 = ((q[2 * j + 1] >> shift) & 3) - ((hmask[2 * j + 1] & (1 << ib)) ? 0 : 4);
+        a[j] = E::make(dl * q0, dl * q1);
+    }
+}
+
 // q4_K sub-block ib (0..7) uses scale/min pair ib and the low (even ib) or high (odd ib) nibbles of
 // qs[32 * (ib / 2) ...], as in dequantize_row_q4_K
 template <typename E>
@@ -659,6 +694,18 @@ static __dpct_inline__ void fg_stage_a(const block_q8_0 * __restrict__ xrow, con
 }
 
 template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q2_K * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_q2_K);
+    fg_decode_q2_K<E>(blk->qs, blk->scales, (float) blk->dm[0], (float) blk->dm[1], ib, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q3_K * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_q3_K);
+    fg_decode_q3_K<E>(blk->qs, blk->hmask, blk->scales, (float) blk->d, ib, a);
+}
+
+template <typename E>
 static __dpct_inline__ void fg_stage_a(const block_q4_K * __restrict__ xrow, const int kb, typename E::pair * a) {
     FG_SUPERBLOCK(block_q4_K);
     fg_decode_q4_K<E>(blk->qs, blk->scales, blk->dm, ib, a);
@@ -690,6 +737,35 @@ template <> struct fg_soa<block_q8_0> {
                                       typename E::pair * a) {
         const float d = (float) ((const sycl::half *) (x + nblocks * QK8_0))[ib];
         fg_decode_q8_0<E>((const int8_t *) x + ib * QK8_0, d, a);
+    }
+};
+
+template <> struct fg_soa<block_q2_K> {
+    static constexpr bool supported = true;
+
+    // [qs][scales][dm]
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        const uint8_t * scales = x + nblocks * (QK_K / 4);
+        const sycl::half2 dm = ((const sycl::half2 *) (scales + nblocks * (QK_K / 16)))[ib];
+        fg_decode_q2_K<E>(x + ib * (QK_K / 4), scales + ib * (QK_K / 16), (float) dm[0], (float) dm[1],
+                          kb % (QK_K / 32), a);
+    }
+};
+
+template <> struct fg_soa<block_q3_K> {
+    static constexpr bool supported = true;
+
+    // [qs][hmask][scales][d]
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        const uint8_t * hmask = x + nblocks * (QK_K / 4);
+        const uint8_t * scales = hmask + nblocks * (QK_K / 8);
+        const float d = (float) ((const sycl::half *) (scales + nblocks * 12))[ib];
+        fg_decode_q3_K<E>(x + ib * (QK_K / 4), hmask + ib * (QK_K / 8), scales + ib * 12, d,
+                          kb % (QK_K / 32), a);
     }
 };
 
@@ -941,7 +1017,8 @@ static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const
 // q8_0 and the k-quants take only the grouped path. The plain kernel decodes A again for every BN columns
 // of a dense batch, and for these formats that costs more than the one dequantization of the library GEMM.
 template <typename T> static constexpr bool fg_plain_ok() {
-    return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
+    return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q2_K> && !std::is_same_v<T, block_q3_K> &&
+           !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
            !std::is_same_v<T, block_q6_K>;
 }
 
@@ -975,6 +1052,8 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_IQ1_S:   return fg_visit_layout<block_iq1_s>(reordered, f);
         case GGML_TYPE_IQ1_M:   return fg_visit_layout<block_iq1_m>(reordered, f);
         case GGML_TYPE_Q8_0:    return fg_visit_layout<block_q8_0>(reordered, f);
+        case GGML_TYPE_Q2_K:    return fg_visit_layout<block_q2_K>(reordered, f);
+        case GGML_TYPE_Q3_K:    return fg_visit_layout<block_q3_K>(reordered, f);
         case GGML_TYPE_Q4_K:    return fg_visit_layout<block_q4_K>(reordered, f);
         case GGML_TYPE_Q5_K:    return fg_visit_layout<block_q5_K>(reordered, f);
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
@@ -1281,7 +1360,8 @@ bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool r
     // The active expert count is unknown until the GPU builds the schedule.
     if (g_ggml_sycl_dynamic_precision == GGML_SYCL_DYNAMIC_PRECISION_F32 ||
         !ggml_sycl_xmx_gather_type_enabled(src0_type) || !fg_visit_type(src0_type, reordered, [](auto) {}) ||
-        !ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, std::min(n_as, total_rows))) {
+        !ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, std::min(n_as, total_rows),
+                                                (g_ggml_sycl_mmid_sched & GGML_SYCL_MMID_SCHED_UNBOUNDED) != 0)) {
         return false;
     }
     const sycl::device device = stream->get_device();

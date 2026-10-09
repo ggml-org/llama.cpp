@@ -27,6 +27,8 @@ constexpr bool ggml_sycl_fused_dequant_gemm_type_ok(ggml_type src0_type, int64_t
         return K % 32 == 0;
     }
     const bool superblock =
+           src0_type == GGML_TYPE_Q2_K ||
+           src0_type == GGML_TYPE_Q3_K ||
            src0_type == GGML_TYPE_Q4_K ||
            src0_type == GGML_TYPE_Q5_K ||
            src0_type == GGML_TYPE_Q6_K ||
@@ -51,9 +53,9 @@ constexpr bool ggml_sycl_fused_dequant_gemm_shape_ok(ggml_type src0_type, int64_
 // grouped variant: the per-expert fused kernel is only worth it while each expert is narrow,
 // so wider average slices are left to the per-expert library GEMM loop
 constexpr bool ggml_sycl_grouped_dequant_gemm_shape_ok(ggml_type src0_type, int64_t M, int64_t K,
-                                                       int64_t total_rows, int64_t n_active) {
+                                                       int64_t total_rows, int64_t n_active, bool unbounded = false) {
     return ggml_sycl_fused_dequant_gemm_shape_ok(src0_type, M, 1, K, M) && total_rows > 0 &&
-           total_rows <= INT32_MAX && total_rows <= n_active * GGML_SYCL_FG_MAX_N;
+           total_rows <= INT32_MAX && (unbounded || total_rows <= n_active * GGML_SYCL_FG_MAX_N);
 }
 
 // Runtime type gate, kept out of the constexpr predicates above so those stay pure.
@@ -69,6 +71,8 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
         case GGML_TYPE_IQ1_S:   return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_IQ1_S   ) != 0;
         case GGML_TYPE_IQ1_M:   return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_IQ1_M   ) != 0;
         case GGML_TYPE_Q8_0:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q8_0    ) != 0;
+        case GGML_TYPE_Q2_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q2_K    ) != 0;
+        case GGML_TYPE_Q3_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q3_K    ) != 0;
         case GGML_TYPE_Q4_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q4_K    ) != 0;
         case GGML_TYPE_Q5_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q5_K    ) != 0;
         case GGML_TYPE_Q6_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q6_K    ) != 0;
