@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstring>
 #include <random>
-#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
