@@ -12,6 +12,10 @@ class UiStore {
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
 
+	/** Repo the Discover view selects when it opens, set by a model row. */
+	discoverModelFocus = $state<string | null>(null);
+	discoverModelsOpen = $state(false);
+
 	/** Whether the desktop sidebar is expanded (open). */
 	isSidebarExpanded = $state(false);
 	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
@@ -21,9 +25,20 @@ class UiStore {
 	/** Model the information dialog shows; a phone opens it instead of the manager. */
 	modelInformation = $state<ModelOption | null>(null);
 
+	openDiscoverModels(): void {
+		this.discoverModelFocus = null;
+		this.discoverModelsOpen = true;
+	}
+
 	/** Open the model information dialog, a phone's stand-in for the manager pane. */
 	openModelInformation(option: ModelOption): void {
 		this.modelInformation = option;
+	}
+
+	/** Open the models dialog on Discover, focused on one repo. */
+	openModelsDiscover(focus?: string): void {
+		this.discoverModelFocus = focus ?? null;
+		this.discoverModelsOpen = true;
 	}
 
 	/** Open the models manager, optionally focused on one model. */
