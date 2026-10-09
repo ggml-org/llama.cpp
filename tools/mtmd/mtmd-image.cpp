@@ -1143,6 +1143,72 @@ mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_i
 }
 
 //
+// mtmd_image_preprocessor_cohere2v
+//
+
+mtmd_image_preproc_out mtmd_image_preprocessor_cohere2v::preprocess(const clip_image_u8 & img) const {
+    const auto inst = get_slice_instructions(img.get_size());
+    auto sliced = slice_image(img, inst);
+
+    mtmd_image_preproc_out output;
+    if (sliced.slices.empty()) {
+        output.append_overview(hparams, sliced.overview, true);
+        return output;
+    }
+    // slices first, then thumbnail
+    output.append(hparams, sliced.slices, true);
+    output.append_overview(hparams, sliced.overview, true);
+    output.grid_x = inst.grid_size.width;
+    output.grid_y = inst.grid_size.height;
+    return output;
+}
+
+mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_cohere2v::get_slice_instructions(const clip_image_size & original_size) const {
+    const int tile = hparams.image_size;
+
+    // pick the grid with the least upscale; if all grids need downscale, pick the one with the least downscale
+    // grids are visited by tile count, then by width, same order as HF for ties
+    double best_down = -1.0;
+    double best_up   = std::numeric_limits<double>::max();
+    clip_image_size grid_down = { 1, 1 };
+    clip_image_size grid_up   = { 0, 0 };
+    for (int n = 1; n <= hparams.preproc_max_tiles; n++) {
+        for (int w = 1; w <= n; w++) {
+            if (n % w != 0) {
+                continue;
+            }
+            const clip_image_size g = { w, n / w };
+            const double scale = std::min(
+                (double) (g.width  * tile) / original_size.width,
+                (double) (g.height * tile) / original_size.height);
+            if (scale < 1.0) {
+                if (scale > best_down) {
+                    best_down = scale;
+                    grid_down = g;
+                }
+            } else if (scale < best_up) {
+                best_up = scale;
+                grid_up = g;
+            }
+        }
+    }
+    const clip_image_size grid = grid_up.width > 0 ? grid_up : grid_down;
+
+    slice_instructions inst;
+    inst.overview_size = { tile, tile };
+    inst.refined_size  = { tile * grid.width, tile * grid.height };
+    inst.grid_size     = grid;
+    if (grid.width * grid.height > 1) {
+        for (int y = 0; y < grid.height; y++) {
+            for (int x = 0; x < grid.width; x++) {
+                inst.slices.push_back({ x * tile, y * tile, { tile, tile } });
+            }
+        }
+    }
+    return inst;
+}
+
+//
 // mtmd_image_preprocessor_internvl
 //
 

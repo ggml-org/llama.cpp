@@ -452,6 +452,46 @@ static void unary_mul_sycl(const T * x, const T * g, T * dst, const int64_t k, c
     });
 }
 
+// ADD(bias) + UNARY + MUL(scale) with both broadcast over dim 0, the delta-net alpha gate:
+// dst[i] = op(a[i] + bias[i % ne0]) * scale[i % ne0]. k == ne0 makes that the flat index.
+template<typename F>
+static void add_unary_mul_flat_kernel(const float * a, const float * bias, const float * scale, float * dst,
+                                      const int64_t k, const sycl::nd_item<1> &item_ct1, F op) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op(a[i] + bias[i]) * scale[i];
+    }
+}
+
+template<typename F>
+static void add_unary_mul_bcast_kernel(const float * a, const float * bias, const float * scale, float * dst,
+                                       const int64_t k, const sycl::uint3 ne0_fd, const sycl::nd_item<1> &item_ct1, F op) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const uint32_t h = fastmodulo((uint32_t) i, ne0_fd);
+        dst[i] = op(a[i] + bias[h]) * scale[h];
+    }
+}
+
+template<typename F>
+static void add_unary_mul_sycl(const float * a, const float * bias, const float * scale, float * dst,
+                               const int64_t k, const int64_t ne0, queue_ptr main_stream, F op) {
+    const size_t            num_blocks = ceil_div((size_t) k, (size_t) SYCL_GLU_BLOCK_SIZE);
+    const sycl::nd_range<1> range(num_blocks * sycl::range<1>(SYCL_GLU_BLOCK_SIZE), sycl::range<1>(SYCL_GLU_BLOCK_SIZE));
+
+    if (k == ne0) {
+        main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            add_unary_mul_flat_kernel(a, bias, scale, dst, k, item_ct1, op);
+        });
+        return;
+    }
+
+    // 32-bit fastdiv, exact only below 2^31; ggml_sycl_can_fuse() already declined past that
+    GGML_ASSERT(k < ((int64_t) 1 << 31));
+    const sycl::uint3 ne0_fd = init_fastdiv_values((uint32_t) ne0);
+    main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+        add_unary_mul_bcast_kernel(a, bias, scale, dst, k, ne0_fd, item_ct1, op);
+    });
+}
+
 namespace ggml_sycl_detail {
 static void acc_f32_sycl(const char *x, const char *y, float *dst,
                          const int64_t n_elements,
@@ -995,6 +1035,19 @@ static inline void ggml_sycl_op_swiglu(ggml_backend_sycl_context & ctx, ggml_ten
     });
 }
 
+// Hands `launch` the functor for the unary op of a fused unary chain. Anything else
+// ggml_sycl_can_fuse() has already declined, so the default is a dispatcher bug.
+template<typename F>
+static void dispatch_fused_unary_op(ggml_unary_op uop, F && launch) {
+    switch (uop) {
+        case GGML_UNARY_OP_SILU:     launch([](float v) { return op_silu(v); });     break;
+        case GGML_UNARY_OP_SIGMOID:  launch([](float v) { return op_sigmoid(v); });  break;
+        case GGML_UNARY_OP_SOFTPLUS: launch([](float v) { return op_softplus(v); }); break;
+        default:
+            GGML_ABORT("fused unary chain: unsupported unary op %s", ggml_unary_op_name(uop));
+    }
+}
+
 // dst = op(unary_node->src[0]) * other, written straight to the MUL output, saving the
 // standalone unary launch. Preconditions come from ggml_sycl_can_fuse(); re-asserted here.
 void ggml_sycl_op_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
@@ -1032,13 +1085,41 @@ void ggml_sycl_op_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor *
         }
     };
 
-    switch (ggml_get_unary_op(unary_node)) {
-        case GGML_UNARY_OP_SILU:     dispatch_type([](float v) { return op_silu(v); });     break;
-        case GGML_UNARY_OP_SIGMOID:  dispatch_type([](float v) { return op_sigmoid(v); });  break;
-        case GGML_UNARY_OP_SOFTPLUS: dispatch_type([](float v) { return op_softplus(v); }); break;
-        default:
-            GGML_ABORT("fused unary+mul: unsupported unary op %s", ggml_unary_op_name(ggml_get_unary_op(unary_node)));
-    }
+    dispatch_fused_unary_op(ggml_get_unary_op(unary_node), dispatch_type);
+}
+
+// dst = op(a + bias) * scale for an ADD + UNARY + MUL chain whose bias and scale broadcast
+// over dim 0. Preconditions come from ggml_sycl_can_fuse(); re-asserted here.
+void ggml_sycl_op_add_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor * add_node,
+                                      ggml_tensor * unary_node, ggml_tensor * mul_node) {
+    // the dst-arity convention the other fusions follow; a and bias live on add_node
+    scope_op_debug_print scope_dbg_print(__func__, mul_node, /*num_src=*/2);
+
+    const ggml_tensor * a     = add_node->src[0];
+    const ggml_tensor * bias  = add_node->src[1];
+    const ggml_tensor * scale = (mul_node->src[0] == unary_node) ? mul_node->src[1] : mul_node->src[0];
+
+    // scale is picked by elimination; ggml_can_fuse()'s single-use rule rules out MUL(unary, unary)
+    GGML_ASSERT(scale != unary_node);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type == GGML_TYPE_F32 && mul_node->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(a, mul_node));
+    // a and dst are indexed flat
+    GGML_ASSERT(ggml_is_contiguous(a) && ggml_is_contiguous(mul_node));
+    // bias and scale are one contiguous ne0-length row each, broadcast over the outer dims
+    GGML_ASSERT(bias->ne[0] == a->ne[0] && scale->ne[0] == a->ne[0]);
+    GGML_ASSERT(ggml_nrows(bias) == 1 && ggml_nrows(scale) == 1);
+    GGML_ASSERT(ggml_is_contiguous(bias) && ggml_is_contiguous(scale));
+
+    queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const auto dispatch_op = [&](auto op) {
+        add_unary_mul_sycl((const float *) a->data, (const float *) bias->data, (const float *) scale->data,
+                           (float *) mul_node->data, ggml_nelements(mul_node), mul_node->ne[0], main_stream, op);
+    };
+
+    dispatch_fused_unary_op(ggml_get_unary_op(unary_node), dispatch_op);
 }
 
 __dpct_inline__ float ggml_sycl_op_swiglu_oai_single(float x, float g, float alpha = 1.702f, float limit = 7.0f) {

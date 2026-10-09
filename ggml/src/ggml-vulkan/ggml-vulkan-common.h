@@ -233,6 +233,18 @@ ggml_backend_reg_t ggml_backend_vk_reg();
 
 // debug
 int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op);
+#ifdef GGML_VULKAN_RUN_TESTS
+template <typename X_TYPE, typename Y_TYPE>
+void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, int split_k, int shader_size);
+void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant);
+void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, size_t split_k, size_t shader_size, ggml_type quant, bool mmq = false);
+#endif
+#ifdef GGML_VULKAN_CHECK_RESULTS
+extern size_t vk_skip_checks;
+extern size_t vk_output_tensor;
+void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx);
+void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx);
+#endif
 
 // ggml-vulkan.cpp (residual)
 bool ggml_vk_lightning_indexer_k_type_supported(ggml_type type);

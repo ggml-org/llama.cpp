@@ -56,7 +56,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.prefix(GEN_PROMPT, THINK_START);
         auto end = p.end();
 
@@ -85,7 +85,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         }
 
         auto tool_choice = p.choice();
-        foreach_function(inputs.tools, [&](const json & tool) {
+        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             auto         params   = common_chat_tool_parameters(function);
@@ -154,8 +154,9 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
             members_of = [&](const common_chat_schema_object & object, const std::string & rule_prefix) -> common_peg_parser {
                 std::vector<common_peg_parser> required_elements;
                 std::vector<common_peg_parser> optional_elements;
-                for (const auto & prop : object.properties) {
-                    auto element = element_of(prop.name, *prop.schema, rule_prefix + "-" + prop.name);
+                for (size_t i = 0; i < object.properties.size(); i++) {
+                    const auto & prop    = object.properties[i];
+                    auto         element = element_of(prop.name, *prop.schema, rule_prefix + "-" + std::to_string(i));
                     (prop.required ? required_elements : optional_elements).push_back(element);
                 }
 
@@ -180,7 +181,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
 
             common_peg_parser invoke_body = p.eps();
             if (doc->root->kind() == common_chat_schema::KIND_OBJECT) {
-                invoke_body = members_of(static_cast<const common_chat_schema_object &>(*doc->root), "tool-" + name + "-arg");
+                invoke_body = members_of(static_cast<const common_chat_schema_object &>(*doc->root), "tool-" + std::to_string(tool_index) + "-arg");
             }
 
             auto func_parser = p.tool(
@@ -189,7 +190,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                 p.space() + invoke_body + p.space() +
                 p.tool_close(p.literal(INVOKE_END)));
 
-            tool_choice |= p.rule("tool-" + name, func_parser);
+            tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
         });
 
         auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -212,12 +213,10 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         return generation_prompt + reasoning + content_before_tools + tool_calls + end;
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {
