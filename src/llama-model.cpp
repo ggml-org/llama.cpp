@@ -1331,170 +1331,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         gguf_kv.emplace(name, value);
     }
 
-    uint32_t hadamard_version = 0;
-    ml.get_key(LLM_KV_PRISM_HADAMARD_TIED_OUTPUT, hadamard_tied_output, false);
-    if (ml.get_key(LLM_KV_PRISM_HADAMARD_VERSION, hadamard_version, false)) {
-        if (hadamard_version != 1 && hadamard_version != 2) {
-            throw std::runtime_error(format("unsupported prism.hadamard.version: %u", hadamard_version));
-        }
-
-        if ((hadamard_version == 2) != hadamard_tied_output) {
-            throw std::runtime_error("prism.hadamard version 2 requires tied_output=true; version 1 forbids it");
-        }
-        if (hadamard_tied_output && ml.get_weight("output.weight")) {
-            throw std::runtime_error("prism.hadamard.tied_output requires output.weight to be absent");
-        }
-
-        uint32_t block_size = 0;
-        std::string transform;
-        std::string axis;
-        std::string sign_mode;
-        std::vector<std::string> weight_names;
-
-        ml.get_key(LLM_KV_PRISM_HADAMARD_BLOCK_SIZE, block_size);
-        ml.get_key(LLM_KV_PRISM_HADAMARD_TRANSFORM, transform);
-        ml.get_key(LLM_KV_PRISM_HADAMARD_AXIS, axis);
-        ml.get_key(LLM_KV_PRISM_HADAMARD_SIGN_MODE, sign_mode);
-        ml.get_arr(LLM_KV_PRISM_HADAMARD_WEIGHT_NAMES, weight_names);
-
-        if (block_size == 0 || (block_size & (block_size - 1)) != 0) {
-            throw std::runtime_error(format("invalid prism.hadamard.block_size: %u", block_size));
-        }
-        if (transform != "normalized-sylvester-walsh-hadamard") {
-            throw std::runtime_error(format("unsupported prism.hadamard.transform: %s", transform.c_str()));
-        }
-        if (axis != "input-last-dimension") {
-            throw std::runtime_error(format("unsupported prism.hadamard.axis: %s", axis.c_str()));
-        }
-        if (sign_mode != "identity" && sign_mode != "explicit") {
-            throw std::runtime_error(format("unsupported prism.hadamard.sign_mode: %s", sign_mode.c_str()));
-        }
-        if (weight_names.empty()) {
-            throw std::runtime_error("prism.hadamard.weight_names is empty");
-        }
-
-        if (sign_mode == "explicit") {
-            std::vector<int32_t> sign_widths;
-            std::vector<int32_t> sign_values;
-            ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_WIDTHS, sign_widths);
-            ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_VALUES, sign_values);
-            // explicit mode with no widths would leave the sign table empty, which reads
-            // as identity later and silently changes the model function
-            if (sign_widths.empty()) {
-                throw std::runtime_error("prism.hadamard.sign_mode is explicit but sign_widths is empty");
-            }
-            size_t off = 0;
-            for (const int32_t width : sign_widths) {
-                if (width <= 0 || (uint32_t) width % block_size != 0 || off + width > sign_values.size()) {
-                    throw std::runtime_error(format("invalid prism.hadamard sign width: %d", width));
-                }
-                auto & vec = hadamard_sign_data[width];
-                vec.assign(sign_values.begin() + off, sign_values.begin() + off + width);
-                for (const int32_t v : vec) {
-                    if (v != 1 && v != -1) {
-                        throw std::runtime_error("prism.hadamard sign values must be +/-1");
-                    }
-                }
-                off += width;
-            }
-            if (off != sign_values.size()) {
-                throw std::runtime_error("prism.hadamard.sign_values length mismatch");
-            }
-        }
-
-        ml.get_key(LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED, hadamard_gdn_v_grouped, false);
-
-        // the activation-side transform is applied only by build_lora_mm/build_lora_mm_id;
-        // refuse to load folded weights for architectures or tensor kinds that are not
-        // verified to route every matmul through those helpers, rather than run wrong math
-        switch (arch) {
-            case LLM_ARCH_LLAMA:
-            case LLM_ARCH_QWEN3:
-            case LLM_ARCH_QWEN3MOE:
-            case LLM_ARCH_QWEN35:
-            case LLM_ARCH_QWEN35MOE:
-            case LLM_ARCH_QWEN3NEXT:
-                break;
-            default:
-                throw std::runtime_error(format(
-                    "prism.hadamard: arch '%s' is not verified to apply the activation transform to all folded weights",
-                    llm_arch_name(arch)));
-        }
-
-        // A folded weight is a weight W that the converter stores as W_f = W*D*H, where D is a
-        // diagonal matrix of +1/-1 signs and H is the normalized block Hadamard matrix.
-        // H*H = I and D*D = I, so W*x = W_f*(H*(D*x)): the graph applies the signs and then H
-        // to the matmul input of each folded weight (see llm_graph_context::build_hadamard_input).
-        const auto is_foldable_weight = [](const std::string & name) {
-            static const char * kinds[] = {
-                "attn_q", "attn_k", "attn_v", "attn_qkv", "attn_gate", "attn_output",
-                "ffn_gate", "ffn_up", "ffn_down",
-                "ffn_gate_exps", "ffn_up_exps", "ffn_down_exps", "ffn_gate_up_exps",
-                "ffn_gate_shexp", "ffn_up_shexp", "ffn_down_shexp",
-                "ssm_out",
-            };
-            if (name == "output.weight") {
-                return true; // the output head is built through build_lora_mm in every arch
-            }
-            if (name.compare(0, 4, "blk.") != 0) {
-                return false;
-            }
-            size_t pos = 4;
-            while (pos < name.size() && isdigit((unsigned char) name[pos])) {
-                pos++;
-            }
-            if (pos == 4 || pos >= name.size() || name[pos] != '.') {
-                return false;
-            }
-            pos++;
-            for (const char * kind : kinds) {
-                const std::string suffix = std::string(kind) + ".weight";
-                if (name.compare(pos, std::string::npos, suffix) == 0) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        for (const auto & weight_name : weight_names) {
-            if (!is_foldable_weight(weight_name)) {
-                throw std::runtime_error(format(
-                    "prism.hadamard: weight '%s' is not on a verified Hadamard-aware matmul path", weight_name.c_str()));
-            }
-            if (!hadamard_weight_blocks.emplace(weight_name, block_size).second) {
-                throw std::runtime_error(format("duplicate prism.hadamard weight: %s", weight_name.c_str()));
-            }
-        }
-
-        // tensors consumed by row lookup store latent rows and need the
-        // inverse transform applied to the lookup result instead
-        std::vector<std::string> inverse_names;
-        ml.get_arr(LLM_KV_PRISM_HADAMARD_INVERSE_WEIGHT_NAMES, inverse_names, false);
-        for (const auto & name : inverse_names) {
-            // the graph applies the inverse only to the token-embedding lookup; any
-            // other latent table would load and silently stay rotated
-            if (name != "token_embd.weight") {
-                throw std::runtime_error(format(
-                    "prism.hadamard: weight '%s' is not a verified inverse-after-lookup table", name.c_str()));
-            }
-            if (hadamard_weight_blocks.count(name) || !hadamard_inverse_blocks.emplace(name, block_size).second) {
-                throw std::runtime_error(format("duplicate prism.hadamard inverse weight: %s", name.c_str()));
-            }
-        }
-    }
-
-    if (hadamard_tied_output) {
-        if (hadamard_version != 2) {
-            throw std::runtime_error("prism.hadamard.tied_output requires version 2");
-        }
-        const auto it = hadamard_inverse_blocks.find("token_embd.weight");
-        if (it == hadamard_inverse_blocks.end()) {
-            throw std::runtime_error("prism.hadamard.tied_output requires a latent token embedding");
-        }
-        hadamard_weight_blocks.emplace("token_embd.weight", it->second);
-    } else if (hadamard_inverse_blocks.count("token_embd.weight") && !ml.get_weight("output.weight")) {
-        throw std::runtime_error("a tied Hadamard output requires version 2 and tied_output=true");
-    }
+    load_hparams_hadamard(ml);
 
     // get general kv
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
@@ -2150,9 +1987,178 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    create_hadamard_tensors();
+    load_tensors_hadamard();
 
     return true;
+}
+
+// prism.hadamard: read and check the metadata of a GGUF with folded weights, and record which
+// weights need the activation-side transform. load_tensors_hadamard makes the tensors later.
+void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
+    uint32_t hadamard_version = 0;
+    ml.get_key(LLM_KV_PRISM_HADAMARD_TIED_OUTPUT, hadamard_tied_output, false);
+    if (ml.get_key(LLM_KV_PRISM_HADAMARD_VERSION, hadamard_version, false)) {
+        if (hadamard_version != 1 && hadamard_version != 2) {
+            throw std::runtime_error(format("unsupported prism.hadamard.version: %u", hadamard_version));
+        }
+
+        if ((hadamard_version == 2) != hadamard_tied_output) {
+            throw std::runtime_error("prism.hadamard version 2 requires tied_output=true; version 1 forbids it");
+        }
+        if (hadamard_tied_output && ml.get_weight("output.weight")) {
+            throw std::runtime_error("prism.hadamard.tied_output requires output.weight to be absent");
+        }
+
+        uint32_t block_size = 0;
+        std::string transform;
+        std::string axis;
+        std::string sign_mode;
+        std::vector<std::string> weight_names;
+
+        ml.get_key(LLM_KV_PRISM_HADAMARD_BLOCK_SIZE, block_size);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_TRANSFORM, transform);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_AXIS, axis);
+        ml.get_key(LLM_KV_PRISM_HADAMARD_SIGN_MODE, sign_mode);
+        ml.get_arr(LLM_KV_PRISM_HADAMARD_WEIGHT_NAMES, weight_names);
+
+        if (block_size == 0 || (block_size & (block_size - 1)) != 0) {
+            throw std::runtime_error(format("invalid prism.hadamard.block_size: %u", block_size));
+        }
+        if (transform != "normalized-sylvester-walsh-hadamard") {
+            throw std::runtime_error(format("unsupported prism.hadamard.transform: %s", transform.c_str()));
+        }
+        if (axis != "input-last-dimension") {
+            throw std::runtime_error(format("unsupported prism.hadamard.axis: %s", axis.c_str()));
+        }
+        if (sign_mode != "identity" && sign_mode != "explicit") {
+            throw std::runtime_error(format("unsupported prism.hadamard.sign_mode: %s", sign_mode.c_str()));
+        }
+        if (weight_names.empty()) {
+            throw std::runtime_error("prism.hadamard.weight_names is empty");
+        }
+
+        if (sign_mode == "explicit") {
+            std::vector<int32_t> sign_widths;
+            std::vector<int32_t> sign_values;
+            ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_WIDTHS, sign_widths);
+            ml.get_arr(LLM_KV_PRISM_HADAMARD_SIGN_VALUES, sign_values);
+            // explicit mode with no widths would leave the sign table empty, which reads
+            // as identity later and silently changes the model function
+            if (sign_widths.empty()) {
+                throw std::runtime_error("prism.hadamard.sign_mode is explicit but sign_widths is empty");
+            }
+            size_t off = 0;
+            for (const int32_t width : sign_widths) {
+                if (width <= 0 || (uint32_t) width % block_size != 0 || off + width > sign_values.size()) {
+                    throw std::runtime_error(format("invalid prism.hadamard sign width: %d", width));
+                }
+                auto & vec = hadamard_sign_data[width];
+                vec.assign(sign_values.begin() + off, sign_values.begin() + off + width);
+                for (const int32_t v : vec) {
+                    if (v != 1 && v != -1) {
+                        throw std::runtime_error("prism.hadamard sign values must be +/-1");
+                    }
+                }
+                off += width;
+            }
+            if (off != sign_values.size()) {
+                throw std::runtime_error("prism.hadamard.sign_values length mismatch");
+            }
+        }
+
+        ml.get_key(LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED, hadamard_gdn_v_grouped, false);
+
+        // the activation-side transform is applied only by build_lora_mm/build_lora_mm_id;
+        // refuse to load folded weights for architectures or tensor kinds that are not
+        // verified to route every matmul through those helpers, rather than run wrong math
+        switch (arch) {
+            case LLM_ARCH_LLAMA:
+            case LLM_ARCH_QWEN3:
+            case LLM_ARCH_QWEN3MOE:
+            case LLM_ARCH_QWEN35:
+            case LLM_ARCH_QWEN35MOE:
+            case LLM_ARCH_QWEN3NEXT:
+                break;
+            default:
+                throw std::runtime_error(format(
+                    "prism.hadamard: arch '%s' is not verified to apply the activation transform to all folded weights",
+                    llm_arch_name(arch)));
+        }
+
+        // A folded weight is a weight W that the converter stores as W_f = W*D*H, where D is a
+        // diagonal matrix of +1/-1 signs and H is the normalized block Hadamard matrix.
+        // H*H = I and D*D = I, so W*x = W_f*(H*(D*x)): the graph applies the signs and then H
+        // to the matmul input of each folded weight (see llm_graph_context::build_hadamard_input).
+        const auto is_foldable_weight = [](const std::string & name) {
+            static const char * kinds[] = {
+                "attn_q", "attn_k", "attn_v", "attn_qkv", "attn_gate", "attn_output",
+                "ffn_gate", "ffn_up", "ffn_down",
+                "ffn_gate_exps", "ffn_up_exps", "ffn_down_exps", "ffn_gate_up_exps",
+                "ffn_gate_shexp", "ffn_up_shexp", "ffn_down_shexp",
+                "ssm_out",
+            };
+            if (name == "output.weight") {
+                return true; // the output head is built through build_lora_mm in every arch
+            }
+            if (name.compare(0, 4, "blk.") != 0) {
+                return false;
+            }
+            size_t pos = 4;
+            while (pos < name.size() && isdigit((unsigned char) name[pos])) {
+                pos++;
+            }
+            if (pos == 4 || pos >= name.size() || name[pos] != '.') {
+                return false;
+            }
+            pos++;
+            for (const char * kind : kinds) {
+                const std::string suffix = std::string(kind) + ".weight";
+                if (name.compare(pos, std::string::npos, suffix) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        for (const auto & weight_name : weight_names) {
+            if (!is_foldable_weight(weight_name)) {
+                throw std::runtime_error(format(
+                    "prism.hadamard: weight '%s' is not on a verified Hadamard-aware matmul path", weight_name.c_str()));
+            }
+            if (!hadamard_weight_blocks.emplace(weight_name, block_size).second) {
+                throw std::runtime_error(format("duplicate prism.hadamard weight: %s", weight_name.c_str()));
+            }
+        }
+
+        // tensors consumed by row lookup store latent rows and need the
+        // inverse transform applied to the lookup result instead
+        std::vector<std::string> inverse_names;
+        ml.get_arr(LLM_KV_PRISM_HADAMARD_INVERSE_WEIGHT_NAMES, inverse_names, false);
+        for (const auto & name : inverse_names) {
+            // the graph applies the inverse only to the token-embedding lookup; any
+            // other latent table would load and silently stay rotated
+            if (name != "token_embd.weight") {
+                throw std::runtime_error(format(
+                    "prism.hadamard: weight '%s' is not a verified inverse-after-lookup table", name.c_str()));
+            }
+            if (hadamard_weight_blocks.count(name) || !hadamard_inverse_blocks.emplace(name, block_size).second) {
+                throw std::runtime_error(format("duplicate prism.hadamard inverse weight: %s", name.c_str()));
+            }
+        }
+    }
+
+    if (hadamard_tied_output) {
+        if (hadamard_version != 2) {
+            throw std::runtime_error("prism.hadamard.tied_output requires version 2");
+        }
+        const auto it = hadamard_inverse_blocks.find("token_embd.weight");
+        if (it == hadamard_inverse_blocks.end()) {
+            throw std::runtime_error("prism.hadamard.tied_output requires a latent token embedding");
+        }
+        hadamard_weight_blocks.emplace("token_embd.weight", it->second);
+    } else if (hadamard_inverse_blocks.count("token_embd.weight") && !ml.get_weight("output.weight")) {
+        throw std::runtime_error("a tied Hadamard output requires version 2 and tied_output=true");
+    }
 }
 
 // prism.hadamard: make the tensors for the activation-side transform of the folded weights.
@@ -2162,7 +2168,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 // Each tensor goes to the buffer type of the weights that use it, but never to a CPU extra buffer type.
 // Each folded weight then gets its transform in hadamard_rotations (matmul input) or
 // hadamard_inverses (row lookup of a latent table).
-void llama_model_base::create_hadamard_tensors() {
+void llama_model_base::load_tensors_hadamard() {
     if (hadamard_weight_blocks.empty() && hadamard_inverse_blocks.empty()) {
         return;
     }
