@@ -155,6 +155,15 @@ extern "C" {
     // get the gradient accumulator for a node from the forward graph
     GGML_API struct ggml_tensor * ggml_opt_grad_acc(ggml_opt_context_t opt_ctx, struct ggml_tensor * node);
 
+    // optimizer iteration counter, saved with the optimizer state
+    GGML_API int64_t ggml_opt_get_iter(ggml_opt_context_t opt_ctx);
+
+    // ====== Optimizer State Persistence ======
+
+    GGML_API bool ggml_opt_save_state(ggml_opt_context_t opt_ctx, const char* filename);
+    GGML_API bool ggml_opt_load_state(ggml_opt_context_t opt_ctx, const char* filename);
+    GGML_API bool ggml_opt_load_tensors(ggml_opt_context_t opt_ctx, const char* filename);
+
     GGML_API enum ggml_opt_optimizer_type ggml_opt_context_optimizer_type(ggml_opt_context_t); //TODO consistent naming scheme
 
     GGML_API const char * ggml_opt_optimizer_name(enum ggml_opt_optimizer_type);

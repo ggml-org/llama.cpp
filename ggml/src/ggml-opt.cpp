@@ -634,6 +634,35 @@ struct ggml_tensor * ggml_opt_grad_acc(ggml_opt_context_t opt_ctx, struct ggml_t
     return ggml_graph_get_grad_acc(opt_ctx->gb_opt, node);
 }
 
+int64_t ggml_opt_get_iter(ggml_opt_context_t opt_ctx) {
+    return opt_ctx->iter;
+}
+
+static void ggml_opt_set_iter(ggml_opt_context_t opt_ctx, int64_t iter) {
+    opt_ctx->iter = iter;
+}
+
+static int32_t ggml_opt_get_nparams(ggml_opt_context_t opt_ctx) {
+    if (!opt_ctx) {
+        return 0;
+    }
+    return (int32_t)opt_ctx->grad_m.size();
+}
+
+static struct ggml_tensor * ggml_opt_get_grad_m(ggml_opt_context_t opt_ctx, int32_t index) {
+    if (index < 0 || index >= (int32_t)opt_ctx->grad_m.size()) {
+        return nullptr;
+    }
+    return opt_ctx->grad_m[index];
+}
+
+static struct ggml_tensor * ggml_opt_get_grad_v(ggml_opt_context_t opt_ctx, int32_t index) {
+    if (index < 0 || index >= (int32_t)opt_ctx->grad_v.size()) {
+        return nullptr;
+    }
+    return opt_ctx->grad_v[index];
+}
+
 // ====== Optimization Result ======
 
 ggml_opt_result_t ggml_opt_result_init() {
@@ -1091,4 +1120,130 @@ GGML_API const char * ggml_opt_optimizer_name(enum ggml_opt_optimizer_type o) {
         default:
             return "undefined";
     };
+}
+
+// ====== Optimizer State Persistence ======
+
+bool ggml_opt_save_state(ggml_opt_context_t opt_ctx, const char* filename) {
+    if (!opt_ctx || !filename) {
+        return false;
+    }
+
+    struct gguf_context * gguf_ctx = gguf_init_empty();
+    if (!gguf_ctx) {
+        return false;
+    }
+
+    gguf_set_val_str(gguf_ctx, "general.type", "optimizer");
+    gguf_set_val_i64(gguf_ctx, "optimizer.iteration", ggml_opt_get_iter(opt_ctx));
+    gguf_set_val_i32(gguf_ctx, "optimizer.n_params", ggml_opt_get_nparams(opt_ctx));
+
+    int32_t total_params = ggml_opt_get_nparams(opt_ctx);
+
+    for (int32_t i = 0; i < total_params; ++i) {
+        struct ggml_tensor * grad_m = ggml_opt_get_grad_m(opt_ctx, i);
+        struct ggml_tensor * grad_v = ggml_opt_get_grad_v(opt_ctx, i);
+        if (grad_m) {
+            gguf_add_tensor(gguf_ctx, grad_m);
+        }
+        if (grad_v) {
+            gguf_add_tensor(gguf_ctx, grad_v);
+        }
+    }
+
+    bool success = gguf_write_to_file(gguf_ctx, filename, false);
+    gguf_free(gguf_ctx);
+
+    return success;
+}
+
+bool ggml_opt_load_state(ggml_opt_context_t opt_ctx, const char* filename) {
+    if (!opt_ctx || !filename) {
+        return false;
+    }
+
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    struct gguf_context * gguf_context = gguf_init_from_file(filename, gguf_params);
+    if (!gguf_context) {
+        return false;
+    }
+
+    const int64_t key_idx = gguf_find_key(gguf_context, "optimizer.iteration");
+    if (key_idx >= 0 && gguf_get_kv_type(gguf_context, key_idx) == GGUF_TYPE_INT64) {
+        int64_t saved_iter = gguf_get_val_i64(gguf_context, key_idx);
+        ggml_opt_set_iter(opt_ctx, saved_iter);
+    }
+
+    gguf_free(gguf_context);
+    return true;
+}
+
+bool ggml_opt_load_tensors(ggml_opt_context_t opt_ctx, const char* filename) {
+    if (!opt_ctx || !filename) {
+        return false;
+    }
+
+    struct ggml_context * gguf_ctx = nullptr;
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ false,
+        /* .ctx      = */ &gguf_ctx,
+    };
+
+    struct gguf_context * gguf_context = gguf_init_from_file(filename, gguf_params);
+    if (!gguf_context) {
+        return false;
+    }
+
+    if (!gguf_ctx) {
+        gguf_free(gguf_context);
+        return false;
+    }
+
+    int tensor_count = gguf_get_n_tensors(gguf_context);
+    int grad_m_loaded = 0, grad_v_loaded = 0;
+    const int32_t n_params = ggml_opt_get_nparams(opt_ctx);
+
+    for (int i = 0; i < tensor_count; ++i) {
+        const char* tensor_name = gguf_get_tensor_name(gguf_context, i);
+        if (!tensor_name) continue;
+
+        struct ggml_tensor* gguf_tensor = ggml_get_tensor(gguf_ctx, tensor_name);
+        if (!gguf_tensor) continue;
+
+        for (int32_t param_idx = 0; param_idx < n_params; ++param_idx) {
+            struct ggml_tensor* grad_m = ggml_opt_get_grad_m(opt_ctx, param_idx);
+            struct ggml_tensor* grad_v = ggml_opt_get_grad_v(opt_ctx, param_idx);
+
+            if (grad_m && strlen(grad_m->name) > 0 && strcmp(tensor_name, grad_m->name) == 0) {
+                if (grad_m->type == gguf_tensor->type &&
+                    ggml_nelements(grad_m) == ggml_nelements(gguf_tensor)) {
+                    if (grad_m->data) {
+                        ggml_backend_tensor_set(grad_m, gguf_tensor->data, 0, ggml_nbytes(grad_m));
+                        grad_m_loaded++;
+                    }
+                }
+                break;
+            }
+
+            if (grad_v && strlen(grad_v->name) > 0 && strcmp(tensor_name, grad_v->name) == 0) {
+                if (grad_v->type == gguf_tensor->type &&
+                    ggml_nelements(grad_v) == ggml_nelements(gguf_tensor)) {
+                    if (grad_v->data) {
+                        ggml_backend_tensor_set(grad_v, gguf_tensor->data, 0, ggml_nbytes(grad_v));
+                        grad_v_loaded++;
+                    }
+                }
+                break;
+            }
+        }
+
+    }
+
+    ggml_free(gguf_ctx);
+    gguf_free(gguf_context);
+    return (grad_m_loaded > 0 || grad_v_loaded > 0);
 }
