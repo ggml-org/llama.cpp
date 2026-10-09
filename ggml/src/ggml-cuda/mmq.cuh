@@ -549,7 +549,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 }
 
 // Fused gate/up/GLU write-back: accumulators l and l + 2 hold the up and gate values of the same output row and column.
-template<ggml_type type, int J, bool fallback>
+template<ggml_type type, int J, bool fallback, ggml_prec prec_src1>
 static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma_glu(
             const float * __restrict__ sum, const ggml_glu_op glu_op, const float glu_limit,
             const int * __restrict__ ids_dst, float * __restrict__ dst, const int stride, const int i_max, const int j_max) {
@@ -557,7 +557,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma_glu(
     typedef tile<16, 8, int> tile_C;
     static_assert(tile_C::I == 2*GGML_CUDA_MMQ_FUSION_ROWS, "each C tile must hold one chunk of up rows and one of gate rows");
 
-    constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
+    constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback, prec_src1);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
@@ -1028,7 +1028,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     }
 
     if constexpr (has_fusion) {
-        ggml_cuda_mmq_write_back_mma_glu<type, J, fallback>(sum, glu_op, glu_limit, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
+        ggml_cuda_mmq_write_back_mma_glu<type, J, fallback, prec_src1>(sum, glu_op, glu_limit, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
         return;
     }
     GGML_UNUSED_VARS(glu_op, glu_limit);
