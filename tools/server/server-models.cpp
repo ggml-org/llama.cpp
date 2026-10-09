@@ -90,7 +90,7 @@ private:
         std::shared_ptr<server_subproc> proc;
         server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
         int port = 0;
-        std::string buf;      // partial line
+        std::string buf[SERVER_SUBPROC_STREAMS]; // partial line of each pipe
         bool eof = false;     // output closed, waiting for the process to be reaped
         int64_t deadline = 0; // force-kill time in ms, 0 when no stop is pending
     };
@@ -143,46 +143,56 @@ private:
         return false;
     }
 
-    // read what the child wrote, forward complete lines
+    // read what the child wrote, handle its commands and forward its logs, line by line
     void read_output(child_t & c) {
+        for (int i = 0; i < SERVER_SUBPROC_STREAMS; i++) {
+            read_stream(c, (server_subproc_stream) i);
+        }
+        c.eof = c.proc->output_closed();
+    }
+
+    void read_stream(child_t & c, server_subproc_stream stream) {
         char chunk[4096];
-        while (!c.eof) {
-            int n = c.proc->read_output(chunk, sizeof(chunk));
+        std::string & buf = c.buf[stream];
+        bool closed = false;
+        while (true) {
+            int n = c.proc->read_output(stream, chunk, sizeof(chunk));
             if (n < 0) {
-                c.eof = true;
+                closed = true;
                 break;
             }
             if (n == 0) {
                 break;
             }
-            c.buf.append(chunk, (size_t) n);
+            buf.append(chunk, (size_t) n);
             size_t start = 0;
             while (true) {
-                size_t nl = c.buf.find('\n', start);
+                size_t nl = buf.find('\n', start);
                 if (nl == std::string::npos) {
                     break;
                 }
-                std::string line = c.buf.substr(start, nl + 1 - start);
+                on_line(c, stream, buf.substr(start, nl + 1 - start));
                 start = nl + 1;
-                on_line(c, line);
             }
-            c.buf.erase(0, start);
-            if (c.buf.size() > max_line) {
-                c.buf.clear(); // a child that never writes a newline must not grow this without bound
+            buf.erase(0, start);
+            if (buf.size() > max_line) {
+                buf.clear(); // a child that never writes a newline must not grow this without bound
             }
         }
-        if (c.eof && !c.buf.empty()) {
-            on_line(c, c.buf);
-            c.buf.clear();
+        if (closed && !buf.empty()) {
+            on_line(c, stream, buf);
+            buf.clear();
         }
     }
 
-    void on_line(child_t & c, const std::string & line) {
-        if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
+    void on_line(child_t & c, server_subproc_stream stream, const std::string & line) {
+        if (stream == SERVER_SUBPROC_STDERR) {
+            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+        } else if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
             LOG_DBG("[%5d] %s", c.port, line.c_str()); // prevent spamming the log
             models.handle_child_state(c.name, line);
         } else {
-            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+            SRV_WRN("[%5d] unexpected output on the command pipe: %s", c.port, line.c_str());
         }
     }
 
@@ -506,6 +516,8 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     preset.set_option(ctx_preset, "LLAMA_ARG_HOST",  CHILD_ADDR);
     preset.set_option(ctx_preset, "LLAMA_ARG_PORT",  std::to_string(port));
     preset.set_option(ctx_preset, "LLAMA_ARG_ALIAS", name);
+    // the child output goes through the router to its terminal, so it follows the router colors
+    preset.set_option(ctx_preset, "LLAMA_ARG_LOG_COLORS", common_log_get_colors(common_log_main()) ? "on" : "off");
     // TODO: maybe validate preset before rendering ?
     // render args
     args = preset.to_args(bin_path);
@@ -518,9 +530,16 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     }
 }
 
-void server_model_meta::update_caps() {
+void server_model_meta::update_caps(const common_params & base) {
+    // reset to the default so a failed refresh cannot keep old values
+    architecture = server_model_architecture_json(false, false, false, {"text"});
+
+    // resolve the model file offline; do not download
+    common_params params;
+    params.model = base.model;
+    // --no-mmproj applies to child models and blocks auto-attached projectors
+    params.no_mmproj = base.no_mmproj;
     try {
-        common_params params;
         preset.apply_to_params(params, {
             "LLAMA_ARG_MODEL",
             "LLAMA_ARG_MODEL_URL",
@@ -528,20 +547,37 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_MMPROJ_URL",
             "LLAMA_ARG_MMPROJ_AUTO",
             "LLAMA_ARG_HF_REPO",
-            "LLAMA_ARG_HF_REPO_FILE",
+            "LLAMA_ARG_HF_FILE",
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-        common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
-        if (params.no_mmproj || params.mmproj.path.empty()) {
-            multimodal = { false, false };
-        } else {
-            multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
+        common_models_handler_apply(handler, params);
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to resolve the model of '%s': %s\n", name.c_str(), e.what());
+        return;
+    }
+
+    // read the output modalities from the GGUF metadata
+    std::vector<std::string> output_modalities = {"text"};
+    if (!params.model.path.empty()) {
+        output_modalities = server_model_output_modalities(common_get_decision_type(params.model.path));
+    }
+
+    bool inp_image = false;
+    bool inp_audio = false;
+    try {
+        if (!params.no_mmproj && !params.mmproj.path.empty()) {
+            mtmd_caps caps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
+            inp_image = caps.inp_vision;
+            inp_audio = caps.inp_audio;
         }
     } catch (const std::exception & e) {
-        LOG_WRN("failed to initialize common_params for multimodal capability detection: %s\n", e.what());
-        multimodal = { false, false };
+        LOG_WRN("failed to read the multimodal capabilities of '%s': %s\n", name.c_str(), e.what());
+        // keep the output modalities from the GGUF metadata
     }
+
+    // offline discovery cannot see video; a loaded model reports it
+    architecture = server_model_architecture_json(inp_image, inp_audio, false, output_modalities);
 }
 
 //
@@ -632,7 +668,7 @@ void server_models::add_model(server_model_meta && meta) {
     }
 
     meta.update_args(ctx_preset, bin_path); // render args
-    meta.update_caps();
+    meta.update_caps(base_params);
     std::string name = meta.name;
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<server_subproc>(),
@@ -789,11 +825,12 @@ void server_models::load_models() {
             inst.meta.hidden = hidden_models.count(name) > 0;
         }
     };
-    // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
+    // update_args() injects HOST/PORT/ALIAS/LOG_COLORS, so strip them before comparing presets
     auto preset_options_for_compare = [](common_preset p) {
         p.unset_option("LLAMA_ARG_HOST");
         p.unset_option("LLAMA_ARG_PORT");
         p.unset_option("LLAMA_ARG_ALIAS");
+        p.unset_option("LLAMA_ARG_LOG_COLORS");
         return p.options;
     };
 
@@ -821,7 +858,6 @@ void server_models::load_models() {
                 /* progress      */ {},
                 /* exit_code     */ 0,
                 /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
-                /* multimodal    */ mtmd_caps{false, false},
                 // /* need_download */ false,
             };
             add_model(std::move(meta));
@@ -942,7 +978,7 @@ void server_models::load_models() {
 
             inst.meta.exit_code = 0; // clear failed state so the model can be reloaded
             inst.meta.update_args(ctx_preset, bin_path);
-            inst.meta.update_caps();
+            inst.meta.update_caps(base_params);
         }
 
         // add models that are new in this reload, load-on-startup is not honored here since a
@@ -963,7 +999,6 @@ void server_models::load_models() {
                     /* progress      */ {},
                     /* exit_code     */ 0,
                     /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
-                    /* multimodal    */ mtmd_caps{false, false},
                     // /* need_download */ false,
                 };
                 add_model(std::move(meta));
@@ -1164,9 +1199,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
         inst.meta.args = redact_sensitive_args(child_args); // save for debugging/display only
 
-        // TODO @ngxson : maybe separate stdout and stderr in the future
-        //                so that we can use stdout for commands and stderr for logging
-        int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
+        // the child writes its commands to stdout and its logs to stderr
+        int options = subprocess_option_no_window;
         if (!inst.subproc->sproc.create(child_args, options, child_env)) {
             throw std::runtime_error("failed to spawn server instance");
         }
@@ -1288,6 +1322,27 @@ void server_models::update_status(const std::string & name, const update_status_
         }
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
+            // the child replaces both arrays in full; a bad or missing value changes nothing
+            if (args.loaded_info.contains("architecture") && args.loaded_info.at("architecture").is_object()) {
+                const json & child_arch = args.loaded_info.at("architecture");
+                for (const char * key : { "input_modalities", "output_modalities" }) {
+                    if (!child_arch.contains(key) || !child_arch.at(key).is_array()) {
+                        continue;
+                    }
+                    std::vector<std::string> modalities;
+                    bool valid = true;
+                    for (const auto & m : child_arch.at(key)) {
+                        if (!m.is_string()) {
+                            valid = false;
+                            break;
+                        }
+                        modalities.push_back(m.get<std::string>());
+                    }
+                    if (valid) {
+                        meta.architecture[key] = std::move(modalities);
+                    }
+                }
+            }
         }
         if (!args.progress.is_null()) {
             meta.progress = args.progress;
@@ -1667,6 +1722,18 @@ void server_models::handle_child_state(const std::string & name, const std::stri
 // server_child
 //
 
+server_child::server_child() {
+    if (is_child()) {
+        cmd_out = server_reserve_stdout();
+    }
+}
+
+server_child::~server_child() {
+    if (cmd_out) {
+        fclose(cmd_out);
+    }
+}
+
 bool server_child::is_child() {
     const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
     return router_port != nullptr;
@@ -1789,14 +1856,8 @@ void server_child::notify_to_router(const std::string & state, const json & payl
         {"payload", payload},
     };
     std::lock_guard<std::mutex> lk(mtx_stdout);
-    common_log_pause(common_log_main());
-    fflush(stdout);
-    // the router matches the command on a line prefix, so the leading newline
-    // closes whatever the logger left open on the shared pipe, down to the
-    // trailing color reset that carries no newline of its own
-    fprintf(stdout, "\n%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
-    fflush(stdout);
-    common_log_resume(common_log_main());
+    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(cmd_out);
 }
 
 
@@ -2043,19 +2104,6 @@ void server_models_routes::init_routes() {
                 status["failed"]    = true;
             }
 
-            // pi coding agent multimodal compatibility
-            json input_modalities = json::array({"text"});
-            if (meta.multimodal.inp_vision) {
-                input_modalities.push_back("image");
-            }
-            if (meta.multimodal.inp_audio) {
-                input_modalities.push_back("audio");
-            }
-            json architecture {
-                {"input_modalities",  input_modalities},
-                {"output_modalities", json::array({"text"})},
-            };
-
             json model_info = json {
                 {"id",            meta.name},
                 {"aliases",       meta.aliases},
@@ -2064,7 +2112,7 @@ void server_models_routes::init_routes() {
                 {"owned_by",      "llamacpp"}, // for OAI-compat
                 {"created",       t},          // for OAI-compat
                 {"status",        status},
-                {"architecture",  architecture},
+                {"architecture",  meta.architecture},
                 {"source",        server_model_source_to_string(meta.source)},
                 {"can_remove",    meta.source == SERVER_MODEL_SOURCE_CACHE},
                 // {"need_download", meta.need_download},

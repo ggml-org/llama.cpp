@@ -714,7 +714,7 @@ void server_mcp::start(const common_params & params) {
         }
     };
     if (!params.mcp_servers_config.empty()) {
-        std::ifstream f = fs_open_ifstream(params.mcp_servers_config, std::ios::in);
+        std::ifstream f(std::filesystem::u8path(params.mcp_servers_config), std::ios::in);
         if (!f) {
             throw std::runtime_error("failed to open MCP config file: " + params.mcp_servers_config);
         }

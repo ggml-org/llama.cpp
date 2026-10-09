@@ -230,10 +230,12 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn->get_dsa()->self_k_rot_lid, indexer_q);
-                cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn->get_dsa()->self_k_rot_lid, indexer_k);
-                cb(indexer_k, "indexer_k", il);
+                if (inp_attn->get_dsa()->self_k_rot_lid) {
+                    indexer_q = ggml_mul_mat(ctx0, inp_attn->get_dsa()->self_k_rot_lid, indexer_q);
+                    cb(indexer_q, "indexer_q", il);
+                    indexer_k = ggml_mul_mat(ctx0, inp_attn->get_dsa()->self_k_rot_lid, indexer_k);
+                    cb(indexer_k, "indexer_k", il);
+                }
 
                 // store indexer keys to KV cache
                 const auto * mctx_lid = inp_attn->get_dsa()->mctx->get_lid();

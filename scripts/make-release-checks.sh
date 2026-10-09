@@ -8,6 +8,8 @@
 #   GITHUB_OUTPUT
 #   RELEASE_BRANCH: when set, HEAD must belong to origin/RELEASE_BRANCH and must
 #     not be older than 3 days from the branch HEAD (skipped when unset)
+#   REQUIRE_DOCKER: set to "false" to skip the container image check and the
+#     release re-tagging of the nightly images in make-release.yml (default: true)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

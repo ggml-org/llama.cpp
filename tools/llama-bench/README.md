@@ -76,8 +76,6 @@ test parameters:
   -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio>
                                             (default: auto)
   -lzm, --lazy-mode <on|auto|off>           (default: auto)
-  -mmp, --mmap <0|1>                        (DEPRECATED IN FAVOUR OF --load-mode)
-  -dio, --direct-io <0|1>                   (DEPRECATED IN FAVOUR OF --load-mode)
   -embd, --embeddings <0|1>                 (default: 0)
   -ts, --tensor-split <ts0/ts1/..>          (default: 0)
   -ot --override-tensor <tensor name pattern>=<buffer type>;...

@@ -90,3 +90,4 @@ IMPORTANT: If your model needs changes that don't fit the existing infrastructur
 No-go checklist (these will get the PR rejected and require discussion before proceeding):
 - Violating the API design constraints stated above
 - Adding a new model-specific binary: the API and binary surface must stay model-agnostic
+- Adding new flags to conversion script: this script must stay model-agnostic

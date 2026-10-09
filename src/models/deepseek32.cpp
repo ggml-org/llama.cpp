@@ -249,10 +249,12 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
-                cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
-                cb(indexer_k, "indexer_k", il);
+                if (inp_attn_dsa->self_k_rot_lid) {
+                    indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
+                    cb(indexer_q, "indexer_q", il);
+                    indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
+                    cb(indexer_k, "indexer_k", il);
+                }
 
                 // store indexer keys to KV cache
                 const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();
@@ -540,6 +542,7 @@ llama_model_deepseek32::graph_mtp::graph_mtp(const llama_model & model, const ll
     ggml_set_input(inp->embd);
 
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 
@@ -728,4 +731,3 @@ llama_model_deepseek32::graph_mtp::graph_mtp(const llama_model & model, const ll
     res->t_logits = cur;
     ggml_build_forward_expand(gf, cur);
 }
-

@@ -524,6 +524,16 @@ bool mtmd_helper_support_video(const mtmd_context * ctx) {
 
 #ifdef MTMD_VIDEO
 
+// MSVC deprecates strdup(), use a std::string version directly
+static char * mtmd_strdup(const std::string & s) {
+    size_t n = s.size() + 1;
+    char * p = (char *) malloc(n);
+    if (p) {
+        memcpy(p, s.c_str(), n);
+    }
+    return p;
+}
+
 struct mtmd_helper_video {
     const mtmd_context * mctx;
     std::string path;
@@ -807,7 +817,7 @@ struct mtmd_helper_video {
         *out_text   = nullptr;
 
         if (!pending_text.empty()) {
-            *out_text = strdup(pending_text.c_str());
+            *out_text = mtmd_strdup(pending_text);
             pending_text.clear();
             return *out_text ? 0 : -2;
         }
@@ -822,7 +832,7 @@ struct mtmd_helper_video {
         if (!start_emitted) {
             start_emitted = true;
             if (!prompt_start.empty()) {
-                *out_text = strdup(prompt_start.c_str());
+                *out_text = mtmd_strdup(prompt_start);
                 return *out_text ? 0 : -2;
             }
         }

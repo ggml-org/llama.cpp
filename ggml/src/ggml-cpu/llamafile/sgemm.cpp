@@ -228,7 +228,7 @@ template <> inline vfloat32m8_t madd(vbfloat16m4_t a, vbfloat16m4_t b, vfloat32m
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // VECTORIZED HORIZONTAL SUM
 
-#if defined(__ARM_NEON)
+#if defined(__ARM_NEON) || defined(_M_ARM64) || defined(_M_ARM64EC)
 inline float hsum(float32x4_t x) {
     return vaddvq_f32(x);
 }
@@ -384,6 +384,80 @@ template <> inline __m256bh load(const float *p) {
 }
 #endif
 
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+template <typename T, typename U> T load_partial(const U *, int);
+template <typename T> T load_partial_u16(const void *, int);
+
+template <> inline __m128i load_partial_u16(const void *p, int n) {
+#if defined(__AVX512BW__) && defined(__AVX512VL__)
+    return _mm_maskz_loadu_epi16((1u << n) - 1, p);
+#else
+    const __m128i index = _mm_setr_epi32(0, 1, 2, 3);
+    const __m128i pairs = _mm_set1_epi32(n / 2);
+    __m128i v = _mm_castps_si128(_mm_maskload_ps((const float *)p, _mm_cmpgt_epi32(pairs, index)));
+    if (n & 1) {
+        uint16_t last;
+        memcpy(&last, (const char *)p + 2*(n - 1), sizeof(last));
+        v = _mm_or_si128(v, _mm_and_si128(_mm_cmpeq_epi32(pairs, index), _mm_set1_epi32(last)));
+    }
+    return v;
+#endif
+}
+
+template <> inline __m256 load_partial(const float *p, int n) {
+    const __m256 index = _mm256_setr_ps(0, 1, 2, 3, 4, 5, 6, 7);
+    return _mm256_maskload_ps(p, _mm256_castps_si256(_mm256_cmp_ps(index, _mm256_set1_ps(n), _CMP_LT_OQ)));
+}
+
+#if defined(__F16C__)
+template <> inline __m256 load_partial(const ggml_fp16_t *p, int n) {
+    return _mm256_cvtph_ps(load_partial_u16<__m128i>(p, n));
+}
+#endif
+
+#if defined(__AVX2__) || defined(__AVX512F__)
+template <> inline __m256 load_partial(const ggml_bf16_t *p, int n) {
+    return _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(load_partial_u16<__m128i>(p, n)), 16));
+}
+#endif
+
+#if defined(__AVX512F__)
+template <> inline __m256i load_partial_u16(const void *p, int n) {
+#if defined(__AVX512BW__) && defined(__AVX512VL__)
+    return _mm256_maskz_loadu_epi16((1u << n) - 1, p);
+#else
+    const __m256i index = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    const __m256i pairs = _mm256_set1_epi32(n / 2);
+    __m256i v = _mm256_maskload_epi32((const int *)p, _mm256_cmpgt_epi32(pairs, index));
+    if (n & 1) {
+        uint16_t last;
+        memcpy(&last, (const char *)p + 2*(n - 1), sizeof(last));
+        v = _mm256_or_si256(v, _mm256_and_si256(_mm256_cmpeq_epi32(pairs, index), _mm256_set1_epi32(last)));
+    }
+    return v;
+#endif
+}
+
+template <> inline __m512 load_partial(const float *p, int n) {
+    return _mm512_maskz_loadu_ps((1u << n) - 1, p);
+}
+
+template <> inline __m512 load_partial(const ggml_fp16_t *p, int n) {
+    return _mm512_cvtph_ps(load_partial_u16<__m256i>(p, n));
+}
+
+template <> inline __m512 load_partial(const ggml_bf16_t *p, int n) {
+    return _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_cvtepu16_epi32(load_partial_u16<__m256i>(p, n)), 16));
+}
+#endif
+
+#if defined(__AVX512BF16__)
+template <> inline __m512bh load_partial(const ggml_bf16_t *p, int n) {
+    return (__m512bh) _mm512_maskz_loadu_epi16((uint64_t(1) << n) - 1, p);
+}
+#endif
+#endif
+
 #if defined(__riscv_v_intrinsic)
 template <> inline vfloat32m1_t load(const float *p) {
     return __riscv_vle32_v_f32m1(p, __riscv_vsetvlmax_e32m1());
@@ -492,8 +566,10 @@ class tinyBLAS {
     }
 
     bool matmul(int64_t m, int64_t n) {
+#if !defined(__AVX__) && !defined(__AVX2__) && !defined(__AVX512F__)
         if (k % KN != 0)
             return false;
+#endif
         // compute RM for only need tile with size RM&RM-1
 #if VECTOR_REGISTERS == 32
         if (m % 16 == 0 && (m/16 >= params->nth)) {
@@ -548,7 +624,7 @@ class tinyBLAS {
     template <int RM, int RN>
     inline void gemm_bloc(int64_t ii, int64_t jj) {
         D Cv[RN][RM] = {};
-        for (int64_t l = 0; l < k; l += KN) {
+        for (int64_t l = 0; l + KN <= k; l += KN) {
             // help compiler for op order.
             if constexpr (RM <= RN) {
                 V Av[RM];
@@ -574,6 +650,21 @@ class tinyBLAS {
                 }
             }
         }
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+        const int64_t rem = k % KN;
+        if (rem != 0) {
+            V Av[RM];
+            for (int64_t i = 0; i < RM; ++i) {
+                Av[i] = load_partial<V>(A + lda * (ii + i) + k - rem, rem);
+            }
+            for (int64_t j = 0; j < RN; ++j) {
+                V Bv = load_partial<V>(B + ldb * (jj + j) + k - rem, rem);
+                for (int64_t i = 0; i < RM; ++i) {
+                    Cv[j][i] = madd(Av[i], Bv, Cv[j][i]);
+                }
+            }
+        }
+#endif
         for (int64_t j = 0; j < RN; ++j)
             for (int64_t i = 0; i < RM; ++i)
                 C[ldc * (jj + j) + (ii + i)] = hsum(Cv[j][i]);
