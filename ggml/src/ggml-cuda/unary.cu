@@ -107,7 +107,7 @@ static __device__ __forceinline__ float op_ceil(float x) {
 }
 
 static __device__ __forceinline__ float op_round(float x) {
-    return round(x);
+    return roundf(x);
 }
 
 static __device__ __forceinline__ float op_trunc(float x) {
