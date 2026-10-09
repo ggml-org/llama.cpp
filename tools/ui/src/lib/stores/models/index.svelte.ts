@@ -622,6 +622,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),
+						// 0 is the server's way of leaving the trained context unknown
+						contextLength: item.context_length || undefined,
 						description: details?.description,
 						details: details?.details,
 						draftSidecars: mergedDraftSidecars(
