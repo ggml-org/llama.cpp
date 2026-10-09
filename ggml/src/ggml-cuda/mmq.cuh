@@ -15,7 +15,8 @@ typedef void (*ggml_cuda_mmq_load_tiles_t)(const char * __restrict__ x, const ch
     const int kbx0, const int i_max, const int stride);
 typedef void (*ggml_cuda_mmq_vec_dot_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
 typedef void (*ggml_cuda_mmq_write_back_t)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
-    float * __restrict__ dst, const float * __restrict__ y_scale, const int stride, const int i_max, const int j_max);
+    float * __restrict__ dst, const float * __restrict__ y_scale, const int stride, const int i_max, const int j_max,
+    const ggml_glu_op glu_op, const float glu_limit);
 
 enum mmq_q8_1_ds_layout {
     MMQ_Q8_1_DS_LAYOUT_D4,
@@ -375,6 +376,12 @@ static __host__ bool ggml_cuda_mmq_needs_fallback(const int64_t nrows_x) {
     return nrows_x % 128 != 0;
 }
 
+// Whether one CUDA block per tile (tiling) fills the SMs well enough that stream-k is not needed.
+static __host__ bool ggml_cuda_mmq_tiling_is_efficient(const int64_t ntiles, const int nsm) {
+    const int64_t nwaves = (ntiles + nsm - 1) / nsm;
+    return 100*ntiles / (nsm*nwaves) >= 90;
+}
+
 static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, int J, bool fallback, ggml_prec prec_src1) {
     return ggml_cuda_mmq_get_config(type, J, fallback, prec_src1).rows_per_warp();
 }
@@ -437,20 +444,16 @@ static constexpr __host__ __device__ bool ggml_cuda_mmq_fusion_supported(const g
 // Fused gate/up/GLU: the weight tile alternates chunks of this many up and gate rows, so rows r and r + 8 of an MMA tile (same thread) pair up.
 static constexpr int GGML_CUDA_MMQ_FUSION_ROWS = 8;
 
-// Source of weight tile row i; with has_fusion the interleaved x/x_gate row, clamped here because i_max is in output rows.
-template <typename block_t, bool fallback, bool has_fusion>
+// Source of weight tile row i; with has_fusion the up or gate row that the interleaved tile holds there.
+template <typename block_t, bool has_fusion>
 static __device__ __forceinline__ const block_t * ggml_cuda_mmq_x_row(
-        const char * __restrict__ x, const char * __restrict__ x_gate, const int kbx0, int i, const int i_max, const int stride) {
+        const char * __restrict__ x, const char * __restrict__ x_gate, const int kbx0, const int i, const int stride) {
     if constexpr (has_fusion) {
         constexpr int R = GGML_CUDA_MMQ_FUSION_ROWS;
         const char * x_src = (i / R) % 2 == 0 ? x : x_gate;
-        i = (i / (2*R))*R + i % R;
-        if (fallback) {
-            i = min(i, i_max);
-        }
-        return (const block_t *) x_src + kbx0 + i*stride;
+        return (const block_t *) x_src + kbx0 + ((i / (2*R))*R + i % R)*stride;
     } else {
-        GGML_UNUSED_VARS(x_gate, i_max);
+        GGML_UNUSED(x_gate);
         return (const block_t *) x + kbx0 + i*stride;
     }
 }
@@ -460,7 +463,10 @@ static __device__ __forceinline__ const block_t * ggml_cuda_mmq_x_row(
 
 template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __device__ __forceinline__ void ggml_cuda_mmq_write_back_dp4a(
         const float * __restrict__ sum, const int32_t * __restrict__ ids_dst, float * __restrict__ dst,
-        const float * __restrict__ y_scale, const int stride, const int i_max, const int j_max) {
+        const float * __restrict__ y_scale, const int stride, const int i_max, const int j_max,
+        const ggml_glu_op glu_op, const float glu_limit) {
+    GGML_UNUSED_VARS(glu_op, glu_limit);
+
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1) / warp_size;
     constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, prec_src1);
@@ -497,16 +503,19 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
     }
 }
 
-template<ggml_type type, int J, bool fallback, ggml_prec prec_src1>
+// has_fusion: accumulators l and l + ne/2 hold the up and gate values of one output element, the GLU of the two is written.
+template<ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion = false>
 static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
             const float * __restrict__ sum, const int * __restrict__ ids_dst, float * __restrict__ dst,
-            const float * __restrict__ y_scale, const int stride, const int i_max, const int j_max) {
+            const float * __restrict__ y_scale, const int stride, const int i_max, const int j_max,
+            const ggml_glu_op glu_op, const float glu_limit) {
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 #else
     typedef tile<16,  8, int> tile_C;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+    static_assert(!has_fusion || tile_C::I == 2*GGML_CUDA_MMQ_FUSION_ROWS, "each C tile must hold one chunk of up rows and one of gate rows");
 
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback, prec_src1);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -520,20 +529,23 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {
 #pragma unroll
-            for (int l = 0; l < tile_C::ne; ++l) {
+            for (int l = 0; l < (has_fusion ? tile_C::ne/2 : tile_C::ne); ++l) {
                 const int j = j0 + (threadIdx.y % ntx) * tile_C::J + tile_C::get_j(l);
 
                 if (j > j_max) {
                     continue;
                 }
 
-                const int i = i0 + n*tile_C::I + tile_C::get_i(l);
+                const int i = (i0 + n*tile_C::I)/(has_fusion ? 2 : 1) + tile_C::get_i(l);
 
                 if (fallback && i > i_max) {
                     continue;
                 }
 
-                if constexpr (type == GGML_TYPE_NVFP4) {
+                if constexpr (has_fusion) {
+                    const int sum_index = (j0/tile_C::J + n)*tile_C::ne + l;
+                    dst[ids_dst[j]*stride + i] = ggml_cuda_op_glu_single(glu_op, sum[sum_index + tile_C::ne/2], sum[sum_index], glu_limit);
+                } else if constexpr (type == GGML_TYPE_NVFP4) {
                     if (y_scale_used) {
                         dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(j0/tile_C::J + n)*tile_C::ne + l];
                     } else {
@@ -546,49 +558,8 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
             }
         }
     }
-}
 
-// Fused gate/up/GLU write-back: accumulators l and l + 2 hold the up and gate values of the same output row and column.
-template<ggml_type type, int J, bool fallback, ggml_prec prec_src1>
-static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma_glu(
-            const float * __restrict__ sum, const ggml_glu_op glu_op, const float glu_limit,
-            const int * __restrict__ ids_dst, float * __restrict__ dst, const int stride, const int i_max, const int j_max) {
-#ifdef TURING_MMA_AVAILABLE
-    typedef tile<16, 8, int> tile_C;
-    static_assert(tile_C::I == 2*GGML_CUDA_MMQ_FUSION_ROWS, "each C tile must hold one chunk of up rows and one of gate rows");
-
-    constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback, prec_src1);
-    constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
-
-    const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
-
-#pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
-#pragma unroll
-        for (int n = 0; n < ntx; ++n) {
-#pragma unroll
-            for (int l = 0; l < tile_C::ne/2; ++l) {
-                const int j = j0 + (threadIdx.y % ntx) * tile_C::J + tile_C::get_j(l);
-
-                if (j > j_max) {
-                    continue;
-                }
-
-                const int i = (i0 + n*tile_C::I)/2 + tile_C::get_i(l);
-
-                if (fallback && i > i_max) {
-                    continue;
-                }
-
-                const int sum_index = (j0/tile_C::J + n)*tile_C::ne + l;
-                dst[ids_dst[j]*stride + i] = ggml_cuda_op_glu_single(glu_op, sum[sum_index + 2], sum[sum_index], glu_limit);
-            }
-        }
-    }
-#else
-    GGML_UNUSED_VARS(sum, glu_op, glu_limit, ids_dst, dst, stride, i_max, j_max);
-    NO_DEVICE_CODE;
-#endif // TURING_MMA_AVAILABLE
+    GGML_UNUSED_VARS(y_scale_used, glu_op, glu_limit);
 }
 
 // -------------------------------------------------------------------------------------------------------------------------------------
@@ -947,14 +918,18 @@ static constexpr __device__ ggml_cuda_mmq_vec_dot_t ggml_cuda_mmq_get_vec_dot() 
     return ggml_cuda_mmq_get_util_funcs<type, J, fallback, prec_src1>().vec_dot;
 }
 
-template <ggml_type type, int J, bool fallback, ggml_prec prec_src1>
+template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion = false>
 static constexpr __device__ ggml_cuda_mmq_write_back_t ggml_cuda_mmq_get_write_back() {
-    return ggml_cuda_mmq_get_util_funcs<type, J, fallback, prec_src1>().write_back;
+    if constexpr (has_fusion) {
+        return ggml_cuda_mmq_write_back_mma<type, J, fallback, prec_src1, true>;
+    } else {
+        return ggml_cuda_mmq_get_util_funcs<type, J, fallback, prec_src1>().write_back;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
 
-// has_fusion: x and x_gate are the up and gate weights; tile_x_max_i is then in output rows.
+// has_fusion: x and x_gate are the up and gate weights.
 template <ggml_type type, int J, bool fallback, bool fixup, ggml_prec prec_src1, bool has_fusion = false>
 static __device__ __forceinline__ void mul_mat_q_process_tile(
         const char * __restrict__ x, const char * __restrict__ x_gate, const int offset_x, const int * __restrict__ y,
@@ -963,6 +938,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
     static_assert(!(fixup && has_fusion), "the fused gate/up path does not split K");
+    static_assert(!(fallback && has_fusion), "the fused gate/up path needs nrows_x % 128 == 0");
 
     constexpr int              warp_size  = ggml_cuda_get_physical_warp_size();
     constexpr int              nwarps     = ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1) / warp_size;
@@ -970,7 +946,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr int              I          = ggml_cuda_mmq_get_I(type, J, fallback, prec_src1);
     constexpr ggml_cuda_mmq_load_tiles_t load_tiles = ggml_cuda_mmq_get_load_tiles<type, J, fallback, prec_src1, has_fusion>();
     constexpr ggml_cuda_mmq_vec_dot_t    vec_dot    = ggml_cuda_mmq_get_vec_dot<type, J, fallback, prec_src1>();
-    constexpr ggml_cuda_mmq_write_back_t write_back = ggml_cuda_mmq_get_write_back<type, J, fallback, prec_src1>();
+    constexpr ggml_cuda_mmq_write_back_t write_back = ggml_cuda_mmq_get_write_back<type, J, fallback, prec_src1, has_fusion>();
 
     extern __shared__ int data_mul_mat_q[];
     int * tile_y = data_mul_mat_q + J;
@@ -1027,16 +1003,10 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         __syncthreads();
     }
 
-    if constexpr (has_fusion) {
-        ggml_cuda_mmq_write_back_mma_glu<type, J, fallback, prec_src1>(sum, glu_op, glu_limit, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
-        return;
-    }
-    GGML_UNUSED_VARS(glu_op, glu_limit);
-
     if (fixup) {
-        write_back(sum, ids_dst, tmp_fixup + blockIdx.x*(J*I), y_scale, I, I, J);
+        write_back(sum, ids_dst, tmp_fixup + blockIdx.x*(J*I), y_scale, I, I, J, glu_op, glu_limit);
     } else {
-        write_back(sum, ids_dst, dst, y_scale, stride_col_dst, tile_x_max_i, tile_y_max_j);
+        write_back(sum, ids_dst, dst, y_scale, stride_col_dst, tile_x_max_i, tile_y_max_j, glu_op, glu_limit);
     }
 }
 
@@ -1510,7 +1480,9 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const dim3 block_dims(warp_size, nwarps, 1);
 
     CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, false, prec_src1, has_fusion>), nbytes_shared);
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J,  true, prec_src1, has_fusion>), nbytes_shared);
+    if constexpr (!has_fusion) {
+        CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J,  true, prec_src1>), nbytes_shared);
+    }
 
     const int nty  = (args.nrows_x   + config.I - 1) / config.I;
     const int ntx  = (args.ncols_max + config.J - 1) / config.J;
@@ -1545,9 +1517,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     // For the stream-k kernel it is possible to run it with tiling by setting the number of CUDA blocks equal to the number of tiles.
     // This is worthwhile if the efficiency of tiling is high and skipping the fixup kernel is more important.
     const int ntiles_dst = ntx * nty * ntzw;
-    const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
-    const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm*tiles_nwaves);
-    const dim3 block_nums_stream_k(GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst : nsm, 1, 1);
+    const dim3 block_nums_stream_k(GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_mmq_tiling_is_efficient(ntiles_dst, nsm) ? ntiles_dst : nsm, 1, 1);
 
     GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30)); // Assert that variable kbc will not overflow.
 
@@ -1640,7 +1610,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
 
 template <ggml_type type, bool fallback, ggml_prec prec_src1>
 static void mul_mat_q_switch_fusion(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
-    if constexpr (ggml_cuda_mmq_fusion_supported(type)) {
+    if constexpr (!fallback && ggml_cuda_mmq_fusion_supported(type)) {
         if (args.fusion.gate) {
             mul_mat_q_switch_J<type, fallback, prec_src1, true>(ctx, args, stream);
             return;
@@ -1703,3 +1673,5 @@ void ggml_cuda_mul_mat_q(
         const ggml_cuda_mm_fusion_args_host * fusion = nullptr);
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
+
+bool ggml_cuda_mmq_fusion_is_efficient(ggml_type type, int64_t nrows_x, int64_t ncols, int64_t nchannels, int device);

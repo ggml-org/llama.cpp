@@ -1903,7 +1903,7 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
     return true;
 }
 
-// Buffer-independent, so graph_optimize can call it before allocation.
+// Buffer- and batch-size independent, so graph_optimize produces the same graph topology for every ubatch size (see #29986).
 static bool ggml_cuda_mul_mat_q_fusion_matches(const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu, const int device) {
     const ggml_tensor * x_up = up->src[0];
     const ggml_tensor * y    = up->src[1];
@@ -1912,8 +1912,21 @@ static bool ggml_cuda_mul_mat_q_fusion_matches(const ggml_tensor * up, const ggm
         return false;
     }
 
+    // The fused kernel is only compiled for weights whose rows fill whole tiles (no fallback).
+    if (ggml_cuda_mmq_needs_fallback(x_up->ne[1])) {
+        return false;
+    }
+
     if (!ggml_cuda_should_fuse_mul_mat(up, gate, glu)) {
         return false;
+    }
+
+    // The fused kernel quantizes src1 to Q8_1, only fuse if the src1 precision of up and gate allows it.
+    for (const ggml_tensor * mm : { up, gate }) {
+        const ggml_prec prec_src1 = (ggml_prec) ggml_get_op_params_i32(mm, 3);
+        if (prec_src1 != GGML_PREC_UNDEFINED && prec_src1 != GGML_PREC_Q8 && prec_src1 != GGML_PREC_Q4) {
+            return false;
+        }
     }
 
     // The fused write-back applies SWIGLU_OAI with the default alpha and limit of ggml_cuda_op_swiglu_oai_single.
@@ -1927,8 +1940,7 @@ static bool ggml_cuda_mul_mat_q_fusion_matches(const ggml_tensor * up, const ggm
     }
 
     // NVIDIA only: the fused write-back relies on the MMA accumulator layout.
-    const int cc = ggml_cuda_info().devices[device].cc;
-    return turing_mma_available(cc) && !ggml_cuda_should_use_mmvq(x_up->type, cc, y->ne[1]) && ggml_cuda_should_use_mmq(x_up->type, cc, y->ne[1], 0);
+    return turing_mma_available(ggml_cuda_info().devices[device].cc);
 }
 
 static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu) {
@@ -1942,7 +1954,21 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
         return ggml_backend_buffer_get_usage(x->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
             ggml_nbytes(x) != ggml_backend_buffer_get_alloc_size(x->buffer, x) && x->view_src;
     };
-    return ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, ggml_cuda_get_device()) && !bad_padding_clear(up->src[0]) && !bad_padding_clear(gate->src[0]);
+    const int device = ggml_cuda_get_device();
+    if (!ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, device) || bad_padding_clear(up->src[0]) || bad_padding_clear(gate->src[0])) {
+        return false;
+    }
+
+    // The batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches.
+    const ggml_tensor * x_up = up->src[0];
+    const ggml_tensor * y    = up->src[1];
+    const int           cc   = ggml_cuda_info().devices[device].cc;
+    if (ggml_cuda_should_use_mmvq(x_up->type, cc, y->ne[1]) || !ggml_cuda_should_use_mmq(x_up->type, cc, y->ne[1], 0)) {
+        return false;
+    }
+
+    // The fused kernel cannot use stream-k, so only fuse if its tiling is efficient.
+    return ggml_cuda_mmq_fusion_is_efficient(x_up->type, x_up->ne[1], y->ne[1], y->ne[2]*y->ne[3], device);
 }
 
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {

@@ -507,11 +507,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nrows*nwarps) {
         int i = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q8_0 * bxi = ggml_cuda_mmq_x_row<block_q8_0, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride) + kbx;
+        const block_q8_0 * bxi = ggml_cuda_mmq_x_row<block_q8_0, has_fusion>(x, x_gate, kbx0, i, stride) + kbx;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_qs[i*sram_stride + 0             + txi] = get_int_b2(bxi[0].qs,                   kqsx);
@@ -530,11 +530,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps * rows_per_warp) {
         int i = i0 + threadIdx.y * rows_per_warp + threadIdx.x / blocks_per_tile_x_row;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q8_0 * bxi = ggml_cuda_mmq_x_row<block_q8_0, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride) + kbxd;
+        const block_q8_0 * bxi = ggml_cuda_mmq_x_row<block_q8_0, has_fusion>(x, x_gate, kbx0, i, stride) + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_df[i*sram_stride                           + kbxd] = bxi->d;
@@ -749,11 +749,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nrows*nwarps) {
         int i = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, has_fusion>(x, x_gate, kbx0, i, stride);
         const int qs0 = get_int_b4(bxi->qs, txi);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -778,11 +778,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % I;
         {
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-            if (fallback && !has_fusion) {
+            if (fallback) {
                 i = min(i, i_max);
             }
 
-            const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+            const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
             const int * scales = (const int *) bxi->scales;
             const int ksc = threadIdx.x % 2;
@@ -806,11 +806,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps*warp_size) {
         int i = (i0 + threadIdx.y*warp_size + threadIdx.x) % I;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
         x_dm[i] = bxi->dm;
     }
@@ -819,11 +819,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps*rows_per_warp) {
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8)) % I;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride) + (threadIdx.x % (MMQ_TILE_NE_K/8)) / (QI4_K/8);
+        const block_q4_K * bxi = ggml_cuda_mmq_x_row<block_q4_K, has_fusion>(x, x_gate, kbx0, i, stride) + (threadIdx.x % (MMQ_TILE_NE_K/8)) / (QI4_K/8);
 
         const int * scales = (const int *) bxi->scales;
 
@@ -860,11 +860,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nrows*nwarps) {
         int i = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, has_fusion>(x, x_gate, kbx0, i, stride);
         const int ky = QR5_K*txi;
 
         const int ql = get_int_b4(bxi->qs, txi);
@@ -901,11 +901,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % I;
         {
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-            if (fallback && !has_fusion) {
+            if (fallback) {
                 i = min(i, i_max);
             }
 
-            const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+            const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
             const int * scales = (const int *) bxi->scales;
             const int ksc = threadIdx.x % 2;
@@ -929,11 +929,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps*warp_size) {
         int i = (i0 + threadIdx.y*warp_size + threadIdx.x) % I;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
         x_dm[i] = bxi->dm;
     }
@@ -943,11 +943,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps*rows_per_warp) {
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8)) % I;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q5_K * bxi = ggml_cuda_mmq_x_row<block_q5_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
         const int * scales = (const int *) bxi->scales;
 
@@ -985,11 +985,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nrows*nwarps) {
         int i = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
         const int ql = get_int_b2(bxi->ql, txi);
         const int ql0 = (ql >> 0) & 0x0F0F0F0F;
@@ -1015,11 +1015,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps*warp_size) {
         int i = (i0 + threadIdx.y*warp_size + threadIdx.x) % I;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, has_fusion>(x, x_gate, kbx0, i, stride);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_df[i*sram_stride]                     = bxi->d;
@@ -1033,11 +1033,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps*rows_per_warp) {
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8)) % I;
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride) + (threadIdx.x % (MMQ_TILE_NE_K/8)) / 4;
+        const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, has_fusion>(x, x_gate, kbx0, i, stride) + (threadIdx.x % (MMQ_TILE_NE_K/8)) / 4;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_sc[i*sram_stride + threadIdx.x%4] = get_int_b2(bxi->scales, threadIdx.x % (MMQ_TILE_NE_K/8));
@@ -1477,11 +1477,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nrows*nwarps) {
         int i = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_iq4_xs * bxi = ggml_cuda_mmq_x_row<block_iq4_xs, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_iq4_xs * bxi = ggml_cuda_mmq_x_row<block_iq4_xs, has_fusion>(x, x_gate, kbx0, i, stride);
 
         const int aux_q4 = get_int_b4(bxi->qs, kqsx);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_iq4nl);
@@ -1501,11 +1501,11 @@ template <ggml_type type, int J, bool fallback, bool has_fusion = false> static 
     for (int i0 = 0; i0 < I; i0 += nwarps * rows_per_warp) {
         int i = i0 + threadIdx.y * rows_per_warp + threadIdx.x / (MMQ_TILE_NE_K/4);
 
-        if (fallback && !has_fusion) {
+        if (fallback) {
             i = min(i, i_max);
         }
 
-        const block_iq4_xs * bxi = ggml_cuda_mmq_x_row<block_iq4_xs, fallback, has_fusion>(x, x_gate, kbx0, i, i_max, stride);
+        const block_iq4_xs * bxi = ggml_cuda_mmq_x_row<block_iq4_xs, has_fusion>(x, x_gate, kbx0, i, stride);
 
         const float d = __half2float(bxi->d);
 
