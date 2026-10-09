@@ -25,22 +25,23 @@ common_chat_params common_chat_params_init_gigachat_v3(
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     const auto *tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto ret = p.eps();
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Build a choice of all available tools
             auto tool_choice = p.choice();
-            for (const auto & tool : inputs.tools) {
+            for (size_t i = 0; i < inputs.tools.size(); i++) {
+                const auto & tool = inputs.tools[i];
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
                 const auto  schema = common_chat_tool_parameters(function);
 
                 auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
-                auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
+                auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + std::to_string(i) + "-schema", schema)));
 
                 auto tool_open = p.tool_open(p.literal("{") << tool_name);
 
-                tool_choice |= p.rule("tool-" + name, tool_open << "," << tool_args << "}");
+                tool_choice |= p.rule("tool-" + std::to_string(i), tool_open << "," << tool_args << "}");
             }
 
             // Define the tool call structure
@@ -59,13 +60,11 @@ common_chat_params common_chat_params_init_gigachat_v3(
         return p.literal("assistant<|role_sep|>\n") + ret;
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

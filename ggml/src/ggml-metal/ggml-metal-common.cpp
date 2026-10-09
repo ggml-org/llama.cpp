@@ -48,6 +48,114 @@ bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_sim
     return has_simdgroup_mm && ne00 >= 64 && ne21 >= 32;
 }
 
+// the most src1 rows of the few-row MMA kernels
+static constexpr int64_t GGML_METAL_MMA_ROWS_MAX = 16;
+
+// src1 rows per 8x8 simdgroup matrix tile of the few-row MMA kernels
+static constexpr int64_t GGML_METAL_MMA_TILE_ROWS = 8;
+
+// weights per K step of the q5_K and generic few-row MMA kernels
+static constexpr int64_t GGML_METAL_MMA_K_CHUNK = 64;
+
+enum ggml_metal_mma_kind ggml_metal_mul_mv_mma_kind(enum ggml_type type, int rt) {
+    if (type == GGML_TYPE_Q4_0 || (type == GGML_TYPE_Q8_0 && rt == 1)) {
+        return GGML_METAL_MMA_KIND_BLK;
+    }
+    return type == GGML_TYPE_Q5_K ? GGML_METAL_MMA_KIND_Q5_K : GGML_METAL_MMA_KIND_GEN;
+}
+
+int ggml_metal_mul_mv_mma_rt(const struct ggml_tensor * op) {
+    return op->src[1]->ne[1] > GGML_METAL_MMA_TILE_ROWS ? 2 : 1;
+}
+
+static bool ggml_metal_mul_mv_mma_type_supported(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_TQ2_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+int64_t ggml_metal_mul_mv_mma_k_step(enum ggml_type type, int rt) {
+    if (!ggml_metal_mul_mv_mma_type_supported(type)) {
+        return 0;
+    }
+    return ggml_metal_mul_mv_mma_kind(type, rt) == GGML_METAL_MMA_KIND_BLK ? ggml_blck_size(type) : GGML_METAL_MMA_K_CHUNK;
+}
+
+static bool ggml_metal_mul_mat_mma_type_ok(const struct ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const int64_t step = ggml_metal_mul_mv_mma_k_step(src0->type, ggml_metal_mul_mv_mma_rt(op));
+
+    return step > 0 && src0->ne[0] % step == 0 && src0->nb[0] == ggml_type_size(src0->type);
+}
+
+// the fewest src1 rows at which the few-row MMA kernels beat the mat-vec kernels (measured on an M3 Ultra)
+static int64_t ggml_metal_mul_mv_mma_rows_min(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+            return 6;
+        case GGML_TYPE_TQ2_0:
+            return 5;
+        case GGML_TYPE_BF16:
+            return 4;
+        case GGML_TYPE_F16:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
+            return 3;
+        default:
+            return 2;
+    }
+}
+
+bool ggml_metal_op_mul_mat_use_mma(const struct ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+
+    // the batch shape goes into int16 function constants
+    const bool batch_ok = src1->ne[2] <= INT16_MAX && src1->ne[2]/src0->ne[2] <= INT16_MAX && src1->ne[3]/src0->ne[3] <= INT16_MAX;
+
+    return ggml_metal_mul_mat_mma_type_ok(op) && batch_ok &&
+        src1->type == GGML_TYPE_F32 && src1->ne[1] >= ggml_metal_mul_mv_mma_rows_min(src0->type) && src1->ne[1] <= GGML_METAL_MMA_ROWS_MAX &&
+        !ggml_is_transposed(src0) && !ggml_is_transposed(src1) &&
+        src1->nb[0] == sizeof(float) && src1->nb[1] % 16 == 0 && src1->nb[2] % 16 == 0 && src1->nb[3] % 16 == 0;
+}
+
+bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op) {
+    return ggml_metal_mul_mv_mma_type_supported(op->src[0]->type) && op->src[1]->type == GGML_TYPE_F32;
+}
+
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
 // the type indicates whether it is a source range (i.e. ops read data from it) or a destination range (i.e. ops write data to it)
 struct ggml_mem_range {
