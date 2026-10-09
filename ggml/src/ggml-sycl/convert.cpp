@@ -754,7 +754,6 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
 #endif
         default:
             GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(type));
-            return nullptr;
     }
 }
 
@@ -848,7 +847,6 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
 #endif
         default:
             GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(type));
-            return nullptr;
     }
 }
 
@@ -864,7 +862,6 @@ to_bf16_sycl_t ggml_get_to_bf16_sycl(ggml_type type, ggml_tensor * /*dst*/) {
             return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
         default:
             GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(type));
-            return nullptr;
     }
 }
 #endif
