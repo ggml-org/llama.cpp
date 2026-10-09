@@ -1,6 +1,7 @@
 #include <sycl/sycl.hpp>
 
 #include "common.hpp"
+#include "gla.hpp"
 
 template <u_int HEAD_SIZE>
 static void gated_linear_attn_f32_kernel(const dpct::queue_ptr stream, u_int B, u_int T, u_int C, u_int H, float scale,

@@ -27,7 +27,7 @@ const char * mem_api_int2str(int mem_api) {
 /*
 * Depend on to call zesInit(0) before any other Level Zero API calls, otherwise the Level Zero API calls may fail.
 */
-bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
+static bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
     GGML_SYCL_DEBUG("[SYCL] call %s: Querying free memory using Level Zero API.\n", __func__);
 
     free_bytes  = 0;
@@ -94,7 +94,7 @@ bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & tot
 }
 #endif
 
-bool get_memory_size_by_sycl_api(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
+static bool get_memory_size_by_sycl_api(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
     GGML_SYCL_DEBUG("[SYCL] call %s: Querying free memory using SYCL API.\n", __func__);
     total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
 

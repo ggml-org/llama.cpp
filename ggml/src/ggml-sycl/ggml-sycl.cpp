@@ -391,14 +391,14 @@ static ze_result_t init_zes() {
     return res;
 }
 
-ze_result_t get_zes_init_res() {
+static ze_result_t get_zes_init_res() {
     static ze_result_t zes_init_res = init_zes();
     GGML_SYCL_DEBUG("[SYCL] call %s: zesInit result: %d\n", __func__, (int) zes_init_res);
     return zes_init_res;
 }
 #endif
 
-void initialize_sycl_begining() {
+static void initialize_sycl_begining() {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     //must be called in initialization stage, before any other Level Zero API calls
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
@@ -1170,7 +1170,7 @@ static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
-bool is_bmg_g31_arch(int device) {
+static bool is_bmg_g31_arch(int device) {
     return ggml_sycl_info().devices[device].hw_info.arch == gpu_arch::intel_gpu_bmg_g31;
 }
 
@@ -6106,7 +6106,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-bool sycl_get_mem_info(int device, size_t * free, size_t * total) {
+static bool sycl_get_mem_info(int device, size_t * free, size_t * total) {
     GGML_SYCL_DEBUG("[SYCL] [%s] g_ggml_sycl_get_mem_api=%d\n",
         __func__, g_ggml_sycl_get_mem_api);
 
