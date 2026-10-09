@@ -182,10 +182,6 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     if (model.per_layer_tok_embd) {
         const float tok_embd_scale = sqrtf((float) n_embd_per_layer);
 
-        // note: the raw embd branch in `build_inp_per_layer` needs this cast because we can't apply scale to quantized tensors
-        //       to keep the graph static, we apply the cast unconditionally
-        inp_per_layer = ggml_cast      (ctx0, inp_per_layer, GGML_TYPE_F32);
-
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
 
@@ -461,10 +457,13 @@ public:
                 llama_prefetch_rows(ple, ubatch->token, ubatch->n_tokens);
             }
             ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens * ggml_element_size(tokens));
-        } else if (prefetch) {
-            // [TAG_GEMMA4_IMG_PADDING]
+        } else {
             const int32_t padding = 0;
-            llama_prefetch_rows(ple, &padding, 1);
+            if (prefetch) {
+                // [TAG_GEMMA4_IMG_PADDING]
+                llama_prefetch_rows(ple, &padding, 1);
+            }
+            ggml_backend_tensor_set(token0, &padding, 0, ggml_element_size(token0));
         }
     }
 
@@ -473,6 +472,7 @@ public:
     }
 
     ggml_tensor * tokens = nullptr;
+    ggml_tensor * token0 = nullptr;
 
     const llama_model & model;
 };
@@ -493,13 +493,15 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
     } else {
-        // [TAG_GEMMA4_IMG_PADDING]
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
-        const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_per_layer * n_layer
 
-        // Extract and dequantize padding token embedding (row 0)
-        inp_per_layer = ggml_view_1d(ctx0, model.per_layer_tok_embd, embd_size, 0);
+        // [TAG_GEMMA4_IMG_PADDING]
+        inp->token0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+        ggml_set_input(inp->token0);
+        res->t_inp_tokens = inp->token0;
+
+        inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->token0);
         cb(inp_per_layer, "inp_per_layer_multimodal", -1);
     }
     res->add_input(std::move(inp));
