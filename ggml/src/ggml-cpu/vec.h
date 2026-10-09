@@ -998,9 +998,47 @@ inline static void ggml_vec_gelu_erf_bf16(const int n, ggml_bf16_t * y, const gg
 }
 
 #ifdef GGML_GELU_FP16
+// table GELU as in the scalar loops below: -10 < x < 10 (mid) from the FP16 table, other lanes gather 0;
+// x >= 10 and NaN set pass (the caller uses x), so NaN is never used as an index
+#if defined(__AVX512F__) && defined(__F16C__)
+inline static __m512 ggml_v_gelu_table(__m512 x, __mmask16 * mid, __mmask16 * pass) {
+    *pass = _mm512_cmp_ps_mask(x, _mm512_set1_ps(10.0f), _CMP_NLT_UQ);
+    *mid  = _mm512_cmp_ps_mask(x, _mm512_set1_ps(-10.0f), _CMP_GT_OQ) & (__mmask16) ~*pass;
+    const __m512i idx = _mm512_cvtepu16_epi32(_mm512_cvtps_ph(x, _MM_FROUND_TO_NEAREST_INT));
+    const __m512i t   = _mm512_mask_i32gather_epi32(_mm512_setzero_si512(), *mid, idx, ggml_table_gelu_f16, 2);
+    return _mm512_cvtph_ps(_mm512_cvtepi32_epi16(t));
+}
+#elif defined(__AVX2__) && defined(__F16C__)
+inline static __m256 ggml_v_gelu_table(__m256 x, __m256 * mid, __m256 * pass) {
+    *pass = _mm256_cmp_ps(x, _mm256_set1_ps(10.0f), _CMP_NLT_UQ);
+    *mid  = _mm256_andnot_ps(*pass, _mm256_cmp_ps(x, _mm256_set1_ps(-10.0f), _CMP_GT_OQ));
+    const __m256i idx = _mm256_cvtepu16_epi32(_mm256_cvtps_ph(x, _MM_FROUND_TO_NEAREST_INT));
+    const __m256i t   = _mm256_mask_i32gather_epi32(_mm256_setzero_si256(), (const int *) ggml_table_gelu_f16, idx,
+                                                    _mm256_castps_si256(*mid), 2);
+    const __m256i h   = _mm256_and_si256(t, _mm256_set1_epi32(0xFFFF));
+    return _mm256_cvtph_ps(_mm_packus_epi32(_mm256_castsi256_si128(h), _mm256_extracti128_si256(h, 1)));
+}
+#endif
+
 inline static void ggml_vec_gelu_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__F16C__)
+    for (; i + 16 <= n; i += 16) {
+        const __m512 xv = _mm512_loadu_ps(x + i);
+        __mmask16 mid, pass;
+        const __m512 v = ggml_v_gelu_table(xv, &mid, &pass);
+        _mm512_storeu_ps(y + i, _mm512_mask_mov_ps(v, pass, xv));
+    }
+#elif defined(__AVX2__) && defined(__F16C__)
+    for (; i + 8 <= n; i += 8) {
+        const __m256 xv = _mm256_loadu_ps(x + i);
+        __m256 mid, pass;
+        const __m256 v = ggml_v_gelu_table(xv, &mid, &pass);
+        _mm256_storeu_ps(y + i, _mm256_blendv_ps(v, xv, pass));
+    }
+#endif
     uint16_t t;
-    for (int i = 0; i < n; ++i) {
+    for (; i < n; ++i) {
         if (x[i] <= -10.0f) {
             y[i] = 0.0f;
         } else if (x[i] >= 10.0f) {
@@ -1445,8 +1483,27 @@ inline static void ggml_vec_reglu_bf16(const int n, ggml_bf16_t * y, const ggml_
 
 #ifdef GGML_GELU_FP16
 inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, const float * g) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__F16C__)
+    for (; i + 16 <= n; i += 16) {
+        const __m512 xv = _mm512_loadu_ps(x + i);
+        const __m512 gv = _mm512_loadu_ps(g + i);
+        __mmask16 mid, pass;
+        const __m512 v = ggml_v_gelu_table(xv, &mid, &pass);
+        _mm512_storeu_ps(y + i, _mm512_mask_mul_ps(_mm512_maskz_mul_ps(mid, v, gv), pass, xv, gv));
+    }
+#elif defined(__AVX2__) && defined(__F16C__)
+    for (; i + 8 <= n; i += 8) {
+        const __m256 xv = _mm256_loadu_ps(x + i);
+        const __m256 gv = _mm256_loadu_ps(g + i);
+        __m256 mid, pass;
+        const __m256 v = ggml_v_gelu_table(xv, &mid, &pass);
+        const __m256 r = _mm256_and_ps(_mm256_mul_ps(v, gv), mid);
+        _mm256_storeu_ps(y + i, _mm256_blendv_ps(r, _mm256_mul_ps(xv, gv), pass));
+    }
+#endif
     uint16_t t;
-    for (int i = 0; i < n; ++i) {
+    for (; i < n; ++i) {
         if (x[i] <= -10.0f) {
             y[i] = 0.0f;
         } else if (x[i] >= 10.0f) {
