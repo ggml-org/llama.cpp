@@ -775,7 +775,9 @@ ggml_tensor * clip_graph::build_attn(
 
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         v = ggml_cast(ctx0, v, GGML_TYPE_F16);
-        if (kq_mask) {
+        // the mask may already be f16 (e.g. cast once by the caller for all layers);
+        // a same-type ggml_cast is still a full copy, so only cast when needed
+        if (kq_mask && kq_mask->type != GGML_TYPE_F16) {
             kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
         }
 
