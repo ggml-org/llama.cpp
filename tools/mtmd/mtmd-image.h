@@ -168,8 +168,7 @@ struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
     slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
 
 protected:
-    // the reference always aligns to patch_size * 4, independent of downsample_mode:
-    // even 4x keeps the 2x2 vit_merger slot so the patch grid stays divisible by 4
+    // always patch_size * 4, even in 4x mode (the 2x2 vit_merger slot stays)
     int get_slice_align() const override {
         return hparams.patch_size * 4;
     }

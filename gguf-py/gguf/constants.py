@@ -410,7 +410,7 @@ class Keys:
         BLOCK_COUNT           = "clip.vision.block_count"
         IMAGE_MEAN            = "clip.vision.image_mean"
         IMAGE_STD             = "clip.vision.image_std"
-        MAX_SLICE_NUMS        = "clip.vision.max_slice_nums" # llava-uhd slice cap (MiniCPM-V)
+        MAX_SLICE_NUMS        = "clip.vision.max_slice_nums"
         IMAGE_RESIZE_ALGO     = "clip.vision.image_resize_algo"
         SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
         SWIGLU_CLAMP          = "clip.vision.swiglu_clamp"

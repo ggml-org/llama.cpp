@@ -179,7 +179,6 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         self.gguf_writer.add_vision_projector_scale_factor(
             2 if self.downsample_mode == "4x" else 4)
 
-        # slice cap read by the reference image processor, so it has to travel with the model
         max_slice_nums = self.preprocessor_config.get("max_slice_nums")
         if max_slice_nums is not None:
             self.gguf_writer.add_vision_max_slice_nums(int(max_slice_nums))
@@ -205,8 +204,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         return super().filter_tensors(item)
 
 
-# MiniCPM-V 4.7 shares the v4.6 stack: the same Qwen3.5 text tower (MoE variant when the
-# checkpoint says so) and the same SigLIP + vit_merger + merger vision tower.
+# MiniCPM-V 4.7 shares the v4.6 stack: the same Qwen3.5 text tower (MoE variant when the checkpoint says so) and the same SigLIP + vit_merger + merger vision tower.
 
 @ModelBase.register("MiniCPMV4_7ForConditionalGeneration")
 @ModelBase.example("openbmb/MiniCPM-V-4.7")
@@ -227,7 +225,7 @@ class MiniCPMV4_7TextModel(Qwen3_5TextModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
+        # MTP tensors are not used yet
         if name.startswith("mtp"):
             return None
 
@@ -238,11 +236,10 @@ class MiniCPMV4_7TextModel(Qwen3_5TextModel):
 @ModelBase.example("openbmb/MiniCPM-V-4.7")
 class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
     projector_type = gguf.VisionProjectorType.MINICPMV4_7
-    # MiniCPMV4_7ImageProcessorPil default; 4.7 checkpoints may omit it (and patch_size)
+    # MiniCPMV4_7ImageProcessorPil default
     default_scale_resolution = 448
 
     def get_downsample_mode(self) -> str:
-        # 4.7 moved downsample_mode to the model config; an explicit preprocessor value
-        # still wins so that a copy of the model dir can export the 4x variant
+        # 4.7 moved downsample_mode to the model config; preprocessor value takes priority
         return self.preprocessor_config.get(
             "downsample_mode", self.global_config.get("downsample_mode", "16x"))

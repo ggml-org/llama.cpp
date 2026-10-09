@@ -516,7 +516,7 @@ struct mtmd_context {
     bool tok_row_end_trail = false;
     bool ov_img_first      = false;
 
-    // MiniCPM-V 4.7 prepends an <image_id>N</image_id> tag before <image>
+    // MiniCPM-V 4.6/4.7 prepends an <image_id>N</image_id> tag before <image>
     bool use_image_id = false;
 
     // string template for slice image delimiters with row/col (idefics3)
@@ -693,7 +693,6 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
-                    // the 4.6/4.7 processors prepend <image_id>N</image_id> by default
                     use_image_id      = true;
                     image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
                 } break;

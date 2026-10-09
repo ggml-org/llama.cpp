@@ -507,7 +507,6 @@ mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_llava_uhd::get_slice_instructions(const clip_image_size & original_size) const {
     mtmd_image_preprocessor_llava_uhd::slice_instructions res;
-    // align by the model's merge factor
     const int patch_size      = get_slice_align();
     const int slice_size      = hparams.image_size;
     const int original_width  = original_size.width;
@@ -567,7 +566,6 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
     res.overview_size = best_size;
 
     {
-        // slice cap from the model; the reference processor cuts at most this many slices
         const int max_slice_nums = hparams.max_slice_nums > 0 ? hparams.max_slice_nums : 9;
         const float log_ratio = log((float)original_width / original_height);
         const float ratio = (float)original_width * original_height / (slice_size * slice_size);
@@ -893,8 +891,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
 //
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_minicpmv::get_slice_instructions(const clip_image_size & original_size) const {
-    // the reference returns the overview only for small images; the generic llava-uhd
-    // path would slice as soon as one side exceeds the scale resolution
+    // overview only for small images, unlike generic llava-uhd which slices once one side exceeds scale resolution
     const int   slice_size = hparams.image_size;
     const float ratio      = (float) original_size.width * original_size.height / (slice_size * slice_size);
     if (ratio <= 1.0f) {

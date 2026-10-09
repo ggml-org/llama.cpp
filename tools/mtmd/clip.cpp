@@ -1322,7 +1322,7 @@ struct clip_model_loader {
             if (is_vision) {
                 get_u32(KEY_IMAGE_SIZE, hparams.image_size);
                 get_u32(KEY_PATCH_SIZE, hparams.patch_size);
-                get_u32(KEY_MAX_SLICE_NUMS, hparams.max_slice_nums, false); // llava-uhd slice cap
+                get_u32(KEY_MAX_SLICE_NUMS, hparams.max_slice_nums, false);
                 get_i32(KEY_MINICPMV_VERSION, hparams.minicpmv_version, false); // legacy
                 get_u32(KEY_MINICPMV_QUERY_NUM, hparams.minicpmv_query_num, false);
                 if (hparams.minicpmv_query_num == 0) {
@@ -1470,8 +1470,7 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         GGML_ASSERT(hparams.n_merge == 2 || hparams.n_merge == 4);
 
-                        // the reference stretches the refined image to the target size instead of
-                        // padding it, so padding would build every slice from the wrong pixels
+                        // no padding: the reference stretches the refined image to the target size
                         hparams.image_pad_ov = PAD_NONE;
                         hparams.image_pad_rf = PAD_NONE;
 
