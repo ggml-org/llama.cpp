@@ -4014,6 +4014,7 @@ private:
 
                     const bool is_user_start = spans.is_user_start(n_tokens_start);
                     const bool is_last_user_message = n_tokens_start == last_user_pos;
+                    const bool is_after_last_media = has_mtmd && input_tokens.find_next_media_chunk(n_tokens_start).first == nullptr;
 
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
@@ -4030,8 +4031,8 @@ private:
                         slot.init_sampler();
                     } else {
                         // skip ordinary mid-prompt checkpoints, unless the batch starts a user
-                        // message or we are near the end of the prompt
-                        if (!is_user_start && !near_prompt_end) {
+                        // message, follows the last media or we are near the end of the prompt
+                        if (!is_user_start && !is_after_last_media && !near_prompt_end) {
                             do_checkpoint = false;
                         }
                     }
@@ -4045,15 +4046,17 @@ private:
                         do_checkpoint = false;
                     }
 
-                    // do not checkpoint after mtmd chunks
-                    do_checkpoint = do_checkpoint && !has_mtmd;
+                    // after mtmd chunks, only checkpoint after the last media
+                    if (has_mtmd && !is_after_last_media) {
+                        do_checkpoint = false;
+                    }
 
                     // no need to create checkpoints that are too close together, unless it's the last user message
                     do_checkpoint = do_checkpoint && (
                             slot.prompt.checkpoints.empty() ||
                             is_last_user_message || near_prompt_end ||
                             n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
-                    SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
+                    SLT_DBG(slot, "main/do_checkpoint = %s, after_last_media = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", is_after_last_media ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.

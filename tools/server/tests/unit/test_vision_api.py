@@ -118,6 +118,33 @@ def test_vision_chat_completion_token_count():
     assert res.body["input_tokens"] > 10
 
 
+@pytest.mark.parametrize("preset", ["tinygemma3", "tinyopenjev"]) # SWA and hybrid memory
+def test_vision_chat_completion_reuse_image_after_text_change(preset: str):
+    global server
+    server = getattr(ServerPreset, preset)()
+    server.n_slots = 1
+    server.media_path = "../../../tools"
+    server.start()
+
+    def chat(text: str) -> dict:
+        res = server.make_request("POST", "/chat/completions", data={
+            "temperature": 0.0,
+            "top_k": 1,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "file://mtmd/test-1.jpeg"}},
+                    {"type": "text", "text": text},
+                ]},
+            ],
+        })
+        assert res.status_code == 200
+        return res.body["timings"]
+
+    chat("What is this:\n")
+    timings = chat("Test test\n")
+    assert timings["cache_n"] > timings["prompt_n"]
+
+
 @pytest.mark.parametrize(
     "prompt, image_data, success, re_content",
     [
