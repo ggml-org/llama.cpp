@@ -5,6 +5,8 @@
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
 
+#include <cstdlib>
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
 template <int ncols1, bool oob>
@@ -285,6 +287,119 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     }
 }
 
+// TEMP experiment: batch size range for the MMA kernel with on-the-fly K/V dequantization
+static int ggml_cuda_fattn_mma_q_nb_min() {
+    static const int nb_min = getenv("FA_Q_MMA_MIN") ? atoi(getenv("FA_Q_MMA_MIN")) : 1;
+    return nb_min;
+}
+
+static int ggml_cuda_fattn_mma_q_nb_max() {
+    static const int nb_max = getenv("FA_Q_MMA") ? std::min(atoi(getenv("FA_Q_MMA")), 8) : 8;
+    return nb_max;
+}
+
+// quantized K/V that the MMA kernel can dequantize on the fly instead of converting all of K/V to f16 first
+static bool ggml_cuda_fattn_mma_use_q(const int cc, const ggml_tensor * dst) {
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+
+    if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !ampere_mma_available(cc)) {
+        return false;
+    }
+    if (K->type != V->type || (K->type != GGML_TYPE_Q4_0 && K->type != GGML_TYPE_Q8_0)) {
+        return false;
+    }
+    if (K->ne[0] != V->ne[0] || (K->ne[0] != 128 && K->ne[0] != 256 && K->ne[0] != 512)) {
+        return false;
+    }
+    return Q->ne[1] >= ggml_cuda_fattn_mma_q_nb_min() && Q->ne[1] <= ggml_cuda_fattn_mma_q_nb_max();
+}
+
+template <int D, ggml_type type_KV>
+static void ggml_cuda_flash_attn_ext_mma_q_switch_ncols(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const int ncols2) {
+    const int64_t nb = dst->src[0]->ne[1];
+    GGML_ASSERT(nb <= 8);
+
+    switch (ncols2) {
+        case 1:
+            if constexpr (D <= 256) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 8, 1, type_KV>(ctx, dst);
+                return;
+            }
+            break;
+        case 2:
+            if (nb <= 4) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 4, 2, type_KV>(ctx, dst);
+            } else {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 8, 2, type_KV>(ctx, dst);
+            }
+            return;
+        case 4:
+            if (nb <= 2) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 2, 4, type_KV>(ctx, dst);
+            } else if (nb <= 4) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 4, 4, type_KV>(ctx, dst);
+            } else {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 8, 4, type_KV>(ctx, dst);
+            }
+            return;
+        case 8:
+            if (nb <= 1) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 1, 8, type_KV>(ctx, dst);
+            } else if (nb <= 2) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 2, 8, type_KV>(ctx, dst);
+            } else if (nb <= 4) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 4, 8, type_KV>(ctx, dst);
+            } else {
+                ggml_cuda_flash_attn_ext_mma_f16_case<D, D, 8, 8, type_KV>(ctx, dst);
+            }
+            return;
+        default:
+            break;
+    }
+    GGML_ABORT("fatal error");
+}
+
+template <ggml_type type_KV>
+static void ggml_cuda_flash_attn_ext_mma_q_switch_D(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const int ncols2) {
+    switch (dst->src[0]->ne[0]) {
+        case 128: ggml_cuda_flash_attn_ext_mma_q_switch_ncols<128, type_KV>(ctx, dst, ncols2); break;
+        case 256: ggml_cuda_flash_attn_ext_mma_q_switch_ncols<256, type_KV>(ctx, dst, ncols2); break;
+        case 512: ggml_cuda_flash_attn_ext_mma_q_switch_ncols<512, type_KV>(ctx, dst, ncols2); break;
+        default: GGML_ABORT("fatal error");
+    }
+}
+
+static void ggml_cuda_flash_attn_ext_mma_q(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * Q    = dst->src[0];
+    const ggml_tensor * K    = dst->src[1];
+    const ggml_tensor * mask = dst->src[3];
+
+    float max_bias = 0.0f;
+    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+
+    // same GQA selection as ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2
+    bool use_gqa_opt = mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    for (const ggml_tensor * t : {Q, mask}) {
+        for (size_t i = 1; t && i < GGML_MAX_DIMS; ++i) {
+            if (t->nb[i] % 16 != 0) {
+                use_gqa_opt = false;
+                break;
+            }
+        }
+    }
+    const int gqa_ratio = Q->ne[2] / K->ne[2];
+    const int ncols2 = !use_gqa_opt ? 1 : (gqa_ratio > 4 ? 8 : (gqa_ratio > 2 ? 4 : (gqa_ratio > 1 ? 2 : 1)));
+
+    if (K->type == GGML_TYPE_Q8_0) {
+        ggml_cuda_flash_attn_ext_mma_q_switch_D<GGML_TYPE_Q8_0>(ctx, dst, ncols2);
+    } else {
+        GGML_ASSERT(K->type == GGML_TYPE_Q4_0);
+        ggml_cuda_flash_attn_ext_mma_q_switch_D<GGML_TYPE_Q4_0>(ctx, dst, ncols2);
+    }
+}
+
 static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * KQV  = dst;
@@ -292,6 +407,11 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
+
+    if (ggml_cuda_fattn_mma_use_q(cc, dst)) {
+        ggml_cuda_flash_attn_ext_mma_q(ctx, dst);
+        return;
+    }
 
     switch (Q->ne[0]) {
         case 64:
@@ -636,6 +756,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+        if (ggml_cuda_fattn_mma_use_q(cc, dst)) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
         if (can_use_vector_kernel) {
             if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
                 // the sparse gather exists only in the MMA kernel: (DKQ, DV, 1, 8) with GQA > 4
@@ -736,9 +859,12 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
     switch (kernel) {
         case BEST_FATTN_KERNEL_TILE:
-        case BEST_FATTN_KERNEL_MMA_F16:
             need_f16_K = true;
             need_f16_V = true;
+            break;
+        case BEST_FATTN_KERNEL_MMA_F16:
+            need_f16_K = !ggml_cuda_fattn_mma_use_q(ggml_cuda_info().devices[device].cc, dst);
+            need_f16_V = need_f16_K;
             break;
         case BEST_FATTN_KERNEL_VEC: {
             const bool f16_fallback = ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) == nullptr;
