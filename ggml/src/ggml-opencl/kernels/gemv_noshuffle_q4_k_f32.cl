@@ -11,6 +11,14 @@
 #define NSUBGROUPS 4
 #define SUBGROUP_SIZE 64
 
+// A6X compiler incorrectly constant-folds get_local_size() results;
+// force runtime materialization via a no-op ALU round-trip.
+#ifdef GGML_CL_A6X_CONSTFOLD_FIX
+#define MATERIALIZE_WG(x) do { (x) *= 2u; if ((x) > 1u) (x) /= 2u; } while(0)
+#else
+#define MATERIALIZE_WG(x)
+#endif
+
 // scales are transposed: consecutive codes of a row are `stride` apart
 inline void get_scale_min_k4(
     int j,
@@ -233,6 +241,7 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
     // K-split (more waves/SP -> latency hiding) while large-M keeps 4. The
     // physical weight layout stride below is INDEPENDENT of this (see BLOCK_STRIDE_A).
     uint nsg = get_local_size(1);
+    MATERIALIZE_WG(nsg);
 
     uint K = ne00;
     uint M = ne01;
@@ -400,6 +409,7 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_glu(
     uint gid     = get_global_id(0);
     ushort slid  = get_sub_group_local_id();
     uint nsg     = get_local_size(1);
+    MATERIALIZE_WG(nsg);
 
     uint K = ne00;
     uint M = ne01;
@@ -514,6 +524,7 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_splitk(
     uint gid     = get_global_id(0);
     ushort slid  = get_sub_group_local_id();
     uint nsg     = get_local_size(1);
+    MATERIALIZE_WG(nsg);
     uint ksplit  = get_num_groups(1);
     uint kslice  = get_group_id(1);
 
