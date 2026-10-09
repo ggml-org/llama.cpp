@@ -244,6 +244,28 @@ ggml_backend_dev_t ggml_backend_meta_device(
     return &result.first->second;
 }
 
+// Give collectives a compact isolated buffer instead of inheriting the compute arena, so an
+// ALLREDUCE need not map the whole arena per rank. Read once; fixes layout for the buffer's life.
+static bool ggml_backend_meta_comm_isolation_enabled() {
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_META_COMM_ISOLATION");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    return enabled;
+}
+
+// Confine isolation to decode. Gate on row count = batch size; default 1 (only n_tokens==1 is
+// unambiguous decode, wider batches may be short prefill chunks). Raise via
+// GGML_META_COMM_DECODE_TOKENS for parallel/speculative decode.
+static size_t ggml_backend_meta_comm_decode_max_tokens() {
+    static const size_t max_tokens = []() -> size_t {
+        const char * env = getenv("GGML_META_COMM_DECODE_TOKENS");
+        const int    v   = env != nullptr ? atoi(env) : 1;
+        return v > 0 ? (size_t) v : 0;
+    }();
+    return max_tokens;
+}
+
 //
 // meta backend buffer type
 //
@@ -426,6 +448,10 @@ struct ggml_backend_meta_buffer_context {
     int stc_compute_index      = 0;
     int stc_compute_index_next = 0;
     std::vector<ggml_backend_buffer_ptr> bufs;
+
+    // Per-rank buffers for decode-only isolated collectives. Lazy, one per rank, grown to the
+    // largest payload; one suffices since each collective is consumed before the next (offset 0).
+    std::vector<ggml_backend_buffer_ptr> comm_bufs;
 
     // FIXME
     // The size of the split state cache is unbounded and can theoretically grow infinitely large.
@@ -1282,6 +1308,25 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
 
     std::vector<ggml_tensor *> simple_tensors;
     simple_tensors.reserve(n_simple_bufs);
+
+    // A PARTIAL tensor is a pre-sync collective result. assume_sync=false is required: assume_sync=true
+    // reports MIRRORED (the downstream-visible state), not the true pre-reduction PARTIAL state.
+    const ggml_backend_meta_split_state split_state_async =
+        ggml_backend_meta_get_split_state(stc, tensor, /* assume_sync = */ false);
+
+    // Row count = real batch size of this graph (gallocr re-inits nodes each graph). Over-counting
+    // only declines isolation, which is safe.
+    const size_t n_tokens = (size_t) ggml_nrows(tensor);
+
+    const bool is_collective =
+        ggml_backend_meta_comm_isolation_enabled() &&
+        n_tokens <= ggml_backend_meta_comm_decode_max_tokens() &&
+        split_state_async.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL;
+
+    if (is_collective && buf_ctx->comm_bufs.size() < n_simple_bufs) {
+        buf_ctx->comm_bufs.resize(n_simple_bufs);
+    }
+
     for (size_t j = 0; j < n_simple_bufs; j++) {
         ggml_context          * simple_ctx = stc.ctxs[j].get();
         ggml_backend_buffer_t   simple_buf = buf_ctx->bufs[j].get();
@@ -1335,7 +1380,28 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         }
         // TODO: revisit once the graph allocator has been refactored, see https://github.com/ggml-org/llama.cpp/pull/25051#issuecomment-4842873396
         ggml_backend_buffer_t init_buf = simple_buf;
-        if (t_ij->view_src != nullptr) {
+
+        // Isolated collectives get payload-sized backing instead of the compute arena. Views
+        // excluded: they inherit the source's sub-buffer (handled below).
+        if (is_collective && t_ij->view_src == nullptr) {
+            GGML_ASSERT(simple_buf != nullptr);
+
+            ggml_backend_buffer_type_t simple_buft = ggml_backend_buffer_get_type(simple_buf);
+            const size_t alignment = ggml_backend_buft_get_alignment(simple_buft);
+            const size_t payload = GGML_PAD(ggml_backend_buft_get_alloc_size(simple_buft, t_ij), alignment);
+
+            // One buffer per rank, grown to the largest payload; collectives reuse it at offset 0.
+            ggml_backend_buffer_ptr & comm_buf = buf_ctx->comm_bufs[j];
+            if (!comm_buf || ggml_backend_buffer_get_size(comm_buf.get()) < payload) {
+                comm_buf.reset(ggml_backend_buft_alloc_buffer(simple_buft, payload));
+                GGML_ASSERT(comm_buf);
+            }
+
+            simple_buf   = comm_buf.get();
+            init_buf     = simple_buf;
+            t_ij->buffer = simple_buf;
+            t_ij->data   = ggml_backend_buffer_get_base(simple_buf);
+        } else if (t_ij->view_src != nullptr) {
             t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
             // views inherit the source slice's concrete sub-buffer (issue 22197)
             if (tensor->view_src != nullptr && ggml_backend_buffer_is_meta(tensor->view_src->buffer)
