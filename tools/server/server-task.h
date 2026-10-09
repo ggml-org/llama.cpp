@@ -89,8 +89,9 @@ struct task_params {
     std::string        control_action;
     std::string        control_cmpl_id;
 
-    // per-request parameters for chat parsing
-    common_chat_parser_params chat_parser_params;
+    // reported in generation_settings, parsing itself is owned by the chat session
+    common_chat_format      chat_format      = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
     // message spans for checkpointing
     common_chat_msg_spans message_spans;
@@ -106,9 +107,8 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_parser_params chat_parser_params;
+    common_chat_session chat_session; // owns all parsing for this generation
     common_chat_msg chat_msg;
-    common_chat_input generated_input; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
 
@@ -124,7 +124,7 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params);
+    task_result_state(common_chat_session session = {});
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
@@ -258,6 +258,17 @@ struct server_task {
         return ids;
     }
 
+    void apply_chat_session(const common_chat_session & session) {
+        if (!session.has_template()) {
+            return;
+        }
+
+        session.apply_sampling(params.sampling);
+        params.chat_format = session.format();
+        params.antiprompt.insert(params.antiprompt.end(), session.additional_stops().begin(), session.additional_stops().end());
+        params.message_spans = tokens.find_message_spans(session.message_delimiters());
+    }
+
     void add_child(int id_parent, int id_child) {
         server_task copy;
 
@@ -275,12 +286,6 @@ struct server_task {
         }
 
         child_tasks.push_back(std::move(copy));
-    }
-
-    // the task will be moved into queue, then onto slots
-    // however, the state must be kept by caller (e.g., HTTP thread)
-    task_result_state create_state() const {
-        return task_result_state(params.chat_parser_params);
     }
 
     bool is_parent() const {

@@ -200,9 +200,12 @@ static bool ggml_cuda_op_fwht_impl(ggml_backend_cuda_context & ctx, const ggml_t
             case 4096:
                 ggml_cuda_kernel_launch(fwht_cuda_block<4096, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
                 return true;
+#if !defined(GGML_USE_MUSA)
+            // 32 KB of shared memory, above the MUSA limit; falls back there
             case 8192:
                 ggml_cuda_kernel_launch(fwht_cuda_block<8192, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
                 return true;
+#endif // !defined(GGML_USE_MUSA)
             default:
                 return false;
         }
