@@ -14,6 +14,11 @@ struct ggml_cuda_topk_moe_args {
     bool prob_bias{};
     bool norm{};
     bool scale{};
+    bool grouped_experts{};
+
+    int  n_expert_groups{};
+    int  n_exp_per_group{};
+    int  n_group_used{};
 };
 
 void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
