@@ -585,6 +585,11 @@ void server_model_meta::update_caps(const common_params & base) {
 
     // offline discovery cannot see video; a loaded model reports it
     architecture = server_model_architecture_json(inp_image, inp_audio, false, output_modalities);
+
+    // the trained context, read from the GGUF metadata
+    if (!params.model.path.empty()) {
+        n_ctx_train = common_get_gguf_n_ctx_train(params.model.path);
+    }
 }
 
 //
@@ -2124,6 +2129,10 @@ void server_models_routes::init_routes() {
                 // {"need_download", meta.need_download},
                 // TODO: add other fields, may require reading GGUF metadata
             };
+
+            if (meta.n_ctx_train > 0) {
+                model_info["context_length"] = meta.n_ctx_train;
+            }
 
             // merge with loaded_info from the child process if available
             if (meta.is_running()) {
