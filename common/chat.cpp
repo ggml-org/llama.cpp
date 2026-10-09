@@ -1637,7 +1637,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
 
     templated   = true;
     prompt_text = std::move(applied.prompt);
-    cur.role    = "assistant";
+    result.role = "assistant";
 
     grammar_text           = std::move(applied.grammar);
     grammar_lazy           = applied.grammar_lazy;
@@ -1669,7 +1669,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
 
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !params.echo) {
         // start from the prefill so it is not emitted as part of the first delta
-        cur = common_chat_parse(input, true, parser_params);
+        result = common_chat_parse(input, true, parser_params);
     }
 }
 
@@ -1691,9 +1691,9 @@ const common_chat_msg & common_chat_session::feed(const common_chat_input & chun
     input.append(chunk);
     auto msg = common_chat_parse(input, true, parser_params);
     if (!msg.empty()) {
-        cur = std::move(msg);
+        result = std::move(msg);
     }
-    return cur;
+    return result;
 }
 
 const common_chat_msg & common_chat_session::finish(const common_chat_input & chunk) {
@@ -1702,9 +1702,9 @@ const common_chat_msg & common_chat_session::finish(const common_chat_input & ch
     input.append(chunk);
     auto msg = common_chat_parse(input, false, parser_params);
     if (!msg.empty()) {
-        cur = std::move(msg);
+        result = std::move(msg);
     }
-    return cur;
+    return result;
 }
 
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {

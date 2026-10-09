@@ -381,7 +381,7 @@ struct common_chat_session_params {
 
 class common_chat_session {
   public:
-    common_chat_session() { cur.role = "assistant"; }
+    common_chat_session() { result.role = "assistant"; }
 
     common_chat_session(const common_chat_templates *        tmpls,
                         const llama_vocab *                  vocab,
@@ -390,7 +390,7 @@ class common_chat_session {
 
     const std::string &      prompt()   const { return prompt_text; }
     common_chat_format       format()   const { return parser_params.format; }
-    const common_chat_msg &  msg()      const { return cur; }
+    const common_chat_msg &  msg()      const { return result; }
     const common_peg_arena & parser()   const { return parser_params.parser; }
 
     const std::string &              grammar()            const { return grammar_text; }
@@ -423,9 +423,9 @@ class common_chat_session {
     common_chat_parser_params  parser_params;
     common_chat_msg_delimiters delimiters;
     common_chat_input          input;
-    common_chat_msg           cur;
-    bool                      templated = false;
-    bool                      finished  = false;
+    common_chat_msg            result;
+    bool                       templated = false;
+    bool                       finished  = false;
 };
 
 // used by arg and server
