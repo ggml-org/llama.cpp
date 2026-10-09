@@ -1230,6 +1230,42 @@ common_decision_type common_get_decision_type(const std::string & fname) {
     return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
 }
 
+uint32_t common_get_gguf_n_ctx_train(const std::string & fname) {
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(fname.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        return 0; // missing or unreadable file
+    }
+
+    const int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+    if (arch_id < 0 || gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
+        return 0;
+    }
+
+    const std::string key = std::string(gguf_get_val_str(gguf_ctx.get(), arch_id)) + ".context_length";
+    const int64_t key_id = gguf_find_key(gguf_ctx.get(), key.c_str());
+    if (key_id < 0) {
+        return 0;
+    }
+
+    // writers are not strict about the width of the hparams, so accept both
+    switch (gguf_get_kv_type(gguf_ctx.get(), key_id)) {
+        case GGUF_TYPE_UINT32:
+            return gguf_get_val_u32(gguf_ctx.get(), key_id);
+        case GGUF_TYPE_UINT64:
+            {
+                const uint64_t val = gguf_get_val_u64(gguf_ctx.get(), key_id);
+                return val <= UINT32_MAX ? (uint32_t) val : 0;
+            }
+        default:
+            return 0;
+    }
+}
+
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
