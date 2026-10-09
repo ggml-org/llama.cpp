@@ -183,6 +183,37 @@ template [[host_name("kernel_rms_norm_f32_4")]]         kernel kernel_rms_norm_f
 template [[host_name("kernel_rms_norm_mul_f32_4")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 2>;
 template [[host_name("kernel_rms_norm_mul_add_f32_4")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 3>;
 
+
+template <typename T>
+kernel void kernel_rms_norm_back_impl(
+        constant ggml_metal_kargs_norm_back & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup float * shmem_f32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i01 = tgpig.x;
+    const int i02 = tgpig.y;
+    const int i03 = tgpig.z;
+
+    device const T * dz = (device const T *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
+
+    // device const T * x = (device const T *) (src1 + i03*args.nb13 + i02*args.nb12 + i01*args.nb11);
+
+    device T * y = (device T *) (dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1);
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        y[i00] = dz[i00];
+    }
+}
+typedef decltype(kernel_rms_norm_back_impl<float4>) kernel_rms_norm_back_t;
+
+template [[host_name("kernel_rms_norm_back_f32")]]   kernel kernel_rms_norm_back_t kernel_rms_norm_back_impl<float>;
+template [[host_name("kernel_rms_norm_back_f32_4")]] kernel kernel_rms_norm_back_t kernel_rms_norm_back_impl<float4>;
+
 template <typename T0, typename T>
 kernel void kernel_l2_norm_impl(
         constant ggml_metal_kargs_l2_norm & args,

@@ -2244,6 +2244,30 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm(ggml_metal_
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rms_norm_back(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_RMS_NORM_BACK);
+
+    char base[256];
+    char name[256];
+
+    const bool is_c4 = op->src[0]->ne[0] % 4 == 0;
+
+    const char * t0_str = ggml_type_name(op->src[0]->type);
+
+    snprintf(base, 256, "kernel_rms_norm_back_%s%s", t0_str, is_c4 ? "_4" : "");
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    res.c4   = is_c4;
+    res.smem = 32*sizeof(float);
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm_scale(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_NORM || op->op == GGML_OP_RMS_NORM);
 
