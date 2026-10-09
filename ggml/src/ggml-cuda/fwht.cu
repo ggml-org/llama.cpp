@@ -72,7 +72,18 @@ __global__ void fwht_cuda_block(const T * src, float * dst, const int64_t n_rows
     constexpr int NE        = N / NT;
     static_assert(NE >= 1 && N % NT == 0 && NT % warp_size == 0, "bad FWHT block shape");
 
+#if defined(GGML_USE_MUSA) && defined(__MUSA_ARCH__) && __MUSA_ARCH__ < 220
+    // MUSA arch 21 caps static shared memory at 28 KB, wider blocks do not fit there
+    constexpr bool fits = N*sizeof(float) < 28*1024;
+    if constexpr (!fits) {
+        GGML_UNUSED_VARS(src, dst, n_rows, scale);
+        NO_DEVICE_CODE;
+        return;
+    }
+    __shared__ float s[fits ? N : 1];
+#else
     __shared__ float s[N];
+#endif // defined(GGML_USE_MUSA) && defined(__MUSA_ARCH__) && __MUSA_ARCH__ < 220
 
     const int64_t r = blockIdx.x;
     if (r >= n_rows) {
@@ -200,12 +211,14 @@ static bool ggml_cuda_op_fwht_impl(ggml_backend_cuda_context & ctx, const ggml_t
             case 4096:
                 ggml_cuda_kernel_launch(fwht_cuda_block<4096, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
                 return true;
-#if !defined(GGML_USE_MUSA)
-            // 32 KB of shared memory, above the MUSA limit; falls back there
             case 8192:
+#ifdef GGML_USE_MUSA
+                if (ggml_cuda_info().devices[ggml_cuda_get_device()].cc < GGML_CUDA_CC_QY2) {
+                    return false; // no device code below MUSA arch 22, see fwht_cuda_block
+                }
+#endif // GGML_USE_MUSA
                 ggml_cuda_kernel_launch(fwht_cuda_block<8192, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
                 return true;
-#endif // !defined(GGML_USE_MUSA)
             default:
                 return false;
         }
