@@ -2521,7 +2521,7 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
         !extra->optimized_feature.reorder) {
         return false;
     }
-    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type) || src1_ncols > GGML_SYCL_XMX_MAX_COLS) {
+    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type) || src1_ncols > g_ggml_sycl_xmx_max_cols) {
         return false;
     }
 
@@ -2545,7 +2545,7 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
     return ggml_sycl_mul_mat_vec_q_xmx_type(src0->type, short_rows, src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, ne00,
                                             row_diff, src1_ncols, stride_y_bytes, ldd, 0, stream);
 }
-#endif  // GGML_SYCL_MMVQ_HAS_XMX
+#endif // GGML_SYCL_MMVQ_HAS_XMX
 
 bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
                                      enum ggml_type   src0_type,
@@ -2567,7 +2567,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
     if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
         return false;
     }
-    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type) || ncols_dst > GGML_SYCL_XMX_GLU_MAX_COLS) {
+    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type) || ncols_dst > g_ggml_sycl_xmx_glu_max_cols) {
         return false;
     }
     if (!ggml_sycl_esimd::xmx_supported(vx, ncols) || !ggml_sycl_esimd::xmx_supported(vgate, ncols) ||
@@ -2585,7 +2585,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
     GGML_UNUSED_VARS(device, src0_type, glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes,
                      stride_col_dst, stream);
     return false;
-#endif  // GGML_SYCL_MMVQ_HAS_XMX
+#endif // GGML_SYCL_MMVQ_HAS_XMX
 }
 
 void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,

@@ -63,7 +63,7 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
         return false;
     }
     // mat-vec only: one column per decoded token, up to the batch the reorder kernels cover
-    const int max_cols = xmx_pair ? std::max(MMVQ_MAX_BATCH_SIZE, GGML_SYCL_XMX_GLU_MAX_COLS) : MMVQ_MAX_BATCH_SIZE;
+    const int max_cols = xmx_pair ? std::max(MMVQ_MAX_BATCH_SIZE, g_ggml_sycl_xmx_glu_max_cols) : MMVQ_MAX_BATCH_SIZE;
     if (act->ne[1] > max_cols) {
         return false;
     }

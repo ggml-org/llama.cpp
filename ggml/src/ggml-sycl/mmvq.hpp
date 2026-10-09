@@ -81,7 +81,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(
 
 
 // Fused dense-FFN GEMV on the XMX engines for reordered weights of one type, up * act(gate) for up to
-// GGML_SYCL_XMX_GLU_MAX_COLS activation columns. Returns false if it does not apply, the caller falls back.
+// GGML_SYCL_XMX_GLU_MAX_COLS (at most) activation columns. Returns false if it does not apply, the caller falls back.
 // vy: src1 quantized with quantize_and_reorder_q8_1_soa.
 bool ggml_sycl_mul_mat_vec_q_glu_xmx(
     int                device,

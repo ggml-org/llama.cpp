@@ -65,6 +65,8 @@ extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_enable_xmx_esimd;
+extern int g_ggml_sycl_xmx_max_cols;
+extern int g_ggml_sycl_xmx_glu_max_cols;
 extern int g_ggml_sycl_prioritize_dmmv;
 
 // Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
@@ -228,10 +230,10 @@ typedef sycl::float2 dfloat2;
 #    define GGML_SYCL_MMVQ_HAS_XMX
 #endif // __INTEL_LLVM_COMPILER
 
-// most columns the XMX mul_mat_vec_q handles, wider batches use other kernels
-#define GGML_SYCL_XMX_MAX_COLS 80
+// default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
+#define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
 
-// most columns the fused gate and up XMX kernel handles
+// most columns the fused gate and up XMX kernel is built for, GGML_SYCL_XMX_GLU_MAX_COLS can only lower this limit
 #define GGML_SYCL_XMX_GLU_MAX_COLS 16
 
 static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
