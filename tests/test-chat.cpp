@@ -13,7 +13,6 @@
 #include "common.h"
 #include "ggml.h"
 #include "log.h"
-#include "peg-parser/simple-tokenize.h"
 
 #include <algorithm>
 #include <exception>
@@ -24,8 +23,48 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using json = common_json;
+
+// Splits before whitespace and punctuation, so markup lands in pieces much like real tokens
+static std::vector<std::string> simple_tokenize(const std::string & input) {
+    std::vector<std::string> result;
+    std::string              current;
+
+    for (char c : input) {
+        switch (c) {
+            case ' ':
+            case '\n':
+            case '\t':
+            case '{':
+            case '}':
+            case ',':
+            case '[':
+            case '"':
+            case ']':
+            case '.':
+            case '<':
+            case '>':
+            case '=':
+            case '/':
+                if (!current.empty()) {
+                    result.push_back(current);
+                    current.clear();
+                }
+                break;
+            default:
+                break;
+        }
+        current += c;
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
+}
 
 static std::ostream & operator<<(std::ostream & os, const common_chat_msg_diff & diff) {
     os << "{ content_delta: " << diff.content_delta << "; ";
