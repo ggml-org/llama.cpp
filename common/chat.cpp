@@ -9,6 +9,7 @@
 #include "json.h"
 #include "log.h"
 #include "parsers/parsers.h"
+#include "sampling.h"
 
 #include "jinja/value.h"
 #include "jinja/runtime.h"
@@ -112,41 +113,11 @@ const char * common_chat_role_to_string(common_chat_role role) {
     return "";
 }
 
-json common_chat_msg_delimiters::to_json() const {
-    json result = json::array();
-    for (const auto & d : delimiters) {
-        result.push_back({
-            { "role",      common_chat_role_to_string(d.role) },
-            { "delimiter", d.delimiter                        },
-        });
-    }
-    return result;
-}
-
-common_chat_msg_delimiters common_chat_msg_delimiters_parse(const json & delimiters) {
-    common_chat_msg_delimiters result;
-
-    if (!delimiters.is_array()) {
-        return result;
-    }
-
-    result.delimiters.reserve(delimiters.size());
-    for (const auto & d : delimiters) {
-        if (!d.is_object()) {
-            continue;
-        }
-        result.delimiters.push_back({
-            common_chat_role_from_string(d.value("role", std::string())),
-            d.value("delimiter", std::string()),
-        });
-    }
-
-    return result;
-}
-
 void common_chat_msg_delimiters::tokenize(const llama_vocab * vocab) {
     for (auto & d : delimiters) {
-        d.tokens = common_tokenize(vocab, d.delimiter, false, true);
+        if (d.tokens.empty()) {
+            d.tokens = common_tokenize(vocab, d.delimiter, false, true);
+        }
     }
 }
 
@@ -620,8 +591,11 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
 }
 
 common_chat_continuation common_chat_continuation_parse(const common_json & value) {
-    if (value.is_boolean() && value.get<bool>()) {
-        return COMMON_CHAT_CONTINUATION_AUTO;
+    if (value.is_null()) {
+        return COMMON_CHAT_CONTINUATION_NONE;
+    }
+    if (value.is_boolean()) {
+        return value.get<bool>() ? COMMON_CHAT_CONTINUATION_AUTO : COMMON_CHAT_CONTINUATION_NONE;
     }
     if (value.is_string()) {
         auto value_str = value.get<std::string>();
@@ -632,7 +606,7 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
             return COMMON_CHAT_CONTINUATION_CONTENT;
         }
     }
-    return COMMON_CHAT_CONTINUATION_NONE;
+    throw std::invalid_argument("Invalid continue_final_message: expected a boolean, \"content\" or \"reasoning_content\"");
 }
 
 bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
@@ -1665,15 +1639,12 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
     prompt_text = std::move(applied.prompt);
     cur.role    = "assistant";
 
-    sampling_params.grammar            = std::move(applied.grammar);
-    sampling_params.grammar_lazy       = applied.grammar_lazy;
-    sampling_params.grammar_triggers   = std::move(applied.grammar_triggers);
-    sampling_params.preserved_tokens   = std::move(applied.preserved_tokens);
-    sampling_params.additional_stops   = std::move(applied.additional_stops);
-    sampling_params.generation_prompt  = applied.generation_prompt;
-    sampling_params.thinking_start_tag = std::move(applied.thinking_start_tag);
-    sampling_params.thinking_end_tags  = std::move(applied.thinking_end_tags);
-    sampling_params.message_delimiters = std::move(applied.message_delimiters);
+    grammar_text           = std::move(applied.grammar);
+    grammar_lazy           = applied.grammar_lazy;
+    stops                  = std::move(applied.additional_stops);
+    generation_prompt_text = applied.generation_prompt;
+    thinking_start         = std::move(applied.thinking_start_tag);
+    thinking_ends          = std::move(applied.thinking_end_tags);
 
     parser_params.format            = applied.format;
     parser_params.generation_prompt = vocab ? common_chat_input_tokenize(vocab, applied.generation_prompt)
@@ -1681,10 +1652,38 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
     parser_params.debug             = params.debug;
     parser_params.parser            = std::move(applied.parser);
 
+    delimiters = std::move(applied.message_delimiters);
+
+    if (vocab) {
+        common_params_sampling resolved;
+        resolved.grammar_lazy = applied.grammar_lazy;
+        common_sampling_add_preserved_tokens(resolved, vocab, applied.preserved_tokens);
+        common_sampling_add_grammar_triggers(resolved, vocab, std::move(applied.grammar_triggers));
+        preserved_tokens = std::move(resolved.preserved_tokens);
+        grammar_triggers = std::move(resolved.grammar_triggers);
+
+        delimiters.tokenize(vocab);
+    } else {
+        grammar_triggers = std::move(applied.grammar_triggers);
+    }
+
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !params.echo) {
         // start from the prefill so it is not emitted as part of the first delta
         cur = common_chat_parse(input, true, parser_params);
     }
+}
+
+void common_chat_session::apply_sampling(common_params_sampling & sampling) const {
+    if (!templated) {
+        return;
+    }
+    if (!grammar_text.empty()) {
+        sampling.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, grammar_text};
+    }
+    sampling.grammar_lazy      = grammar_lazy;
+    sampling.generation_prompt = generation_prompt_text;
+    sampling.preserved_tokens.insert(preserved_tokens.begin(), preserved_tokens.end());
+    sampling.grammar_triggers.insert(sampling.grammar_triggers.end(), grammar_triggers.begin(), grammar_triggers.end());
 }
 
 const common_chat_msg & common_chat_session::feed(const common_chat_input & chunk) {

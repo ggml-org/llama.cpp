@@ -13,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -219,8 +220,6 @@ struct common_chat_msg_delimiters {
 
     // split tokens into message spans. skips maps a start index to a length of a region to jump over without matching
     common_chat_msg_spans split(const llama_tokens & tokens, const std::map<size_t, size_t> & skips = {}) const;
-
-    common_json to_json() const;
 };
 
 struct common_chat_tool {
@@ -376,18 +375,6 @@ common_chat_msg common_chat_parse(const common_chat_input & input, bool is_parti
 common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 
 // what the sampler needs from an applied chat template
-struct common_chat_sampling {
-    std::string                         grammar;
-    bool                                grammar_lazy = false;
-    std::vector<common_grammar_trigger> grammar_triggers;
-    std::vector<std::string>            preserved_tokens;
-    std::vector<std::string>            additional_stops;
-    std::string                         generation_prompt;
-    std::string                         thinking_start_tag;
-    std::vector<std::string>            thinking_end_tags;
-    common_chat_msg_delimiters          message_delimiters;
-};
-
 struct common_chat_session_params {
     bool echo  = false; // include the assistant prefill in the output when continuing a message
     bool debug = false; // enable debug output for the PEG parser
@@ -406,11 +393,22 @@ class common_chat_session {
                         const common_chat_templates_inputs & inputs,
                         const common_chat_session_params &   params = {});
 
-    const std::string &          prompt()   const { return prompt_text; }
-    const common_chat_sampling & sampling() const { return sampling_params; }
-    common_chat_format           format()   const { return parser_params.format; }
-    const common_chat_msg &      msg()      const { return cur; }
-    const common_peg_arena &     parser()   const { return parser_params.parser; }
+    const std::string &      prompt()   const { return prompt_text; }
+    common_chat_format       format()   const { return parser_params.format; }
+    const common_chat_msg &  msg()      const { return cur; }
+    const common_peg_arena & parser()   const { return parser_params.parser; }
+
+    const std::string &              grammar()            const { return grammar_text; }
+    const std::string &              generation_prompt()  const { return generation_prompt_text; }
+    const std::string &              thinking_start_tag() const { return thinking_start; }
+    const std::vector<std::string> & thinking_end_tags()  const { return thinking_ends; }
+    const std::vector<std::string> & additional_stops()   const { return stops; }
+
+    const common_chat_msg_delimiters & message_delimiters() const { return delimiters; }
+
+    // sets the grammar, its triggers, the preserved tokens and the generation prompt
+    // the preserved tokens and token triggers are only resolved when the session was given a vocab
+    void apply_sampling(common_params_sampling & sampling) const;
 
     // false for a default session, which parses its output as plain content
     bool has_template() const { return templated; }
@@ -422,10 +420,19 @@ class common_chat_session {
     const common_chat_msg & finish(const common_chat_input & chunk = {});
 
   private:
-    std::string               prompt_text;
-    common_chat_sampling      sampling_params;
-    common_chat_parser_params parser_params;
-    common_chat_input         input;
+    std::string                         prompt_text;
+    std::string                         grammar_text;
+    bool                                grammar_lazy = false;
+    std::vector<common_grammar_trigger> grammar_triggers;
+    std::set<llama_token>               preserved_tokens;
+    std::vector<std::string>            stops;
+    std::string                         generation_prompt_text;
+    std::string                         thinking_start;
+    std::vector<std::string>            thinking_ends;
+
+    common_chat_parser_params  parser_params;
+    common_chat_msg_delimiters delimiters;
+    common_chat_input          input;
     common_chat_msg           cur;
     bool                      templated = false;
     bool                      finished  = false;
@@ -477,5 +484,3 @@ struct common_chat_prompt_preset {
 };
 
 common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
-
-common_chat_msg_delimiters common_chat_msg_delimiters_parse(const common_json & delimiters);

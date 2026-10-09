@@ -4810,11 +4810,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
-        // message delimiters for checkpointing
-        auto delimiters = chat_session.has_template() ? chat_session.sampling().message_delimiters :
-            common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
-        delimiters.tokenize(ctx_server.vocab);
-
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
@@ -4826,11 +4821,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     params,
                     meta->logit_bias_eog,
                     data);
-            if (chat_session.has_template()) {
-                server_schema::apply_chat_sampling(task.params, ctx_server.vocab, chat_session.sampling());
-            }
 
-            task.params.message_spans = task.tokens.find_message_spans(delimiters);
+            task.apply_chat_session(chat_session);
 
             task.id_slot = json_value(data, "id_slot", -1);
             sse_ping_interval = task.params.sse_ping_interval;

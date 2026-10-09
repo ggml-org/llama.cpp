@@ -89,6 +89,10 @@ struct task_params {
     std::string        control_action;
     std::string        control_cmpl_id;
 
+    // reported in generation_settings, parsing itself is owned by the chat session
+    common_chat_format      chat_format      = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
     // message spans for checkpointing
     common_chat_msg_spans message_spans;
 
@@ -252,6 +256,17 @@ struct server_task {
             }
         }
         return ids;
+    }
+
+    void apply_chat_session(const common_chat_session & session) {
+        if (!session.has_template()) {
+            return;
+        }
+
+        session.apply_sampling(params.sampling);
+        params.chat_format = session.format();
+        params.antiprompt.insert(params.antiprompt.end(), session.additional_stops().begin(), session.additional_stops().end());
+        params.message_spans = tokens.find_message_spans(session.message_delimiters());
     }
 
     void add_child(int id_parent, int id_child) {

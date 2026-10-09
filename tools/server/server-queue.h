@@ -225,7 +225,6 @@ struct server_response_reader {
 
     // if front = true, the task will be posted to the front of the queue (high priority)
     void post_task(server_task && task, bool front = false);
-    // each task, including child tasks, gets its own copy of the chat session
     void post_tasks(std::vector<server_task> && tasks, const common_chat_session & session = {}, bool front = false);
     bool has_next() const;
 

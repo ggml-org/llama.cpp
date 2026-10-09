@@ -4,44 +4,6 @@
 
 namespace server_schema {
 
-static void add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens) {
-    GGML_ASSERT(vocab != nullptr);
-    for (const auto & t : tokens) {
-        auto ids = common_tokenize(vocab, t, false, true);
-        if (ids.size() == 1) {
-            sampling.preserved_tokens.insert(ids[0]);
-        }
-    }
-}
-
-static void add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers) {
-    GGML_ASSERT(vocab != nullptr);
-    for (auto & trigger : triggers) {
-        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
-            const auto & word = trigger.value;
-            auto ids = common_tokenize(vocab, word, false, true);
-            if (ids.size() == 1) {
-                auto token = ids[0];
-                if (std::find(sampling.preserved_tokens.begin(), sampling.preserved_tokens.end(), (llama_token) token) == sampling.preserved_tokens.end()) {
-                    throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
-                }
-                common_grammar_trigger token_trigger;
-                token_trigger.type  = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
-                token_trigger.value = word;
-                token_trigger.token = token;
-                sampling.grammar_triggers.push_back(std::move(token_trigger));
-            } else {
-                sampling.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
-            }
-        } else {
-            sampling.grammar_triggers.push_back(std::move(trigger));
-        }
-    }
-    if (sampling.grammar_lazy && sampling.grammar_triggers.empty()) {
-        throw std::runtime_error("Error: no triggers set for lazy grammar!");
-    }
-}
-
 //
 // llama.cpp-specific completion schema
 //
@@ -325,10 +287,26 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_bool("grammar_lazy", params.sampling.grammar_lazy))
         ->set_desc("Whether to apply grammar constraints lazily, only when triggered (instead of at every step)"));
 
-    add((new field_str("generation_prompt"))
-        ->set_desc("Generation prompt appended to the chat template output, used by the reasoning budget")
+    //
+    // Chat parser params
+    //
+
+    add((new field_str("reasoning_format"))
+        ->set_desc("Reasoning format for chain-of-thought models")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
-            ctx.params.sampling.generation_prompt = data.at("generation_prompt").get<std::string>();
+            ctx.params.reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
+        }));
+
+    add((new field_json("continue_final_message"))
+        ->set_desc("Whether to continue the final message of the chat template")
+        ->set_handler([&](field_eval_context &, const json & data) {
+            common_chat_continuation_parse(data.at("continue_final_message"));
+        }));
+
+    add((new field_json("echo"))
+        ->set_desc("Whether to include the continued assistant message in the output")
+        ->set_handler([&](field_eval_context &, const json & data) {
+            data.at("echo").get<bool>();
         }));
 
     //
@@ -338,7 +316,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_json("preserved_tokens"))
         ->set_desc("List of token strings that must not be split during tokenization")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
-            add_preserved_tokens(ctx.params.sampling, ctx.vocab, data.at("preserved_tokens").get<std::vector<std::string>>());
+            common_sampling_add_preserved_tokens(ctx.params.sampling, ctx.vocab, data.at("preserved_tokens").get<std::vector<std::string>>());
         }));
 
     add((new field_json("grammar_triggers"))
@@ -348,7 +326,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             for (const auto & t : data.at("grammar_triggers")) {
                 triggers.push_back(server_grammar_trigger(t).value);
             }
-            add_grammar_triggers(ctx.params.sampling, ctx.vocab, std::move(triggers));
+            common_sampling_add_grammar_triggers(ctx.params.sampling, ctx.vocab, std::move(triggers));
         }));
 
     add((new field_bool("reasoning_control", params.sampling.reasoning_control))
@@ -506,6 +484,8 @@ task_params eval_llama_cmpl_schema(
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose       = params_base.verbosity > 9;
 
+    params.reasoning_format = params_base.reasoning_format;
+
     // create context and schema
     field_eval_context ctx(params);
     ctx.vocab          = vocab;
@@ -529,17 +509,6 @@ task_params eval_llama_cmpl_schema(
     }
 
     return params;
-}
-
-void apply_chat_sampling(task_params & params, const llama_vocab * vocab, const common_chat_sampling & chat) {
-    if (!chat.grammar.empty()) {
-        params.sampling.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, chat.grammar};
-    }
-    params.sampling.grammar_lazy      = chat.grammar_lazy;
-    params.sampling.generation_prompt = chat.generation_prompt;
-    add_preserved_tokens(params.sampling, vocab, chat.preserved_tokens);
-    add_grammar_triggers(params.sampling, vocab, chat.grammar_triggers);
-    params.antiprompt.insert(params.antiprompt.end(), chat.additional_stops.begin(), chat.additional_stops.end());
 }
 
 //

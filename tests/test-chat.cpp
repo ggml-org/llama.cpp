@@ -1153,11 +1153,12 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     common_chat_session_params session_params;
     session_params.debug = detailed_debug;
     common_chat_session session(tmpls, nullptr, tc.params, session_params);
-    const auto & sampling = session.sampling();
-    const auto & parser   = session.parser();
+    const auto & parser = session.parser();
+    common_params_sampling sampling;
+    session.apply_sampling(sampling);
     if (detailed_debug) {
         LOG_DBG("Using parser: \n%s\n", parser.dump(parser.root()).c_str());
-        LOG_DBG("Generation prompt: '%s'\n", sampling.generation_prompt.c_str());
+        LOG_DBG("Generation prompt: '%s'\n", session.generation_prompt().c_str());
     }
 
     for (const auto & rule : tc.expect_rules) {
@@ -1224,7 +1225,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 
     // A response format must be enforced by an eager grammar
     if (!tc.params.json_schema.empty()) {
-        if (sampling.grammar.empty()) {
+        if (session.grammar().empty()) {
             throw std::runtime_error("json_schema is set but no grammar was produced");
         }
         if (sampling.grammar_lazy) {
@@ -1233,10 +1234,10 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     // Test grammar if present in params
-    if (!sampling.grammar.empty()) {
-        auto grammar = build_grammar(sampling.grammar);
+    if (!session.grammar().empty()) {
+        auto grammar = build_grammar(session.grammar());
         if (!grammar) {
-            throw std::runtime_error("Failed to build grammar: " + sampling.grammar);
+            throw std::runtime_error("Failed to build grammar: " + session.grammar());
         }
 
         // In production, grammar triggers match against the full generated text
@@ -1249,7 +1250,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // budget sampler inhibits grammar application while inside thinking blocks —
         // triggers inside <think>...</think> are suppressed.
         bool use_reasoning_budget_path = false;
-        if (sampling.grammar_lazy && !sampling.thinking_end_tags.empty()) {
+        if (sampling.grammar_lazy && !session.thinking_end_tags().empty()) {
             use_reasoning_budget_path = true;
             for (const auto & trigger : sampling.grammar_triggers) {
                 if (trigger.type != COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
@@ -1266,8 +1267,8 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             // Reasoning-budget path: simulate thinking-aware trigger detection.
             // Walk through full_input tracking thinking state; only match triggers
             // when outside thinking blocks.
-            const auto & think_start = sampling.thinking_start_tag;
-            const auto & think_ends  = sampling.thinking_end_tags;
+            const auto & think_start = session.thinking_start_tag();
+            const auto & think_ends  = session.thinking_end_tags();
 
             bool in_thinking = false;
             for (size_t i = 0; i < full_input.size(); ++i) {
@@ -1407,7 +1408,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                         std::to_string(result.matched_codepoints) + " codepoints): " +
                         (result.matched_prefix.size() > 100 ? result.matched_prefix.substr(0, 100) + "..." : result.matched_prefix) +
                         "\n\n>>> Expected next: " + result.expected_description +
-                        "\n\n>>> Grammar: " + sampling.grammar;
+                        "\n\n>>> Grammar: " + session.grammar();
                 } else {
                     error_msg =
                         "Grammar match failed:\n\n"
@@ -1418,7 +1419,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                         (result.matched_prefix.size() > 100 ? result.matched_prefix.substr(0, 100) + "..." : result.matched_prefix) +
                         "\n\n>>> Failing character: " + result.failing_char +
                         "\n\n>>> Expected: " + result.expected_description +
-                        "\n\n>>> Grammar: " + sampling.grammar;
+                        "\n\n>>> Grammar: " + session.grammar();
                 }
                 throw std::runtime_error(error_msg);
             }
@@ -7783,27 +7784,59 @@ static void test_chat_session() {
         "</function>\n"
         "</tool_call>";
 
-    // fed in small chunks, the session matches a parse of each prefix from scratch
+    // the session renders the prompt and parses the output fed to it in small chunks
     {
         common_chat_session session(tmpls.get(), nullptr, inputs);
 
-        auto applied = common_chat_templates_apply(tmpls.get(), inputs);
-        assert_equals(applied.prompt, session.prompt());
-        assert_equals(applied.grammar, session.sampling().grammar);
-        assert_equals(applied.generation_prompt, session.sampling().generation_prompt);
+        assert_equals(std::string(R"(<|im_start|>system
+# Tools
 
-        common_chat_parser_params parser_params(applied);
-        parser_params.parser = applied.parser;
+You have access to the following functions:
 
-        for (size_t i = 0; i < output.size(); i += 3) {
-            const auto & msg = session.feed(common_chat_input(output.substr(i, 3)));
-            auto expected = common_chat_parse(common_chat_input(output.substr(0, i + 3)), true, parser_params);
-            if (!expected.empty()) {
-                assert_msg_equals(expected, msg);
-            }
+<tools>
+{"type": "function", "function": {"name": "special_function", "description": "I'm special", "parameters": {"type": "object", "properties": {"arg1": {"type": "integer", "description": "The arg."}}, "required": ["arg1"]}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT><|im_end|>
+<|im_start|>user
+Hey there!<|im_end|>
+<|im_start|>assistant
+<think>
+)"), session.prompt());
+        assert_equals(false, session.grammar().empty());
+        assert_equals(std::string("<|im_start|>assistant\n<think>\n"), session.generation_prompt());
+
+        const std::string thinking = "I'm\nthinking\n</think>\n\n";
+        for (size_t i = 0; i < thinking.size(); i += 3) {
+            session.feed(common_chat_input(thinking.substr(i, 3)));
         }
-        assert_msg_equals(common_chat_parse(common_chat_input(output), false, parser_params), session.finish());
-        assert_equals(std::string("special_function"), session.msg().tool_calls.at(0).name);
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n"), session.msg());
+
+        for (size_t i = thinking.size(); i < output.size(); i += 3) {
+            session.feed(common_chat_input(output.substr(i, 3)));
+        }
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n", "special_function", "{\"arg1\":1}"), session.finish());
     }
 
     // a copy does not see what is fed to the original
@@ -7826,11 +7859,9 @@ static void test_chat_session() {
         cont.reasoning_format       = COMMON_REASONING_FORMAT_AUTO;
 
         common_chat_session session(tmpls.get(), nullptr, cont);
-        auto applied = common_chat_templates_apply(tmpls.get(), cont);
-        common_chat_parser_params parser_params(applied);
-        parser_params.parser = applied.parser;
-        assert_msg_equals(common_chat_parse(common_chat_input(), true, parser_params), session.msg());
-        assert_equals(message_assist_prefill_content.content, session.msg().content);
+        assert_equals(std::string("<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, "),
+                      session.generation_prompt());
+        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking\n"), session.msg());
         session.feed(common_chat_input("world!"));
         assert_equals(std::string("Hello, world!"), session.msg().content);
 

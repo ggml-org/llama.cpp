@@ -101,7 +101,4 @@ task_params eval_llama_cmpl_schema(
                     const std::vector<llama_logit_bias> & logit_bias_eog,
                     const json & data);
 
-// apply the sampling values of an applied chat template on top of the request params
-void apply_chat_sampling(task_params & params, const llama_vocab * vocab, const common_chat_sampling & chat);
-
 } // namespace server_schema

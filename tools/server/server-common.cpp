@@ -1432,7 +1432,6 @@ json oaicompat_chat_params_parse(
     session_params.echo = json_value(body, "echo", false);
     out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
 
-    const auto & chat_sampling = out_session.sampling();
     llama_params["prompt"] = out_session.prompt();
 
     // Reasoning budget: pass parameters through to sampling layer
@@ -1443,10 +1442,10 @@ json oaicompat_chat_params_parse(
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_sampling.thinking_end_tags.empty()) {
+        if (!out_session.thinking_end_tags().empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
-            llama_params["reasoning_budget_start_tag"] = chat_sampling.thinking_start_tag;
-            llama_params["reasoning_budget_end_tags"] = chat_sampling.thinking_end_tags;
+            llama_params["reasoning_budget_start_tag"] = out_session.thinking_start_tag();
+            llama_params["reasoning_budget_end_tags"] = out_session.thinking_end_tags();
             llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
@@ -1473,11 +1472,11 @@ json oaicompat_chat_params_parse(
         }
     }
 
-    // the session owns these, the server applies them with server_schema::apply_chat_sampling()
-    for (const char * key : { "generation_prompt", "grammar_lazy", "grammar_triggers", "preserved_tokens", "message_delimiters" }) {
+    // the session owns these, the server applies them with server_task::apply_chat_session()
+    for (const char * key : { "grammar_lazy", "grammar_triggers", "preserved_tokens" }) {
         llama_params.erase(key);
     }
-    if (!chat_sampling.grammar.empty()) {
+    if (!out_session.grammar().empty()) {
         llama_params.erase("grammar");
         llama_params.erase("json_schema");
     }
