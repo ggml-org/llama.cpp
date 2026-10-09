@@ -25,7 +25,7 @@ common_chat_params common_chat_params_init_gigachat_v3(
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     const auto *tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto ret = p.eps();
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Build a choice of all available tools
@@ -60,13 +60,11 @@ common_chat_params common_chat_params_init_gigachat_v3(
         return p.literal("assistant<|role_sep|>\n") + ret;
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

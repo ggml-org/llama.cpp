@@ -61,8 +61,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = autoparser.build_parser(inputs, parser_generation_prompt);
-    data.parser = parser.save();
+    data.parser = autoparser.build_parser(inputs, parser_generation_prompt);
 
     // Build grammar if tools are present
     bool has_tools =
@@ -78,7 +77,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         // Set grammar triggers based on tool section markers (fall back to per-call markers)

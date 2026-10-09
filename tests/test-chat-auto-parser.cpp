@@ -450,7 +450,7 @@ static int debug_single_template(const debug_options & opts) {
         generation_params params = prepare_debug_params(opts, tools);
         common_chat_params            parser_data;
         if (std::optional<common_chat_params> spec_tmpl =
-                common_chat_try_specialized_template(chat_template, template_source, params)) {
+                common_chat_try_specialized_template(chat_template, params)) {
             LOG_ERR("\n");
             LOG_ERR("This template uses a specialized parser, analysis results will not be available.\n");
             parser_data = *spec_tmpl;
@@ -484,8 +484,7 @@ static int debug_single_template(const debug_options & opts) {
 
         if (!std::empty(parser_data.parser)) {
             LOG_ERR("\n=== Generated Parser ===\n");
-            common_peg_arena arena;
-            arena.load(parser_data.parser);
+            const common_peg_arena & arena = parser_data.parser;
             LOG_ERR("%s\n", arena.dump(arena.root()).c_str());
 
             LOG_ERR("\n=== Generated Grammar ===\n");
