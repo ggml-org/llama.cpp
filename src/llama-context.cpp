@@ -276,6 +276,14 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
+    if (params.moe_cache_split != nullptr) {
+        cparams.moe_cache_sizes.assign(params.moe_cache_split, params.moe_cache_split + llama_max_devices());
+        if (cparams.moe_cache_size == 0) {
+            for (size_t s : cparams.moe_cache_sizes) {
+                cparams.moe_cache_size += s;
+            }
+        }
+    }
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -466,7 +474,9 @@ llama_context::llama_context(
         }
 
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
+            moe_cache = std::make_unique<llama_moe_cache>(
+                model, backend_ptrs, backend_buft, cparams.moe_cache_size,
+                cparams.moe_cache_sizes.empty() ? nullptr : cparams.moe_cache_sizes.data());
         }
 
         sched_reserve();
@@ -3890,6 +3900,7 @@ llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.moe_cache_split             =*/ nullptr,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

@@ -2777,13 +2777,40 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
-        {"--moe-cache-mib"}, "N",
-        "GPU cache size in MiB for the MoE experts kept in the CPU. with multiple GPUs, it is split among them like the layers (--tensor-split) (default: 0, disabled)",
-        [](common_params & params, int value) {
-            if (value < 0) {
-                throw std::invalid_argument("invalid value");
+        {"--moe-cache-mib"}, "N0,N1,N2,...",
+        "GPU cache size in MiB for the MoE experts kept in the CPU. a single value is split among the GPUs like the layers (--tensor-split). a comma-separated list sets the size of each GPU (default: 0, disabled)",
+        [](common_params & params, const std::string & value) {
+            const std::regex regex{ R"([,/]+)" };
+            std::sregex_token_iterator it{ value.begin(), value.end(), regex, -1 };
+            std::vector<std::string> split_arg{ it, {} };
+            if (split_arg.empty() || split_arg.size() >= llama_max_devices()) {
+                throw std::invalid_argument(
+                    string_format("got %zu input configs, but system only has %zu devices", split_arg.size(), llama_max_devices())
+                );
             }
-            params.moe_cache_size = (size_t) value*1024*1024;
+
+            auto parse_mib = [](const std::string & s) {
+                size_t idx = 0;
+                const int v = std::stoi(s, &idx);
+                if (idx != s.size() || v < 0) {
+                    throw std::invalid_argument("invalid value");
+                }
+                return (size_t) v * 1024 * 1024;
+            };
+
+            params.moe_cache_size = 0;
+            params.moe_cache_per_device = split_arg.size() > 1;
+            for (size_t i = 0; i < llama_max_devices(); ++i) {
+                params.moe_cache_sizes[i] = 0;
+            }
+            if (params.moe_cache_per_device) {
+                for (size_t i = 0; i < split_arg.size(); ++i) {
+                    params.moe_cache_sizes[i] = parse_mib(split_arg[i]);
+                    params.moe_cache_size += params.moe_cache_sizes[i];
+                }
+            } else {
+                params.moe_cache_size = parse_mib(split_arg[0]);
+            }
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
     add_opt(common_arg(
