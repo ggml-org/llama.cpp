@@ -1700,6 +1700,10 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
     }
 }
 
+static bool ggml_cuda_mul_mat_id_has_f32_src1(const ggml_tensor * tensor) {
+    return tensor->op == GGML_OP_MUL_MAT_ID && ggml_get_op_params_i32(tensor, 3) == GGML_PREC_F32;
+}
+
 static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
                                           const ggml_tensor * ffn_gate,
                                           const ggml_tensor * glu,
@@ -1721,6 +1725,10 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
     const bool is_mul_mat_id  = ffn_up->op == GGML_OP_MUL_MAT_ID  && ffn_gate->op == GGML_OP_MUL_MAT_ID  && glu->op == GGML_OP_GLU;
 
     GGML_ASSERT(ffn_up && ffn_gate && glu);
+
+    if (ggml_cuda_mul_mat_id_has_f32_src1(ffn_up) || ggml_cuda_mul_mat_id_has_f32_src1(ffn_gate)) {
+        return false;
+    }
 
     if (!is_mul_mat && !is_mul_mat_id) {
         return false;
@@ -1795,6 +1803,10 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
 }
 
 static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
+    if (ggml_cuda_mul_mat_id_has_f32_src1(tensor)) {
+        return false;
+    }
+
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
     const ggml_tensor * dst  = tensor;
@@ -1823,6 +1835,10 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
 }
 
 static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
+    if (ggml_cuda_mul_mat_id_has_f32_src1(tensor)) {
+        return false;
+    }
+
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
     const ggml_tensor * dst  = tensor;
@@ -1964,7 +1980,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if (ggml_cuda_mul_mat_id_has_f32_src1(dst) || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return true;
     }
 
@@ -2000,9 +2016,10 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const bool src1_f32 = ggml_cuda_mul_mat_id_has_f32_src1(dst);
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
-    if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (!src1_f32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
@@ -2037,7 +2054,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     GGML_ASSERT(nb12 % nb11 == 0);
     GGML_ASSERT(nb2  % nb1  == 0);
 
-    const ggml_type type_src1_sorted = (src0->type == GGML_TYPE_F16 && !fast_fp16_hardware_available(cc))
+    const ggml_type type_src1_sorted = src1_f32 || (src0->type == GGML_TYPE_F16 && !fast_fp16_hardware_available(cc))
         || ggml_is_quantized(src0->type) ? GGML_TYPE_F32 : src0->type;
     const ggml_type type_dst_sorted  = GGML_TYPE_F32;
     const size_t ts_src1_sorted = ggml_type_size(type_src1_sorted);
@@ -2134,7 +2151,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
         dst_slice.data   = dst_data_cur;
 
-        ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
+        if (src1_f32) {
+            ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, &src0_slice, &src1_slice, &dst_slice);
+        } else {
+            ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
+        }
         CUDA_CHECK(cudaGetLastError());
 
         src1_data_cur += src1_slice.nb[2];
@@ -5351,8 +5372,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16 && !ggml_cuda_op_mul_mat_use_fwht(op)) {
                     return false;
                 }
-                if (op->op == GGML_OP_MUL_MAT_ID && ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
-                    return false;
+                if (ggml_cuda_mul_mat_id_has_f32_src1(op)) {
+                    const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
+                    if (!GGML_CUDA_CC_IS_NVIDIA(cc) || b->type != GGML_TYPE_F32 || !ggml_is_contiguous(b) ||
+                            !ggml_is_contiguous_to_2(a) || (a->type != GGML_TYPE_F32 && !ggml_get_to_fp32_cuda(a->type))) {
+                        return false;
+                    }
                 }
 #ifdef GGML_USE_MUSA
                 const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
