@@ -34,6 +34,9 @@ endif()
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+if(ENABLE_EXPERIMENTAL_METRICS)
+    target_compile_definitions(${TARGET} PRIVATE ENABLE_EXPERIMENTAL_METRICS)
+endif()
 
 # llama-server-impl: server logic, reusable by app
 
@@ -54,6 +57,10 @@ target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMA
 
 add_dependencies(${TARGET} llama-ui-assets)
 
+if(ENABLE_EXPERIMENTAL_METRICS)
+    target_compile_definitions(${TARGET} PRIVATE ENABLE_EXPERIMENTAL_METRICS)
+endif()
+
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)
 endif()
@@ -67,3 +74,5 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+

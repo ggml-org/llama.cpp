@@ -39,6 +39,20 @@ using json = common_json;
 
 using raw_buffer = std::vector<uint8_t>;
 
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+inline bool is_json_accept(const std::map<std::string, std::string> & headers) {
+    for (const auto & [key, value] : headers) {
+        std::string lk(key.begin(), key.end());
+        std::transform(lk.begin(), lk.end(), lk.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (lk == "accept" && value.find("application/json") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
     // Fallback null to default value
@@ -521,6 +535,29 @@ struct server_metrics {
     uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted
     uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+    // KV cache metrics (approximate, set in SERVER_TASK_TYPE_METRICS handler)
+    uint32_t kvcache_capacity_tokens = 0;  // llama_n_ctx() total KV cache capacity
+    uint32_t kvcache_used_tokens     = 0;  // sum of slot.prompt.n_tokens() for processing slots
+
+    struct kvcache_slot {
+        int    slot_id            = -1;
+        int    state              = 0;
+        uint32_t n_tokens         = 0;
+        uint32_t n_prompt_cached  = 0;
+        uint32_t n_prompt_processed = 0;
+        uint32_t n_gen            = 0;
+        int64_t  t_start          = 0;
+        int64_t  t_prompt_last    = 0;
+        int64_t  t_gen_last       = 0;
+    };
+    std::vector<kvcache_slot> kvcache_slots;
+
+    // memory metrics (set via llama_get_memory_breakdown)
+    uint64_t memory_context_bytes = 0;  // context/KV cache buffers across all devices
+    uint64_t memory_model_bytes   = 0;  // model weights across all devices
+#endif
 
     void init() {
         t_start = ggml_time_us();

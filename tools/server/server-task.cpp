@@ -11,6 +11,18 @@
 #include "server-common.h"
 
 #include <sstream>
+#include <cmath>
+#include <iomanip>
+
+// Helper to serialize a double with exactly 1 decimal place in JSON output.
+// std::round(x*10)/10 produces artifacts like 3.3000000000000003;
+// snprintf("%.1f") formats the rounded value as a string, then we parse it
+// back into a double so the JSON library writes it as a number.
+static json json_round1(double value) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%.1f", value);
+    return json(std::stod(buf));
+}
 
 //
 // task_params
@@ -1517,9 +1529,123 @@ json server_task_result_slots::to_json() {
     return slots_data;
 }
 
+static const char * slot_state_name(int state) {
+    switch (state) {
+        case 0:  return "idle";
+        case 1:  return "wait_other";
+        case 2:  return "started";
+        case 3:  return "processing_prompt";
+        case 4:  return "done_prompt";
+        case 5:  return "generating";
+        default: return "unknown";
+    }
+}
+
 json server_task_result_metrics::to_json() {
-    // not used, /metrics renders prometheus text via to_metrics()
-    return json{};
+    double n_busy = metrics.n_decode > 0
+        ? (double)metrics.n_busy_slots / (double)metrics.n_decode
+        : 0.0;
+
+    // per-slot context ceiling (all slots share the context window equally)
+    double context_max_slot = 0.0;
+    if (metrics.kvcache_capacity_tokens > 0 && !metrics.kvcache_slots.empty()) {
+        context_max_slot = (double)metrics.kvcache_capacity_tokens / (double)metrics.kvcache_slots.size();
+    }
+
+    // kvcache: active tokens only
+    json kvcache = json::object();
+    kvcache["active_tokens"] = metrics.kvcache_used_tokens;
+
+    // slots: moved out of kvcache, each slot reports its own utilization
+    json slots = json::array();
+    for (const auto & slot : metrics.kvcache_slots) {
+        double ctx_util = 0.0;
+        if (context_max_slot > 0) {
+            ctx_util = (double)slot.n_tokens / context_max_slot * 100.0;
+        }
+        slots.push_back(json{
+            {"slot",            slot.slot_id},
+            {"state",           std::to_string(slot.state) + " - " + slot_state_name(slot.state)},
+            {"tokens",          slot.n_tokens},
+            {"context_max",     (int)std::round(context_max_slot)},
+            {"context_utilization", json_round1(std::round(ctx_util * 10.0) / 10.0)},
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+            {"prompt_cached_tokens",    slot.n_prompt_cached},
+            {"prompt_new_tokens",       slot.n_prompt_processed - slot.n_prompt_cached},
+            {"generated_tokens",        slot.n_gen},
+            {"elapsed_seconds",         json_round1(std::max(0.0, (ggml_time_us() - slot.t_start) / 1e6))},
+#endif
+        });
+    }
+
+    json base = json::object();
+    base["context_max"] = metrics.kvcache_capacity_tokens;
+    base["tasks"] = json{
+        {"processing", n_processing_slots},
+        {"queued",     n_tasks_deferred},
+    };
+
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+    // aggregate in-flight token counts from active slots
+    // prompt processing: only count tokens for slots still in prompt phase (STARTED, PROCESSING_PROMPT)
+    // generation: count tokens for slots actively generating (GENERATING)
+    uint32_t n_prompt_processing = 0;
+    uint32_t n_gen_processing    = 0;
+    for (const auto & s : metrics.kvcache_slots) {
+        if (s.state == 2 || s.state == 3) { // STARTED or PROCESSING_PROMPT
+            n_prompt_processing += s.n_prompt_processed;
+        }
+        if (s.state == 5) { // GENERATING
+            n_gen_processing += s.n_gen;
+        }
+    }
+#endif
+
+    base["prompt"] = json{
+        {"tokens_total",         metrics.prompt.count},
+        {"tokens_cached_total",  metrics.n_prompt_cached},
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+        {"tokens_processed",     metrics.prompt.count + n_prompt_processing},
+#endif
+    };
+
+    base["prediction"] = json{
+        {"tokens_total",         metrics.predict.count},
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+        {"tokens_processed",     metrics.predict.count + n_gen_processing},
+#endif
+    };
+
+    json decode = json{
+        {"total",                metrics.n_decode},
+        {"n_tokens_max",         metrics.n_tokens_max},
+        {"busy_slots_per_decode", json_round1(std::round(n_busy * 10.0) / 10.0)},
+    };
+
+    // speculative section only when draft tokens were generated
+    if (metrics.n_draft_tokens > 0 || metrics.n_draft_accepted > 0) {
+        json accepted = json{{"total", metrics.n_draft_accepted}};
+        for (size_t i = 0; i < metrics.n_accepted_per_pos.size(); i++) {
+            accepted["draft_pos_" + std::to_string(i)] = metrics.n_accepted_per_pos[i];
+        }
+        decode["speculative"] = json{
+            {"draft_tokens_total",     metrics.n_draft_tokens},
+            {"verification_steps_total", metrics.n_draft_verif_steps},
+            {"accepted_tokens",        accepted},
+        };
+    }
+
+    base["decode"] = decode;
+    base["kvcache"] = kvcache;
+    base["slots"]   = slots;
+    base["memory"] = json{
+        {"context_bytes", metrics.memory_context_bytes},
+        {"model_bytes",   metrics.memory_model_bytes},
+    };
+
+    json wrapped = json::object();
+    wrapped["metrics"] = base;
+    return wrapped;
 }
 
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names

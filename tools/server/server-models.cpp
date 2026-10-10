@@ -13,6 +13,9 @@
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+#include <unordered_map>
+#endif
 
 #include <functional>
 #include <optional>
@@ -2020,7 +2023,218 @@ void server_models_routes::init_routes() {
     };
 
     this->proxy_get = [this](const server_http_req & req) {
-        std::string method = "GET";
+        // server-global endpoints (not per-model); skip model name validation
+        if (req.path == "/metrics" || req.path == "/slots") {
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+            // detect JSON accept header
+            bool json_output = is_json_accept(req.headers);
+
+            // /metrics JSON aggregation for router mode (JSON-only feature)
+            if (req.path == "/metrics" && json_output) {
+#endif
+                std::string name = req.get_param("model");
+
+                // no model param: reject with 400
+                if (name.empty()) {
+                    auto error_res = std::make_unique<server_http_res>();
+                    error_res->status = 400;
+                    error_res->data = json{{"error", json{{"code", 400}, {"type", "invalid_request_error"}, {"message", "multiple models configured; specify a model parameter for /metrics, or use model=all to aggregate all"}}}}.dump();
+                    return error_res;
+                }
+
+                // parse comma-separated model list (trim whitespace)
+                std::vector<std::string> raw_names;
+                std::string remaining = name;
+                while (!remaining.empty()) {
+                    auto comma = remaining.find(',');
+                    std::string mname = comma == std::string::npos ? remaining : remaining.substr(0, comma);
+                    while (!mname.empty() && mname.front() == ' ') mname.erase(0, 1);
+                    while (!mname.empty() && mname.back() == ' ') mname.pop_back();
+                    if (!mname.empty()) {
+                        raw_names.push_back(mname);
+                    }
+                    if (comma == std::string::npos) {
+                        break;
+                    }
+                    remaining = remaining.substr(comma + 1);
+                }
+
+                // cap to prevent resource exhaustion from crafted requests
+                if (raw_names.size() > 16) {
+                    auto err = std::make_unique<server_http_res>();
+                    err->status = 400;
+                    err->data = json{{"error", json{{"code", 400}, {"type", "invalid_request_error"}, {"message", "too many models requested"}}}}.dump();
+                    return err;
+                }
+
+                // snapshot all models under the mutex (thread-safe, fixes CRITICAL-1/2)
+                auto all_meta = models.get_all_meta();
+
+                // build alias->canonical map from snapshot
+                std::unordered_map<std::string, std::string> alias_to_name;
+                for (const auto & meta : all_meta) {
+                    alias_to_name[meta.name] = meta.name;
+                    for (const auto & a : meta.aliases) {
+                        alias_to_name[a] = meta.name;
+                    }
+                }
+
+                // does a real model exist named/aliased "all"?
+                bool has_real_model_all = alias_to_name.count("all");
+
+                std::vector<std::string> model_names;
+                if (!has_real_model_all) {
+                    // "all" is not a real model — check if it appears in the input
+                    for (const auto & mname : raw_names) {
+                        if (mname == "all") {
+                            // expand to all models, skip parsing the rest
+                            for (const auto & meta : all_meta) {
+                                if (!meta.hidden) {
+                                    model_names.push_back(meta.name);
+                                }
+                            }
+                            goto done_parsing;
+                        }
+                    }
+                }
+
+                // parse list normally ("all" is a real model, or not present in input)
+                for (auto & mname : raw_names) {
+                    auto it = alias_to_name.find(mname);
+                    if (it != alias_to_name.end()) {
+                        mname = it->second;
+                    }
+                    model_names.push_back(mname);
+                }
+
+            done_parsing:
+
+                // helper: placeholder metrics JSON skeleton
+                auto placeholder_metrics = []() {
+                    return json{
+                        {"context_max", 0},
+                        {"tasks", json{{"processing", 0}, {"queued", 0}}},
+                        {"prompt", json{{"tokens_total", 0}, {"tokens_cached_total", 0}}},
+                        {"prediction", json{{"tokens_total", 0}}},
+                        {"decode", json{{"total", 0}, {"n_tokens_max", 0}, {"busy_slots_per_decode", 0.0}, {"speculative", json{{"draft_tokens_total", 0}, {"verification_steps_total", 0}, {"accepted_tokens", json{{"total", 0}}}}}}},
+                        {"kvcache", json{{"active_tokens", 0}}},
+                        {"slots", json::array()},
+                        {"memory", json{{"context_bytes", 0}, {"model_bytes", 0}}},
+                    };
+                };
+
+                json active    = json::array();
+                json available = json::array();
+                json wait      = json::array();
+
+                for (const auto & model_name : model_names) {
+                    json entry = json{{"model", model_name}};
+
+                    // find the snapshot entry for this model
+                    const server_model_meta * meta = nullptr;
+                    for (const auto & m : all_meta) {
+                        if (m.name == model_name) {
+                            meta = &m;
+                            break;
+                        }
+                    }
+
+                    if (meta == nullptr) {
+                        entry["status"] = "not_found";
+                        entry["metrics"] = json::object();
+                        available.push_back(entry);
+                        continue;
+                    }
+
+                    // re-validate status under lock (fixes CRITICAL-3: TOCTOU)
+                    // get_meta returns a fresh copy under the mutex
+                    auto live_meta = models.get_meta(model_name);
+                    if (!live_meta.has_value() || !live_meta->is_ready_or_sleep()) {
+                        entry["status"] = "unloaded";
+                        entry["metrics"] = placeholder_metrics();
+                        available.push_back(entry);
+                        continue;
+                    }
+
+                    entry["status"] = (live_meta->status == SERVER_MODEL_STATUS_LOADED)
+                        ? "loaded"
+                        : "sleeping";
+
+                    if (live_meta->status != SERVER_MODEL_STATUS_LOADED) {
+                        entry["metrics"] = placeholder_metrics();
+                        active.push_back(entry);
+                        continue;
+                    }
+
+                    // proxy to running child (port validated at line below)
+                    int child_port = live_meta->port;
+                    if (child_port <= 0) {
+                        entry["metrics"] = placeholder_metrics();
+                        active.push_back(entry);
+                        continue;
+                    }
+
+                    httplib::Client cli(CHILD_ADDR, child_port);
+                    cli.set_connection_timeout(models.base_params.timeout_read, 5);
+                    cli.set_read_timeout(models.base_params.timeout_read, 0);
+                    cli.set_write_timeout(models.base_params.timeout_read, 0);
+                    std::string path = "/metrics";
+                    if (!req.query_string.empty()) {
+                        path += "?" + req.query_string;
+                    }
+                    httplib::Headers headers = {{"Accept", "application/json"}};
+                    auto result = cli.Get(path.c_str(), headers);
+                    if (result && result->status == 200 && (size_t)result->body.size() <= 4 * 1024 * 1024) {
+                        try {
+                            json child_resp = json::parse(result->body);
+                            json child_metrics = json::object();
+                            if (child_resp.is_object() && child_resp.contains("metrics")) {
+                                auto & m = child_resp["metrics"];
+                                if (m.is_array() && !m.empty()) {
+                                    child_metrics = m[0];
+                                } else if (m.is_object()) {
+                                    child_metrics = m;
+                                }
+                            }
+                            entry["metrics"] = child_metrics;
+                        } catch (const std::exception &) {
+                            entry["metrics"] = placeholder_metrics();
+                        }
+                    } else {
+                        entry["metrics"] = placeholder_metrics();
+                    }
+                    active.push_back(entry);
+                }
+
+                json wrapped = json::object();
+                wrapped["active"]    = active;
+                wrapped["available"] = available;
+                wrapped["wait"]      = wait;
+                auto res = std::make_unique<server_http_res>();
+                res->status = 200;
+                res->content_type = "application/json";
+                res->data = wrapped.dump();
+                return res;
+#ifdef ENABLE_EXPERIMENTAL_METRICS
+            }
+#endif
+
+            // Prometheus fallback: route to first available model (single output format)
+            std::string name = req.get_param("model");
+            if (name.empty()) {
+                for (const auto & [n, inst] : models.mapping) {
+                    if (inst.meta.is_running()) {
+                        return models.proxy_request(req, "GET", n, false);
+                    }
+                }
+                auto error_res = std::make_unique<server_http_res>();
+                error_res->status = 503;
+                error_res->data = json{{"error", json{{"code", 503}, {"type", "server_error"}, {"message", "no running model"}}}}.dump();
+                return error_res;
+            }
+            return models.proxy_request(req, "GET", name, false);
+        }
+
         std::string name = req.get_param("model");
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
@@ -2030,7 +2244,7 @@ void server_models_routes::init_routes() {
         if (autoload) {
             models.ensure_model_ready(name, req.should_stop);
         }
-        return models.proxy_request(req, method, name, false);
+        return models.proxy_request(req, "GET", name, false);
     };
 
     this->proxy_post = [this](const server_http_req & req) {

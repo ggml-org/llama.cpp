@@ -537,9 +537,10 @@ struct server_task_result_error : server_task_result {
 
 // used by /metrics API
 struct server_task_result_metrics : server_task_result {
-    // these are immediate stats, not accumulated (server_metrics is cumulative)
+    // immediate stats about active tasks
     int n_processing_slots = 0;
     int n_tasks_deferred = 0;
+
 
     server_metrics metrics;
 
