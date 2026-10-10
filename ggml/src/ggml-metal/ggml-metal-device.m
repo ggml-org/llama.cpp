@@ -1572,7 +1572,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_ELU:
-                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_STEP:
@@ -1587,6 +1586,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_UNARY_OP_TRUNC:
                 case GGML_UNARY_OP_XIELU:
                     return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
+                case GGML_UNARY_OP_NEG:
+                    return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16);
                 default:
                     return false;
             }

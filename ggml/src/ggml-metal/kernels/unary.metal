@@ -52,7 +52,7 @@ kernel void kernel_unary_impl(
         }
 
         if (FC_OP == OP_UNARY_NUM_FILL) {
-            dst_ptr[i0] = (T) args.val;
+            dst_ptr[i0] = (T) TC(args.val);
         }
 
         if (FC_OP == OP_UNARY_NUM_CLAMP) {
@@ -188,6 +188,11 @@ template [[host_name("kernel_unary_f32_f32")]]   kernel kernel_unary_t kernel_un
 template [[host_name("kernel_unary_f32_f32_4")]] kernel kernel_unary_t kernel_unary_impl<float4, float4, float4>;
 template [[host_name("kernel_unary_f16_f16")]]   kernel kernel_unary_t kernel_unary_impl<half,   half,   float>;
 template [[host_name("kernel_unary_f16_f16_4")]] kernel kernel_unary_t kernel_unary_impl<half4,  half4,  float4>;
+
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_unary_bf16_bf16")]]   kernel kernel_unary_t kernel_unary_impl<bfloat,  bfloat,  float>;
+template [[host_name("kernel_unary_bf16_bf16_4")]] kernel kernel_unary_t kernel_unary_impl<bfloat4, bfloat4, float4>;
+#endif
 
 kernel void kernel_silu_back_f32(
         constant ggml_metal_kargs_silu_back & args,

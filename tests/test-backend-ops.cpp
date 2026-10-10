@@ -9597,6 +9597,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_NEG, GGML_TYPE_BF16, {4096, 2, 2, 2}));
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_NEG, GGML_TYPE_BF16, {4097, 2, 2, 2}));
+
     // fused relu + sqr (squared ReLU)
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         test_cases.emplace_back(new test_relu_sqr(type, { 128, 2, 2, 2 }));
@@ -11936,6 +11939,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_unary(GGML_UNARY_OP_NEG, type, {4096, 512, 1, 1}));
+        test_cases.emplace_back(new test_unary(GGML_UNARY_OP_NEG, type, {4097, 512, 1, 1}));
+    }
 
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
