@@ -3159,7 +3159,7 @@ namespace dpct
             _local_mem_size = local_mem_size;
 
 
-        };
+        }
         static inline std::mutex kernel_function_ptr_map_mutex;
 
       public:

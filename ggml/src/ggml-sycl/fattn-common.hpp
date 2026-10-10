@@ -832,6 +832,29 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
+// Carries the sub-group size (and grf_size_automatic when use_large_grf) as
+// kernel properties via get(properties_tag), in place of the
+// reqd_sub_group_size attribute and the deprecated parallel_for overload.
+template <typename KernelFunc, uint32_t Size, bool UseGrf>
+struct props_kernel {
+    KernelFunc kernel;
+
+    void operator()(sycl::nd_item<3> item) const {
+        kernel(item);
+    }
+
+    auto get(sycl::ext::oneapi::experimental::properties_tag) const {
+        if constexpr (UseGrf) {
+            return sycl::ext::oneapi::experimental::properties{
+                sycl::ext::intel::experimental::grf_size_automatic,
+                sycl::ext::oneapi::experimental::sub_group_size<Size> };
+        } else {
+            return sycl::ext::oneapi::experimental::properties{
+                sycl::ext::oneapi::experimental::sub_group_size<Size> };
+        }
+    }
+};
+
 template <fattn_kernel_t fattn_kernel, int warp_size, bool use_large_grf = false>
 static void lauch_kernel(
     dpct::dim3 group_range,
@@ -881,7 +904,7 @@ static void lauch_kernel(
         static_cast<sycl::range<3>>(group_range * local_range),
         static_cast<sycl::range<3>>(local_range));
 
-    const auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
+    const auto kernel = [=](sycl::nd_item<3> item_ct1) {
         GGML_UNUSED(item_ct1);
         fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
                      max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
@@ -892,14 +915,7 @@ static void lauch_kernel(
 
     q->submit([&](sycl::handler &cgh) {
         // grf_size_automatic lets the compiler use the large register file when the kernel needs it. grf_size<256> would say the same but is undefined on devices that do not have it.
-        if constexpr (use_large_grf) {
-            cgh.parallel_for(
-                rng,
-                sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size_automatic },
-                kernel);
-        } else {
-            cgh.parallel_for(rng, kernel);
-        }
+        cgh.parallel_for(rng, props_kernel<decltype(kernel), warp_size, use_large_grf>{kernel});
     });
 }
 
