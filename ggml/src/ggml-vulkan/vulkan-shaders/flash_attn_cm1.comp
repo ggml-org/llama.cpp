@@ -90,6 +90,18 @@ void main() {
         barrier();
     }
 
+    if (GQA_TOK > 1) {
+        // Folded verify tile: row r -> token row_tok(r), head row_head(r); 8 rows per token.
+        [[unroll]] for (uint32_t idx = 0; idx < Br * HSK / 4; idx += gl_WorkGroupSize.x) {
+            uint32_t d = (idx + tid) % (HSK / 4);
+            uint32_t r = (idx + tid) / (HSK / 4);
+            uint32_t rr = i * Br + r;
+            if (r < Br && d < HSK / 4 && row_tok(rr) < p.ne2 && (rr % 8u) < p.gqa_ratio) {
+                uint32_t off = row_tok(rr) * p.nb01 / 4 + (row_head(rr) * p.nb02 + iq3 * p.nb03) / 16;
+                Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[off + d] * p.scale);
+            }
+        }
+    } else {
     uint32_t q_offset = gqa_iq1*p.nb01 + (iq2*p.nb02+iq3*p.nb03) / 4;
 
     [[unroll]] for (uint32_t idx = 0; idx < Br * HSK / 4; idx += gl_WorkGroupSize.x) {
@@ -99,6 +111,7 @@ void main() {
             i * Br + r < N) {
             Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
         }
+    }
     }
     barrier();
 
@@ -168,7 +181,42 @@ void main() {
                 continue;
             }
             // Only load if the block is not all zeros
-            if (mask_opt_bits != MASK_OPT_ALL_ZERO) {
+            if (GQA_TOK > 1 && mask_opt_bits != MASK_OPT_ALL_ZERO) {
+                // Folded path: each 4-row group is inside one token (8 rows per token).
+                float max_mask = NEG_FLT_MAX_OVER_2;
+                [[unroll]] for (uint32_t idx = 0; idx < Bc * Br / 4; idx += gl_WorkGroupSize.x) {
+                    uint32_t c = (idx + tid) / (Br / 4);
+                    uint32_t r = (idx + tid) % (Br / 4);
+                    if (idx + tid < Bc * Br / 4 || idx + gl_WorkGroupSize.x <= Bc * Br / 4) {
+                        uint32_t kcol;
+                        bool kv_active = fa_kv_index(j * Bc + c, kcol);
+                        if (kv_active) {
+                            uint32_t rr = i * Br + r * 4;
+                            uint32_t tok = min(row_tok(rr), p.nem1 - 1u);
+                            uint32_t mo = tok * KV;
+                            if (p.nem2 != 1 || p.nem3 != 1) {
+                                mo += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
+                            }
+                            float mv = float(data_m[mo + (j * Bc + c)]);
+                            mask_cache[idx / WorkGroupSize] = f16vec4(mv);
+                            max_mask = max(max_mask, mv);
+                        }
+                    }
+                }
+                bool all_less = subgroupAll(max_mask <= NEG_FLT_MAX_OVER_2);
+                barrier();
+                if (gl_SubgroupInvocationID == 0) {
+                    tmpsh[gl_SubgroupID] = all_less ? NEG_FLT_MAX_OVER_2 : 0.0f;
+                }
+                barrier();
+                [[unroll]] for (uint s = 0; s < gl_NumSubgroups; ++s) {
+                    max_mask = max(max_mask, tmpsh[s]);
+                }
+                if (max_mask <= NEG_FLT_MAX_OVER_2) {
+                    continue;
+                }
+            }
+            if (GQA_TOK == 1 && mask_opt_bits != MASK_OPT_ALL_ZERO) {
                 bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
 
                 float max_mask = NEG_FLT_MAX_OVER_2;
@@ -551,6 +599,28 @@ void main() {
     // division by L. Store the intermediate O value and per-row m and L values.
     if (p.k_num > 1) {
         if (p.gqa_ratio > 1) {
+            if (GQA_TOK > 1) {
+                // Folded path: per-row token/head addressing into the split-K scratch.
+                [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+                    uint32_t rr = tile_row(r);
+                    uint32_t tok = row_tok(rr);
+                    uint32_t head = row_head(rr);
+                    if (tok < p.ne2 && (rr % 8u) < p.gqa_ratio) {
+                        uint32_t o_off = HSV * p.ne1 * (split_k_index + p.k_num * (tok + p.ne2 * iq3)) / 4;
+                        [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
+                            const uint d = d0 + col_tid;
+                            if (d >= HSV/4) break;
+                            const uint d_local = d0 / threads_per_rowgroup;
+                            data_ov4[o_off + head * HSV / 4 + d] = D_TYPEV4(Of[r][d_local]);
+                        }
+                        if (col_tid == 0) {
+                            uint32_t lm = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (tok + p.ne2 * iq3));
+                            data_o[lm + head] = D_TYPE(Lf[r]);
+                            data_o[lm + p.ne1 + head] = D_TYPE(Mf[r]);
+                        }
+                    }
+                }
+            } else {
             // note: O and Q have swapped coord 1,2.
             uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3)) / 4;
 
@@ -571,6 +641,7 @@ void main() {
                     perElemOpStoreCol0(tile_row(r), 0u, ACC_TYPE(Lf[r]), o_offset, iq2, N);
                     perElemOpStoreCol0(tile_row(r), 0u, ACC_TYPE(Mf[r]), o_offset + p.ne1, iq2, N);
                 }
+            }
             }
         } else {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {

@@ -8139,8 +8139,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         workgroups_y /= gqa_ratio;
     }
 
-    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc);
-
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
@@ -8152,6 +8150,22 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     if (logit_softcap != 0) {
         scale /= logit_softcap;
     }
+
+    // Prototype (GGML_VK_FA_QTOK_FOLD): fold 2 query tokens into one 16-row GQA tile, 8 rows per
+    // token (6 heads + 2 padding rows), so each K/V tile is read once per token pair. gqa_ratio 6,
+    // coopmat1 with Br = 16 and the split_k > 1 path only (checked once split_k is known).
+    // Token rows are bounded by the Q token count (dst ne2); the fold is only enabled with a mask.
+    uint32_t gqa_tok = 1;
+    static const bool fa_qtok_fold = getenv("GGML_VK_FA_QTOK_FOLD") != nullptr;
+    // ALiBi is not supported by the folded row mapping.
+    if (fa_qtok_fold && mask != nullptr && max_bias == 0.0f && gqa_ratio == 6 && (uint32_t)neq1 >= 2 &&
+        tuning_params.path == FA_COOPMAT1 && tuning_params.block_rows == 16) {
+        gqa_tok = 2;
+        N = 8 * gqa_tok;
+        workgroups_x = (uint32_t)CEIL_DIV(neq1, gqa_tok);
+    }
+
+    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc);
 
     // Sparse mask hint (op_params[4]): compact the <= n_kv_max finite positions and gather only those.
     const int32_t n_kv_max = mask ? ggml_get_op_params_i32(dst, 4) : 0;
@@ -8463,6 +8477,17 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                   { mask_buf, sparse_buf }, sc_pc,
                                   { nem1, nem2, nem3 });
         ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    if (gqa_tok > 1 && (split_k == 1 || use_sparse)) {
+        // the fold is only implemented for the split_k > 1 store path: restore the original mapping
+        gqa_tok = 1;
+        N = gqa_ratio;
+        workgroups_x = (uint32_t)neq1;
+    }
+    // the push constants are at the 128-byte limit: gqa_tok goes in the spare bits 25+ of mask_n_head_log2
+    if (gqa_tok > 1) {
+        mask_n_head_log2 |= gqa_tok << 25;
     }
 
     const vk_flash_attn_push_constants pc = { N, KV,
