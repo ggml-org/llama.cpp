@@ -1,10 +1,12 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
+#include "common.h"
 
 #include <chrono>
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cassert>
 #include <vector>
 #include <thread>
@@ -217,13 +219,30 @@ int main(int argc, char *argv[]) {
 
     int n_threads = std::max(1, std::min(4, (int) std::thread::hardware_concurrency()));
     int n_rounds  = 100;
+    bool use_default_threads = false;
 
     if (argc > 1) {
-        n_threads = std::atoi(argv[1]);
+        if (std::strcmp(argv[1], "--default") == 0) {
+            common_cpu_params cpuparams;
+            common_cpu_params cpuparams_batch;
+            postprocess_cpu_params(cpuparams, nullptr);
+            postprocess_cpu_params(cpuparams_batch, &cpuparams);
+            GGML_ASSERT(cpuparams.n_threads > 0);
+            GGML_ASSERT(cpuparams_batch.n_threads == cpuparams.n_threads);
+            n_threads = cpuparams.n_threads;
+            use_default_threads = true;
+        } else {
+            n_threads = std::atoi(argv[1]);
+        }
     }
 
     if (argc > 2) {
         n_rounds  = std::atoi(argv[2]);
+    }
+
+    if (use_default_threads) {
+        test_active(n_threads, n_rounds);
+        return 0;
     }
 
     test_barrier(n_threads, n_rounds);

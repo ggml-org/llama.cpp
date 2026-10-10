@@ -141,6 +141,10 @@ if (LLAMA_SUBPROCESS)
     target_compile_definitions(${TARGET} PUBLIC LLAMA_SUBPROCESS)
 endif()
 
+if (GGML_CPU_RISCV64_SPACEMIT)
+    target_compile_definitions(${TARGET} PRIVATE GGML_USE_CPU_RISCV64_SPACEMIT)
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

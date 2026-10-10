@@ -218,6 +218,23 @@ int32_t common_cpu_get_num_math() {
             }
         }
     }
+#elif defined(GGML_USE_CPU_RISCV64_SPACEMIT) && defined(__linux__) && defined(__riscv)
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    int32_t n_a100 = 0;
+    while (std::getline(cpuinfo, line)) {
+        std::istringstream fields(line);
+        std::string key;
+        std::string separator;
+        uint64_t marchid;
+        if (fields >> key >> separator >> std::hex >> marchid &&
+            key == "marchid" && separator == ":" && marchid == UINT64_C(0x8000000041000002)) {
+            ++n_a100;
+        }
+    }
+    if (n_a100 > 0) {
+        return n_a100;
+    }
 #elif defined(__powerpc64__) || defined(__powerpc__)
     int32_t smt_factor = 1;
     int phy_cpus = common_cpu_get_num_physical_cores();
