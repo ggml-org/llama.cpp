@@ -48,6 +48,7 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <mutex>
 #include <regex>
 #include <set>
+#include <tuple>
 #include <unordered_set>
 
 #undef MIN
@@ -494,6 +495,13 @@ struct ggml_opencl_fa_kernels {
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_split;       // flash-decoding K-split
     // vec decode
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec;
+    bool f32_f16_vec_512_attempted = false;
+    std::map<std::tuple<int, int, int>, cl_kernel> f32_f16_mq_decode;
+    std::map<std::tuple<int, int, int>, size_t>    f32_f16_mq_decode_wg;
+    std::map<std::tuple<int, int, int>, int>       f32_f16_mq_decode_hs;
+    std::set<std::tuple<int, int, int>>           f32_f16_mq_decode_attempted;
+    ggml_cl_buffer fd_partial;
+    cl_uint compute_units = 0;
     // kv-head-coalesced vec decode
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq;
     // kv-head-coalesced + flash-decoding split
@@ -1289,6 +1297,11 @@ struct ggml_backend_opencl_context {
 
         ref_count--;
         if (ref_count == 0) {
+            if (fa.fd_partial.buffer) {
+                CL_CHECK(clReleaseMemObject(fa.fd_partial.buffer));
+                fa.fd_partial.buffer = nullptr;
+                fa.fd_partial.size = 0;
+            }
 #ifdef GGML_OPENCL_PROFILING
             flush_profiling_batch();
             write_profiling_info();
@@ -1473,14 +1486,7 @@ static bool use_adreno_bin_kernels(ggml_backend_opencl_context * backend_ctx) {
 #endif // GGML_OPENCL_USE_ADRENO_BIN_KERNELS
 }
 
-static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
-    if (backend_ctx->kernels_loaded) {
-        return;
-    }
-
-    cl_int err;
-
-    // compiler options for general kernels
+static std::string ggml_opencl_make_compile_opts(const ggml_backend_opencl_context * backend_ctx) {
     auto opencl_c_std =
         std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." + std::to_string(backend_ctx->opencl_c_version.minor);
     std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
@@ -1491,7 +1497,18 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         compile_opts += " -qcom-enable-large-buffer ";
     }
 
-    backend_ctx->kernel_compile_opts = compile_opts;
+    return compile_opts;
+}
+
+static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
+    if (backend_ctx->kernels_loaded) {
+        return;
+    }
+
+    cl_int err;
+    const std::string & compile_opts = backend_ctx->kernel_compile_opts;
+    const std::string opencl_c_std = "CL" + std::to_string(backend_ctx->opencl_c_version.major) +
+                                   "." + std::to_string(backend_ctx->opencl_c_version.minor);
 
     GGML_LOG_INFO("ggml_opencl: loading OpenCL kernels");
 
@@ -5606,6 +5623,127 @@ static void ggml_opencl_ensure_fa_pre_kernels(ggml_backend_opencl_context * back
     clReleaseProgram(prog_pre_f16);
 }
 
+static bool ggml_opencl_ensure_fa_f32_f16_vec_512(ggml_backend_opencl_context * backend_ctx) {
+    const std::pair<int, int> key = {512, 512};
+    auto & fa = backend_ctx->fa;
+    if (fa.f32_f16_q1_vec.count(key) > 0) {
+        return true;
+    }
+    if (fa.f32_f16_vec_512_attempted || backend_ctx->kernel_compile_opts.empty()) {
+        return false;
+    }
+    fa.f32_f16_vec_512_attempted = true;
+
+    const ggml_opencl_fa_dim * cfg = nullptr;
+    for (const auto & d : g_opencl_fa_dims) {
+        if (d.dk == 512 && d.dv == 512) {
+            cfg = &d;
+            break;
+        }
+    }
+    if (cfg == nullptr) {
+        return false;
+    }
+
+    // Compile only vec decode and merge to stay within the Adreno compiler's memory limit.
+    const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
+                             " -D FA_DECODE_ONLY -D FA_VEC_ONLY";
+    cl_program prog = build_program_from_source_ex(
+        backend_ctx->context, backend_ctx->device,
+        ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
+        /*fatal=*/false, "fa f32_f16 decode512 vec", backend_ctx->queue);
+    if (!prog) {
+        return false;
+    }
+    cl_int err;
+    cl_kernel vec = clCreateKernel(prog, "flash_attn_f32_f16_q1_vec", &err);
+    if (err != CL_SUCCESS) {
+        clReleaseProgram(prog);
+        return false;
+    }
+    cl_kernel merge = clCreateKernel(prog, "flash_attn_f32_merge", &err);
+    clReleaseProgram(prog);
+    if (err != CL_SUCCESS) {
+        clReleaseKernel(vec);
+        return false;
+    }
+    if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, vec, 256, "flash_attn_f32_f16_q1_vec", 512, 512) ||
+        !ggml_opencl_fa_kernel_fits_wg(backend_ctx, merge, 128, "flash_attn_f32_merge", 512, 512)) {
+        clReleaseKernel(vec);
+        clReleaseKernel(merge);
+        return false;
+    }
+    fa.f32_f16_q1_vec[key] = vec;
+    if (fa.f32_merge.count(key) > 0) {
+        clReleaseKernel(merge);
+    } else {
+        fa.f32_merge[key] = merge;
+    }
+    return true;
+}
+
+static void ggml_opencl_ensure_fa_f32_f16_mq_decode(ggml_backend_opencl_context * backend_ctx, int dk, int dv, int gqa) {
+    const std::tuple<int, int, int> key = {dk, dv, gqa};
+    auto & fa = backend_ctx->fa;
+    if (fa.f32_f16_mq_decode.count(key) > 0 || fa.f32_f16_mq_decode_attempted.count(key) > 0 ||
+        backend_ctx->kernel_compile_opts.empty()) {
+        return;
+    }
+    if (gqa == 4 && dk != 128 && fa.f32_f16_q1_vec_mq_split.count({dk, dv}) > 0) {
+        fa.f32_f16_mq_decode[key] = fa.f32_f16_q1_vec_mq_split.at({dk, dv});
+        fa.f32_f16_mq_decode_wg[key] = 256;
+        fa.f32_f16_mq_decode_hs[key] = 1;
+        return;
+    }
+    fa.f32_f16_mq_decode_attempted.insert(key);
+    const ggml_opencl_fa_dim * cfg = nullptr;
+    for (const auto & d : g_opencl_fa_dims) {
+        if (d.dk == dk && d.dv == dv) {
+            cfg = &d;
+            break;
+        }
+    }
+    if (cfg == nullptr) {
+        return;
+    }
+
+    const bool cluster = dk == 64 || dk == 128;
+    const int head_sub = cluster ? 2 : (gqa == 8 ? (dk == 512 ? 4 : 2) : 1);
+    const int nsg_max = dk == 64 ? 1 : (dk == 128 || (gqa == 8 && dk == 256) ? 2 : 4);
+    const char * kernel_name = cluster ? "flash_attn_f32_f16_q1_vec_mq_split_c8" : "flash_attn_f32_f16_q1_vec_mq_split";
+    const std::string src = ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16);
+    const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
+                             " -D FA_MQ_ONLY -D MQ_GQA=" + std::to_string(gqa / head_sub) +
+                             " -D FA_HEAD_SUB=" + std::to_string(head_sub) +
+                             (cluster ? " -D MQ_NSG=" + std::to_string(nsg_max) + " -D FA_CL_C=16" : " -D FA_MQ_SPLIT_ONLY") +
+                             (dk == 64 ? " -D FA_CL_MHRED -D FA_CL_MASK_BCAST" : "") +
+                             (gqa == 8 && dk == 256 ? " -D FA_Q1_Q_REG" : "");
+    for (int nsg = nsg_max; nsg >= 1; nsg /= 2) {
+        const size_t wg = 64 * nsg;
+        cl_program prog = build_program_from_source_ex(
+            backend_ctx->context, backend_ctx->device, src.c_str(),
+            opts + " -D MQ_NSG_SPLIT=" + std::to_string(nsg),
+            /*fatal=*/false, "fa f32_f16 mq decode", backend_ctx->queue);
+        if (!prog) {
+            continue;
+        }
+        cl_int err;
+        cl_kernel kernel = clCreateKernel(prog, kernel_name, &err);
+        clReleaseProgram(prog);
+        if (err != CL_SUCCESS) {
+            continue;
+        }
+        if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, kernel, wg, kernel_name, dk, dv)) {
+            clReleaseKernel(kernel);
+            continue;
+        }
+        fa.f32_f16_mq_decode[key] = kernel;
+        fa.f32_f16_mq_decode_wg[key] = wg;
+        fa.f32_f16_mq_decode_hs[key] = head_sub;
+        return;
+    }
+}
+
 // DK=512 prefill BM-tile
 static bool ggml_opencl_ensure_fa_f32_f16_prefill_512(ggml_backend_opencl_context * backend_ctx, bool split) {
     const int dk = 512, dv = 512;
@@ -6833,6 +6971,10 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     // determine whether to use large buffer for Adreno
     backend_ctx->adreno_use_large_buffer = getenv("GGML_OPENCL_ADRENO_USE_LARGE_BUFFER") != nullptr &&
                                            backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
+
+    backend_ctx->kernel_compile_opts = ggml_opencl_make_compile_opts(backend_ctx.get());
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS,
+                            sizeof(backend_ctx->fa.compute_units), &backend_ctx->fa.compute_units, NULL));
 
     // ragged moe, unspecified or non-zero means enabled, set to 0 to disable
     static const char * ragged_fp16_env = getenv("GGML_OPENCL_MOE_RAGGED_FP16");
@@ -9327,10 +9469,13 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return false;
                 }
                 if (q->ne[1] == 1) {
-                    // DK=512 decode is bandwidth-bound and slower on the GPU
-                    // than on the CPU; decline it here so it runs on the CPU.
-                    // Prefill (n_q > 1) stays on the GPU.
-                    return false;
+                    const char * decode_env = getenv("GGML_OPENCL_FA_DK512_DECODE");
+                    if ((decode_env && decode_env[0] == '0') ||
+                        backend_ctx->gpu_family != ADRENO || k->ne[2] <= 0 ||
+                        (q->ne[2] / k->ne[2] != 4 && q->ne[2] / k->ne[2] != 8) || q->ne[2] % k->ne[2] != 0 ||
+                        !ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx)) {
+                        return false;
+                    }
                 } else {
                     // prefill, BM-tile in its own FA_PREFILL_ONLY program
                     if (!ggml_opencl_ensure_fa_f32_f16_prefill_512(backend_ctx, /*split=*/false)) {
@@ -17918,10 +18063,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     }
 #endif
 
-    // DK=512 (Gemma-4 global layers) runs decode-only (q1 / q1_split) on
-    // Adreno - it never uses the BM-tile path, and the prepass + split-tile
-    // programs OOM the compiler at DK=512; supports_op only admits
-    // n_q==1 here and prefill goes to CPU
+    // Compile DK512 decode separately from the prefill programs.
     const bool fa_decode_only_512 = (d_head_q == 512);
 
     // per-variant lazy compile for this (dk, dv)
@@ -17950,7 +18092,11 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     if (is_f16) {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F16);
     } else if (is_mixed) {
-        ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32_F16);
+        if (fa_decode_only_512 && n_q == 1) {
+            GGML_ASSERT(ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx));
+        } else {
+            ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32_F16);
+        }
         if (fa_decode_only_512) {
             // DK=512: the BM-tile prefill kernels are specifically compiled from
             // FA_PREFILL_ONLY
@@ -17984,6 +18130,16 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     }
 
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
+    const int mq_gqa = n_head_kv > 0 ? n_head / n_head_kv : 0;
+    const std::tuple<int, int, int> mq_decode_key = {d_head_q, d_head_v, mq_gqa};
+    const bool mq_decode_shape = backend_ctx->gpu_family == ADRENO && is_mixed && n_q == 1 &&
+                                 d_head_q == d_head_v && n_head_kv > 0 && n_head % n_head_kv == 0 &&
+                                 ((((d_head_q == 64 && mq_gqa == 8) || (d_head_q == 128 && mq_gqa == 4)) &&
+                                   backend_ctx->has_subgroup_shuffle) ||
+                                  ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)));
+    if (mq_decode_shape && n_kv >= 32) {
+        ggml_opencl_ensure_fa_f32_f16_mq_decode(backend_ctx, d_head_q, d_head_v, mq_gqa);
+    }
     const bool use_native_q8_0_q1 = is_q8_0 && n_q == 1 &&
                                     backend_ctx->fa.f32_q8_0_q1.count(dk_dv) > 0;
     // Native q8_0 prefill — reads q8_0 directly, wg_size = cfg->bm.
@@ -18242,6 +18398,8 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const int fd_max_n_q = (d_head_q <= FD_MAX_DK_MULTI) ? FD_MAX_N_Q_MULTI : 1;
     cl_kernel fd_k_split = NULL;
     bool use_fd_mq = false;
+    bool use_fd_mq_decode = false;
+    int fd_head_sub = 1;
     size_t fd_mq_wg = 256;  // MQ_GQA=4 kernel: Q1_WG_SIZE(64) * MQ_NSG_SPLIT(4)
     bool use_fa_k_img = false;  // K bound as image1d_buffer_t instead of (buf, offset)
 
@@ -18274,9 +18432,15 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         if (mq_enabled && mq_kv_ok && nq_in_vec_range && !is_causal &&
             backend_ctx->gpu_family != INTEL &&
             !use_local_tile &&
-            n_kv >= FD_MIN_N_KV &&
+            n_kv >= (mq_decode_shape ? 32 : FD_MIN_N_KV) &&
             backend_ctx->fa.f32_merge.count(dk_dv) > 0) {
-            if (nq1_only && lmq_on && is_mixed && d_head_q == 128 && d_head_v == 128 &&
+            if (mq_decode_shape && backend_ctx->fa.f32_f16_mq_decode.count(mq_decode_key) > 0) {
+                fd_k_split = backend_ctx->fa.f32_f16_mq_decode.at(mq_decode_key);
+                fd_mq_wg = backend_ctx->fa.f32_f16_mq_decode_wg.at(mq_decode_key);
+                fd_head_sub = backend_ctx->fa.f32_f16_mq_decode_hs.at(mq_decode_key);
+                use_fd_mq = true;
+                use_fd_mq_decode = true;
+            } else if (nq1_only && lmq_on && is_mixed && d_head_q == 128 && d_head_v == 128 &&
                 gqa_ratio_dispatch == 8 &&
                 backend_ctx->fa.f32_f16_q1_local_mq_split_g8.count(dk_dv) > 0) {
                 fd_k_split = backend_ctx->fa.f32_f16_q1_local_mq_split_g8.at(dk_dv);
@@ -18555,6 +18719,14 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         int n_splits = (n_kv + fd_kv_per_split - 1) / fd_kv_per_split;
         if (n_splits < FD_MIN_SPLITS) { n_splits = FD_MIN_SPLITS; }
         if (n_splits > fd_max_splits) { n_splits = fd_max_splits; }
+        if (use_fd_mq_decode) {
+            const size_t wg_per_split = (size_t) n_head_kv * n_batch;
+            const size_t wg_target = 4 * (size_t) backend_ctx->fa.compute_units;
+            while (wg_per_split * n_splits < wg_target && n_splits < fd_max_splits &&
+                   n_kv / (n_splits + 1) >= 32) {
+                n_splits++;
+            }
+        }
         const int kv_per_split = (n_kv + n_splits - 1) / n_splits;
 
         const int fa_partial_floats = 2 + d_head_v;
@@ -18562,15 +18734,26 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
             (size_t) n_batch * n_head * n_q * n_splits * fa_partial_floats * sizeof(float);
 
         ggml_cl_flash_attn_temp_buffer temp_partial;
+        cl_mem partial_buffer;
         cl_int err;
-        temp_partial.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
-                                           partial_size_bytes, NULL, &err);
-        if (err != CL_SUCCESS) {
-            CL_CHECK(clFinish(backend_ctx->queue));
+        if (use_fd_mq_decode) {
+            auto & pool = backend_ctx->fa.fd_partial;
+            if (partial_size_bytes > pool.size) {
+                CL_CHECK(clFinish(backend_ctx->queue));
+                pool.allocate(backend_ctx->context, partial_size_bytes);
+            }
+            partial_buffer = pool.buffer;
+        } else {
             temp_partial.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
                                                partial_size_bytes, NULL, &err);
+            if (err != CL_SUCCESS) {
+                CL_CHECK(clFinish(backend_ctx->queue));
+                temp_partial.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
+                                                   partial_size_bytes, NULL, &err);
+            }
+            CL_CHECK(err);
+            partial_buffer = temp_partial.data;
         }
-        CL_CHECK(err);
 
         cl_kernel k_split = fd_k_split;
         int argi = 0;
@@ -18638,7 +18821,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_ulong), &mask_nb3));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &mask_ne2));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &mask_ne3));
-        CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_mem),   &temp_partial.data));
+        CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_mem),   &partial_buffer));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &n_splits));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &kv_per_split));
 
@@ -18646,7 +18829,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         // matches Q1_WG_SIZE * NSG (MQ_GQA=4 -> 256; MQ_GQA=8 -> 192)
         const size_t fd_wg = use_fd_mq ? fd_mq_wg : 64;
         const size_t fd_head_dim = use_fd_mq
-            ? (size_t)(n_head_kv * n_batch)
+            ? (size_t)(n_head_kv * fd_head_sub * n_batch)
             : (size_t)(n_head     * n_batch);
         size_t fd_lws[3] = { fd_wg, 1, 1 };
         // gid(2) packs q_idx * n_splits + split_idx.
@@ -18655,7 +18838,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
 
         cl_kernel k_merge = backend_ctx->fa.f32_merge.at(dk_dv);
         argi = 0;
-        CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_mem),   &temp_partial.data));
+        CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_mem),   &partial_buffer));
         CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_mem),   &extra_o->data_device));
         CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_ulong), &offset_o));
         CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(int),      &n_head));
