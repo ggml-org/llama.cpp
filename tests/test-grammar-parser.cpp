@@ -132,6 +132,13 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
     }
 }
 
+static void verify_success(const char * grammar_bytes) {
+    fprintf(stderr, "Testing expected success:%s\n", grammar_bytes);
+    llama_grammar_parser result;
+    result.parse(grammar_bytes);
+    assert(!result.rules.empty() && "should have succeeded");
+}
+
 static void verify_failure(const char * grammar_bytes) {
     fprintf(stderr, "Testing expected failure:%s\n", grammar_bytes);
     llama_grammar_parser result;
@@ -163,6 +170,22 @@ int main()
 
     verify_failure(R"""(
         root ::= "a"{5000,6000}
+    )""");
+
+    // Boundary: repetitions of exactly MAX_REPETITION_THRESHOLD (2000) must parse.
+    // The clamp in parse_sequence only kicks in strictly above the threshold, so
+    // handle_repetitions has to accept the threshold itself (used to abort via >=).
+    verify_success(R"""(
+        root ::= "a"{0,2000}
+    )""");
+
+    verify_success(R"""(
+        root ::= "a"{2000}
+    )""");
+
+    // Nested products above the threshold must still be rejected.
+    verify_failure(R"""(
+        root ::= ("a"{0,50}){0,50}
     )""");
 
     verify_parsing(R"""(
