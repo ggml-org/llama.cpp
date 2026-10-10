@@ -337,7 +337,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
         // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
         cat = ggml_cont(ctx0, ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, 0));
         if (has_conf) {
-            cat_conf = ggml_sigmoid(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0)));
+            cat_conf = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0));
         }
     }
 
