@@ -340,6 +340,39 @@ It is possible to come across some precision issues when running tests that stem
 instructions, which can be circumvented by setting the environment variable `SYCL_PROGRAM_COMPILE_OPTIONS`
 as `-cl-fp32-correctly-rounded-divide-sqrt`
 
+#### Mix SYCL with other backends
+
+By default the whole project is built with the SYCL compiler (`icx`/`icpx`), which prevents building other
+backends that need a different compiler, such as ROCm (`hipcc`).
+
+With `GGML_SYCL_SEPARATE_BUILD=ON`, only the SYCL backend is built with the SYCL compiler in a nested CMake project.
+The rest of the project uses the compiler you choose, and each backend is built as a dynamically loadable library,
+so SYCL can be used together with other backends, e.g. ROCm or Vulkan.
+
+This needs two options in addition to `GGML_SYCL=ON`:
+
+- `-DGGML_SYCL_SEPARATE_BUILD=ON`
+- `-DGGML_BACKEND_DL=ON` (required, the configuration would fail without it)
+
+```sh
+# Export relevant ENV variables
+source /opt/intel/oneapi/setvars.sh
+
+# Option 1: SYCL + Vulkan: the rest of the project is built with the default system compiler
+cmake -B build -DGGML_BACKEND_DL=ON -DGGML_SYCL=ON -DGGML_SYCL_SEPARATE_BUILD=ON -DGGML_VULKAN=ON
+
+# Option 2: SYCL + ROCm: HIPCXX is set explicitly, so the ROCm compiler is not confused with the clang shipped with oneAPI
+HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+	cmake -B build -DGGML_BACKEND_DL=ON -DGGML_SYCL=ON -DGGML_SYCL_SEPARATE_BUILD=ON -DGGML_HIP=ON
+
+# build all binary
+cmake --build build --config Release -j -v
+```
+
+You can use `-DGGML_SYCL_SEPARATE_BUILD_CXX=<compiler>` to choose another SYCL C++ compiler than `icpx`.
+Other backends are enabled with their usual options, and all of them are listed by `--list-devices` at runtime.
+Builds without `GGML_SYCL_SEPARATE_BUILD` are not affected.
+
 ### III. Run the inference
 
 #### Retrieve and prepare model
@@ -786,10 +819,13 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
 | GGML_SYCL_SUPPORT_LEVEL_ZERO_API | ON *(default)* \|OFF *(Optional)* | Support to use Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
+| GGML_SYCL_SEPARATE_BUILD | OFF *(default)* \|ON *(optional)* | Build in a nested project with its own C++ compiler, so the rest can use another compiler such as GCC or hipcc. Requires `GGML_BACKEND_DL=ON`. (2.) |
+| GGML_SYCL_SEPARATE_BUILD_CXX | `icpx` *(default)* | C++ compiler used for the nested SYCL project when `GGML_SYCL_SEPARATE_BUILD=ON`. |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
 1. FP32 or FP16 have different performance impact to LLM. Recommended to test them for better prompt processing performance on your models. You need to rebuild the code after change `GGML_SYCL_F16=OFF/ON`.
+2. See [Mix SYCL with other backends](#mix-sycl-with-other-backends) for the full set of options and an example.
 
 ### Runtime
 

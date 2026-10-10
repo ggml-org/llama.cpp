@@ -258,6 +258,9 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
+option(GGML_SYCL_SEPARATE_BUILD             "ggml: build in a nested project with its own C++ compiler, so the rest can use another compiler such as GCC or hipcc" OFF)
+set   (GGML_SYCL_SEPARATE_BUILD_CXX "icpx" CACHE STRING
+                                            "ggml: C++ compiler for GGML_SYCL_SEPARATE_BUILD")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
 option(GGML_ET                              "ggml: use ET backend"                            OFF)

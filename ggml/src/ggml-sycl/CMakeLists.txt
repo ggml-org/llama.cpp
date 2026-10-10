@@ -4,6 +4,78 @@ if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL)$")
     message(FATAL_ERROR "GGML_SYCL_TARGET: Invalid target, the supported options are [INTEL]")
 endif()
 
+# CMake build tree wants and can work with only one C++ compiler, but
+# - ggml-sycl wants -fsycl capable compiler
+# - ggml-hip wants hipcc
+# thanks ggml backends talking only through C API, we can freely build one backend with it's own compiler
+# so this branch does exactly that: we build this backend as externalproject, an existing pattern from hexagon backend
+if (GGML_SYCL_SEPARATE_BUILD)
+    if (NOT GGML_BACKEND_DL)
+        # only tested with shared libraries
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD requires GGML_BACKEND_DL")
+    endif()
+    unset(GGML_SYCL_SEPARATE_BUILD_CXX_PATH CACHE)
+    find_program(GGML_SYCL_SEPARATE_BUILD_CXX_PATH ${GGML_SYCL_SEPARATE_BUILD_CXX})
+    if (NOT GGML_SYCL_SEPARATE_BUILD_CXX_PATH)
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD_CXX: ${GGML_SYCL_SEPARATE_BUILD_CXX} not found")
+    endif()
+
+    # select the minimal possible build because we only need one backend
+    set(sycl_args
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${GGML_SYCL_SEPARATE_BUILD_CXX_PATH}
+        -DCMAKE_SKIP_BUILD_RPATH=ON
+        -DBUILD_SHARED_LIBS=ON
+        -DGGML_BACKEND_DL=ON
+        -DGGML_CPU=OFF
+        -DGGML_BUILD_TESTS=OFF
+        -DGGML_BUILD_EXAMPLES=OFF
+        -DGGML_CCACHE=${GGML_CCACHE})
+    if (CMAKE_CXX_COMPILER_LAUNCHER) # support when ccache or similar program passed as launcher
+        list(APPEND sycl_args -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER} -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER})
+    endif()
+
+    # append everything starting with GGML_SYCL to the flags
+    get_cmake_property(cache_vars CACHE_VARIABLES)
+    foreach (var ${cache_vars})
+        if (var MATCHES "^GGML_SYCL" AND NOT var MATCHES "^GGML_SYCL_SEPARATE_BUILD")
+            list(APPEND sycl_args -D${var}=${${var}})
+        endif()
+    endforeach()
+
+    set(sycl_lib ${CMAKE_SHARED_MODULE_PREFIX}ggml-sycl${CMAKE_SHARED_MODULE_SUFFIX})
+    set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_lib})
+
+    # ggml is not built standalone here, so use a wrapper project
+    set(sycl_src ${CMAKE_CURRENT_BINARY_DIR}/nested-src)
+    file(WRITE ${sycl_src}/CMakeLists.txt
+        "cmake_minimum_required(VERSION ${CMAKE_VERSION})\n"
+        "project(ggml-sycl-nested C CXX)\n"
+        "add_subdirectory(\"${CMAKE_CURRENT_SOURCE_DIR}/../..\" ggml)\n")
+
+    include(ExternalProject)
+    ExternalProject_Add(ggml-sycl
+        SOURCE_DIR ${sycl_src}
+        BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/nested
+        CMAKE_ARGS ${sycl_args}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target ggml-sycl
+        BUILD_ALWAYS ON
+        BUILD_BYPRODUCTS ${sycl_out}
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/bin/${sycl_lib} ${sycl_out})
+    add_dependencies(ggml ggml-sycl)
+
+    if (GGML_BACKEND_DIR)
+        install(PROGRAMS ${sycl_out} DESTINATION ${GGML_BACKEND_DIR})
+    else()
+        install(PROGRAMS ${sycl_out} DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+    return()
+endif()
+
+# icpx links temporary objects that are deleted afterwards, so the linker depfile makes ggml-sycl always out of date
+set(CMAKE_LINK_DEPENDS_USE_LINKER OFF)
+
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
 
 if (DEFINED ENV{ONEAPI_ROOT})
