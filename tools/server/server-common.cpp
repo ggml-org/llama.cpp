@@ -1190,7 +1190,6 @@ void handle_media(
         out_files.push_back(decoded_data);
     }
 }
-
 // load media files from an OAI content array, then replace each media part with a media marker text part
 static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
     for (auto & p : content) {
@@ -1261,6 +1260,7 @@ server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context
     if (files.empty()) {
         return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
     }
+
     return process_mtmd_prompt(mctx, prompt, files, init_opt);
 }
 
@@ -1876,18 +1876,49 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc,
+        const std::vector<raw_buffer> & query_files,
+        const std::vector<raw_buffer> & doc_files,
         const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
+
+    // media must be spliced through the mtmd pipeline
+    if ((!query_files.empty() || !doc_files.empty()) && mctx == nullptr) {
+        throw std::invalid_argument("multimodal rerank input requires --mmproj");
+    }
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
 
     if (rerank_prompt != nullptr) {
+        // multimodal: append one media marker per image (arrays already flattened by caller)
+        std::string q = query;
+        for (size_t i = 0; i < query_files.size(); i++) {
+            q += get_media_marker();
+        }
+        std::string d = doc;
+        for (size_t i = 0; i < doc_files.size(); i++) {
+            d += get_media_marker();
+        }
+
         std::string prompt = rerank_prompt;
-        string_replace_all(prompt, "{query}"   , query);
-        string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
-        result.push_back(tokens);
+        string_replace_all(prompt, "{query}"   , q);
+        string_replace_all(prompt, "{document}", d  );
+
+        if (query_files.empty() && doc_files.empty()) {
+            server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
+            result.push_back(tokens);
+        } else {
+            // process_mtmd_prompt returns a complete mtmd server_tokens; return it directly
+            // (push_back into a non-mtmd result would hit the NULL placeholder tokens)
+            std::vector<raw_buffer> files;
+            files.insert(files.end(), query_files.begin(), query_files.end());
+            files.insert(files.end(), doc_files.begin(),   doc_files.end());
+            return process_mtmd_prompt(mctx, prompt, files, init_opt);
+        }
     } else {
+        if (!query_files.empty() || !doc_files.empty()) {
+            throw std::invalid_argument("multimodal rerank input requires a model with a rerank chat template");
+        }
+
         // Get EOS token - use SEP token as fallback if EOS is not available
         server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
         server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);

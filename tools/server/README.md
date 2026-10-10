@@ -765,35 +765,158 @@ This endpoint also supports multimodal embeddings. See the documentation for the
 ### POST `/reranking`: Rerank documents according to a given query
 
 Similar to https://jina.ai/reranker/ but might change in the future.
-Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` options.
+Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` or `--reranking` options.
 
 *Options:*
 
-`query`: The query against which the documents will be ranked.
+`query`: The query against which the documents will be ranked. A plain string, or
+(for multimodal rerankers such as Qwen3-VL-Reranker) an object of the form
+`{"text": string | [strings], "image": url | data-uri | raw-base64 | [urls]}`. All keys are
+optional; text-only, image-only, or both are allowed. A plain string is treated as
+`{"text": "..."}`.
 
-`documents`: An array strings representing the documents to be ranked.
+`documents/texts`: An array of documents to be ranked. Each element accepts the same
+string-or-object form as `query`.
+
+`top_n`: How many of the highest-scoring results to return. Defaults to the number of
+documents; the response is truncated to this many entries.
+
+`model`: Optional model name echoed in the Jina response. Ignored otherwise.
+
+`return_text` (TEI only): When `true`, echo each document's text in the response.
 
 *Aliases:*
   - `/rerank`
   - `/v1/rerank`
   - `/v1/reranking`
 
+The endpoint supports two request formats, selected by which key carries the documents:
+
+- **TEI format** (`query` + `texts`): same input shape as Jina. Set `return_text: true` to echo
+  each document's text back in the response; images are never returned and the `text` field is
+  the text parts joined (image-only documents echo `""`).
+- **Jina format** (`query` + `documents`): Multimodal (image + text) supported. `query` and
+  each `documents` element may be a plain string or a multimodal object (`{"text", "image"}`).
+
 *Examples:*
+
+**TEI format** - `query` + `texts`:
+
+```shell
+curl http://127.0.0.1:8012/v1/rerank \
+    -H "Content-Type: application/json" \
+    -d '{
+        "query": "What is machine learning?",
+        "texts": [
+            "Machine learning is a subset of artificial intelligence.",
+            "A python is a large snake."
+        ],
+        "return_text": true
+    }' | jq
+```
+
+**Jina format, text-only** - `query` + `documents`:
 
 ```shell
 curl http://127.0.0.1:8012/v1/rerank \
     -H "Content-Type: application/json" \
     -d '{
         "model": "some-model",
-            "query": "What is panda?",
-            "top_n": 3,
-            "documents": [
-                "hi",
-            "it is a bear",
+        "query": "What is a panda?",
+        "top_n": 3,
+        "documents": [
+            "Just a short greeting.",
+            "It is a bear.",
             "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
-            ]
+        ]
     }' | jq
 ```
+
+Plain-string documents and queries are implicitly wrapped as `{"text": "..."}`.
+
+**Jina format, multimodal** (ex. Qwen3-VL-Reranker) - mix text and images in `query` and/or `documents`:
+
+```shell
+curl http://127.0.0.1:8012/v1/rerank \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen3-VL-Reranker-2B",
+        "query": {
+            "text": "A city skyline with tall buildings and a river",
+            "image": "data:image/jpeg;base64,<base64>"
+        },
+        "documents": [
+            "a plain string document is also valid",
+            {
+                "text": "A photograph of the Boston skyline at dusk",
+                "image": "https://example.com/skyline.jpg"
+            },
+            {
+                "text": "caption for the two-figure spread",
+                "image": ["https://example.com/fig1.png", "data:image/jpeg;base64,<base64>"]
+            }
+        ],
+        "top_n": 2
+    }' | jq
+```
+
+In Jina format the endpoint returns a wrapped object with `model`, `object`, `usage`, and a
+`results` array of `{index, relevance_score}` sorted by score descending.
+
+**Jina response** (wrapped object with `results`):
+
+```json
+{
+  "model": "Qwen/Qwen3-VL-Reranker-2B",
+  "object": "list",
+  "usage": { "prompt_tokens": 1832, "total_tokens": 1832 },
+  "results": [
+    { "index": 0, "relevance_score": 0.931 },
+    { "index": 2, "relevance_score": 0.512 }
+  ]
+}
+```
+
+`usage.prompt_tokens` is the sum of `tokens_evaluated` across all scored (query, document) pairs.
+The response is sorted descending by score and truncated to `top_n`.
+
+In TEI format it returns
+a bare array of `{index, score}` (+ optional `text`) with the same ordering. `relevance_score` /
+`score` is the probability that the document matches the query, in `[0, 1]`.
+
+**TEI response** (bare array; `text` echoed only when `return_text: true`):
+
+```json
+[
+  { "index": 0, "score": 0.931, "text": "Q3 revenue grew 14% quarter over quarter." },
+  { "index": 1, "score": 0.204, "text": "" }
+]
+```
+
+*Note:* Images never appear in any response shape; `return_text` echoes the text parts joined,
+`""` for image-only documents.
+
+> **NOTE:** The behavior below differs depending on whether your reranker is a
+> bidirectional encoder or a causal decoder LLM. Keep this in mind when choosing your
+> `--ubatch-size`.
+
+*Input size limit:*
+
+A traditional bidirectional-encoder reranker (e.g. `bge-reranker-v2-m3`) must fit the entire
+prompt within `--ubatch-size`, since every token attends to every other token and the whole input
+has to be batched in a single forward pass. The server rejects a request that exceeds it with:
+
+```txt
+input (N tokens) is too large to process. increase the physical batch size (current batch size: M)
+```
+
+For such models, raise `--ubatch-size` above the token count of your largest single query +
+document. The default `--ubatch-size 512` only covers short snippets, and this limitation applies
+to long **text** documents as well as images.
+
+Causal decoder rerankers (e.g. `Qwen3-VL-Reranker`) have no such limitation: they are
+autoregressive LLMs with a KV cache, and their RANK pooling only reads the last token, so the
+input can be split across batches and does not need to fit within `--ubatch-size`.
 
 ### POST `/infill`: For code infilling.
 
