@@ -59,6 +59,11 @@ function downloadIdKey(repoWithTag: string): string {
 	return `${repo.toUpperCase()}:${tag.toUpperCase().replace(HF_UD_QUANT_PREFIX_REGEX, '')}`;
 }
 
+/** Zeroed progress, used until the first feed record reports real counts. */
+function emptyDownloadProgress(): ModelDownloadProgress {
+	return { downloadedBytes: 0, files: {}, totalBytes: 0 };
+}
+
 export class ModelStatusManager {
 	/**
 	 * Sidecar files pulled by registered models, as `<repo>/<file>` keys.
@@ -252,11 +257,11 @@ export class ModelStatusManager {
 		// the feed must be live so the resulting models_reload event refreshes the list
 		this.subscribe();
 
-		// resuming a paused download: drop the paused state, and let the server
-		// discard its stale DOWNLOADED entry (via the list fetch) before re-posting
-		if (this.deletePausedDownload(repoWithTag) || this.stopRequests.delete(repoWithTag)) {
-			await this.host.fetchRouterModels();
-		}
+		// a paused download keeps its marker and its last reported progress until the
+		// request is accepted: dropping the marker first lets the next list refresh
+		// adopt the tag again as paused, which leaves the row stuck on that state
+		const snapshot = this.pausedDownloads.get(repoWithTag) ?? null;
+		const wasPaused = this.pausedDownloads.has(repoWithTag);
 
 		try {
 			const res = await ModelsService.downloadModel(repoWithTag);
@@ -265,12 +270,24 @@ export class ModelStatusManager {
 				throw new Error(res.error?.message ?? 'Server rejected the download request');
 			}
 
-			// flip the chip to "downloading" right away; the feed refines it with real progress
-			this.downloadProgress.set(repoWithTag, { downloadedBytes: 0, files: {}, totalBytes: 0 });
+			// the marker gives way to the live entry, seeded with the last reported
+			// progress so the row does not fall back to 0%; the feed refines it
+			this.deletePausedDownload(repoWithTag);
+			this.stopRequests.delete(repoWithTag);
+			this.failedDownloads.delete(repoWithTag);
+			this.downloadProgress.set(repoWithTag, snapshot ?? emptyDownloadProgress());
 
 			toast.success(`Download started: ${this.host.toDisplayName(repoWithTag)}`);
 		} catch (error) {
-			toast.error(`Download failed: ${repoWithTag}`);
+			// the download did not start: a resumed one stays paused rather than
+			// dropping off the list, which reads as a finished download
+			if (wasPaused) {
+				this.setPausedDownload(repoWithTag, snapshot);
+			}
+
+			const reason = error instanceof Error ? error.message : 'unknown error';
+
+			toast.error(`Download failed: ${repoWithTag} (${reason})`);
 
 			throw error;
 		}
@@ -292,11 +309,13 @@ export class ModelStatusManager {
 			progress,
 			repoWithTag
 		}));
+		// a tag can carry a stale pause mark next to its live entry, e.g. after the
+		// list adopted it again while it was resuming: one row per tag, the live one
 		const paused = Array.from(this.pausedDownloads, ([repoWithTag, progress]) => ({
 			isPaused: true,
 			progress,
 			repoWithTag
-		}));
+		})).filter((entry) => !this.downloadProgress.has(entry.repoWithTag));
 
 		return [...inFlight, ...paused];
 	}
@@ -328,7 +347,8 @@ export class ModelStatusManager {
 	}
 
 	isDownloadPaused(repoWithTag: string): boolean {
-		return this.pausedDownloads.has(repoWithTag);
+		// a running download outranks its pause mark, which can outlive a resume
+		return this.pausedDownloads.has(repoWithTag) && !this.downloadProgress.has(repoWithTag);
 	}
 
 	/**
@@ -338,7 +358,11 @@ export class ModelStatusManager {
 	isModelDownloaded(repoWithTag: string): boolean {
 		const key = downloadIdKey(repoWithTag);
 
-		return this.host.routerModels.some((m) => downloadIdKey(m.id) === key);
+		// a tag the router still lists as downloading is an unfinished download, not a
+		// model on disk, so the download options offer it as resumable instead
+		return this.host.routerModels.some(
+			(m) => downloadIdKey(m.id) === key && m.status?.value !== ServerModelStatus.DOWNLOADING
+		);
 	}
 
 	isOperationInProgress(modelId: string): boolean {
@@ -380,9 +404,10 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * The server stops the download child but keeps the partial files, so
-	 * re-posting the tag resumes where it stopped. The feed reports the stop
-	 * as download_failed; the 'pause' stop request marks it as intentional.
+	 * The server stops the download child but keeps the partial file, so re-posting
+	 * the tag resumes where it stopped. The feed reports the stop as download_failed;
+	 * the 'pause' stop request marks it as intentional, and the paused state is stored
+	 * before the request: an unconfirmed pause would leave the chip spinning.
 	 */
 	async pauseDownload(repoWithTag: string): Promise<void> {
 		if (!serverStore.isRouterMode) {
@@ -395,15 +420,25 @@ export class ModelStatusManager {
 
 		this.stopRequests.set(repoWithTag, ModelDownloadStopRequest.PAUSE);
 
+		const snapshot = this.downloadProgress.get(repoWithTag) ?? null;
+		const wasInFlight = this.downloadProgress.delete(repoWithTag);
+
+		this.setPausedDownload(repoWithTag, snapshot);
+
 		try {
 			await ModelsService.unload(repoWithTag);
 		} catch {
 			this.stopRequests.delete(repoWithTag);
+			this.deletePausedDownload(repoWithTag);
+
+			if (wasInFlight) {
+				this.downloadProgress.set(repoWithTag, snapshot ?? emptyDownloadProgress());
+			}
+
 			toast.error(`Failed to pause: ${repoWithTag}`);
 		}
 	}
 
-	/** Open the /models/sse feed with auto reconnect; idempotent, router mode only. */
 	subscribe(): void {
 		if (this.statusReaderActive) return;
 
@@ -412,6 +447,23 @@ export class ModelStatusManager {
 		this.statusReaderActive = true;
 		this.statusAbort = new AbortController();
 		void this.runStatusReader(this.statusAbort.signal);
+	}
+
+	/** Open the /models/sse feed with auto reconnect; idempotent, router mode only. */
+	/**
+	 * A model the server lists as downloading that this session never started is a
+	 * download left unfinished by an earlier run: the server keeps no partial-file
+	 * index, so this is how a refresh or a fresh open learns about it. It is offered
+	 * as paused, and re-posting the tag resumes it from the files already on disk.
+	 */
+	syncPausedDownloads(): void {
+		for (const model of this.host.routerModels) {
+			if (model.status?.value !== ServerModelStatus.DOWNLOADING) continue;
+
+			if (this.downloadProgress.has(model.id) || this.pausedDownloads.has(model.id)) continue;
+
+			this.setPausedDownload(model.id, null);
+		}
 	}
 
 	async unload(modelId: string): Promise<void> {
@@ -478,7 +530,11 @@ export class ModelStatusManager {
 		}
 
 		if (request === ModelDownloadStopRequest.PAUSE) {
-			this.setPausedDownload(event.model, progress);
+			// a pause already stored its snapshot when the user asked for it
+			if (!this.pausedDownloads.has(event.model)) {
+				this.setPausedDownload(event.model, progress);
+			}
+
 			this.failedDownloads.delete(event.model);
 
 			return;

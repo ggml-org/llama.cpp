@@ -5,6 +5,7 @@
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '$lib/constants';
+	import type { ModelDraftSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import { ModelsService } from '$lib/services/models.service';
 	import { settingsStore } from '$lib/stores';
@@ -39,6 +40,8 @@
 		sizeRange?: { min: number; max: number } | null;
 		/** Draft sidecars available for the model, badged with their own quant. */
 		draftSidecars?: ModelSidecarBadge[];
+		/** Draft sidecar kinds the repo offers, one badge per kind and no quant. */
+		draftKinds?: ModelDraftSidecar[];
 		/** Give the id a row of its own, with its badges and icons together under it. */
 		stackId?: boolean;
 		/** Allow badges to wrap onto new lines instead of truncating. */
@@ -50,6 +53,7 @@
 		aliases,
 		class: className = '',
 		contextLength,
+		draftKinds = [],
 		draftSidecars = [],
 		hideCapabilities = false,
 		hideModalities = false,
@@ -93,12 +97,17 @@
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
 	let uniqueDraftSidecars = $derived(draftSidecars.filter((badge) => !isAuxSidecar(badge.kind)));
+	// the model id can already name one of the kinds
+	let uniqueDraftKinds = $derived([
+		...new Set(draftKinds.filter((kind) => kind !== parsed.sidecar))
+	]);
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
 	let displayName = $derived(primaryAlias ?? parsed.modelName ?? modelId);
 
 	let hasBadges = $derived(
 		parsed.sidecar ||
+			uniqueDraftKinds.length > 0 ||
 			uniqueDraftSidecars.length > 0 ||
 			(parsed.params && !hideParameters) ||
 			(parsed.quantization && !resolvedHideQuantization) ||
@@ -143,6 +152,12 @@
 						{parsed.quantization}
 					</span>
 				{/if}
+
+				{#each uniqueDraftKinds as kind (kind)}
+					<span class={variantBadgeClass} title="{kind.toUpperCase()} draft model">
+						{kind}
+					</span>
+				{/each}
 
 				<ModelDraftSidecars {draftSidecars} />
 

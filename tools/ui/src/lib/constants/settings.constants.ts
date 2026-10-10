@@ -126,6 +126,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: true,
+				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Only available in router mode.',
+				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
+				label: 'Enable Discover Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				// Deliberately off for now: the natural place to turn it on is the first
 				// run experience, once onboarding exists to ask the user about it.
 				defaultValue: false,

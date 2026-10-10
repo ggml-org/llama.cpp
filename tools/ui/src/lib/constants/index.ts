@@ -48,6 +48,7 @@ export * from './model-id.constants';
 export * from './model-loading.constants';
 export * from './models-manager.constants';
 export * from './models-discover.constants';
+export * from './models-discover-download.constants';
 export * from './model-compatibility.constants';
 export * from './huggingface.constants';
 export * from './precision.constants';

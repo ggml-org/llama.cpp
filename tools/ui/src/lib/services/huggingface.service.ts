@@ -144,6 +144,12 @@ export class HuggingFaceService {
 		Q8_0: 8
 	};
 
+	// File trees already fetched, keyed by repo id: the discover view asks for the same
+	// repo from several places.
+	private static treeCache = new Map<string, HfModelSibling[]>();
+
+	private static treePending = new Map<string, Promise<HfModelSibling[]>>();
+
 	/** Details already fetched, for a caller that cannot await (a table sorting its rows). */
 	static cachedDetails(modelId: string): HfModelDetailInfo | null | undefined {
 		// llama.cpp model ids carry the quant tag after a colon
@@ -581,21 +587,31 @@ export class HuggingFaceService {
 	 * repos that keep quants in per-quant subdirectories (e.g. `UD-Q4_K_XL/`)
 	 * are included; follows cursor pagination for repos over one page.
 	 */
-	static async getTree(modelId: string): Promise<HfModelSibling[]> {
-		if (!HuggingFaceService.isEnabled()) return [];
 
-		const files: HfModelSibling[] = [];
-		const firstUrl =
-			`${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_TREE_PATH}` +
-			`${PATH_SEPARATOR}${HF_MAIN_BRANCH}?${HF_RECURSIVE_TREE_PARAM}`;
+	static getTree(modelId: string): Promise<HfModelSibling[]> {
+		if (!HuggingFaceService.isEnabled()) return Promise.resolve([]);
 
-		let url: string | null = firstUrl;
+		const cached = HuggingFaceService.treeCache.get(modelId);
 
-		try {
+		if (cached) return Promise.resolve(cached);
+
+		const pending = HuggingFaceService.treePending.get(modelId);
+
+		if (pending) return pending;
+
+		const promise = (async () => {
+			const files: HfModelSibling[] = [];
+			const firstUrl =
+				`${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_TREE_PATH}` +
+				`${PATH_SEPARATOR}${HF_MAIN_BRANCH}?${HF_RECURSIVE_TREE_PARAM}`;
+
+			let url: string | null = firstUrl;
+
 			for (let page = 0; url && page < HF_TREE_MAX_PAGES; page++) {
 				const response: Response = await fetch(url);
 
-				if (!response.ok) return files;
+				if (!response.ok)
+					throw new Error(`Failed to fetch tree for ${modelId}: ${response.status}`);
 
 				const data = (await response.json()) as HfModelSibling[];
 
@@ -603,11 +619,24 @@ export class HuggingFaceService {
 
 				url = HuggingFaceService.parseNextPageUrl(response.headers.get(HF_LINK_HEADER));
 			}
-		} catch {
-			// Return whatever was fetched before the failure.
-		}
 
-		return files;
+			HuggingFaceService.treeCache.set(modelId, files);
+
+			return files;
+		})()
+			.catch((error: unknown) => {
+				// not cached: a rate limited or failed fetch should retry on the
+				// next mount; an empty tree makes the store fall back to the
+				// catalog's advertised sizes
+				console.error(`Error fetching tree for ${modelId}:`, error);
+
+				return [] as HfModelSibling[];
+			})
+			.finally(() => HuggingFaceService.treePending.delete(modelId));
+
+		HuggingFaceService.treePending.set(modelId, promise);
+
+		return promise;
 	}
 
 	static async getTrending(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
