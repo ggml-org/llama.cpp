@@ -11563,6 +11563,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // decode-shaped cases with quantized K/V (small nb, GQA, unpadded and padded KV)
+    for (int hs : { 128, 256, 512, }) {
+        for (int nr2 : { 1, 2, 4, 6, 8, }) {
+            for (int kv : { 113, 512, 1024, }) {
+                for (int nb : { 1, 2, 3, 4, 5, 8, }) {
+                    for (ggml_type type_KV : { GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, }) {
+                        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {nr2, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+                    }
+                }
+            }
+        }
+    }
+    for (ggml_type type_KV : { GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 1024, 4, true, true,  0,  0, GGML_PREC_F32, type_KV, type_KV));
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {4, 1},  512, 3, true, false, 0, 10, GGML_PREC_F32, type_KV, type_KV));
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {4, 1}, 1024, 6, true, false, 0,  0, GGML_PREC_F32, type_KV, type_KV, {0, 2, 1, 3}));
+        test_cases.emplace_back(new test_flash_attn_ext(512, 512, 2, {8, 1}, 1024, 5, true, true,  0,  0, GGML_PREC_F32, type_KV, type_KV));
+    }
+
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 96 && hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
@@ -11936,6 +11955,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    // TEMP experiment: small-batch FA with quantized KV, shapes of Llama-3-8B, Qwen3.5-35B-A3B, Qwen3.8-27B, Gemma-4 (SWA and global)
+    for (auto [hs, nh, gqa] : { std::array<int, 3>{128, 8, 4}, {128, 8, 8}, {256, 2, 8}, {256, 4, 6}, {256, 8, 2}, {512, 2, 8} }) {
+        for (int64_t kv : {4096, 16384, 65536}) {
+            for (ggml_type t : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+                for (int64_t nb = 1; nb <= 8; ++nb) {
+                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, nh, {gqa, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, t, t));
+                }
+            }
+        }
+    }
 
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
