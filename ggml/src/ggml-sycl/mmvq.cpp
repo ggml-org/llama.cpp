@@ -1890,6 +1890,12 @@ static void reorder_mul_mat_vec_q4_k_q8_1_sycl_ncols(
         const int ncols, const int nrows,
         const int stride_col_y_bytes, const int stride_col_dst,
         dpct::queue_ptr stream) {
+    if constexpr (ncols_dst >= 5) {
+        if (ggml_sycl_q4_k_mmvq_wide_row_pair(ggml_sycl_get_device())) {
+            reorder_mul_mat_vec_q4_k_q8_1_sycl_ncols_impl<ncols_dst, 2>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
+            return;
+        }
+    }
     constexpr int rows_per_sg = ncols_dst >= 3 && ncols_dst <= 4 ? 2 : 1;
     reorder_mul_mat_vec_q4_k_q8_1_sycl_ncols_impl<ncols_dst, rows_per_sg>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
 }
@@ -3223,7 +3229,13 @@ static void launch_mul_mat_vec_q_reorder_glu(const void * vx, const void * vgate
                                              const int ncols, const int nrows, const int stride_col_y_bytes,
                                              const int stride_col_dst, const ggml_glu_op glu_op,
                                              dpct::queue_ptr stream) {
-    // q4_K pairs rows for 3..4 columns, q5_K for 3..5
+    if constexpr (reorder_vec_dot_q_sycl::gtype == GGML_TYPE_Q4_K && ncols_dst >= 5) {
+        if (ggml_sycl_q4_k_mmvq_wide_row_pair(ggml_sycl_get_device())) {
+            launch_mul_mat_vec_q_reorder_glu_impl<reorder_vec_dot_q_sycl, ncols_dst, 2>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
+            return;
+        }
+    }
+    // q4_K pairs rows for 3..4 columns (3..8 on BMG, above), q5_K for 3..5
     constexpr int row_pair_max = reorder_vec_dot_q_sycl::gtype == GGML_TYPE_Q5_K ? 5 : 4;
     constexpr int rows_per_sg =
         reorder_vec_dot_shared_activations<reorder_vec_dot_q_sycl::gtype>::value && ncols_dst >= 3 &&

@@ -22,6 +22,12 @@ inline bool ggml_sycl_q5_k_mmvq_reuse(int device) {
     return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31;
 }
 
+// q4_K multi-column MMVQ pairs rows up to 8 columns on Xe2 (BMG); untested archs stop at 4
+inline bool ggml_sycl_q4_k_mmvq_wide_row_pair(int device) {
+    const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31;
+}
+
 void ggml_sycl_op_mul_mat_vec_q(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
