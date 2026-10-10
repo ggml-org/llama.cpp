@@ -2684,7 +2684,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_silu_back(ggml_m
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_memset(ggml_metal_library_t lib, const ggml_tensor *  op) {
-    GGML_ASSERT(op->type == GGML_TYPE_I64);
+    GGML_ASSERT(op->type == GGML_TYPE_I64 || op->type == GGML_TYPE_F32);
 
     char base[256];
     char name[256];
@@ -2736,6 +2736,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal(ggml
 
     res.smem = 32 * sizeof(int32_t);
     res.nsg  = nsg;
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cross_entropy_loss(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_CROSS_ENTROPY_LOSS);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_cross_entropy_loss_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
 
     return res;
 }
