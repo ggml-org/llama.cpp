@@ -144,3 +144,15 @@ def test_rerank_tei_top_n(top_n, expected_len):
     res = server.make_request("POST", "/rerank", data=data)
     assert res.status_code == 200
     assert len(res.body) == expected_len
+
+
+@pytest.mark.parametrize("endpoint", ["/embeddings", "/v1/embeddings"])
+def test_embeddings_rejected_with_rank_pooling(endpoint):
+    # RANK pooling outputs n_cls_out scores per sequence, which is smaller than
+    # n_embd_out, so the embeddings endpoints must refuse the request instead
+    # of reading past the pooled output
+    global server
+    server.start()
+    res = server.make_request("POST", endpoint, data={"input": "hello"})
+    assert res.status_code == 400
+    assert "rerank" in res.body["error"]["message"]

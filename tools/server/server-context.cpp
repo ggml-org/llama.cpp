@@ -6013,6 +6013,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return res;
     }
 
+    // RANK pooling yields n_cls_out scores per sequence, not an n_embd_out embedding
+    if (meta->pooling_type == LLAMA_POOLING_TYPE_RANK) {
+        res->error(format_error_response("Pooling type 'rank' does not produce embeddings. Please use the /rerank endpoint instead", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
     const json body = json::parse(req.body);
 
     // for the shape of input/content, see tokenize_input_prompts()
