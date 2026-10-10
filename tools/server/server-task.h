@@ -543,6 +543,9 @@ struct server_task_result_metrics : server_task_result {
 
     server_metrics metrics;
 
+    std::string              model_name;
+    std::set<std::string>    model_aliases;
+
     virtual json to_json() override;
 
     struct metric_item {
