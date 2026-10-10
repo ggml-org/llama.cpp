@@ -1150,6 +1150,14 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_cohere2moe;
     }
 
+    // Inkling / TML: this marker combination is unique to the template
+    if (src.find("<|content_thinking|>") != std::string::npos &&
+        src.find("<|content_text|>") != std::string::npos &&
+        src.find("<|message_model|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Inkling\n");
+        return common_chat_params_init_inkling;
+    }
+
     if (is_lfm2_template(src)) {
         LOG_DBG("Using specialized template: LFM2\n");
         return common_chat_params_init_lfm2_tokens;

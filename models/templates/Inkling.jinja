@@ -1,0 +1,514 @@
+{#- Keep Python's floating type spelling when the jinja engine compacts 1.0 to 1. -#}
+{%- macro json_scalar(value) -%}
+  {%- set serialized = value | tojson(ensure_ascii=false, separators=(',', ':')) -%}
+  {%- if value is float and '.' not in serialized and 'e' not in (serialized | lower) -%}
+    {{- serialized -}}{{- '.0' -}}
+  {%- else -%}
+    {{- serialized -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro canonical_json(value) -%}
+  {%- if value is mapping -%}
+    {{- '{' -}}
+    {%- for key, item in value | dictsort(case_sensitive=true) -%}
+      {{- (key | string) | tojson(ensure_ascii=false, separators=(',', ':')) -}}{{- ':' -}}
+      {{- canonical_json(item) -}}
+      {%- if not loop.last -%}{{- ',' -}}{%- endif -%}
+    {%- endfor -%}
+    {{- '}' -}}
+  {%- elif value is sequence and value is not string -%}
+    {{- '[' -}}
+    {%- for item in value -%}
+      {{- canonical_json(item) -}}
+      {%- if not loop.last -%}{{- ',' -}}{%- endif -%}
+    {%- endfor -%}
+    {{- ']' -}}
+  {%- else -%}
+    {{- json_scalar(value) -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{#- Advance across insignificant JSON whitespace. -#}
+{%- macro json_skip_ws(source, state) -%}
+  {%- set scan = namespace(done=false) -%}
+  {%- for ignored in range(source | length) -%}
+    {%- if not scan.done and state.pos < source | length -%}
+      {%- set ch = source[state.pos] -%}
+      {%- if ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n' -%}
+        {%- set state.pos = state.pos + 1 -%}
+      {%- else -%}
+        {%- set scan.done = true -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endmacro -%}
+
+{#-
+  Decode a JSON string under Transformers, then re-encode it like json.dumps.
+  llama.cpp converts string arguments to objects after capability detection;
+  the fallback keeps engine-only parsing safe without runtime-only filters.
+-#}
+{%- macro json_string(source, state) -%}
+  {%- if lipsum is defined -%}
+    {%- set out = namespace(decoded='', done=false, code=0, low=0) -%}
+    {%- set hex_values = {'0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'a': 10, 'b': 11, 'c': 12, 'd': 13, 'e': 14, 'f': 15} -%}
+    {%- set state.pos = state.pos + 1 -%}
+    {%- for ignored in range(source | length) -%}
+      {%- if not out.done and state.pos < source | length -%}
+        {%- set ch = source[state.pos] -%}
+        {%- set state.pos = state.pos + 1 -%}
+        {%- if ch == '"' -%}
+          {%- set out.done = true -%}
+        {%- elif ch != '\\' -%}
+          {%- set out.decoded = out.decoded + ch -%}
+        {%- elif state.pos < source | length -%}
+          {%- set escape = source[state.pos] -%}
+          {%- set state.pos = state.pos + 1 -%}
+          {%- if escape == '"' -%}{%- set out.decoded = out.decoded + '"' -%}
+          {%- elif escape == '\\' -%}{%- set out.decoded = out.decoded + '\\' -%}
+          {%- elif escape == '/' -%}{%- set out.decoded = out.decoded + '/' -%}
+          {%- elif escape == 'b' -%}{%- set out.decoded = out.decoded + '\b' -%}
+          {%- elif escape == 'f' -%}{%- set out.decoded = out.decoded + '\f' -%}
+          {%- elif escape == 'n' -%}{%- set out.decoded = out.decoded + '\n' -%}
+          {%- elif escape == 'r' -%}{%- set out.decoded = out.decoded + '\r' -%}
+          {%- elif escape == 't' -%}{%- set out.decoded = out.decoded + '\t' -%}
+          {%- elif escape == 'u' -%}
+            {%- set out.code = 0 -%}
+            {%- for offset in range(4) -%}
+              {%- set digit = source[state.pos + offset] | lower -%}
+              {%- set out.code = out.code * 16 + hex_values[digit] -%}
+            {%- endfor -%}
+            {%- set state.pos = state.pos + 4 -%}
+            {%- if out.code >= 55296 and out.code <= 56319 and source[state.pos:state.pos + 2] == '\\u' -%}
+              {%- set out.low = 0 -%}
+              {%- for offset in range(4) -%}
+                {%- set digit = source[state.pos + 2 + offset] | lower -%}
+                {%- set out.low = out.low * 16 + hex_values[digit] -%}
+              {%- endfor -%}
+              {%- if out.low >= 56320 and out.low <= 57343 -%}
+                {%- set out.code = 65536 + (out.code - 55296) * 1024 + out.low - 56320 -%}
+                {%- set state.pos = state.pos + 6 -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- set out.decoded = out.decoded + ('%c' % out.code) -%}
+          {%- else -%}
+            {%- set out.decoded = out.decoded + escape -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set state.string_value = out.decoded -%}
+    {{- out.decoded | tojson(ensure_ascii=false, separators=(',', ':')) -}}
+  {%- else -%}
+    {%- set out = namespace(start=state.pos, escaped=false, done=false) -%}
+    {%- set state.pos = state.pos + 1 -%}
+    {%- for ignored in range(source | length) -%}
+      {%- if not out.done and state.pos < source | length -%}
+        {%- set ch = source[state.pos] -%}
+        {%- set state.pos = state.pos + 1 -%}
+        {%- if out.escaped -%}
+          {%- set out.escaped = false -%}
+        {%- elif ch == '\\' -%}
+          {%- set out.escaped = true -%}
+        {%- elif ch == '"' -%}
+          {%- set out.done = true -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set state.string_value = source[out.start:state.pos] -%}
+    {{- source[out.start:state.pos] -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{#-
+  Move the cursor across one complete JSON value without rendering it. Object
+  parsing uses the raw slice to sort members before recursively rendering them.
+-#}
+{%- macro json_scan_value(source, state) -%}
+  {{- json_skip_ws(source, state) -}}
+  {%- set scan = namespace(depth=0, quoted=false, escaped=false, done=false) -%}
+  {%- for ignored in range(source | length) -%}
+    {%- if not scan.done and state.pos < source | length -%}
+      {%- set ch = source[state.pos] -%}
+      {%- if scan.quoted -%}
+        {%- set state.pos = state.pos + 1 -%}
+        {%- if ch == '"' and not scan.escaped -%}
+          {%- set scan.quoted = false -%}
+        {%- elif ch == '\\' and not scan.escaped -%}
+          {%- set scan.escaped = true -%}
+        {%- else -%}
+          {%- set scan.escaped = false -%}
+        {%- endif -%}
+      {%- elif ch == '"' -%}
+        {%- set scan.quoted = true -%}
+        {%- set state.pos = state.pos + 1 -%}
+      {%- elif ch == '{' or ch == '[' -%}
+        {%- set scan.depth = scan.depth + 1 -%}
+        {%- set state.pos = state.pos + 1 -%}
+      {%- elif ch == '}' or ch == ']' -%}
+        {%- if scan.depth > 0 -%}
+          {%- set scan.depth = scan.depth - 1 -%}
+          {%- set state.pos = state.pos + 1 -%}
+        {%- else -%}
+          {%- set scan.done = true -%}
+        {%- endif -%}
+      {%- elif ch == ',' and scan.depth == 0 -%}
+        {%- set scan.done = true -%}
+      {%- else -%}
+        {%- set state.pos = state.pos + 1 -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endmacro -%}
+
+{#- Parse and canonically render one JSON value from source at state.pos. -#}
+{%- macro canonical_json_text_value(source, state) -%}
+  {{- json_skip_ws(source, state) -}}
+  {%- if state.pos >= source | length -%}
+    {{- '{}' -}}
+  {%- elif source[state.pos] == '"' -%}
+    {{- json_string(source, state) -}}
+  {%- elif source[state.pos] == '{' -%}
+    {%- set state.pos = state.pos + 1 -%}
+    {{- json_skip_ws(source, state) -}}
+    {%- set object_state = namespace(pairs=[], done=false) -%}
+    {%- if state.pos < source | length and source[state.pos] == '}' -%}
+      {%- set state.pos = state.pos + 1 -%}
+      {%- set object_state.done = true -%}
+    {%- endif -%}
+    {%- for ignored in range(source | length) -%}
+      {%- if not object_state.done -%}
+        {{- json_skip_ws(source, state) -}}
+        {%- set key = json_string(source, state) -%}
+        {%- set sort_key = state.string_value -%}
+        {{- json_skip_ws(source, state) -}}
+        {%- if state.pos < source | length and source[state.pos] == ':' -%}
+          {%- set state.pos = state.pos + 1 -%}
+        {%- endif -%}
+        {{- json_skip_ws(source, state) -}}
+        {%- set value_start = state.pos -%}
+        {{- json_scan_value(source, state) -}}
+        {#- json.loads keeps the final member when a key is duplicated. -#}
+        {%- set unique = namespace(pairs=[]) -%}
+        {%- for previous in object_state.pairs -%}
+          {%- if previous[0] != sort_key -%}
+            {%- set unique.pairs = unique.pairs + [previous] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- set object_state.pairs = unique.pairs + [[sort_key, key, source[value_start:state.pos]]] -%}
+        {{- json_skip_ws(source, state) -}}
+        {%- if state.pos < source | length and source[state.pos] == ',' -%}
+          {%- set state.pos = state.pos + 1 -%}
+        {%- else -%}
+          {%- if state.pos < source | length and source[state.pos] == '}' -%}
+            {%- set state.pos = state.pos + 1 -%}
+          {%- endif -%}
+          {%- set object_state.done = true -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{- '{' -}}
+    {%- for pair in object_state.pairs | sort(case_sensitive=true, attribute=0) -%}
+      {{- pair[1] -}}{{- ':' -}}
+      {%- set child_state = namespace(pos=0, string_value='') -%}
+      {{- canonical_json_text_value(pair[2], child_state) -}}
+      {%- if not loop.last -%}{{- ',' -}}{%- endif -%}
+    {%- endfor -%}
+    {{- '}' -}}
+  {%- elif source[state.pos] == '[' -%}
+    {%- set state.pos = state.pos + 1 -%}
+    {{- '[' -}}
+    {{- json_skip_ws(source, state) -}}
+    {%- set array_state = namespace(done=false, first=true) -%}
+    {%- if state.pos < source | length and source[state.pos] == ']' -%}
+      {%- set state.pos = state.pos + 1 -%}
+      {%- set array_state.done = true -%}
+    {%- endif -%}
+    {%- for ignored in range(source | length) -%}
+      {%- if not array_state.done -%}
+        {%- if not array_state.first -%}{{- ',' -}}{%- endif -%}
+        {%- set array_state.first = false -%}
+        {{- canonical_json_text_value(source, state) -}}
+        {{- json_skip_ws(source, state) -}}
+        {%- if state.pos < source | length and source[state.pos] == ',' -%}
+          {%- set state.pos = state.pos + 1 -%}
+        {%- else -%}
+          {%- if state.pos < source | length and source[state.pos] == ']' -%}
+            {%- set state.pos = state.pos + 1 -%}
+          {%- endif -%}
+          {%- set array_state.done = true -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{- ']' -}}
+  {%- else -%}
+    {%- set scalar = namespace(start=state.pos, done=false) -%}
+    {%- for ignored in range(source | length) -%}
+      {%- if not scalar.done and state.pos < source | length -%}
+        {%- set ch = source[state.pos] -%}
+        {%- if ch == ',' or ch == '}' or ch == ']' or ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n' -%}
+          {%- set scalar.done = true -%}
+        {%- else -%}
+          {%- set state.pos = state.pos + 1 -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set token = source[scalar.start:state.pos] -%}
+    {%- if token == 'true' or token == 'false' or token == 'null' -%}
+      {{- token -}}
+    {%- elif '.' in token or 'e' in token or 'E' in token -%}
+      {{- json_scalar(token | float) -}}
+    {%- else -%}
+      {{- token | int | tojson(ensure_ascii=false, separators=(',', ':')) -}}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro canonical_json_text(source) -%}
+  {%- set text = source | trim -%}
+  {%- if not text -%}
+    {{- '{}' -}}
+  {%- else -%}
+    {%- set state = namespace(pos=0, string_value='') -%}
+    {{- canonical_json_text_value(text, state) -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{#-
+  OpenAI clients use either an argument mapping or a JSON-encoded object.
+  Non-object/empty oddities degrade to {} instead of raising.  Object parsing
+  recursively sorts keys, keeps the last duplicate key (json.loads behavior),
+  decodes JSON escapes under Transformers, and preserves array order.
+-#}
+{%- macro canonical_arguments(arguments) -%}
+  {%- if arguments is mapping -%}
+    {{- canonical_json(arguments) -}}
+  {%- elif arguments is string -%}
+    {%- set source = arguments | trim -%}
+    {%- if source and source[0] == '{' -%}
+      {{- canonical_json_text(source) -}}
+    {%- else -%}
+      {{- '{}' -}}
+    {%- endif -%}
+  {%- else -%}
+    {{- '{}' -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{#-
+  Match Python f"{float(effort):.2f}" followed by trailing-zero removal.
+  llama.cpp's jinja engine has no round filter; the bit table handles binary64 midpoint equality.
+-#}
+{%- macro reasoning_effort_text(effort) -%}
+  {%- set eff = effort -%}
+  {%- if eff is string -%}
+    {%- set e = eff | trim | lower -%}
+    {%- if e == 'none' -%}{%- set eff = 0.0 -%}
+    {%- elif e == 'minimal' -%}{%- set eff = 0.1 -%}
+    {%- elif e == 'low' -%}{%- set eff = 0.2 -%}
+    {%- elif e == 'medium' -%}{%- set eff = 0.7 -%}
+    {%- elif e == 'high' -%}{%- set eff = 0.9 -%}
+    {%- elif e == 'xhigh' -%}{%- set eff = 0.99 -%}
+    {%- elif e == 'max' -%}{%- set eff = 0.99 -%}
+    {%- else -%}{%- set eff = e | float(-1.0) -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- set value = eff | float -%}
+  {%- if value < 0 or value > 0.99 -%}
+    {{- raise_exception('Invalid reasoning_effort: ' + (effort | string) + '; expected none/minimal/low/medium/high/xhigh/max or a number in [0.0, 0.99]') -}}
+  {%- endif -%}
+  {%- if value == value | int and value >= 0 and value <= 1 -%}
+    {{- value | int -}}
+  {%- else -%}
+    {%- set midpoint_rounds_up = '1011011011010100100100100111000111000111100011100011111100000001111110000001111110000001111111000000' -%}
+    {%- set rounded = namespace(hundredths=0) -%}
+    {%- for lower_hundredth in range(100) -%}
+      {%- set boundary = (lower_hundredth + 0.5) / 100 -%}
+      {%- if value > boundary or (value == boundary and midpoint_rounds_up[lower_hundredth] == '1') -%}
+        {%- set rounded.hundredths = lower_hundredth + 1 -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if rounded.hundredths == 100 -%}
+      {{- '1' -}}
+    {%- elif rounded.hundredths == 0 -%}
+      {{- '0' -}}
+    {%- elif rounded.hundredths % 10 == 0 -%}
+      {{- '0.' -}}{{- (rounded.hundredths / 10) | int -}}
+    {%- elif rounded.hundredths < 10 -%}
+      {{- '0.0' -}}{{- rounded.hundredths -}}
+    {%- else -%}
+      {{- '0.' -}}{{- rounded.hundredths -}}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro role_token(role) -%}
+  {%- if role == 'user' -%}{{- '<|message_user|>' -}}
+  {%- elif role == 'assistant' -%}{{- '<|message_model|>' -}}
+  {%- elif role == 'system' or role == 'developer' -%}{{- '<|message_system|>' -}}
+  {%- elif role == 'tool' -%}{{- '<|message_tool|>' -}}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro emit_message(role, kind, content='', author_name='') -%}
+  {{- role_token(role) -}}
+  {%- if author_name -%}{{- author_name -}}{%- endif -%}
+  {%- if kind == 'text' -%}
+    {{- '<|content_text|>' -}}{{- content -}}
+  {%- elif kind == 'thinking' -%}
+    {{- '<|content_thinking|>' -}}{{- content -}}
+  {%- elif kind == 'xml' -%}
+    {{- '<|content_xml|>' -}}{{- content -}}
+  {%- elif kind == 'invoke_tool_json' -%}
+    {{- '<|content_invoke_tool_json|>' -}}{{- content -}}
+  {%- elif kind == 'image' -%}
+    {{- '<|content_image|><|image|>' -}}
+  {%- elif kind == 'audio' -%}
+    {{- '<|content_audio_input|><|audio|><|audio_end|>' -}}
+  {%- endif -%}
+  {{- '<|end_message|>' -}}
+{%- endmacro -%}
+
+{%- set effort_value = reasoning_effort if (reasoning_effort is defined and reasoning_effort is not none) else 0.9 -%}
+{%- set eff_ns = namespace(emitted=false) -%}
+{%- set first_ns = namespace(idx=-1) -%}
+{%- for m in messages -%}
+  {%- if first_ns.idx == -1 and m.get('role') not in ['system', 'developer'] -%}
+    {%- set first_ns.idx = loop.index0 -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if tools is defined and tools -%}
+  {{- '<|message_system|>tool_declare<|content_xml|>[' -}}
+  {%- for tool in tools -%}
+    {%- set function = tool.get('function', {}) if tool.get('function', {}) is mapping else {} -%}
+    {%- set description = function.get('description') or '' -%}
+    {%- set parameters = function.get('parameters') or {} -%}
+    {%- set tool_type = tool.get('type', 'function') -%}
+    {{- '{"description":' -}}{{- canonical_json(description) -}}
+    {{- ',"name":' -}}{{- canonical_json(function.get('name')) -}}
+    {{- ',"parameters":' -}}{{- canonical_json(parameters) -}}
+    {{- ',"type":' -}}{{- canonical_json(tool_type) -}}{{- '}' -}}
+    {%- if not loop.last -%}{{- ',' -}}{%- endif -%}
+  {%- endfor -%}
+  {{- ']<|end_message|>' -}}
+{%- endif -%}
+
+{#- Last-user boundary used only by the opt-in preserve_thinking=false mode. -#}
+{%- set thinking_state = namespace(last_user_index=messages | length - 1, found_user=false) -%}
+{%- for index in range(messages | length - 1, -1, -1) -%}
+  {%- if not thinking_state.found_user and messages[index].get('role') == 'user' -%}
+    {%- set thinking_state.last_user_index = index -%}
+    {%- set thinking_state.found_user = true -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- for message in messages -%}
+  {%- set message_index = loop.index0 -%}
+  {%- set role = message.get('role') -%}
+  {%- if not eff_ns.emitted and loop.index0 == first_ns.idx -%}
+    {{- emit_message('system', 'text', 'Thinking effort level: ' + reasoning_effort_text(effort_value)) -}}
+    {%- set eff_ns.emitted = true -%}
+  {%- endif -%}
+  {%- if role == 'tool' -%}
+    {%- set resolved = namespace(name=message.get('name') or '') -%}
+    {%- if not resolved.name and message.get('tool_call_id') -%}
+      {%- for prior in messages[:message_index] -%}
+        {%- if prior.get('role') == 'assistant' -%}
+          {%- for call in prior.get('tool_calls') or [] -%}
+            {%- if call.get('id') and (call.get('id') | string) == message.get('tool_call_id') -%}
+              {%- set prior_function = call.get('function', {}) if call.get('function', {}) is mapping else {} -%}
+              {%- set resolved.name = prior_function.get('name') or '' -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {%- set tool_content = message.get('content', '') -%}
+    {%- if tool_content is none -%}
+      {%- set tool_content = '' -%}
+    {%- elif tool_content is mapping or (tool_content is sequence and tool_content is not string) -%}
+      {%- set tool_content = canonical_json(tool_content) -%}
+    {%- elif tool_content is not string -%}
+      {%- set tool_content = canonical_json(tool_content) -%}
+    {%- endif -%}
+    {{- emit_message('tool', 'text', tool_content, resolved.name | string) -}}
+  {%- elif role == 'user' or role == 'assistant' or role == 'system' or role == 'developer' -%}
+    {%- set turn_out -%}
+    {%- if role == 'assistant' and message.get('reasoning_content') is string and message.get('reasoning_content') and
+          ((preserve_thinking is not defined) or preserve_thinking is not false or message_index > thinking_state.last_user_index) -%}
+      {{- emit_message('assistant', 'thinking', message.get('reasoning_content')) -}}
+    {%- endif -%}
+
+    {%- set content = message.get('content', '') -%}
+    {#- Makes llama.cpp retain typed arrays rather than flattening them. -#}
+    {%- set content_probe = content[0] if content is sequence and content | length > 0 else none -%}
+    {%- if content is string -%}
+      {%- if '<__media_' in content -%}
+        {#- Flattened media markers: each part becomes its own message block. The runtime may
+            randomize the marker suffix, so split on the stable prefix and re-emit the exact
+            marker text; the runtime then expands it into the typed content sentinel plus the
+            media embedding rows. -#}
+        {%- for segment in content.split('<__media_') -%}
+          {%- if loop.first -%}
+            {%- if segment -%}{{- emit_message(role, 'text', segment) -}}{%- endif -%}
+          {%- else -%}
+            {%- set mparts = segment.split('>') -%}
+            {%- set rest = mparts[1:] | join('>') -%}
+            {{- role_token(role) -}}{{- '<__media_' + mparts[0] + '>' -}}{{- '<|end_message|>' -}}
+            {%- if rest -%}{{- emit_message(role, 'text', rest) -}}{%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- elif content -%}
+        {{- emit_message(role, 'text', content) -}}
+      {%- endif -%}
+    {%- elif content is sequence -%}
+      {%- for part in content -%}
+        {%- if part is string -%}
+          {{- emit_message(role, 'text', part) -}}
+        {%- elif part is mapping -%}
+          {%- set part_type = part.get('type') -%}
+          {%- if part_type is none or part_type == 'text' or part_type == 'input_text' -%}
+            {%- set part_text = part.get('text', '') -%}
+            {{- emit_message(role, 'text', part_text if part_text is string else '') -}}
+          {%- elif part_type == 'image' or part_type == 'input_image' or part_type == 'image_url' -%}
+            {{- emit_message(role, 'image') -}}
+          {%- elif part_type == 'audio' or part_type == 'input_audio' or part_type == 'audio_url' -%}
+            {{- emit_message(role, 'audio') -}}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+
+    {%- if role == 'assistant' -%}
+      {%- for call in message.get('tool_calls') or [] -%}
+        {%- set function = call.get('function', {}) if call.get('function', {}) is mapping else {} -%}
+        {%- if function.get('name') is string -%}
+          {%- set raw_arguments = function.get('arguments') or {} -%}
+          {%- set arguments_json = canonical_arguments(raw_arguments) -%}
+          {%- set invocation = '{"name":' + canonical_json(function.get('name')) + ',"args":' + arguments_json + '}' -%}
+          {{- emit_message('assistant', 'invoke_tool_json', invocation, function.get('name')) -}}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {%- endset -%}
+    {{- turn_out -}}
+    {#- Close each historical model turn, but never emit a bare terminator for an
+        assistant message that rendered no blocks. -#}
+    {%- if role == 'assistant' and turn_out -%}
+      {{- '<|content_model_end_sampling|>' -}}
+    {%- endif -%}
+  {%- else -%}
+    {{- raise_exception('Unknown message role: ' + (role | string)) -}}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if not eff_ns.emitted -%}
+  {{- emit_message('system', 'text', 'Thinking effort level: ' + reasoning_effort_text(effort_value)) -}}
+{%- endif -%}
+
+{%- if add_generation_prompt is defined and add_generation_prompt -%}
+  {{- '<|message_model|>' -}}
+{%- endif -%}
+{#- Unsloth translation to jinja from TML's parser #}
