@@ -6905,16 +6905,17 @@ struct test_concat : public test_case {
     const int64_t ne_b_d;
     const int dim;
     const int v; // view (1 << 0: non-cont a (first 3 dim), 1 << 1: non-cont b (first 3 dim), 1 << 2: non-cont a (last 2 dim), 1 << 3: non-cont b (last 2 dim))
+    const bool transpose_b; // b is a transposed view of a contiguous tensor (dim 0 only)
 
     std::string vars() override {
-        return VARS_TO_STR5(type, ne_a, ne_b_d, dim, v);
+        return VARS_TO_STR6(type, ne_a, ne_b_d, dim, v, transpose_b);
     }
 
     test_concat(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {10, 5, 5, 5},
             int64_t ne_b_d = 5,
-            int dim = 2, int v = 0)
-        : type(type), ne_a(ne_a), ne_b_d(ne_b_d), dim(dim), v(v) {}
+            int dim = 2, int v = 0, bool transpose_b = false)
+        : type(type), ne_a(ne_a), ne_b_d(ne_b_d), dim(dim), v(v), transpose_b(transpose_b) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         auto ne_b = ne_a;
@@ -6939,7 +6940,14 @@ struct test_concat : public test_case {
             ggml_set_name(a, "a");
         }
         ggml_tensor * b;
-        if (v & 2) {
+        if (transpose_b) {
+            GGML_ASSERT(dim == 0);
+            b = ggml_new_tensor_4d(ctx, type, ne_b[1], ne_b[0], ne_b[2], ne_b[3]);
+            ggml_set_name(b, "b");
+
+            b = ggml_transpose(ctx, b);
+            ggml_set_name(b, "transpose_of_b");
+        } else if (v & 2) {
             auto ne = ne_b; ne[0] *= 3; ne[1] *= 2; ne[2] *= 4;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
@@ -11285,6 +11293,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256,  8, 512, 1}, 256, GGML_ROPE_TYPE_NEOX,   512, 1.0f, 0.0f, 1.0f, false, 0, true)); // gemma4 E2B sliding
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {512,  8, 512, 1}, 128, GGML_ROPE_TYPE_NEOX,   512, 1.0f, 0.0f, 1.0f, true,  0, true)); // gemma4 E4B global
 
+    // dim-0 concat with a transposed src1 (GDN conv_input)
+    for (int64_t ne_b_d : { 31, 32, 33, 64 }) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 10240, 1, 1}, ne_b_d, 0, 0, true));
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {1, 37, 1, 1}, ne_b_d, 0, 0, true));
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 64, 3, 2}, ne_b_d, 0, 0, true));
+    }
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {40, 37, 2, 1}, 33, 0, 0, true));
+
     for (int v : { 0, 1, 2, 3 }) {
         for (int dim : { 0, 1, 2, 3, }) {
             test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {11, 12, 13, 14}, 7, dim, v));
@@ -11943,6 +11959,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int64_t n_tokens : {512, 2048}) {
             test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, type, { 2*17408, n_tokens, 1, 1 }, 0, false));
             test_cases.emplace_back(new test_glu_split(GGML_GLU_OP_SWIGLU, type, { 17408, n_tokens, 1, 1 }, 0));
+        }
+    }
+
+    // dim-0 CONCAT with a transposed src1 at gated delta net conv_input shapes:
+    // concat(conv_state {3, channels}, transpose(qkv {channels, n_tokens})) for 8192 and 10240 channels
+    for (int64_t channels : {8192, 10240}) {
+        for (int64_t n_tokens : {512, 2048, 4096}) {
+            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, channels, 1, 1}, n_tokens, 0, 0, true));
         }
     }
 

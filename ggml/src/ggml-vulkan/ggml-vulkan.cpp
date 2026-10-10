@@ -331,6 +331,25 @@ bool ggml_vk_concat_supported(const ggml_tensor * src0, const ggml_tensor * src1
     // Quantized tensor rows are block-aligned when created.
     return ggml_is_contiguous_rows(src0) && ggml_is_contiguous_rows(src1) && ggml_is_contiguous_rows(dst);
 }
+
+// dim-0 concat with a transposed src1, e.g. GDN conv_input = concat(conv_state, transpose(qkv), 0)
+static bool ggml_vk_concat_transpose_supported(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
+    if (ggml_get_op_params_i32(dst, 0) != 0) {
+        return false;
+    }
+    if (ggml_is_quantized(dst->type) || ggml_vk_concat_unit_size(dst->type) != 4) {
+        return false;
+    }
+    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (src1->nb[1] != ggml_type_size(src1->type) || src1->nb[0] < (size_t) src1->ne[1] * src1->nb[1]) {
+        return false;
+    }
+    // src1 goes through the tiled transpose copy, src0 through a plain strided copy, so src1 must be the larger part
+    return src1->ne[0] >= 32 && src0->ne[0] <= src1->ne[0];
+}
+
 static bool vk_instance_initialized = false;
 
 vk_instance_t vk_instance;
@@ -10426,6 +10445,24 @@ void ggml_vk_opt_step_sgd(ggml_backend_vk_context * ctx, vk_context& subctx, con
 }
 
 void ggml_vk_concat(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    if (ggml_vk_concat_transpose_supported(src0, src1, dst)) {
+        // dst = [src0 | src1] along dim 0 as two copies into views of dst: a plain copy for src0 and
+        // the tiled transpose copy for the transposed src1. The two copies write disjoint elements.
+        ggml_tensor dst0 = *dst;
+        dst0.ne[0] = src0->ne[0];
+        ggml_vk_cpy(ctx, subctx, src0, &dst0);
+
+        const size_t offs = src0->ne[0] * dst->nb[0];
+        ggml_tensor dst1 = *dst;
+        dst1.ne[0] = src1->ne[0];
+        dst1.data = (char *) dst->data + offs;
+        if (dst->view_src) {
+            dst1.view_offs += offs;
+        }
+        ggml_vk_cpy(ctx, subctx, src1, &dst1);
+        return;
+    }
+
     int * op_params = (int *)dst->op_params;
 
     const uint32_t unit_size = ggml_vk_concat_unit_size(dst->type);
