@@ -1473,6 +1473,8 @@ class TextModel(ModelBase):
                 self.gguf_writer.add_rope_scaling_type(rope_gguf_type)
                 self.gguf_writer.add_rope_scaling_factor(rope_factor)
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_params["original_max_position_embeddings"])
+                if (truncate := rope_params.get("truncate")) is not None:
+                    self.gguf_writer.add_rope_scaling_truncate(truncate)
                 if (yarn_ext_factor := rope_params.get("extrapolation_factor")) is not None:
                     self.gguf_writer.add_rope_scaling_yarn_ext_factor(yarn_ext_factor)
                 if (yarn_attn_factor := rope_params.get("attention_factor", rope_params.get("attn_factor"))) is not None:
