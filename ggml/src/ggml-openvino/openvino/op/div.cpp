@@ -104,6 +104,7 @@ OutputVector translate_div(const NodeContext & context) {
     }
 
     input_1 = repeat_input_to_match(context, input_1, input_0, 1);
+    align_ranks(input_0, input_1);
 
     const auto output_type = context.get_output_type();
     const bool use_f32_compute = input_0.get_element_type() != ov::element::f32 ||

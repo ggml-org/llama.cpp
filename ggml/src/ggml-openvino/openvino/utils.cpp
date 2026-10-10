@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <ctime>
 #include <memory>
+#include <numeric>
 #include <openvino/op/add.hpp>
 #include <openvino/op/clamp.hpp>
 #include <openvino/op/convert.hpp>
@@ -20,6 +21,7 @@
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <string>
 
 namespace ov {
@@ -350,12 +352,36 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
     auto stride = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
     ov::Output<ov::Node> axes;
     if (axis == -1) {
-        axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {context.is_stateful() ? 2 : 3});
+        const auto & in_ps = input.get_partial_shape();
+        FRONT_END_GENERAL_CHECK(in_ps.rank().is_static(), "process_view_input requires a static input rank");
+        axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {in_ps.rank().get_length() - 1});
     } else {
         axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {axis});
     }
     auto sliced = std::make_shared<ov::op::v8::Slice>(input, begin, end, stride, axes);
     return sliced;
+}
+
+ov::Output<ov::Node> lift_to_rank(const ov::Output<ov::Node> & value, int64_t target_rank) {
+    const auto & ps = value.get_partial_shape();
+    if (!ps.rank().is_static() || ps.rank().get_length() >= target_rank) {
+        return value;
+    }
+    std::vector<int64_t> axes(static_cast<size_t>(target_rank - ps.rank().get_length()));
+    std::iota(axes.begin(), axes.end(), 0);
+    auto axes_const = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{axes.size()}, axes);
+    return std::make_shared<ov::op::v0::Unsqueeze>(value, axes_const);
+}
+
+void align_ranks(ov::Output<ov::Node> & a, ov::Output<ov::Node> & b) {
+    const auto & ra = a.get_partial_shape().rank();
+    const auto & rb = b.get_partial_shape().rank();
+    if (ra.is_dynamic() || rb.is_dynamic()) {
+        return;
+    }
+    const int64_t rank = std::max(ra.get_length(), rb.get_length());
+    a = lift_to_rank(a, rank);
+    b = lift_to_rank(b, rank);
 }
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index) {
