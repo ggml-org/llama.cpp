@@ -176,6 +176,12 @@ __kernel void flash_attn_f32(
             ACC_TYPE s1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
             ACC_TYPE s2 = (dot_acc2.s0 + dot_acc2.s1 + dot_acc2.s2 + dot_acc2.s3) * scale;
             ACC_TYPE s3 = (dot_acc3.s0 + dot_acc3.s1 + dot_acc3.s2 + dot_acc3.s3) * scale;
+            if (logit_softcap > 0.0f) {
+                s0 = logit_softcap * tanh(s0 / logit_softcap);
+                s1 = logit_softcap * tanh(s1 / logit_softcap);
+                s2 = logit_softcap * tanh(s2 / logit_softcap);
+                s3 = logit_softcap * tanh(s3 / logit_softcap);
+            }
 
             if (is_causal) {
                 const int causal_limit = n_kv - n_q + my_query_row;
@@ -197,12 +203,6 @@ __kernel void flash_attn_f32(
                 if (k_row3 < n_kv) s3 += slope * (ACC_TYPE)mask_ptr[k_row3];
             }
 
-            if (logit_softcap > 0.0f) {
-                s0 = logit_softcap * tanh(s0 / logit_softcap);
-                s1 = logit_softcap * tanh(s1 / logit_softcap);
-                s2 = logit_softcap * tanh(s2 / logit_softcap);
-                s3 = logit_softcap * tanh(s3 / logit_softcap);
-            }
 
             const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
             const ACC_TYPE scale_prev = native_exp(m_i - m_new);
@@ -332,12 +332,12 @@ __kernel void flash_attn_f32_q1(
             dot_acc = mad(q_priv[k], CONVERT_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         m_i = max(m_i, score);
     }
@@ -368,12 +368,12 @@ __kernel void flash_attn_f32_q1(
             dot_acc = mad(q_priv[k], CONVERT_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         const ACC_TYPE p = exp(score - m_final);
         l_i += p;
