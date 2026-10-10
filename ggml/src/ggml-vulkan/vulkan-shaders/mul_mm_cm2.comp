@@ -49,7 +49,7 @@ layout (constant_id = 6) const uint subgroup_size = 32;
 #ifdef MULMAT_QUANT
 
 uint mm_quant_k() {
-    // Use ternary expressions to avoid switch lowering qk through an OpPhi.
+    // Use ternary expressions instead of a switch to keep qk as a specialization-constant expression.
     return (MmTypeA == GGML_TYPE_Q1_0) ? 128u :
            (MmTypeA == GGML_TYPE_Q2_0) ?  64u :
           ((MmTypeA == GGML_TYPE_Q4_0 || MmTypeA == GGML_TYPE_Q4_1 ||
