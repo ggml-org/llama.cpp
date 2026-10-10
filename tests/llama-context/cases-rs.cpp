@@ -27,6 +27,16 @@ struct case_multi_seq_split_replay : ctx_test {
     }
 
     case_result run(model_run & mr) const override {
+        for (bool remove_anchor : { false, true }) {
+            const auto result = run(mr, remove_anchor);
+            if (result.status != test_status::PASS) {
+                return result;
+            }
+        }
+        return case_result::pass();
+    }
+
+    case_result run(model_run & mr, bool remove_anchor) const {
         const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
 
         constexpr uint32_t  n_seqs     = 2;
@@ -64,18 +74,33 @@ struct case_multi_seq_split_replay : ctx_test {
 
         bool ok = true;
 
-        // keep the anchor at p0 - 1 when rolling back the tail
+        llama_pos replay_pos[n_seqs] = {};
+
+        // try removing the anchor as well as the tail when requested
         for (uint32_t s = 0; s < n_seqs && ok; ++s) {
             ok = ok && decode_gen(ctx_roll.get(), n_vocab, (llama_seq_id) s, 0, (llama_pos) p0 - 1);
             ok = ok && decode_gen(ctx_ref.get(),  n_vocab, (llama_seq_id) s, 0, (llama_pos) p0 - 1);
-
             ok = ok && decode_gen(ctx_roll.get(), n_vocab, (llama_seq_id) s, (llama_pos) p0 - 1, (llama_pos) n_prompt);
-            ok = ok && decode_gen(ctx_ref.get(),  n_vocab, (llama_seq_id) s, (llama_pos) p0 - 1, (llama_pos) p0);
+            if (!ok) {
+                break;
+            }
 
-            ok = ok && llama_memory_seq_rm(llama_get_memory(ctx_roll.get()), (llama_seq_id) s, p0, -1);
+            const llama_pos remove_pos = remove_anchor ? p0 - 1 : p0;
+            const bool removed = llama_memory_seq_rm(llama_get_memory(ctx_roll.get()), (llama_seq_id) s, remove_pos, -1);
+            if (!removed && !remove_anchor) {
+                ok = false;
+                break;
+            }
+            replay_pos[s] = removed ? remove_pos : (llama_pos) n_prompt;
+            ok = llama_memory_seq_pos_max(llama_get_memory(ctx_roll.get()), (llama_seq_id) s) == replay_pos[s] - 1;
+            if (replay_pos[s] > p0 - 1) {
+                ok = ok && decode_gen(ctx_ref.get(), n_vocab, (llama_seq_id) s, p0 - 1, replay_pos[s]);
+            }
 
             // a second partial removal while one is pending must be refused
-            ok = ok && !llama_memory_seq_rm(llama_get_memory(ctx_roll.get()), (llama_seq_id) s, p0 - 1, -1);
+            if (removed) {
+                ok = ok && !llama_memory_seq_rm(llama_get_memory(ctx_roll.get()), (llama_seq_id) s, remove_pos - 1, -1);
+            }
         }
         CTX_REQUIRE(ok, "the multi-seq prefill / rollback failed");
 
@@ -84,7 +109,7 @@ struct case_multi_seq_split_replay : ctx_test {
             common_batch batch(ctx);
             for (uint32_t s = 0; s < n_seqs; ++s) {
                 for (uint32_t i = 0; i < n_replay; ++i) {
-                    const llama_pos pos = p0 + (llama_pos) i;
+                    const llama_pos pos = replay_pos[s] + (llama_pos) i;
                     batch.add(tok(s, pos), pos, (llama_seq_id) s, true);
                 }
             }
@@ -123,7 +148,7 @@ struct case_multi_seq_split_replay : ctx_test {
         {
             common_batch batch_tail(ctx_ref.get());
             for (uint32_t i = 0; i < n_tail; ++i) {
-                const llama_pos pos = p0 + (llama_pos) (n_replay + i);
+                const llama_pos pos = replay_pos[0] + (llama_pos) (n_replay + i);
                 batch_tail.add(tok(0, pos + 7), pos, 0, false);
             }
             ok = llama_process(ctx_ref.get(), LLAMA_PROCESS_TYPE_DECODE, batch_tail.get()) == 0;
@@ -131,7 +156,7 @@ struct case_multi_seq_split_replay : ctx_test {
 
         logits_diff diff_tail;
         for (uint32_t i = 0; i < n_tail && ok; ++i) {
-            const llama_pos pos = p0 + (llama_pos) (n_replay + i);
+            const llama_pos pos = replay_pos[1] + (llama_pos) (n_replay + i);
             ok = decode_one(ctx_roll.get(), tok(1, pos), pos, 1) &&
                  decode_one(ctx_ref.get(),  tok(1, pos), pos, 1);
             if (!ok) {
@@ -253,18 +278,19 @@ struct case_rollback : ctx_test {
                     "replay logits mismatch at position " + std::to_string(pos) + ", nmse " + std::to_string(diff.nmse()));
         }
 
-        // TODO: this test is invalid because RS rollback is only correct once after a ubatch with more than n_rs_seq tokens
-        //       this is not the case here. add asserts and guardrails to prevent such attempts
-        //if (!llama_memory_seq_rm(llama_get_memory(ctx_src.get()), 0, rollback_pos, -1) ||
-        //    !llama_memory_seq_rm(llama_get_memory(ctx_dst.get()), 0, rollback_pos, -1)) {
-        //    TLOG_ERR("%s: partial rollback failed\n", __func__);
-        //    return case_result::fail();
-        //}
-
-        //constexpr llama_state_seq_flags partial_flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
-        //common_prompt_checkpoint ckpt_partial;
-        //ckpt_partial.update_tgt(ctx_src.get(), 0, partial_flags);
-        //ckpt_partial.load_tgt(ctx_dst.get(), 0, partial_flags);
+        // a single-token ubatch may not preserve the state before that token
+        const llama_pos last_pos = (llama_pos) tokens.size() - 1;
+        if (llama_memory_seq_rm(llama_get_memory(ctx_src.get()), 0, last_pos, -1)) {
+            CTX_REQUIRE(decode_one(ctx_src.get(), tokens[last_pos], last_pos), "single-token replay failed");
+        }
+        CTX_REQUIRE(llama_memory_seq_pos_max(llama_get_memory(ctx_src.get()), 0) == last_pos &&
+                    decode_one(ctx_src.get(), tokens.back(), last_pos + 1) &&
+                    decode_one(ctx_dst.get(), tokens.back(), last_pos + 1),
+                "continuation after single-token rollback failed");
+        const float * logits_src = llama_get_logits_ith(ctx_src.get(), 0);
+        const float * logits_dst = llama_get_logits_ith(ctx_dst.get(), 0);
+        CTX_REQUIRE(logits_src && logits_dst && compare_logits(logits_src, logits_dst, n_vocab).nmse() <= nmse_eps,
+                "single-token rollback changed the continuation");
 
         // Repeat the load into a context that already has its own rollback state:
         // groups 1..n_rs_seq hold a different prompt's history, and rs_idx[0] is
@@ -292,6 +318,7 @@ struct case_rollback : ctx_test {
 
         ckpt.load_tgt(ctx_dirty.get(), 0, 0);
 
+        // FIXME: DSV4 accepts rollback into history not restored by the checkpoint, causing replay logits to differ.
         for (uint32_t i = 0; i < n_rollback; ++i) {
             const llama_pos pos = rollback_pos + i;
             if (!decode_one(ctx_dirty.get(), tokens[pos], pos)) {
