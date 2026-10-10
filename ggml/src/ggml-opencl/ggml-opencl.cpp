@@ -445,6 +445,7 @@ static void populateProfilingInfo(
 }
 
 struct ggml_backend_opencl_context;
+static bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context *backend_ctx);
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
 static void ggml_cl_adreno_xmem_attn_release_scratch(ggml_backend_opencl_context * backend_ctx);
@@ -1640,8 +1641,14 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("cvt.cl");
 #endif
+        // The Adreno 850 (E17) compiler carries a printf in any program into every program it compiles
+        // later, and the driver then allocates a 1 MB printf buffer on each dispatch of those kernels.
+        // cvt.cl holds the only printfs that compile on E17 (a never-taken workaround), so drop them.
+        const std::string cvt_opts =
+            backend_ctx->adreno_cl_compiler_version.type == E17
+                ? compile_opts + " -DGGML_CL_NO_PRINTF_WA" : compile_opts;
         backend_ctx->program_cvt =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+            build_program_from_source(backend_ctx, kernel_src.c_str(), cvt_opts);
 
         CL_CHECK((backend_ctx->kernel_convert_block_q1_0  = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q1_0", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_q1_0  = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q1_0", &err), err));
@@ -4104,7 +4111,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("gemm_noshuffle_q4_0_q8_1_dp4a.cl");
 #endif
-        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        // E17 (Adreno 850) reads wrong values from the start of the local tiles: pad them.
+        const std::string q4_0_dp4a_opts = adreno_e17_compiler_quirks(backend_ctx)
+            ? compile_opts + " -DGEMM_LM_PAD=1" : compile_opts;
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_0_dp4a_opts);
         CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q4_0_q8_1_dp4a = clCreateKernel(prog, "kernel_gemm_noshuffle_q4_0_q8_1_dp4a", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
@@ -8583,6 +8593,13 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
     bool threashold_ok = tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
             tensor->ne[2] == 1 && tensor->ne[3] == 1;
 
+    // The transposed layout (transpose_2d_as_16b over M rows and K/4 or K/32 columns) needs
+    // K % 32 == 0 and M % 4 == 0, which set_tensor and get_tensor assert. Decline other weights so
+    // they take the flat path; the rule below is stricter for the types it covers.
+    if (tensor->ne[0] % 32 != 0 || tensor->ne[1] % 4 != 0) {
+        return false;
+    }
+
     // The noshuffle layout packs 2 rows per 32-bit texel and the GEMV reads it at an
     // ne1/2 texel stride with an exact-cover dispatch, so it is only addressable when
     // ne1 is a multiple of 64; an unaligned ne1 truncates the stride and the weight is
@@ -8652,10 +8669,13 @@ inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ct
 // LOSS and inverts the ranking. The same box, after a reboot and a gate that
 // waits for policy6 to return to 4396800, reports the +11.9% above with no
 // order bias. A7X regresses hard on this layout and stays off.
+// The Adreno 850 (E17 compiler) stays off too: its batched tiled GEMM gives wrong results on a
+// large lm_head.
 // GGML_OPENCL_{Q4K,Q6K}_GEMV_TILED forces either way (=0 off, any other value on).
 inline bool tiled_gemv_default_on(const ggml_backend_opencl_context *backend_ctx) {
-    return backend_ctx && (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
-                           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X);
+    return backend_ctx && !adreno_e17_compiler_quirks(backend_ctx) &&
+           (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+            backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X);
 }
 
 // Tiled-wide q6_K GEMV (default OFF; GGML_OPENCL_Q6K_GEMV_TILED forces either
@@ -8731,7 +8751,10 @@ inline bool use_q4_0_bin_kernels(const ggml_backend_opencl_context *backend_ctx,
         !backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin) {
         return false;
     }
-    return (tensor->ne[0] % 32 == 0) && (tensor->ne[1] % 64 == 0);
+    // The bin kernels transpose and multiply one 2-D matrix; a stacked weight keeps the
+    // regular layout.
+    return tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+           (tensor->ne[0] % 32 == 0) && (tensor->ne[1] % 64 == 0);
 #else
     GGML_UNUSED(backend_ctx);
     GGML_UNUSED(tensor);
@@ -8779,22 +8802,38 @@ static inline bool flat_large_m_enabled() {
     return en;
 }
 
+// The noshuffle q4_K GEMV binds the whole weight as one image1d_buffer of ne00*ne01/8 uint texels.
+// A vocab-scale weight can exceed CL_DEVICE_IMAGE_MAX_BUFFER_SIZE, and clCreateImage under CL_CHECK
+// aborts rather than falling back.
+static inline bool q4_K_weight_image_fits(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    const size_t texels = (size_t) ggml_nelements(tensor) / 8;
+    return texels != 0 && texels <= backend_ctx->image_max_buffer_size;
+}
+
 static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    // The transposed weight layout tiles rows by 4, so an ne1 it cannot represent has
+    // no noshuffle route either; route those to the flat GEMV ahead of the opt-in gate.
     if (tensor->ne[1] % 4 != 0 && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
         return true;
     }
 
-    if (!flat_large_m_enabled()) {
-        return false;
-    }
     // gemv_noshuffle variant perf drops for large M, use flat variant for large M.
     // threshold is well above typical hidden/FFN dims, but below typical vocab sizes.
     // note that this forces large M weights to use LM GEMM.
     // EXCEPT when this branch's tiled-canonical lm_head/embed layout is active: the
     // weight is converted to the 64-row tiled layout, which the flat gemv would
     // misread as garbage. use_q4k_tiled owns these large-M weights, so defer to it.
-    return tensor->ne[1] >= 32768 && tensor->ne[2] == 1 && tensor->ne[3] == 1
-           && !use_q4k_tiled(backend_ctx, tensor);
+    const bool large_m = tensor->ne[1] >= 32768 && tensor->ne[2] == 1 && tensor->ne[3] == 1
+                         && !use_q4k_tiled(backend_ctx, tensor);
+    if (!large_m) {
+        return false;
+    }
+    // The image-fit escape is a correctness guard (clCreateImage would fail under CL_CHECK), so it
+    // must be reachable regardless of flat_large_m_enabled(); the opt-in gate sits after it.
+    if (!q4_K_weight_image_fits(backend_ctx, tensor)) {
+        return true;
+    }
+    return flat_large_m_enabled();
 }
 
 static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
@@ -8846,7 +8885,10 @@ inline bool use_q6_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx,
         !backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin) {
         return false;
     }
-    return (tensor->ne[0] % 256 == 0) && (tensor->ne[1] % 64 == 0) &&
+    // The bin kernels transpose and multiply one 2-D matrix; a stacked weight keeps the
+    // regular layout.
+    return tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+           (tensor->ne[0] % 256 == 0) && (tensor->ne[1] % 64 == 0) &&
            !use_q6k_tiled(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q6_K(backend_ctx, tensor);
 #else
     GGML_UNUSED(backend_ctx);
@@ -8861,7 +8903,10 @@ inline bool use_q4_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx,
         !backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin) {
         return false;
     }
-    return (tensor->ne[0] % 256 == 0) && (tensor->ne[1] % 64 == 0) &&
+    // The bin kernels transpose and multiply one 2-D matrix; a stacked weight keeps the
+    // regular layout.
+    return tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+           (tensor->ne[0] % 256 == 0) && (tensor->ne[1] % 64 == 0) &&
            !use_q4k_tiled(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(backend_ctx, tensor);
 #else
     GGML_UNUSED(backend_ctx);
@@ -19838,11 +19883,12 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clReleaseMemObject(b_sub_buf));
         CL_CHECK(clReleaseMemObject(b_img));
     } else {
-        // dp4a (int8) dense prefill GEMM, default off
+        // dp4a (int8) dense prefill GEMM. Default off, except on the Adreno 850 (E17) for wide
+        // outputs, where it beats the f16 GEMM.
         static const char * q4_0_dense_dp4a_env = getenv("GGML_OPENCL_Q4_0_DENSE_DP4A");
         bool q4_0_dense_dp4a_on = q4_0_dense_dp4a_env
             ? (atoi(q4_0_dense_dp4a_env) != 0)
-            : false;
+            : (adreno_e17_compiler_quirks(backend_ctx) && M >= 2048);
         // dot prod has to be available
         q4_0_dense_dp4a_on = backend_ctx->has_integer_dot && q4_0_dense_dp4a_on;
 
@@ -22526,11 +22572,13 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         region.size = ne00 * ne1 * sizeof(float);
         CL_CHECK((b_sub_buf = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-        // dp4a (int8) dense q6_K prefill GEMM
+        // dp4a (int8) dense q6_K prefill GEMM. Not on the Adreno 850 (E17) compiler: it returns wrong
+        // results there for prefill wider than 8 tokens.
         static const char * q6k_dense_dp4a_env = getenv("GGML_OPENCL_Q6K_DENSE_DP4A");
                      bool   q6k_dense_dp4a_on  = (q6k_dense_dp4a_env != nullptr)
                                                    ? (atoi(q6k_dense_dp4a_env) != 0)
-                                                   : (backend_ctx->adreno_gen != ADRENO_GPU_GEN::X1E);
+                                                   : (backend_ctx->adreno_gen != ADRENO_GPU_GEN::X1E &&
+                                                      !adreno_e17_compiler_quirks(backend_ctx));
         // dot prod has to be available
         q6k_dense_dp4a_on = backend_ctx->has_integer_dot && q6k_dense_dp4a_on;
 
@@ -23453,7 +23501,18 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     // quant kv without FA
     // used for non-contiguous src0 (the usual head-major permuted K view when n_head_kv>1)
     // AND for the contiguous case that occurs when n_head_kv==1 (e.g. Gemma-4 E2B)
-    if ((src0t == GGML_TYPE_Q4_0 || src0t == GGML_TYPE_Q8_0) &&
+    //
+    // A q4_0 weight in the bin (ILA) layout is excluded: the restore below only knows the noshuffle
+    // transposed layout, and the per-slice broadcast loop further down serves it with the bin GEMM.
+    bool q4_0_bin_layout = false;
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    q4_0_bin_layout = src0t == GGML_TYPE_Q4_0 && src0->view_src == nullptr &&
+                      ggml_is_contiguous(src0) && src0->ne[2] == 1 && src0->ne[3] == 1 &&
+                      use_adreno_kernels(backend_ctx, src0) &&
+                      !use_adreno_moe_kernels(backend_ctx, src0) &&
+                      use_q4_0_bin_kernels(backend_ctx, src0);
+#endif
+    if ((src0t == GGML_TYPE_Q4_0 || src0t == GGML_TYPE_Q8_0) && !q4_0_bin_layout &&
         (!ggml_is_contiguous(src0) || src1->ne[2] > src0->ne[2])) {
         cl_mem f16_buf = ggml_cl_mul_mat_dequant_quant_to_f16(backend_ctx, src0, nullptr);
 

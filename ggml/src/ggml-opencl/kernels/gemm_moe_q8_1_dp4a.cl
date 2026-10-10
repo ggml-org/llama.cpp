@@ -100,6 +100,15 @@ inline int dp4a4(uint w0,uint w1,uint w2,uint w3,uint a0,uint a1,uint a2,uint a3
     int r=0; r=dot_acc_sat_4x8packed_ss_int(w0,a0,r); r=dot_acc_sat_4x8packed_ss_int(w1,a1,r);
     r=dot_acc_sat_4x8packed_ss_int(w2,a2,r); r=dot_acc_sat_4x8packed_ss_int(w3,a3,r); return r; }
 
+// The symmetric 8-bit types have no min term. Leave it out at compile time rather than
+// multiplying by a zero min: the q8_1 block sum is half precision, overflows to inf for
+// activations around 1e5, and 0 * inf would turn the whole output NaN.
+#if MOE_QT == 80 || MOE_QT == 82
+#define MOE_MIN_TERM(t) 0.0f
+#else
+#define MOE_MIN_TERM(t) (mn*(float)sh_s[t])
+#endif
+
 // One token's two-half dp4a + uniform scale/min epilogue into acc[t].
 #define MOE_DP4A_T(t) do {                                                                  \
         uint4 a0 = vload4(0, &sh_qa[t][0]);                                                 \
@@ -107,7 +116,7 @@ inline int dp4a4(uint w0,uint w1,uint w2,uint w3,uint a0,uint a1,uint a2,uint a3
         const int raw1 = dp4a4(qw[0],qw[1],qw[2],qw[3], a0.s0,a0.s1,a0.s2,a0.s3);           \
         const int raw2 = dp4a4(qw[4],qw[5],qw[6],qw[7], a1.s0,a1.s1,a1.s2,a1.s3);           \
         const float a_d = (float)sh_d[t];                                                   \
-        acc[t] += sc0*a_d*(float)raw1 + sc1*a_d*(float)raw2 - mn*(float)sh_s[t];             \
+        acc[t] += sc0*a_d*(float)raw1 + sc1*a_d*(float)raw2 - MOE_MIN_TERM(t);              \
     } while (0)
 
 __attribute__((qcom_wave_pair_mode(1)))

@@ -263,7 +263,7 @@ kernel void kernel_convert_block_q4_0_noshuffle(
         q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
         q[i + QK4_0/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
 
-#ifdef ADRENO_GPU
+#if defined(ADRENO_GPU) && !defined(GGML_CL_NO_PRINTF_WA)
         // Workaround for adreno - must have the following printf statement for
         // the kernel to work properly. Otherwise it produces incorrect result.
         // convert_uchar above also seems necessary.
@@ -453,7 +453,7 @@ kernel void kernel_convert_block_q4_1_noshuffle(
         q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
         q[i + QK4_1/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
 
-#ifdef ADRENO_GPU
+#if defined(ADRENO_GPU) && !defined(GGML_CL_NO_PRINTF_WA)
         if (get_global_id(0) == 65536*4096) {
             printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
         }
@@ -651,7 +651,7 @@ kernel void kernel_convert_block_q5_0_noshuffle(
         q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
         q[i + QK5_0/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
 
-#ifdef ADRENO_GPU
+#if defined(ADRENO_GPU) && !defined(GGML_CL_NO_PRINTF_WA)
         if (get_global_id(0) == 65536*4096) {
             printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
         }
@@ -860,7 +860,7 @@ kernel void kernel_convert_block_q5_1_noshuffle(
         q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
         q[i + QK5_1/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
 
-#ifdef ADRENO_GPU
+#if defined(ADRENO_GPU) && !defined(GGML_CL_NO_PRINTF_WA)
         if (get_global_id(0) == 65536*4096) {
             printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
         }

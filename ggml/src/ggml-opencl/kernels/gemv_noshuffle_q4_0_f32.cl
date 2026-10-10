@@ -224,6 +224,10 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32(
     uint M = ne01;
 
     uint LINE_STRIDE_A = M / 2;
+    // The x-grid is padded to a whole wave, so the tail lanes hold a row past the packed
+    // weight and only the stores below are guarded. Clamp the row every fetch reads; the
+    // lanes stay active, which the sub_group ops in the dequant macros require.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
     uint BLOCK_STRIDE_A = N_SIMDGROUP * M;
 
     __private uint4     regA;
@@ -234,7 +238,7 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32(
 
     // loop along K in block granularity, skip 4 blocks every iter
     for (uint k = groupId; k < (K / QK4_0); k += N_SIMDGROUP) {
-        regS = src0_d[gid + k * LINE_STRIDE_A]; // each fiber loads scale of two rows
+        regS = src0_d[gid_s + k * LINE_STRIDE_A]; // each fiber loads scale of two rows
         // first 4 fibers in each wave load 8 B values to its private scope
         if (slid < 4) {
             regB.s0123 = read_imagef(src1, (slid * 2 + k * 8));
@@ -242,20 +246,20 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32(
         }
 
         // load half weights for two blocks in consecutive rows
-        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_hi(totalSum, as_ushort8(regA), regS, regB);
 #else
         dequantizeBlockAccum_ns_sgbroadcast_1_hi(totalSum, as_ushort8(regA), regS, regB);
 #endif // VECTOR_SUB_GROUP_BROADCAST
 
-        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
-        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
-        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
-        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_lo(totalSum, as_ushort8(regA), regS, regB);
 #else
@@ -329,6 +333,10 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32_mc3(
     uint M = ne01;
 
     uint LINE_STRIDE_A  = M / 2;
+    // The x-grid is padded to a whole wave, so the tail lanes hold a row past the packed
+    // weight. Clamp the row every fetch reads and guard the stores below; the lanes stay
+    // active, which the sub_group ops in the dequant macros require.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
     // BLOCK_STRIDE_A is the LAYOUT stride between consecutive K-blocks = 4 uints
     // per q4_0 block * M (set by the trans4_ns convert). The "4" is uints/block, NOT
     // the subgroup count — keep it fixed so the K-split count (nsg) can vary.
@@ -347,17 +355,17 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32_mc3(
     __private float2 ts3 = (float2)(0.0f);
 
     for (uint k = groupId; k < (K / QK4_0); k += nsg) {
-        regS = src0_d[gid + k * LINE_STRIDE_A];
+        regS = src0_d[gid_s + k * LINE_STRIDE_A];
 
         // weights loaded ONCE, reused across the columns
-        regA_hi.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA_hi.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA_hi.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA_hi.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
-        regA_lo.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
-        regA_lo.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
-        regA_lo.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
-        regA_lo.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+        regA_hi.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA_hi.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA_hi.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA_hi.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA_lo.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA_lo.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA_lo.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA_lo.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 
         MC_COL_Q40(ts0, 0);
         MC_COL_Q40(ts1, 1);
@@ -381,10 +389,12 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32_mc3(
         }
         dst = (global float*)((global char*)dst + offsetd);
         // dst is column-major [M rows x n_cols cols]: (row, col) at col*M + row
-        vstore2((float2)(acc.s0, acc.s1), 0, &(dst[0 * M + gid * 2]));
-        vstore2((float2)(acc.s2, acc.s3), 0, &(dst[1 * M + gid * 2]));
-        if (n_cols > 2) vstore2((float2)(acc.s4, acc.s5), 0, &(dst[2 * M + gid * 2]));
-        if (n_cols > 3) vstore2((float2)(acc.s6, acc.s7), 0, &(dst[3 * M + gid * 2]));
+        if (gid < LINE_STRIDE_A) {
+            vstore2((float2)(acc.s0, acc.s1), 0, &(dst[0 * M + gid * 2]));
+            vstore2((float2)(acc.s2, acc.s3), 0, &(dst[1 * M + gid * 2]));
+            if (n_cols > 2) vstore2((float2)(acc.s4, acc.s5), 0, &(dst[2 * M + gid * 2]));
+            if (n_cols > 3) vstore2((float2)(acc.s6, acc.s7), 0, &(dst[3 * M + gid * 2]));
+        }
     }
 }
 #undef MC_COL_Q40
