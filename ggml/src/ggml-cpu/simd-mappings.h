@@ -140,6 +140,14 @@ extern float ggml_table_f32_ue4m3[1 << 8];
 #define GGML_CPU_UE4M3_TO_FP32(x) ggml_ue4m3_to_fp32(x)
 #endif
 
+// Pre AVX512 CPUs (AVX2 with F16C, such as i5-8th gen or i7-4790)
+// do not produce codegen as checks below don't test for __F16C__
+// but this check does.
+#if defined(__F16C__)
+#define GGML_CPU_FP16_TO_FP32(x) GGML_CPU_COMPUTE_FP16_TO_FP32(x)
+#define GGML_CPU_FP32_TO_FP16(x) GGML_CPU_COMPUTE_FP32_TO_FP16(x)
+#endif
+
 // On ARM NEON, it's quicker to directly convert x -> x instead of calling into ggml_lookup_fp16_to_fp32,
 // so we define GGML_CPU_FP16_TO_FP32 and GGML_CPU_FP32_TO_FP16 elsewhere for NEON.
 // This is also true for POWER9.
