@@ -185,10 +185,6 @@ endif()
 
 # ggml
 
-if (GGML_BACKEND_DL AND NOT BUILD_SHARED_LIBS)
-    message(FATAL_ERROR "GGML_BACKEND_DL requires BUILD_SHARED_LIBS")
-endif()
-
 add_library(ggml-base
             ../include/ggml.h
             ../include/ggml-alloc.h
@@ -218,6 +214,9 @@ configure_file(ggml-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.h @ONL
 target_include_directories(ggml-base PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
+    # When using dynamic backends, ggml-base needs to be compiled with -fPIC
+    # even if it's a static library, because backends will link against it
+    set_target_properties(ggml-base PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
 if (GGML_SCHED_NO_REALLOC)
