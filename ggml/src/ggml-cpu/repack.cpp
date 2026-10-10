@@ -3818,6 +3818,78 @@ static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_UNUSED(data_size);
 }
 
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+// Q8_0 rows -> NR x 4 VNNI panels (8x4 / 16x4, see repack.h); same byte count in and out
+template <int NR>
+static int repack_q8_0_to_q8_0_vnni(struct ggml_tensor * t, const void * GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(data_size == ggml_nbytes(t));
+
+    const int64_t nrow    = ggml_nrows(t);
+    const int64_t nblocks = t->ne[0] / QK8_0;
+
+    if (nrow % NR != 0 || t->ne[0] % QK8_0 != 0) {
+        return -1;
+    }
+
+    block<8, NR> *     dst = (block<8, NR> *) t->data;
+    const block_q8_0 * src = (const block_q8_0 *) data;
+
+    for (int64_t b = 0; b < nrow; b += NR) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            block<8, NR> out;
+            for (int n = 0; n < NR; n++) {
+                const block_q8_0 & in = src[x + n * nblocks];
+                out.d[n]              = in.d;
+                for (int g = 0; g < 8; g++) {
+                    for (int j = 0; j < 4; j++) {
+                        out.qs[4 * NR * g + 4 * n + j] = (int8_t) ((uint8_t) in.qs[4 * g + j] ^ 0x80);
+                    }
+                }
+            }
+            *dst++ = out;
+        }
+        src += NR * nblocks;
+    }
+    return 0;
+}
+
+// Q4_0 rows -> NR x 4 VNNI panels (8x4 / 16x4, see repack.h): a byte permutation only
+template <int NR>
+static int repack_q4_0_to_q4_0_vnni(struct ggml_tensor * t, const void * GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q4_0);
+    GGML_ASSERT(data_size == ggml_nbytes(t));
+
+    const int64_t nrow    = ggml_nrows(t);
+    const int64_t nblocks = t->ne[0] / QK4_0;
+
+    if (nrow % NR != 0 || t->ne[0] % QK4_0 != 0) {
+        return -1;
+    }
+
+    block<4, NR> *     dst = (block<4, NR> *) t->data;
+    const block_q4_0 * src = (const block_q4_0 *) data;
+
+    for (int64_t b = 0; b < nrow; b += NR) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            block<4, NR> out;
+            for (int n = 0; n < NR; n++) {
+                const block_q4_0 & in = src[x + n * nblocks];
+                out.d[n]              = in.d;
+                for (int g = 0; g < 4; g++) {
+                    for (int j = 0; j < 4; j++) {
+                        out.qs[4 * NR * g + 4 * n + j] = in.qs[4 * g + j];
+                    }
+                }
+            }
+            *dst++ = out;
+        }
+        src += NR * nblocks;
+    }
+    return 0;
+}
+#endif  // __AVXVNNI__ || (__AVX512VNNI__ && __AVX512VL__)
+
 static int repack_q8_0_to_q8_0_4_bl(struct ggml_tensor *       t,
                                     int                        interleave_block,
                                     const void * GGML_RESTRICT data,
@@ -4920,6 +4992,178 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     }
 };
 
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+template <ggml_type TYPE, int NR>
+void gemm_vnni(int, float *, size_t, const void *, const void *, const void *, int, int);
+
+template <>
+void gemm_vnni<GGML_TYPE_Q8_0, 8>(int                        n,
+                                  float * GGML_RESTRICT      s,
+                                  size_t                     bs,
+                                  const void * GGML_RESTRICT vx,
+                                  const void * GGML_RESTRICT vy,
+                                  const void * GGML_RESTRICT vy_aux,
+                                  int                        nr,
+                                  int                        nc) {
+    ggml_gemm_q8_0_8x4_q8_0(n, s, bs, vx, vy, vy_aux, nr, nc);
+}
+
+template <>
+void gemm_vnni<GGML_TYPE_Q4_0, 8>(int                        n,
+                                  float * GGML_RESTRICT      s,
+                                  size_t                     bs,
+                                  const void * GGML_RESTRICT vx,
+                                  const void * GGML_RESTRICT vy,
+                                  const void * GGML_RESTRICT vy_aux,
+                                  int                        nr,
+                                  int                        nc) {
+    ggml_gemm_q4_0_8x4_q8_0(n, s, bs, vx, vy, vy_aux, nr, nc);
+}
+
+#    if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+template <>
+void gemm_vnni<GGML_TYPE_Q8_0, 16>(int                        n,
+                                   float * GGML_RESTRICT      s,
+                                   size_t                     bs,
+                                   const void * GGML_RESTRICT vx,
+                                   const void * GGML_RESTRICT vy,
+                                   const void * GGML_RESTRICT vy_aux,
+                                   int                        nr,
+                                   int                        nc) {
+    ggml_gemm_q8_0_16x4_q8_0(n, s, bs, vx, vy, vy_aux, nr, nc);
+}
+
+template <>
+void gemm_vnni<GGML_TYPE_Q4_0, 16>(int                        n,
+                                   float * GGML_RESTRICT      s,
+                                   size_t                     bs,
+                                   const void * GGML_RESTRICT vx,
+                                   const void * GGML_RESTRICT vy,
+                                   const void * GGML_RESTRICT vy_aux,
+                                   int                        nr,
+                                   int                        nc) {
+    ggml_gemm_q4_0_16x4_q8_0(n, s, bs, vx, vy, vy_aux, nr, nc);
+}
+#    endif
+
+// Q8_0 / Q4_0 weights in the x86 VNNI NR x 4 layout (8x4 / 16x4, see repack.h): 2-D weights and GGML_OP_MUL_MAT only.
+template <ggml_type TYPE, int NR> class tensor_traits_vnni : public tensor_traits_base {
+    static_assert(TYPE == GGML_TYPE_Q8_0 || TYPE == GGML_TYPE_Q4_0, "VNNI layout: Q8_0 or Q4_0 weights");
+    static_assert(NR == 8 || NR == 16, "VNNI layout: 8- or 16-row panels");
+
+    static size_t aux_row_bytes(int64_t k) { return (size_t) (k / QK8_0) * 8; }
+
+    bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
+        if (op->op != GGML_OP_MUL_MAT) {
+            return false;
+        }
+        const int64_t ne10  = op->src[1]->ne[0];
+        const int64_t nrows = ggml_nrows(op->src[1]);
+        size                = (size_t) nrows * (ggml_row_size(GGML_TYPE_Q8_0, ne10) + aux_row_bytes(ne10)) + 64;
+        return true;
+    }
+
+    bool compute_forward(struct ggml_compute_params * params, struct ggml_tensor * op) override {
+        if (op->op != GGML_OP_MUL_MAT) {
+            return false;
+        }
+        forward_mul_mat(params, op);
+        return true;
+    }
+
+    int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
+        GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx4\n", __func__, t->name, ggml_type_name(t->type), NR);
+        if constexpr (TYPE == GGML_TYPE_Q4_0) {
+            return repack_q4_0_to_q4_0_vnni<NR>(t, data, data_size);
+        } else {
+            return repack_q8_0_to_q8_0_vnni<NR>(t, data, data_size);
+        }
+    }
+
+    void forward_mul_mat(ggml_compute_params * params, ggml_tensor * op) {
+        const ggml_tensor * src0 = op->src[0];
+        const ggml_tensor * src1 = op->src[1];
+        ggml_tensor *       dst  = op;
+
+        GGML_TENSOR_BINARY_OP_LOCALS
+
+        const int ith = params->ith;
+        const int nth = params->nth;
+
+        GGML_ASSERT(ne0 == ne01);
+        GGML_ASSERT(ne1 == ne11);
+        GGML_ASSERT(ne2 == ne12);
+        GGML_ASSERT(ne3 == ne13);
+        GGML_ASSERT(nb0 == sizeof(float));
+        GGML_ASSERT(ne03 == 1 && ne13 == 1 && ne3 == 1);
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_n_dims(src0) == 2);
+        GGML_ASSERT(ne00 % QK8_0 == 0 && ne01 % NR == 0);  // QK4_0 == QK8_0
+
+        const size_t  nbw1   = ggml_row_size(GGML_TYPE_Q8_0, ne10);
+        const size_t  nba1   = aux_row_bytes(ne10);
+        const int64_t nrows1 = ne11 * ne12;
+
+        char * wdata = (char *) params->wdata;
+        char * waux  = (char *) GGML_PAD((uintptr_t) (wdata + nrows1 * nbw1), 64);
+        GGML_ASSERT(waux + nrows1 * nba1 <= wdata + params->wsize);
+
+        const ggml_from_float_t from_float = ggml_get_type_traits_cpu(GGML_TYPE_Q8_0)->from_float;
+
+        // Both phases go through the threadpool chunk counter: [0, nq) are 8-row activation quantization
+        // chunks, [nq, nq + nc) are output-column chunks; a thread crosses the barrier exactly once.
+        const int64_t qchunk = 8;
+        const int64_t nq     = (nrows1 + qchunk - 1) / qchunk;
+
+        const int64_t nr0     = ne01;
+        int64_t       nchunk0 = MIN((nr0 + 2 * NR - 1) / (2 * NR), (int64_t) nth * 16);
+        nchunk0               = MAX(nchunk0, (int64_t) 1);
+        const int64_t dr0     = GGML_PAD((nr0 + nchunk0 - 1) / nchunk0, 2 * NR);
+        nchunk0               = (nr0 + dr0 - 1) / dr0;
+        const int64_t nc      = nchunk0 * ne12;
+
+        if (ith == 0) {
+            ggml_threadpool_chunk_set(params->threadpool, nth);
+        }
+        ggml_barrier(params->threadpool);
+
+        bool    crossed = false;
+        int64_t c       = ith;
+        while (c < nq + nc) {
+            if (c < nq) {
+                const int64_t r1 = MIN((c + 1) * qchunk, nrows1);
+                for (int64_t ir = c * qchunk; ir < r1; ir++) {
+                    const int64_t i12 = ir / ne11;
+                    const int64_t i11 = ir - i12 * ne11;
+                    const float * src = (const float *) ((const char *) src1->data + i11 * nb11 + i12 * nb12);
+                    from_float(src, wdata + ir * nbw1, ne10);
+                    ggml_q8_0_vnni_comp(wdata + ir * nbw1, waux + ir * nba1, ne10);
+                }
+            } else {
+                if (!crossed) {
+                    ggml_barrier(params->threadpool);
+                    crossed = true;
+                }
+                const int64_t cc  = c - nq;
+                const int64_t c0  = cc % nchunk0;
+                const int64_t i12 = cc / nchunk0;
+                const int64_t s0  = c0 * dr0;
+                const int64_t e0  = MIN(s0 + dr0, nr0);
+                if (s0 < e0) {
+                    gemm_vnni<TYPE, NR>((int) ne00, (float *) ((char *) dst->data + i12 * nb2) + s0, nb1 / nb0,
+                                        (const char *) src0->data + s0 * nb01, wdata + i12 * ne11 * nbw1,
+                                        waux + i12 * ne11 * nba1, (int) ne11, (int) (e0 - s0));
+                }
+            }
+            c = ggml_threadpool_chunk_add(params->threadpool, 1);
+        }
+        if (!crossed) {
+            ggml_barrier(params->threadpool);
+        }
+    }
+};
+#endif  // __AVXVNNI__ || (__AVX512VNNI__ && __AVX512VL__)
+
 }  // namespace ggml::cpu::repack
 
 static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(const struct ggml_tensor * cur) {
@@ -4958,6 +5202,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     // instance for Q8_0
     static const ggml::cpu::repack::tensor_traits<block_q8_0, 4, 4, GGML_TYPE_Q8_0> q8_0_4x4_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_q8_0, 8, 4, GGML_TYPE_Q8_0> q8_0_4x8_q8_0;
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+    static const ggml::cpu::repack::tensor_traits_vnni<GGML_TYPE_Q8_0, 8> q8_0_8x4_q8_0;
+    static const ggml::cpu::repack::tensor_traits_vnni<GGML_TYPE_Q4_0, 8> q4_0_8x4_q8_0;
+#endif
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    static const ggml::cpu::repack::tensor_traits_vnni<GGML_TYPE_Q8_0, 16> q8_0_16x4_q8_0;
+    static const ggml::cpu::repack::tensor_traits_vnni<GGML_TYPE_Q4_0, 16> q4_0_16x4_q8_0;
+#endif
 
     // instances for RISC-V
     //
@@ -4972,6 +5224,22 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
 #endif
 
     if (cur->type == GGML_TYPE_Q4_0) {
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+        // x86 AVX-512 VNNI 16x4 layout, 2-D weights only
+        if (ggml_cpu_has_avx512_vnni()) {
+            if (cur->ne[1] % 16 == 0 && cur->ne[2] == 1 && cur->ne[3] == 1) {
+                return &q4_0_16x4_q8_0;
+            }
+        }
+#endif
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+        // x86 VNNI 8x4 layout, 2-D weights only
+        if (ggml_cpu_has_avx_vnni() || ggml_cpu_has_avx512_vnni()) {
+            if (cur->ne[1] % 8 == 0 && cur->ne[2] == 1 && cur->ne[3] == 1) {
+                return &q4_0_8x4_q8_0;
+            }
+        }
+#endif
         if (ggml_cpu_has_avx2() || (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)) {
             if (cur->ne[1] % 8 == 0) {
                 return &q4_0_8x8_q8_0;
@@ -5103,6 +5371,22 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_Q8_0) {
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+        // x86 AVX-512 VNNI 16x4 layout, 2-D weights only
+        if (ggml_cpu_has_avx512_vnni()) {
+            if (cur->ne[1] % 16 == 0 && cur->ne[2] == 1 && cur->ne[3] == 1) {
+                return &q8_0_16x4_q8_0;
+            }
+        }
+#endif
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+        // x86 VNNI 8x4 layout, 2-D weights only
+        if (ggml_cpu_has_avx_vnni() || ggml_cpu_has_avx512_vnni()) {
+            if (cur->ne[1] % 8 == 0 && cur->ne[2] == 1 && cur->ne[3] == 1) {
+                return &q8_0_8x4_q8_0;
+            }
+        }
+#endif
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 4 == 0) {
                 return &q8_0_4x8_q8_0;
