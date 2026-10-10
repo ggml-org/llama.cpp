@@ -34,6 +34,7 @@
 #include "kai/ukernels/matmul/pack/kai_lhs_quant_pack_qai8dxp_f32.h"
 
 #include "kai/ukernels/matmul/pack/kai_rhs_pack_kxn_bf16p2vlx2b_f32_x32_sme.h"
+#include "kai/ukernels/matmul/pack/kai_rhs_pack_kxn_f32p2vlx1biasf32_f32_f32_sme.h"
 #include "kai/ukernels/matmul/pack/kai_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme.h"
 #include "kai/ukernels/matmul/pack/kai_rhs_pack_nxk_qsi4c32pscalef16_qsu4c32s16s0.h"
 #include "kai/ukernels/matmul/pack/kai_rhs_pack_nxk_qsi4c32ps1s0scalef16_qsu4c32s16s0_neon.h"
@@ -975,6 +976,13 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
         /* .lhs_type           = */ GGML_TYPE_F32,
         /* .rhs_type           = */ GGML_TYPE_F32,
         /* .op_type            = */ GGML_TYPE_F32,
+        /* .rhs_kxn_info = */ {
+            /* .packed_stride         = */ nullptr,
+            /* .to_float              = */ nullptr,
+            /* .packed_size_ex        = */ &rhs_ps_fn2<kai_get_rhs_packed_size_rhs_pack_kxn_f32p2vlx1biasf32_f32_f32_sme>,
+            /* .packed_stride_ex      = */ &rhs_stride_fn1<kai_get_rhs_packed_stride_rhs_pack_kxn_f32p2vlx1biasf32_f32_f32_sme>,
+            /* .pack_func_ex          = */ &rhs_pack_fn13<kai_run_rhs_pack_kxn_f32p2vlx1biasf32_f32_f32_sme>,
+        },
     },
     {
         /* SME GEMM */
