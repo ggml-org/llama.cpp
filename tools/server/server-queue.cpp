@@ -135,6 +135,7 @@ void server_queue::terminate() {
     condition_tasks.notify_all();
 }
 
+void server_queue::start_loop(int64_t idle_sleep_ms, int64_t heartbeat_ms) {
 bool server_queue::process_new_tasks(bool is_yielding) {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
@@ -278,6 +279,8 @@ void server_queue::yield_to_queue(std::function<void()> && work) {
 void server_queue::start_loop(int64_t idle_sleep_ms) {
     running = true;
     time_last_task = ggml_time_ms();
+    time_last_heartbeat = ggml_time_ms();
+    heartbeat_interval_ms = heartbeat_ms;
 
     // spawn the worker thread used by yield_to_queue()
     GGML_ASSERT(!worker.thread.joinable() && "start_loop() is already running");
@@ -356,6 +359,16 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
                 });
                 if (res) {
                     break; // new task arrived or terminate
+                }
+                // check heartbeat (GPU touch to prevent driver VRAM eviction)
+                if (callback_heartbeat && heartbeat_interval_ms > 0) {
+                    int64_t now_heartbeat = ggml_time_ms();
+                    if ((now_heartbeat - time_last_heartbeat) >= heartbeat_interval_ms) {
+                        lock.unlock(); // release lock before GPU op
+                        callback_heartbeat();
+                        lock.lock();
+                        time_last_heartbeat = ggml_time_ms();
+                    }
                 }
                 // otherwise, loop again to check sleeping condition
             }
