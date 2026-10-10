@@ -304,6 +304,9 @@ if (APPLE)
     llama_build(test-rset-release.cpp)
 endif()
 
+llama_build_and_test(test-state-seq-range.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-state-seq-range PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 if (NOT GGML_BACKEND_DL AND GGML_CPU)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)
