@@ -66,6 +66,47 @@ def test_lora_per_request():
         assert match_regex(re_test, res.body["content"])
 
 
+def test_lora_ram_prompt_cache():
+    global server
+    server.n_slots = 1
+    server.n_ctx = 2048
+    server.n_predict = 16
+    server.cache_ram = 256
+    server.start()
+
+    prompt = "Look in thy glass and tell the face thou viewest. " * 15
+    other = "The quick brown fox jumps over the lazy dog. " * 15
+
+    def complete(text: str, scale: float, cache_prompt: bool = True):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": text,
+            "lora": [{"id": 0, "scale": scale}],
+            "cache_prompt": cache_prompt,
+            "temperature": 0.0,
+            "seed": 42,
+            "n_predict": 16,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    expected_zero = complete(prompt, 0.0, False)
+    expected_one = complete(prompt, 1.0, False)
+    assert expected_zero["content"] != expected_one["content"]
+    complete(prompt, 0.0)
+    complete(other, 1.0)
+    restored = complete(prompt, 1.0)
+    assert restored["content"] == expected_one["content"]
+
+    complete(other, 1.0)
+    restored = complete(prompt, 0.0)
+    assert restored["content"] == expected_zero["content"]
+    assert restored["timings"]["cache_n"] > 0
+    complete(other, 1.0)
+    restored = complete(prompt, 1.0)
+    assert restored["content"] == expected_one["content"]
+    assert restored["timings"]["cache_n"] > 0
+
+
 @pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
 def test_with_big_model():
     server = ServerProcess()

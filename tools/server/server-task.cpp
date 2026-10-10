@@ -1711,9 +1711,12 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
-server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
+server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, const std::vector<common_adapter_lora_info> & lora, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
+        if (!are_lora_equal(it->lora, lora)) {
+            continue;
+        }
         const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
 
         if (cur_lcp_len == (int) prompt.tokens.size()) {
@@ -1739,6 +1742,10 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
 
     // remove any cached prompts that are fully contained in the current prompt
     for (auto it = states.begin(); it != states.end();) {
+        if (!are_lora_equal(it->lora, lora)) {
+            ++it;
+            continue;
+        }
         const int len = it->prompt.tokens.get_common_prefix(prompt.tokens);
 
         if (len == (int) it->prompt.tokens.size()) {
@@ -1784,6 +1791,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             /*.tokens      =*/ prompt.tokens.clone(),
             /*.checkpoints =*/ prompt.checkpoints,
         },
+        /*.lora   =*/ lora,
         /*.data   =*/ {
             /*.main =*/ std::move(state_data_tgt),
             /*.drft =*/ std::move(state_data_dft),
@@ -1793,11 +1801,12 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
-    const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
+bool server_prompt_cache::load(server_prompt & prompt, std::vector<common_adapter_lora_info> & lora, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    const bool lora_compatible = are_lora_equal(lora, lora_new) || !lora_should_clear_cache(lora, lora_new);
+    const int lcp_best = lora_compatible ? prompt.tokens.get_common_prefix(tokens_new) : 0;
 
-    float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
-    float f_sim_best  = float(lcp_best) / tokens_new.size();
+    float f_keep_best = lora_compatible && prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f;
+    float f_sim_best  = lora_compatible ? float(lcp_best) / tokens_new.size() : 0.0f;
 
     SRV_TRC(" - looking for better prompt, base f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
 
@@ -1805,6 +1814,9 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
+        if (!are_lora_equal(it->lora, lora_new) && lora_should_clear_cache(it->lora, lora_new)) {
+            continue;
+        }
         const int lcp_cur = it->prompt.tokens.get_common_prefix(tokens_new);
 
         const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
@@ -1863,6 +1875,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         }
 
         prompt = std::move(it_best->prompt);
+        lora   = std::move(it_best->lora);
 
         states.erase(it_best);
     }
