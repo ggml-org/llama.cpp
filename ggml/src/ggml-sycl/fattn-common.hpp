@@ -832,6 +832,21 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
+// Advertises grf_size_automatic via the properties_tag getter, replacing the
+// deprecated parallel_for(range, properties, kernel) overload.
+template <typename KernelFunc, int warp_size>
+struct grf_size_kernel {
+    KernelFunc kernel;
+
+    [[sycl::reqd_sub_group_size(warp_size)]] void operator()(sycl::nd_item<3> item) const {
+        kernel(item);
+    }
+
+    auto get(sycl::ext::oneapi::experimental::properties_tag) const {
+        return sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size_automatic };
+    }
+};
+
 template <fattn_kernel_t fattn_kernel, int warp_size, bool use_large_grf = false>
 static void lauch_kernel(
     dpct::dim3 group_range,
@@ -893,10 +908,7 @@ static void lauch_kernel(
     q->submit([&](sycl::handler &cgh) {
         // grf_size_automatic lets the compiler use the large register file when the kernel needs it. grf_size<256> would say the same but is undefined on devices that do not have it.
         if constexpr (use_large_grf) {
-            cgh.parallel_for(
-                rng,
-                sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size_automatic },
-                kernel);
+            cgh.parallel_for(rng, grf_size_kernel<decltype(kernel), warp_size>{kernel});
         } else {
             cgh.parallel_for(rng, kernel);
         }
