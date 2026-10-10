@@ -5,10 +5,11 @@
 #include <string>
 #include <vector>
 
-inline constexpr const char * LLM_KV_IMATRIX_DATASETS     = "imatrix.datasets";
-inline constexpr const char * LLM_KV_IMATRIX_CHUNK_COUNT  = "imatrix.chunk_count";
-inline constexpr const char * LLM_KV_IMATRIX_CHUNK_SIZE   = "imatrix.chunk_size";
+inline constexpr const char * LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
+inline constexpr const char * LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
+inline constexpr const char * LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
 inline constexpr const char * LLM_KV_IMATRIX_STATS_SCHEMA = "imatrix.stats_schema";
+inline constexpr const char * LLM_KV_IMATRIX_N_LAYER_NEXTN = "imatrix.n_layer_nextn";
 
 struct common_imatrix_entry {
     std::vector<float>   sums;
@@ -23,6 +24,7 @@ struct common_imatrix {
     std::vector<std::string> stats_schema;
     int32_t chunk_count    = 0;
     int32_t chunk_size     = 0;
+    int32_t n_layer_nextn  = 0;
     bool    is_legacy      = false;
     bool    has_metadata   = false;
 };

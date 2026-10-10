@@ -20,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LIBS=(libllama libmtmd)
 
 usage() {
     echo "Usage: $0 [--tag <version>]" >&2
@@ -56,18 +57,6 @@ if ! command -v abi-compliance-checker >/dev/null 2>&1 || ! command -v abidw >/d
     echo "Warning: abi-compliance-checker or abigail-tools not installed - skipping API/ABI check"
     exit 0
 fi
-
-discover_libs() {
-    local build_dir="$1"
-    local libs=()
-    for dir in "$build_dir/src" "$build_dir/bin"; do
-        [[ -d "$dir" ]] || continue
-        for f in "$dir"/lib*.so; do
-            [[ -f "$f" ]] && libs+=("$(basename "$f" .so)")
-        done
-    done
-    echo "${libs[@]}"
-}
 
 if [[ -n "${COMPARE_TAG}" ]]; then
     PREV_TAG="${COMPARE_TAG}"
@@ -118,14 +107,10 @@ git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" "$PREV_TAG"
 
 cmake -S "$WORKTREE_DIR" -B "$BUILD_OLD" -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build "$BUILD_OLD" --parallel "$(nproc)"
-OLD_LIBS=($(discover_libs "$BUILD_OLD"))
-echo "Libraries found in old build: ${OLD_LIBS[*]}"
 
 cmake -S "$REPO_ROOT"    -B "$BUILD_NEW" -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build "$BUILD_NEW" --parallel "$(nproc)"
-NEW_LIBS=($(discover_libs "$BUILD_NEW"))
-echo "Libraries found in new build: ${NEW_LIBS[*]}"
 
-(cd "$WORKTREE_DIR" && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_OLD" "${OLD_LIBS[@]}")
-(cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_NEW" "${NEW_LIBS[@]}")
+(cd "$WORKTREE_DIR" && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_OLD" "${LIBS[@]}")
+(cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_NEW" "${LIBS[@]}")
 (cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" "${CHECK_FLAGS[@]}" --check "$BUILD_OLD" "$BUILD_NEW")

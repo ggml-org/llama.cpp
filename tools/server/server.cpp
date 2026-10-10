@@ -41,6 +41,7 @@ int llama_server(int argc, char ** argv);
 
 // to be used via CLI (argc / argv are used by router mode only)
 int llama_server(common_params & params, int argc, char ** argv);
+int llama_server(common_params & params, int argc, char ** argv, server_child & child);
 void llama_server_terminate();
 void llama_server_terminate() {
     if (shutdown_handler) {
@@ -90,6 +91,8 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int llama_server(int argc, char ** argv) {
+    server_child child;
+
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
@@ -115,12 +118,17 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    const int result = llama_server(params, argc, argv);
+    const int result = llama_server(params, argc, argv, child);
     common_log_flush(common_log_main());
     return result;
 }
 
 int llama_server(common_params & params, int argc, char ** argv) {
+    server_child child;
+    return llama_server(params, argc, argv, child);
+}
+
+int llama_server(common_params & params, int argc, char ** argv, server_child & child) {
     bool is_run_by_cli = (argv == nullptr);
 
     common_models_handler models_handler;
@@ -194,7 +202,6 @@ int llama_server(common_params & params, int argc, char ** argv) {
     //
 
     // register API routes
-    server_child child; // only used in non-router mode
     server_routes routes(params, ctx_server);
     server_tools tools;
 
@@ -514,16 +521,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
 #endif
     }
 
-    bool uses_default_port = false;
     for (const auto & address : ctx_http.listening_addresses) {
         SRV_INF("listening on %s\n", address.c_str());
-        uses_default_port |= string_ends_with(address, ":8080");
-    }
-
-    // TODO: remove this in the future
-    // check the string to also handle the .sock case
-    if (uses_default_port) {
-        SRV_WRN("%s", "notice: server default port will be changed to :9931 in a future release (ref: https://github.com/ggml-org/llama.cpp/pull/26508)\n");
     }
 
     if (is_router_server) {
