@@ -459,6 +459,7 @@ struct ggml_backend_opencl_device_context {
     std::string    device_name;
     cl_device_type device_type;
     std::string    device_version;
+    std::string    device_description;
 
     // Initialized by ggml_cl_init().
     ggml_backend_opencl_context * backend_ctx = nullptr;
@@ -6509,15 +6510,16 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
         GGML_LOG_INFO("\nggml_opencl: device: '%s (%s)'\n", dev->name, dev->version);
 
         auto dev_ctx = std::unique_ptr<ggml_backend_opencl_device_context>(new ggml_backend_opencl_device_context{
-            /*.platform         =*/dev->platform->id,
-            /*.platform_nane    =*/dev->platform->name,
-            /*.device           =*/dev->id,
-            /*.device_name      =*/dev->name,
-            /*.device_type      =*/dev->type,
-            /*.device_version   =*/dev->version,
-            /*.backend_ctx      =*/nullptr,
-            /*.buffer_type      =*/{},
-            /*.context          =*/shared_context,
+            /*.platform           =*/dev->platform->id,
+            /*.platform_nane      =*/dev->platform->name,
+            /*.device             =*/dev->id,
+            /*.device_name        =*/dev->name,
+            /*.device_type        =*/dev->type,
+            /*.device_version     =*/dev->version,
+            /*.device_description =*/dev->name + ", " + dev->version,
+            /*.backend_ctx        =*/nullptr,
+            /*.buffer_type        =*/{},
+            /*.context            =*/shared_context,
         });
 
         found_devices.push_back(ggml_backend_device{
@@ -12958,7 +12960,7 @@ static const char * ggml_backend_opencl_device_get_name(ggml_backend_dev_t dev) 
 
 static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_t dev) {
     ggml_backend_opencl_device_context *dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
-    return dev_ctx->device_name.c_str();
+    return dev_ctx->device_description.c_str();
 }
 
 static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
