@@ -1,5 +1,11 @@
 #include "ggml-vulkan-common.h"
 
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 inline std::ostream & operator<<(std::ostream & os, vk::Buffer buffer) {
     return os << static_cast<VkBuffer>(buffer);
@@ -4108,6 +4114,8 @@ vk_device ggml_vk_get_device(size_t idx) {
                 device->memory_priority = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+            } else if (strcmp("VK_KHR_external_semaphore_fd", properties.extensionName) == 0) {
+                device->external_semaphore = true;
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -4458,6 +4466,10 @@ vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
+        }
+        if (device->external_semaphore) {
+            device_extensions.push_back("VK_KHR_external_semaphore");
+            device_extensions.push_back("VK_KHR_external_semaphore_fd");
         }
 
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -12771,6 +12783,11 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
     if (submit || last_node) {
         ggml_vk_ctx_end(compute_ctx);
 
+        if (last_node && ctx->comm_active && !compute_ctx->seqs.empty()) {
+            ctx->comm_prog_val++;
+            compute_ctx->seqs.back().back().signal_semaphores.push_back({ ctx->comm_prog_sem, ctx->comm_prog_val });
+        }
+
         // TODO probably it'd be better to pass a exit_node flag to ggml_vk_compute_forward
         if (last_node) {
             compute_ctx->exit_tensor_idx = node_idx_begin;
@@ -14284,6 +14301,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         // initialize partial sums to zero.
         ggml_vk_buffer_memset_async(compute_ctx, ctx->prealloc_add_rms_partials, 0, 0, ctx->prealloc_size_add_rms_partials);
         ggml_vk_sync_buffers(ctx, compute_ctx);
+    }
+
+    if (ctx->comm_active) {
+        compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        compute_ctx->s->wait_semaphores.push_back({ ctx->comm_prog_sem, ctx->comm_prog_val });
     }
 
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
@@ -16185,11 +16207,606 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+struct ggml_backend_vk_comm_context {
+    std::vector<ggml_backend_t>             backends;
+    std::vector<ggml_backend_vk_context*>   vkctx;
+    std::vector<vk_device>                  device;
+    size_t                                  align = 4096;
+    size_t                                  cap   = 0;
+    bool                                    fast  = false;
+    std::vector<vk::Semaphore>              prog;
+    std::vector<std::vector<vk::Semaphore>> peer_prog;
+    std::vector<uint64_t>                   last_reduce;
+    std::vector<vk_command_pool>            cmd_pool;
+    std::vector<uint64_t>                   pool_max_val;
+    std::vector<void*>                      host_ptr;
+    std::vector<std::vector<ggml_backend_buffer_t>> host_buf;
+    std::vector<ggml_tensor*>               tmp_tensor;
+    ggml_context *                          tctx = nullptr;
+    bool                                    ring_ok = false;
+    std::vector<vk::Semaphore>              up;
+    std::vector<std::vector<vk::Semaphore>> peer_up;
+    std::vector<uint64_t>                   up_val;
+    std::vector<vk_command_pool>            cmd_pool_xfer;
+    std::vector<uint64_t>                   xfer_pool_max_val;
+    uint64_t                                ring_round = 0;
+    std::vector<ggml_tensor*>               ring_view;
+    std::vector<ggml_backend_buffer_t>      up16_buffer;
+    std::vector<ggml_backend_buffer_t>      dn16_buffer;
+    std::vector<ggml_tensor*>               up16_tensor;
+    std::vector<ggml_tensor*>               dn16_tensor;
+};
+
+static vk::Semaphore ggml_vk_create_export_timeline(vk_device & device) {
+    vk::ExportSemaphoreCreateInfo esci{ vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd };
+    vk::SemaphoreTypeCreateInfo   stci{ vk::SemaphoreType::eTimeline, 0 };
+    stci.pNext = &esci;
+    vk::SemaphoreCreateInfo sci{};
+    sci.pNext = &stci;
+    return device->device.createSemaphore(sci);
+}
+
+static void ggml_vk_comm_close_fd(int fd) {
+#if defined(_WIN32)
+    _close(fd);
+#else
+    close(fd);
+#endif
+}
+
+static vk::Semaphore ggml_vk_import_timeline(vk_device & dst_dev, vk_device & src_dev, vk::Semaphore src_sem) {
+    auto pGetSemFd = (PFN_vkGetSemaphoreFdKHR) src_dev->device.getProcAddr("vkGetSemaphoreFdKHR");
+    auto pImportSemFd = (PFN_vkImportSemaphoreFdKHR) dst_dev->device.getProcAddr("vkImportSemaphoreFdKHR");
+    int fd = -1;
+    VkSemaphoreGetFdInfoKHR gi{};
+    gi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+    gi.semaphore  = src_sem;
+    gi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+    VkResult result = pGetSemFd((VkDevice) src_dev->device, &gi, &fd);
+    if (result != VK_SUCCESS) {
+        throw vk::SystemError(vk::make_error_code((vk::Result) result), "ggml_vulkan: vkGetSemaphoreFdKHR");
+    }
+
+    vk::Semaphore dst;
+    try {
+        vk::SemaphoreTypeCreateInfo stci{ vk::SemaphoreType::eTimeline, 0 };
+        vk::SemaphoreCreateInfo sci{};
+        sci.pNext = &stci;
+        dst = dst_dev->device.createSemaphore(sci);
+
+        VkImportSemaphoreFdInfoKHR isi{};
+        isi.sType      = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;
+        isi.semaphore  = dst;
+        isi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+        isi.fd         = fd;
+        result = pImportSemFd((VkDevice) dst_dev->device, &isi);
+        if (result != VK_SUCCESS) {
+            throw vk::SystemError(vk::make_error_code((vk::Result) result), "ggml_vulkan: vkImportSemaphoreFdKHR");
+        }
+    } catch (...) {
+        if (dst) {
+            dst_dev->device.destroySemaphore(dst);
+        }
+        ggml_vk_comm_close_fd(fd);
+        throw;
+    }
+    return dst;
+}
+
+static bool ggml_vk_comm_opaque_fd_supported(ggml_backend_vk_comm_context * comm) {
+    const size_t n = comm->device.size();
+    uint8_t driver_uuid[VK_UUID_SIZE];
+    for (size_t i = 0; i < n; i++) {
+        vk::PhysicalDeviceIDProperties id;
+        vk::PhysicalDeviceProperties2  p2;
+        p2.pNext = &id;
+        comm->device[i]->physical_device.getProperties2(&p2);
+        if (i == 0) {
+            memcpy(driver_uuid, id.driverUUID.data(), VK_UUID_SIZE);
+        } else if (memcmp(driver_uuid, id.driverUUID.data(), VK_UUID_SIZE) != 0) {
+            return false;
+        }
+        if (!comm->device[i]->device.getProcAddr("vkGetSemaphoreFdKHR") ||
+            !comm->device[i]->device.getProcAddr("vkImportSemaphoreFdKHR")) {
+            return false;
+        }
+
+        vk::SemaphoreTypeCreateInfo               stci{ vk::SemaphoreType::eTimeline, 0 };
+        vk::PhysicalDeviceExternalSemaphoreInfo   esi{ vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd };
+        esi.pNext = &stci;
+        vk::ExternalSemaphoreProperties esp = comm->device[i]->physical_device.getExternalSemaphoreProperties(esi);
+        const vk::ExternalSemaphoreFeatureFlags need =
+            vk::ExternalSemaphoreFeatureFlagBits::eExportable | vk::ExternalSemaphoreFeatureFlagBits::eImportable;
+        if ((esp.externalSemaphoreFeatures & need) != need) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_backends) {
+    ggml_backend_vk_comm_context * comm = new ggml_backend_vk_comm_context;
+    comm->backends.assign(backends, backends + n_backends);
+    comm->vkctx.resize(n_backends);
+    comm->device.resize(n_backends);
+    bool ok = (n_backends >= 2);
+    for (size_t i = 0; i < n_backends; i++) {
+        comm->vkctx[i]  = (ggml_backend_vk_context *) backends[i]->context;
+        comm->device[i] = comm->vkctx[i]->device;
+        ok = ok && comm->device[i]->external_memory_host && comm->device[i]->external_semaphore;
+        comm->align = std::max(comm->align, (size_t) comm->device[i]->min_imported_host_pointer_alignment);
+    }
+    comm->fast = ok;
+    comm->host_ptr.resize(n_backends, nullptr);
+    comm->host_buf.resize(n_backends);
+    comm->tmp_tensor.resize(n_backends, nullptr);
+    for (size_t k = 0; k < n_backends; k++) {
+        comm->host_buf[k].resize(n_backends);
+    }
+    comm->up16_buffer.resize(n_backends, nullptr);
+    comm->dn16_buffer.resize(n_backends, nullptr);
+    comm->up16_tensor.resize(n_backends, nullptr);
+    comm->dn16_tensor.resize(n_backends, nullptr);
+    comm->ring_view.resize(n_backends, nullptr);
+    const ggml_init_params ip = { ggml_tensor_overhead() * (4 * n_backends + 8), nullptr, true };
+    comm->tctx = ggml_init(ip);
+
+    if (comm->fast) {
+        comm->fast = ggml_vk_comm_opaque_fd_supported(comm);
+    }
+    if (comm->fast) {
+        comm->prog.resize(n_backends);
+        comm->peer_prog.assign(n_backends, std::vector<vk::Semaphore>(n_backends));
+        comm->last_reduce.assign(n_backends, 0);
+        comm->cmd_pool.resize(n_backends);
+        comm->pool_max_val.assign(n_backends, 0);
+        comm->up.resize(n_backends);
+        comm->peer_up.assign(n_backends, std::vector<vk::Semaphore>(n_backends));
+        comm->up_val.assign(n_backends, 0);
+        comm->cmd_pool_xfer.resize(n_backends);
+        comm->xfer_pool_max_val.assign(n_backends, 0);
+        comm->ring_ok = true;
+        for (size_t i = 0; i < n_backends; i++) {
+            comm->cmd_pool[i].init(comm->device[i], comm->device[i]->compute_queue.get());
+            comm->cmd_pool_xfer[i].init(comm->device[i], comm->device[i]->transfer_queue.get());
+            if (comm->device[i]->single_queue ||
+                comm->device[i]->transfer_queue->handle == comm->device[i]->compute_queue->handle) {
+                comm->ring_ok = false;
+            }
+        }
+        try {
+            for (size_t i = 0; i < n_backends; i++) {
+                comm->prog[i] = ggml_vk_create_export_timeline(comm->device[i]);
+                comm->up[i]   = ggml_vk_create_export_timeline(comm->device[i]);
+            }
+            for (size_t j = 0; j < n_backends; j++) {
+                for (size_t i = 0; i < n_backends; i++) {
+                    if (i == j) { continue; }
+                    comm->peer_prog[i][j] = ggml_vk_import_timeline(comm->device[i], comm->device[j], comm->prog[j]);
+                    comm->peer_up[i][j]   = ggml_vk_import_timeline(comm->device[i], comm->device[j], comm->up[j]);
+                }
+            }
+        } catch (const vk::SystemError & e) {
+            GGML_LOG_WARN("ggml_vulkan: shared semaphore initialization failed: %s; using generic all-reduce\n", e.what());
+            comm->fast = false;
+            return comm;
+        }
+        if (comm->fast) {
+            for (size_t i = 0; i < n_backends; i++) {
+                comm->vkctx[i]->comm_prog_sem = comm->prog[i];
+                comm->vkctx[i]->comm_prog_val = 0;
+                comm->vkctx[i]->comm_active   = true;
+            }
+        }
+    }
+    if (!comm->fast) {
+        GGML_LOG_WARN("ggml_vulkan: shared semaphore all-reduce unavailable; using generic all-reduce\n");
+    }
+    return comm;
+}
+
+static void * ggml_vk_comm_aligned_alloc(size_t alignment, size_t size) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    return _aligned_malloc(size, alignment);
+#else
+    return std::aligned_alloc(alignment, size);
+#endif
+}
+
+static void ggml_vk_comm_aligned_free(void * ptr) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
+static void ggml_backend_vk_comm_free(void * comm_ctx) {
+    ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
+    for (size_t i = 0; i < comm->vkctx.size(); i++) {
+        ggml_backend_synchronize(comm->backends[i]);
+        comm->vkctx[i]->comm_active   = false;
+        comm->vkctx[i]->comm_prog_sem = VK_NULL_HANDLE;
+    }
+    for (size_t i = 0; i < comm->prog.size(); i++) {
+        if (comm->prog[i]) {
+            comm->device[i]->device.destroySemaphore(comm->prog[i]);
+        }
+        if (i < comm->up.size() && comm->up[i]) {
+            comm->device[i]->device.destroySemaphore(comm->up[i]);
+        }
+        for (size_t j = 0; j < comm->peer_prog[i].size(); j++) {
+            if (comm->peer_prog[i][j]) {
+                comm->device[i]->device.destroySemaphore(comm->peer_prog[i][j]);
+            }
+            if (i < comm->peer_up.size() && j < comm->peer_up[i].size() && comm->peer_up[i][j]) {
+                comm->device[i]->device.destroySemaphore(comm->peer_up[i][j]);
+            }
+        }
+    }
+    for (size_t i = 0; i < comm->cmd_pool.size(); i++) {
+        comm->cmd_pool[i].destroy(comm->device[i]->device);
+    }
+    for (size_t i = 0; i < comm->cmd_pool_xfer.size(); i++) {
+        comm->cmd_pool_xfer[i].destroy(comm->device[i]->device);
+    }
+    for (auto & row : comm->host_buf) {
+        for (auto & b : row) {
+            ggml_backend_buffer_free(b);
+        }
+    }
+    for (void * p : comm->host_ptr) {
+        ggml_vk_comm_aligned_free(p);
+    }
+    for (ggml_backend_buffer_t b : comm->up16_buffer) {
+        if (b) {
+            ggml_backend_buffer_free(b);
+        }
+    }
+    for (ggml_backend_buffer_t b : comm->dn16_buffer) {
+        if (b) {
+            ggml_backend_buffer_free(b);
+        }
+    }
+    if (comm->tctx) {
+        ggml_free(comm->tctx);
+    }
+    delete comm;
+}
+
+static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, size_t nbytes) {
+    // Reuse the current buffers when they fit and are not grossly oversized. We deliberately SHRINK when the
+    // request is much smaller than the current cap (e.g. the prefill->decode transition): the imported external
+    // host buffers are made visible across devices on every timeline-semaphore signal, so an oversized `cap`
+    // left over from a large prefill stalls every small (decode) all-reduce in proportion to its size.
+    constexpr size_t shrink_slack = 4;
+    if (nbytes <= comm->cap && comm->cap <= nbytes * shrink_slack) {
+        return true;
+    }
+    const size_t n      = comm->backends.size();
+    const size_t newcap = (nbytes + comm->align - 1) & ~(comm->align - 1);
+
+    // Buffers may still be referenced by the previous (async) all-reduce; wait for it before freeing them.
+    for (size_t i = 0; i < n; i++) {
+        if (comm->last_reduce[i] == 0) {
+            continue;
+        }
+        vk::SemaphoreWaitInfo wi;
+        wi.semaphoreCount = 1;
+        wi.pSemaphores    = &comm->prog[i];
+        wi.pValues        = &comm->last_reduce[i];
+        (void) comm->device[i]->device.waitSemaphores(wi, UINT64_MAX);
+    }
+
+    for (size_t k = 0; k < n; k++) {
+        for (size_t i = 0; i < n; i++) {
+            ggml_backend_buffer_free(comm->host_buf[k][i]);
+            comm->host_buf[k][i] = nullptr;
+        }
+        ggml_vk_comm_aligned_free(comm->host_ptr[k]);
+        comm->host_ptr[k] = nullptr;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (comm->up16_buffer[i]) {
+            ggml_backend_buffer_free(comm->up16_buffer[i]);
+            comm->up16_buffer[i] = nullptr;
+        }
+        if (comm->dn16_buffer[i]) {
+            ggml_backend_buffer_free(comm->dn16_buffer[i]);
+            comm->dn16_buffer[i] = nullptr;
+        }
+    }
+
+    const size_t slotcap = 4 * newcap;
+    for (size_t k = 0; k < n; k++) {
+        comm->host_ptr[k] = ggml_vk_comm_aligned_alloc(comm->align, slotcap);
+        if (!comm->host_ptr[k]) {
+            return false;
+        }
+        for (size_t i = 0; i < n; i++) {
+            comm->host_buf[k][i] = ggml_backend_vk_device_buffer_from_host_ptr(
+                ggml_backend_get_device(comm->backends[i]), comm->host_ptr[k], slotcap, newcap);
+            if (!comm->host_buf[k][i]) {
+                return false;
+            }
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_buffer_type_t bt = ggml_backend_get_default_buffer_type(comm->backends[i]);
+        if (!comm->tmp_tensor[i]) {
+            comm->tmp_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1);
+        }
+        comm->up16_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
+        comm->dn16_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
+        if (!comm->up16_buffer[i] || !comm->dn16_buffer[i]) {
+            return false;
+        }
+        if (!comm->up16_tensor[i]) {
+            comm->up16_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F16, 1);
+        }
+        if (!comm->dn16_tensor[i]) {
+            comm->dn16_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F16, 1);
+        }
+        comm->up16_tensor[i]->buffer = comm->up16_buffer[i];
+        comm->up16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->up16_buffer[i]);
+        comm->dn16_tensor[i]->buffer = comm->dn16_buffer[i];
+        comm->dn16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
+        if (!comm->ring_view[i]) {
+            comm->ring_view[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1);
+        }
+    }
+    comm->cap = newcap;
+    return true;
+}
+
+static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * comm,
+                                                ggml_tensor ** tensors) {
+    const size_t   n    = comm->backends.size();
+    const size_t   esz  = ggml_type_size(GGML_TYPE_F32);
+    const size_t   xsz  = sizeof(uint16_t);
+    const int64_t  nel  = ggml_nelements(tensors[0]);
+    const int64_t  cels = (nel + (int64_t) n - 1) / (int64_t) n;
+    const uint64_t nsteps = 2 * (uint64_t) (n - 1);
+    const uint64_t nprog  = nsteps + 1;
+
+    const uint64_t round    = comm->ring_round++;
+    const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap;
+
+    std::vector<uint64_t> compute_val(n), reduce_val(n), prev_reduce(n), up_base(n);
+    for (size_t i = 0; i < n; i++) {
+        prev_reduce[i] = comm->last_reduce[i];
+        compute_val[i] = comm->vkctx[i]->comm_prog_val;
+        reduce_val[i]  = compute_val[i] + nprog;
+        comm->vkctx[i]->comm_prog_val = reduce_val[i];
+        comm->last_reduce[i]          = reduce_val[i];
+        up_base[i]      = comm->up_val[i];
+        comm->up_val[i] += nsteps;
+        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
+        if (done >= comm->pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]); }
+        comm->pool_max_val[i] = reduce_val[i];
+        uint64_t xdone = comm->device[i]->device.getSemaphoreCounterValue(comm->up[i]);
+        if (xdone >= comm->xfer_pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool_xfer[i]); }
+        comm->xfer_pool_max_val[i] = up_base[i] + nsteps;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        const size_t nextd = (i + 1) % n;
+        const size_t prevd = (i + n - 1) % n;
+        ggml_tensor * rview = comm->ring_view[i];
+        char *        tbase = (char *) tensors[i]->data;
+
+        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
+        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]);
+
+        auto chunk_cels = [&](size_t c) -> int64_t {
+            const int64_t off = (int64_t) c * cels;
+            return off >= nel ? 0 : std::min(cels, nel - off);
+        };
+        auto set_view = [](ggml_tensor * tt, ggml_backend_buffer_t buf, char * data, int64_t ne0, size_t es) {
+            tt->ne[0] = ne0; tt->ne[1] = tt->ne[2] = tt->ne[3] = 1;
+            tt->nb[0] = es;  tt->nb[1] = tt->nb[2] = tt->nb[3] = (size_t) ne0 * es;
+            tt->buffer = buf; tt->data = data; tt->view_offs = 0;
+        };
+
+        {
+            ggml_backend_vk_buffer_context * ubc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
+            ggml_backend_vk_buffer_context * dbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
+            ggml_backend_vk_buffer_context * hbc = (ggml_backend_vk_buffer_context *) comm->host_buf[i][i]->context;
+            ggml_backend_vk_buffer_context * pbc = (ggml_backend_vk_buffer_context *) comm->host_buf[prevd][i]->context;
+            ggml_tensor * up16t = comm->up16_tensor[i];
+            ggml_tensor * dn16t = comm->dn16_tensor[i];
+            char *        ubase = (char *) ggml_backend_buffer_get_base(comm->up16_buffer[i]);
+            char *        dbase = (char *) ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
+
+            const int64_t cels0 = chunk_cels(i);
+            ggml_vk_ctx_begin(comm->device[i], cctx);
+            cctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
+            cctx->s->wait_semaphores.push_back({ comm->up[i],   up_base[i] });
+            if (cels0) {
+                set_view(rview, tensors[i]->buffer,  tbase + (size_t) i * cels * esz, cels0, esz);
+                set_view(up16t, comm->up16_buffer[i], ubase,                          cels0, xsz);
+                ggml_vk_cpy(comm->vkctx[i], cctx, rview, up16t);
+            }
+            ggml_vk_ctx_end(cctx);
+            cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + 1 });
+
+            for (uint64_t t = 0; t < nsteps; t++) {
+                const bool    rs = (t < (uint64_t) (n - 1));
+                const size_t  s  = (size_t) (rs ? t : t - (n - 1));
+                const size_t  c_send = rs ? (i + n - s) % n : (i + n + 1 - s) % n;
+                const size_t  c_recv = rs ? (i + n - s - 1) % n : (i + n - s) % n;
+                const int64_t scels = chunk_cels(c_send), rcels = chunk_cels(c_recv);
+                const size_t  uoff = (size_t) t * (size_t) cels * xsz;
+                const size_t  hoff = slot_off + uoff;
+
+                ggml_vk_ctx_begin(comm->device[i], tctx);
+                if (t == 0) {
+                    tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + 1 });
+                    if (round >= 2) {
+                        tctx->s->wait_semaphores.push_back({ comm->peer_prog[i][nextd], prev_reduce[nextd] });
+                    }
+                } else {
+                    tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 1 });
+                }
+                if (scels) {
+                    ggml_vk_buffer_copy_async(tctx, hbc->dev_buffer, hoff, ubc->dev_buffer, uoff, (size_t) scels * xsz);
+                }
+                ggml_vk_ctx_end(tctx);
+                tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
+
+                ggml_vk_ctx_begin(comm->device[i], cctx);
+                cctx->s->wait_semaphores.push_back({ comm->peer_up[i][prevd], up_base[prevd] + t + 1 });
+                if (rcels) {
+                    ggml_vk_buffer_copy_async(cctx, dbc->dev_buffer, 0, pbc->dev_buffer, hoff, (size_t) rcels * xsz);
+                    ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+                    set_view(dn16t, comm->dn16_buffer[i], dbase,                                 rcels, xsz);
+                    set_view(rview, tensors[i]->buffer,   tbase + (size_t) c_recv * cels * esz,  rcels, esz);
+                    if (rs) { ggml_vk_add(comm->vkctx[i], cctx, rview, dn16t, rview); }
+                    else    { ggml_vk_cpy(comm->vkctx[i], cctx, dn16t, rview); }
+                    ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+                    if (t + 1 < nsteps) {
+                        set_view(up16t, comm->up16_buffer[i], ubase + (size_t) (t + 1) * cels * xsz, rcels, xsz);
+                        ggml_vk_cpy(comm->vkctx[i], cctx, rview, up16t);
+                        ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+                    }
+                }
+                ggml_vk_ctx_end(cctx);
+                cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 2 });
+            }
+        }
+        ggml_vk_submit(tctx, {});
+        ggml_vk_submit(cctx, {});
+    }
+    return true;
+}
+
+static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors) {
+    ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
+    const size_t n = comm->backends.size();
+
+    if (!comm->fast || tensors[0]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    const int64_t ne = ggml_nelements(tensors[0]);
+    if (ne == 0) {
+        return true;
+    }
+    const size_t nbytes = ggml_nbytes(tensors[0]);
+    for (size_t i = 0; i < n; i++) {
+        if (tensors[i]->type != GGML_TYPE_F32 || ggml_nelements(tensors[i]) != ne || !ggml_is_contiguous(tensors[i])) {
+            return false;
+        }
+    }
+    if (!ggml_backend_vk_comm_ensure(comm, nbytes)) {
+        return false;
+    }
+
+    constexpr size_t ring_min = 2u << 20;
+    if (comm->ring_ok && n >= 2 && nbytes >= ring_min) {
+        bool all_compute = true;
+        for (size_t i = 0; i < n; i++) {
+            all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
+        }
+        if (all_compute) {
+            return ggml_backend_vk_comm_allreduce_ring(comm, tensors);
+        }
+    }
+
+    std::vector<uint64_t> compute_val(n), gather_val(n), reduce_val(n), prev_reduce(n);
+    for (size_t i = 0; i < n; i++) {
+        prev_reduce[i] = comm->last_reduce[i];
+        compute_val[i] = comm->vkctx[i]->comm_prog_val;
+        gather_val[i]  = compute_val[i] + 1;
+        reduce_val[i]  = compute_val[i] + 2;
+        comm->vkctx[i]->comm_prog_val = reduce_val[i];
+        comm->last_reduce[i]          = reduce_val[i];
+        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
+        if (done < comm->pool_max_val[i] && comm->cmd_pool[i].buffers_in_use() >= 256) {
+            vk::SemaphoreWaitInfo wi;
+            wi.semaphoreCount = 1;
+            wi.pSemaphores    = &comm->prog[i];
+            wi.pValues        = &comm->pool_max_val[i];
+            (void) comm->device[i]->device.waitSemaphores(wi, UINT64_MAX);
+            done = comm->pool_max_val[i];
+        }
+        if (done >= comm->pool_max_val[i]) {
+            ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]);
+        }
+        comm->pool_max_val[i] = reduce_val[i];
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        ggml_tensor * tmp = comm->tmp_tensor[i];
+        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+            tmp->ne[d] = tensors[i]->ne[d];
+        }
+        tmp->nb[0] = ggml_type_size(GGML_TYPE_F32);
+        for (int d = 1; d < GGML_MAX_DIMS; d++) {
+            tmp->nb[d] = tmp->nb[d - 1] * tmp->ne[d - 1];
+        }
+        ggml_backend_vk_buffer_context * hbc = (ggml_backend_vk_buffer_context *) comm->host_buf[i][i]->context;
+        vk_context c = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
+
+        ggml_vk_ctx_begin(comm->device[i], c);
+        c->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
+        for (size_t k = 0; k < n; k++) {
+            if (k != i) {
+                c->s->wait_semaphores.push_back({ comm->peer_prog[i][k], prev_reduce[k] });
+            }
+        }
+        if (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) {
+            ggml_backend_vk_buffer_context * bc = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
+            ggml_vk_buffer_copy_async(c, hbc->dev_buffer, 0, bc->dev_buffer,
+                                      vk_tensor_offset(tensors[i]) + tensors[i]->view_offs, nbytes);
+        } else {
+            ggml_vk_buffer_memset_async(c, hbc->dev_buffer, 0, 0, nbytes);
+        }
+        ggml_vk_ctx_end(c);
+        c->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], gather_val[i] });
+
+        ggml_vk_ctx_begin(comm->device[i], c);
+        c->s->wait_semaphores.push_back({ comm->prog[i], gather_val[i] });
+        for (size_t k = 0; k < n; k++) {
+            if (k != i) {
+                c->s->wait_semaphores.push_back({ comm->peer_prog[i][k], gather_val[k] });
+            }
+        }
+        for (size_t k = 0; k < n; k++) {
+            if (k == i) {
+                continue;
+            }
+            tmp->buffer = comm->host_buf[k][i];
+            tmp->data   = ggml_backend_buffer_get_base(tmp->buffer);
+            ggml_vk_add(comm->vkctx[i], c, tensors[i], tmp, tensors[i]);
+            ggml_vk_sync_buffers(comm->vkctx[i], c);
+        }
+        ggml_vk_ctx_end(c);
+        c->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], reduce_val[i] });
+
+        ggml_vk_submit(c, {});
+    }
+    return true;
+}
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    UNUSED(reg);
+    if (strcmp(name, "ggml_backend_comm_init") == 0) {
+        return (void *) ggml_backend_vk_comm_init;
+    }
+    if (strcmp(name, "ggml_backend_comm_free") == 0) {
+        return (void *) ggml_backend_vk_comm_free;
+    }
+    if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
+        return (void *) ggml_backend_vk_comm_allreduce_tensor;
+    }
+    return nullptr;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {
