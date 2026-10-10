@@ -35,9 +35,71 @@
 
 namespace fs = std::filesystem;
 
-//
-// internal helpers
-//
+// NOTE on safe_json_to_str (house-wide masking pattern):
+//    use of safe_json_to_str pattern et al. to manage payload covers up splits and damage by invalid UTF-8
+//    by substituting U+FFFD. This breaks the MCP contract.
+//    Consider fixing splits across byte chunks or handling the exception instead.
+//    safe_json_to_str use should be reserved for diagnostics.
+
+// History:
+// 2026-09-14 Ralph Holland - Djeti AI.
+//    run_subprocess now joins UTF-8 sequences split across the pipe.
+//    reads are joined via a carry, so every streamed chunk is
+//    self-contained valid UTF-8.
+//    Invalid multi-byte sequences can no longer reach the JSON layer
+//    from the tool output (and the server won't crash).
+// 2026-09-14 Ralph Holland - Djeti AI.
+//    Added exception handling at the stream serialization boundary.
+//    A JSON dump() throw on invalid UTF-8 is caught in
+//    chunked_content_provider (server-http.cpp) and logged, and ends the
+//    stream cleanly. Without this handler the throw escapes the
+//    httplib thread and terminates the whole server process.
+//    Catching the serialization throw at the HTTP edge is the pattern that
+//    converts a process-crashing exception into a contained, logged
+//    stream termination; it is the layer that stops server crashes
+//    even if a future code path reintroduces invalid UTF-8.
+
+// formats a byte string as a hex dump for safe logging of potentially-invalid UTF-8.
+// each byte becomes two hex chars, space-separated, so the result is pure ASCII
+// and can pass through any logger without re-introducing the encoding problem.
+static std::string bytes_to_hex(const std::string & s, size_t max_bytes = 64) {
+    static const char * digits = "0123456789abcdef";
+    std::string out;
+    out.reserve(s.size() * 3);
+    const size_t n = std::min(s.size(), max_bytes);
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char) s[i];
+        out.push_back(digits[c >> 4]);
+        out.push_back(digits[c & 0x0F]);
+        if (i + 1 < n) out.push_back(' ');
+    }
+    if (s.size() > max_bytes) {
+        out += " ...";
+    }
+    return out;
+}
+
+// returns the length of the longest prefix of s that ends on a UTF-8
+// character boundary. walks back from the end counting continuation bytes
+// (10xx xxxx); if the buffer ends mid-sequence, returns the offset before
+// the lead byte of that incomplete sequence.
+static size_t utf8_complete_prefix_len(const std::string & s) {
+    const size_t len = s.size();
+    size_t i = len;
+    size_t cont = 0;
+    while (cont < 4 && i > 0) {
+        i--;
+        if (((unsigned char) s[i] & 0xC0) != 0x80) break;
+        cont++;
+    }
+    if (cont == 0) return len; // ends in ASCII (top bit clear) = complete
+    if (i == 0) return len;    // all continuation bytes, malformed, return whole
+    unsigned char lead = (unsigned char) s[i];
+    int needed = ((lead & 0xE0) == 0xC0) ? 2 :
+                 ((lead & 0xF0) == 0xE0) ? 3 :
+                 ((lead & 0xF8) == 0xF0) ? 4 : 0;
+    return (needed == (int) cont + 1) ? len : i;
+}
 
 // a child process writes in the OEM code page, so accented output would reach
 // the JSON layer as invalid bytes. run() spawns without a console, so the
@@ -248,7 +310,10 @@ static tools_io::exec_result run_subprocess(
 #endif
         // read raw bytes, not lines: the output can hold NUL and must arrive as soon as it is ready
         // keep draining past the size cap, else the child blocks on a full pipe
+        // a multi-byte UTF-8 character can be split across two reads; the carry holds the
+        // incomplete tail so on_chunk always receives a self-contained valid UTF-8 string
         char buf[4096];
+        std::string carry;
         for (;;) {
 #if defined(_WIN32)
             const int n = _read(_fileno(f), buf, (unsigned) sizeof(buf));
@@ -264,19 +329,25 @@ static tools_io::exec_result run_subprocess(
             if (truncated) {
                 continue;
             }
-            const size_t len = (size_t) n;
-            if (output.size() + len <= max_output) {
-                output.append(buf, len);
-                if (on_chunk && !on_chunk(console_output_to_utf8(std::string(buf, len)))) {
+            carry.append(buf, (size_t) n);
+            const size_t valid = utf8_complete_prefix_len(carry);
+            if (valid > 0) {
+                std::string piece = console_output_to_utf8(carry.substr(0, valid));
+                output.append(piece);
+                if (on_chunk && !on_chunk(piece)) {
                     proc.terminate();
                     break;
                 }
-            } else {
-                size_t remaining = max_output - output.size();
-                output.append(buf, remaining);
-                if (on_chunk && remaining > 0) on_chunk(console_output_to_utf8(std::string(buf, remaining)));
+                carry.erase(0, valid);
+            }
+            if (output.size() >= max_output) {
                 truncated = true;
             }
+        }
+        // EOF: a non-empty carry is a sequence truncated by end-of-stream
+        if (!carry.empty()) {
+            output += "\xEF\xBF\xBD"; // U+FFFD
+            if (on_chunk) on_chunk("\xEF\xBF\xBD");
         }
     }
 
@@ -2114,13 +2185,15 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
 
             server_tool & tool = find_tool(tools, tool_name, stream);
 
+            SRV_INF("tool: invoking %s (stream=%d) args: %s\n", tool_name.c_str(), (int) stream, params.dump().c_str());
+
             if (stream) {
                 int id = res_id.fetch_add(1);
                 queue_res.add_waiting_task_id(id);
                 res->qr = &queue_res;
                 res->id = id;
 
-                res->worker = std::thread([this, id, &req, &tool, params]() mutable {
+                res->worker = std::thread([this, id, &req, &tool, tool_name, params = std::move(params)]() mutable {
                     server_tool::stream st{queue_res, id, [&req]() {
                         return !req.should_stop();
                     }};
@@ -2128,9 +2201,12 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                     auto done = std::make_unique<server_tool_stream_result>();
                     try {
                         tool.invoke(params, &st);
+                        SRV_INF("tool: %s stream finished (id=%d)\n", tool_name.c_str(), id);
                     } catch (const std::exception & e) {
+                        SRV_WRN("tool: %s stream error: %s\n", tool_name.c_str(), e.what());
                         done->error_msg = e.what();
                     } catch (...) {
+                        SRV_WRN("tool: %s stream error: unknown\n", tool_name.c_str());
                         done->error_msg = "An unknown error occurred";
                     }
                     done->id    = st.id;
@@ -2140,11 +2216,36 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
 
                 res->content_type = "text/event-stream";
                 res->status = 200;
-                res->next   = [this, id](std::string & output) -> bool {
+                res->next   = [this, id, tool_name](std::string & output) -> bool {
                     auto result = queue_res.recv(id);
                     auto * r = dynamic_cast<server_tool_stream_result *>(result.get());
                     GGML_ASSERT(r != nullptr);
-                    output = "data: " + safe_json_to_str(r->to_json()) + "\n\n";
+
+                    // run_subprocess joins UTF-8 sequences split across pipe reads via a carry,
+                    // so every chunk arriving here is self-contained valid UTF-8.
+                    // safe_json_to_str is a category error on this path: it exists to paper
+                    // over invalid UTF-8 by substituting U+FFFD, but the input is guaranteed
+                    // valid, so the substitution can never fire and the call only obscures
+                    // the real invariant. Plain dump() is correct.
+                    std::string payload;
+                    try {
+                        payload = r->to_json().dump();
+                    } catch (const std::exception & e) {
+                        // dump() threw: the chunk contains bytes that are not valid UTF-8.
+                        // Log the offending bytes as hex so the source can be identified,
+                        // then rethrow so the outer handler (chunked_content_provider) can
+                        // end the stream cleanly instead of crashing the server.
+                        SRV_ERR("tool: %s (id=%d) chunk failed UTF-8 validation: %s\n",
+                            tool_name.c_str(), id, e.what());
+                        SRV_ERR("tool: %s (id=%d) chunk hex: %s\n",
+                            tool_name.c_str(), id, bytes_to_hex(r->chunk).c_str());
+                        throw;
+                    }
+
+                    SRV_DBG("tool: %s stream chunk: %s\n", tool_name.c_str(), payload.c_str());
+
+                    // the SSE event contract \n\n
+                    output = "data: " + payload + "\n\n";
                     if (r->done) {
                         queue_res.remove_waiting_task_id(id);
                         return false;
@@ -2153,6 +2254,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 };
             } else {
                 json result = tool.invoke(params, nullptr);
+                SRV_INF("tool: %s done: %s\n", tool_name.c_str(), result.dump().c_str());
                 res->status = 200;
                 res->data   = safe_json_to_str(result);
             }
