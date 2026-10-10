@@ -12597,6 +12597,108 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     return n_fail == 0;
 }
 
+// A CONV_2D kernel that is not contiguous is repacked into a dense matrix before the
+// mul_mat. The regular MODE_TEST comparison cannot cover that repack: CONV_2D has no
+// use_ref implementation, so the reference backend runs the exact same code and agrees
+// no matter what the repack produces. Compare the two kernel layouts against each other
+// instead, which does fail if the repack indexing is wrong.
+static bool run_conv_2d_cwhn_equivalence(ggml_backend_t backend, const char * op_names_filter) {
+    if (!op_names_filter_selects(op_names_filter, "CONV_2D")) {
+        return true;
+    }
+
+    if (ggml_backend_dev_type(ggml_backend_get_device(backend)) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return true;  // the repack is a CPU-only path
+    }
+
+    struct shape_t { int64_t ne_w, ne_h, ne_c, ne_n; int64_t ne_kw, ne_kh, ne_oc; int s0, s1, p0, p1, d0, d1; };
+    // ne_oc > 1 is what forces the repack; the others vary stride, padding, dilation and batch
+    const shape_t shapes[] = {
+        {  16, 16,  1, 1, 3, 3, 12, 1, 1, 0, 0, 1, 1 },
+        {  17, 13, 25, 2, 2, 1, 12, 1, 5, 5, 2, 2, 4 },
+        {  10, 10,  2, 3, 5, 5,  7, 2, 3, 2, 1, 3, 1 },
+    };
+    const ggml_type kernel_types[] = { GGML_TYPE_F32, GGML_TYPE_F16 };
+
+    // deterministic, so both layouts are fed identical values
+    auto fill = [](ggml_tensor * t, uint32_t seed) {
+        const size_t n = ggml_nelements(t);
+        std::vector<float> data(n);
+        uint32_t s = seed;
+        for (size_t i = 0; i < n; i++) {
+            s = s*1664525u + 1013904223u;
+            data[i] = ((s >> 8) & 0xFFFF) / 32768.0f - 1.0f;
+        }
+        if (t->type == GGML_TYPE_F32) {
+            ggml_backend_tensor_set(t, data.data(), 0, n*sizeof(float));
+        } else {
+            std::vector<ggml_fp16_t> half(n);
+            ggml_fp32_to_fp16_row(data.data(), half.data(), n);
+            ggml_backend_tensor_set(t, half.data(), 0, n*sizeof(ggml_fp16_t));
+        }
+    };
+
+    auto run = [&](const shape_t & sh, ggml_type kernel_type, bool cwhn) {
+        ggml_init_params ip = { ggml_tensor_overhead()*64 + ggml_graph_overhead(), /* .mem_base = */ NULL, /* .no_alloc = */ true };
+        ggml_context_ptr ctx(ggml_init(ip));
+
+        const int64_t ne_in[4] = { sh.ne_w,   sh.ne_h,   sh.ne_c, sh.ne_n };
+        const int64_t ne_kn[4] = { sh.ne_kw,  sh.ne_kh,  sh.ne_c, sh.ne_oc };
+
+        ggml_tensor * input_base  = ggml_new_tensor(ctx.get(), GGML_TYPE_F32, 4, ne_in);
+        ggml_tensor * kernel_base = ggml_new_tensor(ctx.get(), kernel_type,  4, ne_kn);
+
+        ggml_tensor * input  = input_base;
+        ggml_tensor * kernel = kernel_base;
+        if (cwhn) {
+            input  = ggml_permute(ctx.get(), ggml_cont(ctx.get(), ggml_permute(ctx.get(), input_base,  1, 2, 0, 3)), 2, 0, 1, 3);
+            kernel = ggml_permute(ctx.get(), ggml_cont(ctx.get(), ggml_permute(ctx.get(), kernel_base, 2, 3, 1, 0)), 3, 2, 0, 1);
+        }
+
+        ggml_tensor * out = ggml_conv_2d_direct(ctx.get(), kernel, input, sh.s0, sh.s1, sh.p0, sh.p1, sh.d0, sh.d1);
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx.get(), backend);
+        GGML_ASSERT(buf != NULL);
+        fill(input_base,  12345);
+        fill(kernel_base, 999);
+
+        ggml_cgraph * gf = ggml_new_graph(ctx.get());
+        ggml_build_forward_expand(gf, out);
+        GGML_ASSERT(ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS);
+
+        std::vector<float> res(ggml_nelements(out));
+        ggml_backend_tensor_get(out, res.data(), 0, res.size()*sizeof(float));
+
+        ggml_backend_buffer_free(buf);
+
+        return res;
+    };
+
+    int n_run = 0;
+    int n_fail = 0;
+    for (const auto & sh : shapes) {
+        for (ggml_type kernel_type : kernel_types) {
+            const std::vector<float> ref  = run(sh, kernel_type, false);
+            const std::vector<float> test = run(sh, kernel_type, true);
+            const double err = nmse(test.data(), ref.data(), ref.size());
+            n_run++;
+
+            // the repack only reorders, so this is lossless and far tighter than the
+            // per-op tolerance used by the regular test cases
+            if (!(err < 1e-7)) {
+                printf("  FAIL conv_2d cwhn: W=%lld H=%lld C=%lld N=%lld K=%lldx%lld OC=%lld type=%s nmse=%f\n",
+                       (long long)sh.ne_w, (long long)sh.ne_h, (long long)sh.ne_c, (long long)sh.ne_n,
+                       (long long)sh.ne_kw, (long long)sh.ne_kh, (long long)sh.ne_oc,
+                       ggml_type_name(kernel_type), err);
+                n_fail++;
+            }
+        }
+    }
+    printf("  conv_2d cwhn equivalence: %d cases run, %d failed\n", n_run, n_fail);
+
+    return n_fail == 0;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
@@ -12735,8 +12837,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_failed_tests(failed_tests);
 
         const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool cwhn_ok  = run_conv_2d_cwhn_equivalence(backend, op_names_filter);
 
-        return n_ok == tests_run && slice_ok;
+        return n_ok == tests_run && slice_ok && cwhn_ok;
     }
 
     if (mode == MODE_GRAD) {
