@@ -172,7 +172,33 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
 
-        ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
+        const bool has_embd = ubatch->is_mixed() || ubatch->token == nullptr;
+        if (rope_section_order == LLAMA_ROPE_SECTION_ORDER_TYXZ || !has_embd) {
+            ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
+            return;
+        }
+
+        // input is always [t, y, x, z]
+        // token entries are expanded by the batch to [p, p, p, 0]
+        GGML_ASSERT(n_pos_per_embd == 4);
+
+        // slot index per section, slots are t = 0, y = 1, x = 2, z = 3
+        std::array<int64_t, 4> slot_of_section = { 0, 1, 2, 3 };
+        switch (rope_section_order) {
+            case LLAMA_ROPE_SECTION_ORDER_TYXZ: break;
+            case LLAMA_ROPE_SECTION_ORDER_ZYXT: slot_of_section = { 3, 1, 2, 0 }; break;
+            default: GGML_ABORT("unsupported rope section order");
+        }
+
+        std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
+        for (int64_t i = 0; i < n_tokens; ++i) {
+            const bool is_embd = ubatch->is_mixed() ? ubatch->type[i] != 0 : true;
+            for (int64_t s = 0; s < 4; ++s) {
+                const int64_t slot = is_embd ? slot_of_section[s] : s;
+                pos_data[s*n_tokens + i] = ubatch->pos[slot*n_tokens + i];
+            }
+        }
+        ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(pos));
     }
 }
 
@@ -2620,7 +2646,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos() const {
-    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
+    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd(), hparams.rope_section_order);
 
     auto & cur = inp->pos;
 

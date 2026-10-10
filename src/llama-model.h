@@ -160,6 +160,7 @@ enum llm_type {
 };
 
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+std::string llama_rope_section_order_name(llama_rope_section_order rope_section_order);
 
 // Map a GGUF activation-name string to llm_ffn_op_type. Returns `fallback` if
 // the string is empty or not recognized.

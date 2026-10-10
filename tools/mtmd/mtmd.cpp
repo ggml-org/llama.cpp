@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,7 +28,10 @@
 #include <vector>
 
 // remember to bump this if the serialization format changes
-#define MTMD_SERIALIZATION_VERSION 2
+#define MTMD_SERIALIZATION_VERSION 3
+
+// oldest compat version that can be loaded
+#define MTMD_SERIALIZATION_VERSION_MIN 2
 
 struct mtmd_serialization {
     // note: using 64-bit here for future-proofing
@@ -45,7 +49,7 @@ struct mtmd_serialization {
         // copy buf to data
         data.assign(buf, buf + len);
         uint64_t ver_in = read<uint64_t>();
-        if (ver_in != version) {
+        if (ver_in < MTMD_SERIALIZATION_VERSION_MIN || ver_in > version) {
             throw std::runtime_error("version mismatch");
         }
         this->version = ver_in;
@@ -106,6 +110,11 @@ void clip_image_f32::serialize(mtmd_serialization & ser) const {
     ser.write(add_viewsep);
     ser.write(add_newline);
     ser.write(lead_pad);
+    ser.write((int32_t)suffix_type);
+    ser.write((int32_t)anyres.grid_x);
+    ser.write((int32_t)anyres.grid_y);
+    ser.write((int32_t)anyres.orig_nx);
+    ser.write((int32_t)anyres.orig_ny);
     ser.write((int32_t)nx_);
     ser.write((int32_t)ny_);
 }
@@ -113,6 +122,17 @@ void clip_image_f32::deserialize(mtmd_serialization & ser) {
     add_viewsep = ser.read<bool>();
     add_newline = ser.read<bool>();
     lead_pad = ser.read<int32_t>();
+    if (ser.version >= 3) {
+        const int32_t suffix_raw = ser.read<int32_t>();
+        if (suffix_raw < 0 || suffix_raw >= CLIP_SUFFIX_COUNT) {
+            throw std::runtime_error("invalid suffix type");
+        }
+        suffix_type = (clip_suffix_type)suffix_raw;
+        anyres.grid_x = ser.read<int32_t>();
+        anyres.grid_y = ser.read<int32_t>();
+        anyres.orig_nx = ser.read<int32_t>();
+        anyres.orig_ny = ser.read<int32_t>();
+    }
     nx_ = ser.read<int32_t>();
     ny_ = ser.read<int32_t>();
     buf.clear(); // always a placeholder after loading
@@ -204,8 +224,10 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_CANVAS,    // MiniCPM-V 4.7: overview + slices in one chunk, sharing one 2D canvas (see mtmd_image_tokens::canvas_tile_grid)
     MTMD_POS_TYPE_COUNT,     // for validation
 };
+
 
 struct mtmd_image_tokens {
     uint32_t nx = 0; // number of tokens in x direction
@@ -217,6 +239,14 @@ struct mtmd_image_tokens {
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
+        }
+        if (pos == MTMD_POS_TYPE_CANVAS) {
+            uint32_t n = 0;
+            for (size_t k = 0; k < batch_f32.entries.size(); ++k) {
+                const auto [gw, gh] = canvas_tile_grid(k);
+                n += gw * gh + (uint32_t) clip_suffix_rows(batch_f32.entries[k].suffix_type).size();
+            }
+            return n;
         }
         uint32_t nz = batch_f32.entries.size();
         if (n_temporal_merge > 1) {
@@ -243,8 +273,17 @@ struct mtmd_image_tokens {
         return false;
     }
 
+    // MTMD_POS_TYPE_CANVAS: entries are [overview, slices row by row], nx/ny is the token grid of the last entry
+    // returns the token grid (w, h) of entry k, scaled from its pixel size
+    std::pair<uint32_t, uint32_t> canvas_tile_grid(size_t k) const {
+        const auto & ref = batch_f32.entries.back();
+        const auto & e   = batch_f32.entries[k];
+        return { (uint32_t) e.nx() * nx / ref.nx(), (uint32_t) e.ny() * ny / ref.ny() };
+    }
+
     bool can_batch_with(const mtmd_image_tokens & other) {
-        return nx == other.nx && ny == other.ny && pos == other.pos;
+        // a canvas chunk holds a whole image group, its layout is not given by nx/ny alone
+        return nx == other.nx && ny == other.ny && pos == other.pos && pos != MTMD_POS_TYPE_CANVAS;
     }
 
     mtmd_image_tokens clone() {
@@ -516,6 +555,9 @@ struct mtmd_context {
     bool tok_row_end_trail = false;
     bool ov_img_first      = false;
 
+    // MiniCPM-V 4.6/4.7 prepends an <image_id>N</image_id> tag before <image>
+    bool use_image_id = false;
+
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
@@ -680,6 +722,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
+            case PROJECTOR_TYPE_MINICPMV4_7:
                 {
                     slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
                     tok_ov_img_start  = {lookup_token("<image>")};
@@ -689,6 +732,7 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
+                    use_image_id      = true;
                     image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
@@ -1429,7 +1473,15 @@ struct mtmd_tokenizer {
             const bool has_tiling_grid = (preproc_out.grid_x > 0 && preproc_out.grid_y > 0)
                 || preproc_out.has_overview();
 
-            if (has_tiling_grid) {
+            if (has_tiling_grid && ctx->proj_type_v() == PROJECTOR_TYPE_MINICPMV4_7) {
+                GGML_ASSERT(bitmaps.size() == 1);
+                if (ctx->use_image_id) {
+                    add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
+                }
+                add_text(ctx->tok_ov_img_start);
+                // the separators after <image> are appended by clip, see add_canvas_chunk()
+                add_canvas_chunk(std::move(preproc_out), bitmaps[0]->id);
+            } else if (has_tiling_grid) {
                 // [QWEN_VIDEO] we do not support "frame merging" for llama-uhd style, so no batching for now
                 GGML_ASSERT(bitmaps.size() == 1);
 
@@ -1448,6 +1500,9 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
+                    if (ctx->use_image_id) {
+                        add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
+                    }
                     add_text(ctx->tok_ov_img_start);
                     cur.entries.emplace_back(std::move(ov_chunk));
                     add_text(ctx->tok_ov_img_end);
@@ -1673,6 +1728,62 @@ struct mtmd_tokenizer {
         return 0;
     }
 
+    // MiniCPM-V 4.7: the overview and all slices go in one chunk, clip appends the separators after each tile:
+    //   [ov] </image><slice> [S00] </slice><slice> [S01] </slice>\n<slice> [S10] </slice><slice> [S11] </slice>
+    void add_canvas_chunk(mtmd_image_preproc_out && preproc_out, const std::string & id) {
+        const int n_col = preproc_out.grid_x;
+        const int n_row = preproc_out.grid_y;
+        auto & slices = preproc_out.entries;
+        GGML_ASSERT(preproc_out.has_overview());
+        GGML_ASSERT((int) slices.size() == n_col * n_row);
+
+        auto & ov = preproc_out.overview;
+        ov.suffix_type = CLIP_SUFFIX_MINICPMV_OV;
+        if (!slices.empty()) {
+            ov.suffix_type = CLIP_SUFFIX_MINICPMV_OV_SLICE;
+            ov.anyres.grid_x = n_col;
+            ov.anyres.grid_y = n_row;
+        }
+        for (int y = 0; y < n_row; y++) {
+            for (int x = 0; x < n_col; x++) {
+                auto & suffix = slices[y * n_col + x].suffix_type;
+                if (y == n_row - 1 && x == n_col - 1) {
+                    suffix = CLIP_SUFFIX_MINICPMV_LAST;
+                } else if (x == n_col - 1) {
+                    suffix = CLIP_SUFFIX_MINICPMV_ROW_END;
+                } else {
+                    suffix = CLIP_SUFFIX_MINICPMV_SLICE;
+                }
+            }
+        }
+
+        mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+        image_tokens->pos = MTMD_POS_TYPE_CANVAS;
+        image_tokens->id  = id;
+        auto & entries = image_tokens->batch_f32.entries;
+        entries.push_back(std::move(ov));
+        for (auto & slice : slices) {
+            entries.push_back(std::move(slice));
+        }
+        // token grid of the last entry, the grids of the other entries are scaled from it
+        image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, &entries.back());
+        image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, &entries.back());
+
+        size_t n_tokens = 0;
+        for (const auto & entry : entries) {
+            n_tokens += clip_n_output_tokens(ctx->ctx_v, &entry);
+        }
+        GGML_ASSERT(n_tokens == image_tokens->n_tokens());
+
+        mtmd_input_chunk chunk{
+            MTMD_INPUT_CHUNK_TYPE_IMAGE,
+            {}, // text tokens
+            std::move(image_tokens),
+            nullptr, // audio tokens
+        };
+        cur.entries.emplace_back(std::move(chunk));
+    }
+
     std::vector<mtmd_input_chunk> split_batch_to_chunk(mtmd_image_preproc_out && preproc_out, const std::string & id) {
         std::vector<mtmd_input_chunk> chunks;
 
@@ -1812,6 +1923,24 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
     if (image_tokens->is_placeholder()) {
         LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
         return 1;
+    }
+
+    if (image_tokens->pos == MTMD_POS_TYPE_CANVAS) {
+        // the tiles differ in size, encode them one by one
+        size_t offset = 0;
+        for (const auto & entry : image_tokens->batch_f32.entries) {
+            clip_image_f32_batch one;
+            one.entries.push_back(entry);
+            std::vector<float> embd((size_t) n_embd_out * clip_n_output_tokens(ctx_clip, &entry));
+            if (!clip_image_batch_encode(ctx_clip, ctx->n_threads, &one, embd)) {
+                return 1;
+            }
+            GGML_ASSERT(offset + embd.size() <= out_embd.size());
+            std::copy(embd.begin(), embd.end(), out_embd.begin() + offset);
+            offset += embd.size();
+        }
+        GGML_ASSERT(offset == out_embd.size());
+        return 0;
     }
 
     bool ok = clip_image_batch_encode(
@@ -2494,6 +2623,67 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
+// map a tile coordinate onto the canvas like the reference: round(linspace(0, canvas - 1, grid)), round() breaks ties to even
+static uint32_t mtmd_canvas_scale(uint32_t coord, uint32_t grid, uint32_t canvas) {
+    if (grid <= 1 || canvas <= 1) {
+        return 0;
+    }
+    const double v = (double) coord * (double) (canvas - 1) / (double) (grid - 1);
+    return std::min((uint32_t) std::nearbyint(v), canvas - 1);
+}
+
+// MTMD_POS_TYPE_CANVAS: every tile shares the <image> token before the chunk as origin
+// the overview is stretched over the whole canvas, each slice fills its own cell; the time component is the origin, in slot z
+// a tile takes one position in slot t (the KV cache position), the separators after it take one position each
+static mtmd_decoder_pos mtmd_canvas_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
+    const auto & entries = image_tokens->batch_f32.entries;
+    const auto & grid    = entries[0].anyres;
+    const uint32_t nx = image_tokens->nx;
+    const uint32_t ny = image_tokens->ny;
+    const uint32_t canvas_w = grid.is_tiled() ? grid.grid_x * nx : nx;
+    const uint32_t canvas_h = grid.is_tiled() ? grid.grid_y * ny : ny;
+    const uint32_t base = pos_0 - 1;
+
+    mtmd_decoder_pos pos;
+    uint32_t t = pos_0;
+    for (size_t k = 0; k < entries.size(); ++k) {
+        const auto [gw, gh] = image_tokens->canvas_tile_grid(k);
+        if (i < gw * gh) {
+            const uint32_t row = i / gw;
+            const uint32_t col = i % gw;
+            uint32_t h;
+            uint32_t w;
+            if (k == 0) {
+                h = mtmd_canvas_scale(row, gh, canvas_h);
+                w = mtmd_canvas_scale(col, gw, canvas_w);
+            } else {
+                const uint32_t s = k - 1;
+                h = (s / grid.grid_x) * ny + row;
+                w = (s % grid.grid_x) * nx + col;
+            }
+            pos.t = t;
+            pos.x = base + w;
+            pos.y = base + h;
+            pos.z = base;
+            return pos;
+        }
+        i -= gw * gh;
+
+        const size_t n_sep = clip_suffix_rows(entries[k].suffix_type).size();
+        if (i < n_sep) {
+            const uint32_t p = t + 1 + i;
+            pos.t = p;
+            pos.x = p;
+            pos.y = p;
+            pos.z = p;
+            return pos;
+        }
+        i -= n_sep;
+        t += 1 + n_sep;
+    }
+    GGML_ABORT("token index out of range");
+}
+
 mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
     mtmd_decoder_pos pos;
     switch (image_tokens->pos) {
@@ -2543,6 +2733,10 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                     pos.z = image_tokens->image_idx;
                 }
             } break;
+        case MTMD_POS_TYPE_CANVAS:
+            {
+                pos = mtmd_canvas_decoder_pos(image_tokens, pos_0, i);
+            } break;
         default:
             GGML_ABORT("invalid position type");
     }
@@ -2563,6 +2757,15 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
             // HunyuanVL: the sequential (dim-0) position advances by the full token count
             // (includes BOI/EOI and row newline tokens), not by max(nx, ny)
             return image_tokens->n_tokens();
+        case MTMD_POS_TYPE_CANVAS:
+            {
+                // one position per tile, plus one per separator
+                llama_pos n_pos = 0;
+                for (const auto & entry : image_tokens->batch_f32.entries) {
+                    n_pos += 1 + (llama_pos) clip_suffix_rows(entry.suffix_type).size();
+                }
+                return n_pos;
+            }
         default:
             GGML_ABORT("invalid position type");
     }

@@ -68,6 +68,7 @@
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
+#define KEY_MAX_SLICE_NUMS         "clip.vision.max_slice_nums"
 #define KEY_WIN_ATTN_PATTERN       "clip.vision.n_wa_pattern"
 #define KEY_WIN_ATTN_LAYER_INDEXES "clip.vision.wa_layer_indexes"
 #define KEY_WA_PATTERN_MODE        "clip.vision.wa_pattern_mode"
@@ -146,6 +147,7 @@
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
 #define TN_IMAGE_NEWLINE   "v.image_newline"
 #define TN_IMAGE_SEPERATOR "v.view_seperator"
+#define TN_TOK_EMBD_SEP    "v.tok_embd_sep"
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
@@ -500,6 +502,7 @@ enum projector_type {
     PROJECTOR_TYPE_PARAKEET,
     PROJECTOR_TYPE_EXAONE4_5,
     PROJECTOR_TYPE_MINICPMV4_6,
+    PROJECTOR_TYPE_MINICPMV4_7,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_MINIMAX_M3,
@@ -569,6 +572,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_EXAONE4_5,         "exaone4_5"},
     { PROJECTOR_TYPE_HUNYUANVL,         "hunyuanvl"},
     { PROJECTOR_TYPE_MINICPMV4_6,       "minicpmv4_6"},
+    { PROJECTOR_TYPE_MINICPMV4_7,       "minicpmv4_7"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
@@ -660,6 +664,38 @@ struct clip_image_u8 {
 
 struct mtmd_serialization; // forward declaration
 
+// separators appended after the image tokens of one entry, as rows of v.tok_embd_sep
+enum clip_suffix_type : int32_t {
+    CLIP_SUFFIX_NONE = 0,
+    // MiniCPM-V 4.7 tiles
+    CLIP_SUFFIX_MINICPMV_OV,       // </image>
+    CLIP_SUFFIX_MINICPMV_OV_SLICE, // </image><slice>
+    CLIP_SUFFIX_MINICPMV_SLICE,    // </slice><slice>
+    CLIP_SUFFIX_MINICPMV_ROW_END,  // </slice>\n<slice>
+    CLIP_SUFFIX_MINICPMV_LAST,     // </slice>
+    CLIP_SUFFIX_COUNT,
+};
+
+// rows of v.tok_embd_sep for each suffix type
+// MiniCPM-V 4.7 rows (set by the converter): 0 = </image>, 1 = <slice>, 2 = </slice>, 3 = \n
+static inline const std::vector<int> & clip_suffix_rows(clip_suffix_type type) {
+    static const std::vector<int> none;
+    static const std::vector<int> minicpmv_ov       = { 0 };
+    static const std::vector<int> minicpmv_ov_slice = { 0, 1 };
+    static const std::vector<int> minicpmv_slice    = { 2, 1 };
+    static const std::vector<int> minicpmv_row_end  = { 2, 3, 1 };
+    static const std::vector<int> minicpmv_last     = { 2 };
+    switch (type) {
+        case CLIP_SUFFIX_NONE:              return none;
+        case CLIP_SUFFIX_MINICPMV_OV:       return minicpmv_ov;
+        case CLIP_SUFFIX_MINICPMV_OV_SLICE: return minicpmv_ov_slice;
+        case CLIP_SUFFIX_MINICPMV_SLICE:    return minicpmv_slice;
+        case CLIP_SUFFIX_MINICPMV_ROW_END:  return minicpmv_row_end;
+        case CLIP_SUFFIX_MINICPMV_LAST:     return minicpmv_last;
+        default: GGML_ABORT("invalid suffix type");
+    }
+}
+
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
 // For seq, buf.size() == nx*ny*3*nt
@@ -675,10 +711,12 @@ struct clip_image_f32 {
     // deepseek4v: number of leading IMAGE_PAD embeddings, aligns IMAGE_START to the LLM compressor ratio
     // depends on the chunk position, set at tokenize time (see mtmd_tokenizer::add_media)
     int32_t lead_pad = 0;
+    // separators appended after the image tokens
+    clip_suffix_type suffix_type = CLIP_SUFFIX_NONE;
 
-    // llava-next "anyres" tiling, used by Granite4 Vision
-    // the whole grid is encoded and assembled in a single graph
-    // NOTE: excluded from serialized: a deserialized image is always a placeholder, which is never encoded
+    // tile grid of the image group this entry belongs to
+    // llava-next "anyres" (Granite4 Vision): the whole grid is encoded and assembled in a single graph
+    // MiniCPM-V 4.7: set on the overview entry, the decoder positions of all tiles are derived from it
     struct anyres_info {
         int grid_x = 0; // tiles per row, 0 means the image is not tiled
         int grid_y = 0; // tiles per column

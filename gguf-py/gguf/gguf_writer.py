@@ -24,6 +24,7 @@ from .constants import (
     GGUFEndian,
     GGUFValueType,
     Keys,
+    RopeSectionOrder,
     RopeScalingType,
     PoolingType,
     TokenType,
@@ -1154,6 +1155,9 @@ class GGUFWriter:
     def add_rope_dimension_sections(self, dims: Sequence[int]) -> None:
         self.add_array(Keys.Rope.DIMENSION_SECTIONS.format(arch=self.arch), dims)
 
+    def add_rope_section_order(self, value: RopeSectionOrder) -> None:
+        self.add_string(Keys.Rope.SECTION_ORDER.format(arch=self.arch), value.value)
+
     def add_rope_freq_base(self, value: float) -> None:
         self.add_float32(Keys.Rope.FREQ_BASE.format(arch=self.arch), value)
 
@@ -1461,6 +1465,9 @@ class GGUFWriter:
 
     def add_vision_projector_scale_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Projector.SCALE_FACTOR, value)
+
+    def add_vision_max_slice_nums(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.MAX_SLICE_NUMS, value)
 
     def add_vision_n_wa_pattern(self, value: int) -> None:
         """Add window attention pattern interval for vision models.

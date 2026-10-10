@@ -1078,7 +1078,7 @@ extern "C" {
 
     // Set custom position for the token at index idx in the batch
     // For M-RoPE models:
-    //     - Embedding tokens must have multiple positions per token
+    //     - Embedding tokens must have n_pos_per_embd positions per token, in order [t, y, x, z]; t is also the KV cache position
     //     - Text token only requires one single position per token
     LLAMA_API bool llama_batch_ext_set_pos(
                                 struct llama_batch_ext * batch,

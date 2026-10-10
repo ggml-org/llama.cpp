@@ -166,4 +166,7 @@ struct clip_graph {
     // Generic function to stack frames for audio processing
     // Abstracts out the StackAudioFrames logic used by ultravox
     ggml_tensor * build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed);
+
+    // append the separators of img.suffix_type after the image tokens
+    ggml_tensor * build_suffix(ggml_tensor * cur);
 };
