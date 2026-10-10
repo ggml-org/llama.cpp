@@ -1912,6 +1912,10 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
+            // sampler history buffers are allocated up front, so do not let them be larger than the context
+            task.params.sampling.penalty_last_n     = std::min(task.params.sampling.penalty_last_n,     slot.n_ctx);
+            task.params.sampling.dry_penalty_last_n = std::min(task.params.sampling.dry_penalty_last_n, slot.n_ctx);
+
             try {
                 slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
             } catch (std::exception & e) {
