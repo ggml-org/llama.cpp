@@ -1627,6 +1627,39 @@ class GGUFWriter:
     def add_xielu_eps(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.EPS, values)
 
+    def add_prism_hadamard_version(self, value: int) -> None:
+        self.add_uint32(Keys.PrismHadamard.VERSION, value)
+
+    def add_prism_hadamard_tied_output(self, value: bool) -> None:
+        self.add_bool(Keys.PrismHadamard.TIED_OUTPUT, value)
+
+    def add_prism_hadamard_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.PrismHadamard.BLOCK_SIZE, value)
+
+    def add_prism_hadamard_transform(self, value: str) -> None:
+        self.add_string(Keys.PrismHadamard.TRANSFORM, value)
+
+    def add_prism_hadamard_axis(self, value: str) -> None:
+        self.add_string(Keys.PrismHadamard.AXIS, value)
+
+    def add_prism_hadamard_sign_mode(self, value: str) -> None:
+        self.add_string(Keys.PrismHadamard.SIGN_MODE, value)
+
+    def add_prism_hadamard_sign_widths(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.PrismHadamard.SIGN_WIDTHS, values)
+
+    def add_prism_hadamard_sign_values(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.PrismHadamard.SIGN_VALUES, values)
+
+    def add_prism_hadamard_weight_names(self, names: Sequence[str]) -> None:
+        self.add_array(Keys.PrismHadamard.WEIGHT_NAMES, names)
+
+    def add_prism_hadamard_inverse_weight_names(self, names: Sequence[str]) -> None:
+        self.add_array(Keys.PrismHadamard.INVERSE_WEIGHT_NAMES, names)
+
+    def add_prism_hadamard_gdn_v_grouped(self, value: bool) -> None:
+        self.add_bool(Keys.PrismHadamard.GDN_V_GROUPED, value)
+
     def add_attention_value_expert_count(self, count: int):
         self.add_uint32(Keys.Attention.VALUE_EXPERT_COUNT.format(arch=self.arch), count)
 

@@ -803,23 +803,23 @@ class ModelBase:
                 for name in self.model_tensors
             ):
                 raise ValueError("Tied Hadamard output must not carry a separate output head")
-            self.gguf_writer.add_bool("prism.hadamard.tied_output", True)
+            self.gguf_writer.add_prism_hadamard_tied_output(True)
         elif "token_embd.weight" in inverse_weight_names and self.hparams.get("tie_word_embeddings", False):
             raise ValueError("A tied latent embedding requires Hadamard schema 3 and tied_output=true")
 
-        self.gguf_writer.add_uint32("prism.hadamard.version", 2 if tied_output else 1)
-        self.gguf_writer.add_uint32("prism.hadamard.block_size", block_size)
-        self.gguf_writer.add_string("prism.hadamard.transform", "normalized-sylvester-walsh-hadamard")
-        self.gguf_writer.add_string("prism.hadamard.axis", "input-last-dimension")
-        self.gguf_writer.add_string("prism.hadamard.sign_mode", sign_mode)
-        self.gguf_writer.add_array("prism.hadamard.weight_names", weight_names)
+        self.gguf_writer.add_prism_hadamard_version(2 if tied_output else 1)
+        self.gguf_writer.add_prism_hadamard_block_size(block_size)
+        self.gguf_writer.add_prism_hadamard_transform("normalized-sylvester-walsh-hadamard")
+        self.gguf_writer.add_prism_hadamard_axis("input-last-dimension")
+        self.gguf_writer.add_prism_hadamard_sign_mode(sign_mode)
+        self.gguf_writer.add_prism_hadamard_weight_names(weight_names)
         if sign_mode == "explicit":
-            self.gguf_writer.add_array("prism.hadamard.sign_widths", sign_widths)
-            self.gguf_writer.add_array("prism.hadamard.sign_values", sign_values)
+            self.gguf_writer.add_prism_hadamard_sign_widths(sign_widths)
+            self.gguf_writer.add_prism_hadamard_sign_values(sign_values)
         if inverse_weight_names:
-            self.gguf_writer.add_array("prism.hadamard.inverse_weight_names", inverse_weight_names)
+            self.gguf_writer.add_prism_hadamard_inverse_weight_names(inverse_weight_names)
         if getattr(self, "_hadamard_gdn_v_grouped", False):
-            self.gguf_writer.add_bool("prism.hadamard.gdn_v_grouped", True)
+            self.gguf_writer.add_prism_hadamard_gdn_v_grouped(True)
             logger.info("GGUF Hadamard: linear-attention out_proj kept in grouped V order")
         logger.info("GGUF Hadamard contract: H%d, sign_mode=%s, %d folded weight(s), %d inverse-lookup",
                     block_size, sign_mode, len(weight_names), len(inverse_weight_names))

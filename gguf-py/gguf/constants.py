@@ -493,6 +493,19 @@ class Keys:
         BETA                = "xielu.beta"
         EPS                 = "xielu.eps"
 
+    class PrismHadamard:
+        VERSION              = "prism.hadamard.version"
+        TIED_OUTPUT          = "prism.hadamard.tied_output"
+        BLOCK_SIZE           = "prism.hadamard.block_size"
+        TRANSFORM            = "prism.hadamard.transform"
+        AXIS                 = "prism.hadamard.axis"
+        SIGN_MODE            = "prism.hadamard.sign_mode"
+        SIGN_WIDTHS          = "prism.hadamard.sign_widths"
+        SIGN_VALUES          = "prism.hadamard.sign_values"
+        WEIGHT_NAMES         = "prism.hadamard.weight_names"
+        INVERSE_WEIGHT_NAMES = "prism.hadamard.inverse_weight_names"
+        GDN_V_GROUPED        = "prism.hadamard.gdn_v_grouped"
+
 
 #
 # recommended mapping of model tensor names for storage in gguf
