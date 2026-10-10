@@ -255,6 +255,117 @@ static void test(void) {
     assert(params.speculative.draft.n_max == 123);
 
     {
+        const auto types_ngram_mod = std::vector<enum common_speculative_type>{ COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+        const auto types_draft_mtp = std::vector<enum common_speculative_type>{ COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+        const auto types_none      = std::vector<enum common_speculative_type>{ COMMON_SPECULATIVE_TYPE_NONE };
+
+        {
+            common_params spec_params;
+            argv = {"binary_name"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_ngram_mod);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--no-spec-type", "ngram-mod"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_none);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-type", "draft-mtp"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == std::vector<enum common_speculative_type>({ COMMON_SPECULATIVE_TYPE_NGRAM_MOD, COMMON_SPECULATIVE_TYPE_DRAFT_MTP }));
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-type", "ngram-mod"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_ngram_mod);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-type", "ngram-mod,draft-mtp"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == std::vector<enum common_speculative_type>({ COMMON_SPECULATIVE_TYPE_NGRAM_MOD, COMMON_SPECULATIVE_TYPE_DRAFT_MTP }));
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--no-spec-type", "ngram-mod", "--spec-type", "draft-mtp"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_draft_mtp);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-type", "draft-mtp", "--no-spec-type", "ngram-mod"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_draft_mtp);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--no-spec-type", "draft-mtp"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_ngram_mod);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--no-spec-type", "ngram-mod", "--spec-type", "ngram-mod"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_ngram_mod);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--no-spec-type", "ngram-mod", "--spec-type", "ngram-mod,draft-mtp"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == std::vector<enum common_speculative_type>({ COMMON_SPECULATIVE_TYPE_NGRAM_MOD, COMMON_SPECULATIVE_TYPE_DRAFT_MTP }));
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-type", "none"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_none);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--no-spec-type", "none"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_none);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-type", "none", "--spec-type", "draft-mtp"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_draft_mtp);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-default"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_ngram_mod);
+        }
+
+        {
+            common_params spec_params;
+            argv = {"binary_name", "--spec-default", "--no-spec-type", "ngram-mod"};
+            assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SERVER));
+            assert(spec_params.speculative.types == types_none);
+        }
+    }
+
+    {
         common_params synth_params;
         argv = {"binary_name", "--spec-synth-len", "3.4"};
         assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
