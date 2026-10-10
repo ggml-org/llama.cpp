@@ -112,12 +112,12 @@ std::string random_string() {
     static const std::string str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
     std::random_device rd;
-    std::mt19937 generator(rd());
+    std::uniform_int_distribution<size_t> dist(0, str.size() - 1);
 
     std::string result(32, ' ');
 
     for (int i = 0; i < 32; ++i) {
-        result[i] = str[generator() % str.size()];
+        result[i] = str[dist(rd)];
     }
 
     return result;
