@@ -1,0 +1,88 @@
+# Embedding CLI build and tests (Linux CPU).
+# Timeouts: acquire step 10m (265MiB download); pytest --timeout=60 per test
+# (multiline runs 6 CLI loads; one CLI RUN_TIMEOUT=30s); job 30m.
+name: Embedding CLI
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [master]
+        paths:
+            - '.github/workflows/embedding.yml'
+            - 'examples/**'
+            - 'src/**'
+            - 'ggml/**'
+            - 'include/**'
+            - 'common/**'
+            - '**/CMakeLists.txt'
+            - 'tests/e2e/embedding/**'
+    pull_request:
+        types: [opened, synchronize, reopened]
+        paths:
+            - '.github/workflows/embedding.yml'
+            - 'examples/**'
+            - 'src/**'
+            - 'ggml/**'
+            - 'include/**'
+            - 'common/**'
+            - '**/CMakeLists.txt'
+            - 'tests/e2e/embedding/**'
+
+jobs:
+    embedding-cli-tests-linux:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        env:
+            LLAMA_CACHE: tmp
+
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Restore fixture cache
+              uses: actions/cache@v4
+              with:
+                  path: tmp/embeddinggemma-300M-qat-Q4_0-8dd0ca2a66a8f14470acb0e2a71f801afbc5fb73-50d28e22432a148f6f8a86eab3700f92add5d1f54baf7790675a2a4dadbccf26.gguf
+                  key: embedding-cli-${{ runner.os }}-8dd0ca2a-50d28e22432a148f6f8a86eab3700f92add5d1f54baf7790675a2a4dadbccf26
+
+            - name: Install system deps
+              run: |
+                  sudo apt-get update
+                  sudo apt-get -y install \
+                    build-essential cmake libssl-dev python3-pip
+
+            - name: Set up Python
+              uses: actions/setup-python@v6
+              with: { python-version: '3.11' }
+
+            - name: Install Python deps
+              run: python -m pip install pytest pytest-timeout
+
+            - name: Build llama-embedding
+              run: |
+                  cmake -B build -DCMAKE_BUILD_TYPE=Release
+                  cmake --build build --target llama-embedding -j $(nproc)
+
+            - name: Acquire embedding fixture
+              timeout-minutes: 10
+              run: |
+                  MODEL=$(python tests/e2e/embedding/test_embedding_cli.py)
+                  echo "EMBEDDING_MODEL=$MODEL" >> "$GITHUB_ENV"
+                  echo "Acquired $MODEL"
+
+            - name: Run embedding tests
+              shell: bash
+              run: |
+                  set -o pipefail
+                  pytest -v tests/e2e/embedding \
+                  --timeout=60 \
+                  --durations=10 \
+                  --junitxml=pytest-report.xml | tee pytest-output.txt
+
+            - name: Upload test artifacts
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: linux-embedding-tests
+                  path: |
+                      pytest-output.txt
+                      pytest-report.xml
