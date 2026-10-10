@@ -743,6 +743,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (ggml_is_quantized(default_type)) {
+        // BF16X is a near-lossless recompression of bf16, not an error-minimizing
+        // quantization: keep every quantizable tensor in the same format instead
+        // of applying the low-bit category-based mixing rules (the incompatible-
+        // shape fallback below still applies)
+        const bool skip_mixing = default_type == GGML_TYPE_BF16X;
+
         // if the user provided tensor types - use those
         bool manual = false;
         if (!qs.tensor_type_patterns.empty()) {
@@ -761,7 +767,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         }
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual && !params->pure) {
+        if (!manual && !params->pure && !skip_mixing) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
         }
 
@@ -890,6 +896,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_ALL_F32:     return GGML_TYPE_F32;
         case LLAMA_FTYPE_MOSTLY_Q1_0: return GGML_TYPE_Q1_0;
         case LLAMA_FTYPE_MOSTLY_Q2_0: return GGML_TYPE_Q2_0;
+        case LLAMA_FTYPE_MOSTLY_BF16X: return GGML_TYPE_BF16X;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
 

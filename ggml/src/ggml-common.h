@@ -99,6 +99,11 @@ typedef sycl::half2 ggml_half2;
 #define QI2_0 (QK2_0 / 32)
 #define QR2_0 1
 
+// BF16X: 32 elements per block; the MMVQ kernels split a block across
+// QI_BF16X threads (one 16-element half each)
+#define QI_BF16X 2
+#define QR_BF16X 1
+
 
 #define QI4_0 (QK4_0 / (4 * QR4_0))
 #define QR4_0 2
@@ -190,6 +195,25 @@ typedef struct {
     uint8_t qs[QK2_0 / 4];   // 2 bits per element
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
+
+// BF16X: near-lossless bfloat16 recompression (reference: github.com/dfytensor/bfloat16x)
+// bf16 weights share the block-max exponent: per 32 elements store the two
+// half-block maxima (one byte per 16 elements) and keep per-element exponent
+// deltas in 3 bits. Sign and the full 7-bit mantissa are preserved exactly, so
+// any element with delta <= 6 (and zero-delta ones always) decodes
+// bit-identical to the original bf16. delta == 7 is a saturation sentinel
+// (decoded exponent clamped to emax - 7); it affects only elements already
+// 2^-7 below their half-block max (~2% of weights, negligible for inference
+// quality). The packed streams (4 + 28 + 12 bytes) plus the two emax bytes
+// give 46 bytes per 32 elements = 11.5 bpw (1.39x vs GGML_TYPE_BF16).
+#define QK_BF16X 32
+typedef struct {
+    uint8_t emax[2];      // shared max exponent per 16-element half
+    uint8_t sgn[4];       // 32 sign bits: bit i = element i sign (LSB first)
+    uint8_t mant[28];     // 32 x 7-bit mantissas, LSB-first bit order
+    uint8_t delta[12];    // 32 x 3-bit exponent deltas, LSB first; 7 = saturate
+} block_bf16x;
+static_assert(sizeof(block_bf16x) == 46, "wrong bf16x block size");
 
 #define QK4_0 32
 typedef struct {

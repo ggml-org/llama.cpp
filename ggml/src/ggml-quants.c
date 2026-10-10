@@ -2126,6 +2126,89 @@ size_t quantize_q2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
     return nrow * row_size;
 }
 
+//============================ BF16X (lossless bf16 recompression) =========================
+
+void quantize_row_bf16x_ref(const float * GGML_RESTRICT x, block_bf16x * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_BF16X;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        memset(y[i].sgn,   0, sizeof(y[i].sgn));
+        memset(y[i].mant,  0, sizeof(y[i].mant));
+        memset(y[i].delta, 0, sizeof(y[i].delta));
+        for (int j = 0; j < qk; j++) {
+            const ggml_bf16_t b = GGML_FP32_TO_BF16(x[i*qk + j]);
+            const uint8_t s = b.bits >> 15;
+            const uint8_t e = (b.bits >> 7) & 0xFF;
+            const uint8_t m = b.bits & 0x7F;
+            const int h = j >> 4;               // 16-element half of the block
+            if (j % 16 == 0 || e > y[i].emax[h]) {
+                y[i].emax[h] = e;               // half-block max exponent
+            }
+            if (s) {
+                y[i].sgn[j >> 3] |= 1u << (j & 7);
+            }
+            const int mb = j*7;                 // 7-bit mantissa stream
+            y[i].mant[mb >> 3] |= (m << (mb & 7)) & 0xFF;
+            if ((mb & 7) + 7 > 8) {
+                y[i].mant[(mb >> 3) + 1] |= m >> (8 - (mb & 7));
+            }
+        }
+        for (int j = 0; j < qk; j++) {
+            const ggml_bf16_t b = GGML_FP32_TO_BF16(x[i*qk + j]);
+            const uint8_t e = (b.bits >> 7) & 0xFF;
+            const int h = j >> 4;
+            const uint8_t d = y[i].emax[h] - e; // e <= emax by construction
+            const uint8_t d3 = d > 7 ? 7 : d;   // 7 = saturation sentinel
+            const int db = j*3;                 // 3-bit delta stream
+            y[i].delta[db >> 3] |= (d3 << (db & 7)) & 0xFF;
+            if ((db & 7) + 3 > 8) {
+                y[i].delta[(db >> 3) + 1] |= d3 >> (8 - (db & 7));
+            }
+        }
+    }
+}
+
+void dequantize_row_bf16x(const block_bf16x * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_BF16X;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        for (int j = 0; j < qk; j++) {
+            const int h = j >> 4;
+            const uint8_t emax = x[i].emax[h];
+            const uint8_t s = (x[i].sgn[j >> 3] >> (j & 7)) & 1;
+            const int mb = j*7;
+            uint8_t m = (x[i].mant[mb >> 3] >> (mb & 7)) & 0x7F;
+            if ((mb & 7) + 7 > 8) {
+                m |= (x[i].mant[(mb >> 3) + 1] << (8 - (mb & 7))) & 0x7F;
+            }
+            const int db = j*3;
+            uint8_t d = (x[i].delta[db >> 3] >> (db & 7)) & 0x7;
+            if ((db & 7) + 3 > 8) {
+                d |= (x[i].delta[(db >> 3) + 1] << (8 - (db & 7))) & 0x7;
+            }
+            const uint8_t e = emax > d ? emax - d : 0;
+            const uint32_t u = ((uint32_t)s << 31) | ((uint32_t)e << 23) | ((uint32_t)m << 16);
+            float f;
+            memcpy(&f, &u, sizeof(f));
+            y[i*qk + j] = f;
+        }
+    }
+}
+
+size_t quantize_bf16x(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    UNUSED(quant_weights); // no imatrix: the format is source-exact, not error-minimizing
+    quantize_row_bf16x_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_BF16X, n_per_row);
+}
+
 size_t quantize_q4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     if (!quant_weights) {
         quantize_row_q4_0_ref(src, dst, (int64_t)nrow*n_per_row);
@@ -5626,6 +5709,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
+        case GGML_TYPE_BF16X:
             // nothing to validate
             break;
         default:
