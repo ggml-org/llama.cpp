@@ -148,6 +148,28 @@ static __dpct_inline__ sycl::int2 get_int_from_table_16(
       dpct::byte_level_permute(tmp[0], tmp[1], 0x7531));
 }
 
+// Four E2M1 codes (one per byte, bits 0..3) to their kvalues_mxfp4 int8 values. SWAR arithmetic
+// replaces get_int_from_table_16 for MXFP4: dpct::byte_level_permute is emulated with 64-bit shifts,
+// eight per int, which made the MXFP4 GEMV compute-bound on Intel GPUs.
+// Magnitudes 0,1,2,3,4,6,8,12 = m + [m>=5] + [m>=6] + 3*[m>=7]; each byte stays below 256, so the
+// byte-wise adds never carry. -0 (code 8) is left as 0 so the two's-complement +1 cannot carry either.
+static __dpct_inline__ int mxfp4_codes_to_int8(const uint32_t x) {
+    const uint32_t m   = x & 0x07070707u;
+    const uint32_t ge5 = ((m + 0x03030303u) >> 3) & 0x01010101u;
+    const uint32_t ge6 = ((m + 0x02020202u) >> 3) & 0x01010101u;
+    const uint32_t ge7 = ((m + 0x01010101u) >> 3) & 0x01010101u;
+    const uint32_t mag = m + ge5 + ge6 + 3u * ge7;
+    const uint32_t nz  = ((mag + 0x7f7f7f7fu) >> 7) & 0x01010101u;
+    const uint32_t neg = (x >> 3) & nz & 0x01010101u;
+    return (int) ((mag ^ (neg * 0xffu)) + neg);
+}
+
+// Same result as get_int_from_table_16(q4, kvalues_mxfp4): x = low nibbles, y = high nibbles.
+static __dpct_inline__ sycl::int2 get_int_from_mxfp4(const int q4) {
+    return sycl::int2(mxfp4_codes_to_int8((uint32_t) q4 & 0x0f0f0f0fu),
+                      mxfp4_codes_to_int8(((uint32_t) q4 >> 4) & 0x0f0f0f0fu));
+}
+
 #define VDR_Q2_K_Q8_1_MMVQ 1
 
 // contiguous v/x values
@@ -795,6 +817,41 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K> {
             vl, vh, u0, u1, scs[0], scs[4], *d, d80, d81);
     }
 };
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_MXFP4> {
+    static constexpr ggml_type gtype = GGML_TYPE_MXFP4;
+
+    using mxfp4_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_MXFP4>;
+    using mxfp4_traits = typename mxfp4_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        static_assert(mxfp4_traits::vdr_mmvq == 2, "vector load assumes vdr_mmvq == 2");
+        const uint8_t * base = static_cast<const uint8_t *>(vbq);
+
+        // Reordered nibble blocks are 16 contiguous bytes and iqs is 0 or 2, so each lane's two
+        // weight ints are one aligned 8-byte load (the AoS layout needed eight byte loads).
+        const sycl::int2 q4 = *reinterpret_cast<const sycl::int2 *>(base + ibx_offset.first + sizeof(int) * iqs);
+        const uint8_t    e  = base[d_offset.first];
+
+        // Low nibbles pair with q8_1 ints iqs..iqs+1, high nibbles with iqs+4..iqs+5.
+        const sycl::int2 u_lo = *reinterpret_cast<const sycl::int2 *>(q8_1_quant_ptr + sizeof(int) * iqs);
+        const sycl::int2 u_hi = *reinterpret_cast<const sycl::int2 *>(q8_1_quant_ptr + sizeof(int) * (iqs + 4));
+
+        const sycl::int2 v0 = get_int_from_mxfp4(q4.x());
+        const sycl::int2 v1 = get_int_from_mxfp4(q4.y());
+
+        int sumi = 0;
+        sumi = ggml_sycl_dp4a(v0.x(), u_lo.x(), sumi);
+        sumi = ggml_sycl_dp4a(v0.y(), u_hi.x(), sumi);
+        sumi = ggml_sycl_dp4a(v1.x(), u_lo.y(), sumi);
+        sumi = ggml_sycl_dp4a(v1.y(), u_hi.y(), sumi);
+
+        const float d = ggml_sycl_e8m0_to_fp32(e) * 0.5f * static_cast<float>((*q8_1_ds)[0]);
+        return d * sumi;
+    }
+};
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -1124,7 +1181,7 @@ static __dpct_inline__ float vec_dot_mxfp4_q8_1(const void * __restrict__ vbq,
 #pragma unroll
     for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
         const int aux_q4 = get_int_b1(bq4->qs, iqs + l);
-        const sycl::int2 v      = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+        const sycl::int2 v      = get_int_from_mxfp4(aux_q4);
         sumi = ggml_sycl_dp4a(v.x(), q8[l + 0], sumi);
         sumi = ggml_sycl_dp4a(v.y(), q8[l + 4], sumi);
     }

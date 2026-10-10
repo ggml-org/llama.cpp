@@ -1223,6 +1223,24 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 #define GGML_F16_STEP GGML_F32_STEP
 #define GGML_F16_EPR  GGML_F32_EPR
 
+static inline uint32x4_t __lzs_f32cx4_to_f16(float32x4_t v_f) {
+    float32x4_t v_base = vec_mul(vec_mul(vec_abs(v_f), vec_splats(0x1.0p+112f)), vec_splats(0x1.0p-110f));
+
+    const uint32x4_t v_w      = (uint32x4_t)v_f;
+    const uint32x4_t v_shl1_w = vec_add(v_w, v_w);
+    const uint32x4_t v_sign   = vec_and(v_w, vec_splats(UINT32_C(0x80000000)));
+    const uint32x4_t v_bias   = vec_max(vec_and(v_shl1_w, vec_splats(UINT32_C(0xFF000000))), vec_splats(UINT32_C(0x71000000)));
+
+    v_base = vec_add((float32x4_t)vec_add(vec_sr(v_bias, 1), vec_splats(UINT32_C(0x07800000))), v_base);
+
+    const uint32x4_t v_bits    = (uint32x4_t)v_base;
+    const uint32x4_t v_nonsign = vec_add(vec_and(vec_sr(v_bits, 13), vec_splats(UINT32_C(0x00007C00))),
+                                         vec_and(v_bits, vec_splats(UINT32_C(0x00000FFF))));
+    const uint32x4_t v_is_nan  = (uint32x4_t)vec_cmpgt(v_shl1_w, vec_splats(UINT32_C(0xFF000000)));
+
+    return vec_or(vec_sr(v_sign, 16), vec_sel(v_nonsign, vec_splats(UINT32_C(0x7E00)), v_is_nan));
+}
+
 static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
     float tmp[4];
 
@@ -1236,15 +1254,9 @@ static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
 }
 
 static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
-    float arr[4];
-
-    // note: keep type-cast here to prevent compiler bugs
-    // see: https://github.com/ggml-org/llama.cpp/issues/12846
-    vec_xst(v_y, 0, (float *)(arr));
-
-    for (int i = 0; i < 4; i++) {
-        x[i] = GGML_CPU_FP32_TO_FP16(arr[i]);
-    }
+    const uint32x4_t v_h = __lzs_f32cx4_to_f16(v_y);
+    const uint64_t   tmp = ((uint64x2_t)vec_pack(v_h, v_h))[0];
+    memcpy(x, &tmp, sizeof(tmp));
 }
 
 #define GGML_F16_VEC                GGML_F32x4
