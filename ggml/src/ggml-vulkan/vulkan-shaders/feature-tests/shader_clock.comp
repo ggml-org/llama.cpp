@@ -1,0 +1,7 @@
+#version 460
+
+#extension GL_EXT_shader_realtime_clock : require
+
+void main()
+{
+}
