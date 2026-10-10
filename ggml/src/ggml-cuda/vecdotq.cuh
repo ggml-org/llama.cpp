@@ -675,6 +675,19 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
     return d6 * sumf_d;
 }
 
+#if defined(GGML_USE_HIP)
+// 4 Q1_0 sign bits (nibble j of q) -> one int holding weights 4j..4j+3 as int8 (-1 / +1)
+// in byte lanes 0..3. n * 0x00204081 lands bit i at position 8i, so the mask leaves one
+// sign bit per byte; 0x0D - spread selects the v_perm_b32 byte constant 0xFF (sel 0x0D)
+// or 0x00 (sel 0x0C), and the spread bit is OR'd back in.
+static __device__ __forceinline__ int q1_0_unpack4_hip(const uint32_t q, const int j) {
+    const uint32_t n      = (q >> (4 * j)) & 0x0Fu;
+    const uint32_t spread = (n * 0x00204081u) & 0x01010101u;
+    const uint32_t sel    = 0x0D0D0D0Du - spread;
+    return (int) (__builtin_amdgcn_perm(0u, 0u, sel) | spread);
+}
+#endif // defined(GGML_USE_HIP)
+
 static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -700,6 +713,17 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
         const int u2 = get_int_b4(bq8_1_chunk->qs, j*4+2);
         const int u3 = get_int_b4(bq8_1_chunk->qs, j*4+3);
 
+#if defined(GGML_USE_HIP)
+        // HIP implements __byte_perm as a software routine, so the 8-call chain below is
+        // expensive. Spread the sign bits directly instead: for nibble n, n * 0x00204081
+        // lands bit i at position 8i, so the mask leaves one sign bit per byte. Then
+        // 0x0D - spread selects the v_perm_b32 constant 0xFF (sel 0x0D) or 0x00 (sel 0x0C)
+        // per byte, and the spread bit is OR'd back to give -1 / +1 as int8.
+        const int v0 = q1_0_unpack4_hip((uint32_t) q, 0);
+        const int v1 = q1_0_unpack4_hip((uint32_t) q, 1);
+        const int v2 = q1_0_unpack4_hip((uint32_t) q, 2);
+        const int v3 = q1_0_unpack4_hip((uint32_t) q, 3);
+#else
         // unpack crumbs into nibble indices
         const int n0 = __byte_perm(0x11100100, 0x11100100, q >> 0); // [0, 1, 4, 5] [ 8,  9, 12, 13]
         const int n1 = __byte_perm(0x11100100, 0x11100100, q >> 2); // [2, 3, 6, 7] [10, 11, 14, 15]
@@ -713,6 +737,7 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
         const int v1 = __byte_perm(s0, s1, 0x7632);
         const int v2 = __byte_perm(s2, s3, 0x5410);
         const int v3 = __byte_perm(s2, s3, 0x7632);
+#endif // defined(GGML_USE_HIP)
 
         sumi = ggml_cuda_dp4a(v0, u0, sumi);
         sumi = ggml_cuda_dp4a(v1, u1, sumi);
