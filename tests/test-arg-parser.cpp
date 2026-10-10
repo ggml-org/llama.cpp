@@ -10,6 +10,7 @@
 #include <vector>
 #include <sstream>
 #include <unordered_set>
+#include <thread>
 
 #undef NDEBUG
 #include <cassert>
@@ -238,6 +239,14 @@ static void test(void) {
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.cpuparams.n_threads == 1234);
+
+    argv = { "binary_name", "-t", "-1" };
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.cpuparams.n_threads == common_cpu_get_num_math());
+
+    argv = { "binary_name", "-t", "0" };
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.cpuparams.n_threads == static_cast<int>(std::thread::hardware_concurrency()));
 
     argv = {"binary_name", "--verbose"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
