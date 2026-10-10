@@ -287,8 +287,8 @@ static inline bool ggml_hexagon_is_repack_type(enum ggml_type type) {
            type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q2_K;
 }
 
-// Size of one repacked row in the DSP tiled layout. The K-quant tiles store uncompressed scales/mins,
-// so they are larger than the ggml blocks. For the other repack types the tile has the same size as the ggml blocks.
+// Size of one repacked row in the DSP tiled layout. The Q3_K..Q6_K tiles store uncompressed scales/mins,
+// so they are larger than the ggml blocks. For the other repack types (Q2_K included) the tile has the same size.
 static inline size_t ggml_hexagon_tiled_row_size(enum ggml_type type, int64_t ne0) {
     if (type == GGML_TYPE_Q6_K) {
         return (size_t) (ne0 / 32) * (HTP_MM_WEIGHT_TILE_SIZE_Q6_K / 32);
@@ -301,9 +301,6 @@ static inline size_t ggml_hexagon_tiled_row_size(enum ggml_type type, int64_t ne
     }
     if (type == GGML_TYPE_Q3_K) {
         return (size_t) (ne0 / 32) * (HTP_MM_WEIGHT_TILE_SIZE_Q3_K / 32);
-    }
-    if (type == GGML_TYPE_Q2_K) {
-        return (size_t) (ne0 / 32) * (HTP_MM_WEIGHT_TILE_SIZE_Q2_K / 32);
     }
     return ggml_row_size(type, ne0);
 }
@@ -1896,13 +1893,11 @@ static void repack_q2_K_tiled(ggml_tensor * t, const void * data, size_t offset,
                 for (int kt = 0; kt < n_k_tiles; kt++) {
                     const int kt_local = kt % 8;  // k-tile within the super-block
                     const block_q2_K * b = &src_row[kt / 8];
-                    const float d    = GGML_FP16_TO_FP32(b->d);
-                    const float dmin = GGML_FP16_TO_FP32(b->dmin);
 
                     uint8_t * tile = matrix_dst + ((size_t) ct * n_k_tiles + kt) * tile_size;
                     uint8_t * lo_pl = tile;
-                    ggml_half * sc_pl = (ggml_half *) (tile + 256);
-                    ggml_half * m_pl  = (ggml_half *) (tile + 384);
+                    uint8_t * sc_pl = tile + 256;
+                    ggml_half * dd_pl = (ggml_half *) (tile + 320);
 
                     for (int lk = 0; lk < 32; lk++) {
                         const int g   = lk >> 2;
@@ -1910,9 +1905,10 @@ static void repack_q2_K_tiled(ggml_tensor * t, const void * data, size_t offset,
                         lo_pl[(g >> 2) * 128 + pos] |= (uint8_t) (q2_3_K_get_low2(b->qs, kt_local * 32 + lk) << ((g & 3) * 2));
                     }
                     for (int sub = 0; sub < 2; sub++) {
-                        const uint8_t sc = b->scales[kt_local * 2 + sub];
-                        sc_pl[sub * 32 + row] = GGML_FP32_TO_FP16( d    * (float) (sc & 0xF));
-                        m_pl [sub * 32 + row] = GGML_FP32_TO_FP16(-dmin * (float) (sc >> 4));
+                        sc_pl[sub * 32 + row] = b->scales[kt_local * 2 + sub];
+                    }
+                    if (row / 8 == kt_local % 4) {
+                        dd_pl[row % 8] = kt_local < 4 ? b->d : (ggml_half) (b->dmin ^ 0x8000);  // -dmin
                     }
                 }
             }
@@ -1922,7 +1918,7 @@ static void repack_q2_K_tiled(ggml_tensor * t, const void * data, size_t offset,
     GGML_UNUSED(size);
 }
 
-// Reverse of repack_q2_K_tiled. Unpacks quants losslessly and normalizes scales/mins. Read-back only.
+// Reverse of repack_q2_K_tiled. Lossless. Read-back only.
 static void repack_tiled_q2_K(void * data, const ggml_tensor * t, size_t offset, size_t size) {
     GGML_ASSERT(offset == 0);
 
@@ -1957,14 +1953,12 @@ static void repack_tiled_q2_K(void * data, const ggml_tensor * t, size_t offset,
                     block_q2_K * b = &dst_row[sb];
                     memset(b, 0, sizeof(block_q2_K));
 
-                    ggml_half sub_scales[16];
-                    ggml_half sub_mins[16];
                     for (int kt_local = 0; kt_local < 8; kt_local++) {
                         const int kt = sb * 8 + kt_local;
                         const uint8_t *   tile  = matrix_src + ((size_t) ct * n_k_tiles + kt) * tile_size;
                         const uint8_t *   lo_pl = tile;
-                        const ggml_half * sc_pl = (const ggml_half *) (tile + 256);
-                        const ggml_half * m_pl  = (const ggml_half *) (tile + 384);
+                        const uint8_t *   sc_pl = tile + 256;
+                        const ggml_half * dd_pl = (const ggml_half *) (tile + 320);
 
                         for (int lk = 0; lk < 32; lk++) {
                             const int e   = kt_local * 32 + lk;
@@ -1975,36 +1969,15 @@ static void repack_tiled_q2_K(void * data, const ggml_tensor * t, size_t offset,
                         }
 
                         for (int sub = 0; sub < 2; sub++) {
-                            const float D = GGML_FP16_TO_FP32(sc_pl[sub * 32 + row]);
-                            const float M = GGML_FP16_TO_FP32(m_pl[sub * 32 + row]);
-                            sub_scales[kt_local * 2 + sub] = GGML_FP32_TO_FP16((D > 0.0f) ? D : 0.0f);
-                            sub_mins[kt_local * 2 + sub]   = GGML_FP32_TO_FP16((-M > 0.0f) ? -M : 0.0f);
+                            b->scales[kt_local * 2 + sub] = sc_pl[sub * 32 + row];
                         }
-                    }
-
-                    int ls[16];
-                    int lm[16];
-                    ggml_half * const dd[2] = { &b->d, &b->dmin };
-                    const ggml_half * const prod[2] = { sub_scales, sub_mins };
-                    int * const ll[2] = { ls, lm };
-                    for (int w = 0; w < 2; w++) {
-                        if (hexagon_recover_k_scales(prod[w], 16, 0, 15, dd[w], ll[w])) {
-                            continue;
+                        if (row / 8 == kt_local % 4) {
+                            if (kt_local < 4) {
+                                b->d = dd_pl[row % 8];
+                            } else {
+                                b->dmin = (ggml_half) (dd_pl[row % 8] ^ 0x8000);
+                            }
                         }
-                        float max_val = 0.0f;
-                        for (int j = 0; j < 16; j++) {
-                            max_val = (std::max)(max_val, GGML_FP16_TO_FP32(prod[w][j]));
-                        }
-                        *dd[w] = GGML_FP32_TO_FP16(max_val / 15.0f);
-                        const float d_actual = GGML_FP16_TO_FP32(*dd[w]);
-                        const float inv_d    = (d_actual > 0.0f) ? (1.0f / d_actual) : 0.0f;
-                        for (int j = 0; j < 16; j++) {
-                            ll[w][j] = (std::min)(15, (int) roundf(inv_d * GGML_FP16_TO_FP32(prod[w][j])));
-                        }
-                    }
-
-                    for (int j = 0; j < 16; j++) {
-                        b->scales[j] = (uint8_t) (ls[j] | (lm[j] << 4));
                     }
                 }
             }
