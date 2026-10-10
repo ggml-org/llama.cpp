@@ -5421,6 +5421,8 @@ void ggml_vk_instance_init() {
             GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
             return;
         }
+
+        vk_instance.multi_device = vk_instance.device_indices.size() > 1;
     }
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
 
@@ -5429,14 +5431,24 @@ void ggml_vk_instance_init() {
         std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
 
         bool membudget_supported = false;
+        bool external_memory_host_supported = false;
         for (const auto & ext : extensionprops) {
             if (strcmp(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, ext.extensionName) == 0) {
                 membudget_supported = true;
-                break;
+            } else if (strcmp("VK_EXT_external_memory_host", ext.extensionName) == 0) {
+                external_memory_host_supported = true;
             }
         }
 
         vk_instance.device_supports_membudget.push_back(membudget_supported);
+
+        if (external_memory_host_supported) {
+            vk::PhysicalDeviceProperties2 props2;
+            vk::PhysicalDeviceExternalMemoryHostPropertiesEXT ext_props;
+            props2.pNext = &ext_props;
+            vkdev.getProperties2(&props2);
+            vk_instance.host_import_alignment = std::max<size_t>(vk_instance.host_import_alignment, ext_props.minImportedHostPointerAlignment);
+        }
 
         ggml_vk_print_gpu_info(i);
     }
@@ -13115,7 +13127,7 @@ static const char * ggml_backend_vk_host_buffer_type_name(ggml_backend_buffer_ty
 
 static void ggml_backend_vk_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     VK_LOG_MEMORY("ggml_backend_vk_host_buffer_free_buffer()");
-    ggml_vk_host_free(vk_instance.devices[0], buffer->context);
+    ggml_vk_host_free(buffer->context);
 }
 
 static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
@@ -13124,7 +13136,7 @@ static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_
     size += 32;  // Behave like the CPU buffer type
     void * ptr = nullptr;
     try {
-        ptr = ggml_vk_host_malloc(vk_instance.devices[0], size);
+        ptr = ggml_vk_host_malloc(size);
     } catch (vk::SystemError& e) {
         GGML_LOG_WARN("ggml_vulkan: Failed to allocate pinned memory (%s)\n", e.what());
         // fallback to cpu buffer
