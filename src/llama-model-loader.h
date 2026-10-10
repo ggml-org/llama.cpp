@@ -140,6 +140,10 @@ struct llama_model_loader {
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
+    // tensors copied out of the mmap and weights read in place from it, used to reclaim the copied source pages after load
+    std::vector<std::pair<const llama_tensor_weight *, size_t>> copied_from_mmap;
+    std::set<const llama_tensor_weight *>                       read_from_mmap;
+
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
     struct ggml_backend_buft_comparator {
         bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {

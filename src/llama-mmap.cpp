@@ -576,6 +576,21 @@ struct llama_mmap::impl {
         mapped_fragments = std::move(new_mapped_fragments);
     }
 
+    bool discard_fragment(size_t first, size_t last) {
+#if defined(__linux__) && defined(MADV_DONTNEED)
+        // pages of a shared read-only file mapping are re-read from the page cache if touched again
+        align_range(&first, &last, sysconf(_SC_PAGESIZE));
+        if (last > first && madvise((uint8_t *) addr + first, last - first, MADV_DONTNEED)) {
+            LLAMA_LOG_WARN("warning: madvise(MADV_DONTNEED) failed: %s\n", strerror(errno));
+            return false;
+        }
+#else
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+#endif
+        return true;
+    }
+
     ~impl() {
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
@@ -640,6 +655,12 @@ struct llama_mmap::impl {
         GGML_UNUSED(last);
     }
 
+    bool discard_fragment(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+        return true;
+    }
+
     ~impl() {
         if (hMapping) {
             if (addr) {
@@ -670,6 +691,13 @@ struct llama_mmap::impl {
 
         throw std::runtime_error("mmap not supported");
     }
+
+    bool discard_fragment(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+
+        throw std::runtime_error("mmap not supported");
+    }
 #endif
 
     void * addr;
@@ -684,6 +712,7 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
+bool llama_mmap::discard_fragment(size_t first, size_t last) { return pimpl->discard_fragment(first, last); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;
