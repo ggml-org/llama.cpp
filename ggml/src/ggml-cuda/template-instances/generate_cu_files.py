@@ -90,10 +90,6 @@ for ncols in [8, 16, 32, 64]:
             f.write(SOURCE_FATTN_MMA_START)
 
             for head_size_kq in HEAD_SIZES_KQ:
-                if head_size_kq == 40:
-                    continue
-                if head_size_kq == 72:
-                    continue
                 # Skip compilation of unused ncols2 values for niche head sizes:
                 if head_size_kq == 192 and ncols2 not in (8, 16): # MiMo-V2.5
                     continue
