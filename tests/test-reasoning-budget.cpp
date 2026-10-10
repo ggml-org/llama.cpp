@@ -490,12 +490,25 @@ int main(void) {
             SIZE_MAX, SIZE_MAX); // no forcing expected (natural end)
     }
 
+    // Test 9: Empty forced_tokens - when budget exhausts, smoothly transitions to DONE without forcing
+    {
+        const std::vector<llama_token> start = {100};
+        const std::vector<llama_token> end = {101};
+        const std::vector<llama_token> forced = {};
+        const std::vector<llama_token> sequence = {100, 50, 51, 52, 53};
+
+        test_reasoning_budget("empty forced_tokens smoothly transitions to DONE", sequence, {start}, {end}, forced,
+            2,      // budget of 2 tokens
+            REASONING_BUDGET_IDLE,
+            SIZE_MAX, SIZE_MAX); // no forcing expected since forced is empty
+    }
+
     test_reasoning_budget_clone_mid_counting();
     test_reasoning_budget_clone_mid_forcing();
     test_reasoning_budget_force_manual();
     test_reasoning_budget_end_match();
 
-    printf("OK (12 tests passed)\n");
+    printf("OK (13 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();
