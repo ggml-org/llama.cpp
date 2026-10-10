@@ -24,9 +24,10 @@ struct server_decision_option {
 
 struct server_decision_question {
     std::string id;
-    server_decision_question_type type;
+    server_decision_question_type type = SERVER_DECISION_QUESTION_CHOICE;
     json instructions;
     std::vector<server_decision_option> options; // in the order of the model outputs
+    json error; // per-question validation error, when supported by the model
 };
 
 struct server_decision_context {
@@ -109,6 +110,7 @@ private:
     const llama_vocab * vocab = nullptr;
     std::shared_ptr<const common_chat_template> tmpl; // the "systemone" template
 
+    std::map<size_t, std::vector<float>> score_bias;
     std::map<std::string, float> temperatures; // "<type>" or "<type>.<n_options bucket>"
     size_t n_options_max   = 0;
     bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
@@ -136,6 +138,7 @@ private:
     size_t n_outputs(const server_decision_question & question) const;
     // LFM2_D1: label text and tokens of each option
     void d1_labels(const server_decision_question & question, std::vector<std::string> & texts, std::vector<llama_tokens> & groups) const;
+    void fill_task_decision2(const json & state, const server_decision_question & question, server_task & task) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
     void fill_task_d1omni(
             const json & state,

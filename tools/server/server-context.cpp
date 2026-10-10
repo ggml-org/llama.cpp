@@ -5770,6 +5770,15 @@ void server_routes::init_routes() {
             return res;
         }
 
+        if (std::all_of(questions.begin(), questions.end(), [](const auto & question) { return !question.error.is_null(); })) {
+            json answers = json::object();
+            for (const auto & question : questions) {
+                answers[question.id] = question.error;
+            }
+            res->ok(json{{"model", meta->model_name}, {"answers", answers}, {"usage", {{"input_tokens", 0}, {"output_tokens", 0}}}});
+            return res;
+        }
+
         // one task per variant of each question, or one task for all the questions
         auto & rd = res->rd;
         {
@@ -5781,6 +5790,9 @@ void server_routes::init_routes() {
                 tasks.push_back(std::move(task));
             } else {
                 for (const auto & question : questions) {
+                    if (!question.error.is_null()) {
+                        continue;
+                    }
                     for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
                         server_task task = server_task(SERVER_TASK_TYPE_DECISION);
                         task.id = rd.get_new_id();
@@ -5809,6 +5821,10 @@ void server_routes::init_routes() {
         size_t i_result = 0;
         size_t i_score  = 0;
         for (const auto & question : questions) {
+            if (!question.error.is_null()) {
+                answers[question.id] = question.error;
+                continue;
+            }
             std::vector<std::vector<float>> scores;
             if (decision.is_joint()) {
                 // one result with the scores of all the questions, in order

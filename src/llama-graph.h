@@ -128,6 +128,19 @@ protected:
 
 using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
 
+class llm_graph_input_decision2 : public llm_graph_input_i {
+public:
+    llm_graph_input_decision2(const llama_ubatch & ubatch, int64_t n_outputs);
+    void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * candidates = nullptr;
+    ggml_tensor * query = nullptr;
+    ggml_tensor * status = nullptr;
+    int64_t n_candidates;
+    int64_t n_outputs;
+};
+
 class llm_graph_input_embd : public llm_graph_input_i {
 public:
     llm_graph_input_embd(int64_t n_embd) : n_embd(n_embd) {}
@@ -1205,6 +1218,9 @@ struct llm_graph_context {
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, float tok_scale = 1.0f) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
+    llm_graph_input_decision2 * build_inp_decision2() const;
+    ggml_tensor * build_decision2_head(const llama_model & model, ggml_tensor * hidden, llm_graph_input_decision2 * inp) const;
+
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;

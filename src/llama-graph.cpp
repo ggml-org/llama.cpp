@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "llama-ext.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -66,6 +67,58 @@ static bool can_reuse_kq_mask(
 }
 
 // impl
+
+struct decision2_rows {
+    std::vector<int32_t> candidates;
+    int32_t query = 0;
+    bool valid = false;
+};
+
+static decision2_rows decision2_get_rows(const llama_ubatch & ubatch) {
+    decision2_rows rows;
+    int32_t output = 0;
+    int32_t queries = 0;
+    bool ok = ubatch.n_seqs_unq == 1 && ubatch.token != nullptr;
+    for (uint32_t i = 0; ok && i < ubatch.n_tokens; ++i) {
+        const int32_t order = ubatch.decision_order ? ubatch.decision_order[i] : LLAMA_DECISION_ORDER_NONE;
+        if (order != LLAMA_DECISION_ORDER_NONE) {
+            ok = ok && ubatch.output[i] && (!ubatch.type || ubatch.type[i] == 0);
+            if (order == LLAMA_DECISION_ORDER_OPTION) {
+                rows.candidates.push_back(output);
+                ok = ok && queries == 0 && rows.candidates.size() <= 255;
+            } else if (order >= LLAMA_DECISION_ORDER_QUESTION_NOUL && order <= LLAMA_DECISION_ORDER_QUESTION_SCORE) {
+                rows.query = output;
+                ++queries;
+                ok = ok && i + 1 == ubatch.n_tokens;
+            } else {
+                ok = false;
+            }
+        }
+        output += ubatch.output[i] != 0;
+    }
+    rows.valid = ok && queries == 1 && rows.candidates.size() >= 2 && rows.candidates.size() <= 255;
+    if (!rows.valid) {
+        rows.candidates.assign(1, 0);
+        rows.query = 0;
+    }
+    return rows;
+}
+
+llm_graph_input_decision2::llm_graph_input_decision2(const llama_ubatch & ubatch, int64_t n_outputs) :
+    n_candidates(decision2_get_rows(ubatch).candidates.size()), n_outputs(n_outputs) {}
+
+void llm_graph_input_decision2::set_input(const llama_ubatch * ubatch) {
+    const auto rows = decision2_get_rows(*ubatch);
+    GGML_ASSERT((int64_t) rows.candidates.size() == n_candidates);
+    const float valid = rows.valid || ubatch->decision_order == nullptr ? 0.0f : NAN;
+    ggml_backend_tensor_set(candidates, rows.candidates.data(), 0, ggml_nbytes(candidates));
+    ggml_backend_tensor_set(query, &rows.query, 0, ggml_nbytes(query));
+    ggml_backend_tensor_set(status, &valid, 0, ggml_nbytes(status));
+}
+
+bool llm_graph_input_decision2::can_reuse(const llm_graph_params & params) {
+    return params.n_outputs == n_outputs && (int64_t) decision2_get_rows(params.ubatch).candidates.size() == n_candidates;
+}
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
@@ -2646,6 +2699,38 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     res->add_input(std::move(inp));
 
     return cur;
+}
+
+llm_graph_input_decision2 * llm_graph_context::build_inp_decision2() const {
+    auto input = std::make_unique<llm_graph_input_decision2>(ubatch, n_outputs);
+    auto * inp = input.get();
+    inp->candidates = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, inp->n_candidates);
+    inp->query      = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    inp->status     = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    ggml_set_input(inp->candidates);
+    ggml_set_input(inp->query);
+    ggml_set_input(inp->status);
+    res->add_input(std::move(input));
+    return inp;
+}
+
+ggml_tensor * llm_graph_context::build_decision2_head(const llama_model & model, ggml_tensor * hidden, llm_graph_input_decision2 * inp) const {
+    const auto & head = model.decision2;
+    auto * candidates = ggml_get_rows(ctx0, hidden, inp->candidates);
+    auto * query = ggml_get_rows(ctx0, hidden, inp->query);
+    candidates = build_norm(candidates, head.candidate_norm_w, head.candidate_norm_b, LLM_NORM, -1);
+    query = build_norm(query, head.query_norm_w, head.query_norm_b, LLM_NORM, -1);
+    auto * key = build_lora_mm(head.key, candidates);
+    auto * query_key = build_lora_mm(head.query, query);
+    auto * bilinear = ggml_sum_rows(ctx0, ggml_mul(ctx0, key, query_key));
+    bilinear = ggml_scale(ctx0, bilinear, 1.0f / sqrtf((float) hparams.n_decision2_head));
+    auto * nonlinear = ggml_add(ctx0, build_lora_mm(head.candidate_mlp, candidates), head.candidate_mlp_b);
+    nonlinear = ggml_add(ctx0, nonlinear, build_lora_mm(head.query_mlp, query));
+    nonlinear = ggml_gelu_erf(ctx0, nonlinear);
+    nonlinear = build_lora_mm(head.scalar, nonlinear);
+    auto * scores = ggml_add(ctx0, bilinear, nonlinear);
+    scores = ggml_pad(ctx0, scores, 0, hidden->ne[1] - scores->ne[1], 0, 0);
+    return ggml_add(ctx0, scores, inp->status);
 }
 
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {

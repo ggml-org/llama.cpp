@@ -2,6 +2,7 @@
 #include "llama-memory-recurrent.h"
 
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
+    load_decision2_hparams(ml);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
@@ -32,6 +33,8 @@ void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
 
 void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
+
+    load_decision2_tensors();
 
     const auto nf = nextn_flags(ml);
     const int trunk_flags = nf.trunk;
@@ -154,6 +157,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    auto * inp_decision2 = hparams.n_decision2_head && n_outputs > 0 ? build_inp_decision2() : nullptr;
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = 0; il < n_layer; ++il) {
@@ -218,6 +222,14 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+
+    if (hparams.n_decision2_head) {
+        cur = inp_decision2 ? build_decision2_head(model, cur, inp_decision2) : ggml_reshape_2d(ctx0, cur, 1, 0);
+        cb(cur, "result_decision", -1);
+        res->t_embd = cur;
+        ggml_build_forward_expand(gf, cur);
+        return;
+    }
 
     if (model.cls_out) {
         ggml_tensor * embd = build_lora_mm(model.cls_out, cur);

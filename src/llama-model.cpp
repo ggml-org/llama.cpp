@@ -3427,6 +3427,46 @@ ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std:
     return create_tensor(*ml, tn, ne, flags);
 }
 
+void llama_model_base::load_decision2_hparams(llama_model_loader & loader) {
+    std::string decision_type;
+    loader.get_key(LLM_KV_DECISION_TYPE, decision_type, false);
+    if (decision_type != "decision2") {
+        return;
+    }
+    loader.get_key(LLM_KV_DECISION_HEAD_DIM, hparams.n_decision2_head);
+    loader.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
+    if (hparams.n_decision2_head == 0 || hparams.n_decision2_head > 4096 ||
+            !std::isfinite(hparams.f_norm_eps) || hparams.f_norm_eps <= 0.0f) {
+        throw std::runtime_error("invalid Decision2 head configuration");
+    }
+    hparams.n_embd_out_impl = 1;
+}
+
+void llama_model_base::load_decision2_tensors() {
+    if (!hparams.n_decision2_head) {
+        return;
+    }
+    const int64_t h = hparams.n_embd;
+    const int64_t d = hparams.n_decision2_head;
+    auto & head = decision2;
+    head.candidate_norm_w = create_tensor(tn(LLM_TENSOR_DECISION2_CANDIDATE_NORM, "weight"), {h}, 0);
+    head.candidate_norm_b = create_tensor(tn(LLM_TENSOR_DECISION2_CANDIDATE_NORM, "bias"),   {h}, 0);
+    head.query_norm_w     = create_tensor(tn(LLM_TENSOR_DECISION2_QUERY_NORM, "weight"),     {h}, 0);
+    head.query_norm_b     = create_tensor(tn(LLM_TENSOR_DECISION2_QUERY_NORM, "bias"),       {h}, 0);
+    head.key             = create_tensor(tn(LLM_TENSOR_DECISION2_KEY, "weight"),             {h, d}, 0);
+    head.query           = create_tensor(tn(LLM_TENSOR_DECISION2_QUERY, "weight"),           {h, d}, 0);
+    head.candidate_mlp   = create_tensor(tn(LLM_TENSOR_DECISION2_CANDIDATE_MLP, "weight"),   {h, d}, 0);
+    head.candidate_mlp_b = create_tensor(tn(LLM_TENSOR_DECISION2_CANDIDATE_MLP, "bias"),     {d}, 0);
+    head.query_mlp       = create_tensor(tn(LLM_TENSOR_DECISION2_QUERY_MLP, "weight"),       {h, d}, 0);
+    head.scalar          = create_tensor(tn(LLM_TENSOR_DECISION2_SCALAR, "weight"),          {d, 1}, 0);
+    for (const auto * tensor : {head.candidate_norm_w, head.candidate_norm_b, head.query_norm_w, head.query_norm_b,
+            head.key, head.query, head.candidate_mlp, head.candidate_mlp_b, head.query_mlp, head.scalar}) {
+        if (tensor->type != GGML_TYPE_F32) {
+            throw std::runtime_error("Decision2 head tensors must use F32");
+        }
+    }
+}
+
 void llama_model_base::create_tensor_gate_up_exps(llama_layer & layer, int bid, int64_t n_embd_, int64_t n_ff_, int64_t n_expert_, int flags) {
     if (flags & TENSOR_SKIP) {
         const int skip = TENSOR_NOT_REQUIRED | TENSOR_SKIP;

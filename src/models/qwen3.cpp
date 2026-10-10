@@ -1,6 +1,7 @@
 #include "models.h"
 
 void llama_model_qwen3::load_arch_hparams(llama_model_loader & ml) {
+    load_decision2_hparams(ml);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
     switch (hparams.n_layer()) {
@@ -14,6 +15,8 @@ void llama_model_qwen3::load_arch_hparams(llama_model_loader & ml) {
 
 void llama_model_qwen3::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
+
+    load_decision2_tensors();
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -67,6 +70,7 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
     auto * inp_attn = build_attn_inp_kv();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    auto * inp_decision2 = hparams.n_decision2_head && n_outputs > 0 ? build_inp_decision2() : nullptr;
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
@@ -148,6 +152,14 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+
+    if (hparams.n_decision2_head) {
+        cur = inp_decision2 ? build_decision2_head(model, cur, inp_decision2) : ggml_reshape_2d(ctx0, cur, 1, 0);
+        cb(cur, "result_decision", -1);
+        res->t_embd = cur;
+        ggml_build_forward_expand(gf, cur);
+        return;
+    }
 
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);

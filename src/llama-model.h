@@ -732,6 +732,19 @@ struct llama_model {
     struct ggml_tensor * dense_2_out_layers_b = nullptr;
     struct ggml_tensor * dense_3_out_layers   = nullptr;
 
+    struct decision2_head {
+        ggml_tensor * candidate_norm_w = nullptr;
+        ggml_tensor * candidate_norm_b = nullptr;
+        ggml_tensor * query_norm_w = nullptr;
+        ggml_tensor * query_norm_b = nullptr;
+        ggml_tensor * key = nullptr;
+        ggml_tensor * query = nullptr;
+        ggml_tensor * candidate_mlp = nullptr;
+        ggml_tensor * candidate_mlp_b = nullptr;
+        ggml_tensor * query_mlp = nullptr;
+        ggml_tensor * scalar = nullptr;
+    } decision2;
+
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
@@ -839,6 +852,9 @@ struct llama_model_base : public llama_model {
 
     // convenience overload of create_tensor that doesn't require llama_model_loader
     ggml_tensor * create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+
+    void load_decision2_hparams(llama_model_loader & ml);
+    void load_decision2_tensors();
 
     // helper: try merged gate_up_exps first, fall back to separate gate and up
     void create_tensor_gate_up_exps(llama_layer & layer, int bid, int64_t n_embd_,
