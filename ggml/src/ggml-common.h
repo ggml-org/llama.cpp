@@ -99,6 +99,9 @@ typedef sycl::half2 ggml_half2;
 #define QI2_0 (QK2_0 / 32)
 #define QR2_0 1
 
+#define QI_PTQ1_0 (QK_PTQ1_0 / 32)
+#define QR_PTQ1_0 1
+
 
 #define QI4_0 (QK4_0 / (4 * QR4_0))
 #define QR4_0 2
@@ -286,6 +289,15 @@ typedef struct {
     ggml_half d;
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
+
+// Same trit packing as TQ1_0, with one scale per 128 weights instead of per 256
+#define QK_PTQ1_0 128
+typedef struct {
+    uint8_t qs[(QK_PTQ1_0 - 4 * QK_PTQ1_0 / 64) / 5]; // 5 elements per byte (3^5 = 243 < 256)
+    uint8_t qh[QK_PTQ1_0 / 64];                       // 4 elements per byte
+    ggml_half d;
+} block_ptq1_0;
+static_assert(sizeof(block_ptq1_0) == sizeof(ggml_half) + QK_PTQ1_0 / 64 + (QK_PTQ1_0 - 4 * QK_PTQ1_0 / 64) / 5, "wrong ptq1_0 block size/padding");
 
 //
 // Super-block quantization structures
