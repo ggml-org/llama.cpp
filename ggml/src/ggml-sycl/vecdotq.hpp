@@ -18,9 +18,6 @@
 #include "type.hpp"
 #include "quants.hpp"
 
-typedef float (*vec_dot_q_sycl_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
-                                  const int & iqs);
-
 static __dpct_inline__ int get_int_b1(const void * x, const int & i32) {
     const uint8_t * x8 = (const uint8_t *) x;
 

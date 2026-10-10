@@ -39,7 +39,49 @@ static void convert_f32(const void * vx, const int64_t ib, const int iqs, dfloat
     v.y() = x[ib + iqs + 1];
 }
 
-template <int qk, int qr, dequantize_kernel_t dequantize_kernel>
+// dispatch by int tag: a function pointer NTTP embeds the helper mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum dequantize_tag {
+    DEQUANT_Q1_0,
+    DEQUANT_Q4_0,
+    DEQUANT_Q4_1,
+    DEQUANT_Q5_0,
+    DEQUANT_Q5_1,
+    DEQUANT_Q8_0,
+    DEQUANT_CONVERT_F16,
+    DEQUANT_CONVERT_BF16,
+};
+
+enum dequantize_reorder_tag {
+    DEQUANT_REORDER_Q1_0,
+    DEQUANT_REORDER_Q4_0,
+};
+
+template <dequantize_tag tag>
+static void dispatch_dequantize(const void * vx, const int64_t ib, const int iqs, dfloat2 & v) {
+    switch (tag) {
+        case DEQUANT_Q1_0:          dequantize_q1_0(vx, ib, iqs, v); break;
+        case DEQUANT_Q4_0:          dequantize_q4_0(vx, ib, iqs, v); break;
+        case DEQUANT_Q4_1:          dequantize_q4_1(vx, ib, iqs, v); break;
+        case DEQUANT_Q5_0:          dequantize_q5_0(vx, ib, iqs, v); break;
+        case DEQUANT_Q5_1:          dequantize_q5_1(vx, ib, iqs, v); break;
+        case DEQUANT_Q8_0:          dequantize_q8_0(vx, ib, iqs, v); break;
+        case DEQUANT_CONVERT_F16:   convert_f16(vx, ib, iqs, v); break;
+#ifdef GGML_SYCL_DMMV_HAS_BF16
+        case DEQUANT_CONVERT_BF16:  convert_bf16(vx, ib, iqs, v); break;
+#endif
+    }
+}
+
+template <dequantize_reorder_tag tag>
+static void dispatch_dequantize_reorder(const void * d, const int64_t ib, const void * qs, const int iqs, dfloat2 & v) {
+    switch (tag) {
+        case DEQUANT_REORDER_Q1_0: dequantize_q1_0_reorder(d, ib, qs, iqs, v); break;
+        case DEQUANT_REORDER_Q4_0: dequantize_q4_0_reorder(d, ib, qs, iqs, v); break;
+    }
+}
+
+template <int qk, int qr, dequantize_tag dequantize_kernel>
 static void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * __restrict__ y, float * __restrict__ dst, const int ncols, const int nrows,
                                    const sycl::nd_item<3> &item_ct1) {
     // qk = quantized weights per x block
@@ -78,7 +120,7 @@ static void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * 
             // dequantize
             // for qr = 2 the iqs needs to increase by 1 per j iter because 2 weights per data val
             dfloat2 v;
-            dequantize_kernel(vx, ib, iqs + j/qr, v);
+            dispatch_dequantize<dequantize_kernel>(vx, ib, iqs + j/qr, v);
 
             // matrix multiplication
             // for qr = 2 the y index needs to increase by 1 per j iter because of y_offset = qk/2
@@ -110,7 +152,7 @@ static void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * 
     }
 }
 
-template <int qk, int qr, dequantize_kernel_t_reorder dequantize_kernel_reorder>
+template <int qk, int qr, dequantize_reorder_tag dequantize_kernel_reorder>
 static void dequantize_mul_mat_vec_reorder(const void * __restrict__ vx, const dfloat * __restrict__ y, float * __restrict__ dst, const int ncols, const int nrows,
                                    const sycl::nd_item<3> &item_ct1) {
     // qk = quantized weights per x block
@@ -153,7 +195,7 @@ static void dequantize_mul_mat_vec_reorder(const void * __restrict__ vx, const d
             // dequantize
             // for qr = 2 the iqs needs to increase by 1 per j iter because 2 weights per data val
             dfloat2 v;
-            dequantize_kernel_reorder((const void *)d_ptr, ib, (const void *)vx, ib * QK4_0 / 2 +iqs+j/qr, v);
+            dispatch_dequantize_reorder<dequantize_kernel_reorder>((const void *)d_ptr, ib, (const void *)vx, ib * QK4_0 / 2 +iqs+j/qr, v);
 
             // matrix multiplication
             // for qr = 2 the y index needs to increase by 1 per j iter because of y_offset = qk/2
@@ -184,7 +226,7 @@ static void dequantize_mul_mat_vec_reorder(const void * __restrict__ vx, const d
             // dequantize
             // for qr = 2 the iqs needs to increase by 1 per j iter because 2 weights per data val
             dfloat2 v;
-            dequantize_kernel_reorder((const void *)d_ptr, ib, (const void *)vx, ib * QK4_0 / 2 +iqs+j/qr, v);
+            dispatch_dequantize_reorder<dequantize_kernel_reorder>((const void *)d_ptr, ib, (const void *)vx, ib * QK4_0 / 2 +iqs+j/qr, v);
 
             // matrix multiplication
             // for qr = 2 the y index needs to increase by 1 per j iter because of y_offset = qk/2
@@ -231,7 +273,7 @@ static void convert_mul_mat_vec_f16_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<1, 1, convert_f16>(vx, y, dst, ncols,
+                dequantize_mul_mat_vec<1, 1, DEQUANT_CONVERT_F16>(vx, y, dst, ncols,
                                                           nrows, item_ct1);
             });
     }
@@ -252,7 +294,7 @@ static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<1, 1, convert_bf16>(vx, y, dst, ncols,
+                dequantize_mul_mat_vec<1, 1, DEQUANT_CONVERT_BF16>(vx, y, dst, ncols,
                                                            nrows, item_ct1);
             });
     }
@@ -1501,7 +1543,7 @@ static void dequantize_mul_mat_vec_q4_0_sycl_reorder(const void *vx, const dfloa
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
+                dequantize_mul_mat_vec_reorder<QK4_0, QR4_0, DEQUANT_REORDER_Q4_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1524,7 +1566,7 @@ static void dequantize_mul_mat_vec_q4_0_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<QK4_0, QR4_0, dequantize_q4_0>(
+                dequantize_mul_mat_vec<QK4_0, QR4_0, DEQUANT_Q4_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1546,7 +1588,7 @@ static void dequantize_mul_mat_vec_q1_0_sycl_reorder(const void *vx, const dfloa
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec_reorder<QK1_0, QR1_0, dequantize_q1_0_reorder>(
+                dequantize_mul_mat_vec_reorder<QK1_0, QR1_0, DEQUANT_REORDER_Q1_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1568,7 +1610,7 @@ static void dequantize_mul_mat_vec_q1_0_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<QK1_0, QR1_0, dequantize_q1_0>(
+                dequantize_mul_mat_vec<QK1_0, QR1_0, DEQUANT_Q1_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1589,7 +1631,7 @@ static void dequantize_mul_mat_vec_q4_1_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<QK4_1, QR4_1, dequantize_q4_1>(
+                dequantize_mul_mat_vec<QK4_1, QR4_1, DEQUANT_Q4_1>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1610,7 +1652,7 @@ static void dequantize_mul_mat_vec_q5_0_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<QK5_0, QR5_0, dequantize_q5_0>(
+                dequantize_mul_mat_vec<QK5_0, QR5_0, DEQUANT_Q5_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1631,7 +1673,7 @@ static void dequantize_mul_mat_vec_q5_1_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<QK5_1, QR5_1, dequantize_q5_1>(
+                dequantize_mul_mat_vec<QK5_1, QR5_1, DEQUANT_Q5_1>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1749,7 +1791,7 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
         stream->parallel_for(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                dequantize_mul_mat_vec<QK8_0, QR8_0, dequantize_q8_0>(
+                dequantize_mul_mat_vec<QK8_0, QR8_0, DEQUANT_Q8_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }

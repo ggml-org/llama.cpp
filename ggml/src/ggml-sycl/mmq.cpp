@@ -13,32 +13,6 @@
 #include "mmq.hpp"
 #include "vecdotq.hpp"
 
-typedef void (*allocate_tiles_sycl_t)(
-    int** x_ql,
-    sycl::half2** x_dm,
-    int** x_qh,
-    int** x_sc);
-typedef void (*load_tiles_sycl_t)(
-    const void* __restrict__ vx,
-    int* __restrict__ x_ql,
-    sycl::half2* __restrict__ x_dm,
-    int* __restrict__ x_qh,
-    int* __restrict__ x_sc,
-    const int& i_offset,
-    const int& i_max,
-    const int& k,
-    const int& blocks_per_row);
-typedef float (*vec_dot_q_mul_mat_sycl_t)(
-    const int* __restrict__ x_ql,
-    const sycl::half2* __restrict__ x_dm,
-    const int* __restrict__ x_qh,
-    const int* __restrict__ x_sc,
-    const int* __restrict__ y_qs,
-    const sycl::half2* __restrict__ y_ms,
-    const int& i,
-    const int& j,
-    const int& k);
-
 
 template <int mmq_y>
 static __dpct_inline__ void
@@ -1191,9 +1165,107 @@ static __dpct_inline__ float vec_dot_q6_K_q8_1_mul_mat(
     return vec_dot_q6_K_q8_1_impl_mmq(&x_ql[index_x], &y_qs[index_y], sc, x_dmf[i * (WARP_SIZE/QI6_K) + i/QI6_K], &y_df[index_y/QI8_1]);
 }
 
+// dispatch by int tag: a function pointer NTTP embeds the helper mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum load_tiles_tag {
+    LOAD_TILES_Q4_0,
+    LOAD_TILES_Q4_1,
+    LOAD_TILES_Q5_0,
+    LOAD_TILES_Q5_1,
+    LOAD_TILES_Q8_0,
+    LOAD_TILES_Q2_K,
+    LOAD_TILES_Q3_K,
+    LOAD_TILES_Q4_K,
+    LOAD_TILES_Q5_K,
+    LOAD_TILES_Q6_K,
+};
+
+enum vec_dot_mul_mat_tag {
+    VEC_DOT_MUL_MAT_Q4_0,
+    VEC_DOT_MUL_MAT_Q4_1,
+    VEC_DOT_MUL_MAT_Q5_0,
+    VEC_DOT_MUL_MAT_Q5_1,
+    VEC_DOT_MUL_MAT_Q8_0,
+    VEC_DOT_MUL_MAT_Q2_K,
+    VEC_DOT_MUL_MAT_Q3_K,
+    VEC_DOT_MUL_MAT_Q4_K,
+    VEC_DOT_MUL_MAT_Q5_K,
+    VEC_DOT_MUL_MAT_Q6_K,
+};
+
+template <load_tiles_tag load_tiles, int mmq_y, int nwarps, bool need_check>
+static __dpct_inline__ void
+dispatch_load_tiles(const void *__restrict__ vx, int *__restrict__ x_ql,
+                    sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
+                    int *__restrict__ x_sc, const int &i_offset, const int &i_max,
+                    const int &k, const int &blocks_per_row) {
+    switch (load_tiles) {
+        case LOAD_TILES_Q4_0:
+            load_tiles_q4_0<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q4_1:
+            load_tiles_q4_1<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q5_0:
+            load_tiles_q5_0<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q5_1:
+            load_tiles_q5_1<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q8_0:
+            load_tiles_q8_0<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q2_K:
+            load_tiles_q2_K<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q3_K:
+            load_tiles_q3_K<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q4_K:
+            load_tiles_q4_K<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q5_K:
+            load_tiles_q5_K<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+        case LOAD_TILES_Q6_K:
+            load_tiles_q6_K<mmq_y, nwarps, need_check>(vx, x_ql, x_dm, x_qh, x_sc,
+                                                       i_offset, i_max, k, blocks_per_row);
+            break;
+    }
+}
+
+template <vec_dot_mul_mat_tag vec_dot>
+static __dpct_inline__ float
+dispatch_vec_dot_mul_mat(const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
+                         const int *__restrict__ x_qh, const int *__restrict__ x_sc,
+                         const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
+                         const int &i, const int &j, const int &k) {
+    switch (vec_dot) {
+        case VEC_DOT_MUL_MAT_Q4_0: return vec_dot_q4_0_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q4_1: return vec_dot_q4_1_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q5_0: return vec_dot_q5_0_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q5_1: return vec_dot_q5_1_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q8_0: return vec_dot_q8_0_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q2_K: return vec_dot_q2_K_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q3_K: return vec_dot_q3_K_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q4_K: return vec_dot_q4_K_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q5_K: return vec_dot_q5_K_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+        case VEC_DOT_MUL_MAT_Q6_K: return vec_dot_q6_K_q8_1_mul_mat(x_ql, x_dm, x_qh, x_sc, y_qs, y_ds, i, j, k);
+    }
+}
+
 template <int qk, int qr, int qi, bool need_sum, typename block_q_t, int mmq_x,
-          int mmq_y, int nwarps, load_tiles_sycl_t load_tiles, int vdr,
-          vec_dot_q_mul_mat_sycl_t vec_dot>
+          int mmq_y, int nwarps, bool need_check, load_tiles_tag load_tiles, int vdr,
+          vec_dot_mul_mat_tag vec_dot>
 /*
 DPCT1110:8: The total declared local variable size in device function mul_mat_q
 exceeds 128 bytes and may cause high register pressure. Consult with your
@@ -1227,10 +1299,11 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 
     for (int ib0 = 0; ib0 < blocks_per_row_x; ib0 += blocks_per_warp) {
 
-        load_tiles(x + row_x_0 * blocks_per_row_x + ib0, tile_x_ql, tile_x_dm,
-                   tile_x_qh, tile_x_sc, item_ct1.get_local_id(1),
-                   nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
-                   blocks_per_row_x);
+        dispatch_load_tiles<load_tiles, mmq_y, nwarps, need_check>(
+            x + row_x_0 * blocks_per_row_x + ib0, tile_x_ql, tile_x_dm,
+            tile_x_qh, tile_x_sc, item_ct1.get_local_id(1),
+            nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
+            blocks_per_row_x);
 
 #pragma unroll
         for (int ir = 0; ir < qr; ++ir) {
@@ -1292,7 +1365,7 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                 for (int j = 0; j < mmq_x; j += nwarps) {
 #pragma unroll
                     for (int i = 0; i < mmq_y; i += WARP_SIZE) {
-                        sum[i / WARP_SIZE][j / nwarps] += vec_dot(
+                        sum[i / WARP_SIZE][j / nwarps] += dispatch_vec_dot_mul_mat<vec_dot>(
                             tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
                             tile_y_qs, tile_y_ds, item_ct1.get_local_id(2) + i,
                             item_ct1.get_local_id(1) + j, k);
@@ -1371,9 +1444,9 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q4_0_AMPERE;
     allocate_tiles_q4_0<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_qs_q4_0, tile_x_d_q4_0);
-    mul_mat_q<QK4_0, QR4_0, QI4_0, true, block_q4_0, mmq_x, mmq_y, nwarps,
-              load_tiles_q4_0<mmq_y, nwarps, need_check>, VDR_Q4_0_Q8_1_MMQ,
-              vec_dot_q4_0_q8_1_mul_mat>(
+    mul_mat_q<QK4_0, QR4_0, QI4_0, true, block_q4_0, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q4_0, VDR_Q4_0_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q4_0>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1414,9 +1487,9 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q4_1_AMPERE;
     allocate_tiles_q4_1<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_qs_q4_1, tile_x_dm_q4_1);
-    mul_mat_q<QK4_1, QR4_1, QI4_1, true, block_q4_1, mmq_x, mmq_y, nwarps,
-              load_tiles_q4_1<mmq_y, nwarps, need_check>, VDR_Q4_1_Q8_1_MMQ,
-              vec_dot_q4_1_q8_1_mul_mat>(
+    mul_mat_q<QK4_1, QR4_1, QI4_1, true, block_q4_1, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q4_1, VDR_Q4_1_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q4_1>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1457,9 +1530,9 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q5_0_AMPERE;
     allocate_tiles_q5_0<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql_q5_0, tile_x_d_q5_0);
-    mul_mat_q<QK5_0, QR5_0, QI5_0, false, block_q5_0, mmq_x, mmq_y, nwarps,
-              load_tiles_q5_0<mmq_y, nwarps, need_check>, VDR_Q5_0_Q8_1_MMQ,
-              vec_dot_q5_0_q8_1_mul_mat>(
+    mul_mat_q<QK5_0, QR5_0, QI5_0, false, block_q5_0, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q5_0, VDR_Q5_0_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q5_0>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1500,9 +1573,9 @@ mul_mat_q5_1(
     const int nwarps = NWARPS_Q5_1_AMPERE;
     allocate_tiles_q5_1<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql_q5_1, tile_x_dm_q5_1);
-    mul_mat_q<QK5_1, QR5_1, QI5_1, true, block_q5_1, mmq_x, mmq_y, nwarps,
-              load_tiles_q5_1<mmq_y, nwarps, need_check>, VDR_Q5_1_Q8_1_MMQ,
-              vec_dot_q5_1_q8_1_mul_mat>(
+    mul_mat_q<QK5_1, QR5_1, QI5_1, true, block_q5_1, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q5_1, VDR_Q5_1_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q5_1>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1543,9 +1616,9 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q8_0_AMPERE;
     allocate_tiles_q8_0<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_qs_q8_0, tile_x_d_q8_0);
-    mul_mat_q<QK8_0, QR8_0, QI8_0, false, block_q8_0, mmq_x, mmq_y, nwarps,
-              load_tiles_q8_0<mmq_y, nwarps, need_check>, VDR_Q8_0_Q8_1_MMQ,
-              vec_dot_q8_0_q8_1_mul_mat>(
+    mul_mat_q<QK8_0, QR8_0, QI8_0, false, block_q8_0, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q8_0, VDR_Q8_0_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q8_0>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1587,9 +1660,9 @@ mul_mat_q2_K(
     const int nwarps = NWARPS_Q2_K_AMPERE;
     allocate_tiles_q2_K<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql_q2_K, tile_x_dm_q2_K, tile_x_sc_q2_K);
-    mul_mat_q<QK_K, QR2_K, QI2_K, false, block_q2_K, mmq_x, mmq_y, nwarps,
-              load_tiles_q2_K<mmq_y, nwarps, need_check>, VDR_Q2_K_Q8_1_MMQ,
-              vec_dot_q2_K_q8_1_mul_mat>(
+    mul_mat_q<QK_K, QR2_K, QI2_K, false, block_q2_K, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q2_K, VDR_Q2_K_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q2_K>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1632,9 +1705,9 @@ mul_mat_q3_K(
     allocate_tiles_q3_K<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql_q3_K, tile_x_dm_q3_K, tile_x_qh_q3_K,
                                tile_x_sc_q3_K);
-    mul_mat_q<QK_K, QR3_K, QI3_K, false, block_q3_K, mmq_x, mmq_y, nwarps,
-              load_tiles_q3_K<mmq_y, nwarps, need_check>, VDR_Q3_K_Q8_1_MMQ,
-              vec_dot_q3_K_q8_1_mul_mat>(
+    mul_mat_q<QK_K, QR3_K, QI3_K, false, block_q3_K, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q3_K, VDR_Q3_K_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q3_K>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1676,9 +1749,9 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q4_K_AMPERE;
     allocate_tiles_q4_K<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql_q4_K, tile_x_dm_q4_K, tile_x_sc_q4_K);
-    mul_mat_q<QK_K, QR4_K, QI4_K, true, block_q4_K, mmq_x, mmq_y, nwarps,
-              load_tiles_q4_K<mmq_y, nwarps, need_check>, VDR_Q4_K_Q8_1_MMQ,
-              vec_dot_q4_K_q8_1_mul_mat>(
+    mul_mat_q<QK_K, QR4_K, QI4_K, true, block_q4_K, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q4_K, VDR_Q4_K_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q4_K>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1720,9 +1793,9 @@ mul_mat_q5_K(
     const int nwarps = NWARPS_Q5_K_AMPERE;
     allocate_tiles_q5_K<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql_q5_K, tile_x_dm_q5_K, tile_x_sc_q5_K);
-    mul_mat_q<QK_K, QR5_K, QI5_K, true, block_q5_K, mmq_x, mmq_y, nwarps,
-              load_tiles_q5_K<mmq_y, nwarps, need_check>, VDR_Q5_K_Q8_1_MMQ,
-              vec_dot_q5_K_q8_1_mul_mat>(
+    mul_mat_q<QK_K, QR5_K, QI5_K, true, block_q5_K, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q5_K, VDR_Q5_K_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q5_K>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
@@ -1763,9 +1836,9 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q6_K_AMPERE;
     allocate_tiles_q6_K<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql, tile_x_dm, tile_x_sc);
-    mul_mat_q<QK_K, QR6_K, QI6_K, false, block_q6_K, mmq_x, mmq_y, nwarps,
-              load_tiles_q6_K<mmq_y, nwarps, need_check>, VDR_Q6_K_Q8_1_MMQ,
-              vec_dot_q6_K_q8_1_mul_mat>(
+    mul_mat_q<QK_K, QR6_K, QI6_K, false, block_q6_K, mmq_x, mmq_y, nwarps, need_check,
+              LOAD_TILES_Q6_K, VDR_Q6_K_Q8_1_MMQ,
+              VEC_DOT_MUL_MAT_Q6_K>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
