@@ -125,6 +125,21 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 - Any help with managing issues, PRs and projects is very appreciated!
 - Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
 
+## Citation
+
+If you use llama.cpp in your research, please cite it as follows:
+
+```bibtex
+@software{gerganov_llamacpp_2026,
+    title = {llama.cpp},
+    url = {https://github.com/ggml-org/llama.cpp},
+    publisher = {ggml},
+    author = {Gerganov, Georgi},
+    month = sep,
+    year = {2026},
+}
+```
+
 ## Acknowledgements
 
 - [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
