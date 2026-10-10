@@ -619,19 +619,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_ds = (const half2 *) y;
 
-    float2 y_df[J/nwarps];
-#pragma unroll
-    for (int j0 = 0; j0 < J; j0 += nwarps) {
-        const int j = j0 + threadIdx.y;
-
-        y_df[j0/nwarps] = __half22float2(y_ds[j*MMQ_TILE_Y_K]);
-    }
-
 #pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K/2; k01 += QR2_K*VDR_Q2_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
-#pragma unroll
+#pragma unroll 2
         for (int j0 = 0; j0 < J; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
 
@@ -642,7 +634,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 constexpr int ns = 2;
                 sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
                     &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
-                    &x_dm[i*(MMQ_TILE_NE_K + 1) + k0/4], k01 < MMQ_TILE_NE_K/2 ? y_df[j0/nwarps].x : y_df[j0/nwarps].y,
+                    &x_dm[i*(MMQ_TILE_NE_K + 1) + k0/4], __half22float2(y_ds[j*MMQ_TILE_Y_K]).x,
                     &y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
             }
         }
@@ -654,7 +646,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     for (int k01 = MMQ_TILE_NE_K/2; k01 < MMQ_TILE_NE_K; k01 += QR2_K*VDR_Q2_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
-#pragma unroll
+#pragma unroll 2
         for (int j0 = 0; j0 < J; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
 
@@ -665,7 +657,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 constexpr int ns = 1;
                 sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
                     &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
-                    &x_dm[i*(MMQ_TILE_NE_K + 1) + k0/4], k01 < MMQ_TILE_NE_K/2 ? y_df[j0/nwarps].x : y_df[j0/nwarps].y,
+                    &x_dm[i*(MMQ_TILE_NE_K + 1) + k0/4], __half22float2(y_ds[j*MMQ_TILE_Y_K]).y,
                     &y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
             }
         }
@@ -693,6 +685,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
+#pragma unroll 1
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
 
