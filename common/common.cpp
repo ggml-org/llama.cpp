@@ -15,6 +15,7 @@
 #include "unicode.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cinttypes>
 #include <climits>
 #include <cmath>
@@ -78,6 +79,23 @@ common_time_meas::~common_time_meas() {
 // CPU utils
 //
 
+int32_t common_cpu_count_apple_perf_cores(const std::vector<std::pair<std::string, int32_t>> & levels) {
+    int32_t n_cores = 0;
+    for (const auto & level : levels) {
+        std::string name = level.first;
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return (char) std::tolower(c); });
+
+        if (name.find("super") == std::string::npos && name.find("performance") == std::string::npos) {
+            continue;
+        }
+        if (level.second > 0) {
+            n_cores += level.second;
+        }
+    }
+    return n_cores;
+}
+
 int32_t common_cpu_get_num_physical_cores() {
 #if defined(_AIX)
     int32_t logical_cpus = _system_configuration.ncpus;
@@ -108,6 +126,38 @@ int32_t common_cpu_get_num_physical_cores() {
 #elif defined(__APPLE__) && defined(__MACH__)
     int32_t num_physical_cores;
     size_t len = sizeof(num_physical_cores);
+
+    int32_t nperflevels = 0;
+    len = sizeof(nperflevels);
+    if (sysctlbyname("hw.nperflevels", &nperflevels, &len, NULL, 0) == 0 && nperflevels > 0) {
+        std::vector<std::pair<std::string, int32_t>> levels;
+        for (int32_t i = 0; i < nperflevels; i++) {
+            char key[64];
+            char name[64] = {};
+            size_t name_len = sizeof(name) - 1;
+
+            snprintf(key, sizeof(key), "hw.perflevel%d.name", i);
+            if (sysctlbyname(key, name, &name_len, NULL, 0) != 0) {
+                continue;
+            }
+
+            int32_t n = 0;
+            len = sizeof(n);
+            snprintf(key, sizeof(key), "hw.perflevel%d.physicalcpu", i);
+            if (sysctlbyname(key, &n, &len, NULL, 0) != 0) {
+                continue;
+            }
+
+            levels.emplace_back(name, n);
+        }
+
+        const int32_t n_cores = common_cpu_count_apple_perf_cores(levels);
+        if (n_cores > 0) {
+            return n_cores;
+        }
+    }
+
+    len = sizeof(num_physical_cores);
     int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, NULL, 0);
     if (result == 0) {
         return num_physical_cores;

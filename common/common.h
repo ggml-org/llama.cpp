@@ -80,6 +80,8 @@ struct common_cpu_params {
 int32_t common_cpu_get_num_physical_cores();
 int32_t common_cpu_get_num_math();
 
+int32_t common_cpu_count_apple_perf_cores(const std::vector<std::pair<std::string, int32_t>> & levels);
+
 //
 // Common params
 //
