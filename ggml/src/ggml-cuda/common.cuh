@@ -1448,11 +1448,15 @@ struct ggml_backend_cuda_context {
     std::string name;
     cudaEvent_t copy_event = nullptr;
 
+private:
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
+    bool stream_used[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
+
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {nullptr};
     void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {nullptr};
     size_t cublas_workspace_sizes[GGML_CUDA_MAX_DEVICES] = {0};
 
+public:
     int curr_stream_no = 0;
 
 #ifdef USE_CUDA_GRAPH
@@ -1516,7 +1520,9 @@ struct ggml_backend_cuda_context {
 
     ~ggml_backend_cuda_context();
 
+    // Borrow handles for the current backend call, not across synchronize().
     cudaStream_t stream(int device, int stream) {
+        stream_used[device][stream] = true;
         if (streams[device][stream] == nullptr) {
             ggml_cuda_set_device(device);
             CUDA_CHECK(cudaStreamCreateWithFlags(&streams[device][stream], cudaStreamNonBlocking));
@@ -1526,9 +1532,22 @@ struct ggml_backend_cuda_context {
 
     cudaStream_t stream() { return stream(device, curr_stream_no); }
 
+    void synchronize() {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+        // Multi-device execution retains its existing synchronization behavior.
+        if (ggml_cuda_info().device_count == 1 && !stream_used[device][curr_stream_no]) {
+            return;
+        }
+#endif
+        CUDA_CHECK(cudaStreamSynchronize(stream()));
+        stream_used[device][curr_stream_no] = false;
+    }
+
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
     cublasHandle_t cublas_handle() {
+        // A cached BLAS handle can submit work without requesting the stream again.
+        stream();
         if (cublas_handles[device][curr_stream_no] == nullptr) {
             ggml_cuda_set_device(device);
             CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
