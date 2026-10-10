@@ -9,7 +9,7 @@ on:
         type: boolean
   push:
     branches:
-      - master
+      - master,refactor_build_onednn
     paths: [
       '.github/workflows/release.yml',
       '**/CMakeLists.txt',
