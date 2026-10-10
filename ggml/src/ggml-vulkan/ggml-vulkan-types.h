@@ -808,6 +808,7 @@ struct vk_device_struct {
     matmul_tile_selector_t matmul_id_tile_selector;
 
     vk_pipeline pipeline_matmul_split_k_reduce;
+    vk_pipeline pipeline_mul_mat_scale_f32;
     vk_pipeline pipeline_quantize_q8_1_x4;
 
     vk_pipeline pipeline_dequant[GGML_TYPE_COUNT];
@@ -1119,6 +1120,10 @@ typedef std::vector<vk_submission> vk_sequence;
 #define MAT_VEC_FUSION_FLAGS_SCALE0 0x4
 
 #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
+
+#define MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE 0x10
+#define MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_VEC 0x20
+#define MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_2D 0x40
 
 struct vk_staging_memcpy {
     vk_staging_memcpy(void * _dst, const void * _src, size_t _n) : dst(_dst), src(_src), n(_n) {}
