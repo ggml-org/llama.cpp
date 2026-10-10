@@ -350,6 +350,11 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         *shard_view = {};
     }
 
+    static const bool dist_split_recurrent = [] {
+        const char * env = std::getenv("LLAMA_DIST_TP_SPLIT_RECURRENT");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+
     const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
     const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
     const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
@@ -445,7 +450,10 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         // DeltaNet graph reshapes those tensors, which the meta backend allows for one segment only
         // (handle_reshape: GGML_ASSERT(src_ss[0].n_segments == 1)). Mirrored, the block runs on every
         // rank with no collective; full attention, the FFN and the output still split.
+        // LLAMA_DIST_TP_SPLIT_RECURRENT=1 splits Qwen3.5's DeltaNet layers too (one segment repeated
+        // nr_s times, see below); Qwen3-Next's two-segment qkv still needs the mirror.
         if (ud->dist_tp_world_size > 1 && ud->n_devices == 1 &&
+                !(dist_split_recurrent && ud->model->arch != LLM_ARCH_QWEN3NEXT) &&
                 (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) &&
                 (std::regex_match(tensor_name, pattern_qkv_weight)     || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
                  std::regex_match(tensor_name, pattern_ssm_dt)         || std::regex_match(tensor_name, pattern_ssm_a)            ||
@@ -758,7 +766,17 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
             if (shard_view != nullptr) {
                 shard_view->n_segments = nr_s;
             }
-            if (local > 0) {
+            if (dist_split_recurrent && nr_s > 1) {
+                // upstream's form: one segment of `local` elements, repeated nr_s times. The meta backend
+                // reshapes and views it like a multi-GPU split; the loader still reads the nr_s slices above.
+                for (uint32_t r = 0; r < nr_s; ++r) {
+                    split_state.ne[r] = 0;
+                    split_state.nr[r] = 0;
+                }
+                split_state.ne[0] = local;
+                split_state.nr[0] = nr_s;
+                split_state.n_segments = 1;
+            } else if (local > 0) {
                 split_state.n_segments = nr_s;
             } else {
                 // Tiny tensors can legitimately be empty on a rank after granularity rounding.
