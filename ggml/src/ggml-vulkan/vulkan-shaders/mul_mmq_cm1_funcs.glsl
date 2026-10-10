@@ -19,7 +19,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     uint32_t lo4 = blk.qs & 0x0F0F0F0F;
     uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
     lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;
@@ -28,7 +28,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        buf_a_d[ks * BM + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
     }
 }
 
@@ -46,7 +46,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     // Store raw unsigned nibbles; the -8 offset is absorbed by the min term.
     uint32_t lo4 = blk.qs & 0x0F0F0F0F;
     uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
@@ -54,7 +54,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
+        buf_a_dm[ks * BM + buf_ib] = in_bounds ? vec2(float(blk.dm.x), float(blk.dm.y)) : vec2(0.0f);
     }
 }
 
@@ -75,7 +75,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     uint32_t lo4 = blk.qs & 0x0F0F0F0F;
     uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
     lo4 |= ((blk.qh >> (4u * loadr       )) & 0xFu) * 0x02040810u & 0x10101010u;
@@ -86,7 +86,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        buf_a_d[ks * BM + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
     }
 }
 
@@ -106,7 +106,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     // Store raw unsigned 5-bit values; the -16 offset is absorbed by the min term.
     uint32_t lo4 = blk.qs & 0x0F0F0F0F;
     uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
@@ -116,7 +116,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
+        buf_a_dm[ks * BM + buf_ib] = in_bounds ? vec2(float(blk.dm.x), float(blk.dm.y)) : vec2(0.0f);
     }
 }
 
@@ -135,11 +135,11 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr] = blk.qs;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        buf_a_d[ks * BM + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
     }
 }
 
@@ -158,7 +158,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
@@ -169,7 +169,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        buf_a_d[ks * BM + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
     }
 }
 
@@ -194,7 +194,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
@@ -205,7 +205,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = blk.d;
+        buf_a_d[ks * BM + buf_ib] = in_bounds ? blk.d : 0.0f;
     }
 }
 
@@ -226,7 +226,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
@@ -237,7 +237,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = e8m0_to_fp32(blk.e) * 0.5;
+        buf_a_d[ks * BM + buf_ib] = in_bounds ? e8m0_to_fp32(blk.e) * 0.5 : 0.0f;
     }
 }
 
@@ -271,7 +271,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     // Store raw unsigned nibbles (blk.qs already masked); no -8 recentering needed.
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2    ] = blk.qs0;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2 + 1] = blk.qs1;
@@ -287,7 +287,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         const uint mn_val = (sub < 4) ? (s_j4 & 0x3Fu) : ((s_j8 >> 4)    | ((s_j4 >> 6) << 4));
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
         float d_scaled = dm.x * float(sc_val);
-        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, -(dm.y * float(mn_val)));
+        buf_a_dm[ks * BM + buf_ib] = in_bounds ? vec2(d_scaled, -(dm.y * float(mn_val))) : vec2(0.0f);
     }
 }
 
@@ -323,7 +323,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     // Store raw unsigned 5-bit values (qs nibble | qh bit); no -16 recentering needed.
     uint32_t v0 = blk.qs0 | blk.qh0;
     uint32_t v1 = blk.qs1 | blk.qh1;
@@ -341,7 +341,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         const uint mn_val = (sub < 4) ? (s_j4 & 0x3Fu) : ((s_j8 >> 4)    | ((s_j4 >> 6) << 4));
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
         float d_scaled = dm.x * float(sc_val);
-        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, -(dm.y * float(mn_val)));
+        buf_a_dm[ks * BM + buf_ib] = in_bounds ? vec2(d_scaled, -(dm.y * float(mn_val))) : vec2(0.0f);
     }
 }
 
@@ -388,7 +388,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     uint32_t v0 = ((blk.qs0 | 0x80808080) - 0x20202020) ^ 0x80808080;
     uint32_t v1 = ((blk.qs1 | 0x80808080) - 0x20202020) ^ 0x80808080;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2    ] = v0;
@@ -398,8 +398,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         const uint ib_k = blk.ib / 8;
         const uint sub = blk.ib % 8;
         i8vec2 sc = unpack8(int32_t(int16_t(data_a_packed16[ib_k].scales[sub]))).xy;
-        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = float(data_a_packed16[ib_k].d) * float(sc.x);
-        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = float(data_a_packed16[ib_k].d) * float(sc.y);
+        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = in_bounds ? float(data_a_packed16[ib_k].d) * float(sc.x) : 0.0f;
+        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = in_bounds ? float(data_a_packed16[ib_k].d) * float(sc.y) : 0.0f;
     }
 }
 
@@ -439,7 +439,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     uint32_t v0 = ((blk.qs0 | 0x80808080) - 0x04040404) ^ 0x80808080;
     uint32_t v1 = ((blk.qs1 | 0x80808080) - 0x04040404) ^ 0x80808080;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2    ] = v0;
@@ -456,8 +456,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         uint combined = lo | (hi << 4);
         i8vec2 sc = unpack8(int32_t(combined)).xy;
         float d = float(data_a_packed16[ib_k].d);
-        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = d * float(int(sc.x) - 32);
-        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = d * float(int(sc.y) - 32);
+        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = in_bounds ? d * float(int(sc.x) - 32) : 0.0f;
+        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = in_bounds ? d * float(int(sc.y) - 32) : 0.0f;
     }
 }
 
@@ -486,7 +486,7 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     return blk;
 }
 
-void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     const uint sub_base = (loadr >> 1) * 4;
@@ -499,8 +499,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = ue4m3_to_fp32(blk.d0) * 0.5;
-        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = ue4m3_to_fp32(blk.d1) * 0.5;
+        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = in_bounds ? ue4m3_to_fp32(blk.d0) * 0.5 : 0.0f;
+        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = in_bounds ? ue4m3_to_fp32(blk.d1) * 0.5 : 0.0f;
     }
 }
 
@@ -559,7 +559,9 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
         if (buf_ib < BM) {                                                                      \
             const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;                                \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                pre_a[li * BK_STEP + ks] = block_a_load(ib + ks, loadr_a);                      \
+                /* a k step past end_k re-reads an in-bounds block; its scale is zeroed below */ \
+                const uint ib_k = ((blk) + ks * BK < end_k) ? (ib + ks) : ib;                   \
+                pre_a[li * BK_STEP + ks] = block_a_load(ib_k, loadr_a);                         \
             }                                                                                   \
         }                                                                                       \
     }                                                                                           \
@@ -579,7 +581,8 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
         const uint buf_ib = loadc_a + li * loadstride_a;                                        \
         if (buf_ib < BM) {                                                                      \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                block_a_to_shmem(pre_a[li * BK_STEP + ks], buf_ib, ks, loadr_a);                \
+                const bool in_bounds = (blk) + ks * BK < end_k;                                 \
+                block_a_to_shmem(pre_a[li * BK_STEP + ks], buf_ib, ks, loadr_a, in_bounds);     \
             }                                                                                   \
         }                                                                                       \
     }                                                                                           \

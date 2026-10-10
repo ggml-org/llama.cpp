@@ -5308,6 +5308,32 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// one row of a has an inf scale in one block: only that row may become inf
+// catches a matmul whose padded k step reads the next row, or re-reads a block of this row
+struct test_mul_mat_row_inf : public test_mul_mat {
+    const int64_t inf_block;
+
+    test_mul_mat_row_inf(ggml_type type_a, int64_t m, int64_t n, int64_t k, int64_t inf_block)
+        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}), inf_block(inf_block) {
+            GGML_ASSERT(type_a == GGML_TYPE_Q8_0);
+        }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // positive values, so the inf row is +inf and never inf - inf
+            init_tensor_uniform(t, 0.1f, 1.0f);
+            if (strcmp(t->name, "a") == 0) {
+                const ggml_fp16_t d = ggml_fp32_to_fp16(INFINITY);
+                ggml_backend_tensor_set(t, &d, (m - 1) * t->nb[1] + inf_block * t->nb[0], sizeof(d));
+            }
+        }
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR5(type_a, m, n, k, inf_block);
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -10667,6 +10693,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
+
+    // k is not a multiple of 128: the inf sits in block 0 (what the previous row's padded k step
+    // reads) or in the first block of the last partial k step (what a clamped prefetch re-reads)
+    for (auto [k, inf_block] : {std::pair<int64_t, int64_t>{160, 0}, {160, 4}, {2880, 0}, {2880, 88}}) {
+        test_cases.emplace_back(new test_mul_mat_row_inf(GGML_TYPE_Q8_0, 64, 32, k, inf_block));
+    }
 
     // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
     for (int64_t n : {1, 7, 8, 9, 16, 127, 128, 511, 512}) {
