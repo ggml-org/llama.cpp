@@ -68,6 +68,8 @@ class SpecialVocab:
         self.chat_template = None
         self.normalizer_lowercase = None
         self.normalizer_strip_accents = None
+        self.bos_token = None
+        self.eos_token = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -114,6 +116,14 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
             gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
+        if self.bos_token is not None:
+            if not quiet:
+                logger.info(f'Setting bos_token to {self.bos_token}')
+            gw.add_bos_token_string(self.bos_token)
+        if self.eos_token is not None:
+            if not quiet:
+                logger.info(f'Setting eos_token to {self.eos_token}')
+            gw.add_eos_token_string(self.eos_token)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -354,6 +364,11 @@ class SpecialVocab:
                 tc_content = entry_content
             else:
                 continue
+            # Store the token string for GGUF metadata (needed for chat templates)
+            if typ == 'bos':
+                self.bos_token = tc_content
+            elif typ == 'eos':
+                self.eos_token = tc_content
             # We only need the first match here.
             maybe_token_id = next(
                 (atok.get('id') for atok in added_tokens if atok.get('content') == tc_content),

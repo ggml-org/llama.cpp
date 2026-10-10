@@ -1268,6 +1268,12 @@ class GGUFWriter:
     def add_mask_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.MASK_ID, id)
 
+    def add_bos_token_string(self, value: str) -> None:
+        self.add_string(Keys.Tokenizer.BOS_TOKEN, value)
+
+    def add_eos_token_string(self, value: str) -> None:
+        self.add_string(Keys.Tokenizer.EOS_TOKEN, value)
+
     def add_add_bos_token(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_BOS, value)
 

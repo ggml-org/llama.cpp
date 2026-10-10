@@ -348,6 +348,8 @@ class Keys:
         SEP_ID               = "tokenizer.ggml.seperator_token_id"
         PAD_ID               = "tokenizer.ggml.padding_token_id"
         MASK_ID              = "tokenizer.ggml.mask_token_id"
+        BOS_TOKEN            = "tokenizer.ggml.bos_token"
+        EOS_TOKEN            = "tokenizer.ggml.eos_token"
         ADD_BOS              = "tokenizer.ggml.add_bos_token"
         ADD_EOS              = "tokenizer.ggml.add_eos_token"
         ADD_SEP              = "tokenizer.ggml.add_sep_token"
