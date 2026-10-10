@@ -13,7 +13,8 @@ import {
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 	RECENT_MODEL_LIMIT,
-	RECENT_MODELS_LOCALSTORAGE_KEY
+	RECENT_MODELS_LOCALSTORAGE_KEY,
+	TRANSCRIPTION_MODEL_AUTO
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
@@ -23,6 +24,7 @@ import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { repoOf } from '$lib/utils/model-names';
@@ -203,6 +205,28 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 	get status() {
 		return this._status;
+	}
+
+	/**
+	 * Model used to transcribe mic input when the active model is text-only
+	 * (ROUTER mode only). The transcriptionModel setting wins when that model
+	 * is loaded, else the first loaded model with audio input.
+	 */
+	get transcriptionModelId(): string | null {
+		if (!serverStore.isRouterMode) return null;
+
+		const isUsable = (m: ModelOption) => m.modalities?.audio && this.isModelLoaded(m.model);
+		const preferred = settingsStore.config.transcriptionModel;
+
+		if (typeof preferred === 'string' && preferred !== TRANSCRIPTION_MODEL_AUTO) {
+			const model = this.models.find((m) => m.model === preferred && isUsable(m));
+
+			if (model) return model.model;
+		}
+
+		const model = this.models.find(isUsable);
+
+		return model?.model ?? null;
 	}
 
 	clearSelection(): void {
