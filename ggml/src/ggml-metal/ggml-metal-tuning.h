@@ -72,4 +72,8 @@ fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
 fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
+// K-quant mul_mv_ext (small-batch mat-vec, ne11 4..8) is slower than the generic mat-vec
+// path on some devices. No match -> enabled.
+bool kq_mv_ext_enabled(enum ggml_metal_device_id device_id);
+
 }  // namespace ggml_metal_tuning
