@@ -223,6 +223,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 if (!pending && rollback >= 1 && rollback <= (llama_pos) cell.n_rs) {
                     set_rs_idx(seq_id, (uint32_t) rollback);
                     cell.pos = p0 - 1;
+                    cell.n_rs = 0;
                     return true;
                 }
                 return false;
@@ -728,6 +729,10 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
         }
 
         for (int i = min; i <= max; ++i) {
+            if (i >= min + (int32_t) n_seqs && cells[i].src != i) {
+                // Only the current state is copied for relocated idle cells.
+                cells[i].n_rs = 0;
+            }
             if (cells[i].src < 0) {
                 GGML_ASSERT(rs_z >= 0);
                 cells[i].src0 = rs_z;
