@@ -117,6 +117,7 @@ enum htp_op_code {
     HTP_OP_UNARY_CEIL,
     HTP_OP_UNARY_SGN,
     HTP_OP_UPSCALE,
+    HTP_OP_DSV4_HC_PRE,
 
     HTP_OP_INVALID
 };

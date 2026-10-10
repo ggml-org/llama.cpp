@@ -53,6 +53,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
+        case GGML_OP_DSV4_HC_PRE:     return HTP_OP_DSV4_HC_PRE;
         case GGML_OP_TRI:             return HTP_OP_TRI;
         case GGML_OP_PAD:             return HTP_OP_PAD;
         case GGML_OP_IM2COL:          return HTP_OP_IM2COL;
@@ -4141,6 +4142,49 @@ static bool htp_kparams_solve_conv2d_dw(
     return true;
 }
 
+static bool htp_kparams_solve_dsv4_hc_pre(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_dsv4_hc_pre_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * x       = op->src[0];
+    const struct ggml_tensor * weights = op->src[1];
+    const struct ggml_tensor * dst     = op;
+
+    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->ne[1] != 4 || x->ne[3] != 1) {
+        return false;
+    }
+    if (dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2] || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (ggml_is_permuted(x) || ggml_is_permuted(weights) || ggml_is_permuted(dst)) {
+        return false;
+    }
+
+    const bool gated = ggml_get_op_params_i32(op, 1) != 0;
+    if (gated) {
+        if (weights->ne[0] != x->ne[0] || weights->ne[1] != x->ne[1] || weights->ne[2] != x->ne[2] || weights->ne[3] != 1) {
+            return false;
+        }
+    } else {
+        if (weights->ne[0] != x->ne[1] || weights->ne[1] != x->ne[2] || weights->ne[2] != 1 || weights->ne[3] != 1) {
+            return false;
+        }
+    }
+
+    kparams->n_threads = htp_session_n_threads(sess);
+
+    return true;
+}
+
 template <auto SolveFn>
 static inline bool htp_kparams_invoke(
     const struct ggml_hexagon_session * sess,
@@ -4390,6 +4434,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_SOLVE_TRI:
             return htp_kparams_invoke<htp_kparams_solve_solve_tri>(sess, op, kparams);
+
+        case HTP_OP_DSV4_HC_PRE:
+            return htp_kparams_invoke<htp_kparams_solve_dsv4_hc_pre>(sess, op, kparams);
 
         default:
             if (htp_op_is_unary(opcode)) {

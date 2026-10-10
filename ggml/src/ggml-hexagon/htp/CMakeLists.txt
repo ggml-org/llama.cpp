@@ -49,6 +49,7 @@ add_library(${HTP_LIB} SHARED
     pool-ops.c
     upscale-ops.c
     allreduce-ops.c
+    dsv4-hc-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
