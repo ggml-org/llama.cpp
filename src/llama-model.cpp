@@ -1872,6 +1872,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         ggml_backend_dev_props props;
         ggml_backend_dev_get_props(dev, &props);
         bool buffer_from_host_ptr_supported = props.caps.buffer_from_host_ptr;
+        // copy GPU tensors instead of wrapping the mmap range [first, last): scattered tensors (e.g. --cpu-moe) make the range much larger than the tensors
+        if (getenv("LLAMA_GPU_NO_HOST_PTR") && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            buffer_from_host_ptr_supported = false;
+        }
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
         std::vector<ggml_backend_buffer_ptr> bufs;
