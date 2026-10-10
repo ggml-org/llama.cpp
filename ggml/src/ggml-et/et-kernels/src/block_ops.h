@@ -7,6 +7,7 @@
 #    define BLOCK_OPS_H
 
 #    include "math_fp.h"
+#    include "platform.h"
 #    include "quants.h"
 
 #    include <stdint.h>
@@ -733,6 +734,98 @@ static inline float compute_block_dot_product_f32_f16_partial(const float *    a
     }
 
     return sum;
+}
+
+//******************************************************************************
+// F32 x F32 register-resident row dot (decode GEMV). The running sum lives in
+// vector registers f20..f23 for the whole row instead of being spilled to
+// memory every few elements, so the inner loop is just paired flw.ps loads and
+// fmadd, no gather or convert needed since both operands are already f32.
+// Four independent lane accumulators break the fmadd dependency chain so
+// several A/B loads stay in flight, hiding load latency.
+//******************************************************************************
+static inline void __attribute__((always_inline))
+f32_dot_reset(void) {
+    __asm__ volatile(
+        "fbci.pi f20, 0\n"
+        "fbci.pi f21, 0\n"
+        "fbci.pi f22, 0\n"
+        "fbci.pi f23, 0\n"
+        ::: "f20", "f21", "f22", "f23");
+}
+
+// Accumulate n_blocks blocks of 32 f32 A values times 32 f32 B into f20..f23.
+static inline void __attribute__((always_inline))
+f32_dot_tile(const float * a_row, const float * b_col, int64_t n_blocks) {
+    // Prefetch A ahead into L2, not L1. The weight row is streamed once and
+    // never reused, but L1 is shared by both harts of a minion, so a simple
+    // L1 prefetch gets evicted before the load consumes it and the line is
+    // re-fetched from DRAM. l2_prefetch stages the line into L2 instead, which
+    // is large enough to hold the in-flight window, so a re-touch hits L2
+    // rather than causing a second DRAM read. B lives in on-chip L2 SCP
+    // already, so it needs no prefetch.
+    //
+    // Each block is 128B = 2 lines. Prefetch 16 lines (8 blocks) at a time,
+    // staying PF_AHEAD blocks in front of the consuming load.
+    const int64_t PF_AHEAD = 16;
+    for (int64_t kb = 0; kb < n_blocks; kb++) {
+        const float * a_ptr = a_row + (kb << 5);   // 32 f32 per block = 128B
+        const float * b_ptr = b_col + (kb << 5);
+        if ((kb & 7) == 0) {
+            const int64_t pf_block = kb + PF_AHEAD;
+            if (pf_block + 8 <= n_blocks) {
+                l2_prefetch(a_row + (pf_block << 5), 16, 64);   // 16 lines = 8 blocks
+            }
+        }
+        __asm__ volatile(
+            // Issue all 8 independent loads first (4 A + 4 B) so several misses
+            // are outstanding before any consumer stalls in-order issue.
+            "flw.ps   f11, %[a0]\n"
+            "flw.ps   f13, %[a1]\n"
+            "flw.ps   f15, %[a2]\n"
+            "flw.ps   f17, %[a3]\n"
+            "flw.ps   f12, %[b0]\n"
+            "flw.ps   f14, %[b1]\n"
+            "flw.ps   f16, %[b2]\n"
+            "flw.ps   f18, %[b3]\n"
+            "fmadd.ps f20, f11, f12, f20\n"
+            "fmadd.ps f21, f13, f14, f21\n"
+            "fmadd.ps f22, f15, f16, f22\n"
+            "fmadd.ps f23, f17, f18, f23\n"
+            :
+            : [a0] "m"(*(const float(*)[8])&a_ptr[0]),
+              [a1] "m"(*(const float(*)[8])&a_ptr[8]),
+              [a2] "m"(*(const float(*)[8])&a_ptr[16]),
+              [a3] "m"(*(const float(*)[8])&a_ptr[24]),
+              [b0] "m"(*(const float(*)[8])&b_ptr[0]),
+              [b1] "m"(*(const float(*)[8])&b_ptr[8]),
+              [b2] "m"(*(const float(*)[8])&b_ptr[16]),
+              [b3] "m"(*(const float(*)[8])&b_ptr[24])
+            : "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18",
+              "f20", "f21", "f22", "f23"
+        );
+    }
+}
+
+static inline float __attribute__((always_inline))
+f32_dot_reduce(void) {
+    float result;
+    __asm__ __volatile__ (
+        // Combine the 4 lane accumulators, then horizontal-sum the 8 lanes.
+        "fadd.ps   f20, f20, f21, rne \n\t"
+        "fadd.ps   f22, f22, f23, rne \n\t"
+        "fadd.ps   f20, f20, f22, rne \n\t"
+        "fswizz.ps f1, f20, 0xB1 \n\t"
+        "fadd.ps   f2, f20, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f20", "f21", "f22", "f23"
+    );
+    return result;
 }
 
 // Compute dot product between f32 block and f32 column vector
