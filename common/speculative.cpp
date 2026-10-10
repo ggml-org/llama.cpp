@@ -1829,6 +1829,64 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
     }
+
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+            return false;
+        }
+
+        const uint32_t magic = 0x4d545031; // MTP1
+        const int32_t n_rows = verify_h_rows[seq_id];
+        const size_t header_bytes = sizeof(magic) + sizeof(n_embd) + sizeof(n_rows);
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        data.resize(header_bytes + row_bytes + verify_h[seq_id].size() * sizeof(float));
+        std::memcpy(data.data(),                                      &magic,  sizeof(magic));
+        std::memcpy(data.data() + sizeof(magic),                       &n_embd, sizeof(n_embd));
+        std::memcpy(data.data() + sizeof(magic) + sizeof(n_embd),      &n_rows, sizeof(n_rows));
+        std::memcpy(data.data() + header_bytes, pending_h[seq_id].data(), row_bytes);
+        if (n_rows > 0) {
+            std::memcpy(data.data() + header_bytes + row_bytes, verify_h[seq_id].data(), verify_h[seq_id].size() * sizeof(float));
+        }
+        return true;
+    }
+
+    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+            return;
+        }
+
+        uint32_t magic = 0;
+        int32_t width = 0;
+        int32_t n_rows = 0;
+        const size_t header_bytes = sizeof(magic) + sizeof(width) + sizeof(n_rows);
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+        if (data.size() < header_bytes) {
+            return;
+        }
+        std::memcpy(&magic,  data.data(),                                sizeof(magic));
+        std::memcpy(&width,  data.data() + sizeof(magic),                sizeof(width));
+        std::memcpy(&n_rows, data.data() + sizeof(magic) + sizeof(width), sizeof(n_rows));
+        if (magic != 0x4d545031 || width != n_embd || n_embd <= 0 || n_rows < 0 || (uint32_t) n_rows > llama_n_batch(params.ctx_tgt)) {
+            return;
+        }
+        const size_t payload_bytes = data.size() - header_bytes;
+        if (payload_bytes % row_bytes != 0 || payload_bytes / row_bytes != (size_t) n_rows + 1) {
+            return;
+        }
+
+        verify_h[seq_id].resize((size_t) n_rows * n_embd);
+        std::memcpy(pending_h[seq_id].data(), data.data() + header_bytes, row_bytes);
+        if (n_rows > 0) {
+            std::memcpy(verify_h[seq_id].data(), data.data() + header_bytes + row_bytes, payload_bytes - row_bytes);
+        }
+        verify_h_rows[seq_id] = n_rows;
+        i_batch_beg[seq_id] = i_batch_end[seq_id] = i_last[seq_id] = -1;
+        if (chain_heads) {
+            chain_h[seq_id].clear();
+        }
+        batch.clear();
+    }
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
