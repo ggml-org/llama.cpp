@@ -305,8 +305,12 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // automatic prompt-cache storage policy for the current slot state
+    bool cache_prompt = true;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
-        if (prompt.tokens.size() == 0) {
+        // skip automatic prompt-cache storage for tasks that disabled caching
+        if (prompt.tokens.size() == 0 || !cache_prompt) {
             return false;
         }
 
@@ -1952,6 +1956,8 @@ private:
 
         slot.task = std::make_unique<const server_task>(std::move(task));
 
+        slot.cache_prompt = slot.task->params.cache_prompt;
+
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
             : SLOT_STATE_STARTED;
@@ -2987,6 +2993,8 @@ private:
 
                         slot->prompt.clear();
                         slot->prompt.tokens = std::move(restored);
+                        // explicit restore replaces the previous task's cache policy
+                        slot->cache_prompt = true;
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
@@ -3876,6 +3884,9 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
+
+                    // skip checkpoints for future prompt reuse when caching is disabled
+                    do_checkpoint = do_checkpoint && slot.task->params.cache_prompt;
 
                     // TODO: do the same for all models, then remove process_mtmd_chunk()
                     if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
