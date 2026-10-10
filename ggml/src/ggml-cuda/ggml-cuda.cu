@@ -2678,8 +2678,9 @@ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
-static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, bool * nodes_changed) {
     bool res = false;
+    *nodes_changed = false;
 
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
@@ -2696,6 +2697,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     // Check if the graph size has changed
     if ((int)graph->node_props.size() != cgraph->n_nodes) {
         res = true;
+        *nodes_changed = true;
         graph->node_props.resize(cgraph->n_nodes);
     }
 
@@ -2712,6 +2714,9 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
         }
 
         if (res || memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
+            // a new op, or a node that starts or stops running a kernel, changes the CUDA graph topology
+            *nodes_changed |= graph->node_props[i].node.op != prop.node.op ||
+                ggml_cuda_is_view_or_noop(&graph->node_props[i].node) != ggml_cuda_is_view_or_noop(&prop.node);
             graph->node_props[i] = prop;
             res = true;
         }
@@ -4595,10 +4600,15 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         } else {
             graph_evaluated_or_captured = true; // ggml graph has been directly evaluated
         }
+#else
+        GGML_UNUSED(graph_key);
+        graph_evaluated_or_captured = true;
+#endif  // USE_CUDA_GRAPH
     }
 
+#ifdef USE_CUDA_GRAPH
+    ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
     if (use_cuda_graph) {
-        ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
         if (graph->instance == nullptr) { // Create executable graph from captured graph.
             CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
         }
@@ -4607,11 +4617,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
-#else
-        GGML_UNUSED(graph_key);
-        graph_evaluated_or_captured = true;
-#endif  // USE_CUDA_GRAPH
     }
+
+    graph->replayed_since_capture = use_cuda_graph && !cuda_graph_update_required;
+#endif  // USE_CUDA_GRAPH
 }
 
 #ifdef USE_CUDA_GRAPH
@@ -4649,7 +4658,8 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (graph->is_enabled()) {
         const bool graph_compatible = ggml_cuda_graph_check_compability(cgraph);
         if (graph_compatible) {
-            const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
+            bool nodes_changed = false;
+            const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph, &nodes_changed);
 
             if (!graph->warmup_complete) {
                 // Warmup: need at least 2 calls with no property change on the 2nd call
@@ -4663,9 +4673,23 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
             } else {
                 // Post-warmup: normal CUDA graph operation
                 if (properties_changed) {
-                    // Properties changed - reset warmup, execute directly until stable again
-                    graph->warmup_complete = false;
-                    GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
+                    // Legacy pools can synchronize on OOM, so changed shapes need warmup before capture.
+                    bool recapture_safe = false;
+#if defined(GGML_USE_VMM)
+                    recapture_safe = true;
+                    for (int device = 0; device < ggml_cuda_info().device_count; ++device) {
+                        recapture_safe &= ggml_cuda_info().devices[device].vmm;
+                    }
+#endif // defined(GGML_USE_VMM)
+                    // recapture at once if no node changes op or starts or stops running
+                    if (recapture_safe && graph->instance != nullptr && graph->replayed_since_capture && !nodes_changed) {
+                        use_cuda_graph = true;
+                        cuda_graph_update_required = true;
+                    } else {
+                        // Reset warmup when properties keep changing or nodes change.
+                        graph->warmup_complete = false;
+                        GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
+                    }
                 } else {
                     use_cuda_graph = true;
                     cuda_graph_update_required = graph->instance == nullptr;
