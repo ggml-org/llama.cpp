@@ -416,6 +416,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_s_cache         ("cache_s_l\\d*");
     static const std::regex pattern_ssm_conv1d      ("blk\\.\\d*\\.ssm_conv1d.weight");
     static const std::regex pattern_ssm_out_weight  ("blk\\.\\d*\\.ssm_out.weight");
+    static const std::regex pattern_kda_attn        ("blk\\.\\d*\\.(attn|ssm|indexer)_.*");
 
     static const std::regex pattern_ffn_up_weight     ("blk\\.\\d*\\.ffn_up(_exps)?.weight");
     static const std::regex pattern_ffn_up_bias       ("blk\\.\\d*\\.ffn_up(_exps)?.bias");
@@ -487,6 +488,12 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         if (ud->model->arch == LLM_ARCH_HRM_TEXT) {
             // aliased cache slots cannot satisfy the meta-split invariants, so replicate all tensors
             return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor, 0, 0};
+        }
+
+        // TODO: improve KDA splits to not mirror
+        if (hparams.n_embd_head_kda != 0 &&
+                (std::regex_match(tensor_name, pattern_kda_attn) || tensor_name.compare(0, 6, "cache_") == 0)) {
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
         if (is_dsv4) {
             if (std::regex_match(tensor_name, pattern_kv_cache) ||
@@ -710,7 +717,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         // for better performance it may make sense to round up blck_size to a higher power of 2 so that more efficient kernels can be used
         if (hparams.is_recr(il)) {
             // linear attention
-            const int64_t head_dim        = hparams.ssm_d_state;
+            const int64_t head_dim        = hparams.ssm_d_state != 0 ? hparams.ssm_d_state : (int64_t) hparams.n_embd_head_kda;
             const int64_t blck_size_perf  = std::lcm(blck_size, 128);
             const int64_t granularity_qkv = std::lcm(blck_size_perf, head_dim);
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
