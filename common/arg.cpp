@@ -3643,7 +3643,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.slot_save_path += DIRECTORY_SEPARATOR;
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SLOT_SAVE_PATH"));
     add_opt(common_arg(
         {"--media-path"}, "PATH",
         "directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)",
