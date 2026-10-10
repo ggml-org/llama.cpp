@@ -68,8 +68,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-kvo, --kv-offload, -nkvo, --no-kv-offload` | whether to enable KV cache offloading (default: enabled)<br/>(env: LLAMA_ARG_KV_OFFLOAD) |
 | `--repack, -nr, --no-repack` | whether to enable weight repacking (default: enabled)<br/>(env: LLAMA_ARG_REPACK) |
 | `--no-host` | bypass host buffer allowing extra buffers to be used<br/>(env: LLAMA_ARG_NO_HOST) |
-| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
-| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
+| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1, turbo2, turbo3, turbo4<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
+| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1, turbo2, turbo3, turbo4<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
 | `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
@@ -114,8 +114,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:<br/> - 0: generic output<br/> - 1: error<br/> - 2: warning<br/> - 3: info<br/> - 4: trace (more info)<br/> - 5: debug<br/>(default: 3)<br/><br/>(env: LLAMA_ARG_LOG_VERBOSITY) |
 | `--log-prefix, --no-log-prefix` | Enable prefix in log messages<br/>(env: LLAMA_ARG_LOG_PREFIX) |
 | `--log-timestamps, --no-log-timestamps` | Enable timestamps in log messages<br/>(env: LLAMA_ARG_LOG_TIMESTAMPS) |
-| `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K) |
-| `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V) |
+| `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1, turbo2, turbo3, turbo4<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K) |
+| `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1, turbo2, turbo3, turbo4<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V) |
 
 
 ### Sampling params
@@ -1342,6 +1342,30 @@ Returns information about the loaded model. See [OpenAI Models API documentation
 
 The returned list always has one single element. The `meta` field can be `null` (for example, while the model is still loading).
 
+Each object in `data` has an `architecture` object. It has two string arrays:
+
+- `input_modalities` lists what the model can read. It always has `text`, plus each media type that the model supports.
+- `output_modalities` lists what the model can produce.
+
+One output value is special:
+
+| Value | Meaning |
+|---|---|
+| `decisions` | The model is a native decision model. Serve it with [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api). |
+
+A language model that classifies with prompts does not get `decisions`. Only native decision models do.
+
+Check for membership. Tolerate values that you do not know:
+
+```js
+const useSystemOne =
+    model.architecture?.output_modalities?.includes("decisions") === true;
+```
+
+Without decision metadata, `output_modalities` is `["text"]`. This default is for compatibility only. It does not mean that the model can generate text. Values can change. New combinations such as `["text", "decisions"]` use the same shape.
+
+The router returns the same `architecture` object in [`GET /models`](#get-models-list-available-models). You can find a native decision model without a probe or a model load. This works for unloaded and sleeping models too. Older servers can omit `architecture`. If it is absent, use the legacy behavior of your client.
+
 By default, model `id` field is the path to model file, specified via `-m`. You can set a custom value for model `id` field via `--alias` argument. For example, `--alias gpt-4o-mini`.
 
 Example:
@@ -1353,6 +1377,10 @@ Example:
         {
             "id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             "object": "model",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            },
             "created": 1735142223,
             "owned_by": "llamacpp",
             "meta": {
@@ -1603,6 +1631,13 @@ This endpoint requires that the model uses a pooling different than type `none`.
 
 See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
 
+For multimodal models (loaded with `--mmproj`), each element of `input` can also be an object with a `content` array, using the same parts as `/v1/chat/completions`:
+- `{ "type": "text", "text": "..." }`: text is added to the prompt as-is
+- `{ "type": "image_url", "image_url": { "url": "..." } }`: remote URL, base64 data URI, or local file (`file://`, requires `--media-path`)
+- `{ "type": "input_audio", "input_audio": { "data": "..." } }` and `{ "type": "input_video", "input_video": { "url": "..." } }`: same as `/v1/chat/completions`, requires a model with audio or video support
+
+Each object gives one embedding. This input shape is not part of the OpenAI Embeddings API; it follows the shape used by providers like OpenRouter for vision embedding models.
+
 *Examples:*
 
 - input as string
@@ -1627,6 +1662,26 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
   -d '{
           "input": ["hello", "world"],
           "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
+
+- `input` as multimodal content
+
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": [
+              { "content": [
+                  { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..." } },
+                  { "type": "text", "text": "Describe this image" }
+              ] },
+              { "content": [
+                  { "type": "text", "text": "hello" }
+              ] }
+          ],
           "encoding_format": "float"
   }'
   ```
@@ -1731,6 +1786,142 @@ curl http://localhost:8080/v1/messages/count_tokens \
 ```json
 {"input_tokens": 10}
 ```
+
+## TypeSafe-compatible API Endpoints
+
+### POST `/v1/systemone`: TypeSafe-compatible System One API
+
+Answers typed questions about a `state` with a decision model.
+
+Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not supported. Multimodal input is an extension to this API, see the [OpenJev multimodal API](https://jev-skills.github.io/openjev-multimodal/api) for reference.
+
+*Options:*
+
+`state`: The content to evaluate. Can be a string, an object or an array. A value that is not a string is given to the model as JSON text.
+
+`images`: Optional. An array of images, the maximum number may be limited depending on the model. Each one is a data URL (`data:image/...;base64,...`). See the image input section below.
+
+`questions`: An object that maps a question id to a question. Each question has these fields:
+
+- `type`: One of `choice`, `score`, `noul`.
+- `instructions`: The question. Can be a string, an object or an array.
+- `criteria`: The possible answers, the shape depends on `type`:
+  - `choice`: An object that maps each option to its description. The description can be `null`.
+  - `score`: An array of 2 to 10 level descriptions, lowest level first.
+  - `noul`: Optional. An object with the descriptions of `true` and `false`.
+
+The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
+
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for laya and clef. For laya, long questions and options are truncated to the token budget the model was trained with.
+
+For laya and clef, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. A server that runs clef only serves this endpoint, text generation is not available.
+
+*Image input:*
+
+Image input needs a model that supports it (for example: openjev, clef) and its multimodal projector, see `--mmproj`.
+
+Images can be given in two ways, and both can be used in the same request:
+
+- The `images` field.
+- A `state` made of chat messages, either an array of messages or an object with a `messages` array. An `image_url` part in the `content` of a message is taken as an image, in the same format as chat completions. Only data URLs are accepted.
+
+All the images are placed before the state in the prompt, the ones from `images` first. The image parts are removed from the state.
+
+*Response:*
+
+`answers`: An object that maps each question id to its answer. The fields depend on the question type:
+
+- `choice`:
+  - `choice`: The option with the highest probability.
+  - `probabilities`: The probability of each option, they sum to 1.
+  - `confidence`: A value from 0 to 1, where 0 means all options are equally likely.
+- `score`:
+  - `score`: The expected level index, weighted by probability. It can be between two levels.
+  - `legend`: The description of each level index.
+  - `probabilities`: The probability of each level index, they sum to 1.
+  - `confidence`: A value from 0 to 1.
+- `noul`:
+  - `noul`: The probability that the answer is true.
+
+`usage`: `input_tokens` is the number of prompt tokens of all questions. `output_tokens` is always 0.
+
+The probabilities are scaled with the temperatures stored in the model file. They are not guaranteed to be calibrated for your data.
+
+*Examples:*
+
+```shell
+curl http://127.0.0.1:8080/v1/systemone \
+    -H "Content-Type: application/json" \
+    -d '{
+        "state": "Customer message: I was charged twice for my order last week and nobody has replied.",
+        "questions": {
+            "route": {
+                "type": "choice",
+                "instructions": "Which team should handle this?",
+                "criteria": {"billing": null, "shipping": null, "technical": null}
+            },
+            "angry": {
+                "type": "noul",
+                "instructions": "Is the customer angry?"
+            },
+            "urgency": {
+                "type": "score",
+                "instructions": "How urgent is this?",
+                "criteria": ["can wait", "this week", "today", "right now"]
+            }
+        }
+    }' | jq
+```
+
+Response (values are shortened):
+
+```json
+{
+  "model": "openjev",
+  "answers": {
+    "route": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {"billing": 0.9998, "shipping": 0.0001, "technical": 0.0001},
+      "confidence": 0.9997
+    },
+    "angry": {
+      "type": "noul",
+      "noul": 0.6328
+    },
+    "urgency": {
+      "type": "score",
+      "score": 2.0858,
+      "legend": {"0": "can wait", "1": "this week", "2": "today", "3": "right now"},
+      "probabilities": {"0": 0.0023, "1": 0.116, "2": 0.6753, "3": 0.2064},
+      "confidence": 0.673
+    }
+  },
+  "usage": {
+    "input_tokens": 239,
+    "output_tokens": 0
+  }
+}
+```
+
+Example with an image:
+
+```shell
+curl http://127.0.0.1:8080/v1/systemone \
+    -H "Content-Type: application/json" \
+    -d '{
+        "state": "The document was received by the accounting team this morning.",
+        "images": ["data:image/jpeg;base64,/9j/4AAQSkZJRg..."],
+        "questions": {
+            "has_table": {
+                "type": "noul",
+                "instructions": "Does the image contain a table?"
+            }
+        }
+    }' | jq
+```
+
+An invalid request returns the error `400`. A model that is not a decision model returns the error `501`. A request with images returns the error `501` if the model does not support image input, or if no multimodal projector is loaded.
 
 ## Server tools
 
@@ -1920,6 +2111,37 @@ Note:
     - If a model is running but updated or removed from the source, it will be unloaded
     - If a model is not running, it will be added or updated according to the source
 2. When the model is loaded, the info from `/v1/models` is forwarded to router's `/v1/models`. This includes metadata about the model and the runtime instance.
+
+Each object in `data` has the same `architecture` object as [`GET /v1/models`](#get-v1models-openai-compatible-model-info-api) of a direct server. The server computes both arrays offline. It does not load the model, download files, or run inference. `output_modalities` comes from the GGUF metadata. `input_modalities` comes from the projector file. A native decision model shows `decisions` before its first load, after unload, and while it sleeps:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "my-decision-model",
+      "object": "model",
+      "tags": ["local"],
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["decisions"]
+      },
+      "status": {
+        "value": "unloaded"
+      }
+    }
+  ]
+}
+```
+
+The values work like this:
+
+- A loaded model reports both arrays. Its values replace the cached values in full.
+- The cache keeps the values across sleep and unload. A known decision model stays advertised.
+- Before the first report, the values come from the offline computation.
+- Offline computation cannot see video. Only a loaded model reports `video` in `input_modalities`.
+- If the metadata or the model file is not available, both arrays are `["text"]`.
+- A source or preset refresh computes both arrays again. A replaced model does not keep old values.
 
 The `status` object can be:
 

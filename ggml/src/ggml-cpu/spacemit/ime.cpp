@@ -321,6 +321,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                           std::is_same_v<BLOC_TYPE, block_q4_K>) {
                 gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i4;
                 set_kernel_impl = true;
+            } else if constexpr (std::is_same_v<BLOC_TYPE, block_q8_0>) {
+                gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i8;
+                set_kernel_impl = true;
             }
         }
 #endif
@@ -623,6 +626,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             if constexpr (std::is_same_v<BLOC_TYPE, block_q4_0> || std::is_same_v<BLOC_TYPE, block_q4_1> ||
                           std::is_same_v<BLOC_TYPE, block_q4_K>) {
                 gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i4;
+                set_kernel_impl = true;
+            } else if constexpr (std::is_same_v<BLOC_TYPE, block_q8_0>) {
+                gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i8;
                 set_kernel_impl = true;
             }
         }
@@ -1242,6 +1248,7 @@ class tensor_traits_common : public tensor_traits_base {
 static const tensor_traits<block_q4_0, 32, 16>  q4_0_16x32_q8_0;
 static const tensor_traits<block_q4_1, 32, 16>  q4_1_16x32_q8_0;
 static const tensor_traits<block_q4_K, 32, 16>  q4_k_16x32_q8_0;
+static const tensor_traits<block_q8_0, 32, 16>  q8_0_16x32_q8_0;
 // Impl By IME2
 static const tensor_traits<block_q2_K, 256, 32> q2_k_32x256_q8_0;
 static const tensor_traits<block_q3_K, 256, 32> q3_k_32x256_q8_0;
@@ -1351,6 +1358,12 @@ static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack
 #if defined(RISCV64_SPACEMIT_IME2)
                 if ((ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
                     return &ggml::cpu::riscv64_spacemit::q8_0_32x32_q8_0;
+                }
+#endif
+
+#if defined(RISCV64_SPACEMIT_IME1)
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                    return &ggml::cpu::riscv64_spacemit::q8_0_16x32_q8_0;
                 }
 #endif
             }
@@ -1655,12 +1668,14 @@ ggml_backend_buffer_type_t ggml_backend_cpu_riscv64_spacemit_buffer_type(void) {
     static ggml_backend_buffer_type ggml_backend_cpu_buffer_type_riscv64_spacemit = {
   /* .iface    = */
         {
-         /* .get_name         = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_get_name,
-         /* .alloc_buffer     = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_alloc_buffer,
-         /* .get_alignment    = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_get_alignment,
-         /* .get_max_size     = */ nullptr,
-         /* .get_alloc_size   = */ ggml_backend_cpu_riscv64_spacemit_nbytes,
-         /* .is_host          = */ nullptr,
+         /* .get_name           = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_get_name,
+         /* .alloc_buffer       = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_alloc_buffer,
+         /* .alloc_buffer_n     = */ NULL,
+         /* .get_alignment      = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_get_alignment,
+         /* .get_max_size       = */ nullptr,
+         /* .get_alloc_size     = */ ggml_backend_cpu_riscv64_spacemit_nbytes,
+         /* .get_alloc_size_n   = */ NULL,
+         /* .is_host            = */ nullptr,
          },
  /* .device  = */
         ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),

@@ -1,0 +1,32 @@
+diff --git a/ggml/src/ggml-sycl/fused-gemm.cpp b/ggml/src/ggml-sycl/fused-gemm.cpp
+index 2a5e24f9c..fd27bf0db 100644
+--- a/ggml/src/ggml-sycl/fused-gemm.cpp
++++ b/ggml/src/ggml-sycl/fused-gemm.cpp
+@@ -492,6 +492,22 @@ bool ggml_sycl_fused_dequant_gemm_f16_device_ok(dpct::queue_ptr stream) {
+     return ok;
+ }
+ 
++#ifdef GGML_SYCL_NO_XMX_GATHER
++// Built without the XMX gather kernels: their 8x16x16 sub-group-16 joint_matrix
++// shape has no lowering on DG2 (acm-g10), where ahead-of-time compilation crashes
++// IGC. The runtime gate (matrix_combinations) already rejects DG2, so these stubs
++// only drop code that could never run there.
++bool ggml_sycl_fused_dequant_gemm_f16(ggml_type, const void *, const sycl::half *, float *, int64_t, int64_t, int64_t,
++                                      int64_t, ggml_sycl_pool &, dpct::queue_ptr) {
++    return false;
++}
++
++bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type, const void *, size_t, const float *, float *, const int64_t *,
++                                        int64_t, int64_t, int64_t, int64_t, std::vector<ggml_sycl_gg_tile> &,
++                                        ggml_sycl_pool &, dpct::queue_ptr) {
++    return false;
++}
++#else
+ bool ggml_sycl_fused_dequant_gemm_f16(ggml_type src0_type, const void * src0, const sycl::half * src1_f16, float * dst,
+                                       int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool,
+                                       dpct::queue_ptr stream) {
+@@ -639,3 +655,4 @@ bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_b
+     }
+     return true;
+ }
++#endif // GGML_SYCL_NO_XMX_GATHER

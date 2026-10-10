@@ -41,6 +41,9 @@ int llama_cli(int argc, char ** argv) {
         return 1;
     }
 
+    llama_backend_init();
+    llama_numa_init(params.numa);
+
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
     sigint_action.sa_handler = signal_handler;

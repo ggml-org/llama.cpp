@@ -1,0 +1,38 @@
+N-xe-r2 hang, 2026-09-29 (xe KMD, 7.3.0-rc1-273-tkg-bore, NEO 26.35.39758, b12305 4e7400c3a)
+
+Round 2 started 12:07:05. Three rows completed by 12:08-12:09:
+  pp512 202.86 +/- 9.81 | tg64 13.38 +/- 0.17 | pp512 @ d8192 170.24 +/- 3.03
+Fourth test (tg64 @ d8192) never completed; killed 12:31:25 (SIGTERM, exited in 2 s).
+Round 1 (12:00:59-12:04:05) had completed the same test at 12.50 +/- 0.13.
+
+State while hung (sampled ~12:30):
+- llama-bench PID 249340: 1350 s elapsed, main thread 99.9 % CPU in userspace (R, no kernel stack);
+  12 worker threads sleeping in futex_wait.
+- GPU: act_freq 2400. fdinfo over 5 s: drm-cycles-ccs +96,088,348 of drm-total-cycles +96,095,483
+  (ccs context scheduled ~100 % of the time); drm-cycles-bcs +0.
+- Kernel log: no xe messages at all during the run (no reset, no timeout, no CAT). ccs preempt 7.5 s,
+  job timeout 10 s (NEO uses LR-mode VMs, so job timeout does not apply to its queues).
+- Main-thread backtrace (eu-stack, two samples 2 s apart, identical):
+    #0  __sched_yield
+    #1-5 (libur_adapter_level_zero, no symbols)
+    #6  enqueueMemCopyHelper(ur_command_t, ur_queue_handle_t_*, void*, unsigned char, unsigned long, void const*, unsigned int, ur_event_handle_t_* const*, ur_event_handle_t_**, bool)
+    #7  ur::level_zero::urEnqueueUSMMemcpy
+    #8  urEnqueueUSMMemcpy
+    #9  sycl::_V1::detail::MemoryManager::copy_usm
+    #10 sycl::_V1::detail::queue_impl::memcpy
+    #11 sycl::_V1::queue::memcpy
+    #12 (libggml-sycl, no symbol)
+    #13 ggml_backend_sched_graph_compute_async
+    #14 llama_context::graph_compute
+    #15 llama_context::process_ubatch
+    #16 llama_context::decode
+    #17 llama_decode
+    #19 llama_bench(int, char**)
+- After SIGTERM: process gone in 2 s, still no kernel messages, GPU act_freq 0, service restarted and healthy.
+
+Reading: host yield-loop inside the L0 adapter's memcpy enqueue waiting for a prior command;
+ccs context "busy" but nothing being reset on teardown is consistent with an in-ring semaphore wait
+(MI_SEMAPHORE_WAIT counts as context running time) on an event that never got signalled, with the
+blitter idle. Cross-engine (ccs <-> bcs) dependency ordering is the first suspect; lever runs
+(UR_L0_USE_COPY_ENGINE=0, GGML_SYCL_ENABLE_HOST_PINNED_MEM=0, GGML_SYCL_ENABLE_GRAPH=0) follow.
+Not proven: no L0 debug trace was taken before the kill.

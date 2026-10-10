@@ -19,9 +19,9 @@ accepted implementation is unconditional in the F16 VEC branch; there is no
 runtime knob to maintain after the A770 gates pass.
 
 P03 must first publish
-`docs/research/kmic68-a770-fa-memory-floor.md` with P11 eligibility marked
-reachable. If that report rejects the opportunity, P11 stops before kernel
-editing.
+`docs/research/kmic68-a770-fa-memory-floor.md` with valid paired proxy
+measurements. Missing or invalid measurement evidence stops P11 before kernel
+editing; the proxy timing gap cannot establish that P11 is unreachable.
 
 Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 `p100-docs/FINDINGS.md`, "Bound fp16 accumulation error".
@@ -40,7 +40,8 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 
 1. Read the completed P03 report before editing. Continue only when schema version,
    build/driver keys, paired VEC manifests, and `p11_eligible=true` all match
-   the baseline used here.
+   the baseline used here. This is P03's measurement-readiness predicate,
+   without a proxy-gap threshold.
 2. Keep `sycl::half2 VKQ[ncols][...]` as persistent cross-tile output. Create
    zeroed private `sycl::float2 VKQ_tile[ncols][...]` inside each
    `k_VKQ_0` iteration; add no local/shared-memory array.

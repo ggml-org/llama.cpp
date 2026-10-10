@@ -641,6 +641,37 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def tinylaya() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        local_model = os.environ.get("TINYLAYA_LOCAL_MODEL")
+        server.model_hf_file = None
+        if local_model:
+            server.model_file = local_model
+            server.model_hf_repo = None
+        else:
+            server.model_hf_repo = "ggml-org/tinylaya-for-testing-gguf"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_ubatch = 512
+        server.n_slots = 2
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinyopenjev() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinyopenjev-for-testing-gguf:Q8_0"
+        server.n_ctx = 4096
+        server.n_batch = 512
+        server.n_slots = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
     def tinygemma3() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()

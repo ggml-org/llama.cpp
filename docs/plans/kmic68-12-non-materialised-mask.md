@@ -34,7 +34,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - **R12.4 (State-driven):** WHILE a batch is multi-sequence, multi-stream, non-contiguous, query-position-unordered, cache-position-disordered or wrapped, cross-attention, or sliding-window attention, the mask builder shall allocate and populate the existing full mask tensor.
 - **R12.5 (Event-driven):** WHEN graph reservation uses the prefix-length representation, `llama_context::graph_reserve` shall size the compute buffer from the compact input shape.
 - **R12.6 (State-driven):** WHILE causal prefix masks are disabled, flash attention is disabled, or the selected backend/kernel lacks prefix support, the graph builder shall use the existing materialized mask.
-- **R12.7 (Event-driven):** WHEN a context transitions between prefix and materialized eligibility, the context shall complete representation-specific re-reservation before binding graph inputs.
+- **R12.7 (Event-driven):** WHEN a context transitions between prefix and materialized eligibility, the context shall complete representation-specific re-reservation before applying the microbatch memory context or binding graph inputs.
 - **R12.8 (Event-driven):** WHEN the cached-attention input prepares an eligible query, `llama_kv_cache` shall set its prefix length to the exact number of leading cache cells visible to that query.
 - **R12.9 (State-driven):** WHILE ALiBi, M-RoPE ordering, cache holes, non-monotonic cached-cell positions in exact K/V order, cache wraparound, or non-leading sequence membership changes additive mask values, the cached-attention graph input shall use the existing materialized mask.
 - **R12.10 (Unwanted behaviour):** IF the causal-prefix-mask option receives an invalid boolean value, THEN the common argument parser shall fail with the option name and rejected value.
@@ -48,7 +48,11 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 1. Add `causal_prefix_mask=false` to common/context parameters with positive/
    negative CLI aliases and `LLAMA_ARG_CAUSAL_PREFIX_MASK`; propagate through
    target and P08-capped draft contexts without changing the default.
-2. Add an eligibility query to `llama_kv_cache_context`. Prove one sequence/
+2. Add a read-only prospective-layout query to `llama_kv_cache_context`, using
+   `sinfos[i_cur]` and `ubatches[i_cur]` over the current cache metadata without
+   calling `apply()` or `apply_ubatch()`. It must expose post-apply row order,
+   membership, positions, and `n_kv` for eligibility and reservation descriptors;
+   it must not mutate live cells or advance the context cursor. Prove one sequence/
    stream, contiguous hole-free leading cache membership, and that selected K/V
    tensor row order is position-ordered with no wrap or disorder and forms the
    exact leading visible prefix for every query. Also require position-ordered
@@ -72,25 +76,32 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    backend source heuristics, CPU/SYCL support+dispatch, and OpenVINO/other
    backend mask classification. Invalid tag/type/shape combinations are rejected;
    an I32 src3 can never be classified as an additive mask by fallback code.
-6. Before building a compact graph, create a shape-correct prototype and run a
-   positive route preflight on the intended backend. CPU must select its prefix
+6. At entry to `llama_context::process_ubatch`, before `mctx->apply()`, use the
+   prospective layout to select the representation and complete any required
+   reservation. Create a shape-correct prototype and run a positive route
+   preflight on the intended backend. CPU must select its prefix
    implementation. SYCL must call the same best-kernel selector as dispatch and
    return VEC or TILE; XMX, sparse, MKL, oneDNN, OpenVINO, or another backend
    returns ineligible. Do not rely on scheduler migration or a later
    `supports_op` failure; construct the full mask instead.
-7. In `llm_graph_context::build_attn`, select the prefix operator only after
-   preflight. CPU FA and SYCL VEC/TILE load one visible count per query and use
+7. Pass the preselected representation, shape, and route through graph params;
+   `llm_graph_context::build_attn` consumes that frozen decision, including full
+   fallback, rather than discovering eligibility after cache mutation. CPU FA
+   and SYCL VEC/TILE load one visible count per query and use
    exact zero/negative-infinity values. No temporary mask is materialized.
 8. Make graph parameters and reuse include representation enum, source shape,
    backend, and selected route. A mismatch rejects reuse before input binding.
 9. Implement one-active-reservation protocol for target and draft contexts. Keep
    byte estimates per `(representation,effective_n_ubatch,route)`, but only one
    scheduler buffer live. Before the first live graph or any representation
-   transition: synchronize; discard/reset the old scheduler buffers; build the
-   actual new-representation reservation graph; call reserve; verify returned
-   bytes; then set active representation and bind inputs. Failure aborts before
-   cache mutation. Returning to prefix re-reserves compactly rather than keeping
-   a full-size high-water buffer.
+   transition, and before `mctx->apply()`: synchronize; invalidate graph reuse;
+   discard/reset the old scheduler buffers; build the new-representation
+   reservation graph from prospective descriptors; call reserve; verify returned
+   bytes; then set active representation. Only after success may the microbatch
+   call `mctx->apply()`, build/reuse its graph, and bind inputs. Failure leaves
+   the incoming microbatch unapplied and the reservation invalid; released old
+   buffers cannot be reused, so a retry must reserve again. Returning to prefix
+   re-reserves compactly rather than keeping a full-size high-water buffer.
 10. Use the P08 effective draft width in reservation keys. Test initial prefix,
    prefix-to-full-to-prefix, inherited and cap-64 draft widths, allocation
    failure, and route changes. Record raw reserved/actual bytes for each step.
@@ -102,18 +113,19 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 
 - `common/common.h` and `common/arg.cpp` - opt-in parameter, CLI, and environment parsing.
 - `src/llama-kv-cache.h:98-141` - `slot_info` and `is_contiguous`.
+- `src/llama-kv-cache.cpp:1291-1357,3469-3489` - preparation restores temporary placements; the new prospective query must precede the live `apply_ubatch` in `apply()`.
 - `src/llama-kv-cache.cpp:2168-2317` - cached causal mask construction.
 - `src/llama-kv-cache.cpp:2358-2395` - cached mask input population.
 - `src/llama-graph.cpp:30-65,477-508,2751-2775,2985-3020` - representation-aware inputs, reuse, operator construction, and ordinary cached MHA.
 - `src/llama-graph.cpp:1065-1099,3117,3501-3628,3823-3832` - mandatory materialized-mask call sites.
-- `src/llama-context.cpp:1840-1896,3123-3182` - pre-bind reuse decision and representation-specific reserve protocol.
+- `src/llama-context.cpp:1840-1896,3123-3182` - move representation selection/reservation before `mctx->apply()`; later graph construction consumes that decision.
 - `ggml/src/ggml.c:5592-5665` - fixed FA source slots and representation op params.
 - `ggml/src/ggml-backend-meta.cpp:1016` and `ggml/src/ggml-backend.cpp:1186-1195` - split metadata and backend placement.
 - `ggml/src/ggml-cpu` - CPU prefix FA implementation/support.
 - `ggml/src/ggml-sycl/fattn.cpp:871-1017` and `ggml/src/ggml-sycl/ggml-sycl.cpp:7017-8123` - route selection, support, and dispatch preflight.
 - `ggml/src/ggml-sycl/fattn-vec.hpp:155,407-409` and `ggml/src/ggml-sycl/fattn-tile.hpp` - supported consumers.
 - `tests/test-backend-ops.cpp`, `tests/test-sycl-turbo-correctness.cpp`, and `tests/test-qwen4exp-mtp.cpp` - operator, route, transition, and token tests.
-- `docs/research/qwen4exp-mtp-correctness-2026-10-04.md:412-418` - PR #90 note updated only after proof.
+- `docs/research/speculative/qwen4exp-mtp-correctness-2026-10-04.md:410-418` - PR #90 note updated only after proof.
 - `scripts/perf/verify-causal-prefix-mask.py` - planned deep/fallback/reservation comparison.
 
 ## Verification
@@ -145,9 +157,14 @@ Expected evidence:
 - strict byte comparison covers prefix smaller/equal/larger boundaries;
 - seeded target tokens are identical at depths 4096 and 16384;
 - prefix graphs allocate no additive mask and reserve fewer raw bytes;
-- prefix-to-full-to-prefix tests re-reserve before binding, release the prior
-  active buffer, use correct bytes at inherited/cap-64 widths, and abort safely
-  on injected reserve failure before cache mutation;
+- initial prefix and prefix-to-full-to-prefix tests re-reserve before
+  `mctx->apply()` and binding, release the prior active buffer, and use correct
+  bytes at inherited/cap-64 widths;
+- injected reservation failures on initial allocation and both transition
+  directions leave cell occupancy, positions, sequence membership, cache heads,
+  and the microbatch cursor identical to their pre-`process_ubatch` snapshots;
+  instrumentation records no `mctx->apply()` or input binding, no stale graph
+  reuse, and a fresh reservation on retry;
 - every named FA fallback passes its existing F16 additive mask in src3 with tag
   MATERIALIZED and no compact tensor; the non-FA fallback remains outside the FA
   operator and retains its existing F32 mask;

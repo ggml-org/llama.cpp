@@ -62,7 +62,7 @@ DEFAULT_MODELS = [
 ]
 
 FA_ROUTE_RE = re.compile(
-    r"GGML_SYCL_FA_ROUTE: route=(?P<route>VEC|TILE|XMX|Q8_GQA) "
+    r"GGML_SYCL_FA_ROUTE: route=(?P<route>VEC|TILE|XMX|Q8_GQA|MKL|ONEDNN) "
     r"phase=(?P<phase>decode|prefill) q_tokens=(?P<q_tokens>\d+) "
     r"head_dim=(?P<head_dim>\d+) gqa=(?P<gqa>\d+) "
     r"type_k=(?P<type_k>\S+) type_v=(?P<type_v>\S+) "
@@ -173,6 +173,22 @@ def _cmake_cache_values(cache_path: Path) -> dict[str, str]:
     return values
 
 
+def _runtime_package_versions() -> dict[str, Any]:
+    captured = _capture_command(["pacman", "-Q"])
+    wanted = {
+        name + suffix
+        for name in ("intel-compute-runtime", "intel-graphics-compiler", "level-zero-loader")
+        for suffix in ("", "-git")
+    }
+    return {
+        **captured,
+        "stdout": "".join(
+            line for line in captured["stdout"].splitlines(keepends=True)
+            if line.split() and line.split()[0] in wanted
+        ),
+    }
+
+
 def collect_product_provenance(
     bin_dir: Path,
     candidate_bin_dir: Path,
@@ -211,15 +227,7 @@ def collect_product_provenance(
         ),
         "sycl_ls": _capture_command(["sycl-ls"], baseline_effective),
         "kernel": _capture_command(["uname", "-a"]),
-        "compute_runtime": _capture_command(
-            [
-                "pacman",
-                "-Q",
-                "intel-compute-runtime",
-                "intel-graphics-compiler",
-                "level-zero-loader",
-            ]
-        ),
+        "compute_runtime": _runtime_package_versions(),
         "baseline_effective_env": _provenance_env(baseline_effective, baseline_env),
         "candidate_effective_env": _provenance_env(candidate_effective, candidate_env or {}),
     }

@@ -257,7 +257,7 @@ bool cli_context::list_and_ask_models() {
         ui::user_turn user_turn;
         selection = user_turn.read_input(false, "Select model by number: ");
         if (selection.empty()) {
-            continue;
+            return false;
         }
         try {
             size_t idx = std::stoul(selection);
@@ -504,8 +504,13 @@ int cli_context::run() {
             break;
         }
 
+        // a submitted line always ends with a newline, an empty read is EOF
+        if (buffer.empty()) {
+            break;
+        }
+
         // remove trailing newline
-        if (!buffer.empty() && buffer.back() == '\n') {
+        if (buffer.back() == '\n') {
             buffer.pop_back();
         }
 

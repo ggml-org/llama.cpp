@@ -53,6 +53,40 @@ def bench_result(
 
 
 class ProductCampaignTests(unittest.TestCase):
+    def test_parses_library_fa_routes(self) -> None:
+        # fattn.cpp emits both library routes; dropping them hides prefill dispatch.
+        for route in ("MKL", "ONEDNN"):
+            with self.subTest(route=route):
+                logs = (
+                    f"GGML_SYCL_FA_ROUTE: route={route} phase=prefill q_tokens=512 "
+                    "head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 "
+                    "k_quants_first=0 v_quants_first=0\n"
+                )
+                records = HARNESS._parse_fa_route_records(logs)
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["route"], route)
+                self.assertEqual(records[0]["phase"], "prefill")
+
+    def test_runtime_packages_include_git_variants_without_unrelated_packages(self) -> None:
+        captured = {
+            "argv": ["pacman", "-Q"], "returncode": 0, "stderr": "",
+            "stdout": (
+                "intel-compute-runtime-git 22.43.test\n"
+                "intel-graphics-compiler 1:2.41.10-1\n"
+                "level-zero-loader-git 1.34.0.test\n"
+                "unrelated-package 1.0\n"
+            ),
+        }
+        with mock.patch.object(HARNESS, "_capture_command", return_value=captured):
+            result = HARNESS._runtime_package_versions()
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(result["stdout"], captured["stdout"].replace("unrelated-package 1.0\n", ""))
+
+    def test_runtime_packages_preserve_query_errors(self) -> None:
+        captured = {"argv": ["pacman", "-Q"], "returncode": -1, "stdout": "", "stderr": "pacman unavailable"}
+        with mock.patch.object(HARNESS, "_capture_command", return_value=captured):
+            self.assertEqual(HARNESS._runtime_package_versions(), captured)
+
     def test_selects_pp512_and_tg128_rows(self) -> None:
         rows = [
             {"n_prompt": 64, "n_gen": 0, "avg_ts": 999.0},

@@ -1,8 +1,12 @@
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "gguf.h"
 
 #include "build-info.h"
 #include "common.h"
+
+#include "../src/llama-ext.h"
+
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
@@ -63,7 +67,7 @@
 extern char ** environ;
 #endif
 
-#if defined(__linux__)
+#if !defined(_WIN32)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
@@ -975,11 +979,27 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
     return std::string(value.begin(), value.end());
 }
 
-// returns true if successful, false otherwise
-bool fs_create_directory_with_parents(const std::string & path) {
+void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
     std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::u8path(path), ec);
-    return !ec;
+    std::filesystem::path path_tmp = path;
+    path_tmp += ".tmp";
+
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+    }
+
+    std::ofstream file(path_tmp, std::ios::binary);
+    file << data;
+    file.close();
+
+    if (!file.fail()) {
+        std::filesystem::rename(path_tmp, path, ec);
+    }
+
+    if (file.fail() || ec) {
+        std::filesystem::remove(path_tmp, ec);
+        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
+    }
 }
 
 bool fs_is_directory(const std::string & path) {
@@ -1004,171 +1024,90 @@ void common_set_env(const std::string & name, const std::string & value) {
 #endif
 }
 
-std::string fs_get_cache_directory() {
-    std::string cache_directory = "";
-    auto ensure_trailing_slash = [](std::string p) {
-        // Make sure to add trailing slash
-        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
-            p += DIRECTORY_SEPARATOR;
-        }
-        return p;
-    };
-    cache_directory = common_get_env("LLAMA_CACHE");
-    if (cache_directory.empty()) {
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
-        defined(__OpenBSD__) || defined(__NetBSD__)
-        const std::string xdg_cache_home = common_get_env("XDG_CACHE_HOME");
-        const std::string home           = common_get_env("HOME");
-        if (!xdg_cache_home.empty()) {
-            cache_directory = xdg_cache_home;
-        } else if (!home.empty()) {
-            cache_directory = home + "/.cache/";
-        } else {
-#if defined(__linux__)
-            /* no $HOME is defined, fallback to getpwuid */
-            struct passwd *pw = getpwuid(getuid());
-            if ((!pw) || (!pw->pw_dir)) {
-                throw std::runtime_error("Failed to find $HOME directory");
-            }
-
-            cache_directory = std::string(pw->pw_dir) + std::string("/.cache/");
-#else /* defined(__linux__) */
-            throw std::runtime_error("Failed to find $HOME directory");
-#endif /* defined(__linux__) */
-        }
-#elif defined(__APPLE__)
-        cache_directory = common_get_env("HOME");
-        if (cache_directory.empty()) {
-            throw std::runtime_error("Failed to find $HOME directory");
-        }
-        cache_directory += "/Library/Caches/";
-#elif defined(_WIN32)
-        cache_directory = common_get_env("LOCALAPPDATA");
-        if (cache_directory.empty()) {
-            throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
-        }
-#elif defined(__EMSCRIPTEN__)
-        GGML_ABORT("not implemented on this platform");
+std::filesystem::path common_get_path_from_env(const std::string & name) {
+#if defined(_WIN32)
+    const std::wstring wname = utf8_to_wstring(name);
+    const wchar_t * wvalue = _wgetenv(wname.c_str());
+    return wvalue ? std::filesystem::path(wvalue) : std::filesystem::path();
 #else
-#  error Unknown architecture
+    const char * value = std::getenv(name.c_str());
+    return value ? std::filesystem::path(value) : std::filesystem::path();
 #endif
-        cache_directory = ensure_trailing_slash(cache_directory);
-        cache_directory += "llama.cpp";
-    }
-    return ensure_trailing_slash(cache_directory);
 }
 
-std::string fs_get_config_directory() {
-    std::string config_directory = "";
-    auto ensure_trailing_slash = [](std::string p) {
-        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
-            p += DIRECTORY_SEPARATOR;
-        }
-        return p;
-    };
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
-        defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
-    const std::string xdg_config_home = common_get_env("XDG_CONFIG_HOME");
-    const std::string home            = common_get_env("HOME");
-    if (!xdg_config_home.empty()) {
-        config_directory = xdg_config_home;
-    } else if (!home.empty()) {
-        config_directory = home + "/.config/";
-    } else {
-#if defined(__linux__)
-        /* no $HOME is defined, fallback to getpwuid */
-        struct passwd *pw = getpwuid(getuid());
-        if ((!pw) || (!pw->pw_dir)) {
-            throw std::runtime_error("Failed to find $HOME directory");
-        }
-
-        config_directory = std::string(pw->pw_dir) + std::string("/.config/");
-#else
-        throw std::runtime_error("Failed to find $HOME directory");
-#endif
+#if !defined(_WIN32)
+static std::filesystem::path get_home_directory() {
+    std::filesystem::path home = common_get_path_from_env("HOME");
+    if (!home.empty()) {
+        return home;
     }
-#elif defined(_WIN32)
-    config_directory = common_get_env("APPDATA");
+    const struct passwd * pw = getpwuid(getuid());
+    if (!pw || !pw->pw_dir || !*pw->pw_dir) {
+        throw std::runtime_error("Failed to find $HOME directory");
+    }
+    return pw->pw_dir;
+}
+#endif
+
+std::filesystem::path fs_get_cache_directory() {
+    std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
+    if (!cache_directory.empty()) {
+        return cache_directory;
+    }
+#if defined(_WIN32)
+    cache_directory = common_get_path_from_env("LOCALAPPDATA");
+    if (cache_directory.empty()) {
+        throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
+    }
+#elif defined(__APPLE__)
+    cache_directory = get_home_directory() / "Library/Caches";
+#else
+    cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
+    if (cache_directory.empty()) {
+        cache_directory = get_home_directory() / ".cache";
+    }
+#endif
+    return cache_directory / "llama.cpp";
+}
+
+std::filesystem::path fs_get_config_directory() {
+    std::filesystem::path config_directory;
+#if defined(_WIN32)
+    config_directory = common_get_path_from_env("APPDATA");
     if (config_directory.empty()) {
         throw std::runtime_error("Failed to find %APPDATA% directory");
     }
-#elif defined(__EMSCRIPTEN__)
-    // caller decides what to do when there is no config directory
-    throw std::runtime_error("not implemented on this platform");
 #else
-#  error Unknown architecture
+    config_directory = common_get_path_from_env("XDG_CONFIG_HOME");
+    if (config_directory.empty()) {
+        config_directory = get_home_directory() / ".config";
+    }
 #endif
-    config_directory = ensure_trailing_slash(config_directory);
-    config_directory += "llama.cpp";
-    return ensure_trailing_slash(config_directory);
+    return config_directory / "llama.cpp";
 }
 
-std::string fs_get_cache_file(const std::string & filename) {
+std::filesystem::path fs_get_cache_file(const std::string & filename) {
     GGML_ASSERT(filename.find(DIRECTORY_SEPARATOR) == std::string::npos);
-    std::string cache_directory = fs_get_cache_directory();
-    const bool success = fs_create_directory_with_parents(cache_directory);
-    if (!success) {
-        throw std::runtime_error("failed to create cache directory: " + cache_directory);
+    const std::filesystem::path cache_directory = fs_get_cache_directory();
+    std::error_code ec;
+    common_create_directories(cache_directory, ec);
+    if (ec) {
+        throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
     }
-    return cache_directory + filename;
-}
-
-std::vector<common_file_info> fs_list(const std::string & path, bool include_directories) {
-    std::vector<common_file_info> files;
-    if (path.empty()) return files;
-
-    std::filesystem::path dir(path);
-    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-        return files;
-    }
-
-    for (const auto & entry : std::filesystem::directory_iterator(dir)) {
-        try {
-            // Only include regular files (skip directories)
-            const auto & p = entry.path();
-            if (std::filesystem::is_regular_file(p)) {
-                common_file_info info;
-                info.path   = p.string();
-                info.name   = p.filename().string();
-                info.is_dir = false;
-                try {
-                    info.size = static_cast<size_t>(std::filesystem::file_size(p));
-                } catch (const std::filesystem::filesystem_error &) {
-                    info.size = 0;
-                }
-                files.push_back(std::move(info));
-            } else if (include_directories && std::filesystem::is_directory(p)) {
-                common_file_info info;
-                info.path   = p.string();
-                info.name   = p.filename().string();
-                info.size   = 0; // Directories have no size
-                info.is_dir = true;
-                files.push_back(std::move(info));
-            }
-        } catch (const std::filesystem::filesystem_error &) {
-            // skip entries we cannot inspect
-            continue;
-        }
-    }
-
-    return files;
-}
-
-std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode) {
-#ifdef _WIN32
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
-    if (!wlen) { return std::ifstream(); }
-    std::vector<wchar_t> wfname(wlen);
-    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
-    return std::ifstream(wfname.data(), mode);
-#else
-    return std::ifstream(fname, mode);
-#endif
+    return cache_directory / std::filesystem::u8path(filename);
 }
 
 //
 // TTY utils
 //
+
+bool common_is_tty(FILE * file) {
+#if defined(_WIN32)
+    return _isatty(_fileno(file));
+#else
+    return isatty(fileno(file));
+#endif
+}
 
 bool tty_can_use_colors() {
     // Check NO_COLOR environment variable (https://no-color.org/)
@@ -1187,10 +1126,21 @@ bool tty_can_use_colors() {
 
     // Check if stdout and stderr are connected to a terminal
     // We check both because log messages can go to either
-    bool stdout_is_tty = isatty(fileno(stdout));
-    bool stderr_is_tty = isatty(fileno(stderr));
+    return common_is_tty(stdout) || common_is_tty(stderr);
+}
 
-    return stdout_is_tty || stderr_is_tty;
+bool tty_enable_ansi() {
+#if defined(_WIN32)
+    // a Windows console renders ANSI sequences only in virtual terminal mode, pipes and files take them as is
+    for (DWORD id : { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) {
+        HANDLE h    = GetStdHandle(id);
+        DWORD  mode = 0;
+        if (GetConsoleMode(h, &mode) && !SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            return false;
+        }
+    }
+#endif
+    return true;
 }
 
 //
@@ -1274,6 +1224,71 @@ struct common_init_result::impl {
     std::vector<common_sampler_ptr> samplers;
     std::vector<llama_sampler_seq_config> samplers_seq_config;
 };
+
+static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NAMES = {
+    { COMMON_DECISION_TYPE_OPENJEV, "openjev" },
+    { COMMON_DECISION_TYPE_LEV,     "lev"     },
+    { COMMON_DECISION_TYPE_KEV,     "kev"     },
+    { COMMON_DECISION_TYPE_NIMBLE,  "nimble"  },
+    { COMMON_DECISION_TYPE_LAYA,    "laya"    },
+    { COMMON_DECISION_TYPE_CLEF,    "clef"    },
+};
+
+static common_decision_type common_decision_type_from_string(const std::string & str) {
+    for (const auto & pair : COMMON_DECISION_TYPE_NAMES) {
+        if (pair.second == str) {
+            return pair.first;
+        }
+    }
+    return COMMON_DECISION_TYPE_UNKNOWN;
+}
+
+common_decision_type common_get_decision_type(const struct llama_model * model) {
+    char buf[64];
+    if (llama_model_meta_val_str(model, "general.architecture", buf, sizeof(buf)) < 0) {
+        return COMMON_DECISION_TYPE_NONE;
+    }
+    const std::string key = std::string(buf) + ".decision.type";
+    if (llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf)) < 0) {
+        return COMMON_DECISION_TYPE_NONE;
+    }
+    return common_decision_type_from_string(buf);
+}
+
+common_decision_type common_get_decision_type(const std::string & fname) {
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(fname.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // missing or unreadable file
+    }
+
+    std::string arch;
+    const int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+    if (arch_id < 0) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // no architecture in the metadata
+    }
+    if (gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+    }
+    arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    if (arch.empty()) {
+        return COMMON_DECISION_TYPE_UNKNOWN;
+    }
+
+    const std::string key = arch + ".decision.type";
+    const int64_t type_id = gguf_find_key(gguf_ctx.get(), key.c_str());
+    if (type_id < 0) {
+        return COMMON_DECISION_TYPE_NONE;
+    }
+    if (gguf_get_kv_type(gguf_ctx.get(), type_id) != GGUF_TYPE_STRING) {
+        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+    }
+    return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
+}
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
@@ -1365,6 +1380,29 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    // these decision models return a score for each token via the embeddings output
+    // TODO: maybe improve this in the future
+    const auto decision_type = common_get_decision_type(model);
+    if (decision_type == COMMON_DECISION_TYPE_LAYA || decision_type == COMMON_DECISION_TYPE_KEV || decision_type == COMMON_DECISION_TYPE_CLEF) {
+        params.embedding    = true;
+        params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+
+        cparams.embeddings            = true;
+        cparams.pooling_type          = LLAMA_POOLING_TYPE_NONE;
+        cparams.n_outputs_max         = cparams.n_batch;
+        cparams.n_outputs_max_per_seq = 1;
+
+        LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
+    }
+
+    // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
+    // (server.cpp does this check for --embedding, but before the model is loaded)
+    if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
+        LOG_WRN("embeddings enabled: setting n_batch = n_ubatch = %u\n", cparams.n_ubatch);
+        cparams.n_batch = cparams.n_ubatch;
+        params.n_batch  = params.n_ubatch;
+    }
 
     // load and optionally apply lora adapters
     for (auto & la : params.lora_adapters) {
@@ -1759,10 +1797,11 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
-    // a separate draft model carries the MTP head, so the target leaves its own MTP block unloaded and
-    // the draft keeps it. The role is marked rather than read from the paths: the same file may be both.
+    // A separate draft model carries the MTP head, so the target leaves its own MTP block unloaded
+    // and the draft keeps it. The role is marked rather than read from the paths: the same file may
+    // be both. An explicit params.load_mtp still wins.
     const bool mtp_in_draft = params.speculative.has_dft() && !params.model_is_spec_draft;
-    mparams.load_mtp                    = params.speculative.has_mtp() && !mtp_in_draft;
+    mparams.load_mtp                    = params.load_mtp || (params.speculative.has_mtp() && !mtp_in_draft);
 
     return mparams;
 }
@@ -1916,10 +1955,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
 
     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
 }
-
-//
-// Batch utils
-//
 
 void common_batch_clear(struct llama_batch & batch) {
     batch.n_tokens = 0;
@@ -2296,68 +2331,126 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
 common_batch::common_batch(llama_context * ctx) : batch(llama_batch_ext_init(ctx)) {
     const auto rope_type = llama_model_rope_type(llama_get_model(ctx));
     n_pos = rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? GGML_MROPE_SECTIONS : 1;
+    n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+    n_seq_max = llama_n_seq_max(ctx);
 }
 
 void common_batch::clear() {
     tokens.clear();
-    llama_batch_ext_clear(batch.get());
 }
 
 int32_t common_batch::add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output) {
-    const int32_t idx = llama_batch_ext_add_token(batch.get(), seq_id, id);
+    if (seq_id < 0 || seq_id >= n_seq_max) {
+        return -3;
+    }
+    if (id < 0 || id >= n_vocab) {
+        return -2;
+    }
+    tokens.push_back({ id, { pos, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, {} });
+    return size() - 1;
+}
+
+int32_t common_batch::add(llama_token id, llama_pos pos, const std::vector<llama_seq_id> & seq_ids, bool output) {
+    GGML_ASSERT(!seq_ids.empty());
+
+    const int32_t idx = add(id, pos, seq_ids[0], output);
     if (idx < 0) {
-        return idx; // batch full, token outside the vocab or invalid seq id: the caller decides
+        return idx;
     }
-    llama_batch_ext_set_pos(batch.get(), idx, &pos);
-    if (output) {
-        llama_batch_ext_set_output_logits(batch.get(), idx, true);
+    for (size_t s = 1; s < seq_ids.size(); ++s) {
+        if (!add_seq(idx, seq_ids[s])) {
+            remove_last();
+            return -3;
+        }
     }
-    tokens.push_back({ id, { pos, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 } });
     return idx;
 }
 
+bool common_batch::add_seq(int32_t idx, llama_seq_id seq_id) {
+    if (idx < 0 || idx >= size() || seq_id < 0 || seq_id >= n_seq_max) {
+        return false;
+    }
+    tokens[idx].seq_ids_extra.push_back(seq_id);
+    return true;
+}
+
 bool common_batch::set_output(int32_t idx, bool value) {
-    if (idx < 0 || idx >= (int32_t) tokens.size()) {
+    if (idx < 0 || idx >= size()) {
         return false;
     }
     tokens[idx].output = value;
-    return llama_batch_ext_set_output_logits(batch.get(), idx, value);
+    return true;
 }
 
 bool common_batch::set_embd(int32_t idx, llama_embd embd) {
-    if (idx < 0 || idx >= (int32_t) tokens.size()) {
-        return false;
-    }
-    if (!llama_batch_ext_set_embd_token(batch.get(), idx, embd)) {
+    if (idx < 0 || idx >= size() || tokens[idx].embd.data != nullptr) {
         return false;
     }
     tokens[idx].embd = embd;
     return true;
 }
 
+int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output) {
+    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, embd, {} };
+    for (int32_t j = 0; j < n_pos; ++j) {
+        t.pos[j] = pos[j];
+    }
+    tokens.push_back(t);
+    return size() - 1;
+}
+
+// remove the last entry, e.g. to roll back an add() whose set_embd() failed; false if empty
 bool common_batch::remove_last() {
     if (tokens.empty()) {
         return false;
     }
     tokens.pop_back();
-    return llama_batch_ext_remove_last(batch.get());
+    return true;
 }
 
-int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output) {
-    const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, embd);
-    if (idx < 0) {
-        return idx; // batch full, bad row width or invalid seq id: the caller decides
+llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
+    GGML_ASSERT(batch && "common_batch was not initialized with a context");
+    GGML_ASSERT(off >= 0 && n >= 0 && off + n <= size());
+
+    llama_batch_ext * res = batch.get();
+    llama_batch_ext_clear(res);
+
+    for (int32_t i = off; i < off + n; ++i) {
+        const token & t = tokens[i];
+
+        int32_t idx;
+        if (t.id != LLAMA_TOKEN_NULL) {
+            idx = llama_batch_ext_add_token(res, t.seq_id, t.id);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add token %d at index %d (error %d, n = %d)\n", __func__, t.id, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
+            if (t.embd.data && !llama_batch_ext_set_embd_token(res, idx, t.embd)) {
+                GGML_ABORT("%s: failed to set the embedding of token %d at index %d\n", __func__, t.id, i);
+            }
+        } else {
+            idx = llama_batch_ext_add_embd(res, t.seq_id, t.embd);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add embedding at index %d (error %d, n = %d)\n", __func__, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
+        }
+        GGML_ASSERT(idx == i - off);
+
+        for (const llama_seq_id seq_id : t.seq_ids_extra) {
+            if (!llama_batch_ext_add_seq(res, idx, seq_id)) {
+                GGML_ABORT("%s: failed to add seq %d to the entry at index %d\n", __func__, seq_id, i);
+            }
+        }
+        if (t.output) {
+            llama_batch_ext_set_output_logits(res, idx, true);
+        }
+        if (t.decision_order != 0) {
+            llama_batch_ext_set_decision_order(res, idx, (llama_decision_order) t.decision_order);
+        }
     }
-    llama_batch_ext_set_pos(batch.get(), idx, pos);
-    if (output) {
-        llama_batch_ext_set_output_logits(batch.get(), idx, true);
-    }
-    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, embd };
-    for (int32_t j = 0; j < n_pos; ++j) {
-        t.pos[j] = pos[j];
-    }
-    tokens.push_back(t);
-    return idx;
+
+    return res;
 }
 
 common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batch & batch) {
@@ -2452,25 +2545,23 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
 
     return res;
 }
-
-common_batch common_batch_get_one(llama_context * ctx, const llama_tokens & tokens) {
+common_batch common_batch_get_one(llama_context * ctx, const llama_token * tokens, int32_t n_tokens) {
     common_batch batch(ctx);
 
     auto mem = llama_get_memory(ctx);
     llama_pos pos = llama_memory_seq_pos_max(mem, 0) + 1; // -1 + 1 == 0 when the memory is empty
 
-    for (size_t i = 0; i < tokens.size(); ++i) {
-        const bool output = i == tokens.size() - 1;
-        if (batch.add(tokens[i], pos, 0, output) < 0) {
-            LOG_ERR("%s: could not add token %zu of %zu (batch full or token outside the vocab), returning an empty batch\n",
-                    __func__, i, tokens.size());
-            batch.clear();
-            return batch;
-        }
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        const bool output = i == n_tokens - 1;
+        batch.add(tokens[i], pos, 0, output);
         pos++;
     }
 
     return batch;
+}
+
+common_batch common_batch_get_one(llama_context * ctx, const llama_tokens & tokens) {
+    return common_batch_get_one(ctx, tokens.data(), (int32_t) tokens.size());
 }
 
 bool common_prompt_batch_decode(

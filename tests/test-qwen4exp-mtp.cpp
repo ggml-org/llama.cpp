@@ -10,6 +10,7 @@
 #include "../src/llama-model-saver.h"
 #include "../src/llama-context.h"
 #include "../src/llama-model.h"
+#include "../src/llama-memory-recurrent.h"
 
 #include <algorithm>
 #include <cmath>
@@ -663,6 +664,62 @@ static void test_chain_metadata(llama_model * model) {
 
 #include "test-qwen4exp-mtp-driver.h"
 
+static void test_batch_validation(llama_model * head, const std::filesystem::path & dir) {
+    auto cp = llama_context_default_params();
+    cp.n_ctx = 128;
+    cp.n_batch = cp.n_ubatch = 32;
+    cp.n_threads = cp.n_threads_batch = 1;
+    llama_context_ptr draft(llama_init_from_model(head, cp));
+    require(bool(draft), "batch validation context");
+    common_batch batch(draft.get());
+    require(batch.add(3, 0, 0, true) == 0, "valid batch row");
+    require(batch.add(n_vocab, 1, 0, true) == -2 && batch.add(LLAMA_TOKEN_NULL, 1, 0, true) == -2,
+            "invalid tokens are rejected before rendering");
+    require(batch.add(3, 1, -1, true) == -3 && batch.add(3, 1, 1, true) == -3,
+            "invalid sequences are rejected before rendering");
+    require(batch.add(3, 1, std::vector<llama_seq_id>{0, 1}, true) == -3 && batch.size() == 1,
+            "failed shared row leaves the batch unchanged");
+    require(!batch.add_seq(0, 1) && batch.tokens[0].seq_ids_extra.empty(), "invalid extra sequence rejected");
+    require(batch.remove_last() && batch.size() == 0 && !batch.remove_last(), "remove an unrendered row");
+    for (uint32_t i = 0; i < llama_n_batch(draft.get()) + 1; ++i) {
+        require(batch.add(3, i, 0, true) == int32_t(i), "buffer beyond decode capacity");
+    }
+    require(llama_process(draft.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(0, 32)) == 0 &&
+            llama_process(draft.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(32, 1)) == 0,
+            "buffered rows decode in chunks");
+    llama_memory_clear(llama_get_memory(draft.get()), true);
+
+    const std::string wider_path = (dir / "batch-wider.gguf").string();
+    write_fixture(wider_path, false, -1, 1.0f, true, 1.0f, n_vocab + 16);
+    auto wider = load_model(wider_path);
+    require(bool(wider), "wider target model");
+    llama_context_ptr target(llama_init_from_model(wider.get(), cp));
+    require(bool(target), "wider target context");
+    common_params_speculative params;
+    params.types = {COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE};
+    params.draft.ctx_tgt = target.get();
+    params.draft.ctx_dft = draft.get();
+    params.draft.n_max = 2;
+    params.draft.backend_sampling = false;
+    common_speculative_ptr spec(common_speculative_init(params, 1));
+    require(bool(spec), "narrower compatible draft initializes");
+    common_batch input(target.get());
+    require(input.add(3, 0, 0, true) == 0 && input.add(n_vocab, 1, 0, true) == 1 &&
+            input.add(4, 2, 0, true) == 2, "target-only token in prompt");
+    require(common_speculative_process(spec.get(), input), "target-only token skips drafting without aborting");
+    // MROPE permits later position gaps; check the skipped suffix within this mixed batch.
+    require(llama_memory_seq_pos_max(llama_get_memory(draft.get()), 0) == 0,
+            "draft mirrors only the valid prefix");
+    fprintf(stderr, "PASS batch validation and narrower draft vocabulary\n");
+}
+
+static void test_empty_recurrent_memory(llama_model * model) {
+    llama_memory_recurrent memory(*model, GGML_TYPE_F32, GGML_TYPE_F32, false, 4, 1, 3,
+                                  [](int32_t) { return false; });
+    require(memory.n_rs_seq == 0, "empty filtered memory disables rollback snapshots on the member");
+    fprintf(stderr, "PASS empty recurrent memory disables rollback snapshots\n");
+}
+
 // A head exported without token_embd.weight and output.weight drafts with the tables of the
 // model it drafts for, reached through llama_context_params::ctx_other.
 static void test_borrowed_tables(const std::string & bare_path, const std::string & doubled_path,
@@ -1108,6 +1165,8 @@ int main(int argc, char ** argv) {
         llama_backend_free();
     };
     if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
+        test_batch_validation(head.get(), dir);
+        test_empty_recurrent_memory(target.get());
         test_ordinary_context(head.get(), target.get());
         test_ordinary_draft_driver(target.get(), head.get());
         finish();
@@ -1143,6 +1202,8 @@ int main(int argc, char ** argv) {
         finish();
         return 0;
     }
+    test_batch_validation(head.get(), dir);
+    test_empty_recurrent_memory(target.get());
     for (int omitted = 0; omitted < 4; ++omitted) {
         const std::string bad = (dir / "missing.gguf").string();
         write_fixture(bad, true, omitted);

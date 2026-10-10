@@ -33,6 +33,8 @@ public:
 
     const std::vector<std::string> & get_input_names() const { return m_input_names; }
 
+    const std::vector<std::string> & get_output_names() const { return m_output_names; }
+
     size_t get_input_size() const override { return m_decoder->get_input_size(m_node_idx); }
 
     ov::element::Type get_input_type(size_t index) const {
@@ -120,7 +122,10 @@ public:
             auto view_it = m_tensor_map->find(m_input_names[idx]);
             if (!base_name.empty() && view_it != m_tensor_map->end()) {
                 auto base_it = m_tensor_map->find(base_name);
-                if (base_it != m_tensor_map->end() &&
+                // A multi-output translator can publish a VIEW directly without materializing
+                // its packed parent (GatedDeltaNet attention/state). In that case the VIEW is the
+                // authoritative value. The node comparison retains the existing resolved-VIEW path.
+                if (base_it == m_tensor_map->end() ||
                     view_it->second.get_node_shared_ptr() != base_it->second.get_node_shared_ptr()) {
                     return view_it->second;
                 }

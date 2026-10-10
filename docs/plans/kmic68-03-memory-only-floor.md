@@ -1,4 +1,4 @@
-# P03 - Memory-only floor ceiling analysis
+# P03 - Memory-path timing proxy
 
 **Kind:** experimental methodology
 **Depends on:** none
@@ -9,14 +9,17 @@
 Kmic-68 measured a 114.5 us loads-only floor for a 164.5 us CUDA q6_K kernel
 and used it to prove that a requested 84 us target was unreachable. Those
 numbers and that kernel do not transfer to the A770 FA path, but the method does:
-retain memory traffic and synchronization, remove the arithmetic under study,
-and measure the lower bound instead of arguing from mechanism.
+retain memory traffic and synchronization and remove the arithmetic under study.
+The anti-elision hash below adds work absent from a correct optimized kernel,
+so this plan measures a timing proxy, not a proven lower bound.
 
 P03 applies that method only to the TurboQuant SYCL VEC flash-attention path.
 It introduces an experimental build option,
 `GGML_SYCL_FA_MEMORY_FLOOR`, default `OFF`. An enabled build is not
 correctness-capable and must never be a production default. The concrete output
-is `docs/research/kmic68-a770-fa-memory-floor.md`, the turbo FA ceiling report.
+is `docs/research/kmic68-a770-fa-memory-floor.md`, the turbo FA proxy report.
+The option and artifact names retain `floor` for continuity; they do not confer
+lower-bound validity.
 
 Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 `OPTLOG.md`, "Ceiling analysis: why 40 t/s is not reachable".
@@ -25,16 +28,16 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 
 - **R03.1 (Ubiquitous):** The `GGML_SYCL_FA_MEMORY_FLOOR` build option shall default to `OFF`.
 - **R03.2 (Optional feature):** WHERE `GGML_SYCL_FA_MEMORY_FLOOR` is included in a build, the TurboQuant SYCL VEC FA kernel shall stub all FA arithmetic except a minimal observable anti-elision dependency.
-- **R03.3 (Event-driven):** WHEN the memory-floor benchmark completes, the `bench-sycl-fa-floor.py` harness shall report turbo3 and turbo4 floor time in microseconds per iteration for every requested depth.
-- **R03.4 (Event-driven):** WHEN a valid floor time is recorded, the turbo FA ceiling report shall compute the corresponding maximum throughput from the matching full-kernel control.
-- **R03.5 (Unwanted behaviour):** IF an optimization target requires an iteration time below the measured floor, THEN the turbo FA ceiling report shall classify that target as unavailable for the measured kernel design.
+- **R03.3 (Event-driven):** WHEN the memory-floor benchmark completes, the `bench-sycl-fa-floor.py` harness shall report turbo3 and turbo4 proxy time in microseconds per iteration for every requested depth.
+- **R03.4 (Event-driven):** WHEN a valid proxy time is recorded, the turbo FA proxy report shall compute its timing gap from the matching full-kernel control.
+- **R03.5 (Ubiquitous):** The turbo FA proxy report shall label target reachability as undetermined by proxy timing.
 - **R03.6 (State-driven):** WHILE a memory-floor build is running, the `test-sycl-turbo-correctness` harness shall label every emitted result as non-correctness data.
 - **R03.7 (State-driven):** WHILE `GGML_SYCL_FA_MEMORY_FLOOR` is `OFF`, the SYCL VEC FA translation unit shall compile the existing kernel body without a floor-mode runtime branch.
-- **R03.8 (Unwanted behaviour):** IF the paired device-code manifest differs in a retained memory-path category, THEN the `bench-sycl-fa-floor.py` harness shall reject the floor measurement.
+- **R03.8 (Unwanted behaviour):** IF the paired device-code manifest differs in a retained category or normalized retained-path fingerprint, or cannot establish that fingerprint, THEN the `bench-sycl-fa-floor.py` harness shall reject the floor measurement.
 - **R03.9 (Ubiquitous):** The floor kernel shall retain the matching full kernel's global K/V load path.
 - **R03.10 (Ubiquitous):** The floor kernel shall retain the matching full kernel's local-memory staging and barrier path.
 - **R03.11 (Ubiquitous):** The floor kernel shall retain the matching full kernel's indexing and output-store path.
-- **R03.12 (Event-driven):** WHEN the ceiling report is finalized, the P03 report writer shall compute `p11_eligible` from the versioned floor-validity and arithmetic-headroom rule.
+- **R03.12 (Event-driven):** WHEN the proxy report is finalized, the P03 report writer shall compute `p11_eligible` from the versioned measurement-validity rule without a proxy timing threshold.
 
 ## Approach
 
@@ -49,28 +52,42 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 3. Prevent dead-code elimination with one private lane-local integer hash that
    consumes every retained loaded/staged value by bit pattern and is folded into
    the existing non-correctness output store. The hash is the only arithmetic
-   allowed beyond address/index work; its instruction cost makes the floor
-   conservative and is recorded, never subtracted.
+   allowed beyond address/index work. Record its generated instructions, but
+   do not infer its latency or subtract an unmeasured correction. This extra
+   work prevents treating the measured proxy as an unreachable timing floor.
 4. Add `scripts/perf/probe-fa-memory-floor.sh` by reusing the real compile-
    command, `IGC_ShaderDumpEnable=1`, LLVM-SPIR-V, `ocloc`, and summary
    pattern from `scripts/perf/probe-q8-load-width.sh`. Probe the actual
-   `fattn-vec-instance-turbo3_0-turbo3_0.cpp` and
-   `fattn-vec-instance-turbo4_0-turbo4_0.cpp` translation units from both
+   `template-instances/fattn-vec-instance-tq3-tq3.cpp` and
+   `template-instances/fattn-vec-instance-tq4-tq4.cpp` translation units from both
    builds; do not assume a LUT or staging path that the selected specialization
    does not instantiate.
 5. For each full/floor kernel pair, emit a versioned JSON manifest with kernel
    symbol, build ID, compile command hash, route, type, and counts for global
    load messages, SLM load/store messages, gateway/barrier instructions, index/
    address instructions, and global output stores. Require nonzero applicable
-   categories and exact full/floor equality for all retained categories; require
-   the floor's floating arithmetic count to be lower as a negative control.
+   categories and exact full/floor equality for all retained categories. Also
+   retain a normalized instruction/dataflow record and fingerprint covering each
+   memory message's operation, address space/surface, cache policy, access width,
+   vector length, lane mask/predicate, and addressed bytes as a function of
+   lane/query/KV-loop indices. Include address/index dependencies, loop bounds,
+   control-flow edges, barriers, and output-store destinations. Normalize only
+   register/label names and incidental code addresses; do not erase stride,
+   offset, predication, or ordering differences. Compare the records as well as
+   their fingerprints. Unknown descriptors or unprovable address/control
+   equivalence fail closed; equal category counts alone never pass. Require the
+   floor's floating arithmetic count to be lower as a negative control.
 6. Add a manifest-validator fixture-pair test, not another kernel mode. First
    require an intact parsed manifest fixture to pass. Copy that fixture, remove
    one required load/barrier/store-category record, and require the validator to
    reject it with exit code 42 and the exact diagnostic
    `missing-required-category`. This distinguishes the expected fail-closed
    predicate from a missing fixture, unknown option, timeout, or parser crash,
-   without compiling or shipping a hashless kernel variant.
+   without compiling or shipping a hashless kernel variant. Additional mutated
+   copies preserve all category counts but change one message width/surface,
+   address stride, lane predicate, or loop bound. Each must fail with exit 42 and
+   `retained-path-mismatch`; an unparseable descriptor must fail with exit 42 and
+   `unverifiable-retained-path`. Register/label-only renaming must still pass.
 7. Keep non-turbo VEC, normal builds, and TILE unchanged. Add the early
    `LLAMA_TEST_TURBO_FA_BENCH=1` mode to
    `tests/test-sycl-turbo-correctness.cpp`: fixed VEC shapes, warmup,
@@ -81,13 +98,14 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    binaries three times for turbo3 and turbo4 at depths 4096 and 16384, and
    writes report schema version 1.
 9. Record, per build/driver/route/type/depth,
-   `arithmetic_headroom_pct=100*(full_time_us-floor_time_us)/full_time_us` and
-   `ceiling_tps=full_tps*full_time_us/floor_time_us`. Set
-   `p11_eligible=true` only when every required row is `floor_valid=true`,
-   reports `route=VEC`, matches the report build/driver, and has arithmetic
-   headroom of at least 5%; otherwise set it false with the failed predicate.
-   This boolean permits P11 to run; it does not predict an accuracy improvement
-   or replace P11's oracle and 5% performance gates.
+   `proxy_gap_pct=100*(full_time_us-proxy_time_us)/full_time_us`. Label this
+   as a descriptive gap, not arithmetic headroom or a throughput ceiling. Set
+   `p11_eligible=true` only when every required row is `proxy_valid=true`,
+   has complete finite positive paired timings and a passing manifest, reports
+   `route=VEC`, and matches the report build/driver; otherwise set it false
+   with the failed predicate. A small or negative proxy gap cannot reject P11.
+   This boolean establishes measurement readiness only; P11's own oracle and
+   5% performance gates decide whether to retain that change.
 
 ## Critical files & anchors
 
@@ -117,8 +135,8 @@ Configure two otherwise identical AOT builds with the current `AGENTS.md`
 compiler/device flags and `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`:
 
 ```bash
-cmake -B build-sycl-fa-full -GNinja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_FA_MEMORY_FLOOR=OFF
-cmake -B build-sycl-fa-floor -GNinja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_FA_MEMORY_FLOOR=ON
+cmake -B build-sycl-fa-full -GNinja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER= -DGGML_SYCL_FA_MEMORY_FLOOR=OFF
+cmake -B build-sycl-fa-floor -GNinja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER= -DGGML_SYCL_FA_MEMORY_FLOOR=ON
 ninja -C build-sycl-fa-full test-sycl-turbo-correctness
 ninja -C build-sycl-fa-floor test-sycl-turbo-correctness
 ```
@@ -145,27 +163,33 @@ timeout 900 python3 scripts/perf/bench-sycl-fa-floor.py --full build-sycl-fa-ful
 
 Expected evidence:
 
-- four keyed shape rows each contain three full times, three floor times,
-  medians, derived ceiling/headroom, build IDs, route, and named kernel driver;
+- four keyed shape rows each contain three full times, three proxy times,
+  medians, descriptive proxy gap, build IDs, route, and named kernel driver;
 - every floor JSON row contains `correctness_valid=false` and no PASS/FAIL
   correctness verdict;
-- the manifest reports equal nonzero retained global-load, SLM, barrier,
-  indexing, and output-store categories for each actual full/floor VEC pair;
+- the manifest reports equal nonzero applicable retained categories and matching
+  normalized memory-descriptor, byte/address, and control-path records and
+  fingerprints for each actual full/floor VEC pair;
 - the manifest validator accepts the intact fixture, then rejects the fixture
   with one required category removed using exit code 42 and the exact
   `missing-required-category` diagnostic, without compiling or executing
   another kernel variant;
-- the report labels any target faster than the measured floor as unavailable
-  and emits the versioned `p11_eligible` predicate result;
+- same-count descriptor/address/predicate/loop mutations fail with
+  `retained-path-mismatch`, unknown descriptors fail with
+  `unverifiable-retained-path`, and register/label-only renaming passes;
+- the report labels target reachability as undetermined by the proxy and emits
+  the versioned `p11_eligible` measurement-readiness result;
+- valid fixtures with small, zero, and negative proxy gaps remain eligible for
+  P11; invalid manifests or missing timings fail regardless of their gap;
 - the post-run two-driver fault gate is clean and the service is restarted.
 
 ## Assumptions & contingencies
 
-- The floor is a measured lower bound for the exact VEC shapes and software
-  stack in the report, not a universal A770 bandwidth limit.
-- The lane-local anti-elision dependency adds some work, so the measured floor
-  is conservative. Record its generated instructions rather than subtracting an
-  unmeasured correction.
+- The proxy describes only the exact VEC shapes and software stack measured.
+  It proves neither a lower time bound nor a maximum achievable throughput.
+- A future lower-bound claim needs an independently justified bound on the
+  anti-elision overhead and its scheduling effects; instruction counts alone
+  do not supply one. Such a proof is outside P03.
 - A floor build that reaches an ordinary correctness test is a harness error;
   fail the run instead of weakening the correctness oracle.
 - P12 is not gated by this experiment. P03 gates only P11, which changes the

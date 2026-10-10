@@ -1100,6 +1100,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_ministral_3(tmpl, params);
     }
 
+    // LLM-jp-4.1 - GPT-OSS dialect (spaces after special tokens, <|end|>-separated parallel calls)
+    if (src.find("chat_format=llm-jp-harmony-v1") != std::string::npos) {
+        LOG_DBG("Using specialized template: LLM-jp Harmony v1\n");
+        return common_chat_params_init_llm_jp_harmony(tmpl, params);
+    }
+
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
     if (src.find("<|channel|>") != std::string::npos) {
         LOG_DBG("Using specialized template: GPT-OSS\n");

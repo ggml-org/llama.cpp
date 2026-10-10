@@ -145,13 +145,11 @@ static llama_context_ptr create_ctx(llama_model * model, int n_ubatch) {
 // decode all tokens in one batch; returns the logits of every token
 static std::vector<float> decode_prefill(llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+    common_batch batch(lctx);
     for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, { 0 }, true);
+        batch.add(tokens[i], i, 0, true);
     }
-    batch.n_tokens = tokens.size();
-    if (llama_decode(lctx, batch)) {
-        llama_batch_free(batch);
+    if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         throw std::runtime_error("prefill decode failed");
     }
 
@@ -163,20 +161,18 @@ static std::vector<float> decode_prefill(llama_model * model, llama_context * lc
             ret.push_back(logits_ith[j]);
         }
     }
-    llama_batch_free(batch);
     return ret;
 }
 
 // decode one token at a time; returns the logits of the last token of each step
 static std::vector<float> decode_gen(llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    llama_batch batch = llama_batch_init(1, 0, 1);
+    common_batch batch(lctx);
     std::vector<float> ret;
     for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_clear(batch);
-        common_batch_add(batch, tokens[i], i, { 0 }, true);
-        if (llama_decode(lctx, batch)) {
-            llama_batch_free(batch);
+        batch.clear();
+        batch.add(tokens[i], i, 0, true);
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             throw std::runtime_error("decode failed");
         }
         const float * logits = llama_get_logits_ith(lctx, 0);
@@ -184,7 +180,6 @@ static std::vector<float> decode_gen(llama_model * model, llama_context * lctx, 
             ret.push_back(logits[j]);
         }
     }
-    llama_batch_free(batch);
     return ret;
 }
 
@@ -297,7 +292,7 @@ int main(int argc, char ** argv) {
     }
 
     common_init();
-    ggml_backend_load_all();
+    llama_backend_init();
 
     ggml_backend_dev_t dev = ggml_backend_dev_by_name(device_name.c_str());
     if (!dev) {

@@ -26,14 +26,22 @@ layout (push_constant) uniform parameter {
 } p;
 
 #ifdef USE_SUBGROUPS
-shared uvec4 ballots_sh[NUM_SUBGROUPS];
+shared uint counts_sh[NUM_SUBGROUPS];
 #else
 shared uint scan[BLOCK_SIZE];
 #endif
 
+bool is_selected(const uint m_idx) {
+    const float v = float(data_m[m_idx]);
+    return !isinf(v) && !isnan(v);
+}
+
 // One workgroup per mask row: compact the finite-mask KV positions into a
-// per-row index list of length n_kv_max, -1 padded. Emitted in ascending KV
-// order so the downstream attention accumulation is deterministic.
+// per-row index list of length n_kv_max, -1 padded, in ascending KV order so
+// the downstream attention accumulation is deterministic.
+// The row is split into contiguous segments, one per subgroup (or per thread
+// without subgroups), so it needs a single workgroup scan instead of one per
+// BLOCK_SIZE chunk.
 void main() {
     const uint i1 = gl_WorkGroupID.x;
     const uint i2 = gl_WorkGroupID.y;
@@ -43,60 +51,75 @@ void main() {
     const uint m_base   = i3 * p.nbm3 + i2 * p.nbm2 + i1 * p.nbm1;
     const uint out_base = ((i3 * p.nem2 + i2) * p.nem1 + i1) * p.n_kv_max;
 
-    uint base = 0;
-    for (uint chunk = 0; chunk < p.KV; chunk += BLOCK_SIZE) {
-        const uint k = chunk + tid;
-        bool selected = false;
-        if (k < p.KV) {
-            const float v = float(data_m[m_base + k]);
-            selected = !isinf(v) && !isnan(v);
-        }
-
 #ifdef USE_SUBGROUPS
+    const uint sg   = gl_SubgroupID;
+    const uint lane = gl_SubgroupInvocationID;
+    const uint seg  = (p.KV + gl_NumSubgroups - 1) / gl_NumSubgroups;
+    const uint seg_begin = min(sg * seg, p.KV);
+    const uint seg_end   = min(seg_begin + seg, p.KV);
+
+    // Lanes read consecutive positions, so each step is one coalesced load.
+    uint count = 0;
+    for (uint k0 = seg_begin; k0 < seg_end; k0 += gl_SubgroupSize) {
+        const uint k = k0 + lane;
+        count += subgroupBallotBitCount(subgroupBallot(k < seg_end && is_selected(m_base + k)));
+    }
+    if (subgroupElect()) {
+        counts_sh[sg] = count;
+    }
+    barrier();
+
+    uint slot = 0;
+    uint total = 0;
+    for (uint s = 0; s < gl_NumSubgroups; ++s) {
+        slot  += s < sg ? counts_sh[s] : 0u;
+        total += counts_sh[s];
+    }
+
+    for (uint k0 = seg_begin; k0 < seg_end && slot < p.n_kv_max; k0 += gl_SubgroupSize) {
+        const uint k = k0 + lane;
+        const bool selected = k < seg_end && is_selected(m_base + k);
         const uvec4 ballot = subgroupBallot(selected);
-        if (subgroupElect()) {
-            ballots_sh[gl_SubgroupID] = ballot;
+        const uint pos = slot + subgroupBallotExclusiveBitCount(ballot);
+        if (selected && pos < p.n_kv_max) {
+            data_i[out_base + pos] = int32_t(k);
         }
-        barrier();
-
-        uint subgroup_base = 0;
-        uint total = 0;
-        [[unroll]] for (uint s = 0; s < gl_NumSubgroups; ++s) {
-            if (s == gl_SubgroupID) {
-                subgroup_base = total;
-            }
-            total += subgroupBallotBitCount(ballots_sh[s]);
-        }
-        barrier();
-
-        const uint slot = base + subgroup_base + subgroupBallotExclusiveBitCount(ballot);
+        slot += subgroupBallotBitCount(ballot);
+    }
 #else
-        // Hillis-Steele inclusive prefix sum over the workgroup.
-        scan[tid] = selected ? 1u : 0u;
+    const uint run   = (p.KV + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const uint begin = min(tid * run, p.KV);
+    const uint end   = min(begin + run, p.KV);
+
+    uint count = 0;
+    for (uint k = begin; k < end; ++k) {
+        count += is_selected(m_base + k) ? 1u : 0u;
+    }
+
+    // Hillis-Steele inclusive prefix sum of the per-thread counts.
+    scan[tid] = count;
+    barrier();
+    for (uint off = 1; off < BLOCK_SIZE; off <<= 1) {
+        uint add = 0;
+        if (tid >= off) {
+            add = scan[tid - off];
+        }
         barrier();
-        for (uint off = 1; off < BLOCK_SIZE; off <<= 1) {
-            uint add = 0;
-            if (tid >= off) {
-                add = scan[tid - off];
-            }
-            barrier();
-            scan[tid] += add;
-            barrier();
-        }
-
-        const uint inclusive = scan[tid];
-        const uint total = scan[BLOCK_SIZE - 1];
-        const uint slot = base + inclusive - 1u;
-#endif
-
-        if (selected && slot < p.n_kv_max) {
-            data_i[out_base + slot] = int32_t(k);
-        }
-        base += total;
+        scan[tid] += add;
         barrier();
     }
 
-    for (uint s = min(base, p.n_kv_max) + tid; s < p.n_kv_max; s += BLOCK_SIZE) {
+    const uint total = scan[BLOCK_SIZE - 1];
+    uint slot = scan[tid] - count;
+    for (uint k = begin; k < end && slot < p.n_kv_max; ++k) {
+        if (is_selected(m_base + k)) {
+            data_i[out_base + slot] = int32_t(k);
+            ++slot;
+        }
+    }
+#endif
+
+    for (uint s = min(total, p.n_kv_max) + tid; s < p.n_kv_max; s += BLOCK_SIZE) {
         data_i[out_base + s] = int32_t(-1);
     }
 }

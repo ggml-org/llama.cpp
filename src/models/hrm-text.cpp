@@ -43,7 +43,7 @@ void llama_model_hrm_text::load_arch_tensors(llama_model_loader &) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
-    hrm_z_l_init = create_tensor(tn(LLM_TENSOR_HRM_Z_L_INIT), { n_embd }, 0);
+    hrm_z_l_init = create_tensor(tn(LLM_TENSOR_HRM_Z_L_INIT, 0), { n_embd }, 0);
 
     const int lps = hparams.n_hrm_layers_per_stack;
 

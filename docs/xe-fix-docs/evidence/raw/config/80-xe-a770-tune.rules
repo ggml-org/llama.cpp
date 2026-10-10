@@ -1,0 +1,3 @@
+# Intel Arc A770 bound to xe: apply scheduler timeouts (xe-a770-tune.service).
+# "add" covers boot coldplug (device already bound), "bind" covers runtime rebinds.
+ACTION=="add|bind", SUBSYSTEM=="pci", KERNEL=="0000:03:00.0", DRIVER=="xe", TAG+="systemd", ENV{SYSTEMD_WANTS}+="xe-a770-tune.service"

@@ -1,0 +1,73 @@
+From: Sveinbjorn Geirsson <claude@sveinbjorn.dev>
+Subject: [PATCH] fix: retry userptr VM_BIND read-only on EPERM before evicting unused allocations
+
+On the xe KMD a writable userptr bind of a read-only host mapping (a file
+mapped r--s, the common case for model weights loaded with mmap) fails with
+EPERM from hmm_range_fault. Drm::bindBufferObject treated every bind failure
+as memory exhaustion and ran evictUnusedAllocations(), which unbinds the
+copy engine command buffer of a still-pending KMD-submitted job (the sweep
+only trusts task counts above the engine tag). The blitter then reads the
+scratch page, halts on the next mapped allocation, and the next LR-mode
+suspend ends in "Engine reset: engine_class=bcs" after the preempt timeout.
+Same sweep as GSD-13279 (#973) and GSD-13592 (#1010), different victim.
+
+The GPU only reads such ranges. Retry the bind with the read-only flag
+before falling back to the eviction sweep. The retry is limited to EPERM on
+userptr binds (in the xe bind path only hmm's write-permission check in
+mm/hmm.c returns EPERM), errno is read right after the failing bind, and the
+writable flag is restored when the read-only retry fails so the sweep runs
+with the buffer object in its original state. Measured on Arc A770 / xe
+7.3-rc5: default 16681 EPERM binds and a stall in one llama.cpp run, with the
+retry 0 failed binds, no staging fallback, prefill +33%, no reset.
+
+Debug key RetryUserptrBindReadOnly=0 restores the previous behaviour.
+
+Signed-off-by: Sveinbjorn Geirsson <claude@sveinbjorn.dev>
+---
+diff --git a/shared/source/debug_settings/debug_variables_base.inl b/shared/source/debug_settings/debug_variables_base.inl
+index 306b51a..cba7140 100644
+--- a/shared/source/debug_settings/debug_variables_base.inl
++++ b/shared/source/debug_settings/debug_variables_base.inl
+@@ -607,6 +607,7 @@ DECLARE_DEBUG_VARIABLE(int32_t, AddClGlSharing, -1, "Add cl-gl extension")
+ DECLARE_DEBUG_VARIABLE(int32_t, EnableBOMmapCreate, -1, "Create BOs using mmap, -1:default, 0:disable(GEM_USERPTR), 1:enable")
+ DECLARE_DEBUG_VARIABLE(int32_t, EnableGemCloseWorker, -1, "Use asynchronous gem object closing, -1:default, 0:disable, 1:enable")
+ DECLARE_DEBUG_VARIABLE(int32_t, EnableHostPtrValidation, -1, "Validate BO from GEM_USERPTR, -1:default(enable), 0:disable, 1:enable")
++DECLARE_DEBUG_VARIABLE(int32_t, RetryUserptrBindReadOnly, -1, "-1: default (enabled), 0: disabled, 1: enabled. When a writable userptr VM_BIND fails with EPERM (read-only host mapping), retry the bind read-only before evicting unused allocations")
+ DECLARE_DEBUG_VARIABLE(int32_t, EnableBlitterOperationsSupport, -1, "-1: default, 0: disable, 1: enable")
+ DECLARE_DEBUG_VARIABLE(int32_t, EnableBlitterForEnqueueOperations, -1, "Use Blitter engine for enqueue operations. -1: default, 0: disabled, 1: enabled for every enqueue, 2: disabled, except image from buffer access")
+ DECLARE_DEBUG_VARIABLE(int32_t, EnableBlitterForEnqueueImageOperations, -1, "Use Blitter engine for read/write/copy image operations. -1: default, 0: disabled, 1: enabled")
+diff --git a/shared/source/os_interface/linux/drm_neo.cpp b/shared/source/os_interface/linux/drm_neo.cpp
+index 671a0bb..b0462aa 100644
+--- a/shared/source/os_interface/linux/drm_neo.cpp
++++ b/shared/source/os_interface/linux/drm_neo.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include "shared/source/os_interface/linux/drm_neo.h"
+ 
++#include <cerrno>
++
+ #include "shared/source/command_stream/command_stream_receiver.h"
+ #include "shared/source/command_stream/submission_status.h"
+ #include "shared/source/debug_settings/debug_settings_manager.h"
+@@ -1842,6 +1844,21 @@ int Drm::bindAddDebugData(OsContext *osContext, BufferObject *bo, uint32_t vmHan
+ 
+ int Drm::bindBufferObject(OsContext *osContext, uint32_t vmHandleId, BufferObject *bo, const bool forcePagingFence) {
+     auto ret = changeBufferObjectBinding(this, osContext, vmHandleId, bo, true, forcePagingFence);
++    const int bindErrno = (ret != 0) ? getErrno() : 0;
++    if (ret != 0 && bindErrno == EPERM && bo->getUserptr() != 0 && !bo->isReadOnlyGpuResource() &&
++        debugManager.flags.RetryUserptrBindReadOnly.get() != 0) {
++        // A userptr VM_BIND fails with EPERM when hmm_range_fault refuses the write request on
++        // a host range without VM_WRITE (mm/hmm.c; a file mapped r--s, the usual case for model
++        // weights); nothing else in the xe bind path returns EPERM. The CPU cannot write such a
++        // range either, so binding it read-only loses nothing, whereas treating EPERM as memory
++        // exhaustion runs the eviction sweep below, which unbinds allocations that other
++        // in-flight submissions (KMD-submitted blitter jobs) still use.
++        bo->setAsReadOnly(true);
++        ret = changeBufferObjectBinding(this, osContext, vmHandleId, bo, true, forcePagingFence);
++        if (ret != 0) {
++            bo->setAsReadOnly(false);
++        }
++    }
+     if (ret != 0) {
+         auto isAsyncFence = bo->isAsyncPagingFenceRequired();
+         static_cast<DrmMemoryOperationsHandlerBind *>(this->rootDeviceEnvironment.memoryOperationsInterface.get())->evictUnusedAllocations(false, isAsyncFence);

@@ -81,7 +81,12 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 8. Preserve the existing `G+1` return contract. If all `G` drafts survive,
    sample, accept, and append the terminal token at `idxs[G]` from `p_G`.
    Server and speculative-simple consumers must receive `G+1`, not mistake full
-   acceptance for replay.
+   acceptance for replay. This includes a final accepted draft token that is
+   end-of-generation (EOG): the acceptor still returns the bonus, but consumers
+   stop at the first EOG under the active stopping policy and discard the rest
+   of the returned vector. They must not emit or decode the post-EOG bonus;
+   terminate/release the sequence through the existing stop path. An explicit
+   ignore-EOG policy retains its existing behavior.
 9. Mark a proposal consumed after one acceptance attempt. When replay replaces
    `slot.spec_draft` with an accepted prefix plus correction, clear/invalidate
    its distributions even if vector length happens to match. Replayed rounds
@@ -91,6 +96,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    version. The verifier rejects missing, duplicate, corrupt, or cross-proposal
    records. Baseline rows explicitly state `q_records=null`.
 11. Add seeded corpus and server tests for full acceptance/terminal bonus,
+   full acceptance with EOG at the final and an earlier draft position,
    rejection, invalid final-row distribution, target backend token at any index,
    late validation failure with pristine fallback, consumed proposal reuse, same-
    length replay replacement, server, and speculative-simple.
@@ -109,6 +115,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - `common/sampling.h:85-89` - current acceptor declarations.
 - `tools/server/server-context.cpp:3414-3416,4302-4377` - proposal handoff, replay replacement, acceptor selection, and final stats.
 - `examples/speculative-simple/speculative-simple.cpp:193-200,269-270` - non-server `G+1` consumer.
+- `tools/server/server-context.cpp:4388-4407` and `examples/speculative-simple/speculative-simple.cpp:317-325` - consumer stop handling must discard the post-EOG suffix.
 - `tests/test-sampling.cpp` - seeded confidence-bounded distribution corpus.
 - `scripts/perf/verify-spec-distribution.py` - planned P04/`q_records` A770 comparison.
 
@@ -133,6 +140,17 @@ After P04 is complete, stop the service, verify A770 sole tenancy, name the
 kernel driver/build/model, and compare the current exact-match path with P06 at
 temperature 0.8:
 
+The planned verifier launches fresh processes with explicit environments. Map
+`--draft-temperature 0.8` to `LLAMA_SPEC_SAMPLE_TEMP=0.8` and
+`--draft-top-p 1.0` to `LLAMA_SPEC_DRAFT_TOPP=1.0` only in the enabled arm.
+Unset both variables in the baseline, regardless of the parent environment.
+Set `LLAMA_DRAFT_TOP_K=10` in both arms, pass `--target-temperature` to the
+request's target sampling parameters, and keep backend draft sampling disabled.
+Enable P04 logging separately for both arms. Record the resolved settings and
+require an eligible enabled proposal with non-null `q_records` plus baseline
+exact-match selection with `q_records=null`; CLI arguments alone are not proof
+that distribution recording ran.
+
 ```bash
 timeout 1800 python3 scripts/perf/verify-spec-distribution.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --repeats 2 --seed 123 --target-temperature 0.8 --draft-temperature 0.8 --draft-top-p 1.0 --spec-args='--spec-type draft-mtp --no-spec-draft-backend-sampling' --baseline-log /tmp/p06-baseline.jsonl --enabled-log /tmp/p06-enabled.jsonl --q-artifact /tmp/p06-q-records.jsonl --report /tmp/p06-report.json
 ```
@@ -146,12 +164,18 @@ Expected evidence:
   support, and positive sampled-token mass;
 - full acceptance returns exactly `G+1` tokens to both server and
   speculative-simple consumers;
+- EOG fixtures retain the acceptor's `G+1` contract while both consumers emit
+  nothing and schedule no decode after the first effective EOG, including the
+  bonus; the existing ignore-EOG policy is tested separately;
 - invalid or late target/distribution checks leave original sampler/RNG state
   untouched and restart the old whole-block exact-match path;
 - consumed and replay-replaced proposals cannot reuse stale distributions,
   including same-length correction replacement;
 - baseline and enabled P04 logs report accepted/drafted totals for the same six
   requests and the report records their acceptance ratio;
+- subprocess-environment fixtures prove enabled variable mapping and baseline
+  unsetting even under conflicting inherited values; runtime evidence confirms
+  enabled `q_records` and baseline exact-match rather than two disabled arms;
 - every disabled/fallback condition reaches exact-match, invalid environment
   values name the variable, and the post-run GPU fault gate passes.
 

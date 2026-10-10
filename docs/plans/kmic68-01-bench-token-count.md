@@ -8,7 +8,7 @@
 
 Kmic-68 found that `llama-bench -n 128` at long context amortised a 2-3 s
 first-token cost over too few tokens, reporting 12.2 t/s instead of 21.5 t/s.
-The current product and depth-sweep examples in `AGENTS.md:195-201` both use
+The current product and depth-sweep examples in `AGENTS.md:203-209` both use
 `-n 128`, so their long-depth results are not interchangeable with a corrected
 run.
 
@@ -16,7 +16,8 @@ This plan changes measurement instructions and records only. It does not change
 `llama-bench` or `scripts/perf/bench_spec.py`; the server harness has its own
 `n_predict` setting. The P01 A770 research record is
 `docs/research/kmic68-a770-rebaseline.md`, with a `Long-depth comparison`
-table that retains both old and corrected observations.
+table that retains both old and corrected observations, and a separate
+`Token-count calibration` table for the controlled unequal-token experiment.
 
 Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 `p100-docs/FINDINGS.md`, "How the measurements lied", item 3.
@@ -29,6 +30,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - **R01.4 (Unwanted behaviour):** IF two results use different token counts, THEN the P01 long-depth comparison table shall exclude them from a paired delta.
 - **R01.5 (Event-driven):** WHEN an A770 campaign is re-baselined under P01, the P01 A770 research record shall preserve the superseded measurements with their original commands.
 - **R01.6 (Event-driven):** WHEN a paired comparison is excluded for unequal token counts, the P01 long-depth comparison table shall display a token-count-mismatch label.
+- **R01.7 (Event-driven):** WHEN the controlled token-count experiment completes with all other settings fixed, the P01 token-count calibration table shall record its unequal-token delta with both token counts and a calibration-only label.
 
 ## Approach
 
@@ -40,7 +42,8 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 The research record is a file to create when P01 is executed; it is not a
 currently resolvable code anchor for this documentation pass.
 3. Run the paired correction experiment below from one checkout and one binary.
-   Record raw rows and the correction before changing a downstream baseline.
+   Record raw rows and the correction in the separate calibration table before
+   changing a downstream baseline; that delta is not a performance A/B.
 4. Update each affected A770 table by preserving the old row, adding the new
    row, and calculating a delta only between rows with equal `n`.
 5. Leave `scripts/perf/bench_spec.py` unchanged because request length is a
@@ -48,7 +51,7 @@ currently resolvable code anchor for this documentation pass.
 
 ## Critical files & anchors
 
-- `AGENTS.md:192-201` - authoritative product and depth-sweep examples.
+- `AGENTS.md:203-209` - authoritative product and depth-sweep examples.
 - `scripts/perf/bench_spec.py:326` - server request-length default, inspected
   only to keep it out of scope.
 - `Kmic-68/llama.cpp:p100-docs/FINDINGS.md` on `p100-optimizations` - source
@@ -70,9 +73,10 @@ Expected evidence:
 
 - each command reports three repetitions at depth 16384;
 - the record identifies `n=128` and `n=512` on every raw result;
-- the measured correction is recorded before any baseline row is replaced;
-- a deliberate attempt to pair the two rows produces a token-count-mismatch
-  label and no percentage delta;
+- the calibration table records `100*(tps_512/tps_128-1)` with both token
+  counts and a calibration-only label before any baseline row is replaced;
+- a deliberate attempt to pair those rows in the ordinary long-depth comparison
+  table produces a token-count-mismatch label and no percentage delta;
 - the post-run two-driver fault gate from `AGENTS.md` finds no matching fault,
   and the stopped service is restarted.
 

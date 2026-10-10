@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sycl/sycl.hpp>
+#include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 #include "dpct/helper.hpp"
 #include "common.hpp"
 
@@ -1084,6 +1085,7 @@ static void lauch_kernel(
     const int32_t nb32,
     const int64_t nb33) {
     GGML_UNUSED(local_mem_size);
+
     q->submit([&](sycl::handler &cgh) {
         auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
             GGML_UNUSED(item_ct1);

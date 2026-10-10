@@ -1,3 +1,4 @@
+import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { describe, expect, it } from 'vitest';
 
@@ -12,6 +13,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: null,
 			raw: 'model-name-1',
+			sidecar: null,
 			tags: []
 		});
 
@@ -22,6 +24,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: null,
 			raw: 'org/model-name-2',
+			sidecar: null,
 			tags: []
 		});
 	});
@@ -105,6 +108,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q2_K_XL',
 			raw: 'unsloth/DeepSeek-V4-Flash-0731-GGUF:Q2_K_XL',
+			sidecar: null,
 			tags: []
 		});
 
@@ -115,6 +119,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q4_K_XL',
 			raw: 'unsloth/Laguna-S-2.1-GGUF:Q4_K_XL',
+			sidecar: null,
 			tags: []
 		});
 
@@ -125,6 +130,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: null,
 			raw: 'org/Model-Name-GGUF',
+			sidecar: null,
 			tags: []
 		});
 	});
@@ -137,6 +143,7 @@ describe('parseModelId', () => {
 			params: '8B',
 			quantization: null,
 			raw: 'meta-llama/Llama-3.1-8B',
+			sidecar: null,
 			tags: []
 		});
 
@@ -147,6 +154,7 @@ describe('parseModelId', () => {
 			params: '120B',
 			quantization: 'MXFP4',
 			raw: 'openai/gpt-oss-120b-MXFP4',
+			sidecar: null,
 			tags: []
 		});
 
@@ -157,6 +165,7 @@ describe('parseModelId', () => {
 			params: '20B',
 			quantization: 'Q4_K_M',
 			raw: 'openai/gpt-oss-20b:Q4_K_M',
+			sidecar: null,
 			tags: []
 		});
 
@@ -167,6 +176,7 @@ describe('parseModelId', () => {
 			params: '30B',
 			quantization: 'BF16',
 			raw: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-1M-BF16',
+			sidecar: null,
 			tags: ['Instruct', '1M']
 		});
 	});
@@ -179,6 +189,7 @@ describe('parseModelId', () => {
 			params: '17B',
 			quantization: 'Q4_K_M',
 			raw: 'meta-llama/Llama-4-Scout-17B-16E-Instruct-Q4_K_M',
+			sidecar: null,
 			tags: ['16E', 'Instruct']
 		});
 
@@ -189,6 +200,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'IQ4_XS',
 			raw: 'MiniMaxAI/MiniMax-M2-IQ4_XS',
+			sidecar: null,
 			tags: []
 		});
 
@@ -199,6 +211,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'UD-Q3_K_XL',
 			raw: 'MiniMaxAI/MiniMax-M2-UD-Q3_K_XL',
+			sidecar: null,
 			tags: []
 		});
 
@@ -209,6 +222,7 @@ describe('parseModelId', () => {
 			params: '123B',
 			quantization: 'Q4_K_M',
 			raw: 'mistralai/Devstral-2-123B-Instruct-2512-Q4_K_M',
+			sidecar: null,
 			tags: ['Instruct', '2512']
 		});
 
@@ -219,6 +233,7 @@ describe('parseModelId', () => {
 			params: '24B',
 			quantization: 'Q8_0',
 			raw: 'mistralai/Devstral-Small-2-24B-Instruct-2512-Q8_0',
+			sidecar: null,
 			tags: ['Instruct', '2512']
 		});
 
@@ -229,6 +244,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'MXFP4_MOE',
 			raw: 'noctrex/GLM-4.7-Flash-MXFP4_MOE',
+			sidecar: null,
 			tags: []
 		});
 
@@ -239,6 +255,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q4_K_M',
 			raw: 'Qwen/Qwen3-Coder-Next-Q4_K_M',
+			sidecar: null,
 			tags: []
 		});
 
@@ -249,6 +266,7 @@ describe('parseModelId', () => {
 			params: '120B',
 			quantization: 'Q4_K_M',
 			raw: 'openai/gpt-oss-120b-Q4_K_M',
+			sidecar: null,
 			tags: []
 		});
 
@@ -259,6 +277,7 @@ describe('parseModelId', () => {
 			params: '20B',
 			quantization: 'F16',
 			raw: 'openai/gpt-oss-20b-F16',
+			sidecar: null,
 			tags: []
 		});
 
@@ -269,6 +288,7 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q4_K_M',
 			raw: 'nomic-embed-text-v2-moe.Q4_K_M',
+			sidecar: null,
 			tags: []
 		});
 	});
@@ -302,6 +322,43 @@ describe('parseModelId', () => {
 			params: '27B',
 			quantization: 'Q8_0',
 			tags: ['it']
+		});
+	});
+
+	it('parses sidecar file tokens', () => {
+		// sidecar prefix: bare filename or multi-slash path reduces to the filename
+		expect(parseModelId('mtp-Q4_0.gguf')).toMatchObject({
+			quantization: 'Q4_0',
+			sidecar: ModelDraftSidecar.MTP
+		});
+
+		expect(parseModelId('ggml-org/Model-GGUF/mtp-Q4_0.gguf')).toMatchObject({
+			quantization: 'Q4_0',
+			sidecar: ModelDraftSidecar.MTP
+		});
+
+		expect(parseModelId('ggml-org/Model-GGUF/mmproj-F16.gguf')).toMatchObject({
+			quantization: 'F16',
+			sidecar: ModelAuxSidecar.MMPROJ
+		});
+
+		// embedded-draft suffix: -<type> only strips when preceded by a quant
+		expect(parseModelId('ggml-org/Hy3-IQ1_M-mtp')).toMatchObject({
+			modelName: 'Hy3',
+			quantization: 'IQ1_M',
+			sidecar: ModelDraftSidecar.MTP
+		});
+
+		// a model literally named MyModel-mtp is not a draft
+		expect(parseModelId('ggml-org/MyModel-mtp')).toMatchObject({
+			modelName: 'MyModel-mtp',
+			sidecar: null
+		});
+
+		// no sidecar
+		expect(parseModelId('ggml-org/model-Q4_K_M')).toMatchObject({
+			quantization: 'Q4_K_M',
+			sidecar: null
 		});
 	});
 });

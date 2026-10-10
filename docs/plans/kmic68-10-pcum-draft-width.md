@@ -18,11 +18,13 @@ explicitly excluded: its confidence-head value is not a calibrated token
 probability. DFlash/DFlash2 decode the noise block before host filtering, so P10
 can reduce target verification rows there but cannot avoid that draft decode.
 
-`LLAMA_SPEC_P_CUM` is the only runtime control. Unset disables the rule. A
+`LLAMA_SPEC_P_CUM` selects the runtime mode. Unset disables the rule. A
 finite non-negative value is the explicit threshold. Any finite negative value
 selects the A770-measured depth ramp. NaN, infinity, and malformed values fail
 initialization. The ramp uses the committed target position at cycle start and
-is unavailable until the P04/P01 calibration report has been recorded.
+requires the machine-readable artifact at `LLAMA_SPEC_P_CUM_RAMP=<path>`.
+The P04/P01 calibration report alone does not enable negative mode. Unset and
+constant modes, and excluded drafters, do not read the artifact.
 
 Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`, its
 `p_cum`, `p_cum_min`, and cumulative stop beside the existing `p_min`
@@ -43,17 +45,33 @@ stop. P100 threshold values are not defaults for the A770.
 - **R10.11 (State-driven):** WHILE a negative setting is used with EAGLE3, DFlash, or DFlash2, the cumulative-probability rule shall remain disabled for that drafter.
 - **R10.12 (Ubiquitous):** The cumulative-probability extractor shall use the declared probability domain for each eligible drafter.
 - **R10.13 (State-driven):** WHILE DSpark is active, cumulative-probability drafting shall preserve the existing path without a cumulative stop.
+- **R10.14 (Unwanted behaviour):** IF negative MTP mode lacks a valid calibration artifact matching the active target model, draft model, backend devices, route, build, and driver, THEN the speculative initializer shall fail before drafting.
 
 ## Approach
 
 1. Complete P01 and collect P04 synchronized rows for non-chained MTP only.
    `scripts/perf/calibrate-spec-pcum.py` replays those MTP top-1 sequences over
    a predeclared threshold grid and shortlists real A770 A/B candidates.
-2. Store ordered `(position,threshold)` knots at 0, 4096, and 16384 keyed by
-   `drafter=draft-mtp`, model identity, route, build, and driver. Clamp outside
-   endpoints and interpolate between adjacent knots. A negative setting on any
-   other drafter logs one ineligibility reason and applies no cumulative stop;
-   it never reuses MTP calibration.
+2. Have `verify-spec-pcum.py --phase calibrate --ramp-output <path>` write a
+   version-1 JSON artifact alongside the human-readable report only after the
+   paired measurements qualify. Store `schema_version`, `drafter=draft-mtp`,
+   target/draft model SHA-256 identities, backend device identities and their
+   target/draft assignments, route, build identity, driver identity,
+   and exactly three ordered `(position,threshold)` knots at 0, 4096, and 16384.
+   Build identity includes hashes of the server and loaded backend libraries;
+   driver identity includes kernel driver and compute-runtime versions. GPU
+   identity includes vendor/device ID, architecture, VRAM capacity, and device
+   UUID from the active backend. Match the complete assigned device set, not
+   just the default GPU name; missing identity or a different GPU/topology fails
+   initialization. Calibration records the devices that actually executed it.
+   The common speculative initializer reads `LLAMA_SPEC_P_CUM_RAMP` once, with
+   a 64 KiB input limit, only for negative non-chained MTP mode. Require version 1,
+   all fields, exact identity matches, and finite thresholds in `[0,1]`; missing,
+   unreadable, oversized, malformed, or mismatched artifacts fail initialization.
+   Keep the validated knots immutable for the run and record the artifact hash
+   in cycle evidence. Clamp outside endpoints and interpolate between adjacent
+   knots. A negative setting on another drafter logs one ineligibility reason
+   and applies no cumulative stop; it never loads MTP calibration.
 3. Parse the variable with complete string consumption and finite range checks.
    Unset disables. Finite non-negative values are explicit constants; any finite
    negative value selects the keyed MTP ramp. Signed `-0` compares as zero and
@@ -102,6 +120,7 @@ stop. P100 threshold values are not defaults for the A770.
 - `docs/plans/kmic68-04-cycle-log.md` - per-cycle probability and phase schema.
 - `scripts/perf/calibrate-spec-pcum.py` - planned MTP-only offline threshold replay.
 - `scripts/perf/verify-spec-pcum.py` - planned MTP A770 calibration and paired depth A/B.
+- `common/speculative.cpp` - planned bounded ramp-artifact loader and runtime identity validation.
 - `tests/test-speculative-pcum.cpp` - planned EAGLE3, DFlash2, DFlash, MTP, excluded-DSpark, and parser fixtures.
 - `docs/research/kmic68-a770-pcum-ramp.md` - planned MTP-keyed ramp provenance and decision record.
 
@@ -110,6 +129,13 @@ stop. P100 threshold values are not defaults for the A770.
 Add deterministic tests for unset, zero, above-one, equality, strict crossing,
 first-token preservation after prior stops, cumulative-only `n_min` bypass,
 adaptive caps, complete numeric parsing, and every included/excluded drafter.
+Add artifact-loader fixtures for the three knots, interpolation and endpoint
+clamping, missing path/file, malformed/oversized data, unsupported schema,
+missing/duplicate/out-of-order positions, non-finite/out-of-range thresholds,
+and each identity mismatch, including another GPU with the same driver and a
+changed target/draft device assignment. Unset, constant, and excluded modes must
+perform no artifact I/O. Replacing the artifact after initialization must not change the
+in-memory knots or recorded hash.
 DFlash2 fixtures vary selector scores with `p_min` on/off; DSpark fixtures
 prove both confidence-head and sampler-probability changes leave P10 disabled.
 
@@ -120,8 +146,16 @@ timeout 240 ctest --test-dir build-sycl -R 'test-qwen4exp-mtp|test-speculative-p
 After P01/P04, run MTP calibration at the P01 token count and depths:
 
 ```bash
-timeout 3600 python3 scripts/perf/verify-spec-pcum.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --depths 0,4096,16384 --n-predict 512 --repetitions 3 --threshold-grid 0:1:0.01 --seed 123 --spec-args='--spec-type draft-mtp --spec-draft-n-max 7' --cycle-log /tmp/p10-cycles.jsonl --report docs/research/kmic68-a770-pcum-ramp.md
+timeout 3600 python3 scripts/perf/verify-spec-pcum.py --phase calibrate --ramp-output /tmp/p10-ramp.json --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --depths 0,4096,16384 --n-predict 512 --repetitions 3 --threshold-grid 0:1:0.01 --seed 123 --spec-args='--spec-type draft-mtp --spec-draft-n-max 7' --cycle-log /tmp/p10-calibration-cycles.jsonl --report docs/research/kmic68-a770-pcum-ramp.md
+timeout 3600 python3 scripts/perf/verify-spec-pcum.py --phase validate --ramp-input /tmp/p10-ramp.json --modes=unset,-1 --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --depths 0,4096,16384 --n-predict 512 --repetitions 3 --seed 123 --spec-args='--spec-type draft-mtp --spec-draft-n-max 7' --cycle-log /tmp/p10-validation-cycles.jsonl --report docs/research/kmic68-a770-pcum-ramp.md
 ```
+
+Calibration launches use only unset/explicit constant modes and clear inherited
+ramp settings. Validation uses the same binaries without rebuilding, sets
+`LLAMA_SPEC_P_CUM_RAMP` from `--ramp-input` and `LLAMA_SPEC_P_CUM=-1` for the
+negative arm, and clears both for the unset arm. Append the validation results
+and consumed artifact hash to the report; do not refit knots during validation.
+No deployment or performance claim is supported until this second phase passes.
 
 Expected evidence:
 
@@ -135,7 +169,10 @@ Expected evidence:
   accepted-per-drafted, and paired throughput;
 - DFlash2 tests vary selector softmax independently; DSpark tests prove exclusion;
 - DFlash/DFlash2 report unchanged block decode separately from target-row savings;
-- negative mode works only for keyed MTP and is disabled on EAGLE3/DFlash;
+- negative mode consumes the recorded artifact only for matching MTP, fails on
+  missing/invalid/mismatched artifacts, and is disabled on EAGLE3/DFlash;
+- calibration and validation record identical binary/model/device/route/driver
+  identities, and every negative-mode cycle carries the validated artifact hash;
 - DSpark, chained MTP, draft-simple, and P09 remain unchanged;
 - the post-run two-driver fault gate passes and the service is restarted.
 
@@ -150,3 +187,7 @@ Expected evidence:
 - The negative ramp is MTP-only until another eligible drafter/model/route
   receives its own probability dataset and real A770 A/B.
 - If no MTP ramp improves the objective, leave P10 disabled and record it.
+- A changed binary, backend library, model, backend device/assignment, route, or
+  driver invalidates the artifact and requires calibration plus validation again;
+  there is no built-in
+  ramp or silent fallback for negative MTP mode.

@@ -55,6 +55,10 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
+- 2026.09
+  - Update the CI build environment for oneAPI 2026.1 (unified oneAPI Toolkit). oneDNN is removed from the Deep Learning Essentials package in 2026.0, so the CI now uses the oneAPI Toolkit installer which still includes oneDNN.
+  - oneAPI 2026.1 improves the SYCL build performance: measured with the same code on Arc B570, prompt processing 1331 vs 434 t/s (3.1x) vs the 2025.3-based release build.
+
 - 2026.04-05
   - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
   - Fused MoE.
@@ -266,7 +270,7 @@ Platform #0: Intel(R) OpenCL HD Graphics
  `-- Device #0: Intel(R) Iris(R) Xe Graphics [0x9a49]
 ```
 
-2. **Install Intel® oneAPI Base toolkit**
+2. **Install Intel® oneAPI Toolkit**
 
 SYCL backend depends on:
   - Intel® oneAPI DPC++/C++ compiler/running-time.
@@ -276,9 +280,9 @@ SYCL backend depends on:
 
 - **For Intel GPU**
 
-All above are included in both **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** packages.
+With the 2026.0 release, the Intel® oneAPI Base toolkit and the HPC toolkit are combined into the **Intel® oneAPI Toolkit**, and **oneDNN is removed from the Intel® Deep Learning Essentials** package (oneDNN is distributed separately since then). The **Intel® oneAPI Toolkit** includes oneDNN until 2027.0.
 
-It's recommended to install **Intel® Deep Learning Essentials** which only provides the necessary libraries with less size.
+It's recommended to install the **Intel® oneAPI Toolkit**.
 
 oneAPI 2026.0 dropped oneDNN from the Deep Learning Essentials package; install the unified
 **Intel® oneAPI Base toolkit** instead if oneDNN support (`GGML_SYCL_ENABLE_DNN`, the oneDNN FA/GEMM
@@ -935,6 +939,7 @@ variant is provided; its correctness and performance remain unmeasured.
 | GGML_OP_OFFLOAD_MIN_BATCH | 32 (default) or integer | Minimum batch size at which an op whose weights are in host memory is offloaded to the SYCL device. |
 | GGML_SYCL_MMVQ_WIDE | 0 or 1 (1 default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
 | GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Select which quantized weight formats may take the XMX dequant-GEMM paths, where the weights are dequantized inside the GEMM (gathered straight into the XMX tiles) instead of being written out to f16 and read back. This covers the grouped `MUL_MAT_ID` path used by MoE models, and the plain `MUL_MAT` path when built with `GGML_SYCL_F16=ON` (the plain path sits inside that build's f16 branch). Both compute in f16 on the XMX units regardless of `GGML_SYCL_F16`, so enabling them for `MUL_MAT_ID` trades some precision for speed relative to the per-expert library GEMM they replace. Mainly affects prompt processing; token generation is unaffected. One bit per format, so a format can be enabled or benchmarked on its own:<br>* 1: IQ4_NL<br>* 2: IQ3_S<br>* 4: IQ4_XS<br>* 8: IQ3_XXS<br>* 16: IQ2_XXS<br>* 32: IQ2_XS<br>* 64: IQ2_S<br>* 128: IQ1_S<br>* 256: IQ1_M<br>Set to 0 to disable the paths entirely and fall back to the library GEMM, which is the baseline to compare against. A format is only taken when the shape also fits (the weights must cover whole blocks, and the tile is only used while N is narrow), so setting a bit does not force the path. Formats outside this list are never affected by this variable. No effect when the selected build policy omits these kernels or the device has no matching kernel image, see [XMX gather GEMMs and DG2 AOT builds](#xmx-gather-gemms-and-dg2-aot-builds). |
+| GGML_SCHED_COPY_SYNC | 1 (default) or exactly 0 | Keep synchronous scheduler input copies by default. Set exactly `0` to opt into experimental stream-ordered copies where eligible. Read once per process. See [scheduler input-copy synchronization](#scheduler-input-copy-synchronization) for eligibility, lifetime, diagnostics, and validation limits. |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
@@ -947,6 +952,73 @@ variant is provided; its correctness and performance remain unmeasured.
 | SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE | alias | Older alias for UR_L0_USE_COPY_ENGINE, read by the adapter only when the UR name is unset. An explicit value here counts like one on the UR name for the xe default; if the UR name is present but empty next to a set alias, ggml-sycl copies the alias into it (the adapter would otherwise fail parsing the empty value). |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
 | GGML_SYCL_Q8_KV_QUANTS_FIRST | 1 (default) or 0 | Store `q8_0` KV cache rows as 128 contiguous quant values followed by four fp16 scales, instead of four interleaved 34-byte `block_q8_0` records. Applies only to SYCL devices with `q8_0` K and V, 128-element heads and non-transposed V (flash attention on); every other cache keeps canonical blocks either way. Set to 0 to fall back. Read by `src/llama-kv-cache.cpp`. |
+
+### Scheduler input-copy synchronization
+
+`GGML_SCHED_COPY_SYNC` controls the generic scheduler's handling of eligible
+host-to-device split inputs, such as outputs from CPU-resident MoE experts with
+`--n-cpu-moe`. It is a runtime environment variable, not a CMake option or a
+server request parameter. It does not enable SYCL graph replay or select the
+Level Zero copy engine.
+
+| Environment value | Behavior |
+| --- | --- |
+| Unset or `1` | Default: retain the existing synchronization and copy path. |
+| Exactly `0` | Opt into experimental stream-ordered input copies, subject to the gates below. |
+| Empty or any other string, including `false`, `00`, or whitespace around `0` | Retain synchronization; these are not opt-ins. |
+
+The value is cached process-wide when the scheduler first checks it, normally
+during scheduler construction. Set it before launching the executable; changing
+the environment later does not change existing or subsequent schedulers in that
+process. Library callers follow the same rule. No upload-completion event for
+this experimental path is allocated while synchronization is selected. Normal
+pipeline-copy events are unaffected.
+
+With `0`, the destination must advertise `ggml_backend_async_is_stream_ordered`,
+use its default buffer type, and provide an asynchronous tensor setter. Only
+single-device SYCL currently advertises the capability. The scheduler must have
+one copy (`n_copies == 1`) and no pipeline-copy event. The source must have a
+host buffer; CPU-from-pointer buffers are excluded to preserve mapped-memory
+staging, including the PVC workaround. Multi-device SYCL, parallel schedulers,
+unsupported backends, and ineligible buffers keep their existing copy path even
+when `0` is set.
+
+An eligible ordinary split input synchronizes its source backend, then enqueues
+`set_tensor_async` on the destination's in-order stream without first draining
+that stream. Mutable host sources additionally require a completion event,
+recorded immediately after the upload. The scheduler waits on pending upload
+events before host splits can overwrite source memory and before graph return,
+including compute failure. These waits leave later device compute queued.
+Immutable WEIGHTS do not need this mutable-source guard. If event support or
+allocation is unavailable, mutable inputs retain blocking copies. Routed expert
+copies and prefetch staging keep their existing specialized transfer handling;
+this flag is not a guarantee that every copy becomes asynchronous.
+
+Use separate processes for comparison, with identical arguments:
+
+```bash
+# Default and explicit synchronous baseline:
+env -u GGML_SCHED_COPY_SYNC llama-completion -m MODEL --n-cpu-moe 20 -n 256 -lv 5
+GGML_SCHED_COPY_SYNC=1 llama-completion -m MODEL --n-cpu-moe 20 -n 256 -lv 5
+# Experimental opt-in:
+GGML_SCHED_COPY_SYNC=0 llama-completion -m MODEL --n-cpu-moe 20 -n 256 -lv 5
+```
+
+At scheduler destruction, debug logging (`-lv 5` for completion, `-v` for bench)
+prints `stream-ordered input copies: N, host-read flushes: H at a host split,
+G at graph end` if `N > 0`. Require a nonzero counter to establish that a test
+exercised the new ordinary input-copy branch. A missing line alone cannot
+distinguish disabled logging, ineligible graphs, early termination, or the
+synchronous path. Flush counters count upload-event waits, not full backend
+synchronizations or time saved.
+
+**Validation limit:** the 2026-10-06 A770 correctness gate and CPU lifetime tests
+passed, but real-model greedy output was not repeatable even in the forced-sync
+baseline. Output equivalence remains unproven; five timing pairs showed no
+throughput improvement. The optimization therefore remains opt-in. The measured
+revision enabled it when unset; use explicit `0` to reproduce that arm with
+current code. See the [campaign report](../research/sched-stream-ordered-copies-2026-09-28.md)
+for commands, counters, failed comparisons, and untested configurations.
 
 ### Intel Arc (A770 / DG2) flash-attention KV cache
 

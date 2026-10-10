@@ -33,6 +33,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - **R02.8 (Ubiquitous):** The status-bearing device-memory query shall distinguish exact Level Zero, exact SYCL, total-as-free fallback, and query failure outcomes.
 - **R02.9 (Unwanted behaviour):** IF a sample has fallback or failure provenance, zero total bytes, `free_bytes > total_bytes`, or `0/0` values, THEN the P02 result validator shall invalidate the entire launch record.
 - **R02.10 (Unwanted behaviour):** IF `LLAMA_BENCH_MEM_INTERVAL_MS` is empty, malformed, outside `[10,1000]`, or overflows, THEN the server initializer shall fail with the rejected value.
+- **R02.11 (Event-driven):** WHEN `bench_spec.py` receives SIGTERM or SIGINT, the harness shall stop and reap its owned server process group before exiting with a failed launch result.
 
 ## Approach
 
@@ -61,11 +62,23 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 6. Extend `scripts/perf/bench_spec.py:start_server` to assign one unique log
    path and launch ID per server process, and extend `run_arm` to require
    exactly one matching terminal record. Preserve every launch record instead of
-   collapsing to an arm-only aggregate.
+   collapsing to an arm-only aggregate. Install SIGTERM/SIGINT cancellation
+   handling before spawning: cancellation during startup, health checks, warmup,
+   or requests must reach `stop_server`, including the spawn/registration window.
+   Retain the owned process-group ID and make cleanup idempotent; an exited
+   launcher does not prove its descendants are gone. Forward graceful SIGINT,
+   wait at most 20 seconds, escalate to SIGTERM for 10 seconds, then SIGKILL and
+   reap within 5 seconds. Verify the group is gone before another launch. Mark
+   every cancelled launch invalid even if graceful shutdown produced a terminal
+   record; missing records or forced termination cannot become headroom evidence.
 7. Add parser and lifecycle tests to `scripts/test_bench_spec.py`: exact Level
    Zero/SYCL records, total-as-free fallback, `0/0`, malformed intervals,
    missing/duplicate records, write failure, and sleep-wake-shutdown with one
-   process record.
+   process record. Add deterministic exact-sample sequences: `100,60,80` must
+   report minimum/final `60/80`, and `100,60,60` must report `60/60`. Use a fake
+   session-isolated server to test cancellation during startup and requests,
+   graceful terminal-record emission, an exited launcher with a live descendant,
+   and escalation through SIGKILL; assert no owned processes survive.
 8. Treat instrumented launches as memory evidence only. Discard their throughput
    fields from performance comparisons; any performance claim must come from a
    separate launch with `LLAMA_BENCH_MEM_LOG` absent.
@@ -76,7 +89,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - `ggml/include/ggml-backend.h` - existing void query and planned status-bearing compatibility API.
 - `ggml/src/ggml-sycl/mem.cpp:122-150` - exact providers and total-as-free fallback provenance.
 - `common/speculative.cpp:3199-3244` - existing instantaneous checkpoint query; not whole-process telemetry.
-- `scripts/perf/bench_spec.py:442-520` - `start_server` and `run_arm` process ownership.
+- `scripts/perf/bench_spec.py:422-465,505-507` - session-isolated spawn, bounded group shutdown, and `run_arm` cleanup.
 - `scripts/test_bench_spec.py` - parser, failure-policy, interval, and lifecycle tests.
 
 ## Verification
@@ -90,26 +103,35 @@ driver, and boot for both launches.
 Prerequisites: stop `llama-sycl.cpp.service`, verify sole tenancy on
 `/dev/dri/renderD128`, name the xe or i915 driver, set
 `ZES_ENABLE_SYSMAN=1`, and apply the post-run fault gate from `AGENTS.md`.
-Run one instrumented process per fixture:
+Run one instrumented process per fixture, selecting the same `none-q8_0` arm
+with `ONLY` (`LAUNCHES` applies only to `MODE=ab`). These commands require the
+cancellation handling above; the outer kill grace exceeds its 35-second cleanup
+budget. A failed fixture stops the pair rather than launching the next server:
 
 ```bash
-ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-8pct.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline CTX=16384 REPEATS=1 LAUNCHES=1 PROMPTS=/tmp/p02-8pct-prompts.jsonl OUT_TAG=p02-8pct timeout 1800 python3 scripts/perf/bench_spec.py
-ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-full.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline CTX=16384 REPEATS=1 LAUNCHES=1 PROMPTS=/tmp/p02-full-prompts.jsonl OUT_TAG=p02-full timeout 1800 python3 scripts/perf/bench_spec.py
+ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-8pct.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline ONLY=none-q8_0 CTX=16384 REPEATS=1 PROMPTS=/tmp/p02-8pct-prompts.jsonl OUT_TAG=p02-8pct timeout --kill-after=45s 1800 python3 scripts/perf/bench_spec.py || exit $?
+ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-full.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline ONLY=none-q8_0 CTX=16384 REPEATS=1 PROMPTS=/tmp/p02-full-prompts.jsonl OUT_TAG=p02-full timeout --kill-after=45s 1800 python3 scripts/perf/bench_spec.py || exit $?
 ```
 
 Expected evidence:
 
+- each launch prints `arms: ['none-q8_0']`;
 - each summary contains exactly one process-lifetime memory record with positive
   exact-sample count, provider provenance, `min_free_bytes`, and
   `final_free_bytes`;
 - the full-context process reports no more minimum free memory than the 8%-fill
   process under the same setup;
-- at least the full-context record demonstrates the intended distinction by
-  reporting `min_free_bytes < final_free_bytes`;
+- every valid record reports `min_free_bytes <= final_free_bytes`; equality is
+  valid when peak allocations remain live at the pre-cleanup final sample;
+- any observed `min_free_bytes < final_free_bytes` is recorded as a transient
+  dip, not required for acceptance; the deterministic sequences verify both
+  transient and retained-peak tracking independently of hardware behavior;
 - injected total-as-free, `0/0`, query, and write failures invalidate the
   process and produce no numeric headroom claim;
 - a sleep-wake-shutdown scenario emits one record and preserves the minimum
   across reloads;
+- timeout/cancellation fixtures leave no owned server or descendant, reap the
+  child, mark the launch invalid, and prevent the second fixture from starting;
 - invalid interval strings fail startup, while an unsampled control creates no
   sampler record; sampled throughput is excluded from performance evidence.
 
@@ -121,6 +143,9 @@ Expected evidence:
   floor.
 - Per launch means one `llama-server` process lifetime. Multiple model-load
   epochs and prompts share one record.
+- Uncatchable harness termination cannot guarantee cleanup or a terminal
+  record. Abort the campaign and re-establish sole tenancy before resuming;
+  never treat a timed-out launch as completed memory evidence.
 - Exact Level Zero or SYCL provider provenance is mandatory. Never infer free
   VRAM from process RSS, unrelated sysfs files, or the total-as-free fallback.
 - Periodic polling can perturb timing; P02 records headroom only, and performance

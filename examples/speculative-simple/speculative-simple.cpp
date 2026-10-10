@@ -125,17 +125,12 @@ int main(int argc, char ** argv) {
 
     // eval the prompt on the target and feed it to the speculative implementation(s)
     {
-        llama_batch batch_prompt = llama_batch_init(inp.size(), 0, 1);
+        common_batch batch_prompt(ctx_tgt);
         for (size_t i = 0; i < inp.size() - 1; ++i) {
-            common_batch_add(batch_prompt, inp[i], i, { seq_id }, false);
+            batch_prompt.add(inp[i], i, seq_id, false);
         }
 
-        // a one-token prompt leaves nothing to evaluate here: the main loop decodes its only token
-        const int32_t rc = batch_prompt.n_tokens > 0 ? llama_decode(ctx_tgt, batch_prompt) : 0;
-        if (rc != 0) {
-            LOG_ERR("%s: prompt decode failed, ret = %d\n", __func__, rc);
-            return 1;
-        }
+        llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_prompt.get());
 
         if (!common_speculative_process(spec, batch_prompt)) {
             LOG_ERR("%s", "failed to process speculative prompt\n");
@@ -154,7 +149,7 @@ int main(int argc, char ** argv) {
 
     common_speculative_begin(spec, seq_id, prompt_tgt);
 
-    llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+    common_batch batch_tgt(ctx_tgt);
 
     llama_tokens draft;
 
@@ -224,21 +219,17 @@ int main(int argc, char ** argv) {
         }
 
         // always have a token to evaluate from before - id_last
-        common_batch_clear(batch_tgt);
-        common_batch_add  (batch_tgt, id_last, n_past++, { seq_id }, true);
+        batch_tgt.clear();
+        batch_tgt.add(id_last, n_past++, seq_id, true);
 
         // evaluate the target model on [id_last, draft0, draft1, ..., draftN-1]
         {
             for (size_t i = 0; i < draft.size(); ++i) {
-                common_batch_add(batch_tgt, draft[i], n_past + i, { seq_id }, true);
+                batch_tgt.add(draft[i], n_past + i, seq_id, true);
             }
 
 
-            const int32_t rc = llama_decode(ctx_tgt, batch_tgt);
-            if (rc != 0) {
-                LOG_ERR("%s: target decode failed, ret = %d\n", __func__, rc);
-                return 1;
-            }
+            llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
         }
 
         // Hand the target's batch to the speculative layer and let it advance the draft in
@@ -377,7 +368,6 @@ int main(int argc, char ** argv) {
     LOG_INF("target:\n\n");
     common_perf_print(ctx_tgt, smpl.get());
 
-    llama_batch_free(batch_tgt);
 
     common_speculative_free(spec);
 

@@ -1,0 +1,400 @@
+Build with Macros:
+  GGML_SYCL_DNNL: no
+  GGML_SYCL_F16: yes
+  GGML_SYCL_FORCE_MMQ: no
+  GGML_SYCL_GRAPH: yes
+  GGML_SYCL_GRAPH_EVICTION_TIMEOUT: 10
+  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes
+  GGML_SYCL_SUPPORT_VMM: yes
+  GGML_SYCL_FORCE_MMQ: no
+  GGML_SYCL_GRAPH: yes
+  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes
+  GGML_SYCL_SUPPORT_VMM: yes
+Running with Environment Variables:
+  GGML_SYCL_DEBUG: 0
+  GGML_SYCL_DEV_DEBUG: 0
+  GGML_SYCL_DEV2DEV_MEMCPY: 0 (SYCL API)
+  GGML_SYCL_GET_MEM_API: 1 (SYCL API)
+  GGML_SYCL_ENABLE_DNN: DNN disabled by compile flag
+  GGML_SYCL_FA_ONEDNN: 1
+  GGML_SYCL_FA_ONEDNN_MAX_KV: 0
+  GGML_SYCL_ENABLE_MKL_FA: 1
+  GGML_SYCL_MEMTRACE: 0
+  GGML_SYCL_MEMTRACE_STEP: 64
+  GGML_SYCL_ENABLE_FLASH_ATTN: 1
+  GGML_SYCL_FA_FORCE_VEC_STANDARD: 0
+  GGML_SYCL_FA_Q8_GQA_TILE: 0
+  GGML_SYCL_FFN_FUSION: 1
+  GGML_SYCL_ENABLE_GRAPH: 1
+  GGML_SYCL_ENABLE_OPT: 1
+  GGML_SYCL_ENABLE_VMM: 1
+  GGML_SYCL_ENABLE_FUSION: 1
+  GGML_SYCL_PRIORITIZE_DMMV: 0
+  GGML_SYCL_USE_ASYNC_MEM_OP: 1
+  GGML_SYCL_USE_LEVEL_ZERO_API: 0
+  GGML_SYCL_USM_SYSTEM: 0
+  GGML_SYCL_ENABLE_GRAPH: 1
+  GGML_SYCL_ENABLE_OPT: 1
+  GGML_SYCL_XMX_GATHER_TYPES: -1
+  GGML_SYCL_ENABLE_VMM: 1
+  GGML_SYCL_ENABLE_FUSION: 1
+  GGML_SYCL_ENABLE_ESIMD: 1
+  GGML_SYCL_MMVQ_WIDE: 1
+  GGML_SYCL_PRIORITIZE_DMMV: 0
+  GGML_SYCL_USE_ASYNC_MEM_OP: 1
+  GGML_SYCL_USE_LEVEL_ZERO_API: 0
+  GGML_SYCL_USM_SYSTEM: 0
+  GGML_SYCL_ENABLE_HOST_PINNED_MEM: 1
+  GGML_SYCL_HOST_PINNED_MEM_2G: 0
+  GGML_SYCL_SPARSE_FA: 0
+  GGML_SYCL_SPARSE_FA_DEBUG: 0
+  GGML_SYCL_SPARSE_FA_MARGIN: 256
+zeInit with flags value of 1
+Level Zero Loader version: 1.32.0
+zeInitDrivers with flags value of 1
+zeDriverHandle 0xf349aa8 matched between zeDriverGet and zeInitDrivers. Not adding duplicate driver to list
+1 L0 Drivers found.
+Level Zero Driver version: 1.17.39758
+Initialized 1 platforms
+zeInit with flags value of 1
+Level Zero Loader version: 1.32.0
+zeInitDrivers with flags value of 1
+Skipping L0 V2 adapter: Using default adapter version based on device IP version
+NOTE: L0 Immediate CommandList Setting: 1
+NOTE: Number of queue groups = 2
+NOTE: main blitter/copy engine is available
+NOTE: link blitter/copy engines are not available
+NOTE: L0 Immediate CommandList Setting: 1
+NOTE: L0 Immediate CommandList Setting: 1
+NOTE: L0 Immediate CommandList Setting: 1
+NOTE: L0 Immediate CommandList Setting: 1
+urQueueRelease(compute) NumTimesClosedFull 0, NumTimesClosedEarly 0
+urQueueRelease(copy) NumTimesClosedFull 0, NumTimesClosedEarly 0
+NOTE: L0 Immediate CommandList Setting: 1
+urQueueRelease(compute) NumTimesClosedFull 0, NumTimesClosedEarly 0
+urQueueRelease(copy) NumTimesClosedFull 0, NumTimesClosedEarly 0
+urQueueRelease(compute) NumTimesClosedFull 0, NumTimesClosedEarly 0
+urQueueRelease(copy) NumTimesClosedFull 0, NumTimesClosedEarly 0
+Found 1 SYCL devices:
+|  |                   |                                       |       |Max    |        |Max  |Global |                     |
+|  |                   |                                       |       |compute|Max work|sub  |mem    |                     |
+|ID|        Device Type|                                   Name|Version|units  |group   |group|size   |       Driver version|
+|--|-------------------|---------------------------------------|-------|-------|--------|-----|-------|---------------------|
+| 0| [level_zero:gpu:0]|                Intel Arc A770 Graphics|  12.55|    512|    1024|   32| 16225M|           1.17.39758|
+SYCL Optimization Feature:
+|ID|        Device Type|Reorder|
+|--|-------------------|-------|
+| 0| [level_zero:gpu:0]|      Y|
+[getZeQueue]: create queue ordinal = 0, index = 0 (round robin in [0, 0]) priority = Normal
+create command list ordinal: 0, type: immediate, device: 0xf34a008, inOrder: 0
+Cache empty (Host Visible: 1, Profiling: 0, Counter: 0, Interrupt: 0, Device: 0xf355330)
+ze_event_pool_desc_t flags set to: 1
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryFill() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+common_params_fit_impl: MoE cache fit selected main-device dense placement with 9537 MiB projected cache capacity for 18600 MiB of routed expert weights (up to 51.3% coverage)
+common_params_fit_impl: MoE cache fit device 0 leaves 9537 MiB after reserve; minimum complete pool set is 1024 MiB
+[getZeQueue]: create queue ordinal = 1, index = 0 (round robin in [0, 0]) priority = Normal
+create command list ordinal: 1, type: immediate, device: 0xf34a008, inOrder: 0
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8
+calling zeCommandListAppendMemoryCopy() with ZeEvent 276865832
+  NumEventsInWaitList 0:
+ZeEvent = 276865832
+Inserting 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 0, Counter: 0, Device: 0xf355330) into cache 0xf3547c8
+Using 0xf383ba0 event (Host Visible: 0xf383ba0, Profiling: 1, Counter: 0, Interrupt: 0, Device: 0xf355330) from cache 0xf3547c8

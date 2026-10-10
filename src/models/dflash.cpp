@@ -8,6 +8,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
+    ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, hparams.f_attn_value_scale, false);
 
     hparams.llm_ffn_op = LLM_FFN_SILU;
     std::string hidden_act;
@@ -486,19 +487,16 @@ static ggml_tensor * build_dflash2_conv(
 
     ggml_tensor * weight_all = ggml_add(ctx0, coeff_all, base_side);
 
+    // taps at or past block_size only read the left padding and add nothing
+    const int64_t n_taps = std::min(kernel_size, block_size);
+
     ggml_tensor * result = nullptr;
-    for (int64_t tap = 0; tap < kernel_size; ++tap) {
+    for (int64_t tap = 0; tap < n_taps; ++tap) {
         ggml_tensor * values = blocks;
         if (tap > 0) {
-            ggml_tensor * zeros = ggml_fill(ctx0,
-                    ggml_new_tensor_3d(ctx0, hidden->type, hidden_size, std::min(tap, block_size), n_blocks), 0.0f);
-            if (tap < block_size) {
-                ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
-                        blocks->nb[1], blocks->nb[2], 0);
-                values = ggml_concat(ctx0, zeros, previous, 1);
-            } else {
-                values = zeros;
-            }
+            ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
+                    blocks->nb[1], blocks->nb[2], 0);
+            values = ggml_pad_ext(ctx0, previous, 0, 0, tap, 0, 0, 0, 0, 0);
         }
         values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
 
@@ -646,6 +644,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     };
 
     // KV cache injection
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
@@ -816,6 +815,11 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             cur = build_lora_mm(layer.wo, cur, layer.wo_s);
         }
 
+        if (hparams.f_attn_value_scale != 0.0f) {
+            cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
+            cb(cur, "attn_out_scaled", il);
+        }
+
         if (attn_dynamic) {
             cur = build_dflash2_conv(*this, cur, attn_dynamic, layer.dflash_attn_conv_base, 1);
             cb(cur, "attn_conv_out", il);
@@ -942,6 +946,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
 
     // KV cache injection: fused target features from the encoder
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 

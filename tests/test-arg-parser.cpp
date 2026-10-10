@@ -437,7 +437,8 @@ static void test(void) {
 
     {
         common_params mode_params;
-        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO);
+        // off by default: registering a cache provider must not change placement (41cd2e985)
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF);
         assert(mode_params.moe_cache.mode_explicit == false);
         assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_UNSPECIFIED);
     }

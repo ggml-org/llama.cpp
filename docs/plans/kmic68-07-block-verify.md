@@ -37,6 +37,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - **R07.11 (Event-driven):** WHEN block verification returns prefix length `tau` and token `y`, the distribution acceptor shall commit draft tokens `[0,tau)` followed by `y` to target sampler state in that order.
 - **R07.12 (Ubiquitous):** The mode-2 diagnostic record shall identify its launch, sequence, acceptor instance, and proposal range.
 - **R07.13 (Event-driven):** WHEN P06 atomically marks a single-use proposal consumed, the owning mode-2 diagnostic state shall add that proposal's expected-gain contribution exactly once.
+- **R07.14 (Event-driven):** WHEN a server slot replaces its sampler, the slot's mode-2 diagnostic state shall start a fresh acceptor identity with zero counters.
 
 ## Approach
 
@@ -51,7 +52,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    compute `keep[k+1]` from `P[k]`, `q[k]`, and `draft[k]`. For a
    nonterminal position, compute
    `S=sum_y max(keep[k+1]*P[k+1](y)-q[k+1](y),0)` and
-   `h=S/(S+1-keep[k+1])`; for `k=G-1`, use `h=keep[G]`. Set
+   `h[k+1]=S/(S+1-keep[k+1])`; for `k=G-1`, use `h[G]=keep[G]`. Set
    `tau=k+1` whenever the draw passes and continue through the block.
 4. Initialize correction/bonus `y` from the target draw at `P[tau]`. If
    `tau<G`, form the residual as
@@ -63,14 +64,20 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 6. Add `common_spec_block_diag_state` owned by the long-lived acceptor caller:
    `server_slot` for server use and an explicit local object for examples/tests.
    Key it by launch, sequence, and acceptor-instance ID; retain first/last proposal
-   IDs. Preserve it across `common_sampler_reset` and request boundaries, and
-   do not share it across slots or independently seeded samplers. Protect updates
-   when one acceptor can be reached concurrently.
+   IDs. Preserve it across `common_sampler_reset` only while the same acceptor
+   and sequence remain active. Rotate its acceptor-instance ID and clear counters
+   whenever `slot.smpl` is replaced, even with the same seed/configuration or a
+   reused pointer address. Ordinary sampling requests create new samplers and
+   cannot share a bucket. Discard any incomplete bucket on replacement; do not
+   emit it as a 256-block record. Do not share state across slots, sequences, or
+   cloned acceptors. Protect updates when one acceptor can be reached concurrently.
 7. The pure helper computes provisional
-   `E_block=sum_{k=0..G-1} keep[k+1]` and
+   `E_block=sum_{r=1..G} (1-product_{i=r..G}(1-h[i]))` and
    `E_token=sum_{k=0..G-1} product_{j=0..k} min(1,P[j](draft[j])/q[j](draft[j]))`,
    then returns `(tau,y,keep,E_block,E_token)` without touching long-lived
-   counters. Both expectations count accepted draft tokens only and exclude the
+   counters. Conditional on the recorded proposal, the final prefix reaches `r`
+   if any independent draw at positions `r..G` passes; `keep[r]` is not that
+   probability. Both expectations count accepted draft tokens only and exclude the
    always-emitted correction/bonus token `y`. The caller holds those
    contributions with the proposal result.
 8. Only after P06 successfully copies committed sampler/RNG state and atomically
@@ -81,10 +88,15 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    record containing `expected_accepted_draft_tokens_block`,
    `expected_accepted_draft_tokens_tokenwise`,
    `expected_gain_draft_tokens`, and `drafted_tokens_total`; optionally also
-   emit gain divided by `drafted_tokens_total`. Reset only after successful
-   emission. These fields exclude the always-emitted correction/bonus token `y`.
+   emit gain divided by `drafted_tokens_total`. Within one identity, reset only
+   after successful emission. These fields exclude the always-emitted
+   correction/bonus token `y`.
 9. Inherit every P06 fallback for the whole block and keep unset/default mode 0.
-   A future default change requires non-negative diagnostics and P06 parity.
+   A 256-proposal record is descriptive and cannot authorize a default change.
+   Any future default proposal needs P06 parity and repeated fixed-corpus runs
+   with independent predeclared seeds and a confidence bound over run-level gain,
+   as well as A770 throughput evidence. Conditional expectations remove the
+   acceptance-draw noise for a given proposal, not variation in sampled proposals.
 
 ## Critical files & anchors
 
@@ -92,6 +104,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - `common/sampling.h:85-89` - acceptor declarations; add the pure block helper.
 - `common/sampling.cpp:509-539` - mode and P06 RNG clone/copy; diagnostics stay caller-owned.
 - `tools/server/server-context.cpp:386-400,4302-4308` - per-slot diagnostic ownership and acceptance call.
+- `tools/server/server-context.cpp:1990-1992` - request-time sampler replacement must rotate diagnostic identity.
 - `tests/test-sampling.cpp` - seeded helper and end-to-end distribution corpus.
 - `scripts/perf/verify-spec-block.py` - planned mode comparison and diagnostic collector.
 - `docs/research/kmic68-a770-block-verify.md` - planned default-eligibility evidence.
@@ -106,17 +119,29 @@ zero-probability outputs, pool bins until expected count is at least 5, run
 per-case goodness-of-fit and enabled/mode homogeneity tests, and apply
 Holm-Bonferroni at family-wise `alpha=0.01`. TV/max error remain diagnostics.
 
-Add a diagnostic-lifetime test: the same acceptor accumulates 128 eligible blocks,
-resets between requests, then accumulates 128 more and emits exactly one
-`blocks=256` record. Two different acceptors with 128 blocks each emit none and
-never mix identities.
+Add a diagnostic-lifetime fixture that explicitly retains the same acceptor and
+sequence: accumulate 128 eligible blocks, call `common_sampler_reset`, then
+accumulate 128 more and emit exactly one `blocks=256` record. Separately, two
+ordinary server requests with 128 blocks each on the same slot must emit none:
+sampler replacement rotates identity and discards the old partial bucket. Cover
+both changed and identical seeds/configurations, distinct slots, and clones;
+none may combine counters.
+
+Add an exact diagnostic test enumerating all pass/fail combinations for short
+blocks and weighting the greatest passing position by its independent-draw
+probability. For `G=2`, `P[0]=P[1]=(0.25,0.75)`,
+`q[0]=q[1]=(0.5,0.5)`, and `draft=(0,1)`, the helper gets
+`keep=(1,0.5,0.75)`, `h=(0,0.75)`, and `E_block=1.5`, not
+`sum(keep[1:])=1.25`. Include all-zero/all-one draws and `G=1`; the
+diagnostic calculation must consume no RNG draws.
 
 ```bash
 timeout 240 ctest --test-dir build-sycl -R '^test-sampling$' --output-on-failure
 ```
 
-On A770, run an explicit MTP configuration until one acceptor completes 256
-eligible blocks:
+On A770, run an explicit MTP configuration with a sufficiently long request for
+one acceptor to complete 256 eligible blocks. The collector must fail if only
+separate request identities reach that total:
 
 ```bash
 timeout 2400 python3 scripts/perf/verify-spec-block.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --seed 123 --temperature 0.8 --modes 0,1,2 --min-blocks 256 --spec-args='--spec-type draft-mtp --no-spec-draft-backend-sampling' --report docs/research/kmic68-a770-block-verify.md
@@ -132,11 +157,14 @@ Expected evidence:
 - constrained, stateful, missing-`q`, backend-selected, replayed, and chained
   cases fall back for the whole block;
 - one acceptor spanning a reset emits exactly one identity-bearing
-  `blocks=256` record; separate acceptors never combine counters;
+  `blocks=256` record; sampler replacement starts a fresh bucket even on the
+  same slot with the same seed, and separate acceptors never combine counters;
 - mode 1 and mode 2 make identical decisions, but only mode 2 emits diagnostics;
-- `expected_gain_draft_tokens` is non-negative before a future default change
-  is considered, its P07/P06 operands exclude the always-emitted correction or
-  bonus token, and `drafted_tokens_total` is the matching denominator;
+- `expected_gain_draft_tokens` is reported with its sampled proposal identity
+  regardless of sign; its P07/P06 operands exclude correction/bonus tokens and
+  `drafted_tokens_total` is the matching denominator. Exact enumeration over a
+  tiny proposal distribution checks the unconditional expectation separately;
+  no single 256-proposal sign is a default-eligibility gate;
 - actual accepted/drafted counts and the post-run two-driver fault gate are
   recorded.
 
@@ -147,9 +175,10 @@ Run the exact README regression floor before and after the feature.
 - Unset means mode 0, intentionally differing from the source default-on
   behavior; P07 cannot change that default.
 - Mode 2 changes diagnostics only and consumes no additional RNG draws.
-- Diagnostic state belongs to one long-lived acceptor identity, survives reset,
-  and never mixes slots, sequences, or independently seeded samplers.
-- The expected-gain record is a noiseless eligibility gate, not a throughput
-  claim; a future default change also needs an A770 throughput A/B.
+- Diagnostic state survives reset of the same acceptor and sequence, not sampler
+  replacement; it never mixes slots, sequences, or sampler generations.
+- Expected gain is exact conditional on the recorded proposals, whose selection
+  remains stochastic. These diagnostic records are neither an unconditional
+  expectation nor a confidence bound; P07 makes no default or throughput claim.
 - P07 never reconstructs missing P06 distributions or handles state dependent
   on a previously accepted token.

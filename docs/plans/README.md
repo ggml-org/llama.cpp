@@ -1,9 +1,11 @@
 # Plan set: adopt Kmic-68/llama.cpp findings
 
-Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations`, merge
-base `f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. The twelve plans retain the
-transferable measurement, common-layer, and SYCL findings selected from that
-branch. CUDA/Pascal-SASS-only work (`fattn-gemm`, `gemm-fold`,
+Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations` at tip
+`ae35056eba07a52dc85c91b035170013d5e46220`, compared at merge base
+`f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. The twelve plans select findings
+and excerpts from that pinned tip; the merge base is only the comparison point.
+This source pin applies to every plan's provenance below.
+CUDA/Pascal-SASS-only work (`fattn-gemm`, `gemm-fold`,
 `fattn-q4p`, `mmvq`, and `gdn-chunked`) remains out of scope.
 
 Each included finding belongs to exactly one plan. Thresholds and defaults from
@@ -33,7 +35,7 @@ measurement gates, and rollback policy belong outside the requirement sentence.
 | --- | --- | --- | --- | --- |
 | P01 | [Bench token count at depth](kmic68-01-bench-token-count.md) | measurement methodology | none | none |
 | P02 | [Minimum free memory over a run](kmic68-02-min-free-memory.md) | measurement methodology | none | none |
-| P03 | [Memory-only floor ceiling analysis](kmic68-03-memory-only-floor.md) | experimental methodology | none | none |
+| P03 | [Memory-path timing proxy](kmic68-03-memory-only-floor.md) | experimental methodology | none | none |
 | P04 | [Speculative cycle log and phase profile](kmic68-04-cycle-log.md) | instrumentation | none | none |
 | P05 | [Guarded CPU sampler top-k prefilter](kmic68-05-topk-prefilter.md) | common-layer feature | none | none |
 | P06 | [Distribution-recording speculative acceptance](kmic68-06-speculative-sampling.md) | common-layer feature | P04 | P04 cycle dataset |
@@ -41,7 +43,7 @@ measurement gates, and rollback policy belong outside the requirement sentence.
 | P08 | [Draft-context ubatch cap](kmic68-08-draft-ubatch-cap.md) | common-layer feature | none | none |
 | P09 | [Fixed-width padded verification](kmic68-09-padded-verify.md) | common-layer feature | none | none |
 | P10 | [Cumulative-probability draft-width clamp](kmic68-10-pcum-draft-width.md) | common-layer feature | P04 | P01 re-baseline |
-| P11 | [Per-tile fp32 fold for F16 FA output](kmic68-11-fp32-vkq-fold.md) | SYCL backend feature | P03 | P03 floor report |
+| P11 | [Per-tile fp32 fold for F16 FA output](kmic68-11-fp32-vkq-fold.md) | SYCL backend feature | P03 | P03 proxy report |
 | P12 | [Prefix-length causal-mask representation](kmic68-12-non-materialised-mask.md) | core/backend feature | P08 | P08 effective draft width |
 
 P01, P02, P03, P04, P05, P08, and P09 are independently executable. P01 is an

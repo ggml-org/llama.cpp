@@ -1,0 +1,243 @@
+What is going on (evidence, not narrative)
+
+- All four bcs coredumps share one signature: RING_ESR=0x1 (instruction error), blitter parsing a second-level batch at a deterministic NEO address. Three processes died at the identical VA 0xd556a9db0004 with IPEHR=0xfffff000; the fourth at 0xd556a9be0018 on a COMPUTE_WALKER. That is the copy command list's buffer holding non-blitter content when the blitter got to it.
+- Four of five resets logged state=0x29 = REGISTERED|PENDING_DISABLE|SUSPENDED (kernel bit defs). That state exists only while xe suspends an exec queue for an LR-mode preempt fence, which fires on userptr invalidation or BO eviction. "Timedout job" is the cleanup after GuC's reset notice, not a timer.
+- NEO creates every VM in LR mode and binds each pageable host pointer as MAP_USERPTR per copy. Its staging path is skipped whenever the copy has a wait event; UR chains every memcpy with one (inOrder: 0 lists). Source pages are the mmap'd GGUF. tlb_inval_count is 13.0 million this boot.
+- This host migrates and reclaims pages constantly (pgmigrate_success 36.9M, compact_stall 28302, pgsteal_kswapd 131M, 3 GB free). i915 pinned userptr pages and never suspended contexts. xe suspends compute and blitter on every invalidation. Only the blitter breaks; the compute queue survives the same traffic, hence 0/10 with the copy engine off.
+- Open question, one instrumented run away: xe/GuC blitter suspend/resume on DG2 (a), or NEO reusing the copy list buffer while the blitter is parked (b).
+
+Plan
+
+- Part A: four bounded offline runs (tracepoints + NEO allocation/bind logs) to settle (a)/(b) and confirm the trigger.
+- Part B: fork change, auto-set UR_L0_USE_COPY_ENGINE=0 when an Intel node is on xe (sysfs check before any SYCL call, explicit user value wins), unit test, docs.
+- Part C: trigger removal with no code: --load-mode none puts the fit's host-resident experts into pinned SYCL_Host memory (loader mmap guard is the only thing preventing it today). Measured with copy engine on and off.
+- Part D: research doc, README correction, upstream report drafted but not filed without your go.
+
+Assumption: production unit may be stopped for the bounded runs as today's scripts already do.
+
+Plan: make the A770 work on the xe KMD (root cause + fix ladder)
+
+Context
+
+Two sessions today established that llama.cpp SYCL on the Arc A770 fails on the xe kernel driver (silent stalls, bcs engine resets with device coredumps) and that UR_L0_USE_COPY_ENGINE=0 avoids it (0 failures in 10, decode neutral on real text). 
+The mechanism was left as "UR/NEO/xe cross-list event defect, failing event unidentified". 
+The user wants the defect understood and xe fixed properly, not just fenced with an env var.
+
+Evidence re-read this session (all read-only; paths under ~/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/raw/, kernel journal, /proc, debugfs, NEO 26.35.39758.10 and kernel xe sources):
+
+1. All four bcs coredumps share one signature. RING_ESR=0x1 (instruction error),
+   RING_INSTDONE=0xfffffff7, CURRENT_LRCA=0x694001, and the blitter parsing a
+   second-level batch (not the job's batch_addr 0xd556a8c66f00): three dumps from
+   three different processes at the identical GPU VA ACTHD=0xd556a9db0004 with
+   IPEHR=0xfffff000; the fourth at 0xd556a9be0018 with IPEHR=0x72080025
+   (COMPUTE_WALKER). NEO heap placement is deterministic, so this is one specific
+   recycled allocation: the copy immediate command list's command buffer, whose contents at
+   execution time were not blitter commands.
+2. The queue was mid-suspend in 4 of 5 resets. state=0x29 in the kernel log =
+   REGISTERED|PENDING_DISABLE|SUSPENDED (xe_guc_submit.c bit definitions), which is
+   exactly the state left by __guc_exec_queue_process_msg_suspend ->
+   set_exec_queue_suspended(); disable_scheduling(). Suspends come only from LR-mode
+   preempt fences (xe_preempt_fence.c: enable_signaling -> q->ops->suspend(q)), which
+   fire on userptr invalidation (xe_userptr.c, dma_resv_wait_timeout on the VM
+   resv) and BO eviction, then preempt_rebind_work_func rebinds and resumes. The
+   "Timedout job" line is the TDR cleanup triggered by the GuC reset notification, not a
+   5 s timer (Timeout: 0 (ms) in every dump; LR queues have MAX_SCHEDULE_TIMEOUT).
+3. Every expert upload is a userptr bind on an LR-mode VM. NEO creates all VMs with
+   DRM_XE_VM_CREATE_FLAG_LR_MODE (ioctl_helper_xe.cpp:1339), binds are always
+   IMMEDIATE (:2066), host pointers become DRM_XE_VM_BIND_OP_MAP_USERPTR (:1826).
+   NEO's staging-buffer path (which would avoid userptr) is disabled whenever the copy has
+   a wait event: isValidForStagingTransfer(info, numWaitEvents > 0)
+   (cmdlist_hw_immediate.inl:788) and isValidForStaging(...) && !hasDependencies
+   (staging_buffer_manager.cpp:429). The UR trace shows every
+   zeCommandListAppendMemoryCopy carries NumEventsInWaitList 1 (both immediate lists
+   are inOrder: 0, ordering by event chaining). Source pages are the mmap'd GGUF
+   (/proc/<pid>/maps: r--s file mapping, RSS 20 GB). Live counter:
+   debugfs gt0/stats tlb_inval_count = 13,044,100 in 7.4 h of uptime.
+4. This host churns pages constantly. /proc/vmstat this boot: pgmigrate_success 36.9M, compact_stall 28302, pgsteal_kswapd 131M, allocstall_movable 8148; 3 GB
+   free, 34 GB cache (mergerfs, Plex, ZFS ARC). Under i915, userptr pages are pinned while
+   in use and contexts are never suspended for a rebind. Under xe every migration or
+   reclaim inside a live userptr range suspends both the compute and the blitter queue.
+5. The blitter is the only casualty. DG2 has no direct submission for BCS
+   (hw_info_dg2.cpp:34-39 lists RCS/CCS only), so blitter work is KMD-submitted jobs
+   whose batches jump into the copy command list. With UR_L0_USE_COPY_ENGINE=0 there is
+   no BCS exec queue at all, and the identical suspend/resume traffic hits only the CCS,
+   which survives it (0/10 failures, production healthy since 16:50).
+
+Two candidate defects remain, both below the application:
+- (a) xe/GuC on DG2 mishandles suspend/resume of the blitter context (state restored
+  wrongly, parser resumes on stale/foreign batch contents), or
+- (b) NEO releases/reuses the copy command list buffer while the blitter is still parked
+  or suspended on it (the COMPUTE_WALKER dump reads like the buffer had been handed to
+  the compute list).
+
+One instrumented run separates them (X1 below). Either way the application cannot fix the
+defect; it can (1) stop depending on the blitter on xe, and (2) remove the trigger, which
+is the per-copy userptr import of pageable expert pages. (2) is also a performance lever
+on both drivers: hundreds of VM_BIND/unbind ioctls and TLB invalidations per token.
+
+Standing constraints: AGENTS.md style (ASCII, concise, reuse infrastructure), PRs only to Raudbjorn/ggml-llama.cpp master, no timing claims without harness output, GPU runswrapped in timeout, production unit stopped/restarted by the existing runner scripts(raw/bench-xe.sh, raw/run-xe-*.sh), fuser /dev/dri/renderD128 and dmesg checksbefore and after each run.
+
+Part A: close the root cause (offline GPU runs, one bench round each, ~5-10 min)
+
+Common setup: raw/bench-xe.sh-style run of the Ornith bench (--moe-cache off to match production, -d 0,8192, BENCH_TIMEOUT=600), copy engine ON (unset UR_L0_USE_COPY_ENGINE), host as quiet as possible, journalctl -k -f capture, and sudo perf record -e 'xe:xe_exec_queue_scheduling_disable,xe:xe_exec_queue_scheduling_enable,xe:xe_exec_queue_scheduling_done,xe:xe_vma_userptr_invalidate,xe:xe_vma_userptr_invalidate_complete,xe:xe_vm_rebind_worker_enter,xe:xe_vm_rebind_worker_exit,xe:xe_vma_evict,xe:xe_exec_queue_reset,xe:xe_sched_job_timedout'
+(tracepoints verified present under /sys/kernel/tracing/events/xe/; perf installed, trace-cmd is not).
+
+    - X1 (decides (a) vs (b), confirms the trigger). Above tracing plus NEO
+    NEOReadDebugKeys=1 LogAllocationStdout=1 LogAllocationType=1 PrintBOBindingResult=1
+    (keys verified in debug_variables_base.inl). On a reset: (i) does a
+    scheduling_disable of the bcs guc_id precede it within the preempt window; (ii) was
+    the trigger xe_vma_userptr_invalidate or xe_vma_evict; (iii) does the NEO allocation
+    log show the VA in ACTHD (0xd556a9db0000 page) being freed/re-allocated shortly
+    before the reset (-> (b)), or still owned by the copy list (-> (a)). Also count
+    MAP_USERPTR binds per token to quantify the churn. Save perf script output and the
+    new coredump under raw/N-xe-x1-trace/.
+    - X2 (cheap lever that may remove the trigger). UR_L0_USE_DRIVER_INORDER_LISTS=1,
+    copy engine ON, UR_L0_DEBUG=1 for the first 200 lines only to confirm the lists are
+    created inOrder: 1 (the installed adapter has
+    ur_platform_handle_t_::allowDriverInOrderLists with an env-var static; if it still
+    prints inOrder: 0, the run is void). Hypothesis: without wait events NEO takes the
+    staging path (Linux threshold is size < 512 MB, os_interface_linux.cpp:62-67, so
+    the 0.4-2 MB slices qualify), so no userptr per copy; verify with
+    PrintBOBindingResult (MAP_USERPTR count should collapse). Record pass/fail and decode.
+    - X3 (preempt-latency check). Copy engine ON, bcs preempt_timeout_us=7500000 via
+    sysfs (/sys/class/drm/card0/device/tile0/gt0/engines/bcs/, max is 10 s; the tune
+    script deliberately skipped bcs). If resets vanish but silent stalls remain, the blitter
+    cannot be preempted while parked and the defect is in (a). Revert the sysfs value after.
+    - X4 (source fix candidate, see Part C). Copy engine ON, production flags plus
+    --load-mode none (CLI only, no code): host-resident experts then land in SYCL_Host
+    pinned memory. Check the model buffer size log lines show SYCL_Host (not CPU, which
+    would mean a silent fallback at ggml-sycl.cpp:1814-1817), check the fit still chose the
+    same layer split (common/fit.cpp:303 memory estimate may count host bytes
+    differently), then run the bench and the real-text llama-completion. Expected
+    signature: MAP_USERPTR binds during decode collapse to ~0 (PrintBOBindingResult),
+    tlb_inval_count in debugfs gt0/stats stops climbing per token, no reset. Repeat once
+    with copy engine OFF for the production comparison. Record load time and host RSS
+    (weights become an owned ~10 GB pinned copy instead of shared page cache).
+
+Stop rule: if X1 alone shows a bcs scheduling_disable immediately preceding every reset
+and X4 runs clean with the copy engine on, the mechanism is established well enough for
+the upstream report; X2/X3 become optional.
+
+Part B: fork change 1, do not depend on the blitter on xe (unconditional)
+
+Files: ggml/src/ggml-sycl/ggml-sycl.cpp, ggml/src/ggml-sycl/common.cpp/common.hpp,
+docs/backend/SYCL.md, new unit test.
+
+    - Add ggml_sycl_apply_xe_kmd_defaults() (name illustrative) in common.cpp, called at
+    the top of ggml_check_sycl() (ggml-sycl.cpp:435) before initialize_sycl_begining()
+    and before any dpct::dev_mgr::instance() use (the first SYCL runtime call is
+    sycl::device(default_selector) inside the dev_mgr constructor,
+    dpct/helper.hpp:1037-1044). Also call it from the paths that reach dev_mgr without
+    ggml_check_sycl (ggml_backend_sycl_get_device_count at ggml-sycl.cpp:7493,
+    ggml_backend_sycl_buffer_type at :1271, ggml_backend_sycl_print_sycl_devices at
+    :356, ggml_backend_sycl_get_device_memory at :6179, common.cpp:22-34) via a
+    std::call_once guard so the hook is idempotent.
+    - Detection is sysfs only (no SYCL calls allowed yet): scan /sys/class/drm/renderD*/device/,
+    vendor == 0x8086 and readlink driver basename == "xe". Factor the check as a pure
+    function taking the sysfs root so it is unit-testable with a fake tree.
+    - Behaviour: if an Intel node is on xe and none of UR_L0_USE_COPY_ENGINE,
+    SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE is set, setenv("UR_L0_USE_COPY_ENGINE", "0", 0)
+    and log one INFO line: xe KMD detected on <bdf>: copies routed to the compute queue (UR_L0_USE_COPY_ENGINE=0); set UR_L0_USE_COPY_ENGINE=1 to override; see docs/backend/SYCL.md.
+    Explicit user values are always respected. Non-Linux: no-op.
+    - Interaction to document (found by exploration): ggml_backend_sycl_init_private_stream
+    (ggml-sycl.cpp:8511-8529) already treats UR_L0_USE_COPY_ENGINE=0 as "no private copy
+    queue", which disables --prefetch-experts-slots (ggml-backend.cpp:2045-2049). The
+    log line and docs must say prefetch needs UR_L0_USE_COPY_ENGINE=1 on xe, and that
+    this is unsafe until the blitter defect is fixed.
+    - Docs: docs/backend/SYCL.md Runtime env table (:794-832, next to
+    UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS / GGML_SYCL_USM_SYSTEM) and a Known Issues
+    entry (:879-905) with the symptom, kernel line to grep (journalctl -k -g "Timedout job"),
+    and the two workarounds.
+    - Test: tests/test-sycl-xe-defaults.cpp (CPU-only, no GPU): builds a fake sysfs tree in
+    a temp dir (xe node, i915 node, non-Intel node, missing driver link) and checks the
+    pure detection function and the env decision (unset -> set to "0"; preset "1" -> kept;
+    preset "0:0" -> kept). Register in tests/CMakeLists.txt next to the other fork tests.
+    - Verification: CPU/Vulkan-free SYCL build in ~/build-xe (JIT), run the new test,
+    timeout 600 ~/build-xe/bin/test-sycl-turbo-correctness (default sweep) on xe with the
+    env unset to show the hook fires and the oracle stays green, and one Ornith bench round
+    with the env unset (expected to match the copy-engine-off rows: ~14.5 tg64 on auto,
+    real text ~32.5 t/s on off). Confirm /proc/<pid>/environ of the unit shows the
+    variable after removing the drop-in (drop-in then becomes redundant; keep it until the
+    packaged binary carries the change).
+
+Part C: fork change 2, remove the trigger (pinned host-resident experts)
+
+Goal: host-resident MoE expert weights that the scheduler streams every token
+(ggml-backend.cpp:2376-2470, copy_experts) should live in pinned SYCL host memory
+(ggml_backend_sycl_host_buffer_type, sycl::malloc_host) instead of pageable mmap'd
+file pages, so the L0 memcpy source is a known USM allocation: no per-copy userptr
+VM_BIND, no MMU-notifier exposure, no per-copy TLB invalidation. Expected to help on
+both drivers; measured, not assumed.
+
+How placement works today (verified in source):
+    - --fit writes tensor_buft_overrides for expert tensors with
+    ggml_backend_cpu_buffer_type() (common/fit.cpp:900, 955, 996, 1371, 1431);
+    it aborts if the user passed any -ot (fit.cpp:807), so -ot exps=SYCL_Host is not
+    a route.
+    - The loader treats the plain CPU buft as a sentinel and runs
+    select_weight_buft(buft_list_cpu) (src/llama-model-loader.cpp:1253-1255); that list
+    is ACCEL, then the first device's host buft SYCL_Host, then CPU extra bufts, then CPU
+    (src/llama-model.cpp:1147-1206, host buft added unless --no-host).
+    - The only thing that turns SYCL_Host back into CPU_Mapped is the mmap guard at
+    llama-model-loader.cpp:1282-1290. With mmap off the tensor is read from the file
+    straight into sycl::malloc_host memory (loader:1688-1690; ggml-sycl.cpp:1778-1795).
+    straight into sycl::malloc_host memory (loader:1688-1690; ggml-sycl.cpp:1778-1795).
+    - SYCL_Host is still a host buffer for the scheduler (ggml-sycl.cpp:8140-8147,
+    ggml-cpu.cpp:492), so copy_experts keeps running, now from pinned memory.
+
+Options in order of preference:
+    1. CLI only (X4): --load-mode none in the unit (LLAMA_EXTRA_ARGS) and in the bench
+    flags. No code. If X4 is clean with the copy engine on and decode is not worse, this is
+    the production fix for the trigger and gets documented in docs/backend/SYCL.md and the
+    research doc. Side effects to state: every CPU-placed weight moves to SYCL_Host (not
+    just experts; CPU_REPACK is bypassed on the normal fit path), RAM becomes an owned
+    copy, load is a file read instead of page-cache sharing.
+    2. Small code change (only if the user wants mmap kept for non-expert weights): make
+    the guard at llama-model-loader.cpp:1282-1290 keep the host buft for tensors matched
+    by an override that came from the fit (or behind a new --fit-pinned-experts flag,
+    default off), loading them by copy from the mmap (loader:1653-1684 already handles
+    cur->data != nullptr with ggml_backend_tensor_set). Keep the pinned-size caps in
+    ggml-sycl.cpp:1827-1839 in mind; a tensor larger than the pinned limit silently falls
+    back to CPU, so log the buffer type per tensor when the flag is on.
+    3. If pinned placement fails on this host (malloc_host of ~10 GB refused), fall back to
+    registering the mmap'd expert ranges once
+    (sycl::ext::oneapi::experimental::prepare_for_device_copy) to remove the per-copy
+    bind churn; MMU exposure remains, so this is a perf-only fallback.
+
+Caveat to carry into the write-up: system-memory BOs bound to an LR VM are still
+evictable by the xe shrinker under memory pressure, which also suspends queues; pinned
+memory removes the userptr path but not every suspend on a host this loaded. Part B stays
+the safety net.
+
+Part D: records and upstream
+
+    - docs/research/xe-kmd-bcs-copy-engine-2026-09-29.md: mechanism, the coredump
+    signature table (four dumps, identical registers), the kernel/NEO code references above,
+    X1-X4 results with the raw dirs, what is measured vs inferred, and the standing decision
+    ("no blitter queue on xe until NEO/xe fix; pinned experts if X4 wins").
+    - Update the external README (~/research-llama.cpp/.../README.md) cause-ranking and
+    upstream-report sections with the same facts; correct "failing event unidentified" to
+    the suspend/userptr mechanism to the extent X1 proves it.
+    - Draft the upstream report (intel/compute-runtime, cross-referenced to drm/xe) from the
+    README's block plus the new signature; do not file without the user's explicit go,
+    since it is outward-facing.
+    - Memory notes (after approval): evidence directory, the coredump signature, the decision.
+
+PR
+
+Branch xe-kmd-copy-engine from master; commits: (1) xe detection + env default + test,
+(2) docs, (3) research artifact, (4) pinned-experts change if Part C option 2 is chosen
+and measured. PR to Raudbjorn/ggml-llama.cpp master with the required "Not claimed"
+section: single host, single model, one driver combination; xe defect not fixed, only
+avoided; decode numbers from llama-bench random tokens are not production numbers;
+i915 comparison for the production placement still missing.
+
+Verification summary
+
+    - Unit test passes (CPU only).
+    - test-sycl-turbo-correctness default sweep green on xe with the hook active.
+    - Ornith bench round on xe, env unset: no kernel Timedout job, no bcs reset, t/s in
+    line with the copy-engine-off rows.
+    - Production unit: 6 long-context requests through the unit after removing the drop-in,
+    journalctl -k -g "Timedout job" unchanged, /health ok.
+    - X1 artefacts saved; the research doc states which of (a)/(b) the trace supports.

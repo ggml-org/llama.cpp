@@ -195,6 +195,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-batch-alloc.cpp)
     llama_build_chat_test()
     llama_build_and_test(test-common-json-const.cpp)
+    llama_build_and_test(test-imatrix-loader.cpp)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -251,13 +252,16 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_SETUP generate-models
     )
 
+    # Test recurrent-state rollback across all architectures, using the generated dummy models
     llama_test(
         test-recurrent-state-rollback
         LABEL main
-        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
+        ARGS --models "${MODEL_DIR}"
     )
+    # abort on graph reallocations that the initial reserve should have covered
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
+        ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
     )
 
     llama_test(
@@ -405,6 +409,19 @@ llama_build_and_test(test-moe-cache-fit.cpp)
 # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
 llama_build(test-backend-ops.cpp)
 
+if (TARGET ggml-cpu AND NOT GGML_BACKEND_DL AND NOT LLAMA_USE_SYSTEM_GGML)
+    add_executable(test-sched-stream-ordered test-sched-stream-ordered.cpp)
+    target_link_libraries(test-sched-stream-ordered PRIVATE ggml ggml-cpu)
+    llama_test(test-sched-stream-ordered LABEL "main;backend")
+    set_tests_properties(test-sched-stream-ordered PROPERTIES TIMEOUT 30 ENVIRONMENT "GGML_SCHED_COPY_SYNC=0")
+    add_test(NAME test-sched-stream-ordered-default COMMAND ${CMAKE_COMMAND} -E env
+        --unset=GGML_SCHED_COPY_SYNC $<TARGET_FILE:test-sched-stream-ordered> --expect-sync)
+    add_test(NAME test-sched-stream-ordered-sync COMMAND ${CMAKE_COMMAND} -E env
+        GGML_SCHED_COPY_SYNC=1 $<TARGET_FILE:test-sched-stream-ordered> --expect-sync)
+    set_tests_properties(test-sched-stream-ordered-default test-sched-stream-ordered-sync
+        PROPERTIES TIMEOUT 30 LABELS "main;backend")
+endif()
+
 llama_build_and_test(test-tiled-mulmat.cpp)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
@@ -412,6 +429,7 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
+# TODO: run on all dummy models
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
 
@@ -536,6 +554,14 @@ endif()
 
 llama_build(test-turbo-innerq-runtime.cpp)
 llama_test(test-turbo-innerq-runtime)
+
+if (GGML_OPENVINO AND GGML_CPU AND NOT GGML_BACKEND_DL AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
+    find_package(OpenVINO REQUIRED COMPONENTS Runtime)
+    add_executable(test-openvino-repeat test-openvino-repeat.cpp)
+    target_include_directories(test-openvino-repeat PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_link_libraries(test-openvino-repeat PRIVATE ggml ggml-cpu ggml-openvino openvino::runtime)
+    llama_test(test-openvino-repeat LABEL openvino)
+endif()
 
 if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
     add_executable(test-sycl-turbo test-sycl-turbo.cpp)

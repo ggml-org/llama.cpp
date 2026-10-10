@@ -13,9 +13,9 @@ boundary, but separates their costs. `LLAMA_SPEC_LOG` records cycle data
 without forcing a device synchronization. `LLAMA_SPEC_PROFILE` adds explicit
 phase-boundary synchronization so wall times are comparable.
 
-The log is append-only JSONL. A row's `top1_probabilities` covers each emitted
-draft token and also the evaluated candidate that stopped the draft when a
-probability stop fires; `drafted_count` counts only emitted draft tokens.
+The log is append-only JSONL. A row's `top1_probabilities` covers every attempted
+candidate, including any probability-stop candidate and attempts later removed
+from the selected proposal; `drafted_count` counts only final selected tokens.
 Timing rows identify whether they are synchronized.
 
 Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`, changes
@@ -27,9 +27,9 @@ disabled-path contract.
 ## EARS requirements
 
 - **R04.1 (State-driven):** WHILE `LLAMA_SPEC_LOG` names a writable path, the speculative-cycle log writer shall append exactly one JSON object for each completed MTP sequence cycle.
-- **R04.2 (Ubiquitous):** The speculative-cycle JSON row shall contain schema version, launch/request/proposal/sequence/cycle/phase identity, participant count, timing scope, starting position, draft wall time, verify-and-sample wall time, total cycle wall time, drafted count, attempted count, replay-adjusted accepted count, selected state, timing mode, synchronization overhead, and every evaluated token's top-1 probability.
+- **R04.2 (Ubiquitous):** The speculative-cycle JSON row shall contain schema version, launch/request/proposal/sequence/cycle identity, separate draft and verify phase identities with their participant identities/counts and timing scopes, starting position, draft wall time, verify-and-sample wall time, per-sequence total cycle and inter-phase wait times, drafted count, attempted count, replay-adjusted accepted count, selected state, timing mode, per-phase synchronization overhead, and every evaluated token's top-1 probability.
 - **R04.3 (State-driven):** WHILE `LLAMA_SPEC_PROFILE` is enabled, the speculative-cycle profiler shall synchronize the draft and target contexts only at the defined phase boundaries.
-- **R04.4 (Event-driven):** WHEN 64 unique profiled phase identities complete, the speculative-cycle profiler shall report mean draft, verify-and-sample, total-cycle, synchronization, and phase-residual times.
+- **R04.4 (Event-driven):** WHEN at least 64 unique profiled draft phases, 64 unique verify phases, and 64 sequence cycles complete, the speculative-cycle profiler shall report mean timings with a separate denominator for each scope.
 - **R04.5 (State-driven):** WHILE both `LLAMA_SPEC_LOG` and `LLAMA_SPEC_PROFILE` are absent, `common_speculative_impl_draft_mtp` shall execute a compile-time no-record token loop with no per-token instrumentation branch.
 - **R04.6 (State-driven):** WHILE `LLAMA_SPEC_PROFILE` is absent, speculative-cycle instrumentation shall issue no context synchronization.
 - **R04.7 (Event-driven):** WHEN a top-1 candidate triggers the MTP probability stop, the MTP cycle recorder shall retain that candidate's probability as the row's final attempted-probability entry.
@@ -52,38 +52,50 @@ disabled-path contract.
 3. The recording specialization captures attempted token ID, top-1 probability,
    and emitted/stopped state. After every drafter returns, finalize the proposal
    in `common_speculative_draft` only after all `n_min` clears, implementation
-   selection, and common `n_max` resizing. Truncate token records in lockstep
-   with the final result and snapshot immutable `drafted_count=result.size()`.
-   A cleared or unselected attempt keeps diagnostic `attempted_count` but has
+   selection, and common `n_max` resizing. Keep the complete attempted-record
+   stream for `top1_probabilities` and `attempted_count`; truncate only the
+   separate emitted/proposal-aligned records with the final result and snapshot
+   immutable `drafted_count=result.size()`. A cleared or unselected attempt
+   retains all diagnostic attempted records but has
    `selected=false`, `drafted_count=0`, and `accepted_count=0`.
 4. Preserve the immutable selected snapshot and proposal ID across checkpoint
    replay even when `slot.spec_draft` is replaced by accepted tokens plus a
    correction. Final server statistics and log reconciliation always refer to
    the original finalized proposal, not the replay vector.
-5. Define one `phase_id` per shared draft/verify invocation. If several
-   sequences participate, each sequence row stores identical shared phase times,
-   `timing_scope=shared_batch`, and the participant count. These times are not
-   exclusive per-sequence costs and must never be summed across rows. A one-slot
-   phase uses `timing_scope=single_sequence`.
+5. Assign separate `draft_phase_id` and `verify_phase_id` to their actual
+   invocations. Each phase owns its participant proposal/sequence identities,
+   participant count, `timing_scope`, wall time, and synchronization overhead;
+   draft and verify participant sets may differ. Rows referencing the same phase
+   must agree on all its metadata. Shared times use `timing_scope=shared_batch`
+   and are never exclusive per-sequence costs or summed across duplicate rows.
+   A one-slot phase uses `timing_scope=single_sequence`. An unselected proposal
+   with no verification has a null verify reference/time, not a fabricated phase.
 6. Start cycle/draft timing immediately before the shared MTP draft phase. With
    profiling enabled, synchronize `ctx_dft` at draft boundaries and measure
    synchronization time. Logging alone records unsynchronized host wall time.
 7. In `tools/server/server-context.cpp`, carry the selected proposal into its
-   `server_slot`. Measure verify-and-sample from draft completion through
-   target decode, sampling, rollback, replay adjustment, and server-stat update.
-   Synchronize `ctx_tgt` only when profiling.
+   `server_slot`. Measure the shared verify-and-sample invocation from target
+   decode through sampling, rollback, replay adjustment, and server-stat update.
+   Its start does not inherit any participant's individual draft-completion
+   timestamp. Measure each sequence cycle separately from its draft start to
+   its completion, including scheduling waits; record `inter_phase_wait_us` from
+   draft end to verify start. Synchronize `ctx_tgt` only when profiling.
 8. Keep the pending snapshot across the earlier `common_speculative_accept`
    call. Finalize after `spec_is_replay` adjusts `n_accepted` and
    `slot.stats.n_draft_accepted` is updated. Store that adjusted value only on
    the selected row; close stale/unselected proposals with zero reconciled counts.
-9. Aggregate profile means once per unique `phase_id`, not once per duplicated
-   sequence row. Emit after 64 unique phases.
+9. Deduplicate draft and verify means independently by their respective phase
+   IDs; compute total-cycle means by sequence-cycle identity. Report counts and
+   synchronization means for each scope, never sum differently scoped means.
+   Only compute the additive phase residual for one-to-one, single-sequence,
+   non-overlapping draft/verify pairs; otherwise report it as unavailable. Emit
+   after each phase kind and sequence-cycle sample has at least 64 identities.
 10. Add `scripts/perf/verify-spec-cycle-log.py`. It must start an uninstrumented
    cache-warm process, rotate the log, then start an instrumented Qwen4Exp MTP
    process. Assert the initialization log names
    `common_speculative_impl_draft_mtp` before sending requests. Reconcile the
    first six request IDs, then continue profile-only requests until at least 64
-   unique phase IDs have completed.
+   unique phases of each kind and 64 sequence cycles have completed.
 
 ## Critical files & anchors
 
@@ -121,14 +133,21 @@ file, and assigns the measured launch request IDs. Expected evidence:
   zero to both sums;
 - `n_min` clear, common `n_max` clamp, unselected implementation, and partial
   replay cases retain the finalized immutable proposal semantics;
-- multi-sequence tests give all participants one shared phase identity and never
-  sum duplicated shared wall time as exclusive sequence cost;
+- a fixture with draft participants `{A,B}` and verify participants `{A,C}`
+  preserves distinct phase IDs, membership, counts, times, and synchronization
+  overhead; each phase contributes once to its own aggregate despite repeated
+  row references, and unselected proposals have no verify phase;
 - each probability-stop row ends with a non-emitted attempted probability;
-- for each unique profiled phase,
+- probability stops followed by `n_min` clearing, `n_max` clamping, or loss of
+  implementation selection retain the entire attempted stream and its final
+  stopped candidate while only the proposal-aligned records change;
+- for the one-slot campaign's matched, non-overlapping phase pairs,
   `abs(cycle_wall_us-draft_wall_us-verify_sample_wall_us)` is no greater than
-  its measured `sync_overhead_us`;
-- the verifier continues until the 64-phase aggregate appears and verifies the
-  same bound;
+  their combined measured synchronization overhead plus separately recorded
+  inter-phase scheduling time; mixed-participant/shared phases have no additive
+  cycle residual;
+- the verifier continues until each phase-kind and cycle count reaches 64 and
+  checks its own denominator, without treating shared times as sequence costs;
 - an unwritable log path fails before requests begin, while a disabled run
   creates no log, synchronization, or recording-loop work.
 

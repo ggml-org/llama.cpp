@@ -26,6 +26,14 @@ rationale and the paper corpus.
 - This checkout usually sits under the multi-checkout workspace `/mnt/mrgr/llama-cpp-sycl-turbo/`,
   whose own `CLAUDE.md` describes the sibling reference repos and the autonomous-loop state files.
   In-repo `TOPOLOGY.md` is historical - trust live `git` output over it.
+- Session record for the xe KMD blitter root cause, PR #88, the NEO patch, the large-GRF knob
+  and PR #89 (2026-09-30/10-01):
+  `~/.docs/2026-09-30-to-10-01-arc-a770-xe-kmd-blitter-root-cause-pr88-pr89-session/`
+  (README index, timeline, every run with numbers, all review findings and dispositions,
+  open items). The committed evidence is `docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`,
+  `docs/research/sycl/sycl-fa-large-grf-2026-09-30.md` and
+  `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`. Read the
+  session README before touching `xe-kmd.cpp`, the FA GRF code, or the production unit.
 
 ## Operating contract
 
@@ -117,7 +125,12 @@ Always wrap GPU runs in `timeout` - a bad kernel can hang the IGC JIT indefinite
 Other fork-added targets: `test-sycl-turbo`, `test-sycl-fuzz`, `test-sycl-stress-deep`,
 `test-stress-context` (SYCL-gated), `test-kv-cache-adaptive-mode`, `test-turbo-innerq-runtime`,
 `test-turbo-quant.c`, `test-validate-dense-turbo4-capacity.sh`. Upstream `test-backend-ops` and
-`test-quantize-fns` carry turbo cases.
+`test-quantize-fns` carry turbo cases. CPU-only (no GPU) tests for the two newest knobs:
+`test-sycl-xe-defaults` (fake sysfs trees and the copy-engine env policy, Linux only) and
+`test-sycl-fa-large-grf` (whole-value parse and launch decision). In builds with
+`GGML_SYCL_FA_LARGE_GRF=ON`, `ctest -R large-grf` also runs the oracle through
+`tests/check-sycl-fa-large-grf.cmake`, which fails unless the FA geometry profile shows a
+`route=TILE phase=prefill ... grf=256` launch (a green sweep alone proves nothing there).
 
 ```bash
 ctest --test-dir ~/build-<name> -R test-kv-cache-adaptive-mode -V   # single test
@@ -135,11 +148,18 @@ Never hand-roll paired timing; use the harnesses catalogued in `scripts/README.m
 - `scripts/sweep-a770-mmvq-geometry.py` - MMV_Y x MMVQ_NUM_SUBGROUPS geometry sweeps.
 - `scripts/perf/bench_spec.py` - speculative-decoding acceptance/throughput.
 
-Before any timing run: stop competing llama services, check `fuser /dev/dri/renderD128` (a foreign
-holder such as a browser or compositor makes numbers noise, not data), and check
-`sudo dmesg | grep -iE 'xe .*(reset|hang|timeout|GuC)'` before and after. Re-bench the baseline
-binary alongside any candidate - stale baselines mislead, and two internal baselines have disagreed
-by 1.75x on pp512 in the past.
+Before any timing run: stop competing llama services (the production unit is
+`llama-gpu@Ornith-1.5-35B-Q4_K_M.service`; stop it first and restart it in a trap), check
+`fuser /dev/dri/renderD128` (a foreign holder such as a browser or compositor makes numbers noise,
+not data), and check `sudo dmesg | grep -iE 'xe .*(reset|Timedout|CAT)'` before and after.
+Re-bench the baseline binary alongside any candidate - stale baselines mislead, and two internal
+baselines have disagreed by 1.75x on pp512 in the past. Two more gates learned the hard way:
+the product harness compares the binary's `build_commit` with the HEAD of the checkout it runs
+from, so run it from the checkout (or worktree) that built the binary or the product is marked
+invalid; and note the host load in every run header, because with host-resident MoE experts the
+scheduler syncs with the GPU once per MoE layer per token, so a compile or a busy database on
+the host halves decode (15.8 vs 30 t/s observed at load 26 on 24 threads) without any GPU-side
+cause. Pass/fail and bind counts from a loaded run stand, its throughput does not.
 
 ## Architecture
 
@@ -237,14 +257,73 @@ unrelated `QK_WARP_SIZE` / `WARP_32_SIZE` macros are 32. ~17 files pin
 `[[sycl::reqd_sub_group_size(WARP_SIZE)]]`, so SIMD-width env/compiler overrides are no-ops or
 hazards.
 
+### xe KMD copy-engine default (`ggml/src/ggml-sycl/xe-kmd.{hpp,cpp}`)
+
+On the xe kernel driver, every userptr `VM_BIND` of the read-only mmap'd GGUF fails with
+`EPERM`; intel-compute-runtime (NEO) answers each failure with its eviction sweep, which unbinds
+the blitter's KMD-submitted command buffer under a pending job; the blitter halts and the next
+LR-mode suspend becomes `Engine reset: engine_class=bcs` after the 640 ms preempt timeout. The
+kernel is not at fault. Three fixes exist, keep them straight:
+
+- The hook: a load-time constructor in `xe-kmd.cpp` probes `/sys/class/drm` and, only for a
+  DG2 device (`0x5690..0x56ff`) bound to `xe`, sets `UR_L0_USE_COPY_ENGINE=0` and
+  `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1` unless already set or unless any copy-engine
+  variable asks for copy engines (non-zero on the v1 family or its `SYCL_PI_` aliases, 0 on
+  the v2 variable). It also removes empty copy-engine variables there (the v1 adapter aborts
+  at `dlopen` on an empty `UR_L0_USE_COPY_ENGINE_FOR_*`). `GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0`
+  disables it. Log lines are queued and printed at backend init. Off DG2/xe the environment is
+  untouched. Consequence: `--prefetch-experts-slots` is unavailable under the default (needs
+  `UR_L0_USE_COPY_ENGINE=1`, refused on the v2 adapter regardless).
+- `--load-mode none`: host-resident experts go to pinned `SYCL_Host` memory, so no userptr
+  bind happens at all (prefill +12 %, decode flat, 6.65 GB owned RAM for Ornith). Production
+  runs it.
+- The NEO patch (`docs/research/patches/0001-*`): retry the userptr bind read-only on `EPERM`
+  before the sweep. Verified A/B on one library (X7G clean, X7H control stalls). The host's
+  `intel-compute-runtime-git` package carries it as patch 050 since 2026-09-30; the fork
+  default stays until a compute-runtime release carries it, and the production unit opts out
+  with the kill switch. If a runtime update drops the patch, put `UR_L0_USE_COPY_ENGINE=0`
+  back in the unit's `xe-copy-engine.conf`.
+
+### FA large-GRF knob (`ggml/src/ggml-sycl/fattn-grf.hpp`, `fattn.cpp`, `fattn-common.hpp`)
+
+The FA tile kernels spill 8-15 KB per thread at 128 GRF on DG2 (IGC shader dumps).
+`GGML_SYCL_FA_LARGE_GRF=1` requests `grf_size<256>` for tile launches with more than one query
+row (prefill); single-row decode that routes to TILE and every vec launch stay at 128 GRF.
+Needs the CMake option, a supported architecture (`acm_*`, `pvc*`, `bmg_*`, `lnl_m`; one
+warning per device elsewhere), and the value must be exactly `0` or `1` (anything else warns
+and is off). A 256-GRF launch plans with half the work-groups per Xe-core unless
+`GGML_SYCL_MAX_WG_PER_CU` was set and accepted. Measured: pp512 +2.4 % (d=256) / +10 % (d=128)
+at short context, decode flat; the gain sits below the MKL prefill gate (n_kv < 1024). Default
+off. A tile-and-vec mode existed and was dropped: with the occupancy halving it lost 4-8 %
+decode at 8k.
+
+### Scheduler input-copy policy
+
+`GGML_SCHED_COPY_SYNC` defaults to synchronous copies. Only the exact value `0`
+opts into experimental stream-ordered copies; unset, `1`, empty, or other strings
+keep synchronization. It is cached process-wide on first scheduler use, so set
+it before launch. The opt-in requires single-device SYCL, a single-copy scheduler,
+compatible non-mapped host input, and an upload-completion event for mutable
+sources. Disabled mode allocates no extra upload event. CPU lifetime tests and the
+A770 gate pass, but model-output equivalence remains unproven; do not enable this
+by default or claim a speedup from the current evidence. For A/B runs use explicit
+`0` versus `1` and require a nonzero `stream-ordered input copies` counter in the
+opt-in arm (`-lv 5` for completion, `-v` for bench).
+Full contract, examples, exclusions, and evidence:
+[SYCL scheduler input-copy synchronization](docs/backend/SYCL.md#scheduler-input-copy-synchronization).
+
 ### Runtime env knobs (fork-specific)
 
 `GGML_SYCL_FA_XMX`, `GGML_SYCL_FA_XMX_DEBUG`, `GGML_SYCL_FA_ONEDNN`, `GGML_SYCL_FA_Q8_GQA_TILE`,
 `GGML_SYCL_FA_FORCE_VEC_STANDARD`, `GGML_SYCL_ENABLE_MKL_FA` (default 1), `GGML_SYCL_MKL_FA_DEBUG`,
 `GGML_SYCL_MKL_FA_Q_TILE`, `GGML_SYCL_FA_PROFILE` (per-route launch/us buckets, now including the
 MKL and ONEDNN routes), `GGML_SYCL_GRAPH_PROFILE`, `GGML_SYCL_ROPE_FUSION_PROFILE`,
-`GGML_SYCL_Q8_KV_QUANTS_FIRST` (default on, `=0` opts out), `TURBO_LAYER_ADAPTIVE`. Read them through `ggml_sycl_get_env` (upstream helper) rather than bare
-`getenv` in new code. Upstream knobs (`GGML_SYCL_ENABLE_GRAPH`, `GGML_SYCL_ENABLE_DNN`,
+`GGML_SYCL_Q8_KV_QUANTS_FIRST` (default on, `=0` opts out), `TURBO_LAYER_ADAPTIVE`,
+`GGML_SYCL_XE_COPY_ENGINE_DEFAULT` (`=0` disables the xe hook), `GGML_SYCL_FA_LARGE_GRF`
+(`0`/`1`, whole-value parse), `GGML_SYCL_MAX_WG_PER_CU` (occupancy target, strict parse).
+Read them through `ggml_sycl_get_env` (upstream helper) rather than bare `getenv` in new
+code; a knob that must reject `1junk`-style values parses the raw text itself, as
+`fattn-grf.hpp` does. Upstream knobs (`GGML_SYCL_ENABLE_GRAPH`, `GGML_SYCL_ENABLE_DNN`,
 `GGML_SYCL_USE_LEVEL_ZERO_API`, `GGML_SYCL_DEBUG`, ...) keep their upstream meaning.
 
 ## Standing decisions - do not re-litigate without new evidence
@@ -280,6 +359,18 @@ and `turbo/turbo-fa-research-artifact.md`).
   point `ggml_sycl_fuse` (`topk-moe.cpp`, called from `ggml-sycl.cpp`, gated by
   `GGML_SYCL_ENABLE_FUSION`) - which currently fuses top-k MoE only, so it is the hook to extend
   for any new fusion.
+- **xe KMD blitter failure is a NEO residency defect, not a kernel bug (2026-09-30, X1 trace
+  plus coredump, confirmed by the patch A/B X7G/X7H).** Do not re-open "is the kernel at
+  fault" without a new coredump signature. `DirectSubmissionOverrideBlitterSupport=1` survives
+  but decodes at 8.7 t/s: not a production option.
+- **Per-kernel 256 GRF for FA tile prefill launches is a measured, retained opt-in**; the
+  standing "global large-GRF is a dead end" decision is untouched, and the tile-and-vec mode
+  was measured and dropped. Do not re-run mode 2 without a kernel-level change to the vec
+  decode kernels.
 - Open and unresolved: q8_0 KV decode degrades vs f16 as context grows (~-32% at 16k). Attribution
   points at VEC-vs-TILE routing and per-element dequant cost, not missing dp4a. Any fix must keep
   the CPU oracle green.
+- Open: PR #89 left two post-merge bot threads (`strtol` accepts `" 1"`, `"+1"`, `"01"`);
+  the upstream report to intel/compute-runtime is drafted, not filed. The partial
+  `docs/xe-fix-docs/` archive and standalone diagnostic sources are committed; consult the
+  archive manifest for omitted artifacts and label owned-memory probes as controls.

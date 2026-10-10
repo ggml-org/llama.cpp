@@ -193,17 +193,20 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Fetch router models with full metadata (ROUTER mode only).
-	 * No-op in router mode — fetch() already calls listRouter() internally.
+	 * Fetch models with full metadata (ROUTER mode only).
+	 * No-op in MODEL mode - fetch() already calls list() internally.
 	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
 	async fetchRouterModels(): Promise<void> {
 		if (!serverStore.isRouterMode) return;
 
 		try {
-			const response = await ModelsService.listRouter();
+			const response = await ModelsService.list();
 
 			this.routerModels = response.data;
+			// keep the selector options in sync: a downloaded / deleted model shows
+			// up here too, not only in the router model rows
+			this.models = this.buildModelOptions(response);
 			await this.props.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();
@@ -358,30 +361,45 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * Both MODEL and ROUTER modes share the same mapping logic;
 	 * they differ only in which endpoint is called.
 	 */
-	private buildModelOptions(
-		response: ApiModelListResponse | ApiRouterModelsListResponse
-	): ModelOption[] {
-		return response.data.map((item: ApiModelDataEntry, index: number) => {
-			const details = response.models?.[index];
-			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
-			const displayNameSource =
-				details?.name && details.name.trim().length > 0 ? details.name : item.id;
-			const modelId = details?.model || item.id;
+	private buildModelOptions(response: ApiModelsListResponse): ModelOption[] {
+		const entries: {
+			details?: ApiModelsListResponse['models'][number];
+			item: ApiModelDataEntry;
+		}[] = response.data.map((item: ApiModelDataEntry, index: number) => ({
+			details: response.models?.[index],
+			item
+		}));
 
-			return {
-				aliases: item.aliases ?? [],
-				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-				description: details?.description,
-				details: details?.details,
-				id: item.id,
-				meta: item.meta ?? null,
-				modalities: this.props.buildArchitectureModalities(item.architecture),
-				model: modelId,
-				name: this.toDisplayName(displayNameSource),
-				parsedId: ModelsService.parseModelId(modelId),
-				tags: item.tags ?? []
-			};
-		});
+		return (
+			entries
+				// sidecar entries mark downloaded sidecar files, not loadable models
+				.filter(({ item }) => !ModelsService.isSidecarEntry(item.id))
+				// in-flight downloads are not usable models yet; the selector tracks
+				// them in its "Download in progress" section instead
+				.filter(({ item }) => item.status?.value !== ServerModelStatus.DOWNLOADING)
+				.map(({ details, item }) => {
+					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+					const displayNameSource =
+						details?.name && details.name.trim().length > 0 ? details.name : item.id;
+					const modelId = details?.model || item.id;
+
+					return {
+						aliases: item.aliases ?? [],
+						capabilities: rawCapabilities.filter((value: unknown): value is string =>
+							Boolean(value)
+						),
+						description: details?.description,
+						details: details?.details,
+						id: item.id,
+						meta: item.meta ?? null,
+						modalities: this.props.buildArchitectureModalities(item.architecture),
+						model: modelId,
+						name: this.toDisplayName(displayNameSource),
+						parsedId: ModelsService.parseModelId(modelId),
+						tags: item.tags ?? []
+					};
+				})
+		);
 	}
 
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
@@ -390,7 +408,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return this.buildModelOptions(response);
 	}
-
 	/**
 	 * Filter to models visible in the UI (ui !== false).
 	 */
@@ -422,7 +439,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const router = serverStore.isRouterMode;
 
 			if (router) {
-				const response = await ModelsService.listRouter();
+				const response = await ModelsService.list();
 
 				this.routerModels = response.data;
 				this.models = this.buildModelOptions(response);

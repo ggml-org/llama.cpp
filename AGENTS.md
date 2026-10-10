@@ -187,6 +187,21 @@ token precedence is `HF_TOKEN` then
 edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
 `AIP_HTTP_PORT` overrides the CLI port.
 
+### Scheduler input-copy policy
+
+`GGML_SCHED_COPY_SYNC` defaults to synchronous copies. Only the exact value `0`
+opts into experimental stream-ordered copies; unset, `1`, empty, or other strings
+keep synchronization. It is cached process-wide on first scheduler use, so set
+it before launch. The opt-in requires single-device SYCL, a single-copy scheduler,
+compatible non-mapped host input, and an upload-completion event for mutable
+sources. Disabled mode allocates no extra upload event. CPU lifetime tests and the
+A770 gate pass, but model-output equivalence remains unproven; do not enable this
+by default or claim a speedup from the current evidence. For A/B runs use explicit
+`0` versus `1` and require a nonzero `stream-ordered input copies` counter in the
+opt-in arm (`-lv 5` for completion, `-v` for bench).
+Full contract, examples, exclusions, and evidence:
+[SYCL scheduler input-copy synchronization](docs/backend/SYCL.md#scheduler-input-copy-synchronization).
+
 ### GPU Discipline (mandatory before timing runs)
 
 ```bash
