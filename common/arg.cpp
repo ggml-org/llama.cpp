@@ -3502,12 +3502,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--rerank", "--reranking"},
-        string_format("enable reranking endpoint on server (default: %s)", "disabled"),
+        string_format("enable reranking endpoint on server and set pooling to rank (default: %s)", "disabled"),
         [](common_params & params) {
             params.embedding = true;
             params.pooling_type = LLAMA_POOLING_TYPE_RANK;
+            params.reranking_endpoint = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
+    add_opt(common_arg(
+        {"--reranking-endpoint"},
+        string_format("enable reranking endpoint on server without changing pooling (default: %s)", "disabled"),
+        [](common_params & params) {
+            params.reranking_endpoint = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING_ENDPOINT"));
     add_opt(common_arg(
         {"--api-key"}, "KEY",
         "API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)",

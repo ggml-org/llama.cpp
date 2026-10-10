@@ -5674,8 +5674,8 @@ void server_routes::init_routes() {
 
     this->post_rerank = [this](const server_http_req & req) {
         auto res = create_response();
-        if (!params.embedding || params.pooling_type != LLAMA_POOLING_TYPE_RANK) {
-            res->error(format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
+        if (!params.reranking_endpoint) {
+            res->error(format_error_response("This server does not support reranking. Start it with `--reranking` or `--reranking-endpoint`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
 
