@@ -5557,9 +5557,10 @@ struct test_mul_mat_id_fusion : public test_case {
     const int64_t k;
     const uint32_t o; // number of outputs
     const bool mul;
+    const float amax;
 
     std::string vars() override {
-        return VARS_TO_STR10(type_a, type_b, n_mats, n_used, b, m, n, k, o, mul);
+        return VARS_TO_STR11(type_a, type_b, n_mats, n_used, b, m, n, k, o, mul, amax);
     }
 
     double max_nmse_err() override {
@@ -5573,9 +5574,9 @@ struct test_mul_mat_id_fusion : public test_case {
 
     test_mul_mat_id_fusion(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
-            int64_t m = 32, int64_t n = 32, int64_t k = 32, uint32_t o = 1, bool mul = false)
+            int64_t m = 32, int64_t n = 32, int64_t k = 32, uint32_t o = 1, bool mul = false, float amax = 1.0f)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k), o(o), mul(mul) {
+            m(m), n(n), k(k), o(o), mul(mul), amax(amax) {
             GGML_ASSERT(n_used <= n_mats);
         }
 
@@ -5611,11 +5612,19 @@ struct test_mul_mat_id_fusion : public test_case {
             out = ggml_mul(ctx, out, m);
         }
 
+        if (amax > 65504.0f) {
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                if (t->op == GGML_OP_MUL_MAT_ID) {
+                    ggml_prec_set_src(t, GGML_PREC_F32, 1);
+                }
+            }
+        }
+
         return out;
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats);
+        init_mul_mat_id_tensors(ctx, n_mats, amax);
     }
 
     bool run_whole_graph() override { return true; }
@@ -7547,20 +7556,21 @@ struct test_mul_mat_vec_fusion : public test_case {
     const bool with_bias;
     const bool with_gate;
     const bool with_lane_scale;
+    const float amax;
     std::array<int64_t, 2> batch_dims;
 
     test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
-                        bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2})
+                        bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2}, float amax = 1.0f)
     : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias),
-        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims) {
+        with_gate(with_gate), with_lane_scale(with_lane_scale), amax(amax), batch_dims(batch_dims) {
         if (use_id) {
             GGML_ASSERT(n_used <= n_mats);
         }
     }
 
     std::string vars() override {
-        return VARS_TO_STR13(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale, batch_dims);
+        return VARS_TO_STR13(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale, batch_dims) + "," + VAR_TO_STR(amax);
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -7669,6 +7679,9 @@ struct test_mul_mat_vec_fusion : public test_case {
 
             auto build_lane_up = [&]() {
                 ggml_tensor * ffn_up = ggml_mul_mat_id(ctx, ups, cur, ids);
+                if (amax > 65504.0f) {
+                    ggml_prec_set_src(ffn_up, GGML_PREC_F32, 1);
+                }
                 if (with_lane_scale) {
                     ffn_up = build_lane_scale_id(ctx, ctx_weights, ffn_up, ids);
                 }
@@ -7681,6 +7694,9 @@ struct test_mul_mat_vec_fusion : public test_case {
 
             auto build_lane_gate = [&]() {
                 ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
+                if (amax > 65504.0f) {
+                    ggml_prec_set_src(ffn_gate, GGML_PREC_F32, 1);
+                }
                 if (with_lane_scale) {
                     ffn_gate = build_lane_scale_id(ctx, ctx_weights, ffn_gate, ids);
                 }
@@ -7712,6 +7728,13 @@ struct test_mul_mat_vec_fusion : public test_case {
             }
         } else {
             init_mul_mat_id_tensors(ctx, n_mats);
+            if (amax != 1.0f) {
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                    if (strcmp(t->name, "cur") == 0) {
+                        init_tensor_uniform(t, -amax, amax);
+                    }
+                }
+            }
         }
     }
 
@@ -10980,6 +11003,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_a : {GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS,
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 16, 10, 256));
+    }
+
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_BF16 }) {
+        for (int n : { 1, 16 }) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 2, false, 32, n, 256, 1e5f));
+        }
+        test_cases.emplace_back(new test_mul_mat_id_fusion(type, GGML_TYPE_F32, 4, 2, false, 32, 1, 256, 2, true, 1e5f));
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(type, GGML_GLU_OP_SWIGLU, 1, 32, 256,
+            true, 4, 2, false, true, true, false, { 1, 1 }, 1e5f));
     }
 
     // test src1 f16 overflow
