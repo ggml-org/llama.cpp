@@ -980,6 +980,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_snake_bf16;
     vk_pipeline pipeline_pool1d_f32;
     vk_pipeline pipeline_pool2d_f32;
+    vk_pipeline pipeline_pool2d_subgroup_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_gated_linear_attn_f32;

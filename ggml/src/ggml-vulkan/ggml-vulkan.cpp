@@ -3652,7 +3652,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_snake_bf16, "snake_bf16", snake_bf16_len, snake_bf16_data, "main", 4, sizeof(vk_op_snake_push_constants), {256, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_pool1d_f32, "pool1d_f32", pool1d_f32_len, pool1d_f32_data, "main", 2, sizeof(vk_op_pool1d_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_pool2d_f32, "pool2d_f32", pool2d_f32_len, pool2d_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_pool2d_f32, "pool2d_f32", pool2d_f32_len, pool2d_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {1, 1, 1}, {512}, 1);
+    if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
+        ggml_vk_create_pipeline(device, device->pipeline_pool2d_subgroup_f32, "pool2d_subgroup_f32", pool2d_subgroup_f32_len, pool2d_subgroup_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {1, 1, 1}, {128}, 1, false, true, device->subgroup_size);
+    }
 
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv6_f32, "rwkv_wkv6_f32", rwkv_wkv6_f32_len, rwkv_wkv6_f32_data, "main", 7, sizeof(vk_op_rwkv_wkv6_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
@@ -9127,6 +9130,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_POOL_2D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            // Wide windows use neighboring subgroup lanes to read neighboring inputs.
+            if (ctx->device->pipeline_pool2d_subgroup_f32 && dst->op_params[1] >= int32_t(ctx->device->subgroup_size)) {
+                return ctx->device->pipeline_pool2d_subgroup_f32;
+            }
             return ctx->device->pipeline_pool2d_f32;
         }
         return nullptr;
@@ -9569,11 +9576,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         } break;
     case GGML_OP_POOL_2D:
         {
-            const uint32_t N = dst->ne[3];
-            const uint32_t OC = dst->ne[2];
-            const uint32_t OH = dst->ne[1];
-            const uint32_t OW = dst->ne[0];
-            elements = { N * OC * OH * OW, 1, 1};
+            const uint32_t outputs = ggml_nelements(dst);
+            const uint32_t outputs_per_workgroup = pipeline == ctx->device->pipeline_pool2d_subgroup_f32 ? 128 / ctx->device->subgroup_size : 512;
+            const uint32_t workgroups = CEIL_DIV(outputs, outputs_per_workgroup);
+            const uint32_t groups_y = CEIL_DIV(workgroups, ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
+            const uint32_t groups_x = CEIL_DIV(workgroups, groups_y);
+            elements = { groups_x, groups_y, 1 };
         } break;
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
