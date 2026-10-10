@@ -171,6 +171,20 @@ struct llama_model_loader {
     ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
     ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
+    // final buffer type bytes per block id (bid), recorded during create_tensor():
+    // tensor buft overrides can move a block to a device different from the one given by the
+    // split points, and llama_model needs the actual placement to place the per-layer buffers
+    // (KV/RS) on the same device (see dev_layer re-sync in llama_model.cpp)
+    std::map<int, std::map<ggml_backend_buffer_type_t, size_t>> buft_bytes_by_bid;
+
+    // device holding the bulk of the tensors of block `bid`; false if no tensors recorded
+    bool tensor_dev_by_bid(int bid, ggml_backend_dev_t & dev) const;
+
+    // final buffer type of the output tensor (output.weight), recorded during
+    // create_tensor(); used to re-sync dev_output (sampler scratch + logits
+    // transfer buffer placement) with a tensor buft override (see llama_model.cpp)
+    ggml_backend_buffer_type_t buft_output = nullptr;
+
     llama_model_loader(
         struct gguf_context * metadata,
         llama_model_set_tensor_data_t set_tensor_data,

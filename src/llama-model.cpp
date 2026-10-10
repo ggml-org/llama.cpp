@@ -1815,6 +1815,37 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     ml.done_getting_tensors();
 
+    // tensor buft overrides (--override-tensor) may have placed a block's weights on a device
+    // different from the one given by the split points; dev_layer drives the per-layer buffer
+    // placement (KV/RS, see llama_kv_cache), so re-sync it with the actual placement of the
+    // block's tensors (dominant device by bytes)
+    if (pimpl->has_tensor_overrides) {
+        const ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        for (int il = 0; il < n_layer_all; ++il) {
+            ggml_backend_dev_t dev = nullptr;
+            if (!ml.tensor_dev_by_bid(il, dev) || dev == pimpl->dev_layer[il].dev) {
+                continue;
+            }
+            LLAMA_LOG_INFO("%s: layer %3d device re-synced %s -> %s (tensor buft override)\n",
+                    __func__, il, ggml_backend_dev_name(pimpl->dev_layer[il].dev), ggml_backend_dev_name(dev));
+            pimpl->dev_layer[il].dev = dev;
+            pimpl->dev_layer[il].buft_list = (dev == cpu_dev) ? &pimpl->cpu_buft_list : &pimpl->gpu_buft_list.at(dev);
+        }
+
+        // the output layer is the same story: dev_output drives the sampler scratch and the
+        // logits (output) transfer buffer placement (see llama-context.cpp), re-sync it with
+        // the actual placement of output.weight
+        if (ml.buft_output) {
+            const ggml_backend_dev_t out_dev = ggml_backend_buft_get_device(ml.buft_output);
+            if (out_dev && out_dev != pimpl->dev_output.dev) {
+                LLAMA_LOG_INFO("%s: output layer device re-synced %s -> %s (tensor buft override)\n",
+                        __func__, ggml_backend_dev_name(pimpl->dev_output.dev), ggml_backend_dev_name(out_dev));
+                pimpl->dev_output.dev = out_dev;
+                pimpl->dev_output.buft_list = (out_dev == cpu_dev) ? &pimpl->cpu_buft_list : &pimpl->gpu_buft_list.at(out_dev);
+            }
+        }
+    }
+
     if (per_layer_tok_embd && ml.lazy.has(per_layer_tok_embd)) {
         LLAMA_LOG_INFO("%s: enabling prefetch for '%s'\n", __func__, per_layer_tok_embd->name);
 

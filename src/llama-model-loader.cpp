@@ -1286,6 +1286,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             n_tensors_moved++;
         }
 
+        // record the final placement per block (see buft_bytes_by_bid)
+        if (buft && tn.bid >= 0) {
+            buft_bytes_by_bid[tn.bid][buft] += ggml_nbytes(t_meta);
+        }
+
+        // record the final placement of the output tensor (see buft_output)
+        if (buft && tn.tensor == LLM_TENSOR_OUTPUT) {
+            buft_output = buft;
+        }
+
         return buft;
     };
 
@@ -1387,6 +1397,26 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     return tensor;
+}
+
+bool llama_model_loader::tensor_dev_by_bid(int bid, ggml_backend_dev_t & dev) const {
+    const auto it = buft_bytes_by_bid.find(bid);
+    if (it == buft_bytes_by_bid.end() || it->second.empty()) {
+        return false;
+    }
+    ggml_backend_buffer_type_t best_buft = nullptr;
+    size_t best_bytes = 0;
+    for (const auto & [buft, bytes] : it->second) {
+        if (bytes > best_bytes) {
+            best_bytes = bytes;
+            best_buft = buft;
+        }
+    }
+    if (!best_buft) {
+        return false;
+    }
+    dev = ggml_backend_buft_get_device(best_buft);
+    return dev != nullptr;
 }
 
 void llama_model_loader::done_getting_tensors(bool partial) const {
