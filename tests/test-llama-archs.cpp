@@ -135,6 +135,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_layer = 2;
     if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
+    } else if (arch == LLM_ARCH_MAION_CODER) {
+        n_head = 4;
+        n_layer = 4; // dense and MoE layers, each with local and full attention
     } else if (arch == LLM_ARCH_GEMMA4) {
         n_embd = 128;
         n_head = 2;
@@ -182,7 +185,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_head_kv = n_head;
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
-    } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
+    } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER) {
         n_head_kv = 2; // GQA coverage
     }
     const uint32_t n_embd_head = n_embd / n_head;
@@ -289,7 +292,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT, uint32_t(8));
     ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,         n_ctx/8);
 
-    if (arch == LLM_ARCH_GEMMA4) {
+    if (arch == LLM_ARCH_MAION_CODER) {
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>{1, 1, 0, 0});
+    } else if (arch == LLM_ARCH_GEMMA4) {
         ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,      n_embd/2);
         ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(0));
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,        n_embd_head);
@@ -441,6 +446,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      uint32_t(2));
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT, uint32_t(2));
         }
+    }
+
+    if (arch == LLM_ARCH_MAION_CODER) {
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE, n_embd / 2);
+        ms.add_kv(LLM_KV_EXPERT_COUNT, uint32_t(4));
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
     }
 
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
@@ -654,6 +665,7 @@ static bool check_causal_attn_toggle(
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_LLAMA4:
+        case LLM_ARCH_MAION_CODER:
         case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_GROK:
         case LLM_ARCH_QWEN2MOE:

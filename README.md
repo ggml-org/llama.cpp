@@ -34,6 +34,8 @@ irm https://llama.app/install.ps1 | iex
 - Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
 - Build from source by cloning this repository - check out [our build guide](docs/build.md)
 
+Maion-Coder GGUF models use `general.architecture = maion-coder` and `maion-coder.*` metadata keys. Native inference supports interleaved dense/latent-MoE layers and sliding/full attention, with RoPE only on sliding-window layers.
+
 Once installed:
 
 ```sh
