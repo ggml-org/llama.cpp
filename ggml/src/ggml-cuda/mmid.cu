@@ -47,12 +47,17 @@ static __global__ void mm_ids_helper(
         // Generic implementation:
         for (int it = 0; it < n_tokens; ++it) {
             int iex_used = -1; // The index at which the expert is used, if any.
+            bool expert_is_lower = false;
             for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
                 const int expert_used = ids[it*si1 + iex];
-                nex_prev += expert_used < expert;
+                expert_is_lower |= expert_used < expert;
                 if (expert_used == expert) {
                     iex_used = iex;
                 }
+            }
+
+            if (warp_reduce_any<warp_size>(expert_is_lower) && threadIdx.x == 0) {
+                nex_prev++;
             }
 
             if (iex_used != -1) {
@@ -75,7 +80,11 @@ static __global__ void mm_ids_helper(
             const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
                 ids[it*si1 + iex] : INT_MAX;
             const int iex_used = expert_used == expert ? iex : -1;
-            nex_prev += expert_used < expert;
+            const bool expert_is_lower = expert_used < expert;
+            if (warp_reduce_any<neu_padded>(expert_is_lower)
+                    && threadIdx.x % neu_padded == 0) {
+                nex_prev++;
+            }
 
             // Whether the threads at this token position have used the expert:
             const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
