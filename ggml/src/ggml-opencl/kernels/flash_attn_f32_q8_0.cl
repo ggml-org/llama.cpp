@@ -232,13 +232,13 @@ __kernel void flash_attn_f32_q8_0_q1(
 #endif
         }
         score *= scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
 
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         // Online softmax step.
@@ -437,13 +437,13 @@ __kernel void flash_attn_f32_q8_0_q1_vec(
         }
         ACC_TYPE dot_partial = dot4.s0 + dot4.s1 + dot4.s2 + dot4.s3;
         ACC_TYPE score = sub_group_reduce_add(dot_partial) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
 
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base;
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         const ACC_TYPE m_new      = max(m_i, score);
@@ -627,12 +627,12 @@ __kernel void flash_attn_f32_q8_0_q1_split(
 #endif
         }
         score *= scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) (mask_base);
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         // Online softmax step.
@@ -882,12 +882,12 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
         for (int h = 0; h < MQ_GQA; ++h) {
             const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
             ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = s;
         }
@@ -1151,12 +1151,12 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
                 s += sub_group_shuffle_xor(s, step);
             }
             s *= scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_safe];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = valid ? s : FA_M_INIT;
         }
@@ -1655,6 +1655,12 @@ __kernel void flash_attn_f32_q8_0(
                 if (!query_valid) { s0 = FA_M_INIT; s1 = FA_M_INIT; s2 = FA_M_INIT; s3 = FA_M_INIT; }
 #endif
                 s0 *= scale; s1 *= scale; s2 *= scale; s3 *= scale;
+                if (logit_softcap > 0.0f) {
+                    s0 = logit_softcap * tanh(s0 / logit_softcap);
+                    s1 = logit_softcap * tanh(s1 / logit_softcap);
+                    s2 = logit_softcap * tanh(s2 / logit_softcap);
+                    s3 = logit_softcap * tanh(s3 / logit_softcap);
+                }
 
                 if (is_causal) {
                     const int causal_limit = n_kv - n_q + my_query_row;
@@ -1675,12 +1681,6 @@ __kernel void flash_attn_f32_q8_0(
                     if (k_row1 < n_kv) s1 += slope * (ACC_TYPE) mask_ptr[k_row1];
                     if (k_row2 < n_kv) s2 += slope * (ACC_TYPE) mask_ptr[k_row2];
                     if (k_row3 < n_kv) s3 += slope * (ACC_TYPE) mask_ptr[k_row3];
-                }
-                if (logit_softcap > 0.0f) {
-                    s0 = logit_softcap * tanh(s0 / logit_softcap);
-                    s1 = logit_softcap * tanh(s1 / logit_softcap);
-                    s2 = logit_softcap * tanh(s2 / logit_softcap);
-                    s3 = logit_softcap * tanh(s3 / logit_softcap);
                 }
 
                 const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
