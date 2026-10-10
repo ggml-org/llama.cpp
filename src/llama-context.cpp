@@ -1531,7 +1531,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
-
+    // prefill->decode edge: a long prefill churns the seeded slots, so
+    // restore the hot profile once before decode token 0 begins. pure
+    // decode streams (ubatch 1 -> 1) skip this entirely.
+    if (moe_ready && moe.last_ntok > 1 && ubatch.n_tokens == 1) {
+        moe_reseed_decode();
+    }
+    if (moe_ready) moe.last_ntok = ubatch.n_tokens;
     auto * res = get_gf_res_prev();
     auto * gf  = res->get_gf();
 
@@ -4749,7 +4755,10 @@ void llama_context::moe_seed_hot() {
 #include "moe_hot_profile.h"
     static_assert(MOE_HOT_NLAYER == 48, "hot profile layer count");
     const int64_t t0 = ggml_time_us();
-    const int64_t budget_us = 4000000;
+    const int64_t budget_us = [] {
+        const char * e = getenv("MOE_SEED_BUDGET_MS");
+        return (int64_t)(e && e[0] ? atoi(e) : 4000) * 1000;
+    }();
     const int per_layer = file_nt > 0 ? file_nt : MOE_HOT_PER_LAYER;
     const int total = moe.n_layer * per_layer;
     int seeded = 0;
@@ -4770,6 +4779,20 @@ void llama_context::moe_seed_hot() {
                    __func__, moe.n_layer, per_layer,
                    file_nt > 0 ? cparams.moe_profile_path : "built-in",
                    seeded, total, (ggml_time_us() - t0) / 1000000.0);
+}
+
+// Restore the hot profile once, right when decoding starts after a prefill
+// phase. Micro-chunk paging during a long prefill walks moe_rr through every
+// layer's slots, so decode token 0 would otherwise start cold. Re-seeding
+// replays the profile top-down; experts the prefill already made resident
+// are hits (no reread), so this only fetches what prefill evicted.
+// Deliberately NOT called for pure decode streams (last_ntok already 1).
+void llama_context::moe_reseed_decode() {
+    if (!moe_ready) return;
+    const int64_t t0 = ggml_time_us();
+    moe_seed_hot();
+    LLAMA_LOG_INFO("%s: decode-start reseed done in %.2fs (hit=%ld miss=%ld)\n",
+                   __func__, (ggml_time_us() - t0) / 1000000.0, moe.n_hit, moe.n_miss);
 }
 
 // Queue async reads for experts the next layer(s) will likely need. Runs at
@@ -4879,7 +4902,14 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         return false;
     }
     if (ask) {
-        return true;   // split the graph here and sync afterwards
+        // MOE_NOSPLIT=1 retires the per-layer split (host sync + readback per
+        // MoE layer, ~8ms/layer at decode). The pool tables then stay frozen
+        // at whatever the last reseed/paging left, which is correct because
+        // decoding reuses the computed graph and tables stay coherent for a
+        // stable routing set. Diagnostic only; do not ship enabled.
+        static int no_split = -1;
+        if (no_split < 0) no_split = getenv("MOE_NOSPLIT") ? atoi(getenv("MOE_NOSPLIT")) : 0;
+        return no_split ? false : true;   // split the graph here and sync afterwards
     }
     // data phase: page the selected experts (I32 [n_used, n_tokens]).
     // the graph only reads the pool when the slot_ids remap node exists;
@@ -4901,9 +4931,37 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     // else: large prefill batch runs on the full tensors; skip paging so no
     // QD1 fetch stalls land on the prompt path
     // layer-ahead + token-ahead async reads for the layers after this one;
-    // admission-controlled inside, never blocks
-    for (int64_t j = 0; j < ntok; j++) {
-        ctx->moe_prefetch_ahead(il, ids.data() + (size_t) j * nw, (int) nw);
+    // decode-only: prefill rows predict the wrong step and would pollute
+    // staging with useless reads. admission-controlled inside, never blocks.
+    if (ntok == 1) {
+        for (int64_t j = 0; j < ntok; j++) {
+            ctx->moe_prefetch_ahead(il, ids.data() + (size_t) j * nw, (int) nw);
+        }
+        // optional routing trace (MOE_TRACE_DIR=file prefix): one u16 row
+        // [n_used] per layer per decode step for offline profile building.
+        // layers run 0..47 in order; flush a full step at the last layer.
+        // zero cost when unset.
+        static FILE * tf = nullptr;
+        static bool tinit = false;
+        if (!tinit) {
+            tinit = true;
+            const char * p = getenv("MOE_TRACE_DIR");
+            if (p && p[0]) {
+                tf = fopen((std::string(p) + ".ids.u16").c_str(), "wb");
+            }
+        }
+        if (tf) {
+            static std::vector<uint16_t> tbuf;
+            if (tbuf.empty()) tbuf.resize((size_t) ctx->moe.n_layer * ctx->moe.n_used, 0);
+            for (int64_t k = 0; k < nw && k < ctx->moe.n_used; k++) {
+                const int32_t e = ids[(size_t) k];
+                tbuf[(size_t) il * ctx->moe.n_used + k] = (e >= 0 && e < 65536) ? (uint16_t) e : 0;
+            }
+            if (il == ctx->moe.n_layer - 1) {
+                fwrite(tbuf.data(), 2, tbuf.size(), tf);
+                fflush(tf);
+            }
+        }
     }
     {
         // prefetch telemetry: hit rate of demand commits against in-flight

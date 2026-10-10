@@ -50,6 +50,7 @@ bool parse(int argc, char ** argv, opts & o) {
         else if (a == "--experts") { if (!needi(o.experts)) return false; }
         else if (a == "--used") { if (!needi(o.used)) return false; }
         else if (a == "--top") { if (!needi(o.top)) return false; }
+        else if (a == "--width") { if (!needi(o.width)) return false; }
         else if (a == "--check") { o.check = true; }
         else if (a[0] != '-') {
             if (o.check && o.out.empty()) { o.out = a; }

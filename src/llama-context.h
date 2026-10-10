@@ -272,6 +272,8 @@ public:
         // previous decode step's top-k per layer, for the recency predictor
         // (moe_step_sel[il*n_used+k]); empty until the first decode step
         std::vector<int32_t> step_sel;
+        // last ubatch width seen; used to detect the prefill->decode edge
+        uint32_t last_ntok = 0;
     };
     moe_pool moe;
     moe_pager pager;
@@ -289,6 +291,10 @@ public:
     // first decode step starts warm; pages synchronously, failures are
     // tolerated (slots stay -1). capped at 2s to bound server startup.
     void moe_seed_hot();
+    // re-seed once when decoding starts after a long prefill: micro-chunk
+    // paging churns the hot set, so restore the profile before token 0.
+    // bounded by the same budget; no-op for pure decode streams.
+    void moe_reseed_decode();
 
 private:
     llm_graph_result * get_gf_res_prev();
