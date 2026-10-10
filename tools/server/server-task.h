@@ -642,6 +642,7 @@ struct server_prompt_data {
 
 struct server_prompt_cache_state {
     server_prompt prompt;
+    std::vector<common_adapter_lora_info> lora;
     server_prompt_data data;
 
     size_t size() const {
@@ -673,9 +674,9 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    server_prompt_cache_state * alloc(const server_prompt & prompt, const std::vector<common_adapter_lora_info> & lora, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    bool load(server_prompt & prompt, std::vector<common_adapter_lora_info> & lora, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
 };
