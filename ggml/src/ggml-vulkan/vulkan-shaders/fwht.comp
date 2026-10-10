@@ -5,6 +5,9 @@
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #endif
+#ifdef FWHT_F16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#endif
 
 layout(constant_id = 0) const uint BLOCK_SIZE = 32;
 layout(constant_id = 1) const uint N = 128;
@@ -19,7 +22,11 @@ layout(push_constant) uniform parameter
     float scale;
 };
 
+#ifdef FWHT_F16
+layout(binding = 0, std430) readonly buffer A { float16_t data_a[]; };
+#else
 layout(binding = 0, std430) readonly buffer A { float data_a[]; };
+#endif
 layout(binding = 1, std430) writeonly buffer D { float data_d[]; };
 
 const uint EL_W = N / BLOCK_SIZE;
@@ -54,7 +61,7 @@ void main() {
 
         [[unroll]]
         for (uint i = 0; i < EL_W; ++i) {
-            reg[i] = row < n_rows ? data_a[src_offset + row_offset + i * BLOCK_SIZE + tid] * scale : 0.0;
+            reg[i] = row < n_rows ? float(data_a[src_offset + row_offset + i * BLOCK_SIZE + tid]) * scale : 0.0;
         }
 
 #ifdef FWHT_SHMEM
