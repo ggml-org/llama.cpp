@@ -54,10 +54,9 @@ common_chat_params common_chat_params_init_translate_gemma(
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         return p.literal(data.generation_prompt) << p.content(p.rest());
     });
-    data.parser = parser.save();
 
     return data;
 }
