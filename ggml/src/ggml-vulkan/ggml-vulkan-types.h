@@ -264,6 +264,8 @@ struct vk_pipeline_struct {
     std::atomic<bool> compiled {};
     // number of registers used, extracted from pipeline executable properties
     uint32_t register_count {};
+    // shared memory per workgroup in bytes, 0 if unknown
+    uint32_t shmem_size {};
 
 #if defined(VK_EXT_shader_64bit_indexing)
     bool is_64b_indexing {};
