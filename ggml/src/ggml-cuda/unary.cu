@@ -115,23 +115,32 @@ static __device__ __forceinline__ float op_trunc(float x) {
 }
 
 template <float (*op)(float), typename T>
-static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
+static __global__ void unary_op_kernel(const T * x, T * dst, const int64_t k,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02,
+        const int64_t s00,  const int64_t s01,  const int64_t s02, const int64_t s03) {
     ggml_cuda_pdl_lc();
-    const int i = blockDim.x*blockIdx.x + threadIdx.x;
-
-    if (i >= k) {
+    const int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i >= k)
+    {
         return;
     }
-
     ggml_cuda_pdl_sync();
-    dst[i] = (T)op((float)x[i]);
+    int64_t i0 = i % ne00;
+    int64_t i1 = (i/ne00)%ne01;
+    int64_t i2 = (i/(ne00*ne01))%ne02;
+    int64_t i3 = i / (ne00*ne01*ne02);
+    int64_t offset = i0*s00 + i1*s01 + i2*s02 +i3*s03;
+    dst[i] = (T)op((float)x[offset]);
 }
 
 template <float (*op)(float), typename T>
-static void unary_cuda(const T * x, T * dst, const int k, cudaStream_t stream) {
+static void unary_cuda(const T * x, T * dst, const int64_t k,
+    const int64_t ne00,const int64_t ne01,const int64_t ne02,
+    const int64_t s00,const int64_t s01,const int64_t s02,const int64_t s03, 
+    cudaStream_t stream) {
     const int num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream);
-    ggml_cuda_kernel_launch(unary_op_kernel<op, T>, launch_params, x, dst, k);
+    ggml_cuda_kernel_launch(unary_op_kernel<op, T>, launch_params, x, dst, k,ne00,ne01,ne02,s00,s01,s02,s03);
 }
 
 template <float (*op)(float)>
@@ -141,16 +150,27 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     void * dst_d = dst->data;
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
     GGML_ASSERT(src0->type == dst->type);
 
     if (src0->type == GGML_TYPE_F16) {
-        unary_cuda<op>((const half *)src0_d, (half *)dst_d, ggml_nelements(src0), stream);
+        const int64_t s00 = src0->nb[0] / sizeof(half);
+        const int64_t s01 = src0->nb[1] / sizeof(half);
+        const int64_t s02 = src0->nb[2] / sizeof(half);
+        const int64_t s03 = src0->nb[3] / sizeof(half);
+        unary_cuda<op>((const half *)src0_d, (half *)dst_d, ggml_nelements(src0),
+                   ne00, ne01, ne02, s00, s01, s02, s03, stream);
     } else {
-        unary_cuda<op>((const float *)src0_d, (float *)dst_d, ggml_nelements(src0), stream);
+        const int64_t s00 = src0->nb[0] / sizeof(float);
+        const int64_t s01 = src0->nb[1] / sizeof(float);
+        const int64_t s02 = src0->nb[2] / sizeof(float);
+        const int64_t s03 = src0->nb[3] / sizeof(float);
+        unary_cuda<op>((const float *)src0_d, (float *)dst_d, ggml_nelements(src0),
+                   ne00, ne01, ne02, s00, s01, s02, s03, stream);
     }
 }
 
@@ -712,10 +732,23 @@ void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * relu_n
     GGML_ASSERT(src->type == GGML_TYPE_F32 || src->type == GGML_TYPE_F16);
     GGML_ASSERT(src->type == sqr_node->type);
 
-    const int k = ggml_nelements(src);
+    const int64_t k = ggml_nelements(src);
+    const int64_t ne00 = src->ne[0];              // ← 新增
+    const int64_t ne01 = src->ne[1];
+    const int64_t ne02 = src->ne[2];
     if (src->type == GGML_TYPE_F16) {
-        unary_cuda<op_relu_sqr>((const half *)src->data, (half *)sqr_node->data, k, stream);
+        const int64_t s00 = src->nb[0] / sizeof(half);   // ← 新增 4 行 s
+        const int64_t s01 = src->nb[1] / sizeof(half);
+        const int64_t s02 = src->nb[2] / sizeof(half);
+        const int64_t s03 = src->nb[3] / sizeof(half);
+        unary_cuda<op_relu_sqr>((const half *)src->data, (half *)sqr_node->data,
+                   k, ne00, ne01, ne02, s00, s01, s02, s03, stream);
     } else {
-        unary_cuda<op_relu_sqr>((const float *)src->data, (float *)sqr_node->data, k, stream);
+        const int64_t s00 = src->nb[0] / sizeof(float);   // ← 新增 4 行 s
+        const int64_t s01 = src->nb[1] / sizeof(float);
+        const int64_t s02 = src->nb[2] / sizeof(float);
+        const int64_t s03 = src->nb[3] / sizeof(float);
+        unary_cuda<op_relu_sqr>((const float *)src->data, (float *)sqr_node->data,
+                   k, ne00, ne01, ne02, s00, s01, s02, s03, stream);
     }
 }
