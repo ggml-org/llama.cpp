@@ -7,6 +7,7 @@
 #include "server-queue.h"
 #include "server-schema.h"
 #include "server-stream.h"
+#include "server-radix.h"
 
 #include "build-info.h"
 #include "common.h"
@@ -305,6 +306,10 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // radix prefix sharing (opt-in --radix-cache)
+    size_t  radix_n_shared = 0;
+    bool    radix_locked   = false;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
         if (prompt.tokens.size() == 0) {
             return false;
@@ -346,6 +351,28 @@ struct server_slot {
         mem.seq_rm(id, -1, -1);
 
         prompt.clear();
+    }
+
+    // Alias first n_shared tokens from donor via unified-KV seq_cp (metadata-only when same stream).
+    bool prompt_alias_from(server_slot & donor, size_t n_shared) {
+        if (n_shared == 0 || n_shared > donor.prompt.tokens.size()) {
+            return false;
+        }
+
+        const llama_pos p1 = donor.prompt.tokens.pos_next((int64_t) n_shared);
+
+        mem.seq_rm(id, -1, -1);
+        mem.seq_cp(donor.id, id, 0, p1);
+
+        prompt.clear();
+        prompt.tokens = donor.prompt.tokens.clone();
+        prompt.tokens.keep_first(n_shared);
+        // do not copy donor checkpoints - they belong to donor timeline
+        prompt.checkpoints.clear();
+
+        SLT_INF(*this, "radix alias from slot %d, n_shared = %zu, p1 = %d\n", donor.id, n_shared, (int) p1);
+
+        return true;
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -1014,6 +1041,7 @@ private:
     int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
+    std::unique_ptr<server_radix_cache>  radix_cache;
 
     server_metrics metrics;
 
@@ -1434,6 +1462,32 @@ private:
 
             slot.callback_on_release = [this](int id_slot) {
                 queue_tasks.pop_deferred_task(id_slot);
+
+                if (!radix_cache) {
+                    return;
+                }
+
+                server_slot * slot = get_slot_by_id(id_slot);
+                if (!slot) {
+                    return;
+                }
+
+                if (slot->radix_locked && slot->radix_n_shared > 0 && !slot->prompt.tokens.empty()) {
+                    radix_cache->unlock_prefix(slot->prompt.tokens, slot->radix_n_shared);
+                    slot->radix_locked = false;
+                    slot->radix_n_shared = 0;
+                }
+
+                if (!slot->prompt.tokens.empty() && !slot->prompt.tokens.has_mtmd) {
+                    radix_cache->insert(slot->prompt.tokens, slot->id);
+                    radix_cache->refresh_donor(slot->prompt.tokens, slot->id);
+                    if (params_base.radix_max_nodes > 0) {
+                        radix_cache->evict_unlocked((size_t) params_base.radix_max_nodes);
+                    }
+                } else {
+                    slot->radix_locked = false;
+                    slot->radix_n_shared = 0;
+                }
             };
 
             slot.callback_on_reset = [this](const server_slot & slot) {
@@ -1494,6 +1548,19 @@ private:
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+
+        if (params_base.radix_cache) {
+            if (!params_base.kv_unified) {
+                SRV_WRN("%s", "--radix-cache requires --kv-unified; disabling radix cache\n");
+            } else if (mctx != nullptr) {
+                SRV_WRN("%s", "--radix-cache is not supported with multimodal; disabling\n");
+            } else {
+                radix_cache = std::make_unique<server_radix_cache>((size_t) params_base.radix_page_size);
+                SRV_INF("radix cache enabled, page_size = %d, max_nodes = %d\n",
+                        params_base.radix_page_size, params_base.radix_max_nodes);
+                SRV_TRC("%s", "__TEST_TAG_RADIX_CACHE_ENABLED__\n");
+            }
+        }
 
         if (params_base.n_ctx_checkpoints > 0) {
             SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
@@ -1742,6 +1809,45 @@ private:
             }
         }
 
+        // cache-aware: with radix, prefer an empty idle slot when a busy/idle donor can alias a long prefix
+        // (avoids destroying a valuable idle branch when we can seq_cp from a donor)
+        if (ret == nullptr && radix_cache && task.type == SERVER_TASK_TYPE_COMPLETION && !task.tokens.has_mtmd) {
+            size_t best_donor_lcp = 0;
+            for (server_slot & slot : slots) {
+                if (slot.prompt.tokens.empty()) {
+                    continue;
+                }
+                best_donor_lcp = std::max(best_donor_lcp, slot.prompt.tokens.get_common_prefix(task.tokens));
+            }
+            {
+                const auto rm = radix_cache->match_prefix(task.tokens);
+                best_donor_lcp = std::max(best_donor_lcp, rm.n_shared);
+            }
+
+            if (best_donor_lcp > 0 && task.tokens.size() > 0 &&
+                float(best_donor_lcp) / task.tokens.size() > slot_prompt_similarity) {
+                server_slot * empty = nullptr;
+                int64_t t_last = -1;
+                for (server_slot & slot : slots) {
+                    if (slot.is_processing()) {
+                        continue;
+                    }
+                    if (!slot.prompt.tokens.empty()) {
+                        continue;
+                    }
+                    if (!empty || slot.t_last_used <= t_last) {
+                        t_last = slot.t_last_used;
+                        empty = &slot;
+                    }
+                }
+                if (empty) {
+                    ret = empty;
+                    SLT_INF(*ret, "selected empty slot for radix alias, donor_lcp = %zu\n", best_donor_lcp);
+                    update_cache = false;
+                }
+            }
+        }
+
         // find the slot that has been least recently used
         if (ret == nullptr) {
             int64_t t_last = -1;
@@ -1787,6 +1893,77 @@ private:
 
                 SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
+
+            // Physical KV prefix alias via radix + busy/idle donors (requires unified KV).
+            if (radix_cache && task.type == SERVER_TASK_TYPE_COMPLETION && !task.tokens.has_mtmd) {
+                // unlock previous pin on this worker if any
+                if (ret->radix_locked && ret->radix_n_shared > 0 && !ret->prompt.tokens.empty()) {
+                    radix_cache->unlock_prefix(ret->prompt.tokens, ret->radix_n_shared);
+                    ret->radix_locked = false;
+                    ret->radix_n_shared = 0;
+                }
+
+                size_t best_lcp = ret->prompt.tokens.empty()
+                    ? 0
+                    : ret->prompt.tokens.get_common_prefix(task.tokens);
+                server_slot * donor = nullptr;
+
+                const auto task_loras = task.params.lora.empty()
+                    ? params_base.lora_adapters
+                    : construct_lora_list(task.params.lora);
+
+                for (server_slot & slot : slots) {
+                    if (&slot == ret || slot.prompt.tokens.empty() || slot.prompt.tokens.has_mtmd) {
+                        continue;
+                    }
+                    // LoRA mismatch: do not share
+                    if (!are_lora_equal(slot.lora, task_loras)) {
+                        continue;
+                    }
+                    const size_t lcp = slot.prompt.tokens.get_common_prefix(task.tokens);
+                    if (lcp > best_lcp) {
+                        best_lcp = lcp;
+                        donor = &slot;
+                    }
+                }
+
+                {
+                    const auto rm = radix_cache->match_prefix(task.tokens);
+                    radix_cache->stats.n_match++;
+                    if (rm.n_shared > best_lcp && rm.donor_slot >= 0) {
+                        server_slot * d = get_slot_by_id(rm.donor_slot);
+                        if (d && d != ret && !d->prompt.tokens.empty() &&
+                            are_lora_equal(d->lora, task_loras)) {
+                            const size_t lcp = d->prompt.tokens.get_common_prefix(task.tokens);
+                            if (lcp >= rm.n_shared && lcp > best_lcp) {
+                                best_lcp = std::min(lcp, rm.n_shared);
+                                donor = d;
+                            }
+                        }
+                    }
+                }
+
+                best_lcp = radix_cache->align_len(best_lcp);
+
+                if (donor && best_lcp > 0 && best_lcp > ret->prompt.tokens.get_common_prefix(task.tokens)) {
+                    if (prompt_cache && !ret->prompt.tokens.empty()) {
+                        ret->prompt_save(*prompt_cache);
+                        prompt_cache->update();
+                    }
+
+                    radix_cache->invalidate_slot(ret->id);
+
+                    if (ret->prompt_alias_from(*donor, best_lcp)) {
+                        radix_cache->lock_prefix(ret->prompt.tokens, best_lcp);
+                        ret->radix_n_shared = best_lcp;
+                        ret->radix_locked = true;
+                        radix_cache->stats.n_hit++;
+                        radix_cache->stats.n_matched_tok += best_lcp;
+                        radix_cache->stats.n_alias++;
+                        SRV_TRC("%s", "__TEST_TAG_RADIX_ALIAS__\n");
+                    }
+                }
+            }
         }
 
         return ret;
@@ -1811,6 +1988,15 @@ private:
 
             if (slot.prompt.n_tokens() > 0) {
                 SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
+
+                if (radix_cache) {
+                    if (slot.radix_locked && slot.radix_n_shared > 0) {
+                        radix_cache->unlock_prefix(slot.prompt.tokens, slot.radix_n_shared);
+                        slot.radix_locked = false;
+                        slot.radix_n_shared = 0;
+                    }
+                    radix_cache->invalidate_slot(slot.id);
+                }
 
                 slot.prompt_clear();
 
@@ -4347,7 +4533,9 @@ private:
             llama_token id;
             {
                 scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+                // Prefer grammar-first for structured / tool-call outputs to cut invalid XML/JSON samples.
+                const bool grammar_first = common_grammar_needs_prefill(slot.task->params.sampling.grammar);
+                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx, grammar_first);
             }
 
             slot.i_batch = -1;

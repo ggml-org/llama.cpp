@@ -1718,6 +1718,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
 
         if (cur_lcp_len == (int) prompt.tokens.size()) {
             SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
+            it->referenced = true;
             return nullptr;
         }
     }
@@ -1751,12 +1752,23 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     }
 
     if (limit_size > 0) {
-        // make room before allocating the new vectors to avoid breaching the limit
+        // second-chance eviction: give referenced entries one more pass
+        size_t rotations = 0;
+        const size_t max_rotations = states.size() + 1;
         while (!states.empty() && size() + state_size_new > limit_size) {
+            auto & front = states.front();
+            if (front.referenced && rotations < max_rotations) {
+                front.referenced = false;
+                rotations++;
+                SRV_TRC(" - second-chance: rotating referenced cache entry (size = %.3f MiB)\n",
+                        front.size() / (1024.0 * 1024.0));
+                states.splice(states.end(), states, states.begin());
+                continue;
+            }
             SRV_WRN(" - making room for prompt cache entry, removing oldest entry (size = %.3f MiB)\n",
-                    states.front().size() / (1024.0 * 1024.0));
-
+                    front.size() / (1024.0 * 1024.0));
             states.pop_front();
+            rotations = 0;
         }
     }
 
@@ -1788,6 +1800,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             /*.main =*/ std::move(state_data_tgt),
             /*.drft =*/ std::move(state_data_dft),
         },
+        /*.referenced =*/ true,
     });
 
     return &states.back();
@@ -1827,6 +1840,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     if (it_best != states.end()) {
         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
+
+        it_best->referenced = true;
 
         {
             auto & data = it_best->data.main;
@@ -1872,10 +1887,22 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
 void server_prompt_cache::update() {
     if (limit_size > 0) {
+        size_t rotations = 0;
+        const size_t max_rotations = states.size() + 1;
         while (!states.empty() && size() > limit_size) {
-            SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
+            auto & front = states.front();
+            if (front.referenced && rotations < max_rotations) {
+                front.referenced = false;
+                rotations++;
+                SRV_TRC(" - second-chance: rotating referenced cache entry (size = %.3f MiB)\n",
+                        front.size() / (1024.0 * 1024.0));
+                states.splice(states.end(), states, states.begin());
+                continue;
+            }
+            SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n",
+                    front.size() / (1024.0 * 1024.0));
             states.pop_front();
+            rotations = 0;
         }
     }
 
@@ -1886,11 +1913,20 @@ void server_prompt_cache::update() {
     const size_t limit_tokens_cur = limit_size > 0 ? std::max<size_t>(limit_tokens, limit_size/size_per_token) : limit_tokens;
 
     if (limit_tokens > 0) {
+        size_t rotations = 0;
+        const size_t max_rotations = states.size() + 1;
         while (!states.empty() && n_tokens() > limit_tokens_cur) {
+            auto & front = states.front();
+            if (front.referenced && rotations < max_rotations) {
+                front.referenced = false;
+                rotations++;
+                states.splice(states.end(), states, states.begin());
+                continue;
+            }
             SRV_WRN(" - cache token limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
-                    limit_tokens, limit_tokens_cur, states.front().size() / (1024.0 * 1024.0));
-
+                    limit_tokens, limit_tokens_cur, front.size() / (1024.0 * 1024.0));
             states.pop_front();
+            rotations = 0;
         }
     }
 

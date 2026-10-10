@@ -260,7 +260,8 @@ struct common_chat_templates_inputs {
     bool                                  add_generation_prompt  = true;
     common_chat_continuation              continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
     bool                                  use_jinja              = true;
-    // Parameters below only supported when use_jinja is true
+    // Tools / parallel_tool_calls require use_jinja. enable_thinking also drives legacy
+    // post-process disable markers when use_jinja is false (common reasoning templates).
     std::vector<common_chat_tool>         tools;
     common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
     bool                                  parallel_tool_calls = false;

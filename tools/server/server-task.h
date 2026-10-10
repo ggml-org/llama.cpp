@@ -644,6 +644,9 @@ struct server_prompt_cache_state {
     server_prompt prompt;
     server_prompt_data data;
 
+    // second-chance / clock: referenced entries skip one eviction pass
+    bool referenced = true;
+
     size_t size() const {
         size_t res = data.size();
 

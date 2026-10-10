@@ -1414,6 +1414,76 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     }
 }
 
+// Legacy path cannot run Jinja `enable_thinking`. Apply the same disable markers that
+// mainstream templates emit when enable_thinking=false (see models/templates/* and
+// tools/server/tests/unit/test_template.py). Keep this whitelist tight.
+static void common_chat_legacy_apply_thinking_disable(std::string & prompt, const std::string & src) {
+    auto has = [&](const char * needle) {
+        return src.find(needle) != std::string::npos;
+    };
+
+    if (string_ends_with(prompt, "</think>\n\n") ||
+        string_ends_with(prompt, "</think>") ||
+        string_ends_with(prompt, "<|END_THINKING|>")) {
+        LOG_DBG("%s: legacy thinking disable skipped (already closed)\n", __func__);
+        return;
+    }
+
+    // Cohere Command-R / Command-R7B tool_use
+    if (has("<|START_THINKING|>") && has("<|CHATBOT_TOKEN|>")) {
+        if (string_ends_with(prompt, "<|CHATBOT_TOKEN|>")) {
+            prompt += "<|START_THINKING|><|END_THINKING|>";
+            LOG_DBG("%s: legacy thinking disable applied (command-r)\n", __func__);
+            return;
+        }
+    }
+
+    // DeepSeek-R1 distill family: Jinja ends with <think>\n</think> after Assistant
+    // (no ChatML <|im_start|>). Native deepseek3 ends at Assistant without think markers.
+    if (has("<think>") && (has("enable_thinking") || has("not enable_thinking")) &&
+        has("Assistant") && !has("<|im_start|>")) {
+        if (string_ends_with(prompt, "<think>\n") || string_ends_with(prompt, "<think>")) {
+            prompt += "</think>";
+        } else {
+            prompt += "<think>\n</think>";
+        }
+        LOG_DBG("%s: legacy thinking disable applied (deepseek-r1)\n", __func__);
+        return;
+    }
+
+    // Qwen3: enable_thinking is false -> empty think pair with blank lines
+    if (has("enable_thinking is false") || has("enable_thinking is defined and enable_thinking is false")) {
+        if (string_ends_with(prompt, "<|im_start|>assistant\n")) {
+            prompt += "<think>\n\n</think>\n\n";
+            LOG_DBG("%s: legacy thinking disable applied (qwen3)\n", __func__);
+            return;
+        }
+    }
+
+    // QwQ / similar: `if not enable_thinking` closes an opened think block
+    if (has("not enable_thinking") && has("<|im_start|>") && has("<think>")) {
+        if (string_ends_with(prompt, "<|im_start|>assistant\n<think>\n")) {
+            prompt += "</think>";
+            LOG_DBG("%s: legacy thinking disable applied (qwq-close)\n", __func__);
+            return;
+        }
+        if (string_ends_with(prompt, "<|im_start|>assistant\n")) {
+            prompt += "<think>\n</think>";
+            LOG_DBG("%s: legacy thinking disable applied (qwq)\n", __func__);
+            return;
+        }
+    }
+
+    // Native BAILING_THINK hard-codes an open <think> on add_ass
+    if (string_ends_with(prompt, "<think>")) {
+        prompt += "\n\n</think>\n\n";
+        LOG_DBG("%s: legacy thinking disable applied (bailing-think)\n", __func__);
+        return;
+    }
+
+    LOG_DBG("%s: legacy thinking disable skipped (unsupported template)\n", __func__);
+}
+
 // Legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.
 static common_chat_params common_chat_templates_apply_legacy(const struct common_chat_templates *        tmpls,
                                                              const struct common_chat_templates_inputs & inputs) {
@@ -1472,6 +1542,12 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
 
     common_chat_params params;
     params.prompt = std::string(buf.data(), res);
+
+    // Native llama_chat_apply_template has no enable_thinking; mirror Jinja disable markers here.
+    if (inputs.add_generation_prompt && !inputs.enable_thinking) {
+        common_chat_legacy_apply_thinking_disable(params.prompt, src);
+    }
+
     if (!inputs.json_schema.empty()) {
         params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));
     } else {

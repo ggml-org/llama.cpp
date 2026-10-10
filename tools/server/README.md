@@ -167,6 +167,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
+| `--radix-cache, --no-radix-cache` | enable server radix prefix index with physical KV sharing via `seq_cp` (requires `--kv-unified`, default: disabled)<br/>(env: LLAMA_ARG_RADIX_CACHE) |
+| `--radix-page-size N` | radix match/insert alignment in tokens (default: 1)<br/>(env: LLAMA_ARG_RADIX_PAGE_SIZE) |
+| `--radix-max-nodes N` | max unlocked radix nodes before LRU eviction (default: 0 = unlimited)<br/>(env: LLAMA_ARG_RADIX_MAX_NODES) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
 | `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
@@ -231,7 +234,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
-| `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING) |
+| `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>with `--no-jinja`, `off` still disables thinking for common templates via legacy marker post-process (Qwen3/QwQ/R1/Command-R); prefer `--jinja` for full fidelity<br/>(env: LLAMA_ARG_REASONING) |
 | `--reasoning-effort LEVEL` | reasoning effort level given to the chat template: 'default' to keep the template default,<br/>or a level such as 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max' (default: default)<br/>(env: LLAMA_ARG_REASONING_EFFORT) |
 | `--reasoning-budget N` | token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
 | `--reasoning-budget-message MESSAGE` | message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)<br/>(env: LLAMA_ARG_THINK_BUDGET_MESSAGE) |
@@ -587,6 +590,8 @@ These words will not be included in the completion, so make sure to add them to 
 `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
 
 `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
+
+With `--radix-cache` (requires `--kv-unified`), the server also maintains a radix prefix index across slots and can **physically alias** shared prefix KV cells via `seq_cp` (including from a busy donor slot). This reduces re-prefill when concurrent sessions share a long system prompt. `--cache-ram` remains an L2 host-memory blob cache; radix is the L0 hot path. Multimodal and non-unified KV disable radix. Paged/block-pool KV is not part of this path - see `tools/server/bench/radix-prefix/README.md`.
 
 `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
 
@@ -1346,6 +1351,8 @@ See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs
 The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
+
+With `--jinja` (default), `enable_thinking` is applied by the chat template. With `--no-jinja`, `llama_chat_apply_template` has no thinking flag; for common reasoning templates (Qwen3, QwQ, DeepSeek-R1 distill, Command-R), llama.cpp applies the same disable markers in a legacy post-process when thinking is off (`--reasoning off`, `enable_thinking=false`, or `reasoning_effort: "none"`). Prefer `--jinja` for full template fidelity. Non-whitelisted templates need `--jinja` to disable thinking correctly.
 
 `reasoning_effort`: If `none`, reasoning/thinking is disabled. Otherwise, the value is made available to the jinja template.
 

@@ -7936,6 +7936,76 @@ static void test_reasoning_effort_caps() {
     assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
 }
 
+static void test_legacy_thinking_disable_postprocess() {
+    // Gate A: --no-jinja + enable_thinking=false must match Jinja disable suffixes.
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "What is today?";
+
+    struct case_t {
+        const char * path;
+        const char * expected_end;
+    };
+    const case_t cases[] = {
+        { "models/templates/Qwen-Qwen3-0.6B.jinja",
+          "<|im_start|>assistant\n<think>\n\n</think>\n\n" },
+        { "models/templates/Qwen-QwQ-32B.jinja",
+          "<|im_start|>assistant\n<think>\n</think>" },
+        { "models/templates/deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja",
+          "<think>\n</think>" },
+        { "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja",
+          "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_THINKING|><|END_THINKING|>" },
+    };
+
+    for (const auto & c : cases) {
+        auto tmpls = read_templates(c.path);
+        common_chat_templates_inputs inputs;
+        inputs.messages              = { user };
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja             = false;
+        inputs.enable_thinking       = false;
+        auto params                  = common_chat_templates_apply(tmpls.get(), inputs);
+        if (!string_ends_with(params.prompt, c.expected_end)) {
+            throw std::runtime_error(std::string("legacy thinking disable mismatch for ") + c.path +
+                                     "\nexpected end: " + c.expected_end + "\ngot: " + params.prompt);
+        }
+
+        inputs.enable_thinking = true;
+        auto params_on         = common_chat_templates_apply(tmpls.get(), inputs);
+        if (string_ends_with(params_on.prompt, c.expected_end)) {
+            throw std::runtime_error(std::string("legacy thinking disable wrongly applied when on: ") + c.path);
+        }
+    }
+
+    // Gate D: non-think Llama-3 template must not gain <think>
+    {
+        auto tmpls = read_templates("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages              = { user };
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja             = false;
+        inputs.enable_thinking       = false;
+        auto params                  = common_chat_templates_apply(tmpls.get(), inputs);
+        if (params.prompt.find("<think>") != std::string::npos) {
+            throw std::runtime_error("non-think template gained <think> under legacy disable");
+        }
+    }
+
+    // add_generation_prompt=false: leave history rendering alone
+    {
+        auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages              = { user };
+        inputs.add_generation_prompt = false;
+        inputs.use_jinja             = false;
+        inputs.enable_thinking       = false;
+        auto params                  = common_chat_templates_apply(tmpls.get(), inputs);
+        if (params.prompt.find("<think>") != std::string::npos) {
+            throw std::runtime_error("add_generation_prompt=false should not insert think markers");
+        }
+    }
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -8095,6 +8165,7 @@ int main(int argc, char ** argv) {
         test_translate_gemma();
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
+        test_legacy_thinking_disable_postprocess();
         test_template_generation_prompt();
         test_reasoning_effort_caps();
         test_chat_session();

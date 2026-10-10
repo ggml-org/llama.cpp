@@ -638,6 +638,9 @@ struct common_params {
     int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    bool    radix_cache         = false; // opt-in server radix prefix index + unified KV aliasing
+    int32_t radix_page_size     = 1;     // token alignment for radix match/insert (1 = exact)
+    int32_t radix_max_nodes     = 0;     // 0 = unlimited unlocked node budget
 
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT

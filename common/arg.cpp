@@ -1740,6 +1740,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--radix-cache"},
+        {"--no-radix-cache"},
+        string_format("enable server radix prefix index with physical KV sharing via seq_cp (requires --kv-unified, default: %s)",
+            params.radix_cache ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.radix_cache = value;
+        }
+    ).set_env("LLAMA_ARG_RADIX_CACHE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--radix-page-size"}, "N",
+        string_format("radix match/insert alignment in tokens (default: %d)", params.radix_page_size),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("radix-page-size must be >= 1");
+            }
+            params.radix_page_size = value;
+        }
+    ).set_env("LLAMA_ARG_RADIX_PAGE_SIZE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--radix-max-nodes"}, "N",
+        string_format("max unlocked radix nodes before LRU eviction (default: %d, 0 = unlimited)", params.radix_max_nodes),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("radix-max-nodes must be non-negative");
+            }
+            params.radix_max_nodes = value;
+        }
+    ).set_env("LLAMA_ARG_RADIX_MAX_NODES").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
         string_format("whether to use context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),
