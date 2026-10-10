@@ -7,6 +7,9 @@
 #include "amx/amx.h"
 
 #include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -362,6 +365,75 @@ static const char * ggml_backend_cpu_device_get_description(ggml_backend_dev_t d
     return ctx->description.c_str();
 }
 
+#if defined(__linux__)
+static bool ggml_backend_cpu_linux_get_available_memory(size_t & available) {
+    FILE * file = fopen("/proc/meminfo", "r");
+    if (file == nullptr) {
+        return false;
+    }
+
+    uint64_t mem_available_kib = 0;
+    uint64_t mem_free_kib = 0;
+    uint64_t inactive_file_kib = 0;
+    uint64_t sreclaimable_kib = 0;
+    bool found_mem_available = false;
+
+    char line[256];
+    while (fgets(line, sizeof(line), file) != nullptr) {
+        unsigned long long value = 0;
+        if (sscanf(line, "MemAvailable: %llu kB", &value) == 1) {
+            mem_available_kib = value;
+            found_mem_available = true;
+        } else if (sscanf(line, "MemFree: %llu kB", &value) == 1) {
+            mem_free_kib = value;
+        } else if (sscanf(line, "Inactive(file): %llu kB", &value) == 1) {
+            inactive_file_kib = value;
+        } else if (sscanf(line, "SReclaimable: %llu kB", &value) == 1) {
+            sreclaimable_kib = value;
+        }
+    }
+    fclose(file);
+
+    if (!found_mem_available) {
+        return false;
+    }
+
+    constexpr uint64_t max_swappiness = 200;
+    uint64_t swappiness = 60;
+
+    file = fopen("/proc/sys/vm/swappiness", "r");
+    if (file != nullptr) {
+        unsigned long long value = 0;
+        if (fscanf(file, "%llu", &value) == 1) {
+            swappiness = value < max_swappiness ? value : max_swappiness;
+        }
+        fclose(file);
+    }
+
+    // Discount inactive file pages by the kernel's file reclaim weight (200 - swappiness).
+    const uint64_t file_reclaim_weight = max_swappiness - swappiness;
+    const uint64_t inactive_file_reclaimable_kib =
+            inactive_file_kib / max_swappiness * file_reclaim_weight +
+            inactive_file_kib % max_swappiness * file_reclaim_weight / max_swappiness;
+
+    const uint64_t conservative_kib =
+            mem_free_kib + inactive_file_reclaimable_kib + sreclaimable_kib;
+
+    // MemAvailable accounts for zone watermarks and partial slab reclaim.
+    const uint64_t available_kib =
+            conservative_kib < mem_available_kib ? conservative_kib : mem_available_kib;
+    const size_t max_kib = std::numeric_limits<size_t>::max() / 1024;
+
+    if (available_kib > max_kib) {
+        available = std::numeric_limits<size_t>::max();
+    } else {
+        available = static_cast<size_t>(available_kib) * 1024;
+    }
+
+    return true;
+}
+#endif
+
 static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
 #ifdef _WIN32
     MEMORYSTATUSEX status;
@@ -374,8 +446,18 @@ static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * 
     long page_size = sysconf(_SC_PAGE_SIZE);
     *total = pages * page_size;
 
-    // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
+#if defined(__linux__)
+    if (!ggml_backend_cpu_linux_get_available_memory(*free)) {
+        const long available_pages = sysconf(_SC_AVPHYS_PAGES);
+        if (available_pages > 0 && page_size > 0) {
+            *free = static_cast<size_t>(available_pages) * static_cast<size_t>(page_size);
+        } else {
+            *free = *total;
+        }
+    }
+#else
     *free = *total;
+#endif
 #endif // _WIN32
 
     GGML_UNUSED(dev);
