@@ -670,6 +670,111 @@ static inline float compute_block_dot_product_f16(const uint16_t * a_block, cons
     return compute_block_dot_product_f16_partial(a_block, b_col_start, QK_F16);
 }
 
+//******************************************************************************
+// Hoisted F16 row-dot API (register-resident accumulator)
+//
+// Mirrors the q8_dot_* API above: the running sum lives in vector registers
+// for the whole row instead of being spilled to memory every 8 elements, so
+// the inner loop is load + convert + fmadd with no accumulator round-trip.
+//
+// Register contract (shared convention with q8_dot_*):
+//   f20-f23   row accumulators (persistent across tiles, reset per row)
+//   f31       gather pattern (byte offsets of 8 consecutive f16)
+//   f11-f18   scratch within tile
+//   t0, f1-f5 scratch within reduce
+// Caller sets the vector mask to 0xFF once around the surrounding loop.
+//******************************************************************************
+
+static inline void __attribute__((always_inline))
+f16_dot_reset(void) {
+    // Four independent lane accumulators break the fmadd dependency chain so
+    // multiple A/B loads stay in flight, hiding load latency.
+    __asm__ volatile(
+        "fbci.pi f20, 0\n"
+        "fbci.pi f21, 0\n"
+        "fbci.pi f22, 0\n"
+        "fbci.pi f23, 0\n"
+        ::: "f20", "f21", "f22", "f23");
+}
+
+// Accumulate n_blocks blocks of QK_F16 (=32) f16 A values times f32 B into
+// f20..f23 (one accumulator per 8-lane chunk within the block).
+static inline void __attribute__((always_inline))
+f16_dot_tile(const uint16_t * a_row, const float * b_col, int64_t n_blocks) {
+    static const int32_t gather_pattern[8] = {0, 2, 4, 6, 8, 10, 12, 14};
+    __asm__ volatile("flw.ps f31, %[g]\n"
+                     : : [g] "m"(*(const int32_t(*)[8])gather_pattern)
+                     : "f31");
+
+    // fgh.ps/flw.ps are blocking loads, so a non-blocking prefetch hint issued
+    // a few blocks ahead turns a DRAM miss into an L1 hit by the time the
+    // gather runs.
+    const int64_t PF = 4;
+    for (int64_t kb = 0; kb < n_blocks; kb++) {
+        const uint16_t * a_ptr = a_row + (kb << 5);   // 32 f16 per block
+        const float *    b_ptr = b_col + (kb << 5);
+        if (kb + PF < n_blocks) {
+            const uint16_t * pfa = a_ptr + (PF << 5);   // A block = 64B = 1 line
+            const float *    pfb = b_ptr + (PF << 5);   // B block = 128B = 2 lines
+            __asm__ volatile(
+                "lb x0, 0(%[pa])\n"
+                "lb x0, 0(%[pb])\n"
+                "lb x0, 64(%[pb])\n"
+                : : [pa] "r"(pfa), [pb] "r"(pfb));
+        }
+        __asm__ volatile(
+            // Issue all 8 independent memory ops first (4 A gathers + 4 B loads)
+            // so several misses are outstanding before any consumer stalls.
+            "fgh.ps      f11, f31(%[a0])\n"
+            "fgh.ps      f13, f31(%[a1])\n"
+            "fgh.ps      f15, f31(%[a2])\n"
+            "fgh.ps      f17, f31(%[a3])\n"
+            "flw.ps      f12, %[b0]\n"
+            "flw.ps      f14, %[b1]\n"
+            "flw.ps      f16, %[b2]\n"
+            "flw.ps      f18, %[b3]\n"
+            "fcvt.ps.f16 f11, f11\n"
+            "fcvt.ps.f16 f13, f13\n"
+            "fcvt.ps.f16 f15, f15\n"
+            "fcvt.ps.f16 f17, f17\n"
+            "fmadd.ps    f20, f11, f12, f20\n"
+            "fmadd.ps    f21, f13, f14, f21\n"
+            "fmadd.ps    f22, f15, f16, f22\n"
+            "fmadd.ps    f23, f17, f18, f23\n"
+            :
+            : [a0] "r"(a_ptr),      [a1] "r"(a_ptr + 8),
+              [a2] "r"(a_ptr + 16), [a3] "r"(a_ptr + 24),
+              [b0] "m"(*(const float(*)[8])&b_ptr[0]),
+              [b1] "m"(*(const float(*)[8])&b_ptr[8]),
+              [b2] "m"(*(const float(*)[8])&b_ptr[16]),
+              [b3] "m"(*(const float(*)[8])&b_ptr[24])
+            : "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18",
+              "f20", "f21", "f22", "f23"
+        );
+    }
+}
+
+static inline float __attribute__((always_inline))
+f16_dot_reduce(void) {
+    float result;
+    __asm__ __volatile__ (
+        // Combine the 4 lane accumulators, then horizontal-sum the 8 lanes.
+        "fadd.ps   f20, f20, f21, rne \n\t"
+        "fadd.ps   f22, f22, f23, rne \n\t"
+        "fadd.ps   f20, f20, f22, rne \n\t"
+        "fswizz.ps f1, f20, 0xB1 \n\t"
+        "fadd.ps   f2, f20, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f20", "f21", "f22", "f23"
+    );
+    return result;
+}
+
 // Compute dot product between f32 block and f32 column vector
 // Vectorized: processes 8 elements at a time using ET vector instructions
 // Block size: up to 16 f32 values (can handle partial blocks for misaligned K)
