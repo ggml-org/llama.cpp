@@ -30,6 +30,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "BailingMoeV3ForCausalLM": "bailingmoe3",
     "BailingMoeV3VLForConditionalGeneration": "bailingmoe3",
     "BambaForCausalLM": "granite",
+    "BerryLMForCausalLM": "berrylm",
     "BertForMaskedLM": "bert",
     "BertForSequenceClassification": "bert",
     "BertModel": "bert",

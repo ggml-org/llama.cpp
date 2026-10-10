@@ -256,6 +256,7 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
             "head.layers.{bid}.self_attn.in_proj",  # laya
             "layers.{bid}.linear_attn.in_proj_qkv",                                # qwen3.5 text
+            "model.layers.{bid}.kda.in_proj_qkv",                                  # berrylm
         ),
 
         # Attention query
@@ -403,6 +404,15 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.output_gate",  # minimax-01
             "model.layers.{bid}.self_attn.linear_gate",  # hy-v4
             "model.layers.{bid}.self_attn.attn_gate_proj",  # k2-horizon
+            "model.layers.{bid}.kda.in_proj_z",             # berrylm
+        ),
+
+        MODEL_TENSOR.ATTN_RES_SCORE: (
+            "model.layers.{bid}.attn_res.pseudo_query",  # berrylm
+        ),
+
+        MODEL_TENSOR.ATTN_RES_GATE: (
+            "model.layers.{bid}.attn_res.gate",  # berrylm
         ),
 
         # Feed-forward norm
@@ -845,6 +855,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
             "model.layers.{bid}.linear_attn.conv1d",   # qwen3next
             "layers.{bid}.linear_attn.conv1d",         # qwen3.5 text
+            "model.layers.{bid}.kda.conv1d",           # berrylm
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -864,6 +875,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.dt",           # nemotron-h-moe
             "model.layers.{bid}.self_attn.dt_proj",     # kimi
             "model.layers.{bid}.attention.dt_proj",     # bailingmoe3
+            "model.layers.{bid}.kda.dt_bias",           # berrylm
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
@@ -880,6 +892,7 @@ class TensorNameMap:
             "layers.{bid}.linear_attn.A_log",         # qwen3.5 text
             "model.layers.{bid}.self_attn.A_log",     # kimi
             "model.layers.{bid}.attention.A_log",     # bailingmoe3
+            "model.layers.{bid}.kda.A_log",           # berrylm
         ),
 
         MODEL_TENSOR.SSM_B_NORM: (
@@ -908,6 +921,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.norm",     # mamba2
             "model.layers.{bid}.self_attn.o_norm",  # kimi
             "model.layers.{bid}.attention.o_norm",  # bailingmoe3
+            "model.layers.{bid}.kda.norm",          # berrylm
         ),
 
         MODEL_TENSOR.SSM_OUT: (
@@ -917,6 +931,7 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.out_proj",   # qwen3next
             "layers.{bid}.linear_attn.out_proj",         # qwen3.5 text
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
+            "model.layers.{bid}.kda.out_proj",           # berrylm
         ),
 
         MODEL_TENSOR.SSM_ALPHA: (
@@ -943,15 +958,18 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.SSM_F_A: (
             "model.layers.{bid}.self_attn.f_a_proj",
+            "model.layers.{bid}.kda.f_down_proj",  # berrylm
         ),
         MODEL_TENSOR.SSM_F_B: (
             "model.layers.{bid}.self_attn.f_b_proj",
+            "model.layers.{bid}.kda.f_up_proj",  # berrylm
         ),
         MODEL_TENSOR.SSM_BETA: (
             "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
             "layers.{bid}.linear_attn.in_proj_b",        # qwen3.5 text
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
             "model.layers.{bid}.attention.b_proj",       # bailingmoe3
+            "model.layers.{bid}.kda.in_proj_b",          # berrylm
         ),
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (

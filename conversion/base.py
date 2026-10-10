@@ -1946,6 +1946,9 @@ class TextModel(ModelBase):
         if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
             # ref: https://huggingface.co/IFM/K2-Horizon-36B
             res = "k2-horizon"
+        if chkhsh == "be659a753f130c3661652b5aca6a6aaefdfbdf9aa6e9b76b24ed84befff64389":
+            # ref: https://huggingface.co/rwb-ai/BerryLM-OS
+            res = "berrylm"
 
         if res is None:
             logger.warning("\n")

@@ -124,6 +124,7 @@ enum llm_type {
     LLM_TYPE_7_9B_A1_3B, // Ling-3.0-tiny
     LLM_TYPE_12B_A2_5B,
     LLM_TYPE_16B_A1B,
+    LLM_TYPE_18B_A3B, // BerryLM
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_26B_A4B, // Gemma4
@@ -563,6 +564,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_routed_down = nullptr; // latent MoE: n_embd -> n_expert_latent
     struct ggml_tensor * ffn_routed_up   = nullptr; // latent MoE: n_expert_latent -> n_embd
     struct ggml_tensor * ffn_routed_norm = nullptr;
+
+    // berrylm
+    struct ggml_tensor * attn_res_gate = nullptr; // tanh(gate) of the gated block AttnRes
 
     // DSA (deepseek sparse attention)
     struct ggml_tensor * indexer_k_norm   = nullptr;

@@ -1229,6 +1229,9 @@ class GGUFWriter:
     def add_kda_gate_lower_bound(self, value: float) -> None:
         self.add_float32(Keys.KDA.GATE_LOWER_BOUND.format(arch=self.arch), value)
 
+    def add_kda_gate_rank(self, value: int) -> None:
+        self.add_uint32(Keys.KDA.GATE_RANK.format(arch=self.arch), value)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 
