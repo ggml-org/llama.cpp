@@ -207,6 +207,35 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_SETUP generate-models
     )
 
+    # Target and draft models for test-speculative-rejection-sampling which
+    # requires one llama arch model each.
+    set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
+    set(SPEC_DRAFT_DIR  "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/draft")
+    file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}" "${SPEC_DRAFT_DIR}")
+    llama_test(
+        test-llama-archs
+        NAME test-generate-speculative-target
+        LABEL main
+        ARGS -a llama -s 999 -o "${SPEC_TARGET_DIR}"
+    )
+    llama_test(
+        test-llama-archs
+        NAME test-generate-speculative-draft
+        LABEL main
+        ARGS -a llama -s 888 -o "${SPEC_DRAFT_DIR}"
+    )
+    set_tests_properties(
+        test-generate-speculative-target
+        test-generate-speculative-draft
+        PROPERTIES FIXTURES_SETUP speculative-models
+    )
+
+    # To avoid recreating the models use the fixture exclude any option:
+    # -FA "^speculative-models$"
+    llama_build_and_test(test-speculative-rejection-sampling.cpp ARGS
+        -m "${SPEC_TARGET_DIR}/llama-dense.gguf" -md "${SPEC_DRAFT_DIR}/llama-dense.gguf")
+    set_tests_properties(test-speculative-rejection-sampling PROPERTIES FIXTURES_REQUIRED speculative-models)
+
     # Test recurrent-state rollback across all architectures, using the generated dummy models
     llama_test(
         test-recurrent-state-rollback
