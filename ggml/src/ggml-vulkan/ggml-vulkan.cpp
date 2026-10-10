@@ -5976,33 +5976,21 @@ static const std::vector<vk_matmul_pipeline_pair>* ggml_vk_get_mul_mat_mat_pipel
     return &it->second;
 }
 
-static uint32_t ggml_vk_select_matmul_tile(ggml_backend_vk_context * ctx,
-        const std::vector<vk_matmul_pipeline_pair>& configs,
-        uint32_t m, uint32_t n, bool mul_mat_id) {
-    auto& selector = mul_mat_id ? ctx->device->matmul_id_tile_selector : ctx->device->matmul_tile_selector;
-    uint32_t idx = selector(m, n, 0, ctx->device->shader_core_count, configs);
-    if (idx >= configs.size()) idx = (uint32_t)configs.size() - 1;
-    // a tile that is too small can dispatch more workgroups than the device allows
-    const auto& max_wg = ctx->device->properties.limits.maxComputeWorkGroupCount;
-    while (idx + 1 < configs.size() &&
-           (CEIL_DIV(m, configs[idx].unaligned->wg_denoms[0]) > max_wg[0] ||
-            CEIL_DIV(n, configs[idx].unaligned->wg_denoms[1]) > max_wg[1])) {
-        idx++;
-    }
-    return idx;
-}
-
 static vk_pipeline ggml_vk_guess_matmul_pipeline_map(ggml_backend_vk_context * ctx,
         const std::vector<vk_matmul_pipeline_pair>& configs,
         uint32_t m, uint32_t n, bool aligned, bool mul_mat_id) {
-    const uint32_t idx = ggml_vk_select_matmul_tile(ctx, configs, m, n, mul_mat_id);
+    auto& selector = mul_mat_id ? ctx->device->matmul_id_tile_selector : ctx->device->matmul_tile_selector;
+    uint32_t idx = selector(m, n, 0, ctx->device->shader_core_count, configs);
+    if (idx >= configs.size()) idx = (uint32_t)configs.size() - 1;
     return (aligned && configs[idx].aligned) ? configs[idx].aligned : configs[idx].unaligned;
 }
 
 static uint32_t ggml_vk_guess_matmul_pipeline_align_map(ggml_backend_vk_context * ctx,
         const std::vector<vk_matmul_pipeline_pair>& configs,
         uint32_t m, uint32_t n, bool mul_mat_id) {
-    const uint32_t idx = ggml_vk_select_matmul_tile(ctx, configs, m, n, mul_mat_id);
+    auto& selector = mul_mat_id ? ctx->device->matmul_id_tile_selector : ctx->device->matmul_tile_selector;
+    uint32_t idx = selector(m, n, 0, ctx->device->shader_core_count, configs);
+    if (idx >= configs.size()) idx = (uint32_t)configs.size() - 1;
     return configs[idx].align;
 }
 
