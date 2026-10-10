@@ -17,6 +17,8 @@
 
 #define UNUSED GGML_UNUSED
 
+#if TILED_ARCH_SUPPORTED
+
 // unpack routines for various quant types src0
 static void tiled_unpack_src0(const block_q4_K * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
@@ -591,17 +593,6 @@ static bool ggml_tiled_matmul_forced(void) {
     return forced;
 }
 
-// hard constraints shared by the MUL_MAT and MUL_MAT_ID entries; the src0 type gate is the
-// entries' type switch
-
-#if !defined(__AVX512VNNI__) && !defined(__AVX2__) && !defined(__AVX__)
-static bool ggml_tiled_supported(const struct ggml_tensor * src0,
-                                 const struct ggml_tensor * src1) {
-    UNUSED(src0);
-    UNUSED(src1);
-    return false;
-}
-#else
 static bool ggml_tiled_supported(const struct ggml_tensor * src0,
                                  const struct ggml_tensor * src1) {
     if (!ggml_tiled_matmul_enabled()) {
@@ -627,7 +618,7 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
-            return true;
+            break;
         default:
             return false;
     }
@@ -641,7 +632,6 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
     }
     return true;
 }
-#endif
 
 // per-thread workspace slot size (0 when tiled is disabled or unsupported on this arch)
 static size_t ggml_tiled_ws_size(void) {
@@ -1243,3 +1233,31 @@ bool ggml_compute_forward_mul_mat_id_tiled(
     }
     return ggml_tiled_matmul_type_dispatch(params, dst, expert_rows, cur_a, cne1, scratch);
 }
+
+#else // TILED_ARCH_SUPPORTED
+
+// Return 0/false for everything and let the normal vec_dot path run if this architecture doesn't support TILED
+
+size_t ggml_tiled_wdata_size(int n_tasks, struct ggml_tensor * dst) {
+    UNUSED(n_tasks); UNUSED(dst);
+    return 0;
+}
+
+bool ggml_compute_forward_mul_mat_tiled(const struct ggml_compute_params * params,
+                                        struct ggml_tensor * dst) {
+    UNUSED(params); UNUSED(dst);
+    return false;
+}
+
+bool ggml_compute_forward_mul_mat_id_tiled(const struct ggml_compute_params * params,
+                                           struct ggml_tensor *               dst,
+                                           int64_t                            cur_a,
+                                           int64_t                            cne1,
+                                           const int32_t *                    expert_rows,
+                                           char *                             scratch) {
+    UNUSED(params); UNUSED(dst); UNUSED(cur_a); UNUSED(cne1);
+    UNUSED(expert_rows); UNUSED(scratch);
+    return false;
+}
+
+#endif // TILED_ARCH_SUPPORTED

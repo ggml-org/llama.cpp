@@ -3,6 +3,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Top-level switch for whether this architecture has an optimized implementation for tiled.
+// We fall back to vec_dot (optimized for all archs) if not.
+#if defined(__AVX512VNNI__) || defined(__AVX2__) || defined(__AVX__)
+#define TILED_ARCH_SUPPORTED 1
+#else
+#define TILED_ARCH_SUPPORTED 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
