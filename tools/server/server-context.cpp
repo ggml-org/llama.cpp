@@ -1255,12 +1255,22 @@ private:
                 }
 
                 if (ctx_dft == nullptr) {
-                    SRV_ERR("%s", "failed to create MTP context\n");
-                    return false;
+                    if (spec_mtp && !has_draft) {
+                        // MTP not supported by this model - gracefully fall back to non-speculative decoding
+                        SRV_WRN("%s", "MTP speculative decoding is not supported by this model, falling back to non-speculative decoding\n");
+                        params_base.speculative.types.clear();
+                        params_base.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NONE);
+                        spec_init.reset();
+                        model_dft = nullptr;
+                        ctx_dft   = nullptr;
+                    } else {
+                        SRV_ERR("%s", "failed to create speculative decoding context\n");
+                        return false;
+                    }
+                } else {
+                    params_base.speculative.draft.ctx_tgt = ctx_tgt;
+                    params_base.speculative.draft.ctx_dft = ctx_dft;
                 }
-
-                params_base.speculative.draft.ctx_tgt = ctx_tgt;
-                params_base.speculative.draft.ctx_dft = ctx_dft;
             }
 
             load_progress_callback(1.0f, &load_progress_spec);
