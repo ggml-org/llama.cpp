@@ -2779,11 +2779,13 @@ private:
                     if (params_base.cache_idle_slots) {
                         for (auto & slot : slots) {
                             if (!slot.is_processing()) {
-                                SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
+                                if (!slot.task_prev || slot.task_prev->type == SERVER_TASK_TYPE_COMPLETION) {
+                                    SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
 
-                                if (slot.prompt_save(*prompt_cache)) {
-                                    SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
-                                    prompt_cache->update();
+                                    if (slot.prompt_save(*prompt_cache)) {
+                                        SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
+                                        prompt_cache->update();
+                                    }
                                 }
 
                                 if (params_base.kv_unified) {
@@ -2992,6 +2994,7 @@ private:
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
+                    slot->task_prev.reset();
 
                     // nread is the end offset of the llama state payload within the file
                     const size_t nread_ckpt = load_slot_checkpoints(filepath, nread, *slot);
