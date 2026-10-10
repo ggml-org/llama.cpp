@@ -440,6 +440,25 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
+        // dist-tp: keep the gated DeltaNet (linear attention) layers of Qwen3-Next/Qwen3.5 whole on every
+        // rank. Their head-aware split below gives one rank several segments (n_segments = nr_s), and the
+        // DeltaNet graph reshapes those tensors, which the meta backend allows for one segment only
+        // (handle_reshape: GGML_ASSERT(src_ss[0].n_segments == 1)). Mirrored, the block runs on every
+        // rank with no collective; full attention, the FFN and the output still split.
+        if (ud->dist_tp_world_size > 1 && ud->n_devices == 1 &&
+                (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) &&
+                (std::regex_match(tensor_name, pattern_qkv_weight)     || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
+                 std::regex_match(tensor_name, pattern_ssm_dt)         || std::regex_match(tensor_name, pattern_ssm_a)            ||
+                 std::regex_match(tensor_name, pattern_ssm_alpha)      || std::regex_match(tensor_name, pattern_ssm_beta)         ||
+                 std::regex_match(tensor_name, pattern_ssm_beta_alpha) || std::regex_match(tensor_name, pattern_ssm_conv1d)       ||
+                 std::regex_match(tensor_name, pattern_ssm_out_weight) ||
+                 std::regex_match(tensor_name, pattern_r_cache)        || std::regex_match(tensor_name, pattern_s_cache))) {
+            const tensor_config tc = get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            if (hparams.is_recr(tc.il)) {
+                return tc;
+            }
+        }
+
         // standard attention
         if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight", "ssm_out.weight");
