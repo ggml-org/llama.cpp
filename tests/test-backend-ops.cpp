@@ -8476,6 +8476,61 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+struct test_flash_attn_ext_neginf : public test_flash_attn_ext {
+    const bool neginf_first;
+
+    test_flash_attn_ext_neginf(bool neginf_first)
+        : test_flash_attn_ext(64, 64, 1, {1, 1}, 3, 1, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F32, GGML_TYPE_F32, {0, 1, 2, 3}, false),
+          neginf_first(neginf_first) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",neginf_first=" + std::to_string(neginf_first);
+    }
+
+    bool run_whole_graph() override {
+        return true;
+    }
+
+    double max_err() override {
+        return 1e-5;
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        GGML_ASSERT(n == 64);
+        const float e = expf(0.125f);
+        const float expected = 1.0f + e/(1.0f + e);
+        double result = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            result = std::max(result, (double) fabsf(a[i] - expected));
+            result = std::max(result, (double) fabsf(b[i] - expected));
+        }
+        return result;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+
+        std::vector<float> q_data(64, 0.0f);
+        std::vector<float> k_data(3*64, 0.0f);
+        std::vector<float> v_data(3*64, 0.0f);
+        const float k0[3] = { -INFINITY, 1.0f, 2.0f };
+        const float vv[3] = { 10.0f, 1.0f, 2.0f };
+        q_data[0] = 1.0f;
+
+        for (int j = 0; j < 3; ++j) {
+            const int src = neginf_first ? j : (j + 1) % 3;
+            k_data[64*j] = k0[src];
+            for (int i = 0; i < 64; ++i) {
+                v_data[64*j + i] = vv[src];
+            }
+        }
+
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_data.data(), 0, q_data.size()*sizeof(float));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_data.data(), 0, k_data.size()*sizeof(float));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_data.data(), 0, v_data.size()*sizeof(float));
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -11747,6 +11802,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(128, 128,  8, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256,  4, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256,  4, {4, 1}, 1024, 75, true, false, 0, 10.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext_neginf(true));
+    test_cases.emplace_back(new test_flash_attn_ext_neginf(false));
 
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));

@@ -8981,6 +8981,9 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             }
 
             s += mv; // apply mask
+            if (s == -INFINITY) {
+                continue;
+            }
 
             const float Mold = M;
 
