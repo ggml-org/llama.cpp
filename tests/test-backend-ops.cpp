@@ -12597,6 +12597,71 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     return n_fail == 0;
 }
 
+// Reads a tensor back with ggml_backend_tensor_get_async into host memory whose address and/or
+// size is not a multiple of the page size (e.g. a logits row), and checks that only the requested
+// bytes are written. Metal used to assert here on macOS 12/13 (#16266).
+static bool run_get_tensor_async_unaligned(ggml_backend_t backend) {
+    if (ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return true;
+    }
+
+    printf("Running get_tensor_async unaligned host memory tests\n");
+
+    const int64_t n      = 248320;  // n_vocab of Qwen3.5, nbytes is not a page multiple
+    const size_t  pad    = 65536;   // >= any page size, used to page-align the host buffer
+    const uint8_t guard  = 0xA5;
+
+    ggml_init_params params = { ggml_tensor_overhead(), nullptr, true };
+    ggml_context_ptr ctx(ggml_init(params));
+    ggml_tensor * t = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n);
+    ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    if (!buf) {
+        printf("  failed to allocate tensor, skipping\n");
+        return true;
+    }
+
+    const size_t nbytes = ggml_nbytes(t);
+    std::vector<uint8_t> ref(nbytes);
+    for (size_t i = 0; i < nbytes; ++i) {
+        ref[i] = (uint8_t) ((i * 2654435761u) >> 13);
+    }
+    ggml_backend_tensor_set(t, ref.data(), 0, nbytes);
+
+    struct { size_t dst_offs, src_offs, size; } cases[] = {
+        { 0,     0,    nbytes      },  // page-aligned address, odd size
+        { 12,    0,    nbytes - 64 },  // unaligned address
+        { 16376, 4000, 16          },  // small read crossing a page boundary
+    };
+
+    std::vector<uint8_t> host(nbytes + 3*pad);
+    uint8_t * base = (uint8_t *) (((uintptr_t) host.data() + pad - 1) & ~(uintptr_t) (pad - 1));
+
+    int n_fail = 0;
+    for (const auto & c : cases) {
+        std::fill(host.begin(), host.end(), guard);
+        uint8_t * dst = base + c.dst_offs;
+
+        ggml_backend_tensor_get_async(backend, t, dst, c.src_offs, c.size);
+        ggml_backend_synchronize(backend);
+
+        bool ok = memcmp(dst, ref.data() + c.src_offs, c.size) == 0;
+        for (size_t i = 0; ok && i < host.size(); ++i) {
+            const uint8_t * p = host.data() + i;
+            if ((p < dst || p >= dst + c.size) && *p != guard) {
+                ok = false;
+            }
+        }
+        if (!ok) {
+            printf("  FAIL get_tensor_async: dst_offs=%zu src_offs=%zu size=%zu\n", c.dst_offs, c.src_offs, c.size);
+            n_fail++;
+        }
+    }
+
+    printf("  get_tensor_async unaligned: %zu cases run, %d failed\n", sizeof(cases)/sizeof(cases[0]), n_fail);
+
+    return n_fail == 0;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
@@ -12735,8 +12800,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_failed_tests(failed_tests);
 
         const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool async_ok = run_get_tensor_async_unaligned(backend);
 
-        return n_ok == tests_run && slice_ok;
+        return n_ok == tests_run && slice_ok && async_ok;
     }
 
     if (mode == MODE_GRAD) {
