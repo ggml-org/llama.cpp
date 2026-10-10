@@ -1,0 +1,162 @@
+Source: https://raw.githubusercontent.com/intel/compute-runtime/d70df548ba9ddc71b8cf0cd76983944827a7087f/shared/source/generated/xe_hpg_core/hw_cmds_generated_xe_hpg_core.inl
+
+typedef struct tagCOMPUTE_WALKER {
+    union tagTheStructure {
+        struct tagCommon {
+            // DWORD 0
+            uint32_t DwordLength : BITFIELD_RANGE(0, 7);
+            uint32_t PredicateEnable : BITFIELD_RANGE(8, 8);
+            uint32_t WorkloadPartitionEnable : BITFIELD_RANGE(9, 9);
+            uint32_t IndirectParameterEnable : BITFIELD_RANGE(10, 10);
+            uint32_t Reserved_11 : BITFIELD_RANGE(11, 13);
+            uint32_t SystolicModeEnable : BITFIELD_RANGE(14, 14);
+            uint32_t Reserved_15 : BITFIELD_RANGE(15, 15);
+            uint32_t CfeSubopcodeVariant : BITFIELD_RANGE(16, 17);
+            uint32_t CfeSubopcode : BITFIELD_RANGE(18, 23);
+            uint32_t ComputeCommandOpcode : BITFIELD_RANGE(24, 26);
+            uint32_t Pipeline : BITFIELD_RANGE(27, 28);
+            uint32_t CommandType : BITFIELD_RANGE(29, 31);
+            // DWORD 1
+            uint32_t Reserved_32 : BITFIELD_RANGE(0, 7);
+            uint32_t DebugObjectId : BITFIELD_RANGE(8, 31);
+            // DWORD 2
+            uint32_t IndirectDataLength : BITFIELD_RANGE(0, 16);
+            uint32_t L3PrefetchDisable : BITFIELD_RANGE(17, 17);
+            uint32_t PartitionDispatchParameter : BITFIELD_RANGE(18, 29);
+            uint32_t PartitionType : BITFIELD_RANGE(30, 31);
+            // DWORD 3
+            uint32_t Reserved_96 : BITFIELD_RANGE(0, 5);
+            uint32_t IndirectDataStartAddress : BITFIELD_RANGE(6, 31);
+            // DWORD 4
+            uint32_t Reserved_128 : BITFIELD_RANGE(0, 4);
+            uint32_t DispatchWalkOrder : BITFIELD_RANGE(5, 6);
+            uint32_t Reserved_135 : BITFIELD_RANGE(7, 16);
+            uint32_t MessageSimd : BITFIELD_RANGE(17, 18);
+            uint32_t TileLayout : BITFIELD_RANGE(19, 21);
+            uint32_t WalkOrder : BITFIELD_RANGE(22, 24);
+            uint32_t EmitInlineParameter : BITFIELD_RANGE(25, 25);
+            uint32_t EmitLocal : BITFIELD_RANGE(26, 28);
+            uint32_t GenerateLocalId : BITFIELD_RANGE(29, 29);
+            uint32_t SimdSize : BITFIELD_RANGE(30, 31);
+            // DWORD 5
+            uint32_t ExecutionMask;
+            // DWORD 6
+            uint32_t LocalXMaximum : BITFIELD_RANGE(0, 9);
+            uint32_t LocalYMaximum : BITFIELD_RANGE(10, 19);
+            uint32_t LocalZMaximum : BITFIELD_RANGE(20, 29);
+            uint32_t Reserved_222 : BITFIELD_RANGE(30, 31);
+            // DWORD 7
+            uint32_t ThreadGroupIdXDimension;
+            // DWORD 8
+            uint32_t ThreadGroupIdYDimension;
+            // DWORD 9
+            uint32_t ThreadGroupIdZDimension;
+            // DWORD 10
+            uint32_t ThreadGroupIdStartingX;
+            // DWORD 11
+            uint32_t ThreadGroupIdStartingY;
+            // DWORD 12
+            uint32_t ThreadGroupIdStartingZ;
+            // DWORD 13
+            uint64_t PartitionId : BITFIELD_RANGE(0, 31);
+            // DWORD 14
+            uint64_t PartitionSize : BITFIELD_RANGE(32, 63);
+            // DWORD 15
+            uint32_t PreemptX;
+            // DWORD 16
+            uint32_t PreemptY;
+            // DWORD 17
+            uint32_t PreemptZ;
+            // DWORD 18
+            INTERFACE_DESCRIPTOR_DATA InterfaceDescriptor;
+            // DWORD 26
+            POSTSYNC_DATA PostSync;
+            // DWORD 31
+            uint32_t InlineData[8];
+        } Common;
+        uint32_t RawData[39];
+    } TheStructure;
+    typedef enum tagDWORD_LENGTH {
+        DWORD_LENGTH_FIXED_SIZE = 0x25,
+    } DWORD_LENGTH;
+    typedef enum tagCFE_SUBOPCODE_VARIANT {
+        CFE_SUBOPCODE_VARIANT_STANDARD = 0x0,
+        CFE_SUBOPCODE_VARIANT_TG_RESUME = 0x1,
+    } CFE_SUBOPCODE_VARIANT;
+    typedef enum tagCFE_SUBOPCODE {
+        CFE_SUBOPCODE_COMPUTE_WALKER = 0x2,
+    } CFE_SUBOPCODE;
+    typedef enum tagCOMPUTE_COMMAND_OPCODE {
+        COMPUTE_COMMAND_OPCODE_NEW_CFE_COMMAND = 0x2,
+    } COMPUTE_COMMAND_OPCODE;
+    typedef enum tagPIPELINE {
+        PIPELINE_COMPUTE = 0x2,
+    } PIPELINE;
+    typedef enum tagCOMMAND_TYPE {
+        COMMAND_TYPE_GFXPIPE = 0x3,
+    } COMMAND_TYPE;
+    typedef enum tagPARTITION_TYPE {
+        PARTITION_TYPE_DISABLED = 0x0,
+        PARTITION_TYPE_X = 0x1,
+        PARTITION_TYPE_Y = 0x2,
+        PARTITION_TYPE_Z = 0x3,
+    } PARTITION_TYPE;
+    typedef enum tagMESSAGE_SIMD {
+        MESSAGE_SIMD_SIMD8 = 0x0,
+        MESSAGE_SIMD_SIMD16 = 0x1,
+        MESSAGE_SIMD_SIMD32 = 0x2,
+    } MESSAGE_SIMD;
+    typedef enum tagTILE_LAYOUT {
+        TILE_LAYOUT_LINEAR = 0x0,
+        TILE_LAYOUT_TILEY_32BPE = 0x1,
+        TILE_LAYOUT_TILEY_64BPE = 0x2,
+        TILE_LAYOUT_TILEY_128BPE = 0x3,
+    } TILE_LAYOUT;
+    typedef enum tagWALK_ORDER {
+        WALK_ORDER_WALK_012 = 0x0,
+        WALK_ORDER_WALK_021 = 0x1,
+        WALK_ORDER_WALK_102 = 0x2,
+        WALK_ORDER_WALK_120 = 0x3,
+        WALK_ORDER_WALK_201 = 0x4,
+        WALK_ORDER_WALK_210 = 0x5,
+    } WALK_ORDER;
+    typedef enum tagEMIT_LOCAL {
+        EMIT_LOCAL_EMIT_NONE = 0x0,
+        EMIT_LOCAL_EMIT_X = 0x1,
+        EMIT_LOCAL_EMIT_XY = 0x3,
+        EMIT_LOCAL_EMIT_XYZ = 0x7,
+    } EMIT_LOCAL;
+    typedef enum tagSIMD_SIZE {
+        SIMD_SIZE_SIMD8 = 0x0,
+        SIMD_SIZE_SIMD16 = 0x1,
+        SIMD_SIZE_SIMD32 = 0x2,
+    } SIMD_SIZE;
+    typedef enum tagPARTITION_ID {
+        PARTITION_ID_SUPPORTED_MIN = 0x0,
+        PARTITION_ID_SUPPORTED_MAX = 0xf,
+    } PARTITION_ID;
+    typedef enum tagDISPATCH_WALK_ORDER { // patched
+        DISPATCH_WALK_ORDER_LINEAR_WALK = 0x0,
+        DISPATCH_WALK_ORDER_Y_ORDER_WALK = 0x1,
+    } DISPATCH_WALK_ORDER;
+    inline void init() {
+        memset(&TheStructure, 0, sizeof(TheStructure));
+        TheStructure.Common.DwordLength = DWORD_LENGTH_FIXED_SIZE;
+        TheStructure.Common.CfeSubopcodeVariant = CFE_SUBOPCODE_VARIANT_STANDARD;
+        TheStructure.Common.CfeSubopcode = CFE_SUBOPCODE_COMPUTE_WALKER;
+        TheStructure.Common.ComputeCommandOpcode = COMPUTE_COMMAND_OPCODE_NEW_CFE_COMMAND;
+        TheStructure.Common.Pipeline = PIPELINE_COMPUTE;
+        TheStructure.Common.CommandType = COMMAND_TYPE_GFXPIPE;
+        TheStructure.Common.PartitionType = PARTITION_TYPE_DISABLED;
+        TheStructure.Common.MessageSimd = MESSAGE_SIMD_SIMD8;
+        TheStructure.Common.TileLayout = TILE_LAYOUT_LINEAR;
+        TheStructure.Common.WalkOrder = WALK_ORDER_WALK_012;
+        TheStructure.Common.EmitLocal = EMIT_LOCAL_EMIT_NONE;
+        TheStructure.Common.SimdSize = SIMD_SIZE_SIMD8;
+        TheStructure.Common.InterfaceDescriptor.init();
+        TheStructure.Common.PostSync.init();
+        for (uint32_t i = 0; i < 8; i++) {
+            TheStructure.Common.InlineData[i] = 0;
+        }
+    }
+    

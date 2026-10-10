@@ -1,0 +1,14 @@
+[Unit]
+Description=Llama.cpp Server
+After=syslog.target network.target local-fs.target remote-fs.target nss-lookup.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/conf.d/llama.cpp
+ExecStart=/usr/bin/llama-server $LLAMA_ARGS
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

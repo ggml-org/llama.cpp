@@ -1,40 +1,90 @@
 # P01 - Bench token count at depth
 
-**Kind:** methodology
+**Kind:** measurement methodology
 **Depends on:** none
-**Blocks:** the baseline that P10 is judged against
+**Supplies:** re-baselined evidence for P10
 
-## Purpose
+## Context
 
-Kmic-68 measured that `llama-bench -n 128` at long context amortises a 2-3 s
-first-token cost over too few tokens: it reported 12.2 t/s where the truth was
-21.5, and their fix was to use 512 or more. Our `AGENTS.md` specifies `-n 128`
-in both the product bench and the depth sweep, so every turbo3 tg-at-depth figure
-recorded to date may be biased low by an unknown amount.
+Kmic-68 found that `llama-bench -n 128` at long context amortised a 2-3 s
+first-token cost over too few tokens, reporting 12.2 t/s instead of 21.5 t/s.
+The current product and depth-sweep examples in `AGENTS.md:195-201` both use
+`-n 128`, so their long-depth results are not interchangeable with a corrected
+run.
 
-The server harness is not affected: `scripts/perf/bench_spec.py` defaults
-`n_predict` to 256, which a prompt may override (line 306).
+This plan changes measurement instructions and records only. It does not change
+`llama-bench` or `scripts/perf/bench_spec.py`; the server harness has its own
+`n_predict` setting. The P01 A770 research record is
+`docs/research/kmic68-a770-rebaseline.md`, with a `Long-depth comparison`
+table that retains both old and corrected observations.
 
-## Source
+Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
+`p100-docs/FINDINGS.md`, "How the measurements lied", item 3.
 
-- Kmic-68 `p100-docs/FINDINGS.md`, section *How the measurements lied*, item 3.
+## EARS requirements
 
-## In this fork
+- **R01.1 (Ubiquitous):** The `AGENTS.md` product-bench and depth-sweep commands shall specify `-n 512` or greater.
+- **R01.2 (Event-driven):** WHEN an A770 turbo KV throughput result is recorded at or above depth 4096, the P01 A770 research record shall store its `n` value beside its throughput.
+- **R01.3 (Event-driven):** WHEN the depth sweep is rerun with `-n 512` or greater, the P01 A770 research record shall label every retained `-n 128` result at or above depth 4096 as superseded and not directly comparable.
+- **R01.4 (Unwanted behaviour):** IF two results use different token counts, THEN the P01 long-depth comparison table shall exclude them from a paired delta.
+- **R01.5 (Event-driven):** WHEN an A770 campaign is re-baselined under P01, the P01 A770 research record shall preserve the superseded measurements with their original commands.
+- **R01.6 (Event-driven):** WHEN a paired comparison is excluded for unequal token counts, the P01 long-depth comparison table shall display a token-count-mismatch label.
 
-- `AGENTS.md:196` and `AGENTS.md:200`, the two `llama-bench` invocations.
-- `scripts/perf/bench_spec.py:306`, `n_predict` default, for contrast.
+## Approach
 
-## Requirements
+1. Change only the two `llama-bench` examples under `AGENTS.md` from
+   `-n 128` to `-n 512`; retain all other example options.
+2. Before replacing any baseline, create the P01 A770 research record and copy
+   the old `-n 128` command, result, build, model, and driver label into its
+   comparison table.
+The research record is a file to create when P01 is executed; it is not a
+currently resolvable code anchor for this documentation pass.
+3. Run the paired correction experiment below from one checkout and one binary.
+   Record raw rows and the correction before changing a downstream baseline.
+4. Update each affected A770 table by preserving the old row, adding the new
+   row, and calculating a delta only between rows with equal `n`.
+5. Leave `scripts/perf/bench_spec.py` unchanged because request length is a
+   different measurement contract.
 
-- **R01.1** (ubiquitous) The `llama-bench` product bench and depth-sweep commands in `AGENTS.md` shall specify `-n 512` or greater.
-- **R01.2** (event-driven) WHEN a turbo KV throughput figure is recorded at a depth above 4096, the <research log> shall record the token count used alongside the throughput.
-- **R01.3** (event-driven) WHEN the depth sweep is re-run under R01.1, the <research log> shall mark every pre-existing `-n 128` turbo3 tg-at-depth figure as not comparable to the new baseline.
-- **R01.4** (unwanted) IF a throughput figure and the baseline it is compared against were recorded with different token counts, THEN the <reporting format> shall refuse to place them in the same paired comparison. The calibration run under R01.5 is the sole exemption: measuring the delta between token counts is the one comparison that requires them to differ.
-- **R01.5** (optional feature) WHERE a campaign is re-baselined under R01.1, the <research log> shall preserve the superseded figures rather than delete them.
+## Critical files & anchors
 
-## Acceptance
+- `AGENTS.md:192-201` - authoritative product and depth-sweep examples.
+- `scripts/perf/bench_spec.py:326` - server request-length default, inspected
+  only to keep it out of scope.
+- `Kmic-68/llama.cpp:p100-docs/FINDINGS.md` on `p100-optimizations` - source
+  observation and numeric example.
 
-A paired `-n 128` against `-n 512` run at `-d 16384` on the real trunk, A770,
-driver named, sole tenancy, three reps. This pair is exempt from R01.4 by its own
-terms. The measured delta is recorded *before* the campaign is re-baselined, so the
-size of the correction is on record.
+## Verification
+
+Prerequisites: use the AOT production build, name the model and kernel driver,
+stop `llama-sycl.cpp.service`, confirm sole tenancy with
+`fuser -v /dev/dri/renderD128`, and wrap each command in the campaign timeout.
+Run in this order with the same binary, model, environment, and driver:
+
+```bash
+timeout 900 ./build-sycl/bin/llama-bench -m model.gguf -ngl 99 -fa 1 -ctk turbo3 -ctv turbo3 -p 0 -n 128 -d 16384 -r 3
+timeout 900 ./build-sycl/bin/llama-bench -m model.gguf -ngl 99 -fa 1 -ctk turbo3 -ctv turbo3 -p 0 -n 512 -d 16384 -r 3
+```
+
+Expected evidence:
+
+- each command reports three repetitions at depth 16384;
+- the record identifies `n=128` and `n=512` on every raw result;
+- the measured correction is recorded before any baseline row is replaced;
+- a deliberate attempt to pair the two rows produces a token-count-mismatch
+  label and no percentage delta;
+- the post-run two-driver fault gate from `AGENTS.md` finds no matching fault,
+  and the stopped service is restarted.
+
+## Assumptions & contingencies
+
+- `-n 512` is the minimum corrected token count, not a promised throughput
+  threshold.
+- If `-n 512` cannot complete under the declared timeout, keep the old baseline
+  marked uncorrected and record the timeout; do not substitute an `-n 128`
+  comparison.
+- Existing historical results remain evidence. This plan changes their
+  comparability label, not their measured values.
+- `scripts/bench-a770-fork-unique.py` has a separate product-command contract
+  and remains out of scope; a campaign that uses it must update its token count
+  before claiming P01-comparable results.

@@ -3,6 +3,11 @@
 Docs for the Raudbjorn llama.cpp fork (TurboQuant+ on Intel Arc). Folders hold upstream's docs and
 the fork's own; [development/upstream-merge.md](development/upstream-merge.md) lists which is which.
 
+## Start here
+
+- [GUIDE.md](GUIDE.md) - condensed repository field guide, task routes, source map and evidence boundaries
+- [benchmarks/README.md](benchmarks/README.md) - separate inventory and guide to the local benchmark campaign collection
+
 ## build/ - building and installing
 
 - [build.md](build/build.md) - build from source, all shipped backends

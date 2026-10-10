@@ -1,0 +1,16 @@
+[
+  {
+    "monotonic": 23929.745719722,
+    "cpu_ticks": 51044,
+    "fdinfo": [
+      "pos:\t0\nflags:\t02100002\nmnt_id:\t30\nino:\t262\ndrm-driver:\txe\ndrm-client-id:\t5794\ndrm-pdev:\t0000:03:00.0\ndrm-total-system:\t0\ndrm-shared-system:\t0\ndrm-active-system:\t0\ndrm-resident-system:\t0\ndrm-purgeable-system:\t0\ndrm-total-gtt:\t98180 KiB\ndrm-shared-gtt:\t0\ndrm-active-gtt:\t98168 KiB\ndrm-resident-gtt:\t98180 KiB\ndrm-purgeable-gtt:\t0\ndrm-total-vram0:\t2762216 KiB\ndrm-shared-vram0:\t0\ndrm-active-vram0:\t2755752 KiB\ndrm-resident-vram0:\t2762216 KiB\ndrm-purgeable-vram0:\t0\ndrm-total-stolen:\t0\ndrm-shared-stolen:\t0\ndrm-active-stolen:\t0\ndrm-resident-stolen:\t0\ndrm-purgeable-stolen:\t0\ndrm-cycles-rcs:\t0\ndrm-total-cycles-rcs:\t35744337147\ndrm-cycles-vcs:\t0\ndrm-total-cycles-vcs:\t35744337147\ndrm-engine-capacity-vcs:\t2\ndrm-cycles-vecs:\t0\ndrm-total-cycles-vecs:\t35744337147\ndrm-engine-capacity-vecs:\t2\ndrm-cycles-bcs:\t1853533629\ndrm-total-cycles-bcs:\t35744337147\ndrm-cycles-ccs:\t1237015783\ndrm-total-cycles-ccs:\t35744337147\n"
+    ]
+  },
+  {
+    "monotonic": 23932.74609047,
+    "cpu_ticks": 51344,
+    "fdinfo": [
+      "pos:\t0\nflags:\t02100002\nmnt_id:\t30\nino:\t262\ndrm-driver:\txe\ndrm-client-id:\t5794\ndrm-pdev:\t0000:03:00.0\ndrm-total-system:\t0\ndrm-shared-system:\t0\ndrm-active-system:\t0\ndrm-resident-system:\t0\ndrm-purgeable-system:\t0\ndrm-total-gtt:\t98180 KiB\ndrm-shared-gtt:\t0\ndrm-active-gtt:\t98168 KiB\ndrm-resident-gtt:\t98180 KiB\ndrm-purgeable-gtt:\t0\ndrm-total-vram0:\t2762216 KiB\ndrm-shared-vram0:\t0\ndrm-active-vram0:\t2755752 KiB\ndrm-resident-vram0:\t2762216 KiB\ndrm-purgeable-vram0:\t0\ndrm-total-stolen:\t0\ndrm-shared-stolen:\t0\ndrm-active-stolen:\t0\ndrm-resident-stolen:\t0\ndrm-purgeable-stolen:\t0\ndrm-cycles-rcs:\t0\ndrm-total-cycles-rcs:\t35801940799\ndrm-cycles-vcs:\t0\ndrm-total-cycles-vcs:\t35801940799\ndrm-engine-capacity-vcs:\t2\ndrm-cycles-vecs:\t0\ndrm-total-cycles-vecs:\t35801940799\ndrm-engine-capacity-vecs:\t2\ndrm-cycles-bcs:\t1911136805\ndrm-total-cycles-bcs:\t35801940799\ndrm-cycles-ccs:\t1237015783\ndrm-total-cycles-ccs:\t35801940799\n"
+    ]
+  }
+]

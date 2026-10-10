@@ -1,0 +1,44 @@
+0.00.000.757 I llama_completion: llama backend init
+0.00.125.108 I llama_completion: load the model and apply lora adapter, if any
+0.02.380.227 I cmn  common_init_: MoE cache: mode=off
+0.02.571.391 W model has unused tensor blk.40.attn_norm.weight (size = 8192 bytes) -- ignoring
+0.02.571.395 W model has unused tensor blk.40.post_attention_norm.weight (size = 8192 bytes) -- ignoring
+0.02.571.399 W model has unused tensor blk.40.attn_q.weight (size = 9437184 bytes) -- ignoring
+0.02.571.401 W model has unused tensor blk.40.attn_k.weight (size = 589824 bytes) -- ignoring
+0.02.571.403 W model has unused tensor blk.40.attn_v.weight (size = 860160 bytes) -- ignoring
+0.02.571.408 W model has unused tensor blk.40.attn_output.weight (size = 4718592 bytes) -- ignoring
+0.02.571.409 W model has unused tensor blk.40.attn_q_norm.weight (size = 1024 bytes) -- ignoring
+0.02.571.411 W model has unused tensor blk.40.attn_k_norm.weight (size = 1024 bytes) -- ignoring
+0.02.571.413 W model has unused tensor blk.40.ffn_gate_inp.weight (size = 2097152 bytes) -- ignoring
+0.02.571.414 W model has unused tensor blk.40.ffn_down_exps.weight (size = 220200960 bytes) -- ignoring
+0.02.571.417 W model has unused tensor blk.40.ffn_gate_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.571.419 W model has unused tensor blk.40.ffn_up_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.571.421 W model has unused tensor blk.40.ffn_gate_inp_shexp.weight (size = 8192 bytes) -- ignoring
+0.02.571.422 W model has unused tensor blk.40.ffn_gate_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.571.424 W model has unused tensor blk.40.ffn_up_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.571.426 W model has unused tensor blk.40.ffn_down_shexp.weight (size = 860160 bytes) -- ignoring
+0.02.571.429 W model has unused tensor blk.40.nextn.eh_proj.weight (size = 4718592 bytes) -- ignoring
+0.02.571.431 W model has unused tensor blk.40.nextn.enorm.weight (size = 8192 bytes) -- ignoring
+0.02.571.433 W model has unused tensor blk.40.nextn.hnorm.weight (size = 8192 bytes) -- ignoring
+0.02.571.437 W model has unused tensor blk.40.nextn.shared_head_norm.weight (size = 8192 bytes) -- ignoring
+0.04.133.077 I cmn          init: llama threadpool init, n_threads = 12
+0.04.135.442 I 
+0.04.135.490 I system_info: n_threads = 12 (n_threads_batch = 12) / 24 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.04.135.491 I 
+0.04.136.675 I sampler seed: 1069126925
+0.04.136.681 I sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64
+	top_k = 20, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+0.04.136.687 I sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist 
+0.04.136.688 I generate: n_ctx = 32768, n_batch = 2048, n_predict = 128, n_keep = 0
+0.04.136.688 I 
+0.10.158.703 I common_perf_print:    sampling time =      28.86 ms
+0.10.158.705 I common_perf_print:    samplers time =      13.98 ms /   652 tokens
+0.10.158.706 I common_perf_print:        load time =    2256.37 ms
+0.10.158.707 I common_perf_print: prompt eval time =    2254.90 ms /   524 tokens (    4.30 ms per token,   232.38 tokens per second)
+0.10.158.708 I common_perf_print:        eval time =    3735.85 ms /   127 runs   (   29.42 ms per token,    33.99 tokens per second)
+0.10.158.709 I common_perf_print:       total time =    6023.27 ms /   651 tokens
+0.10.158.710 I common_perf_print: unaccounted time =       3.66 ms /   0.1 %      (total - sampling - prompt eval - eval) / (total)
+0.10.158.710 I common_perf_print:    graphs reused =        126

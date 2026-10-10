@@ -1,0 +1,5 @@
+{
+  "source_sha": "4e7400c3aa40f351d77d2039e6cfedd6ae74225e",
+  "build_mode": "AOT",
+  "sycl_device_arch": "acm-g10"
+}

@@ -80,6 +80,8 @@ are required so discarding sample 0 leaves two values for a Student-t interval.
 
 | Path | Purpose |
 |---|---|
+| `index_benchmarks.py` | Read-only inventory of a benchmark artifact directory, including ignored/hidden files, SHA-256 identities and symlink targets. Writes TSV to stdout; see [the archive guide](../docs/benchmarks/README.md) for refresh commands and scope. |
+| `test_index_benchmarks.py` | Checks inventory coverage, duplicate identity and symlink handling without reading link targets. |
 | `bench-models.sh` | Runs a configured set of models through the standard benchmark tooling. |
 | `compare-llama-bench.py` | Reads llama-bench or test-backend-ops result data, selects baseline/compare commits, aggregates repetitions, and emits comparison tables. |
 | `tool_bench.py` | Python benchmark analysis and plotting tool with inline dependency metadata. |

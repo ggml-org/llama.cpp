@@ -1,0 +1,13 @@
+ccs_mode=2
+run 1 A idle 91 load 
+1.89
+run 1 A exit 0
+run 2 B idle 91 load 
+4.03
+run 2 B exit 0
+run 3 B idle 92 load 
+4.11
+run 3 B exit 0
+run 4 A idle 92 load 
+4.66
+run 4 A exit 0

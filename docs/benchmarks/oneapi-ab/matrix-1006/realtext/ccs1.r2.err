@@ -1,0 +1,44 @@
+0.00.001.055 I llama_completion: llama backend init
+0.00.092.020 I llama_completion: load the model and apply lora adapter, if any
+0.02.260.169 I cmn  common_init_: MoE cache: mode=off
+0.02.469.471 W model has unused tensor blk.40.attn_norm.weight (size = 8192 bytes) -- ignoring
+0.02.469.475 W model has unused tensor blk.40.post_attention_norm.weight (size = 8192 bytes) -- ignoring
+0.02.469.480 W model has unused tensor blk.40.attn_q.weight (size = 9437184 bytes) -- ignoring
+0.02.469.482 W model has unused tensor blk.40.attn_k.weight (size = 589824 bytes) -- ignoring
+0.02.469.484 W model has unused tensor blk.40.attn_v.weight (size = 860160 bytes) -- ignoring
+0.02.469.490 W model has unused tensor blk.40.attn_output.weight (size = 4718592 bytes) -- ignoring
+0.02.469.491 W model has unused tensor blk.40.attn_q_norm.weight (size = 1024 bytes) -- ignoring
+0.02.469.493 W model has unused tensor blk.40.attn_k_norm.weight (size = 1024 bytes) -- ignoring
+0.02.469.495 W model has unused tensor blk.40.ffn_gate_inp.weight (size = 2097152 bytes) -- ignoring
+0.02.469.497 W model has unused tensor blk.40.ffn_down_exps.weight (size = 220200960 bytes) -- ignoring
+0.02.469.501 W model has unused tensor blk.40.ffn_gate_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.469.503 W model has unused tensor blk.40.ffn_up_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.469.505 W model has unused tensor blk.40.ffn_gate_inp_shexp.weight (size = 8192 bytes) -- ignoring
+0.02.469.507 W model has unused tensor blk.40.ffn_gate_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.469.510 W model has unused tensor blk.40.ffn_up_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.469.511 W model has unused tensor blk.40.ffn_down_shexp.weight (size = 860160 bytes) -- ignoring
+0.02.469.515 W model has unused tensor blk.40.nextn.eh_proj.weight (size = 4718592 bytes) -- ignoring
+0.02.469.517 W model has unused tensor blk.40.nextn.enorm.weight (size = 8192 bytes) -- ignoring
+0.02.469.520 W model has unused tensor blk.40.nextn.hnorm.weight (size = 8192 bytes) -- ignoring
+0.02.469.526 W model has unused tensor blk.40.nextn.shared_head_norm.weight (size = 8192 bytes) -- ignoring
+0.53.205.119 I cmn          init: llama threadpool init, n_threads = 12
+0.53.444.794 I 
+0.53.444.848 I system_info: n_threads = 12 (n_threads_batch = 12) / 24 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.53.444.849 I 
+0.53.446.418 I sampler seed: 2669050453
+0.53.446.430 I sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64
+	top_k = 1, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+0.53.446.439 I sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist 
+0.53.446.443 I generate: n_ctx = 16384, n_batch = 2048, n_predict = 256, n_keep = 0
+0.53.446.443 I 
+1.03.613.674 I common_perf_print:    sampling time =      79.52 ms
+1.03.613.675 I common_perf_print:    samplers time =      26.12 ms /   847 tokens
+1.03.613.678 I common_perf_print:        load time =   51115.99 ms
+1.03.613.679 I common_perf_print: prompt eval time =    2763.73 ms /   591 tokens (    4.68 ms per token,   213.84 tokens per second)
+1.03.613.680 I common_perf_print:        eval time =    7317.20 ms /   255 runs   (   28.69 ms per token,    34.85 tokens per second)
+1.03.613.680 I common_perf_print:       total time =   10168.89 ms /   846 tokens
+1.03.613.681 I common_perf_print: unaccounted time =       8.44 ms /   0.1 %      (total - sampling - prompt eval - eval) / (total)
+1.03.613.681 I common_perf_print:    graphs reused =        253

@@ -1,0 +1,11 @@
+The quick brown fox jumps over the lazy dog. Write a short paragraph about the history of the Arc A770 graphics card and why kernel drivers matter for compute workloads on Linux.
+
+<think>
+The user wants me to write a short paragraph about two things:
+1. The history of the Arc A770 graphics card
+2. Why kernel drivers matter for compute workloads on Linux
+
+Let me think about what I actually know about these topics.
+
+**Arc A770 history
+

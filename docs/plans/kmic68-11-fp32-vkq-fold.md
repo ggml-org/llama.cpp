@@ -1,60 +1,135 @@
-# P11 - Per-tile fp32 fold for the F16 FA output
+# P11 - Per-tile fp32 fold for F16 FA output
 
-**Kind:** port
-**Depends on:** P03, which decides whether the 2.4% is worth paying
+**Kind:** SYCL backend feature
+**Depends on:** P03
 
-## Purpose
+## Context
 
-Kmic-68 found that the attention output accumulated over the whole KV cache in a
-`half2` register, and that the error grew as the square root of the context:
+The `GGML_SYCL_F16` VEC flash-attention branch keeps the running attention
+output in `sycl::half2 VKQ` and currently rounds every per-cell contribution
+to fp16. Kmic-68 bounded a comparable long-context error by accumulating one KV
+tile in fp32 and folding that tile into the running fp16 output once. Its 2.4%
+cost was measured on a P100 and is not an A770 expectation.
 
-| KV length | `half2` accumulator | per-tile fp32 fold |
-| --- | --- | --- |
-| 4096 | 3.3e-06 | 2.9e-06 |
-| 65536 | 2.8e-05 | 3.1e-06 |
+P11 applies that structure only to `flash_attn_ext_vec` under
+`GGML_SYCL_F16`. The persistent running output remains `sycl::half2`; each
+outer `k_VKQ_0` iteration gets an fp32 tile accumulator. The non-F16
+`sycl::float2` branch and `fattn-tile.hpp` are explicitly unchanged. The
+accepted implementation is unconditional in the F16 VEC branch; there is no
+runtime knob to maintain after the A770 gates pass.
 
-Folding into fp32 once per tile kept their fast inner loop and cost 2.4%.
+P03 must first publish
+`docs/research/kmic68-a770-fa-memory-floor.md` with P11 eligibility marked
+reachable. If that report rejects the opportunity, P11 stops before kernel
+editing.
 
-**This is the one Kmic-68 finding that applies to us unchanged**, and it applies
-to more of our build than the F16 flag suggests. Their warning that
-`fattn-vec.cuh` looks like the same bug but is HIP-only does not apply: we are
-the `half2` build. `fattn-vec.hpp:170` declares `sycl::half2 VKQ[...]` on the F16
-branch, selected by `-DGGML_SYCL_F16=ON`, and the accumulation is at `:480` and
-`:499-500`, inside the KV loop. The fp32 branch at `:184` uses `float2`.
+Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
+`p100-docs/FINDINGS.md`, "Bound fp16 accumulation error".
 
-**TILE is `half2` unconditionally.** `fattn-tile.hpp` declares both a
-`sycl::half2 VKQ` at `:781` and a `sycl::float2 VKQ` at `:799`, selected by
-`SYCL_FAST_FP16`, which `ggml-sycl/common.hpp:52` defines unconditionally (the
-comment there says removing it breaks the file). So the default FP32 build's
-TILE path accumulates in fp16 across the whole KV cache exactly as the F16 VEC
-path does, and scoping this plan to the F16 build would leave that untouched.
+## EARS requirements
 
-## Source
+- **R11.1 (Event-driven):** WHEN the F16 VEC FA kernel processes one KV tile, `flash_attn_ext_vec` shall accumulate that tile's V contributions in fp32 registers.
+- **R11.2 (Event-driven):** WHEN one KV tile is complete, `flash_attn_ext_vec` shall fold its fp32 tile accumulator into the existing fp16 running output exactly once.
+- **R11.3 (Event-driven):** WHEN a tile changes `KQ_max`, the F16 VEC FA kernel shall apply the existing online scale to the prior running output before folding the new tile contribution.
+- **R11.4 (Ubiquitous):** The non-F16 VEC FA branch shall retain its existing `sycl::float2` accumulation path.
+- **R11.5 (Ubiquitous):** The F16 VEC tile fold shall leave `local_share_mem_size` unchanged.
+- **R11.6 (Event-driven):** WHEN the candidate build enumerates affected F16 VEC instantiations, the P11 harness shall require correctness and throughput evidence for every enumerated specialization.
+- **R11.7 (Unwanted behaviour):** IF a measured row does not report `GGML_SYCL_F16=1` and `route=VEC` for both builds, THEN the P11 harness shall reject that row as scope evidence.
 
-- Kmic-68 `p100-docs/FINDINGS.md`, *Bound fp16 accumulation error*, plus the
-  `fattn-tile.cuh` +390/-38 change.
+## Approach
 
-## In this fork
+1. Read the completed P03 report before editing. Continue only when schema version,
+   build/driver keys, paired VEC manifests, and `p11_eligible=true` all match
+   the baseline used here.
+2. Keep `sycl::half2 VKQ[ncols][...]` as persistent cross-tile output. Create
+   zeroed private `sycl::float2 VKQ_tile[ncols][...]` inside each
+   `k_VKQ_0` iteration; add no local/shared-memory array.
+3. Preserve KQ softmax, `KQ_sum`, `KQ_max`, and online scale ordering.
+   Redirect only F16-branch per-cell V multiply-adds to `VKQ_tile`. At tile end,
+   add tile lanes to the already-rescaled persistent value in fp32 and cast to
+   `half2` once. Preserve sink rescale, combine, normalization, and output.
+4. Leave the non-F16 branch, TILE family, dispatch, work-group dimensions, and
+   `local_share_mem_size` expression unchanged. The accepted change is
+   unconditional only after the complete affected F16 VEC matrix passes; no
+   runtime/build opt-out remains.
+5. Discover the affected matrix from the baseline/candidate
+   `compile_commands.json` and VEC template-instance/dispatch tables rather
+   than a hand-maintained Turbo list. Include every F16 VEC specialization that
+   can instantiate the changed branch: standard F16, q4/q5/q8 families, and all
+   supported Turbo K/V combinations, head dimensions, query widths, and GQA
+   shapes selected by production dispatch.
+6. Add a manifest row keyed by build, driver, `type_K`, `type_V`, head
+   dimension, query width, GQA ratio, depth, and route. Both binaries must report
+   `GGML_SYCL_F16=1` and `route=VEC`; a row routed to TILE, XMX, oneMKL, or
+   another implementation is excluded and causes missing-matrix failure, not a
+   passing measurement.
+7. Extend backend-op/oracle coverage to the full discovered matrix at KV lengths
+   4096 and 16384. Use the correct existing tolerance class per type and record
+   NMSE, cosine, norm ratio, route, register count, spills, and shared-memory size.
+8. Run three synchronized throughput repetitions for every discovered row.
+   Register/spill growth is recorded and every row is subject to the same 5%
+   median regression rejection gate.
 
-- `ggml/src/ggml-sycl/fattn-vec.hpp:170` (half2), `:184` (float2), `:480` and
-  `:499-500` (accumulation), `:445-451` and `:527-534` (the online rescale that
-  must survive the fold).
-- `ggml/src/ggml-sycl/fattn-tile.hpp`, the TILE family, same question.
+## Critical files & anchors
 
-## Requirements
+- `ggml/src/ggml-sycl/fattn-vec.hpp:40-46` - `flash_attn_ext_vec` entry.
+- `ggml/src/ggml-sycl/fattn-vec.hpp:167-196` - F16 `half2`, fp32 `float2`, and shared-memory layout.
+- `ggml/src/ggml-sycl/fattn-vec.hpp:338-453` - outer KV tile, KQ maximum, and online rescale.
+- `ggml/src/ggml-sycl/fattn-vec.hpp:458-503` - V contribution loops and current per-cell running accumulation.
+- `ggml/src/ggml-sycl/fattn-vec.hpp:517-536` - sink-time online rescale to preserve.
+- `ggml/src/ggml-sycl/fattn-vec.hpp:563-646` - combine, normalization, and output.
+- `ggml/src/ggml-sycl/fattn-tile.hpp` - explicit unchanged scope boundary.
+- `ggml/CMakeLists.txt:204` and `ggml/src/ggml-sycl/CMakeLists.txt:346-348` - `GGML_SYCL_F16` build selection.
+- `ggml/src/ggml-sycl/template-instances/` and `ggml/src/ggml-sycl/fattn.cpp` - discoverable VEC specialization and route matrix.
+- `tests/test-backend-ops.cpp` and `tests/test-sycl-turbo-correctness.cpp` - full operator/oracle matrix.
+- `docs/research/kmic68-a770-fa-memory-floor.md` - planned P03 gate report consumed by P11.
+- `scripts/perf/bench-sycl-fa-fold.py` - planned matrix discovery, deep oracle, and throughput comparison.
 
-- **R11.1** (event-driven) WHEN the FA F16 build accumulates `VKQ` across the KV loop, the <kernel> shall fold the running accumulator into fp32 once per KV tile rather than rounding the running sum to fp16 at every cell.
-- **R11.2** (ubiquitous) The <fold> shall preserve the online rescaling the kernel applies when `KQ_max` changes mid-loop.
-- **R11.3** (ubiquitous) The VEC kernel shall remain unchanged on its fp32 path, which already accumulates in `float2` at `fattn-vec.hpp:184`. This exemption does not extend to TILE.
-- **R11.3a** (ubiquitous) The TILE kernel shall fold its `sycl::half2 VKQ` accumulator declared at `fattn-tile.hpp:781` into fp32 per KV tile, because `SYCL_FAST_FP16` is unconditionally defined and that branch is selected regardless of `GGML_SYCL_F16`.
-- **R11.4** (unwanted) IF the per-tile fold costs more than 5% of FA throughput, THEN the <change> shall be reverted and the measurement recorded in the research note.
-- **R11.5** (ubiquitous) The <fold> shall not change the shared-memory footprint of the kernel.
-- **R11.6** (event-driven) WHEN the fold is enabled, the VEC and TILE kernels shall be measured separately, and TILE shall be tested with `GGML_SYCL_F16` both on and off.
+## Verification
 
-## Acceptance
+Build baseline/candidate with identical compiler/runtime flags and
+`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, differing only by P11. Run existing
+operator gates first:
 
-Turbo oracle nmse and cosine at depths 4096 and 16384 with `GGML_SYCL_F16=ON`
-before and after, plus FA throughput over three reps, A770, named driver. TILE
-additionally with the flag off, since that is the build where its `half2`
-accumulator would otherwise go unaddressed. P03's floor tells us whether the
-memory work or the arithmetic is the binding constraint here.
+```bash
+timeout 180 ./build-sycl/bin/test-backend-ops -b CPU -o FLASH_ATTN_EXT
+timeout 180 ./build-sycl/bin/test-backend-ops -b SYCL0 -o FLASH_ATTN_EXT
+LLAMA_TEST_TURBO_FA=1 timeout 180 ./build-sycl/bin/test-sycl-turbo-correctness
+```
+
+After A770 sole-tenancy setup, run the discovered matrix:
+
+```bash
+timeout 3600 python3 scripts/perf/bench-sycl-fa-fold.py --baseline-build ./build-sycl-fa-baseline --candidate-build ./build-sycl --discover-from compile_commands.json --all-affected-f16-vec --depths 4096,16384 --repetitions 3 --require-f16 1 --require-route VEC --p03-report docs/research/kmic68-a770-fa-memory-floor.md --report /tmp/p11-fa-fold.json
+```
+
+Expected evidence:
+
+- the script refuses missing/stale/false P03 eligibility;
+- baseline and candidate manifests enumerate the same complete affected F16 VEC
+  specialization keys with no unmeasured row;
+- every row proves `GGML_SYCL_F16=1` and `route=VEC` in both builds;
+- every standard, quantized, and Turbo row passes its existing correctness class
+  at both depths, with baseline/candidate NMSE, cosine, and norm ratio recorded;
+- candidate NMSE is no worse for every row and improves at least one 16384-depth
+  Turbo case without reducing cosine;
+- every row has three throughput samples and candidate median is no more than 5%
+  below its matching baseline;
+- compiler data shows unchanged `local_share_mem_size`; registers/spills are
+  recorded;
+- non-F16 VEC and `fattn-tile.hpp` remain unchanged;
+- the post-run two-driver fault gate passes and the service is restarted.
+
+Reject the change on any missing specialization, route/build mismatch, >5%
+regression, correctness regression, or false P03 gate. Record rejection rather
+than leave a dormant knob or TILE follow-up.
+
+## Assumptions & contingencies
+
+- The fp32 tile accumulator consumes private registers, not shared memory;
+  occupancy is measured for every affected specialization.
+- P100 figures establish mechanism only; A770 acceptance uses the discovered
+  matrix.
+- No runtime/build opt-out remains after acceptance; rollback reverts the
+  isolated VEC change.
+- A TILE-family experiment is a separate plan.

@@ -1,0 +1,1 @@
+[Fri Oct  2 16:51:23 2026] xe 0000:03:00.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=none:owns=none

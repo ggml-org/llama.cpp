@@ -1,0 +1,171 @@
+envs	base.r0		idle=93	load=2.62	faults+0	rc=0	54s
+envs	MKLFA0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=92	load=2.54	faults+0	rc=0	44s
+envs	MKLQT2048.r0	GGML_SYCL_MKL_FA_Q_TILE=2048	idle=78	load=2.28	faults+0	rc=0	54s
+envs	GRAPH0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=93	load=2.07	faults+0	rc=0	54s
+envs	GRF0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=93	load=2.05	faults+0	rc=0	54s
+envs	Q8GQATILE.r0	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=91	load=2.50	faults+0	rc=0	56s
+envs	VECSTD.r0	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=92	load=2.51	faults+0	rc=0	54s
+envs	Q8QF0.r0	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=93	load=2.10	faults+0	rc=0	53s
+envs	FUSION0.r0	GGML_SYCL_ENABLE_FUSION=0	idle=93	load=2.26	faults+0	rc=0	54s
+envs	FFN0.r0	GGML_SYCL_FFN_FUSION=0	idle=93	load=2.01	faults+0	rc=0	54s
+envs	DMMV1.r0	GGML_SYCL_PRIORITIZE_DMMV=1	idle=92	load=2.20	faults+0	rc=0	54s
+envs	ESIMD0.r0	GGML_SYCL_ENABLE_ESIMD=0	idle=93	load=2.29	faults+0	rc=0	54s
+envs	OPT0.r0	GGML_SYCL_ENABLE_OPT=0	idle=92	load=2.34	faults+0	rc=0	58s
+envs	WG8.r0	GGML_SYCL_MAX_WG_PER_CU=8	idle=92	load=2.77	faults+0	rc=0	54s
+envs	WG32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=92	load=2.98	faults+0	rc=0	54s
+envs	ASYNC0.r0	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=92	load=3.57	faults+0	rc=0	54s
+envs	PINNED0.r0	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=82	load=3.30	faults+0	rc=0	54s
+envs	VMM0.r0	GGML_SYCL_ENABLE_VMM=0	idle=85	load=4.25	faults+0	rc=0	55s
+envs	ILCL0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=3.82	faults+0	rc=0	57s
+envs	ILCL1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=85	load=4.45	faults+0	rc=0	54s
+envs	COPYENG1.r0	UR_L0_USE_COPY_ENGINE=1	idle=86	load=4.44	faults+0	rc=0	54s
+envs	MKLFA0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=86	load=4.06	faults+0	rc=0	44s
+envs	MKLQT2048.r1	GGML_SYCL_MKL_FA_Q_TILE=2048	idle=85	load=4.45	faults+0	rc=0	54s
+envs	GRAPH0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=84	load=3.85	faults+0	rc=0	55s
+envs	GRF0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=84	load=4.42	faults+0	rc=0	55s
+envs	Q8GQATILE.r1	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=82	load=3.93	faults+0	rc=0	56s
+envs	VECSTD.r1	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=84	load=4.48	faults+0	rc=0	54s
+envs	Q8QF0.r1	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=70	load=4.06	faults+0	rc=0	53s
+envs	FUSION0.r1	GGML_SYCL_ENABLE_FUSION=0	idle=84	load=4.35	faults+0	rc=0	55s
+envs	FFN0.r1	GGML_SYCL_FFN_FUSION=0	idle=84	load=4.11	faults+0	rc=0	54s
+envs	DMMV1.r1	GGML_SYCL_PRIORITIZE_DMMV=1	idle=84	load=4.56	faults+0	rc=0	54s
+envs	ESIMD0.r1	GGML_SYCL_ENABLE_ESIMD=0	idle=84	load=4.44	faults+0	rc=0	54s
+envs	OPT0.r1	GGML_SYCL_ENABLE_OPT=0	idle=84	load=4.93	faults+0	rc=0	58s
+envs	WG8.r1	GGML_SYCL_MAX_WG_PER_CU=8	idle=84	load=4.88	faults+0	rc=0	54s
+envs	WG32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=85	load=4.78	faults+0	rc=0	54s
+envs	ASYNC0.r1	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=85	load=5.04	faults+0	rc=0	54s
+envs	PINNED0.r1	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=84	load=4.37	faults+0	rc=0	55s
+envs	VMM0.r1	GGML_SYCL_ENABLE_VMM=0	idle=85	load=3.92	faults+0	rc=0	54s
+envs	ILCL0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=4.84	faults+0	rc=0	57s
+envs	ILCL1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=4.26	faults+0	rc=0	54s
+envs	COPYENG1.r1	UR_L0_USE_COPY_ENGINE=1	idle=84	load=4.47	faults+0	rc=0	54s
+envs	base.r1		idle=85	load=4.21	faults+0	rc=0	54s
+envs	MKLQT2048.r2	GGML_SYCL_MKL_FA_Q_TILE=2048	idle=85	load=4.39	faults+0	rc=0	54s
+envs	GRAPH0.r2	GGML_SYCL_ENABLE_GRAPH=0	idle=77	load=4.21	faults+0	rc=0	54s
+envs	GRF0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=85	load=4.13	faults+0	rc=0	54s
+envs	Q8GQATILE.r2	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=85	load=4.32	faults+0	rc=0	55s
+envs	VECSTD.r2	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=84	load=4.21	faults+0	rc=0	53s
+envs	Q8QF0.r2	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=83	load=4.08	faults+0	rc=0	53s
+envs	FUSION0.r2	GGML_SYCL_ENABLE_FUSION=0	idle=84	load=4.57	faults+0	rc=0	54s
+envs	FFN0.r2	GGML_SYCL_FFN_FUSION=0	idle=84	load=4.11	faults+0	rc=0	54s
+envs	DMMV1.r2	GGML_SYCL_PRIORITIZE_DMMV=1	idle=84	load=4.21	faults+0	rc=0	54s
+envs	ESIMD0.r2	GGML_SYCL_ENABLE_ESIMD=0	idle=82	load=4.39	faults+0	rc=0	54s
+envs	OPT0.r2	GGML_SYCL_ENABLE_OPT=0	idle=85	load=4.03	faults+0	rc=0	58s
+envs	WG8.r2	GGML_SYCL_MAX_WG_PER_CU=8	idle=85	load=3.52	faults+0	rc=0	54s
+envs	WG32.r2	GGML_SYCL_MAX_WG_PER_CU=32	idle=84	load=3.48	faults+0	rc=0	55s
+envs	ASYNC0.r2	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=84	load=3.83	faults+0	rc=0	54s
+envs	PINNED0.r2	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=82	load=4.35	faults+0	rc=0	54s
+envs	VMM0.r2	GGML_SYCL_ENABLE_VMM=0	idle=85	load=4.14	faults+0	rc=0	55s
+envs	ILCL0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=3.96	faults+0	rc=0	56s
+envs	ILCL1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.18	faults+0	rc=0	55s
+envs	COPYENG1.r2	UR_L0_USE_COPY_ENGINE=1	idle=84	load=3.94	faults+0	rc=0	54s
+envs	base.r2		idle=84	load=3.54	faults+0	rc=0	54s
+envs	MKLFA0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=84	load=3.82	faults+0	rc=0	45s
+il	ccs1.il0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=3.85	faults+0	rc=0	57s
+il	ccs1.il1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=3.33	faults+0	rc=0	54s
+il	ccs2.il0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=4.66	faults+0	rc=0	63s
+il	ccs2.il1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=4.48	faults+0	rc=0	61s
+il	ccs4.il0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=4.02	faults+0	rc=0	84s
+il	ccs4.il1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=82	load=3.58	faults+0	rc=0	82s
+il	ccs2.il0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=4.45	faults+0	rc=0	64s
+il	ccs2.il1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=81	load=4.59	faults+0	rc=0	61s
+il	ccs4.il0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=80	load=4.50	faults+0	rc=0	85s
+il	ccs4.il1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.69	faults+0	rc=0	81s
+il	ccs1.il0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=79	load=4.56	faults+0	rc=0	56s
+il	ccs1.il1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.37	faults+0	rc=0	54s
+il	ccs4.il0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=79	load=4.99	faults+0	rc=0	84s
+il	ccs4.il1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=85	load=4.61	faults+0	rc=0	81s
+il	ccs1.il0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=4.36	faults+0	rc=0	57s
+il	ccs1.il1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.44	faults+0	rc=0	54s
+il	ccs2.il0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=85	load=4.21	faults+0	rc=0	63s
+il	ccs2.il1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=3.35	faults+0	rc=0	61s
+freq	def.r0		idle=84	load=3.72	faults+0	rc=0	55s
+freq	pin2400.r0		idle=80	load=4.05	faults+0	rc=0	54s
+freq	pin2000.r0		idle=85	load=3.97	faults+0	rc=0	58s
+freq	pin1500.r0		idle=86	load=3.73	faults+0	rc=0	71s
+freq	powersave.r0		idle=86	load=3.48	faults+0	rc=0	54s
+freq	floor1500.r0		idle=84	load=3.54	faults+0	rc=0	53s
+freq	pin2400.r1		idle=82	load=3.84	faults+0	rc=0	54s
+freq	pin2000.r1		idle=81	load=4.05	faults+0	rc=0	58s
+freq	pin1500.r1		idle=85	load=4.01	faults+0	rc=0	71s
+freq	powersave.r1		idle=78	load=4.39	faults+0	rc=0	54s
+freq	floor1500.r1		idle=79	load=5.18	faults+0	rc=0	54s
+freq	def.r1		idle=80	load=5.70	faults+0	rc=0	54s
+freq	pin2000.r2		idle=76	load=5.42	faults+0	rc=0	58s
+freq	pin1500.r2		idle=99	load=4.21	faults+0	rc=0	71s
+freq	powersave.r2		idle=100	load=2.09	faults+0	rc=0	54s
+freq	floor1500.r2		idle=100	load=1.56	faults+0	rc=0	53s
+freq	def.r2		idle=95	load=1.20	faults+0	rc=0	53s
+freq	pin2400.r2		idle=100	load=1.71	faults+0	rc=0	53s
+ornith	prod.r0		idle=100	load=1.20	faults+0	rc=0	140s
+ornith	mcauto_none.r0		idle=100	load=2.71	faults+0	rc=0	164s
+ornith	mcauto_auto.r0		idle=100	load=4.21	faults+0	rc=0	124s
+ornith	mcoff_auto.r0		idle=100	load=5.15	faults+0	rc=0	99s
+ornith	mcsoft_none.r0		idle=100	load=4.06	faults+0	rc=0	110s
+ornith	mcon_none.r0		idle=100	load=3.82	faults+0	rc=0	132s
+ornith	mc4096_none.r0		idle=100	load=4.34	faults+0	rc=0	132s
+ornith	prod_pinned0.r0	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=100	load=5.39	faults+0	rc=0	96s
+ornith	prod_ilcl1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=100	load=4.72	faults+0	rc=0	87s
+ornith	prod_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=3.46	faults+0	rc=0	97s
+ornith	prod_grf0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.91	faults+0	rc=0	87s
+ornith	prod_graph0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=3.45	faults+0	rc=0	86s
+ornith	mcauto_none.r1		idle=100	load=3.63	faults+0	rc=0	132s
+ornith	mcauto_auto.r1		idle=100	load=4.48	faults+0	rc=0	123s
+ornith	mcoff_auto.r1		idle=100	load=5.36	faults+0	rc=0	100s
+ornith	mcsoft_none.r1		idle=100	load=4.04	faults+0	rc=0	111s
+ornith	mcon_none.r1		idle=100	load=4.18	faults+0	rc=0	132s
+ornith	mc4096_none.r1		idle=100	load=4.67	faults+0	rc=0	132s
+ornith	prod_pinned0.r1	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=100	load=5.58	faults+0	rc=0	95s
+ornith	prod_ilcl1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=100	load=3.52	faults+0	rc=0	87s
+ornith	prod_mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=2.71	faults+0	rc=0	97s
+ornith	prod_grf0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.31	faults+0	rc=0	86s
+ornith	prod_graph0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=2.73	faults+0	rc=0	87s
+ornith	prod.r1		idle=95	load=3.34	faults+0	rc=0	87s
+ornith	mcauto_auto.r2		idle=100	load=3.50	faults+0	rc=0	124s
+ornith	mcoff_auto.r2		idle=100	load=4.69	faults+0	rc=0	100s
+ornith	mcsoft_none.r2		idle=100	load=3.51	faults+0	rc=0	110s
+ornith	mcon_none.r2		idle=100	load=3.87	faults+0	rc=0	133s
+ornith	mc4096_none.r2		idle=99	load=5.67	faults+0	rc=0	132s
+ornith	prod_pinned0.r2	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=100	load=3.99	faults+0	rc=0	96s
+ornith	prod_ilcl1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=100	load=3.66	faults+0	rc=0	87s
+ornith	prod_mkl0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=3.32	faults+0	rc=0	97s
+ornith	prod_grf0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.20	faults+0	rc=0	86s
+ornith	prod_graph0.r2	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=2.87	faults+0	rc=0	86s
+ornith	prod.r2		idle=100	load=3.11	faults+0	rc=0	87s
+ornith	mcauto_none.r2		idle=100	load=3.73	faults+0	rc=0	132s
+two	ccs1.ts1000.r0	faults+0
+-1
+two	ccs1.ts20000.r0	faults+0
+-1
+two	ccs2.ts1000.r0	faults+0
+-1
+two	ccs2.ts20000.r0	faults+0
+-1
+two	ccs4.ts1000.r0	faults+0
+-1
+two	ccs4.ts20000.r0	faults+0
+-1
+two	ccs2.ts1000.r1	faults+0
+-1
+two	ccs2.ts20000.r1	faults+0
+-1
+two	ccs4.ts1000.r1	faults+0
+-1
+two	ccs4.ts20000.r1	faults+0
+-1
+two	ccs1.ts1000.r1	faults+0
+-1
+two	ccs1.ts20000.r1	faults+0
+-1
+two	ccs4.ts1000.r2	faults+0
+-1
+two	ccs4.ts20000.r2	faults+0
+-1
+two	ccs1.ts1000.r2	faults+0
+-1
+two	ccs1.ts20000.r2	faults+0
+-1
+two	ccs2.ts1000.r2	faults+0
+-1
+two	ccs2.ts20000.r2	faults+0
+-1

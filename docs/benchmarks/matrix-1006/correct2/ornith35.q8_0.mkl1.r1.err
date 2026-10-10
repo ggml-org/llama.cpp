@@ -1,0 +1,33 @@
+0.02.121.277 I cmn  common_init_: MoE cache: mode=off
+0.02.312.959 W model has unused tensor blk.40.attn_norm.weight (size = 8192 bytes) -- ignoring
+0.02.312.963 W model has unused tensor blk.40.post_attention_norm.weight (size = 8192 bytes) -- ignoring
+0.02.312.967 W model has unused tensor blk.40.attn_q.weight (size = 9437184 bytes) -- ignoring
+0.02.312.968 W model has unused tensor blk.40.attn_k.weight (size = 589824 bytes) -- ignoring
+0.02.312.970 W model has unused tensor blk.40.attn_v.weight (size = 860160 bytes) -- ignoring
+0.02.312.974 W model has unused tensor blk.40.attn_output.weight (size = 4718592 bytes) -- ignoring
+0.02.312.976 W model has unused tensor blk.40.attn_q_norm.weight (size = 1024 bytes) -- ignoring
+0.02.312.978 W model has unused tensor blk.40.attn_k_norm.weight (size = 1024 bytes) -- ignoring
+0.02.312.979 W model has unused tensor blk.40.ffn_gate_inp.weight (size = 2097152 bytes) -- ignoring
+0.02.312.981 W model has unused tensor blk.40.ffn_down_exps.weight (size = 220200960 bytes) -- ignoring
+0.02.312.983 W model has unused tensor blk.40.ffn_gate_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.312.985 W model has unused tensor blk.40.ffn_up_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.312.987 W model has unused tensor blk.40.ffn_gate_inp_shexp.weight (size = 8192 bytes) -- ignoring
+0.02.312.988 W model has unused tensor blk.40.ffn_gate_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.312.990 W model has unused tensor blk.40.ffn_up_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.312.991 W model has unused tensor blk.40.ffn_down_shexp.weight (size = 860160 bytes) -- ignoring
+0.02.312.994 W model has unused tensor blk.40.nextn.eh_proj.weight (size = 4718592 bytes) -- ignoring
+0.02.312.995 W model has unused tensor blk.40.nextn.enorm.weight (size = 8192 bytes) -- ignoring
+0.02.312.997 W model has unused tensor blk.40.nextn.hnorm.weight (size = 8192 bytes) -- ignoring
+0.02.313.002 W model has unused tensor blk.40.nextn.shared_head_norm.weight (size = 8192 bytes) -- ignoring
+0.48.604.005 I cmn          init: llama threadpool init, n_threads = 12
+0.48.823.647 I 
+0.48.823.696 I system_info: n_threads = 12 (n_threads_batch = 12) / 24 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.48.823.704 I perplexity: tokenizing the input ..
+0.48.880.780 I perplexity: tokenization took 57.072 ms
+0.48.880.819 I perplexity: calculating perplexity over 3 chunks, n_ctx=8192, batch_size=2048, n_seq=1
+level_zero backend failed with error: 40 (UR_RESULT_ERROR_OUT_OF_RESOURCES)
+Exception caught at file:/mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp, line:3258, func:operator()
+SYCL error: CHECK_TRY_ERROR(dpct::gemm( *stream, oneapi::mkl::transpose::trans, oneapi::mkl::transpose::nontrans, row_diff, src1_ncols, ne10, &alpha, src0_ptr, dpct::library_data_t::real_half, ne00, src1_ptr, dpct::library_data_t::real_half, ne10, &beta, dst_dd_i, dpct::library_data_t::real_float, ldc, dpct::library_data_t::real_float)): Exception caught in this line of code.
+  in function ggml_sycl_op_mul_mat_sycl at /mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp:3258
+/mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/../ggml-sycl/common.hpp:174: SYCL error
+timeout: the monitored command dumped core

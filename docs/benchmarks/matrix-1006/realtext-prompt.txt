@@ -1,0 +1,81 @@
+LS(1)                            User Commands                            LS(1)
+
+NAME
+     ls - list directory contents
+
+SYNOPSIS
+     ls [OPTION]... [FILE]...
+
+DESCRIPTION
+     List information about the FILEs (the current directory by default).  Sort
+     entries alphabetically if none of -cftuvSUX nor --sort is specified.
+
+     Mandatory arguments to long options are mandatory for short options too.
+
+     -a, --all
+            do not ignore entries starting with .
+
+     -A, --almost-all
+            do not list implied . and ..
+
+     --author
+            with -l, print the author of each file
+
+     -b, --escape
+            print C-style escapes for nongraphic characters
+
+     --block-size=SIZE
+            with   -l,   scale   sizes   by  SIZE  when  printing  them;  e.g.,
+            '--block-size=M'; see SIZE format below
+
+     -B, --ignore-backups
+            do not list implied entries ending with ~
+
+     -c     with -lt: sort by, and show, ctime (time of  last  change  of  file
+            status  information);  with -l: show ctime and sort by name; other‐
+            wise: sort by ctime, newest first
+
+     -C     list entries by columns
+
+     --color[=WHEN]
+            color the output WHEN; more info below
+
+     -d, --directory
+            list directories themselves, not their contents
+
+     -D, --dired
+            generate output designed for Emacs' dired mode
+
+     -f     same as -a -U
+
+     -F, --classify[=WHEN]
+            append indicator (one of */=>@|) to entries WHEN
+
+     --file-type
+            like -F, except do not append '*'
+
+     --format=WORD
+            across,horizontal (-x), commas (-m), long (-l), single-column (-1),
+            verbose (-l), vertical (-C)
+
+     --full-time
+            like -l --time-style=full-iso
+
+     -g     like -l, but do not list owner
+
+     --group-directories-first
+            group directories before files
+
+     -G, --no-group
+            in a long listing, don't print group names
+
+     -h, --human-readable
+            with -l and -s, print sizes like 1K 234M 2G etc.
+
+     --si   likewise, but use powers of 1000 not 1024
+
+     -H, --dereference-command-line
+            follow symbolic links listed on the command line
+
+     --dereference-command-line-symlink-to-dir
+            follow each command line symb

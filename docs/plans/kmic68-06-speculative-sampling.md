@@ -1,56 +1,172 @@
-# P06 - Distribution-recording acceptance
+# P06 - Distribution-recording speculative acceptance
 
-**Kind:** port
-**Depends on:** P04 for validation
+**Kind:** common-layer feature
+**Depends on:** P04
+**Supplies:** recorded distributions and per-token fallback for P07
 
-## Purpose
+## Context
 
-Our acceptance rule (`common/sampling.cpp:678`) accepts a draft token only if it
-equals the target's sample. That is exact for greedy decoding but discards the
-draft's own distribution `q`: off-greedy, acceptance probability is `p(x)`
-rather than `min(1, p(x)/q(x))`.
+The current acceptor samples the target and accepts a drafted token only when
+the token IDs match. That preserves the target distribution but wastes the
+draft probability `q(x)`. For a stateless stochastic drafter, exact rejection
+sampling accepts with `min(1, p(x)/q(x))`; after rejection it samples from the
+normalized residual `max(p-q, 0)`. The output distribution remains the target
+distribution `p` while acceptance can increase.
 
-The correct rule accepts with `min(1, p(x)/q(x))` and, on rejection, draws the
-correction from the residual `max(p - q, 0)`. The output distribution is unchanged;
-the acceptance rate is not.
+P06 is opt-in and limited to the non-chained MTP host path. The runtime contract
+is exact: `LLAMA_SPEC_SAMPLE_TEMP` unset or `0` disables the feature; a
+finite value greater than zero enables draft sampling. `LLAMA_SPEC_DRAFT_TOPP`
+is optional, defaults to `1.0`, and must be finite in `(0, 1]`. The draft
+uses existing `LLAMA_DRAFT_TOP_K=10`. Backend draft sampling must be disabled
+because a backend-selected token has no matching host-side `q`.
 
-Requires the drafter to *record* the distribution it sampled from. Kmic-68 adds
-this with an opt-in temperature and top-p on the draft side; we default it on when
-the chain is stateless and temperature is above zero.
+Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
+`common_sampler_sample_and_accept_n_dist` plus the draft-side `dists`,
+`sample_temp`, and `sample_top_p` data path.
 
-## Source
+## EARS requirements
 
-- Kmic-68 `common/sampling.cpp`: `common_sampler_sample_and_accept_n_dist`, and in
-  `common/speculative.cpp` the `dists` field, `sample_temp`, `sample_top_p`.
+- **R06.1 (Optional feature):** WHERE distribution-recording speculative sampling is included, `common_speculative_draft_params` shall carry one token-ID-keyed normalized draft distribution `q` aligned with each emitted draft token.
+- **R06.2 (State-driven):** WHILE `LLAMA_SPEC_SAMPLE_TEMP` is finite and greater than zero and the MTP sampler chain is stateless, the non-chained MTP drafter shall produce each draft token together with the exact distribution `q` from which it was sampled.
+- **R06.3 (State-driven):** WHILE `0 < LLAMA_SPEC_DRAFT_TOPP < 1`, the non-chained MTP drafter shall truncate `q` to the smallest descending-probability prefix whose cumulative mass reaches the configured value.
+- **R06.4 (Event-driven):** WHEN a draft token with valid `q` is verified against target distribution `p`, `common_sampler_sample_and_accept_n_dist` shall accept it with probability `min(1, p(x)/q(x))`.
+- **R06.5 (Event-driven):** WHEN distribution-recording acceptance rejects a draft token, `common_sampler_sample_and_accept_n_dist` shall select the correction token from normalized `max(p-q, 0)`.
+- **R06.6 (Ubiquitous):** The distribution-recording acceptor shall preserve the target output distribution `p`.
+- **R06.7 (State-driven):** WHILE `LLAMA_SPEC_SAMPLE_TEMP` is unset or zero, speculative acceptance shall use the existing exact-match path.
+- **R06.8 (State-driven):** WHILE grammar, penalties, DRY, mirostat, a reasoning budget, or any unsupported stateful sampler is active, speculative acceptance shall use the existing exact-match path.
+- **R06.9 (State-driven):** WHILE a draft or target token is backend-selected or a chained in-graph argmax token is in use, speculative acceptance shall use the existing exact-match path.
+- **R06.10 (Unwanted behaviour):** IF any block distribution is missing, misaligned, non-normalized, non-finite, or assigns zero mass to its emitted token, THEN the speculative acceptor shall use the existing exact-match path for the entire untouched block.
+- **R06.11 (Unwanted behaviour):** IF either distribution-sampling environment value is outside its accepted finite range, THEN the speculative initializer shall fail with the variable name and rejected value.
+- **R06.12 (Ubiquitous):** The `common_sampler` clone, copy, and reset operations shall maintain deterministic distribution-acceptance RNG state.
+- **R06.13 (Event-driven):** WHEN all `G` draft tokens are accepted, the distribution acceptor shall append one terminal target token sampled from `p_G`.
+- **R06.14 (State-driven):** WHILE P04 cycle logging and P06 are enabled, the cycle artifact shall serialize the proposal identity, drafted token IDs, and every sparse token/probability pair in `q`.
+- **R06.15 (State-driven):** WHILE a proposal is consumed, invalidated, or replaced by checkpoint replay, speculative acceptance shall use the existing exact-match path.
+- **R06.16 (Event-driven):** WHEN distribution-recording acceptance begins, the acceptor shall prevalidate every proposal distribution and target row before mutating the live sampler or RNG.
 
-## In this fork
+## Approach
 
-- `common/sampling.cpp:678` `common_sampler_sample_and_accept_n`, the rule replaced.
-- `common/speculative.h:72-91` `common_speculative_draft_params`, which has no
-  `dists` field today.
-- `common/speculative.cpp:2348-2375`, the non-chained MTP host-side sample and push.
+1. Parse both environment variables once during speculative initialization.
+   Unset top-p becomes 1.0; malformed, non-finite, negative temperature, or top-p
+   outside `(0,1]` is a startup error.
+2. Extend `common_speculative_draft_params` with a monotonic single-use
+   `proposal_id` and `dists` parallel to `result`. Each distribution is a
+   sparse token-ID-keyed normalized vector. Final MTP clear/clamp/selection in
+   `common_speculative_draft` updates result and distributions in lockstep and
+   stamps the immutable P04 proposal snapshot.
+3. On the non-chained MTP CPU path, construct the draft sampler from top-k 10,
+   configured temperature/top-p, and distribution selection. Call
+   `common_sampler_sample`, copy `common_sampler_get_candidates` immediately
+   afterward and before accept, and record the emitted token with that exact
+   normalized `q` under the same proposal ID.
+4. Permit only the supported stateless chain. Grammar, penalties, DRY, mirostat,
+   reasoning budget, unknown sampler, backend-selected token, or chain mode
+   makes the whole proposal ineligible. Log one fallback reason per proposal.
+5. Before touching the live sampler or acceptance RNG, preflight the entire
+   block: proposal ID matches the slot and is unconsumed; replay is false;
+   `result.size()==dists.size()`; every sparse distribution is finite,
+   normalized within the declared tolerance, token-ID unique, and gives positive
+   mass to its emitted token; and `llama_get_sampled_token_ith` is null for
+   every target index. Any failure calls the old exact-match overload on the
+   original untouched state.
+6. Clone `common_sampler` and its domain-separated acceptance RNG after
+   preflight. Build all required target distributions on the working clone. If a
+   later validation fails, discard the clone and run exact-match on the pristine
+   original. Only a fully successful distribution decision copies final sampler
+   and RNG state back atomically.
+7. For each draft position, read normalized target `p` from the working clone,
+   treat absent sparse-`q` IDs as zero, draw one acceptance uniform, and commit
+   an accepted token on the clone. On rejection, build the residual over the
+   union of supports, clamp negative round-off, normalize, sample/commit one
+   correction, and stop. If clipped residual mass is zero, sample from `p`.
+8. Preserve the existing `G+1` return contract. If all `G` drafts survive,
+   sample, accept, and append the terminal token at `idxs[G]` from `p_G`.
+   Server and speculative-simple consumers must receive `G+1`, not mistake full
+   acceptance for replay.
+9. Mark a proposal consumed after one acceptance attempt. When replay replaces
+   `slot.spec_draft` with an accepted prefix plus correction, clear/invalidate
+   its distributions even if vector length happens to match. Replayed rounds
+   always use exact-match until a fresh proposal ID and distributions are made.
+10. Extend the P04 selected cycle row with versioned `q_records`: proposal ID,
+   draft index/token, sparse token/probability pairs, probability sum, and schema
+   version. The verifier rejects missing, duplicate, corrupt, or cross-proposal
+   records. Baseline rows explicitly state `q_records=null`.
+11. Add seeded corpus and server tests for full acceptance/terminal bonus,
+   rejection, invalid final-row distribution, target backend token at any index,
+   late validation failure with pristine fallback, consumed proposal reuse, same-
+   length replay replacement, server, and speculative-simple.
+12. Feed enabled/disabled A770 runs into the P04 schema and report acceptance per
+   drafted token at temperature 0.8; distribution parity is established by the
+   confidence-bounded corpus, not token identity.
 
-## Requirements
+## Critical files & anchors
 
-- **R06.1** (ubiquitous) The <draft params> shall carry, per drafted token, the distribution `q` that token was drawn from.
-- **R06.1a** (ubiquitous) The <recorded distributions> shall be moved, truncated, replaced and replayed in lockstep with the token vector at every site that mutates a draft, including checkpoint save and load, `spec_draft` replacement by an accepted prefix plus correction, and any accepted-token replay, so a token can never be verified against another token's `q`.
-- **R06.1b** (event-driven) WHEN a correction token is emitted, the <acceptor> shall carry no `q` for it, since it was drawn from the residual rather than from `q`.
-- **R06.2** (optional feature) WHERE `LLAMA_SPEC_SAMPLE_TEMP` is greater than zero, the <MTP drafter> shall draw each draft token from the distribution that R06.3 leaves in force, rather than taking the argmax, and shall record that distribution.
-- **R06.3** (optional feature) WHERE `LLAMA_SPEC_DRAFT_TOPP` is less than one, the <MTP drafter> shall first truncate the temperature-scaled distribution to its smallest prefix reaching that mass, matching the target sampler rule, and shall draw from the truncated result. Truncating only the recorded copy after the draw would leave a token sampled from the discarded tail with q(x) = 0, and R06.4 ratio would divide by zero.
-- **R06.4** (event-driven) WHEN a drafted token is verified and `q` was recorded, the <acceptor> shall accept it with probability `min(1, p(x)/q(x))`.
-- **R06.5** (event-driven) WHEN a drafted token is rejected, the <acceptor> shall draw the correction token from the residual `max(p - q, 0)` renormalised, and shall emit that correction in place of the rejected token.
-- **R06.6** (ubiquitous) The <acceptance rule> shall output the target distribution `p` exactly, for the same recorded target and draft distributions. Parity with the greedy rule is not the invariant: the greedy rule already reproduces `p`, so testing against it would not detect a sampler that preserves neither.
-- **R06.7** (unwanted) IF a grammar, penalty, DRY, mirostat or reasoning budget is active, THEN the <acceptor> shall use the existing exact-match acceptance path, which continues to sample from the target's configured distribution; it shall not switch to argmax.
-- **R06.8** (unwanted) IF a backend sampler already picked the token, THEN the <acceptor> shall use the existing exact-match acceptance path, because `cur_p` is not the distribution those tokens came from.
-- **R06.9** (optional feature) WHERE `LLAMA_SPEC_SAMPLE_TEMP` is unset or zero, the <drafter> shall take the argmax and record no distribution, so the <acceptor> shall use the existing exact-match acceptance path and current behaviour stays reachable without a rebuild.
-- **R06.10** (event-driven) WHEN the drafter is the chained path, the <acceptor> shall continue to use the existing exact-match acceptance path, because its tokens are produced by an in-graph argmax with no recorded distribution.
+- `common/speculative.h:72-91` - `common_speculative_draft_params` result contract.
+- `common/speculative.cpp:2313-2415` - non-chained MTP host sampling loop.
+- `common/speculative.cpp:3639-3690` - shared draft wrapper and `n_max` result clamping.
+- `common/sampling.cpp:594-675` - target CPU sampling and candidate distribution.
+- `common/sampling.cpp:678-714` - existing exact-match acceptor.
+- `common/sampling.cpp:509-539` - sampler clone/copy; extend with acceptance RNG state.
+- `common/sampling.h:85-89` - current acceptor declarations.
+- `tools/server/server-context.cpp:3414-3416,4302-4377` - proposal handoff, replay replacement, acceptor selection, and final stats.
+- `examples/speculative-simple/speculative-simple.cpp:193-200,269-270` - non-server `G+1` consumer.
+- `tests/test-sampling.cpp` - seeded confidence-bounded distribution corpus.
+- `scripts/perf/verify-spec-distribution.py` - planned P04/`q_records` A770 comparison.
 
-## Acceptance
+## Verification
 
-Over a seeded corpus of at least 100000 draws per token position, spanning a
-case where `p` and `q` agree closely and one where they diverge substantially, the
-empirical frequency of each emitted token shall match the analytic target `p` under
-a two-sample chi-square goodness-of-fit at p > 0.001, with total variation
-distance below 0.01. The same test shall be run against the existing exact-match
-path as a control. Acceptance rate before and after at temperature 0.8 on the real
-trunk, A770, named driver, sole tenancy.
+Add a fixed-seed corpus covering vocabularies 2 through 64, sparse/dense `p/q`,
+`p=q`, disjoint support, near-zero residual mass, full `G+1` acceptance, and
+multi-token prefixes. Draw `N=100000` outputs per enabled and disabled case.
+For each case, fail immediately if any token with target probability zero is
+emitted. Deterministically pool the lowest-probability bins into one `other`
+bin until every Pearson expected count is at least 5. Run Pearson multinomial
+goodness-of-fit tests for enabled-versus-`p` and disabled-versus-`p`, plus a
+Pearson two-sample homogeneity test for enabled versus disabled. Apply
+Holm-Bonferroni across every case/test at family-wise `alpha=0.01`. Report TV
+and maximum error as diagnostics only, never fixed pass thresholds.
+
+```bash
+timeout 180 ctest --test-dir build-sycl -R '^test-sampling$' --output-on-failure
+```
+
+After P04 is complete, stop the service, verify A770 sole tenancy, name the
+kernel driver/build/model, and compare the current exact-match path with P06 at
+temperature 0.8:
+
+```bash
+timeout 1800 python3 scripts/perf/verify-spec-distribution.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --repeats 2 --seed 123 --target-temperature 0.8 --draft-temperature 0.8 --draft-top-p 1.0 --spec-args='--spec-type draft-mtp --no-spec-draft-backend-sampling' --baseline-log /tmp/p06-baseline.jsonl --enabled-log /tmp/p06-enabled.jsonl --q-artifact /tmp/p06-q-records.jsonl --report /tmp/p06-report.json
+```
+
+Expected evidence:
+
+- every enabled/disabled corpus case passes the predeclared Pearson tests after
+  Holm-Bonferroni at family-wise `alpha=0.01`, with no zero-probability output;
+- every selected P04 proposal has one valid cycle-keyed `q_records` entry per
+  drafted token with matching proposal/token identity, finite normalized sparse
+  support, and positive sampled-token mass;
+- full acceptance returns exactly `G+1` tokens to both server and
+  speculative-simple consumers;
+- invalid or late target/distribution checks leave original sampler/RNG state
+  untouched and restart the old whole-block exact-match path;
+- consumed and replay-replaced proposals cannot reuse stale distributions,
+  including same-length correction replacement;
+- baseline and enabled P04 logs report accepted/drafted totals for the same six
+  requests and the report records their acceptance ratio;
+- every disabled/fallback condition reaches exact-match, invalid environment
+  values name the variable, and the post-run GPU fault gate passes.
+
+Run the exact README regression floor before and after the feature.
+
+## Assumptions & contingencies
+
+- P06 stores sparse distributions bounded by draft top-k 10; it does not retain
+  full-vocabulary `q` arrays.
+- The feature is disabled by default. No target sampler behavior changes until a
+  positive `LLAMA_SPEC_SAMPLE_TEMP` is supplied and every whole-block check
+  passes.
+- Proposal distributions are single-use evidence bound to immutable proposal
+  identity; size equality alone is never provenance.
+- Empirical parity is decided by the predeclared family-wise Pearson/Holm test;
+  TV and maximum error are diagnostics, not acceptance thresholds.
+- P07 may consume only unconsumed P06 proposals with complete `p/q` records;
+  every P06 fallback remains a P07 fallback.

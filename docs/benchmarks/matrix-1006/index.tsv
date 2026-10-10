@@ -1,0 +1,524 @@
+envs	base.r0		idle=93	load=2.62	faults+0	rc=0	54s
+envs	MKLFA0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=92	load=2.54	faults+0	rc=0	44s
+envs	MKLQT2048.r0	GGML_SYCL_MKL_FA_Q_TILE=2048	idle=78	load=2.28	faults+0	rc=0	54s
+envs	GRAPH0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=93	load=2.07	faults+0	rc=0	54s
+envs	GRF0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=93	load=2.05	faults+0	rc=0	54s
+envs	Q8GQATILE.r0	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=91	load=2.50	faults+0	rc=0	56s
+envs	VECSTD.r0	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=92	load=2.51	faults+0	rc=0	54s
+envs	Q8QF0.r0	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=93	load=2.10	faults+0	rc=0	53s
+envs	FUSION0.r0	GGML_SYCL_ENABLE_FUSION=0	idle=93	load=2.26	faults+0	rc=0	54s
+envs	FFN0.r0	GGML_SYCL_FFN_FUSION=0	idle=93	load=2.01	faults+0	rc=0	54s
+envs	DMMV1.r0	GGML_SYCL_PRIORITIZE_DMMV=1	idle=92	load=2.20	faults+0	rc=0	54s
+envs	ESIMD0.r0	GGML_SYCL_ENABLE_ESIMD=0	idle=93	load=2.29	faults+0	rc=0	54s
+envs	OPT0.r0	GGML_SYCL_ENABLE_OPT=0	idle=92	load=2.34	faults+0	rc=0	58s
+envs	WG8.r0	GGML_SYCL_MAX_WG_PER_CU=8	idle=92	load=2.77	faults+0	rc=0	54s
+envs	WG32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=92	load=2.98	faults+0	rc=0	54s
+envs	ASYNC0.r0	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=92	load=3.57	faults+0	rc=0	54s
+envs	PINNED0.r0	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=82	load=3.30	faults+0	rc=0	54s
+envs	VMM0.r0	GGML_SYCL_ENABLE_VMM=0	idle=85	load=4.25	faults+0	rc=0	55s
+envs	ILCL0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=3.82	faults+0	rc=0	57s
+envs	ILCL1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=85	load=4.45	faults+0	rc=0	54s
+envs	COPYENG1.r0	UR_L0_USE_COPY_ENGINE=1	idle=86	load=4.44	faults+0	rc=0	54s
+envs	MKLFA0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=86	load=4.06	faults+0	rc=0	44s
+envs	MKLQT2048.r1	GGML_SYCL_MKL_FA_Q_TILE=2048	idle=85	load=4.45	faults+0	rc=0	54s
+envs	GRAPH0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=84	load=3.85	faults+0	rc=0	55s
+envs	GRF0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=84	load=4.42	faults+0	rc=0	55s
+envs	Q8GQATILE.r1	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=82	load=3.93	faults+0	rc=0	56s
+envs	VECSTD.r1	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=84	load=4.48	faults+0	rc=0	54s
+envs	Q8QF0.r1	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=70	load=4.06	faults+0	rc=0	53s
+envs	FUSION0.r1	GGML_SYCL_ENABLE_FUSION=0	idle=84	load=4.35	faults+0	rc=0	55s
+envs	FFN0.r1	GGML_SYCL_FFN_FUSION=0	idle=84	load=4.11	faults+0	rc=0	54s
+envs	DMMV1.r1	GGML_SYCL_PRIORITIZE_DMMV=1	idle=84	load=4.56	faults+0	rc=0	54s
+envs	ESIMD0.r1	GGML_SYCL_ENABLE_ESIMD=0	idle=84	load=4.44	faults+0	rc=0	54s
+envs	OPT0.r1	GGML_SYCL_ENABLE_OPT=0	idle=84	load=4.93	faults+0	rc=0	58s
+envs	WG8.r1	GGML_SYCL_MAX_WG_PER_CU=8	idle=84	load=4.88	faults+0	rc=0	54s
+envs	WG32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=85	load=4.78	faults+0	rc=0	54s
+envs	ASYNC0.r1	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=85	load=5.04	faults+0	rc=0	54s
+envs	PINNED0.r1	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=84	load=4.37	faults+0	rc=0	55s
+envs	VMM0.r1	GGML_SYCL_ENABLE_VMM=0	idle=85	load=3.92	faults+0	rc=0	54s
+envs	ILCL0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=4.84	faults+0	rc=0	57s
+envs	ILCL1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=4.26	faults+0	rc=0	54s
+envs	COPYENG1.r1	UR_L0_USE_COPY_ENGINE=1	idle=84	load=4.47	faults+0	rc=0	54s
+envs	base.r1		idle=85	load=4.21	faults+0	rc=0	54s
+envs	MKLQT2048.r2	GGML_SYCL_MKL_FA_Q_TILE=2048	idle=85	load=4.39	faults+0	rc=0	54s
+envs	GRAPH0.r2	GGML_SYCL_ENABLE_GRAPH=0	idle=77	load=4.21	faults+0	rc=0	54s
+envs	GRF0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=85	load=4.13	faults+0	rc=0	54s
+envs	Q8GQATILE.r2	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=85	load=4.32	faults+0	rc=0	55s
+envs	VECSTD.r2	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=84	load=4.21	faults+0	rc=0	53s
+envs	Q8QF0.r2	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=83	load=4.08	faults+0	rc=0	53s
+envs	FUSION0.r2	GGML_SYCL_ENABLE_FUSION=0	idle=84	load=4.57	faults+0	rc=0	54s
+envs	FFN0.r2	GGML_SYCL_FFN_FUSION=0	idle=84	load=4.11	faults+0	rc=0	54s
+envs	DMMV1.r2	GGML_SYCL_PRIORITIZE_DMMV=1	idle=84	load=4.21	faults+0	rc=0	54s
+envs	ESIMD0.r2	GGML_SYCL_ENABLE_ESIMD=0	idle=82	load=4.39	faults+0	rc=0	54s
+envs	OPT0.r2	GGML_SYCL_ENABLE_OPT=0	idle=85	load=4.03	faults+0	rc=0	58s
+envs	WG8.r2	GGML_SYCL_MAX_WG_PER_CU=8	idle=85	load=3.52	faults+0	rc=0	54s
+envs	WG32.r2	GGML_SYCL_MAX_WG_PER_CU=32	idle=84	load=3.48	faults+0	rc=0	55s
+envs	ASYNC0.r2	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=84	load=3.83	faults+0	rc=0	54s
+envs	PINNED0.r2	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=82	load=4.35	faults+0	rc=0	54s
+envs	VMM0.r2	GGML_SYCL_ENABLE_VMM=0	idle=85	load=4.14	faults+0	rc=0	55s
+envs	ILCL0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=3.96	faults+0	rc=0	56s
+envs	ILCL1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.18	faults+0	rc=0	55s
+envs	COPYENG1.r2	UR_L0_USE_COPY_ENGINE=1	idle=84	load=3.94	faults+0	rc=0	54s
+envs	base.r2		idle=84	load=3.54	faults+0	rc=0	54s
+envs	MKLFA0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=84	load=3.82	faults+0	rc=0	45s
+il	ccs1.il0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=3.85	faults+0	rc=0	57s
+il	ccs1.il1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=3.33	faults+0	rc=0	54s
+il	ccs2.il0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=4.66	faults+0	rc=0	63s
+il	ccs2.il1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=4.48	faults+0	rc=0	61s
+il	ccs4.il0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=4.02	faults+0	rc=0	84s
+il	ccs4.il1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=82	load=3.58	faults+0	rc=0	82s
+il	ccs2.il0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=83	load=4.45	faults+0	rc=0	64s
+il	ccs2.il1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=81	load=4.59	faults+0	rc=0	61s
+il	ccs4.il0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=80	load=4.50	faults+0	rc=0	85s
+il	ccs4.il1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.69	faults+0	rc=0	81s
+il	ccs1.il0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=79	load=4.56	faults+0	rc=0	56s
+il	ccs1.il1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.37	faults+0	rc=0	54s
+il	ccs4.il0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=79	load=4.99	faults+0	rc=0	84s
+il	ccs4.il1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=85	load=4.61	faults+0	rc=0	81s
+il	ccs1.il0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=84	load=4.36	faults+0	rc=0	57s
+il	ccs1.il1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=4.44	faults+0	rc=0	54s
+il	ccs2.il0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=85	load=4.21	faults+0	rc=0	63s
+il	ccs2.il1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=84	load=3.35	faults+0	rc=0	61s
+freq	def.r0		idle=84	load=3.72	faults+0	rc=0	55s
+freq	pin2400.r0		idle=80	load=4.05	faults+0	rc=0	54s
+freq	pin2000.r0		idle=85	load=3.97	faults+0	rc=0	58s
+freq	pin1500.r0		idle=86	load=3.73	faults+0	rc=0	71s
+freq	powersave.r0		idle=86	load=3.48	faults+0	rc=0	54s
+freq	floor1500.r0		idle=84	load=3.54	faults+0	rc=0	53s
+freq	pin2400.r1		idle=82	load=3.84	faults+0	rc=0	54s
+freq	pin2000.r1		idle=81	load=4.05	faults+0	rc=0	58s
+freq	pin1500.r1		idle=85	load=4.01	faults+0	rc=0	71s
+freq	powersave.r1		idle=78	load=4.39	faults+0	rc=0	54s
+freq	floor1500.r1		idle=79	load=5.18	faults+0	rc=0	54s
+freq	def.r1		idle=80	load=5.70	faults+0	rc=0	54s
+freq	pin2000.r2		idle=76	load=5.42	faults+0	rc=0	58s
+freq	pin1500.r2		idle=99	load=4.21	faults+0	rc=0	71s
+freq	powersave.r2		idle=100	load=2.09	faults+0	rc=0	54s
+freq	floor1500.r2		idle=100	load=1.56	faults+0	rc=0	53s
+freq	def.r2		idle=95	load=1.20	faults+0	rc=0	53s
+freq	pin2400.r2		idle=100	load=1.71	faults+0	rc=0	53s
+ornith	prod.r0		idle=100	load=1.20	faults+0	rc=0	140s
+ornith	mcauto_none.r0		idle=100	load=2.71	faults+0	rc=0	164s
+ornith	mcauto_auto.r0		idle=100	load=4.21	faults+0	rc=0	124s
+ornith	mcoff_auto.r0		idle=100	load=5.15	faults+0	rc=0	99s
+ornith	mcsoft_none.r0		idle=100	load=4.06	faults+0	rc=0	110s
+ornith	mcon_none.r0		idle=100	load=3.82	faults+0	rc=0	132s
+ornith	mc4096_none.r0		idle=100	load=4.34	faults+0	rc=0	132s
+ornith	prod_pinned0.r0	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=100	load=5.39	faults+0	rc=0	96s
+ornith	prod_ilcl1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=100	load=4.72	faults+0	rc=0	87s
+ornith	prod_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=3.46	faults+0	rc=0	97s
+ornith	prod_grf0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.91	faults+0	rc=0	87s
+ornith	prod_graph0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=3.45	faults+0	rc=0	86s
+ornith	mcauto_none.r1		idle=100	load=3.63	faults+0	rc=0	132s
+ornith	mcauto_auto.r1		idle=100	load=4.48	faults+0	rc=0	123s
+ornith	mcoff_auto.r1		idle=100	load=5.36	faults+0	rc=0	100s
+ornith	mcsoft_none.r1		idle=100	load=4.04	faults+0	rc=0	111s
+ornith	mcon_none.r1		idle=100	load=4.18	faults+0	rc=0	132s
+ornith	mc4096_none.r1		idle=100	load=4.67	faults+0	rc=0	132s
+ornith	prod_pinned0.r1	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=100	load=5.58	faults+0	rc=0	95s
+ornith	prod_ilcl1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=100	load=3.52	faults+0	rc=0	87s
+ornith	prod_mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=2.71	faults+0	rc=0	97s
+ornith	prod_grf0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.31	faults+0	rc=0	86s
+ornith	prod_graph0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=2.73	faults+0	rc=0	87s
+ornith	prod.r1		idle=95	load=3.34	faults+0	rc=0	87s
+ornith	mcauto_auto.r2		idle=100	load=3.50	faults+0	rc=0	124s
+ornith	mcoff_auto.r2		idle=100	load=4.69	faults+0	rc=0	100s
+ornith	mcsoft_none.r2		idle=100	load=3.51	faults+0	rc=0	110s
+ornith	mcon_none.r2		idle=100	load=3.87	faults+0	rc=0	133s
+ornith	mc4096_none.r2		idle=99	load=5.67	faults+0	rc=0	132s
+ornith	prod_pinned0.r2	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=100	load=3.99	faults+0	rc=0	96s
+ornith	prod_ilcl1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=100	load=3.66	faults+0	rc=0	87s
+ornith	prod_mkl0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=3.32	faults+0	rc=0	97s
+ornith	prod_grf0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.20	faults+0	rc=0	86s
+ornith	prod_graph0.r2	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=2.87	faults+0	rc=0	86s
+ornith	prod.r2		idle=100	load=3.11	faults+0	rc=0	87s
+ornith	mcauto_none.r2		idle=100	load=3.73	faults+0	rc=0	132s
+two	ccs1.ts1000.r0	faults+0
+-1
+two	ccs1.ts20000.r0	faults+0
+-1
+two	ccs2.ts1000.r0	faults+0
+-1
+two	ccs2.ts20000.r0	faults+0
+-1
+two	ccs4.ts1000.r0	faults+0
+-1
+two	ccs4.ts20000.r0	faults+0
+-1
+two	ccs2.ts1000.r1	faults+0
+-1
+two	ccs2.ts20000.r1	faults+0
+-1
+two	ccs4.ts1000.r1	faults+0
+-1
+two	ccs4.ts20000.r1	faults+0
+-1
+two	ccs1.ts1000.r1	faults+0
+-1
+two	ccs1.ts20000.r1	faults+0
+-1
+two	ccs4.ts1000.r2	faults+0
+-1
+two	ccs4.ts20000.r2	faults+0
+-1
+two	ccs1.ts1000.r2	faults+0
+-1
+two	ccs1.ts20000.r2	faults+0
+-1
+two	ccs2.ts1000.r2	faults+0
+-1
+two	ccs2.ts20000.r2	faults+0
+-1
+cost	8b.r0		idle=100	load=0.01	faults+0	rc=0	5s	foreign=|
+cost	ornith.r0		idle=100	load=0.16	faults+0	rc=0	44s	foreign=|systemd:60.0
+cost	8b.r1		idle=99	load=1.54	faults+0	rc=0	5s	foreign=|
+cost	ornith.r1		idle=99	load=1.39	faults+0	rc=0	45s	foreign=|systemd:54.5
+cost	8b.r2		idle=99	load=1.72	faults+0	rc=0	5s	foreign=|
+cost	ornith.r2		idle=97	load=1.66	faults+0	rc=0	44s	foreign=|systemd:60.0
+mode	ccs1.r0		idle=99	load=1.74	faults+0	rc=0	87s	foreign=|systemd:60.0
+mode	ccs2.r0		idle=100	load=2.86	faults+0	rc=0	95s	foreign=|systemd:50.0
+mode	ccs4.r0		idle=100	load=3.53	faults+0	rc=0	122s	foreign=|systemd:60.0
+mode	ccs2.r1		idle=100	load=3.16	faults+0	rc=0	95s	foreign=|systemd:60.0
+mode	ccs4.r1		idle=100	load=3.12	faults+0	rc=0	121s	foreign=|
+mode	ccs1.r1		idle=100	load=3.13	faults+0	rc=0	86s	foreign=|
+mode	ccs4.r2		idle=100	load=2.80	faults+0	rc=0	122s	foreign=|
+mode	ccs1.r2		idle=100	load=2.33	faults+0	rc=0	88s	foreign=|
+mode	ccs2.r2		idle=98	load=2.60	faults+0	rc=0	95s	foreign=|
+mode	ccs1.r3		idle=99	load=4.02	faults+0	rc=0	87s	foreign=|chrome:93.1
+mode	ccs2.r3		idle=100	load=2.92	faults+0	rc=0	94s	foreign=|
+mode	ccs4.r3		idle=100	load=3.44	faults+0	rc=0	122s	foreign=|postgres:92.0
+ornenv	base.r0		idle=95	load=4.10	faults+0	rc=0	88s	foreign=postgres:92.3|postgres:99.8
+ornenv	GRAPH0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=94	load=4.87	faults+0	rc=0	88s	foreign=postgres:99.7|
+ornenv	Q8QF0.r0	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=3.50	faults+0	rc=0	87s	foreign=|
+ornenv	Q8GQATILE.r0	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=97	load=3.68	faults+0	rc=0	87s	foreign=|(searxng-annas):100
+ornenv	OPT0.r0	GGML_SYCL_ENABLE_OPT=0	idle=99	load=4.23	faults+0	rc=0	86s	foreign=|
+ornenv	ILCL0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=100	load=4.52	faults+0	rc=0	91s	foreign=|
+ornenv	ILCL1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=95	load=2.80	faults+0	rc=0	87s	foreign=|
+ornenv	WG8.r0	GGML_SYCL_MAX_WG_PER_CU=8	idle=100	load=3.24	faults+0	rc=0	87s	foreign=|
+ornenv	WG32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=100	load=3.21	faults+0	rc=0	87s	foreign=|
+ornenv	MKLFA0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=86	load=3.81	faults+0	rc=0	99s	foreign=|
+ornenv	GRF0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=98	load=2.96	faults+0	rc=0	88s	foreign=|
+ornenv	FUSION0.r0	GGML_SYCL_ENABLE_FUSION=0	idle=100	load=2.93	faults+0	rc=0	89s	foreign=|
+ornenv	ESIMD0.r0	GGML_SYCL_ENABLE_ESIMD=0	idle=99	load=4.32	faults+0	rc=0	89s	foreign=|
+ornenv	VMM0.r0	GGML_SYCL_ENABLE_VMM=0	idle=99	load=3.65	faults+0	rc=1	84s	foreign=|
+ornenv	PINNED0.r0	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=99	load=1.83	faults+0	rc=0	97s	foreign=|
+ornenv	VECSTD.r0	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=99	load=3.83	faults+0	rc=0	86s	foreign=|
+ornenv	ASYNC0.r0	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=100	load=3.91	faults+0	rc=0	87s	foreign=|
+ornenv	DMMV1.r0	GGML_SYCL_PRIORITIZE_DMMV=1	idle=98	load=4.14	faults+0	rc=0	86s	foreign=|
+ornenv	GRAPH0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=3.90	faults+0	rc=0	86s	foreign=|
+ornenv	Q8QF0.r1	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=98	load=4.96	faults+0	rc=0	87s	foreign=|
+ornenv	Q8GQATILE.r1	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=100	load=3.88	faults+0	rc=0	87s	foreign=|
+ornenv	OPT0.r1	GGML_SYCL_ENABLE_OPT=0	idle=99	load=4.00	faults+0	rc=0	87s	foreign=|
+ornenv	ILCL0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=100	load=3.00	faults+0	rc=0	91s	foreign=|
+ornenv	ILCL1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=99	load=3.76	faults+0	rc=0	87s	foreign=|
+ornenv	WG8.r1	GGML_SYCL_MAX_WG_PER_CU=8	idle=96	load=3.21	faults+0	rc=0	87s	foreign=|
+ornenv	WG32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=3.50	faults+0	rc=0	87s	foreign=|
+ornenv	MKLFA0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=86	load=3.96	faults+0	rc=0	100s	foreign=|(searxng-annas):50.0
+ornenv	GRF0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=94	load=4.66	faults+0	rc=0	89s	foreign=python:30.4|
+ornenv	FUSION0.r1	GGML_SYCL_ENABLE_FUSION=0	idle=99	load=3.66	faults+0	rc=0	89s	foreign=|
+ornenv	ESIMD0.r1	GGML_SYCL_ENABLE_ESIMD=0	idle=96	load=3.37	faults+0	rc=0	89s	foreign=|
+ornenv	VMM0.r1	GGML_SYCL_ENABLE_VMM=0	idle=99	load=4.24	faults+0	rc=0	96s	foreign=|
+ornenv	PINNED0.r1	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=99	load=2.22	faults+0	rc=0	96s	foreign=|chrome:38.8,chrome:41.6,ss:100
+ornenv	VECSTD.r1	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=95	load=4.33	faults+0	rc=0	88s	foreign=chrome:36.1|
+ornenv	ASYNC0.r1	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=94	load=5.33	faults+0	rc=0	88s	foreign=|
+ornenv	DMMV1.r1	GGML_SYCL_PRIORITIZE_DMMV=1	idle=99	load=3.35	faults+0	rc=0	88s	foreign=|
+ornenv	base.r1		idle=99	load=4.37	faults+0	rc=0	88s	foreign=|
+ornenv	Q8QF0.r2	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=4.54	faults+0	rc=0	87s	foreign=|
+ornenv	Q8GQATILE.r2	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=99	load=4.59	faults+0	rc=0	88s	foreign=|
+ornenv	OPT0.r2	GGML_SYCL_ENABLE_OPT=0	idle=98	load=4.05	faults+0	rc=0	87s	foreign=|
+ornenv	ILCL0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=99	load=2.73	faults+0	rc=0	92s	foreign=|
+ornenv	ILCL1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=98	load=5.29	faults+0	rc=0	88s	foreign=|
+ornenv	WG8.r2	GGML_SYCL_MAX_WG_PER_CU=8	idle=100	load=4.80	faults+0	rc=0	88s	foreign=|
+ornenv	WG32.r2	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=4.57	faults+0	rc=0	87s	foreign=|
+ornenv	MKLFA0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=2.69	faults+0	rc=0	98s	foreign=|
+ornenv	GRF0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=2.46	faults+0	rc=0	88s	foreign=|
+ornenv	FUSION0.r2	GGML_SYCL_ENABLE_FUSION=0	idle=98	load=4.19	faults+0	rc=0	89s	foreign=|
+ornenv	ESIMD0.r2	GGML_SYCL_ENABLE_ESIMD=0	idle=98	load=3.66	faults+0	rc=0	89s	foreign=|
+ornenv	VMM0.r2	GGML_SYCL_ENABLE_VMM=0	idle=99	load=3.53	faults+0	rc=0	88s	foreign=|chrome:31.2
+ornenv	PINNED0.r2	GGML_SYCL_ENABLE_HOST_PINNED_MEM=0	idle=86	load=3.55	faults+0	rc=0	97s	foreign=|
+ornenv	VECSTD.r2	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=99	load=2.89	faults+0	rc=0	88s	foreign=|
+ornenv	ASYNC0.r2	GGML_SYCL_USE_ASYNC_MEM_OP=0	idle=99	load=4.16	faults+0	rc=0	87s	foreign=|
+ornenv	DMMV1.r2	GGML_SYCL_PRIORITIZE_DMMV=1	idle=99	load=4.15	faults+0	rc=0	88s	foreign=|
+ornenv	base.r2		idle=99	load=3.09	faults+0	rc=0	89s	foreign=|
+ornenv	GRAPH0.r2	GGML_SYCL_ENABLE_GRAPH=0	idle=99	load=4.25	faults+0	rc=0	87s	foreign=|
+fitc	q4_fitc32k.r0		idle=99	load=4.80	faults+0	rc=0	87s	foreign=|
+fitc	q4_fitc128k.r0		idle=100	load=3.75	faults+0	rc=0	87s	foreign=|
+fitc	q4_fitc128k_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=3.58	faults+0	rc=0	97s	foreign=|
+fitc	q8_fitc128k.r0		idle=100	load=2.39	faults+0	rc=0	0s	foreign=|
+fitc	q8_fitc128k_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=2.39	faults+0	rc=0	0s	foreign=|
+fitc	q8_fitc128k_grf0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=100	load=2.20	faults+0	rc=0	0s	foreign=|
+fitc	q4_fitc128k.r1		idle=100	load=2.02	faults+0	rc=0	88s	foreign=|
+fitc	q4_fitc128k_mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=3.91	faults+0	rc=0	101s	foreign=|chrome:121
+fitc	q8_fitc128k.r1		idle=100	load=3.73	faults+0	rc=0	0s	foreign=chrome:121|chrome:112
+fitc	q8_fitc128k_mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=3.73	faults+0	rc=0	0s	foreign=chrome:111|chrome:104
+fitc	q8_fitc128k_grf0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=89	load=3.52	faults+0	rc=0	0s	foreign=chrome:103|chrome:97.0
+fitc	q4_fitc32k.r1		idle=100	load=3.23	faults+0	rc=0	88s	foreign=chrome:96.6|chrome:36.0
+fitc	q4_fitc128k_mkl0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.57	faults+0	rc=0	99s	foreign=chrome:35.9|ss:100
+fitc	q8_fitc128k.r2		idle=99	load=3.42	faults+0	rc=0	1s	foreign=|
+fitc	q8_fitc128k_mkl0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=3.31	faults+0	rc=0	0s	foreign=|
+fitc	q8_fitc128k_grf0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=3.05	faults+0	rc=0	1s	foreign=|
+fitc	q4_fitc32k.r2		idle=99	load=2.80	faults+0	rc=0	87s	foreign=|
+fitc	q4_fitc128k.r2		idle=99	load=4.32	faults+0	rc=0	87s	foreign=|
+correct	base.r0		idle=99	load=4.99	faults+0	rc=0	80s	foreign=|
+correct	MKLFA0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.07	faults+0	rc=0	58s	foreign=|
+correct	Q8QF0.r0	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=1.45	faults+0	rc=0	71s	foreign=|
+correct	OPT0.r0	GGML_SYCL_ENABLE_OPT=0	idle=99	load=1.28	faults+0	rc=0	71s	foreign=|
+correct	ESIMD0.r0	GGML_SYCL_ENABLE_ESIMD=0	idle=99	load=1.12	faults+0	rc=0	71s	foreign=|
+correct	Q8GQATILE.r0	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=100	load=3.09	faults+0	rc=0	72s	foreign=|
+correct	GRF0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=1.72	faults+0	rc=0	72s	foreign=|
+correct	FUSION0.r0	GGML_SYCL_ENABLE_FUSION=0	idle=98	load=1.24	faults+0	rc=0	72s	foreign=|
+correct	WG8.r0	GGML_SYCL_MAX_WG_PER_CU=8	idle=99	load=1.23	faults+0	rc=0	72s	foreign=|
+correct	VECSTD.r0	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=99	load=1.06	faults+0	rc=0	71s	foreign=|
+correct	GRAPH0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=99	load=1.08	faults+0	rc=0	71s	foreign=|
+correct	DMMV1.r0	GGML_SYCL_PRIORITIZE_DMMV=1	idle=96	load=1.62	faults+0	rc=0	73s	foreign=|spoon:54.7
+correct	base2.r0		idle=98	load=1.55	faults+0	rc=0	71s	foreign=spoon:54.5|
+correct	MKLFA0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.37	faults+0	rc=0	57s	foreign=|
+correct	Q8QF0.r1	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=1.15	faults+0	rc=0	71s	foreign=|
+correct	OPT0.r1	GGML_SYCL_ENABLE_OPT=0	idle=97	load=1.32	faults+0	rc=0	71s	foreign=|
+correct	ESIMD0.r1	GGML_SYCL_ENABLE_ESIMD=0	idle=100	load=1.27	faults+0	rc=0	72s	foreign=|
+correct	Q8GQATILE.r1	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=99	load=1.25	faults+0	rc=0	72s	foreign=|
+correct	GRF0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=98	load=1.18	faults+0	rc=0	72s	foreign=|
+correct	FUSION0.r1	GGML_SYCL_ENABLE_FUSION=0	idle=95	load=2.39	faults+0	rc=0	72s	foreign=|
+correct	WG8.r1	GGML_SYCL_MAX_WG_PER_CU=8	idle=99	load=1.59	faults+0	rc=0	71s	foreign=|
+correct	VECSTD.r1	GGML_SYCL_FA_FORCE_VEC_STANDARD=1	idle=99	load=2.25	faults+0	rc=0	77s	foreign=|spoon:103
+correct	GRAPH0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=20	load=7.27	faults+0	rc=0	75s	foreign=spoon:106|chrome:38.1,chrome:48.3,spoon:149
+correct	DMMV1.r1	GGML_SYCL_PRIORITIZE_DMMV=1	idle=92	load=4.17	faults+0	rc=0	72s	foreign=chrome:38.9,chrome:47.5,spoon:149|spoon:126
+correct	base2.r1		idle=99	load=1.91	faults+0	rc=0	72s	foreign=spoon:126|spoon:109
+correct	base.r1		idle=98	load=1.44	faults+0	rc=0	71s	foreign=spoon:109|spoon:96.1
+correct	ccs2.r0		idle=96	load=1.01	faults+0	rc=0	78s	foreign=spoon:95.5|spoon:84.6
+correct	ccs4.r0		idle=99	load=2.03	faults+0	rc=0	101s	foreign=spoon:84.1|spoon:73.5
+correct	ccs1.r0		idle=98	load=1.20	faults+0	rc=0	72s	foreign=spoon:73.1|spoon:67.1
+mkl	llama31-8b.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.09	faults+0	rc=0	116s	foreign=spoon:67.0|spoon:59.3
+mkl	llama31-8b.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=97	load=1.30	faults+0	rc=0	84s	foreign=spoon:59.2|spoon:54.6
+mkl	llama31-8b.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.67	faults+0	rc=0	114s	foreign=spoon:54.6|Plex:179,spoon:49.4,ss:100
+mkl	llama31-8b.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=92	load=2.99	faults+0	rc=0	83s	foreign=Plex:179,spoon:49.4|Plex:181,spoon:46.1
+mkl	qwen25-7b.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=90	load=2.72	faults+0	rc=0	87s	foreign=Plex:181,spoon:46.1|spoon:43.2
+mkl	qwen25-7b.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.47	faults+0	rc=0	67s	foreign=spoon:43.2|spoon:41.1
+mkl	qwen25-7b.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=89	load=1.83	faults+0	rc=0	75s	foreign=spoon:41.1|spoon:39.0
+mkl	qwen25-7b.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.38	faults+0	rc=0	67s	foreign=spoon:39.0|spoon:37.4
+mkl	qwen35-9b.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=100	load=1.14	faults+0	rc=0	47s	foreign=spoon:37.4|spoon:36.2
+mkl	qwen35-9b.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=1.28	faults+0	rc=0	48s	foreign=spoon:36.2|spoon:35.2
+mkl	qwen35-9b.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=100	load=1.04	faults+0	rc=0	37s	foreign=spoon:35.2|spoon:34.4
+mkl	qwen35-9b.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=1.05	faults+0	rc=0	47s	foreign=spoon:34.4|spoon:33.4
+mkl	ornith35.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=100	load=1.02	faults+0	rc=0	274s	foreign=spoon:33.4|
+mkl	ornith35.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=100	load=1.30	faults+0	rc=0	159s	foreign=|
+mkl	ornith35.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.20	faults+0	rc=0	133s	foreign=|
+mkl	ornith35.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.01	faults+0	rc=0	160s	foreign=|
+host	t12.r0		idle=100	load=2.56	faults+0	rc=0	86s	foreign=|
+host	t6.r0		idle=100	load=2.83	faults+0	rc=0	86s	foreign=|
+host	t8.r0		idle=99	load=1.96	faults+0	rc=0	86s	foreign=|
+host	t16.r0		idle=99	load=2.49	faults+0	rc=0	86s	foreign=|
+host	t24.r0		idle=100	load=4.11	faults+0	rc=0	87s	foreign=|
+host	ccd0_t12.r0		idle=100	load=6.86	faults+0	rc=0	86s	foreign=|
+host	ccd0_t6.r0		idle=99	load=4.34	faults+0	rc=0	86s	foreign=|(searxng-annas):50.0
+host	ccd1_t12.r0		idle=100	load=2.62	faults+0	rc=0	87s	foreign=|
+host	ccd1_t6.r0		idle=100	load=3.62	faults+0	rc=0	86s	foreign=|
+host	ub256.r0		idle=100	load=2.06	faults+0	rc=0	118s	foreign=|
+host	ub1024.r0		idle=99	load=5.37	faults+0	rc=0	70s	foreign=|
+host	ub2048.r0		idle=99	load=4.61	faults+0	rc=0	63s	foreign=|hindsight-worke:50.1,python3:31.0
+host	t6.r1		idle=99	load=3.49	faults+0	rc=0	87s	foreign=hindsight-worke:49.4|
+host	t8.r1		idle=98	load=2.17	faults+0	rc=0	87s	foreign=|
+host	t16.r1		idle=100	load=2.33	faults+0	rc=0	87s	foreign=|
+host	t24.r1		idle=100	load=3.53	faults+0	rc=0	87s	foreign=|
+host	ccd0_t12.r1		idle=95	load=5.64	faults+0	rc=0	87s	foreign=|
+host	ccd0_t6.r1		idle=100	load=3.30	faults+0	rc=0	86s	foreign=|
+host	ccd1_t12.r1		idle=100	load=3.32	faults+0	rc=0	87s	foreign=chrome:45.1|
+host	ccd1_t6.r1		idle=98	load=3.84	faults+0	rc=0	86s	foreign=|
+host	ub256.r1		idle=99	load=3.13	faults+0	rc=0	121s	foreign=|ld:100,link:38.0
+host	ub1024.r1		idle=93	load=5.80	faults+0	rc=0	71s	foreign=go:400,vet:100,vet:150,vet:175|compile:133,go:132
+host	ub2048.r1		idle=100	load=4.17	faults+0	rc=0	64s	foreign=go:77.0,link:100|
+host	t12.r1		idle=99	load=4.86	faults+0	rc=0	86s	foreign=|(searxng-annas):50.0
+8bnoise	base.r0		idle=95	load=4.01	faults+0	rc=0	61s	foreign=|
+8bnoise	WG32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=4.94	faults+0	rc=0	54s	foreign=|
+8bnoise	Q8QF0.r0	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=3.65	faults+0	rc=0	53s	foreign=|
+8bnoise	VMM0.r0	GGML_SYCL_ENABLE_VMM=0	idle=94	load=2.16	faults+0	rc=0	54s	foreign=go:514|
+8bnoise	ILCL0.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=99	load=2.64	faults+0	rc=0	57s	foreign=|
+8bnoise	ILCL1.r0	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=99	load=1.88	faults+0	rc=0	54s	foreign=|
+8bnoise	WG32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=1.58	faults+0	rc=0	53s	foreign=|
+8bnoise	Q8QF0.r1	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=2.76	faults+0	rc=0	52s	foreign=|
+8bnoise	VMM0.r1	GGML_SYCL_ENABLE_VMM=0	idle=90	load=3.12	faults+0	rc=0	53s	foreign=|
+8bnoise	ILCL0.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=96	load=3.56	faults+0	rc=0	56s	foreign=|
+8bnoise	ILCL1.r1	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=98	load=3.41	faults+0	rc=0	54s	foreign=|forksops.test:102,go:42.2,spn.test:101,tui.test:139
+8bnoise	base.r1		idle=92	load=2.50	faults+0	rc=0	54s	foreign=forksops.test:102,go:38.9,spn.test:100,tui.test:102|
+8bnoise	Q8QF0.r2	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=98	load=2.64	faults+0	rc=0	53s	foreign=|
+8bnoise	VMM0.r2	GGML_SYCL_ENABLE_VMM=0	idle=99	load=1.99	faults+0	rc=0	54s	foreign=|
+8bnoise	ILCL0.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=99	load=1.83	faults+0	rc=0	57s	foreign=|
+8bnoise	ILCL1.r2	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=98	load=1.46	faults+0	rc=0	54s	foreign=|
+8bnoise	base.r2		idle=98	load=1.52	faults+0	rc=0	54s	foreign=|
+8bnoise	WG32.r2	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=1.20	faults+0	rc=0	53s	foreign=|
+8bnoise	VMM0.r3	GGML_SYCL_ENABLE_VMM=0	idle=99	load=1.32	faults+0	rc=0	54s	foreign=|
+8bnoise	ILCL0.r3	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=99	load=1.55	faults+0	rc=0	56s	foreign=|
+8bnoise	ILCL1.r3	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=98	load=1.50	faults+0	rc=0	54s	foreign=|
+8bnoise	base.r3		idle=94	load=1.73	faults+0	rc=0	54s	foreign=|
+8bnoise	WG32.r3	GGML_SYCL_MAX_WG_PER_CU=32	idle=94	load=1.51	faults+0	rc=0	78s	foreign=|spn.test:54.0,spoon:163
+8bnoise	Q8QF0.r3	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=6	load=23.19	faults+0	rc=0	62s	foreign=spn.test:52.7,spoon:164|spoon:238
+8bnoise	ILCL0.r4	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=94	load=21.59	faults+0	rc=0	56s	foreign=spoon:238|spoon:225
+8bnoise	ILCL1.r4	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=83	load=9.79	faults+0	rc=0	54s	foreign=spoon:225|spoon:214
+8bnoise	base.r4		idle=99	load=4.89	faults+0	rc=0	54s	foreign=spoon:214|spoon:204
+8bnoise	WG32.r4	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=2.58	faults+0	rc=0	54s	foreign=spoon:204|spoon:195
+8bnoise	Q8QF0.r4	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=99	load=2.46	faults+0	rc=0	53s	foreign=spoon:195|spoon:186
+8bnoise	VMM0.r4	GGML_SYCL_ENABLE_VMM=0	idle=92	load=2.06	faults+0	rc=0	54s	foreign=spoon:186|spoon:179
+8bnoise	ILCL1.r5	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1	idle=99	load=2.21	faults+0	rc=0	54s	foreign=spoon:179|spoon:172
+8bnoise	base.r5		idle=95	load=1.94	faults+0	rc=0	54s	foreign=spoon:171|spoon:165
+8bnoise	WG32.r5	GGML_SYCL_MAX_WG_PER_CU=32	idle=93	load=1.39	faults+0	rc=0	54s	foreign=spoon:165|spoon:159
+8bnoise	Q8QF0.r5	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=90	load=1.38	faults+0	rc=0	53s	foreign=spoon:159|spoon:153,ss:100
+8bnoise	VMM0.r5	GGML_SYCL_ENABLE_VMM=0	idle=97	load=1.29	faults+0	rc=0	54s	foreign=spoon:153|spoon:148
+8bnoise	ILCL0.r5	SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0	idle=96	load=1.30	faults+0	rc=0	57s	foreign=spoon:148|spoon:143
+deep	base.r0		idle=98	load=1.05	faults+0	rc=0	1038s	foreign=|
+deep	MKLFA0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.12	faults+0	rc=0	1705s	foreign=|
+deep	Q8QF0.r0	GGML_SYCL_Q8_KV_QUANTS_FIRST=0	idle=100	load=2.28	faults+0	rc=0	1037s	foreign=|
+deep	Q8GQATILE.r0	GGML_SYCL_FA_Q8_GQA_TILE=1	idle=100	load=4.76	faults+0	rc=0	1038s	foreign=|
+deep	WG32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=100	load=2.41	faults+0	rc=0	1034s	foreign=|
+deep	GRF0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=99	load=2.30	faults+0	rc=0	1281s	foreign=|
+freq2	def.r0		idle=99	load=3.62	faults+0	rc=0	63s	foreign=|	t0=1791301851	t1=1791301914	avail=22836	cache=22158	temp=64000
+freq2	pin2400.r0		idle=99	load=1.78	faults+0	rc=0	53s	foreign=|	t0=1791301937	t1=1791301990	avail=22493	cache=22175	temp=64000
+freq2	pin2000.r0		idle=97	load=1.25	faults+0	rc=0	58s	foreign=|	t0=1791302013	t1=1791302071	avail=23014	cache=22177	temp=62000
+freq2	powersave.r0		idle=97	load=1.08	faults+0	rc=0	54s	foreign=|	t0=1791302093	t1=1791302147	avail=22839	cache=22350	temp=64000
+freq2	powersave_pin2000.r0		idle=98	load=1.37	faults+0	rc=0	57s	foreign=|	t0=1791302170	t1=1791302227	avail=21873	cache=22446	temp=62000
+freq2	pin2400.r1		idle=93	load=1.38	faults+0	rc=0	53s	foreign=|chrome:58.5	t0=1791302250	t1=1791302303	avail=20867	cache=22459	temp=64000
+freq2	pin2000.r1		idle=95	load=1.78	faults+0	rc=0	58s	foreign=chrome:82.5|chrome:45.2	t0=1791302326	t1=1791302384	avail=21714	cache=22296	temp=62000
+freq2	powersave.r1		idle=99	load=1.59	faults+0	rc=0	53s	foreign=chrome:37.5|	t0=1791302407	t1=1791302460	avail=21682	cache=22304	temp=64000
+freq2	powersave_pin2000.r1		idle=98	load=1.03	faults+0	rc=0	57s	foreign=chrome:48.8|	t0=1791302483	t1=1791302540	avail=20680	cache=22536	temp=62000
+freq2	def.r1		idle=99	load=1.05	faults+0	rc=0	54s	foreign=|	t0=1791302563	t1=1791302617	avail=20525	cache=21973	temp=64000
+single6	t6.r0		idle=98	load=0.97	faults+0	rc=0	53s	foreign=|	t0=1791302640	t1=1791302693	avail=19857	cache=22040	temp=64000
+single6	t12.r0		idle=99	load=1.43	faults+0	rc=0	54s	foreign=|	t0=1791302715	t1=1791302769	avail=20753	cache=21857	temp=64000
+single6	t6.r1		idle=98	load=0.93	faults+0	rc=0	54s	foreign=|	t0=1791302791	t1=1791302845	avail=20746	cache=21861	temp=64000
+single6	t12.r1		idle=97	load=1.27	faults+0	rc=0	54s	foreign=|	t0=1791302867	t1=1791302921	avail=20862	cache=21861	temp=64000
+single6	t6.r2		idle=99	load=1.05	faults+0	rc=0	54s	foreign=|	t0=1791302943	t1=1791302997	avail=20858	cache=21857	temp=64000
+single6	t12.r2		idle=99	load=0.77	faults+0	rc=0	54s	foreign=|python:100	t0=1791303019	t1=1791303073	avail=20667	cache=21842	temp=64000
+correct2	ornith35.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=1.04	faults+0	rc=134	64s	foreign=|	t0=1791303095	t1=1791303159	avail=22232	cache=15216	temp=58000
+correct2	ornith35.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=3.50	faults+0	rc=134	66s	foreign=|	t0=1791303182	t1=1791303248	avail=23745	cache=11565	temp=56000
+correct2	ornith35.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=2.42	faults+0	rc=134	65s	foreign=|	t0=1791303271	t1=1791303336	avail=27409	cache=10438	temp=56000
+correct2	ornith35.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.19	faults+0	rc=134	65s	foreign=|	t0=1791303358	t1=1791303423	avail=27041	cache=11242	temp=58000
+correct2	qwen35-9b.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=3.53	faults+0	rc=0	36s	foreign=|	t0=1791303445	t1=1791303481	avail=28294	cache=15981	temp=60000
+correct2	qwen35-9b.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=95	load=2.99	faults+0	rc=0	31s	foreign=forksops.test:104|	t0=1791303503	t1=1791303534	avail=28265	cache=15947	temp=60000
+correct2	qwen35-9b.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.88	faults+0	rc=0	25s	foreign=|	t0=1791303556	t1=1791303581	avail=28787	cache=15987	temp=62000
+correct2	qwen35-9b.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.53	faults+0	rc=0	31s	foreign=|	t0=1791303604	t1=1791303635	avail=29326	cache=15664	temp=60000
+correct2	qwen25-7b.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=2.49	faults+0	rc=0	49s	foreign=|	t0=1791303658	t1=1791303707	avail=31215	cache=20241	temp=62000
+correct2	qwen25-7b.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.76	faults+0	rc=0	38s	foreign=|	t0=1791303738	t1=1791303776	avail=31354	cache=20130	temp=60000
+correct2	qwen25-7b.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=1.50	faults+0	rc=0	38s	foreign=|	t0=1791303798	t1=1791303836	avail=32865	cache=20096	temp=62000
+correct2	qwen25-7b.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.86	faults+0	rc=0	37s	foreign=|	t0=1791303858	t1=1791303895	avail=33340	cache=20059	temp=60000
+correct2	ornith35.q8_0.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.55	faults+0	rc=134	70s	foreign=|	t0=1791303918	t1=1791303988	avail=33460	cache=16309	temp=58000
+correct2	ornith35.q8_0.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.21	faults+0	rc=134	67s	foreign=|	t0=1791304010	t1=1791304077	avail=31996	cache=16647	temp=58000
+correct2	ornith35.f16.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=97	load=1.88	faults+0	rc=134	66s	foreign=|	t0=1791304099	t1=1791304165	avail=31858	cache=17136	temp=56000
+correct2	ornith35.f16.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=85	load=2.97	faults+0	rc=134	66s	foreign=|	t0=1791304187	t1=1791304253	avail=32097	cache=16440	temp=58000
+correct2	qwen35-9b.q8_0.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=2.12	faults+0	rc=0	34s	foreign=|	t0=1791304275	t1=1791304309	avail=33093	cache=17679	temp=60000
+correct2	qwen35-9b.q8_0.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.15	faults+0	rc=0	39s	foreign=|	t0=1791304332	t1=1791304371	avail=34313	cache=16569	temp=60000
+correct2	qwen35-9b.f16.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=1.70	faults+0	rc=0	32s	foreign=|	t0=1791304393	t1=1791304425	avail=34799	cache=19385	temp=62000
+correct2	qwen35-9b.f16.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=97	load=1.23	faults+0	rc=0	31s	foreign=|	t0=1791304448	t1=1791304479	avail=34846	cache=19225	temp=60000
+correct2	qwen25-7b.q8_0.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=97	load=1.17	faults+0	rc=0	41s	foreign=|	t0=1791304501	t1=1791304542	avail=34871	cache=20511	temp=62000
+correct2	qwen25-7b.q8_0.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=0.94	faults+0	rc=0	37s	foreign=|	t0=1791304565	t1=1791304602	avail=34529	cache=20545	temp=60000
+correct2	qwen25-7b.f16.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=97	load=1.50	faults+0	rc=0	37s	foreign=|	t0=1791304625	t1=1791304662	avail=34516	cache=20536	temp=62000
+correct2	qwen25-7b.f16.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.57	faults+0	rc=0	37s	foreign=|	t0=1791304684	t1=1791304721	avail=34162	cache=20606	temp=60000
+realtext	ccs1.r0		idle=83	load=12.09	faults+0	rc=0	69s	foreign=postgres:32.4|postgres:33.7,(searxng-annas):66.6	t0=1791313294	t1=1791313363	avail=36015	cache=32943	temp=58000
+realtext	ccs2.r0		idle=93	load=13.77	faults+0	rc=0	69s	foreign=postgres:31.4|postgres:30.4,postgres:31.2	t0=1791313486	t1=1791313555	avail=35723	cache=33168	temp=58000
+realtext	ccs2.r1		idle=99	load=11.55	faults+0	rc=0	67s	foreign=postgres:31.3|postgres:32.1	t0=1791313618	t1=1791313685	avail=35362	cache=32831	temp=58000
+realtext	ccs1.r1		idle=100	load=14.28	faults+0	rc=0	65s	foreign=postgres:30.8,postgres:31.5,postgres:35.4|postgres:30.4,postgres:34.1	t0=1791313935	t1=1791314000	avail=35222	cache=32459	temp=58000
+realtext	ccs1.r2		idle=70	load=10.60	faults+0	rc=0	64s	foreign=postgres:33.7|postgres:30.5,postgres:30.9,postgres:34.9,ss:100	t0=1791314023	t1=1791314087	avail=34985	cache=32393	temp=58000
+realtext	ccs2.r2		idle=100	load=13.45	faults+0	rc=0	62s	foreign=postgres:30.3,postgres:30.9,postgres:34.6|hindsight-worke:42.1,postgres:43.8,postgres:45.3,postgres:53.6,postgres:76.5	t0=1791314121	t1=1791314183	avail=33940	cache=26229	temp=58000
+q8	q8_base.r0		idle=87	load=9.49	faults+0	rc=0	187s	foreign=hindsight-worke:48.1,postgres:35.5,postgres:38.1,postgres:38.2,postgres:41.7,postgres:43.8,postgres:44.0,postgres:45.2,postgres:45.3,postgres:45.6,postgres:48.1,postgres:50.7,postgres:54.6|hindsight-worke:48.2,postgres:35.7,postgres:38.0,postgres:38.5,postgres:41.8,postgres:43.7,postgres:44.1,postgres:45.1,postgres:45.2,postgres:45.4,postgres:48.6,postgres:51.2,postgres:51.8	t0=1791320745	t1=1791320932	avail=42305	cache=7083	temp=56000
+q8	q8_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=83	load=8.65	faults+0	rc=0	205s	foreign=hindsight-worke:48.2,postgres:36.4,postgres:37.8,postgres:38.4,postgres:42.1,postgres:44.1,postgres:44.2,postgres:44.9,postgres:45.0,postgres:45.1,postgres:48.2,postgres:50.9,postgres:51.5|hindsight-worke:48.2,postgres:34.5,postgres:37.0,postgres:37.3,postgres:37.5,postgres:38.8,postgres:42.9,postgres:43.7,postgres:44.2,postgres:44.4,postgres:44.6,postgres:45.9,postgres:47.7,postgres:49.7,postgres:50.6	t0=1791321026	t1=1791321231	avail=41317	cache=22293	temp=56000
+q8	q8_grf0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=87	load=6.30	faults+0	rc=0	202s	foreign=hindsight-worke:48.2,postgres:35.1,postgres:36.2,postgres:38.3,postgres:39.2,postgres:43.5,postgres:44.4,postgres:45.7,postgres:45.8,postgres:48.5,postgres:49.7,postgres:50.2|hindsight-worke:48.5,postgres:31.1,postgres:35.5,postgres:36.5,postgres:39.0,postgres:39.3,postgres:43.7,postgres:45.0,postgres:46.2,postgres:49.1,postgres:50.6,postgres:51.2,postgres:51.3	t0=1791321541	t1=1791321743	avail=44135	cache=3055	temp=56000
+q8	q8_mc_auto.r0		idle=81	load=11.50	faults+0	rc=0	268s	foreign=hindsight-worke:48.8,postgres:33.9,postgres:37.0,postgres:39.3,postgres:40.7,postgres:43.9,postgres:45.1,postgres:45.5,postgres:45.7,postgres:47.0,postgres:48.6,postgres:50.9,postgres:52.1|hindsight-worke:49.3,postgres:37.3,postgres:37.9,postgres:40.5,postgres:40.6,postgres:41.8,postgres:44.2,postgres:46.0,postgres:47.0,postgres:47.8,postgres:50.9,postgres:51.2,postgres:51.9	t0=1791322347	t1=1791322615	avail=45890	cache=2777	temp=54000
+q8	q8_mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=73	load=7.38	faults+0	rc=0	202s	foreign=hindsight-worke:49.2,postgres:35.1,postgres:38.2,postgres:40.7,postgres:42.0,postgres:42.3,postgres:43.7,postgres:45.0,postgres:46.2,postgres:46.5,postgres:47.9,postgres:50.4,postgres:51.0,postgres:52.4|hindsight-worke:49.5,postgres:31.0,postgres:39.0,postgres:41.3,postgres:42.5,postgres:42.6,postgres:43.8,postgres:46.4,postgres:46.7,postgres:46.9,postgres:48.2,postgres:50.0,postgres:50.7,postgres:53.4	t0=1791322709	t1=1791322911	avail=44144	cache=15598	temp=56000
+q8	q8_grf0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=75	load=13.12	faults+0	rc=0	182s	foreign=hindsight-worke:49.5,postgres:30.7,postgres:39.1,postgres:41.2,postgres:41.8,postgres:42.5,postgres:43.8,postgres:46.5,postgres:46.7,postgres:48.2,postgres:50.1,postgres:50.6,postgres:53.5|hindsight-worke:49.6,postgres:39.7,postgres:41.7,postgres:42.4,postgres:42.9,postgres:43.9,postgres:46.1,postgres:46.4,postgres:46.9,postgres:48.1,postgres:49.8,postgres:50.7,postgres:53.9	t0=1791322934	t1=1791323116	avail=43363	cache=11701	temp=54000
+q8	q8_mc_auto.r1		idle=76	load=6.33	faults+0	rc=0	297s	foreign=hindsight-worke:49.5,postgres:40.2,postgres:41.8,postgres:42.1,postgres:44.0,postgres:45.2,postgres:45.4,postgres:46.5,postgres:46.9,postgres:48.0,postgres:48.1,postgres:51.2,postgres:53.3|hindsight-worke:49.4,postgres:41.1,postgres:41.8,postgres:42.2,postgres:44.1,postgres:44.8,postgres:45.1,postgres:45.3,postgres:46.0,postgres:47.5,postgres:47.9,postgres:50.9,postgres:51.2	t0=1791323267	t1=1791323564	avail=47281	cache=2429	temp=54000
+q8	q8_base.r1		idle=25	load=9.84	faults+0	rc=0	196s	foreign=hindsight-worke:49.8,postgres:39.3,postgres:41.6,postgres:42.1,postgres:43.6,postgres:45.8,postgres:46.2,postgres:46.6,postgres:46.8,postgres:47.4,postgres:50.0,postgres:51.8|hindsight-worke:49.9,postgres:41.9,postgres:42.3,postgres:42.8,postgres:44.2,postgres:45.0,postgres:45.4,postgres:46.5,postgres:46.6,postgres:47.6,postgres:47.8,postgres:48.2,postgres:49.7,postgres:52.5	t0=1791324170	t1=1791324366	avail=43862	cache=7597	temp=56000
+mkl32k	llama31-8b.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=81	load=10.77	faults+0	rc=0	301s	foreign=hindsight-worke:50.0,postgres:42.1,postgres:42.7,postgres:43.5,postgres:43.7,postgres:44.1,postgres:45.3,postgres:46.4,postgres:47.7,postgres:48.2,postgres:48.9,postgres:49.4,postgres:50.1,postgres:54.4|hindsight-worke:50.0,postgres:41.4,postgres:42.1,postgres:42.2,postgres:43.9,postgres:44.4,postgres:45.4,postgres:46.5,postgres:47.9,postgres:49.5,postgres:50.7,postgres:54.3	t0=1791324789	t1=1791325090	avail=41341	cache=12563	temp=56000
+mkl32k	ornith35.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=78	load=6.97	faults+0	rc=0	186s	foreign=hindsight-worke:50.0,postgres:41.7,postgres:42.1,postgres:42.9,postgres:43.7,postgres:44.7,postgres:45.6,postgres:47.0,postgres:47.4,postgres:49.0,postgres:49.4,postgres:50.8,postgres:52.7|hindsight-worke:50.0,postgres:42.0,postgres:42.7,postgres:43.1,postgres:43.5,postgres:44.2,postgres:45.5,postgres:47.0,postgres:47.2,postgres:47.5,postgres:48.9,postgres:49.4,postgres:51.1,postgres:52.1	t0=1791325440	t1=1791325626	avail=39623	cache=11421	temp=56000
+mkl32k	llama31-8b.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=88	load=6.01	faults+0	rc=0	183s	foreign=hindsight-worke:49.9,postgres:41.3,postgres:41.8,postgres:42.9,postgres:43.5,postgres:44.2,postgres:45.4,postgres:46.6,postgres:46.9,postgres:47.3,postgres:48.3,postgres:49.8,postgres:51.4,postgres:52.1|hindsight-worke:50.0,postgres:42.0,postgres:42.2,postgres:43.1,postgres:43.8,postgres:44.6,postgres:45.8,postgres:46.0,postgres:46.6,postgres:47.3,postgres:48.1,postgres:50.3,postgres:52.1,postgres:52.7	t0=1791325753	t1=1791325936	avail=38540	cache=11682	temp=58000
+mkl32k	ornith35.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=80	load=8.14	faults+0	rc=0	255s	foreign=hindsight-worke:50.0,postgres:41.9,postgres:43.2,postgres:43.3,postgres:43.8,postgres:44.9,postgres:45.5,postgres:45.6,postgres:46.5,postgres:47.1,postgres:48.5,postgres:50.0,postgres:52.3,postgres:52.4|hindsight-worke:50.1,postgres:42.1,postgres:43.7,postgres:43.8,postgres:45.5,postgres:45.7,postgres:45.8,postgres:47.0,postgres:47.2,postgres:48.3,postgres:48.7,postgres:52.1,postgres:52.5	t0=1791326039	t1=1791326294	avail=38765	cache=27450	temp=60000
+mkl32k	llama31-8b.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=83	load=7.96	faults+0	rc=0	291s	foreign=hindsight-worke:50.1,postgres:42.3,postgres:43.9,postgres:44.9,postgres:45.3,postgres:45.7,postgres:45.9,postgres:46.8,postgres:46.9,postgres:47.7,postgres:48.9,postgres:52.3,postgres:52.6|hindsight-worke:50.2,postgres:43.0,postgres:44.3,postgres:44.4,postgres:45.5,postgres:45.8,postgres:46.0,postgres:46.4,postgres:46.5,postgres:46.6,postgres:48.8,postgres:51.8,postgres:52.8	t0=1791326365	t1=1791326656	avail=38277	cache=27494	temp=56000
+mkl32k	ornith35.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=62	load=17.73	faults+0	rc=0	145s	foreign=hindsight-worke:50.4,postgres:43.9,postgres:44.4,postgres:44.7,postgres:45.2,postgres:45.4,postgres:46.2,postgres:46.3,postgres:46.5,postgres:46.7,postgres:49.1,postgres:52.4,postgres:52.7|hindsight-worke:50.4,postgres:43.3,postgres:44.2,postgres:44.9,postgres:45.2,postgres:45.4,postgres:46.2,postgres:46.3,postgres:46.4,postgres:46.8,postgres:49.0,postgres:52.6	t0=1791327260	t1=1791327405	avail=35906	cache=28322	temp=56000
+mkl32k	llama31-8b.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=21	load=7.70	faults+0	rc=0	183s	foreign=hindsight-worke:50.4,postgres:40.7,postgres:44.5,postgres:44.7,postgres:45.4,postgres:45.9,postgres:46.1,postgres:46.3,postgres:46.6,postgres:46.7,postgres:47.8,postgres:48.2,postgres:51.6,postgres:52.8,spn:44.7|hindsight-worke:50.4,postgres:40.6,postgres:44.6,postgres:44.7,postgres:45.3,postgres:46.1,postgres:46.2,postgres:46.4,postgres:46.7,postgres:47.7,postgres:48.4,postgres:50.2,postgres:52.4,spn:35.8	t0=1791328009	t1=1791328192	avail=33066	cache=26137	temp=58000
+mkl32k	ornith35.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=69	load=11.56	faults+0	rc=0	224s	foreign=hindsight-worke:50.5,postgres:41.2,postgres:44.8,postgres:45.3,postgres:45.4,postgres:45.6,postgres:45.7,postgres:46.3,postgres:46.4,postgres:47.4,postgres:48.2,postgres:49.0,postgres:50.0,postgres:52.3|hindsight-worke:50.5,postgres:41.5,postgres:45.1,postgres:45.5,postgres:45.8,postgres:46.5,postgres:46.6,postgres:46.8,postgres:48.4,postgres:49.3,postgres:49.8,postgres:51.9	t0=1791328796	t1=1791329020	avail=35685	cache=21149	temp=60000
+costpath	base.r0		idle=54	load=11.60	faults+0	rc=0	138s	foreign=hindsight-worke:50.8,postgres:41.1,postgres:46.1,postgres:48.0,postgres:48.1,postgres:49.0,postgres:49.4,postgres:49.7,postgres:52.4,postgres:56.1,postgres:67.0,postgres:67.3,postgres:68.6,postgres:69.8|hindsight-worke:50.7,postgres:36.4,postgres:41.5,postgres:47.1,postgres:47.3,postgres:48.5,postgres:48.9,postgres:52.5,postgres:58.1,postgres:59.2,postgres:60.1,postgres:64.6,postgres:65.0,postgres:74.9	t0=1791329625	t1=1791329763	avail=36338	cache=29394	temp=54000
+costpath	FUSION0.r0	GGML_SYCL_ENABLE_FUSION=0	idle=71	load=7.78	faults+0	rc=0	60s	foreign=hindsight-worke:50.7,postgres:33.7,postgres:41.6,postgres:47.0,postgres:47.2,postgres:48.4,postgres:48.7,postgres:52.2,postgres:52.3,postgres:55.1,postgres:60.4,postgres:61.9,postgres:66.5,postgres:74.0|hindsight-worke:50.5,postgres:39.2,postgres:41.6,postgres:45.0,postgres:46.5,postgres:46.8,postgres:48.1,postgres:48.4,postgres:51.9,postgres:54.3,postgres:59.5,postgres:63.4,postgres:63.5	t0=1791329786	t1=1791329846	avail=36339	cache=28931	temp=54000
+costpath	FFN0.r0	GGML_SYCL_FFN_FUSION=0	idle=84	load=3.72	faults+0	rc=0	52s	foreign=hindsight-worke:50.4,postgres:36.4,postgres:41.5,postgres:42.7,postgres:46.4,postgres:46.7,postgres:48.0,postgres:48.3,postgres:51.8,postgres:52.4,postgres:56.1,postgres:57.8,postgres:60.6|hindsight-worke:50.2,postgres:30.4,postgres:37.1,postgres:41.3,postgres:42.2,postgres:46.0,postgres:46.5,postgres:47.6,postgres:47.8,postgres:48.0,postgres:51.5,postgres:53.4,postgres:54.0	t0=1791329868	t1=1791329920	avail=36512	cache=28503	temp=54000
+costpath	GRAPH0.r0	GGML_SYCL_ENABLE_GRAPH=0	idle=100	load=1.70	faults+0	rc=0	53s	foreign=hindsight-worke:50.1,postgres:35.5,postgres:38.7,postgres:41.2,postgres:45.9,postgres:46.1,postgres:46.3,postgres:47.7,postgres:47.9,postgres:51.3,postgres:51.9,postgres:52.0|hindsight-worke:49.9,postgres:31.5,postgres:40.9,postgres:42.3,postgres:46.1,postgres:46.9,postgres:48.4,postgres:51.0	t0=1791329942	t1=1791329995	avail=36599	cache=28198	temp=54000
+costpath	PROFILE.r0	GGML_SYCL_FFN_FUSION_PROFILE=1 GGML_SYCL_GRAPH_PROFILE=1	idle=99	load=1.42	faults+0	rc=0	53s	foreign=hindsight-worke:49.9,postgres:30.3,postgres:40.8,postgres:41.1,postgres:45.4,postgres:47.3,postgres:50.9|hindsight-worke:49.7,postgres:38.0,postgres:40.6,postgres:41.5,postgres:44.2	t0=1791330017	t1=1791330070	avail=36567	cache=28021	temp=54000
+costpath	FUSION0.r1	GGML_SYCL_ENABLE_FUSION=0	idle=97	load=1.38	faults+0	rc=0	53s	foreign=hindsight-worke:49.6,postgres:37.0,postgres:40.3,postgres:40.5,postgres:43.3|hindsight-worke:49.4,postgres:37.1	t0=1791330092	t1=1791330145	avail=36460	cache=27902	temp=54000
+costpath	FFN0.r1	GGML_SYCL_FFN_FUSION=0	idle=94	load=1.26	faults+0	rc=0	53s	foreign=hindsight-worke:49.3,postgres:36.2|hindsight-worke:49.1,postgres:33.6	t0=1791330168	t1=1791330221	avail=36345	cache=27853	temp=54000
+costpath	GRAPH0.r1	GGML_SYCL_ENABLE_GRAPH=0	idle=97	load=2.03	faults+0	rc=0	53s	foreign=hindsight-worke:49.1,postgres:32.8|hindsight-worke:48.9,postgres:30.7	t0=1791330243	t1=1791330296	avail=36857	cache=27814	temp=54000
+costpath	PROFILE.r1	GGML_SYCL_FFN_FUSION_PROFILE=1 GGML_SYCL_GRAPH_PROFILE=1	idle=98	load=1.28	faults+0	rc=0	52s	foreign=hindsight-worke:48.8|hindsight-worke:48.6	t0=1791330319	t1=1791330371	avail=36927	cache=27752	temp=54000
+costpath	base.r1		idle=99	load=1.17	faults+0	rc=0	52s	foreign=hindsight-worke:48.5|hindsight-worke:48.3	t0=1791330393	t1=1791330445	avail=36547	cache=27830	temp=54000
+costpath	FFN0.r2	GGML_SYCL_FFN_FUSION=0	idle=99	load=1.49	faults+0	rc=0	56s	foreign=hindsight-worke:48.3|hindsight-worke:48.1	t0=1791330468	t1=1791330524	avail=36970	cache=26253	temp=54000
+costpath	GRAPH0.r2	GGML_SYCL_ENABLE_GRAPH=0	idle=99	load=2.39	faults+0	rc=0	59s	foreign=hindsight-worke:48.0|hindsight-worke:47.8	t0=1791330547	t1=1791330606	avail=37803	cache=24429	temp=54000
+costpath	PROFILE.r2	GGML_SYCL_FFN_FUSION_PROFILE=1 GGML_SYCL_GRAPH_PROFILE=1	idle=99	load=3.71	faults+0	rc=0	56s	foreign=hindsight-worke:47.7|hindsight-worke:47.5	t0=1791330628	t1=1791330684	avail=38951	cache=24177	temp=54000
+costpath	base.r2		idle=99	load=2.79	faults+0	rc=0	53s	foreign=hindsight-worke:47.5|hindsight-worke:47.3	t0=1791330707	t1=1791330760	avail=39049	cache=24024	temp=54000
+costpath	FUSION0.r2	GGML_SYCL_ENABLE_FUSION=0	idle=99	load=1.39	faults+0	rc=0	54s	foreign=hindsight-worke:47.2|hindsight-worke:47.0	t0=1791330783	t1=1791330837	avail=38920	cache=23934	temp=54000
+correct3	ornith35.q8_0.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.17	faults+0	rc=0	97s	foreign=hindsight-worke:47.0|hindsight-worke:46.6	t0=1791330859	t1=1791330956	avail=38310	cache=23903	temp=56000
+correct3	ornith35.q8_0.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.63	faults+0	rc=0	111s	foreign=hindsight-worke:46.6|hindsight-worke:46.2	t0=1791330978	t1=1791331089	avail=38183	cache=24135	temp=58000
+correct3	ornith35.f16.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=1.68	faults+0	rc=0	98s	foreign=hindsight-worke:46.1|hindsight-worke:45.8	t0=1791331111	t1=1791331209	avail=38843	cache=23613	temp=56000
+correct3	ornith35.f16.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.94	faults+0	rc=0	111s	foreign=hindsight-worke:45.8|hindsight-worke:45.4	t0=1791331231	t1=1791331342	avail=40314	cache=23672	temp=58000
+correct3	ornith35.q8_0.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.34	faults+0	rc=0	97s	foreign=hindsight-worke:45.4|hindsight-worke:45.1	t0=1791331364	t1=1791331461	avail=40377	cache=23577	temp=58000
+correct3	ornith35.q8_0.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=2.27	faults+0	rc=0	112s	foreign=hindsight-worke:45.0|hindsight-worke:44.7	t0=1791331484	t1=1791331596	avail=39069	cache=23953	temp=58000
+correct3	ornith35.f16.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.57	faults+0	rc=0	97s	foreign=hindsight-worke:44.6|hindsight-worke:44.3	t0=1791331619	t1=1791331716	avail=39810	cache=23873	temp=56000
+correct3	ornith35.f16.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=99	load=1.06	faults+0	rc=0	112s	foreign=hindsight-worke:44.2|hindsight-worke:43.9	t0=1791331738	t1=1791331850	avail=40498	cache=23867	temp=58000
+wg	wg16.r0	GGML_SYCL_MAX_WG_PER_CU=16	idle=99	load=5.10	faults+0	rc=0	803s	foreign=hindsight-worke:35.7|hindsight-worke:34.2	t0=1791335397	t1=1791336200	avail=40262	cache=9934	temp=56000
+wg	wg32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=97	load=1.75	faults+0	rc=0	809s	foreign=hindsight-worke:34.2|hindsight-worke:32.9	t0=1791336222	t1=1791337031	avail=34514	cache=30352	temp=58000
+wg	wg64.r0	GGML_SYCL_MAX_WG_PER_CU=64	idle=99	load=1.66	faults+0	rc=0	802s	foreign=hindsight-worke:32.8|hindsight-worke:31.6	t0=1791337053	t1=1791337855	avail=37392	cache=8028	temp=56000
+wg	wg24.r0	GGML_SYCL_MAX_WG_PER_CU=24	idle=96	load=3.18	faults+0	rc=0	807s	foreign=hindsight-worke:31.6|hindsight-worke:30.4,Plex:86.2	t0=1791337877	t1=1791338684	avail=38293	cache=22486	temp=56000
+wg	wg48.r0	GGML_SYCL_MAX_WG_PER_CU=48	idle=91	load=4.19	faults+0	rc=0	826s	foreign=hindsight-worke:30.4,Plex:81.0|Plex:482	t0=1791338706	t1=1791339532	avail=36998	cache=6842	temp=56000
+wg	wg128.r0	GGML_SYCL_MAX_WG_PER_CU=128	idle=81	load=7.64	faults+0	rc=0	806s	foreign=Plex:469|Plex:437	t0=1791339555	t1=1791340361	avail=37187	cache=12375	temp=58000
+wg	wg32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=81	load=5.22	faults+0	rc=0	817s	foreign=Plex:436|Plex:449	t0=1791340384	t1=1791341201	avail=38014	cache=7317	temp=56000
+wg	wg64.r1	GGML_SYCL_MAX_WG_PER_CU=64	idle=82	load=7.53	faults+0	rc=0	826s	foreign=Plex:451|Plex:549	t0=1791341223	t1=1791342049	avail=37648	cache=27543	temp=58000
+wg	wg16.r1	GGML_SYCL_MAX_WG_PER_CU=16	idle=77	load=7.75	faults+0	rc=0	845s	foreign=Plex:447|Plex:455	t0=1791342071	t1=1791342916	avail=35969	cache=14837	temp=56000
+wg8b	wg16.r0	GGML_SYCL_MAX_WG_PER_CU=16	idle=81	load=5.54	faults+0	rc=0	396s	foreign=Plex:458|Plex:542	t0=1791342939	t1=1791343335	avail=30951	cache=29947	temp=62000
+wg8b	wg32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=80	load=7.98	faults+0	rc=0	384s	foreign=Plex:507|chromium:127,chromium:50.0,Plex:596	t0=1791343365	t1=1791343749	avail=27740	cache=25150	temp=60000
+wg8b	wg64.r0	GGML_SYCL_MAX_WG_PER_CU=64	idle=76	load=6.17	faults+0	rc=0	386s	foreign=Plex:553|Plex:544	t0=1791343795	t1=1791344181	avail=28462	cache=25935	temp=62000
+wg8b	wg32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=80	load=5.93	faults+0	rc=0	385s	foreign=Plex:527|Plex:568	t0=1791344203	t1=1791344588	avail=28150	cache=26502	temp=62000
+wg8b	wg64.r1	GGML_SYCL_MAX_WG_PER_CU=64	idle=70	load=6.43	faults+0	rc=0	384s	foreign=Plex:557|Plex:536	t0=1791344618	t1=1791345002	avail=27433	cache=26427	temp=62000
+wg8b	wg16.r1	GGML_SYCL_MAX_WG_PER_CU=16	idle=75	load=6.21	faults+0	rc=0	383s	foreign=Plex:541|gs:100,gs:133,Plex:500	t0=1791345033	t1=1791345416	avail=26392	cache=25880	temp=62000
+mkl32kclean	llama31-8b.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=91	load=2.25	faults+0	rc=0	302s	foreign=Plex:184|Plex:181	t0=1791348058	t1=1791348360	avail=29959	cache=10520	temp=56000	idlerun=85
+mkl32kclean	llama31-8b.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=90	load=2.65	faults+0	rc=0	289s	foreign=Plex:172|Plex:171	t0=1791348652	t1=1791348941	avail=30551	cache=18641	temp=56000	idlerun=86
+mkl32kclean	llama31-8b.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=94	load=2.25	faults+0	rc=0	300s	foreign=|	t0=1791349379	t1=1791349679	avail=34639	cache=12199	temp=56000	idlerun=94	foreignpct=6.2
+mkl32kclean	ornith35.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.41	faults+0	rc=0	178s	foreign=|	t0=1791349701	t1=1791349879	avail=34861	cache=12148	temp=56000	idlerun=90	foreignpct=8.7
+mkl32kclean	llama31-8b.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.65	faults+0	rc=0	182s	foreign=|	t0=1791349902	t1=1791350084	avail=34419	cache=12191	temp=58000	idlerun=93	foreignpct=6.5
+mkl32kclean	ornith35.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.17	faults+0	rc=0	247s	foreign=|MainThread:34.6	t0=1791350107	t1=1791350354	avail=32527	cache=12064	temp=60000	idlerun=90	foreignpct=9.1
+mkl32kclean	llama31-8b.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=0.84	faults+0	rc=0	290s	foreign=MainThread:31.9|	t0=1791350601	t1=1791350891	avail=33122	cache=9922	temp=56000	idlerun=93	foreignpct=6.5
+mkl32kclean	ornith35.mkl1.r0	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=1.19	faults+0	rc=0	180s	foreign=|	t0=1791350914	t1=1791351094	avail=33479	cache=3936	temp=56000	idlerun=90	foreignpct=8.9
+mkl32kclean	llama31-8b.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=95	load=1.50	faults+0	rc=0	193s	foreign=|	t0=1791351117	t1=1791351310	avail=33108	cache=8548	temp=58000	idlerun=93	foreignpct=6.2
+mkl32kclean	ornith35.mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.08	faults+0	rc=0	252s	foreign=|	t0=1791351332	t1=1791351584	avail=33371	cache=9758	temp=60000	idlerun=91	foreignpct=8.1
+mkl32kclean	llama31-8b.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.20	faults+0	rc=0	192s	foreign=|	t0=1791351606	t1=1791351798	avail=33135	cache=13928	temp=58000	idlerun=93	foreignpct=6.1
+mkl32kclean	ornith35.mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=1.04	faults+0	rc=0	250s	foreign=|(searxng-annas):100	t0=1791351821	t1=1791352071	avail=33415	cache=12468	temp=60000	idlerun=91	foreignpct=7.9
+mkl32kclean	llama31-8b.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=99	load=1.02	faults+0	rc=0	289s	foreign=|	t0=1791352094	t1=1791352383	avail=33464	cache=12489	temp=56000	idlerun=94	foreignpct=6.2
+mkl32kclean	ornith35.mkl1.r1	GGML_SYCL_ENABLE_MKL_FA=1	idle=98	load=1.08	faults+0	rc=0	181s	foreign=|	t0=1791352406	t1=1791352587	avail=32264	cache=11852	temp=56000	idlerun=89	foreignpct=9.6
+q8clean	q8_base.r0		idle=99	load=2.02	faults+0	rc=0	152s	foreign=|	t0=1791352610	t1=1791352762	avail=33049	cache=9302	temp=56000	idlerun=83	foreignpct=14.5
+q8clean	q8_base.r0		idle=98	load=0.52	faults+0	rc=0	167s	foreign=|	t0=1791352905	t1=1791353072	avail=33548	cache=15403	temp=56000	idlerun=84	foreignpct=13.4
+q8clean	q8_base.r0		idle=99	load=0.62	faults+0	rc=0	162s	foreign=|	t0=1791353215	t1=1791353377	avail=33516	cache=9715	temp=56000	idlerun=84	foreignpct=13.8
+q8clean	q8_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=3.12	faults+0	rc=0	164s	foreign=|	t0=1791353399	t1=1791353563	avail=33834	cache=8985	temp=56000	idlerun=85	foreignpct=13.5
+q8clean	q8_base.r0		idle=97	load=1.74	faults+0	rc=0	153s	foreign=|	t0=1791353655	t1=1791353808	avail=33756	cache=8816	temp=56000	idlerun=84	foreignpct=14.0
+q8clean	q8_mkl0.r0	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=4.04	faults+0	rc=0	164s	foreign=|	t0=1791353830	t1=1791353994	avail=33800	cache=9003	temp=56000	idlerun=85	foreignpct=13.5
+q8clean	q8_grf0.r0	GGML_SYCL_FA_LARGE_GRF=0	idle=95	load=4.01	faults+0	rc=0	156s	foreign=|	t0=1791354016	t1=1791354172	avail=34141	cache=9122	temp=56000	idlerun=83	foreignpct=14.0
+q8clean	q8_wg32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=96	load=3.62	faults+0	rc=0	154s	foreign=|	t0=1791354195	t1=1791354349	avail=33407	cache=9072	temp=56000	idlerun=84	foreignpct=14.3
+q8clean	q8_mkl0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=98	load=2.94	faults+0	rc=0	164s	foreign=|	t0=1791354372	t1=1791354536	avail=34228	cache=9083	temp=56000	idlerun=85	foreignpct=13.5
+q8clean	q8_grf0.r1	GGML_SYCL_FA_LARGE_GRF=0	idle=98	load=3.29	faults+0	rc=0	153s	foreign=|	t0=1791354559	t1=1791354712	avail=34359	cache=9163	temp=56000	idlerun=84	foreignpct=13.8
+q8clean	q8_wg32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=98	load=3.72	faults+0	rc=0	153s	foreign=|	t0=1791354734	t1=1791354887	avail=34420	cache=9282	temp=56000	idlerun=84	foreignpct=13.9
+q8clean	q8_base.r1		idle=98	load=2.89	faults+0	rc=0	153s	foreign=|	t0=1791354910	t1=1791355063	avail=34431	cache=10408	temp=56000	idlerun=84	foreignpct=14.0
+q8clean	q8_grf0.r2	GGML_SYCL_FA_LARGE_GRF=0	idle=94	load=2.61	faults+0	rc=0	178s	foreign=gh:33.3|clangd.main:87.7,clangd.main:88.8,omp:93.0,omp:94.6	t0=1791355086	t1=1791355264	avail=26265	cache=8300	temp=56000	idlerun=82	foreignpct=15.0
+q8clean	q8_wg32.r2	GGML_SYCL_MAX_WG_PER_CU=32	idle=98	load=3.48	faults+0	rc=0	184s	foreign=omp:40.7,omp:41.5|	t0=1791355286	t1=1791355470	avail=26010	cache=6975	temp=56000	idlerun=85	foreignpct=12.7
+q8clean	q8_base.r2		idle=98	load=2.62	faults+0	rc=0	157s	foreign=gh:44.4|Plex:104,Plex:181	t0=1791355492	t1=1791355649	avail=32061	cache=4051	temp=56000	idlerun=81	foreignpct=16.5
+q8clean	q8_mkl0.r2	GGML_SYCL_ENABLE_MKL_FA=0	idle=91	load=4.63	faults+0	rc=0	169s	foreign=Plex:176|	t0=1791355680	t1=1791355849	avail=32771	cache=8715	temp=56000	idlerun=81	foreignpct=17.6
+wgclean	wg16.r0	GGML_SYCL_MAX_WG_PER_CU=16	idle=98	load=2.46	faults+0	rc=0	727s	foreign=|	t0=1791355872	t1=1791356599	avail=34236	cache=3582	temp=56000	idlerun=89	foreignpct=9.6
+wgclean	wg24.r0	GGML_SYCL_MAX_WG_PER_CU=24	idle=98	load=1.99	faults+0	rc=0	720s	foreign=|	t0=1791356622	t1=1791357342	avail=34611	cache=3387	temp=56000	idlerun=90	foreignpct=9.3
+wgclean	wg32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=94	load=2.18	faults+0	rc=0	721s	foreign=|	t0=1791357364	t1=1791358085	avail=34483	cache=3369	temp=58000	idlerun=89	foreignpct=9.4
+wgclean	wg64.r0	GGML_SYCL_MAX_WG_PER_CU=64	idle=97	load=1.92	faults+0	rc=0	724s	foreign=|	t0=1791358107	t1=1791358831	avail=31486	cache=6660	temp=58000	idlerun=86	foreignpct=12.5
+wgclean	wg24.r1	GGML_SYCL_MAX_WG_PER_CU=24	idle=98	load=3.82	faults+0	rc=0	720s	foreign=gh:200|tailscale:100	t0=1791358853	t1=1791359573	avail=34681	cache=3028	temp=56000	idlerun=90	foreignpct=9.3
+wgclean	wg32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=96	load=1.53	faults+0	rc=0	721s	foreign=|	t0=1791359595	t1=1791360316	avail=35174	cache=3291	temp=56000	idlerun=90	foreignpct=9.0
+wgclean	wg64.r1	GGML_SYCL_MAX_WG_PER_CU=64	idle=95	load=2.03	faults+0	rc=0	719s	foreign=|	t0=1791360339	t1=1791361058	avail=35677	cache=3213	temp=56000	idlerun=90	foreignpct=9.0
+wgclean	wg16.r1	GGML_SYCL_MAX_WG_PER_CU=16	idle=99	load=2.01	faults+0	rc=0	721s	foreign=|	t0=1791361081	t1=1791361802	avail=35586	cache=3178	temp=56000	idlerun=90	foreignpct=9.1
+wgclean	wg32.r2	GGML_SYCL_MAX_WG_PER_CU=32	idle=94	load=2.55	faults+0	rc=0	720s	foreign=|	t0=1791361824	t1=1791362544	avail=35759	cache=3156	temp=58000	idlerun=90	foreignpct=8.9
+wgclean	wg64.r2	GGML_SYCL_MAX_WG_PER_CU=64	idle=98	load=1.84	faults+0	rc=0	726s	foreign=|	t0=1791362567	t1=1791363293	avail=35303	cache=19622	temp=58000	idlerun=90	foreignpct=9.0
+wgclean	wg16.r2	GGML_SYCL_MAX_WG_PER_CU=16	idle=96	load=2.11	faults+0	rc=0	525s	foreign=|	t0=1791363315	t1=1791363840	avail=35077	cache=23312	temp=56000	idlerun=89	foreignpct=11.5
+wgclean	wg24.r2	GGML_SYCL_MAX_WG_PER_CU=24	idle=99	load=3.03	faults+0	rc=0	514s	foreign=|	t0=1791363863	t1=1791364377	avail=35009	cache=23334	temp=56000	idlerun=89	foreignpct=11.6
+wg8bclean	wg16.r0	GGML_SYCL_MAX_WG_PER_CU=16	idle=98	load=2.00	faults+0	rc=0	390s	foreign=|	t0=1791364400	t1=1791364790	avail=35193	cache=28043	temp=62000	idlerun=94	foreignpct=5.8
+wg8bclean	wg32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=94	load=0.85	faults+0	rc=0	380s	foreign=|	t0=1791364812	t1=1791365192	avail=35018	cache=28048	temp=62000	idlerun=94	foreignpct=5.9
+wg8bclean	wg64.r0	GGML_SYCL_MAX_WG_PER_CU=64	idle=98	load=1.01	faults+0	rc=0	380s	foreign=|	t0=1791365214	t1=1791365594	avail=35000	cache=28055	temp=62000	idlerun=94	foreignpct=5.9
+wg8bclean	wg32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=0.87	faults+0	rc=0	380s	foreign=|	t0=1791365616	t1=1791365996	avail=35135	cache=28059	temp=62000	idlerun=94	foreignpct=6.0
+wg8bclean	wg64.r1	GGML_SYCL_MAX_WG_PER_CU=64	idle=97	load=1.03	faults+0	rc=0	380s	foreign=|	t0=1791366018	t1=1791366398	avail=35087	cache=28103	temp=62000	idlerun=94	foreignpct=6.0
+wg8bclean	wg16.r1	GGML_SYCL_MAX_WG_PER_CU=16	idle=96	load=1.28	faults+0	rc=0	380s	foreign=|	t0=1791366420	t1=1791366800	avail=34889	cache=28105	temp=62000	idlerun=94	foreignpct=6.0
+wgcheck	ppl8b.wg16.r0	GGML_SYCL_MAX_WG_PER_CU=16	idle=100	load=0.21	faults+0	rc=0	83s	foreign=systemd:50.0|systemd:54.5	t0=1791384409	t1=1791384492	avail=35275	cache=9241	temp=58000	idlerun=94	foreignpct=4.8
+wgcheck	ppl8b.wg32.r0	GGML_SYCL_MAX_WG_PER_CU=32	idle=98	load=1.03	faults+0	rc=0	72s	foreign=systemd:50.0|systemd:58.3	t0=1791384514	t1=1791384586	avail=34235	cache=9757	temp=58000	idlerun=95	foreignpct=5.4
+wgcheck	ppl8b.wg32.r1	GGML_SYCL_MAX_WG_PER_CU=32	idle=99	load=1.54	faults+0	rc=0	72s	foreign=systemd:58.3|systemd:54.5	t0=1791384608	t1=1791384680	avail=29452	cache=10097	temp=58000	idlerun=89	foreignpct=10.6
+wgcheck	ppl8b.wg16.r1	GGML_SYCL_MAX_WG_PER_CU=16	idle=80	load=2.62	faults+0	rc=0	72s	foreign=systemd:58.3|systemd:58.3	t0=1791384703	t1=1791384775	avail=30330	cache=31211	temp=58000	idlerun=87	foreignpct=8.2

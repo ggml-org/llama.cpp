@@ -1,76 +1,103 @@
 # Plan set: adopt Kmic-68/llama.cpp findings
 
-Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations` at tip
-`ae35056eba07a52dc85c91b035170013d5e46220`, read against this fork at merge base
-`f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. The tip is the revision the findings,
-thresholds and code excerpts were taken from and is what an audit needs; the
-merge base is only for diffing. Its CUDA kernel work (`fattn-gemm`,
-`gemm-fold`, `fattn-q4p`, `mmvq`, `gdn-chunked`) is Pascal SASS and is out of
-scope; these plans cover the `common/` layer and the two findings that bear on
-our SYCL build directly.
+Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations`, merge
+base `f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. The twelve plans retain the
+transferable measurement, common-layer, and SYCL findings selected from that
+branch. CUDA/Pascal-SASS-only work (`fattn-gemm`, `gemm-fold`,
+`fattn-q4p`, `mmvq`, and `gdn-chunked`) remains out of scope.
 
-Kmic-68's `p100-docs/FINDINGS.md` records eleven ways its own measurements misled
-it. Every default in these plans is therefore measured on the A770 rather than
-copied from its thresholds.
+Each included finding belongs to exactly one plan. Thresholds and defaults from
+the P100 source are evidence, not A770 defaults; each A770 value must be derived
+and recorded by the plan that consumes it.
 
-Line numbers throughout this set refer to commit `001d906a6`. They drift as the
-code moves; the plans would need re-verification when implemented, not just when
-written.
+## EARS contract
 
-Requirements use EARS (Easy Approach to Requirements Syntax): the *Ubiquitous*
-form `The <system> shall <response>`, *event-driven* `WHEN <trigger>, the
-<system> shall <response>`, *unwanted behaviour* `IF <trigger>, THEN the <system>
-shall <response>`, *state-driven* `WHILE <state>, the <system> shall <response>`,
-and *optional feature* `WHERE <feature included>, the <system> shall <response>`.
+Requirements use the five forms from Mavin et al., *Easy Approach to
+Requirements Syntax (EARS)*:
 
-## The plans
+- Ubiquitous: `The <system> shall <response>.`
+- Event-driven: `WHEN <trigger>, the <system> shall <response>.`
+- Unwanted behaviour: `IF <trigger>, THEN the <system> shall <response>.`
+- State-driven: `WHILE <state>, the <system> shall <response>.`
+- Optional feature: `WHERE <feature included>, the <system> shall <response>.`
 
-| Plan | Title | Kind | Depends on |
-| --- | --- | --- | --- |
-| P01 | [Bench token count at depth](kmic68-01-bench-token-count.md) | methodology | none |
-| P02 | [Minimum free memory over a run](kmic68-02-min-free-memory.md) | methodology | none |
-| P03 | [Memory-only floor ceiling analysis](kmic68-03-memory-only-floor.md) | methodology | none |
-| P04 | [Speculative cycle log and phase profile](kmic68-04-cycle-log.md) | instrumentation | none |
-| P05 | [Top-k prefilter in the CPU sampler](kmic68-05-topk-prefilter.md) | port | none |
-| P06 | [Distribution-recording acceptance](kmic68-06-speculative-sampling.md) | port | P04 |
-| P07 | [Block verification](kmic68-07-block-verify.md) | port | P06 |
-| P08 | [Draft-context ubatch cap](kmic68-08-draft-ubatch-cap.md) | port | none |
-| P09 | [Padded fixed-width verify](kmic68-09-padded-verify.md) | decoupling | none |
-| P10 | [Cumulative-probability draft width](kmic68-10-pcum-draft-width.md) | port | P01, P04 |
-| P11 | [Per-tile fp32 fold for the F16 FA output](kmic68-11-fp32-vkq-fold.md) | port | P03 |
-| P12 | [Non-materialised causal mask](kmic68-12-non-materialised-mask.md) | port | P08 |
+Angle brackets above are template notation only. A final requirement shall use
+a stable `RNN.M` identifier, exactly one of the five structures, one concrete
+repository component, and one testable response. Final requirement text shall
+not contain template placeholders. Implementation rationale, scope notes,
+measurement gates, and rollback policy belong outside the requirement sentence.
+
+## Plan inventory
+
+| Plan | Title | Kind | Hard dependency | Evidence input |
+| --- | --- | --- | --- | --- |
+| P01 | [Bench token count at depth](kmic68-01-bench-token-count.md) | measurement methodology | none | none |
+| P02 | [Minimum free memory over a run](kmic68-02-min-free-memory.md) | measurement methodology | none | none |
+| P03 | [Memory-only floor ceiling analysis](kmic68-03-memory-only-floor.md) | experimental methodology | none | none |
+| P04 | [Speculative cycle log and phase profile](kmic68-04-cycle-log.md) | instrumentation | none | none |
+| P05 | [Guarded CPU sampler top-k prefilter](kmic68-05-topk-prefilter.md) | common-layer feature | none | none |
+| P06 | [Distribution-recording speculative acceptance](kmic68-06-speculative-sampling.md) | common-layer feature | P04 | P04 cycle dataset |
+| P07 | [Block verification](kmic68-07-block-verify.md) | common-layer feature | P06 | P06 distributions |
+| P08 | [Draft-context ubatch cap](kmic68-08-draft-ubatch-cap.md) | common-layer feature | none | none |
+| P09 | [Fixed-width padded verification](kmic68-09-padded-verify.md) | common-layer feature | none | none |
+| P10 | [Cumulative-probability draft-width clamp](kmic68-10-pcum-draft-width.md) | common-layer feature | P04 | P01 re-baseline |
+| P11 | [Per-tile fp32 fold for F16 FA output](kmic68-11-fp32-vkq-fold.md) | SYCL backend feature | P03 | P03 floor report |
+| P12 | [Prefix-length causal-mask representation](kmic68-12-non-materialised-mask.md) | core/backend feature | P08 | P08 effective draft width |
+
+P01, P02, P03, P04, P05, P08, and P09 are independently executable. P01 is an
+evidence dependency for P10 rather than an implementation dependency.
 
 ## Dependency graph
 
-```
-P01 -------------------------------> (re-baselines the numbers P10 is judged against)
-P02, P03 ---> (measurement discipline for every plan below)
-P04 ---> P06 ---> P07
-P01 ---> P10
-P05 (independent)
-P08 ---> P12
-P09 (independent; P10 is deliberately NOT coupled to it)
-P03 ---> P11
+Hard implementation dependencies:
+
+```text
+P04 -> P06 -> P07
+  +-----> P10
+P03 -> P11
+P08 -> P12
 ```
 
-## Recommended order
+Evidence dependency:
 
-P01 first: it costs no code and may invalidate recorded figures. Then P04,
-because every measurement-driven plan needs its dataset. Then P05, the smallest
-real code win. Then P06 and P07. P02, P03, P08 and P09 run in parallel. P10, P11
-and P12 last.
+```text
+P01 -- re-baselined long-depth results --> P10
+```
 
-## Regression floor
+P02 supplies shared measurement discipline but is not a hard dependency. P05
+and P09 are independent; P09 is deliberately not coupled to P10. The graph is
+acyclic.
 
-`test-qwen4exp-mtp` (75 assertions CPU on the final source, 50 with
-`--q8-kv`; 76 and 51 on Arc A770) and the whole of `scripts/test_bench_spec.py`
-(26 tests at `001d906a6`) pass
-before and after every plan that touches `common/` or the FA kernels. The counts
-are from `docs/research/qwen4exp-mtp-correctness-2026-10-04.md:351-352`; a lower
-count than that is a regression. Plans that change output tokens (P05, P06,
-P07) additionally require seeded output-distribution parity against their own
-pre-change path.
+## Recommended execution order
 
-Every A770 measurement follows the GPU discipline block in `AGENTS.md`, names the
-kernel driver, and runs inside `timeout`. A clean dmesg is not evidence of health
-under xe.
+1. Run P01, P02, P03, P04, P05, P08, and P09 independently or in parallel.
+2. After P04, run P06. After both P04 and the P01 re-baseline, run P10. After
+   P03, run P11. After P08, run P12.
+3. After P06, run P07.
+
+The order controls prerequisites, not ownership: every plan remains an
+independently executable document once its named dependencies are complete.
+
+## Shared verification and A770 regression floor
+
+- Before and after a plan that changes `common/` speculative or sampling
+  behavior, run these exact gates plus the plan's focused test:
+  `timeout 240 ./build-sycl/bin/test-qwen4exp-mtp`,
+  `timeout 240 ./build-sycl/bin/test-qwen4exp-mtp --q8-kv`, and
+  `timeout 240 python3 -m unittest scripts.test_bench_spec`.
+- Before and after P11 or P12 backend work, run
+  `timeout 180 ./build-sycl/bin/test-sycl-turbo-correctness`. Run the Turbo FA
+  path only with the exact opt-in
+  `LLAMA_TEST_TURBO_FA=1 timeout 180 ./build-sycl/bin/test-sycl-turbo-correctness`
+  and its documented hang precautions. Use
+  `ctest --test-dir build-sycl -L sycl --timeout 180 -V` when the full SYCL
+  label is applicable.
+- P05, P06, and P07 require seeded output-distribution parity against their
+  disabled or predecessor path, not only a passing build.
+- Every timing run follows the mandatory GPU discipline in `AGENTS.md`: stop
+  the service, verify sole tenancy on `/dev/dri/renderD128`, wrap the workload
+  in `timeout`, restart the service afterward, and apply the two-driver fault
+  gate. A clean `dmesg` is not proof of health on `xe`.
+- Every recorded A770 result names the kernel driver, complete command, build,
+  model, repetition count, and observed output. A plan may not copy a P100
+  threshold as an A770 default.

@@ -1,52 +1,152 @@
-# P10 - Cumulative-probability draft width
+# P10 - Cumulative-probability draft-width clamp
 
-**Kind:** port
-**Depends on:** P01 for the baseline, P04 for the dataset that sets the default
+**Kind:** common-layer feature
+**Depends on:** P04; P01 re-baseline evidence
+**Independent of:** P09
 
-## Purpose
+## Context
 
-Narrow the draft once the running product of the drafted tokens' top-1
-probabilities falls below a threshold, so a deep context does not pay to verify
-rows that cannot be accepted. Kmic-68 stop when the running product drops under a
-threshold that ramps with depth, and report that the benefit only appears deep in
-context, where each extra verify row costs a full attention pass over the KV
-cache.
+Every host-side drafter already has a per-token `p_min` confidence stop. P10
+adds a second, cumulative stop: multiply successive top-1 probabilities and stop
+before the first token that takes the product below a threshold. This can avoid
+low-value target verification rows at deep context without replacing existing
+stops or adaptive width.
 
-## Source
+The eligible scope is host-loop EAGLE3, DFlash/DFlash2, and non-chained MTP.
+Chained MTP and draft-simple have no supported host stop point. DSpark is
+explicitly excluded: its confidence-head value is not a calibrated token
+probability. DFlash/DFlash2 decode the noise block before host filtering, so P10
+can reduce target verification rows there but cannot avoid that draft decode.
 
-- Kmic-68 `common/speculative.cpp`: `p_cum`, `p_cum_min`, and the stop condition
-  `pc_next < p_cum_min(pos0)` alongside the existing `p_min` test.
+`LLAMA_SPEC_P_CUM` is the only runtime control. Unset disables the rule. A
+finite non-negative value is the explicit threshold. Any finite negative value
+selects the A770-measured depth ramp. NaN, infinity, and malformed values fail
+initialization. The ramp uses the committed target position at cycle start and
+is unavailable until the P04/P01 calibration report has been recorded.
 
-## In this fork
+Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`, its
+`p_cum`, `p_cum_min`, and cumulative stop beside the existing `p_min`
+stop. P100 threshold values are not defaults for the A770.
 
-- `common/speculative.cpp:2362-2367`, the non-chained per-token stop
-  `cur_p->data[0].p < params.p_min`, which `continue`s before `result.push_back`.
-- `common/speculative.cpp:2221`, the chained per-token stop `p < params.p_min`,
-  over the packed `[id, prob]` rows that the in-graph decode emits at `:2210-2216`.
+## EARS requirements
 
-Both paths already carry a per-token confidence stop, so this is an additional
-stop condition rather than a new mechanism. Note that the chained path fuses the
-*decode* into one graph but still runs a host-side *selection* loop at
-`:2213-2229`, so chain mode is in scope. In both paths the crossing token is
-discarded: the stop `break`s before `result.push_back(id)`. The cumulative check
-belongs beside the `p_min` test, not at `:2403-2406`, which is the separate
-`draft_add` failure path.
+- **R10.1 (State-driven):** WHILE `LLAMA_SPEC_P_CUM` is a finite non-negative value, each eligible host-loop drafter shall use that value as its cumulative top-1 probability threshold.
+- **R10.2 (Ubiquitous):** The cumulative-probability rule shall operate in addition to every existing per-token confidence, capacity, and model-specific stop.
+- **R10.3 (State-driven):** WHILE `LLAMA_SPEC_P_CUM` is unset, eligible drafters shall preserve their current stop behavior and batch shapes.
+- **R10.4 (State-driven):** WHILE `LLAMA_SPEC_P_CUM` is finite and negative and non-chained MTP is active, the MTP drafter shall obtain its threshold from the recorded MTP A770 depth ramp at the cycle's committed target position.
+- **R10.5 (Event-driven):** WHEN a non-first candidate makes the running top-1 probability product strictly less than the active threshold, the eligible drafter shall discard that candidate and end the draft round.
+- **R10.6 (Unwanted behaviour):** IF a first candidate has passed every pre-existing stop, THEN the cumulative-probability rule shall preserve that candidate even when its product is below threshold.
+- **R10.7 (State-driven):** WHILE chained MTP or draft-simple is active, cumulative-probability drafting shall preserve the existing path without a cumulative stop.
+- **R10.8 (Event-driven):** WHEN an adaptive controller chooses a draft-width cap, the cumulative-probability rule shall only shorten the resulting draft.
+- **R10.9 (Unwanted behaviour):** IF `LLAMA_SPEC_P_CUM` is empty, malformed, partially parsed, overflowed, or non-finite, THEN the speculative initializer shall fail with the rejected value.
+- **R10.10 (State-driven):** WHILE DFlash or DFlash2 is active, the cumulative-probability rule shall apply only to the host-filtered returned token list.
+- **R10.11 (State-driven):** WHILE a negative setting is used with EAGLE3, DFlash, or DFlash2, the cumulative-probability rule shall remain disabled for that drafter.
+- **R10.12 (Ubiquitous):** The cumulative-probability extractor shall use the declared probability domain for each eligible drafter.
+- **R10.13 (State-driven):** WHILE DSpark is active, cumulative-probability drafting shall preserve the existing path without a cumulative stop.
 
-## Requirements
+## Approach
 
-- **R10.1** (optional feature) WHERE `LLAMA_SPEC_P_CUM` is set, the <drafter> shall multiply each successive drafted token's top-1 probability into a running product initialised to one, and shall stop drafting when that product falls below the threshold.
-- **R10.2** (ubiquitous) The <cumulative rule> shall apply in addition to, and never in place of, the existing `p_min` stop at `:2221` and `:2363`.
-- **R10.3** (optional feature) WHERE the threshold is not set, the <drafter> shall apply no cumulative-probability stop, regardless of padded verify state.
-- **R10.4** (event-driven) WHEN the threshold is depth-dependent, the <default> shall be derived from a paired A770 measurement over our production depth range, not copied from Kmic-68's P100 values.
-- **R10.5** (event-driven) WHEN `LLAMA_SPEC_P_CUM` is set to a negative value, the <drafter> shall use the measured default ramp.
-- **R10.6** (event-driven) WHEN the running product falls below the threshold, the <drafter> shall discard that token and end the round, matching the existing `p_min` behaviour which breaks before pushing.
-- **R10.7** (event-driven) WHEN the rule stops drafting at depth zero, the <drafter> shall fall back to the ordinary `p_min` stop for that round.
-- **R10.8** (event-driven) WHEN the adaptive controller selects the draft width, the <cumulative rule> shall clamp the selected width rather than replace the controller's choice.
-- **R10.9** (event-driven) WHEN the drafter is the chained path, the <cumulative rule> shall read the probability from the packed row rather than from a host-side sampler.
-- **R10.10** (event-driven) WHEN the threshold is active, the <acceptor> shall not treat a token discarded by it as drafted, so it cannot appear in the verification batch.
+1. Complete P01 and collect P04 synchronized rows for non-chained MTP only.
+   `scripts/perf/calibrate-spec-pcum.py` replays those MTP top-1 sequences over
+   a predeclared threshold grid and shortlists real A770 A/B candidates.
+2. Store ordered `(position,threshold)` knots at 0, 4096, and 16384 keyed by
+   `drafter=draft-mtp`, model identity, route, build, and driver. Clamp outside
+   endpoints and interpolate between adjacent knots. A negative setting on any
+   other drafter logs one ineligibility reason and applies no cumulative stop;
+   it never reuses MTP calibration.
+3. Parse the variable with complete string consumption and finite range checks.
+   Unset disables. Finite non-negative values are explicit constants; any finite
+   negative value selects the keyed MTP ramp. Signed `-0` compares as zero and
+   is constant mode. Reject empty strings, whitespace/trailing text, overflow,
+   underflow-to-nonfinite, NaN, and infinities.
+4. At each eligible round start, set `p_cum=1`. For each candidate, first apply
+   all existing model-specific confidence/`p_min` stops. If it survives, obtain
+   the declared token probability, compute `p_next=p_cum*p_top1`, preserve the
+   first surviving candidate, and for later candidates stop before pushing when
+   `p_next<threshold`. Otherwise push and update the product.
+5. Define probability domains explicitly:
+   - EAGLE3 and non-chained MTP use normalized `cur_p->data[0].p` from the host
+     sampler that emitted the candidate.
+   - DFlash2 uses the selected predecessor's selector-score softmax probability;
+     compute that softmax whenever cumulative mode is enabled, even if `p_min`
+     is disabled.
+   - DFlash drafted tokens use normalized host-sampler `cur_p->data[0].p`.
+   - DSpark remains excluded because its confidence-head value is not token
+     top-1 probability and no calibrated transform is provided.
+6. Track `stop_reason`. When cumulative stopping leaves one or more tokens,
+   preserve the first token and bypass generic `n_min` clearing caused solely
+   by that cumulative shortening. Existing `p_min`/confidence failure before
+   the first token and non-cumulative `n_min` behavior remain unchanged.
+7. EAGLE3/MTP break before the next draft decode. DFlash/DFlash2 filter their
+   already-decoded block, so report target-row savings separately from unchanged
+   draft decode work. DSpark remains unchanged.
+8. Start from each existing/adaptive maximum. Never raise it or mutate adaptive
+   controller state; final length is the minimum of existing stops and the
+   cumulative clamp. Leave chained MTP, draft-simple, and P09 independent.
+9. Extend cycle evidence with drafter kind, probability domain, stop reason,
+   crossing probability, threshold, and product before/after. MTP negative-mode
+   calibration consumes P04; other drafter tests use deterministic local traces.
+10. Choose each MTP ramp knot only from a paired A770 run. Require highest median
+   throughput with accepted-tokens-per-drafted-token not below baseline. If no
+   candidate qualifies, emit no ramp and fail P10 rather than copy P100 values.
 
-## Acceptance
+## Critical files & anchors
 
-Paired depth sweep on the A770 reporting accepted-tokens-per-drafted-token and tg,
-against P01's re-baselined numbers, with the P04 log as the dataset. Any default
-threshold chosen here is recorded with the measurement that produced it.
+- `common/speculative.cpp:61-64` - existing one-time environment-gate pattern.
+- `common/speculative.cpp:886-1009` - EAGLE3 host loop and existing `p_min` stop.
+- `common/speculative.cpp:1415-1561` - DFlash/DFlash2 filtering and excluded DSpark boundary.
+- `common/speculative.cpp:2208-2228` - excluded chained MTP output.
+- `common/speculative.cpp:2313-2415` - non-chained MTP host loop and existing `p_min` stop.
+- `common/speculative.cpp:2117-2121,2443-2450` - existing/adaptive cap and controller update.
+- `docs/plans/kmic68-01-bench-token-count.md` - comparable `-n 512` depth evidence.
+- `docs/plans/kmic68-04-cycle-log.md` - per-cycle probability and phase schema.
+- `scripts/perf/calibrate-spec-pcum.py` - planned MTP-only offline threshold replay.
+- `scripts/perf/verify-spec-pcum.py` - planned MTP A770 calibration and paired depth A/B.
+- `tests/test-speculative-pcum.cpp` - planned EAGLE3, DFlash2, DFlash, MTP, excluded-DSpark, and parser fixtures.
+- `docs/research/kmic68-a770-pcum-ramp.md` - planned MTP-keyed ramp provenance and decision record.
+
+## Verification
+
+Add deterministic tests for unset, zero, above-one, equality, strict crossing,
+first-token preservation after prior stops, cumulative-only `n_min` bypass,
+adaptive caps, complete numeric parsing, and every included/excluded drafter.
+DFlash2 fixtures vary selector scores with `p_min` on/off; DSpark fixtures
+prove both confidence-head and sampler-probability changes leave P10 disabled.
+
+```bash
+timeout 240 ctest --test-dir build-sycl -R 'test-qwen4exp-mtp|test-speculative-pcum' --output-on-failure
+```
+
+After P01/P04, run MTP calibration at the P01 token count and depths:
+
+```bash
+timeout 3600 python3 scripts/perf/verify-spec-pcum.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --depths 0,4096,16384 --n-predict 512 --repetitions 3 --threshold-grid 0:1:0.01 --seed 123 --spec-args='--spec-type draft-mtp --spec-draft-n-max 7' --cycle-log /tmp/p10-cycles.jsonl --report docs/research/kmic68-a770-pcum-ramp.md
+```
+
+Expected evidence:
+
+- unset mode reproduces current output and complete numeric-parser boundaries;
+- each included path uses its declared probability domain and preserves the
+  first candidate that passed existing stops;
+- cumulative-only shortening cannot be erased by generic `n_min`, while an
+  earlier existing confidence/`p_min` stop remains authoritative;
+- deterministic temperature-zero runs emit identical target tokens;
+- each MTP depth reports drafted/accepted counts, target rows, draft work,
+  accepted-per-drafted, and paired throughput;
+- DFlash2 tests vary selector softmax independently; DSpark tests prove exclusion;
+- DFlash/DFlash2 report unchanged block decode separately from target-row savings;
+- negative mode works only for keyed MTP and is disabled on EAGLE3/DFlash;
+- DSpark, chained MTP, draft-simple, and P09 remain unchanged;
+- the post-run two-driver fault gate passes and the service is restarted.
+
+## Assumptions & contingencies
+
+- Ramp depth is committed target `pos0`, not requested context or KV size.
+- Explicit thresholds above 1 are legal and reduce a draft to the first token
+  that already passed pre-existing stops; the measured MTP ramp remains `[0,1]`.
+- DFlash/DFlash2 can save target work but not an already-issued draft block.
+- DSpark is ineligible until a token-probability transform is separately
+  calibrated and validated.
+- The negative ramp is MTP-only until another eligible drafter/model/route
+  receives its own probability dataset and real A770 A/B.
+- If no MTP ramp improves the objective, leave P10 disabled and record it.

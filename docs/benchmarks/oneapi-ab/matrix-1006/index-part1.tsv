@@ -1,0 +1,11 @@
+ccs	ccs1.r0		idle=91	load=2.01	faults+0	rc=0	64s
+ccs	ccs2.r0		idle=91	load=2.41	faults+0	rc=0	60s
+ccs	ccs4.r0		idle=92	load=2.55	faults+0	rc=0	81s
+ccs	ccs2.r1		idle=92	load=2.34	faults+0	rc=0	61s
+ccs	ccs4.r1		idle=93	load=2.38	faults+0	rc=0	81s
+ccs	ccs1.r1		idle=93	load=2.71	faults+0	rc=0	53s
+ccs	ccs4.r2		idle=92	load=2.44	faults+0	rc=0	80s
+ccs	ccs1.r2		idle=93	load=2.45	faults+0	rc=0	53s
+ccs	ccs2.r2		idle=92	load=2.18	faults+0	rc=0	60s
+envs	base.r0		idle=92	load=2.21	faults+0	rc=0	54s
+envs	MKLFA0.r1	GGML_SYCL_ENABLE_MKL_FA=0	idle=93	load=2.70	faults+0	rc=0	44s
