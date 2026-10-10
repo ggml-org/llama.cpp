@@ -29,6 +29,7 @@ if (CUDAToolkit_FOUND)
         # 86     == RTX 3000, needs CUDA v11.1
         # 89     == RTX 4000, needs CUDA v11.8
         # 90     == Hopper H100/200, needs CUDA v11.8
+        # 103    == Blackwell GB300, needs CUDA v12.9
         # 120    == Blackwell, needs CUDA v12.8, FP4 tensor cores
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
@@ -64,7 +65,7 @@ if (CUDAToolkit_FOUND)
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real)
             endif()
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.9")
-                list(APPEND CMAKE_CUDA_ARCHITECTURES 121a-real)
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 103-real 121a-real)
             endif()
         endif()
     endif()
