@@ -283,6 +283,9 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     s = ggml_reshape_4d(ctx0, s, S_v, S_v, H_v, n_seqs);
     cb(s, "output_state", il);
 
+    // the state can be a view of the cache, compute the output before the caller stores the new state over it
+    ggml_build_forward_expand(gf, o);
+
     return {o, s};
 }
 
