@@ -300,6 +300,7 @@ export class ChatMessageFlows {
 	async editAssistantMessage(
 		messageId: string,
 		newContent: string,
+		newReasoning: string,
 		shouldBranch: boolean
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
@@ -320,6 +321,7 @@ export class ChatMessageFlows {
 						content: newContent,
 						convId: msg.convId,
 						model: msg.model,
+						reasoningContent: newReasoning,
 						role: msg.role,
 						timestamp: Date.now(),
 						toolCalls: msg.toolCalls || '',
@@ -330,8 +332,14 @@ export class ChatMessageFlows {
 
 				await conversationsStore.updateCurrentNode(newMessage.id);
 			} else {
-				await DatabaseService.updateMessage(msg.id, { content: newContent });
-				conversationsStore.updateMessageAtIndex(idx, { content: newContent });
+				await DatabaseService.updateMessage(msg.id, {
+					content: newContent,
+					reasoningContent: newReasoning
+				});
+				conversationsStore.updateMessageAtIndex(idx, {
+					content: newContent,
+					reasoningContent: newReasoning
+				});
 			}
 
 			conversationsStore.updateConversationTimestamp();

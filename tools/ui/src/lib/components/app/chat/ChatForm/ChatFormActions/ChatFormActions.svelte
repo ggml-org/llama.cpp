@@ -27,6 +27,7 @@
 		isReasoning?: boolean;
 		isRecording?: boolean;
 		showAddButton?: boolean;
+		showContextGauge?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
@@ -48,6 +49,7 @@
 		onStop,
 		onSystemPromptClick,
 		showAddButton = true,
+		showContextGauge = true,
 		showModelSelector = true,
 		uploadedFiles = []
 	}: Props = $props();
@@ -160,7 +162,7 @@
 	{/if}
 
 	<div class="flex items-center gap-1.5">
-		{#if hasProcessedTokens}
+		{#if showContextGauge && hasProcessedTokens}
 			<ChatFormContextGauge />
 		{/if}
 
