@@ -99,4 +99,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_plain(
     int                stride_col_dst,       // floats between output columns in dst
     dpct::queue_ptr    stream);
 
+bool ggml_sycl_mul_mat_vec_q_id_supports_type(enum ggml_type src0_type);
+bool ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(enum ggml_type src0_type);
+
 #endif // GGML_SYCL_MMVQ_HPP

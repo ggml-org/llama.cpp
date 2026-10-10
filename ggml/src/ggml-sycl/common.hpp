@@ -82,9 +82,17 @@ enum ggml_sycl_xmx_gather_type {
     GGML_SYCL_XMX_GATHER_Q4_K     = 1 << 10,
     GGML_SYCL_XMX_GATHER_Q5_K     = 1 << 11,
     GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
+    GGML_SYCL_XMX_GATHER_Q2_K     = 1 << 13,
+    GGML_SYCL_XMX_GATHER_Q3_K     = 1 << 14,
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
+
+enum ggml_sycl_mmid_sched_bit {
+    GGML_SYCL_MMID_SCHED_DEVICE    = 1 << 0,
+    GGML_SYCL_MMID_SCHED_UNBOUNDED = 1 << 1,
+};
+extern int g_ggml_sycl_mmid_sched;
 // Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see fused-gemm.cpp).
 // GGML_SYCL_DYNAMIC_PRECISION picks the operand type, this mask the combinations of that type.
 static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;

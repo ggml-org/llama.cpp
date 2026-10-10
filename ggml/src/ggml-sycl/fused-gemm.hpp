@@ -4,6 +4,18 @@
 #include "common.hpp"
 
 
+// Routed row n is at base + (map[n].i1 % ne1)*nb1 + map[n].i2*nb2.
+struct ggml_sycl_gg_rows {
+    char *                   base;
+    const mmid_row_mapping * map;
+    int64_t                  ne1;
+    size_t                   nb1;
+    size_t                   nb2;
+};
+
+static constexpr int GGML_SYCL_FG_BN = 32;
+static constexpr int64_t GGML_SYCL_MMID_SCHED_MAX_EXPERTS = 4096;
+
 // Shape and type gates for the kernels below. Device capability is separate: it needs a queue to ask.
 static constexpr int GGML_SYCL_FG_MAX_N = 64; // widest N taken; each shape covers it in BN-wide tiles
 
@@ -15,6 +27,8 @@ constexpr bool ggml_sycl_fused_dequant_gemm_type_ok(ggml_type src0_type, int64_t
         return K % 32 == 0;
     }
     const bool superblock =
+           src0_type == GGML_TYPE_Q2_K ||
+           src0_type == GGML_TYPE_Q3_K ||
            src0_type == GGML_TYPE_Q4_K ||
            src0_type == GGML_TYPE_Q5_K ||
            src0_type == GGML_TYPE_Q6_K ||
@@ -39,9 +53,9 @@ constexpr bool ggml_sycl_fused_dequant_gemm_shape_ok(ggml_type src0_type, int64_
 // grouped variant: the per-expert fused kernel is only worth it while each expert is narrow,
 // so wider average slices are left to the per-expert library GEMM loop
 constexpr bool ggml_sycl_grouped_dequant_gemm_shape_ok(ggml_type src0_type, int64_t M, int64_t K,
-                                                       int64_t total_rows, int64_t n_active) {
+                                                       int64_t total_rows, int64_t n_active, bool unbounded = false) {
     return ggml_sycl_fused_dequant_gemm_shape_ok(src0_type, M, 1, K, M) && total_rows > 0 &&
-           total_rows <= INT32_MAX && total_rows <= n_active * GGML_SYCL_FG_MAX_N;
+           total_rows <= INT32_MAX && (unbounded || total_rows <= n_active * GGML_SYCL_FG_MAX_N);
 }
 
 // Runtime type gate, kept out of the constexpr predicates above so those stay pure.
@@ -57,6 +71,8 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
         case GGML_TYPE_IQ1_S:   return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_IQ1_S   ) != 0;
         case GGML_TYPE_IQ1_M:   return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_IQ1_M   ) != 0;
         case GGML_TYPE_Q8_0:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q8_0    ) != 0;
+        case GGML_TYPE_Q2_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q2_K    ) != 0;
+        case GGML_TYPE_Q3_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q3_K    ) != 0;
         case GGML_TYPE_Q4_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q4_K    ) != 0;
         case GGML_TYPE_Q5_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q5_K    ) != 0;
         case GGML_TYPE_Q6_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q6_K    ) != 0;
@@ -84,5 +100,21 @@ bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const v
                                     const int64_t * expert_row_offsets, int64_t n_as, int64_t M, int64_t K,
                                     int64_t total_rows, std::vector<ggml_sycl_gg_tile> & tiles,
                                     ggml_sycl_pool & pool, dpct::queue_ptr stream);
+
+// Build routing and tile tables on the device; unused tile slots are empty.
+bool ggml_sycl_build_mmid_schedule(const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
+                                   int64_t n_tokens, int64_t n_tiles_max, mmid_row_mapping * row_mapping,
+                                   ggml_sycl_gg_tile * tiles, uint32_t * expert_offsets, dpct::queue_ptr stream);
+
+bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool reordered, int32_t src1_prec,
+                                                      int64_t n_as, int64_t n_ids, int64_t n_tokens,
+                                                      int64_t M, int64_t K, dpct::queue_ptr stream);
+
+// Returns false before queuing work when the type, shape, layout or device is unsupported.
+bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, const void * src0_base,
+                                           size_t expert_stride, const ggml_sycl_gg_rows & src1, int32_t src1_prec,
+                                           const ggml_sycl_gg_rows & dst, const int32_t * ids_dev,
+                                           size_t ids_token_stride, int64_t n_as, int64_t n_ids, int64_t n_tokens,
+                                           int64_t M, int64_t K, ggml_sycl_pool & pool, dpct::queue_ptr stream);
 
 #endif // GGML_SYCL_FUSED_GEMM_HPP

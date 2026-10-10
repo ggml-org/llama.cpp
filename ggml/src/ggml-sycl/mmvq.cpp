@@ -2945,6 +2945,48 @@ static void launch_mul_mat_vec_q_moe(
     });
 }
 
+bool ggml_sycl_mul_mat_vec_q_id_supports_type(enum ggml_type src0_type) {
+    switch (src0_type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(enum ggml_type src0_type) {
+    switch (src0_type) {
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_MXFP4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool ggml_sycl_mul_mat_vec_q_id(
     enum ggml_type     src0_type,
     const void *       vx_base,
@@ -2958,6 +3000,9 @@ bool ggml_sycl_mul_mat_vec_q_id(
     size_t             dst_row_stride,
     size_t             src1_row_stride,
     dpct::queue_ptr    stream) {
+    if (!ggml_sycl_mul_mat_vec_q_id_supports_type(src0_type)) {
+        return false;
+    }
     switch (src0_type) {
         case GGML_TYPE_Q4_0:
             launch_mul_mat_vec_q_moe<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
@@ -3168,6 +3213,9 @@ bool ggml_sycl_mul_mat_vec_q_id_reorder(
     size_t             dst_row_stride,
     size_t             src1_row_stride,
     dpct::queue_ptr    stream) {
+    if (!ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(src0_type)) {
+        return false;
+    }
     switch (src0_type) {
         case GGML_TYPE_Q4_K:
             launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K>>(
