@@ -8,7 +8,12 @@
 #endif
 
 #define QK1_0 128
+// Waves that split K. The cross-wave reduction is a fixed per-dispatch cost, so it weighs
+// most on short K; tall M has enough row parallelism, so the host builds that case with
+// -DN_SIMDGROUP=1.
+#ifndef N_SIMDGROUP
 #define N_SIMDGROUP 4
+#endif
 
 #define dequantizeBlockAccum_q1(total, bits, scale, regB, lb)                                       \
     total += (2.0f*(float)((bits >>  0) & 1u) - 1.0f) * scale * sub_group_broadcast(regB.s0, lb+0); \
@@ -73,6 +78,10 @@ __kernel void kernel_gemv_noshuffle_q1_0_f32(
     uint M = ne01;
 
     uint LINE_STRIDE_A  = M;
+    // The x-grid is padded to a whole wave, so the tail lanes hold a row past the packed
+    // weight and only the stores below are guarded. Clamp the row every fetch reads; the
+    // lanes stay active, which the sub_group ops in the dequant macros require.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
     uint BLOCK_STRIDE_A = 4 * M;
 
     uint4  regA;
@@ -83,7 +92,7 @@ __kernel void kernel_gemv_noshuffle_q1_0_f32(
 
     #pragma unroll 1
     for (uint kb = groupId; kb < (K / QK1_0); kb += N_SIMDGROUP) {
-        regS = src0_d[gid + kb * LINE_STRIDE_A]; // each fiber loads its row's scale
+        regS = src0_d[gid_s + kb * LINE_STRIDE_A]; // each fiber loads its row's scale
 
         // first 16 fibers load 8 B values each -> 128 activations for this block
         if (slid < 16) {
@@ -92,10 +101,10 @@ __kernel void kernel_gemv_noshuffle_q1_0_f32(
         }
 
         // load this row's 4 uint32 (128 sign bits)
-        regA.s0 = read_imageui(src0_q, (gid + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA.s1 = read_imageui(src0_q, (gid + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA.s2 = read_imageui(src0_q, (gid + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA.s3 = read_imageui(src0_q, (gid + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + kb * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
 
         float scale = (float)regS;
         dequantizeBlockAccum_q1(totalSum, regA.s0, scale, regB, 0);
@@ -104,15 +113,19 @@ __kernel void kernel_gemv_noshuffle_q1_0_f32(
         dequantizeBlockAccum_q1(totalSum, regA.s3, scale, regB, 12);
     }
 
-    // reduction in local memory, assumes #wave = N_SIMDGROUP = 4
-    local float reduceLM[SIMDGROUP_WIDTH * 3];
-    if (groupId == 1) reduceLM[SIMDGROUP_WIDTH * 0 + slid] = totalSum;
-    if (groupId == 2) reduceLM[SIMDGROUP_WIDTH * 1 + slid] = totalSum;
-    if (groupId == 3) reduceLM[SIMDGROUP_WIDTH * 2 + slid] = totalSum;
+#if N_SIMDGROUP > 1
+    // reduction in local memory across the K-split waves
+    local float reduceLM[SIMDGROUP_WIDTH * (N_SIMDGROUP - 1)];
+    if (groupId > 0) {
+        reduceLM[SIMDGROUP_WIDTH * (groupId - 1) + slid] = totalSum;
+    }
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 0 + slid];
-    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 1 + slid];
-    if (groupId == 0) totalSum += reduceLM[SIMDGROUP_WIDTH * 2 + slid];
+    if (groupId == 0) {
+        for (uint w = 0; w < N_SIMDGROUP - 1; ++w) {
+            totalSum += reduceLM[SIMDGROUP_WIDTH * w + slid];
+        }
+    }
+#endif // N_SIMDGROUP > 1
 
     if (groupId == 0) {
         dst = (global float*)((global char*)dst + offsetd);

@@ -31,7 +31,9 @@ __kernel void kernel_gemv_moe_q4_1_f32_ns(
     ulong         offsetd,
     int           ne00,
     int           ne01,
-    int           ne11
+    int           ne11,
+    int           ne20,
+    int           ids_stride
 ) {
     uint i01  = get_global_id(0);
     uint i20  = get_global_id(2);
@@ -42,9 +44,11 @@ __kernel void kernel_gemv_moe_q4_1_f32_ns(
         return;
     }
 
-    uint i11 = i20 % ne11;
+    // i20 runs over n_tokens x n_expert_used routings; src1 has ne11 = 1 (shared input)
+    // or ne20 rows per token
+    uint i11 = (i20 / ne20) * ne11 + (i20 % ne20) % ne11;
 
-    uint expert_id = src2[i20];
+    uint expert_id = src2[(i20 / ne20) * ids_stride + i20 % ne20];
     uint expert_offset = expert_id * ne00 * ne01 / 32;
 
     __private float sum = 0.0f; // each thread calculate partial sum of one output
