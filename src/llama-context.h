@@ -413,6 +413,9 @@ private:
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
 
+    // true after the prism.hadamard coverage check passes on a reserved graph
+    bool hadamard_verified = false;
+
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;

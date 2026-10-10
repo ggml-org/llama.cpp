@@ -638,6 +638,44 @@ struct llama_prec_policy {
     void load(llama_model_loader & ml, const llama_model & model);
 };
 
+// transform of a folded weight, applied to the matmul input: optional sign flip, then the normalized block Hadamard rotation
+struct llama_hadamard_transform {
+    ggml_tensor * rot;
+    ggml_tensor * signs; // nullptr for identity sign mode
+
+    // if perm_rep > 1, permute the input from tiled head order [hd, nk, rep] to grouped order [hd, rep, nk] before signs and rotation
+    int64_t perm_hd  = 0;
+    int64_t perm_nk  = 0;
+    int64_t perm_rep = 0;
+
+    // ssm_out of a gated delta net gets its value heads in tiled order, but the fold used grouped order
+    // record the head geometry for that permutation, return false if it does not match the input width
+    bool set_gdn_v_perm(int64_t n_in, int64_t n_v, int64_t n_k) {
+        if (n_k <= 0 || n_v <= 0 || n_v % n_k != 0 || n_in % n_v != 0) {
+            return false;
+        }
+        perm_hd  = n_in / n_v;
+        perm_nk  = n_k;
+        perm_rep = n_v / n_k;
+        return true;
+    }
+};
+using llama_hadamard_rotations = std::unordered_map<const ggml_tensor *, llama_hadamard_transform>;
+
+struct llama_hadamard {
+    // names and sign data come from the GGUF metadata in load_hparams, the transforms are made in load_tensors
+    std::unordered_map<std::string, uint32_t> weight_blocks;
+    std::unordered_map<std::string, uint32_t> inverse_blocks;
+
+    std::map<uint32_t, std::vector<int32_t>> sign_data;
+
+    bool gdn_v_grouped = false;
+    bool tied_output = false;
+
+    llama_hadamard_rotations rot; // folded weight -> activation transform
+    llama_hadamard_rotations inv; // latent lookup table -> inverse transform
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -649,6 +687,8 @@ struct llama_model {
 
     // per-tensor activation precision policy
     llama_prec_policy prec_policy;
+
+    llama_hadamard hdmd;
 
     // for classifier models
     std::vector<std::string> classifier_labels;
@@ -856,6 +896,12 @@ struct llama_model_base : public llama_model {
         int mtp;   // TENSOR_NOT_REQUIRED when the file holds only the trunk, TENSOR_SKIP when MTP is not loaded
     };
     nextn_flags_t nextn_flags(llama_model_loader & ml, llm_tensor trunk_probe = LLM_TENSOR_ATTN_NORM) const;
+
+    // helper: read the prism.hadamard metadata and record which weights are folded
+    void load_hparams_hadamard(llama_model_loader & ml);
+
+    // helper: make the prism.hadamard rotation and sign tensors for the folded weights
+    void load_tensors_hadamard();
 
     // helper: read the SWA pattern as one flag per layer, or as a period expanded by set_swa_pattern
     void load_swa_pattern(llama_model_loader & ml, uint32_t n_pattern, bool dense_first = false);
