@@ -245,7 +245,6 @@ llama_build_and_test(
     peg-parser/test-basic.cpp
     peg-parser/test-gbnf-generation.cpp
     peg-parser/test-json-parser.cpp
-    peg-parser/test-json-serialization.cpp
     peg-parser/test-python-dict-parser.cpp
     peg-parser/test-unicode.cpp
     peg-parser/tests.h

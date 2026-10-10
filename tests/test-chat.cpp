@@ -1090,26 +1090,6 @@ struct peg_test_case {
     std::vector<std::string>     expect_rules;
 };
 
-struct make_peg_parser {
-    common_chat_params params_;
-    common_peg_arena   arena_;
-    bool               detailed_debug_;
-
-    make_peg_parser(common_chat_templates *              tmpls,
-                    const common_chat_templates_inputs & inputs,
-                    bool                                 detailed_debug = false) {
-        detailed_debug_ = detailed_debug;
-        params_         = common_chat_templates_apply(tmpls, inputs);
-        arena_.load(params_.parser);
-    }
-
-    common_chat_msg parse(const std::string & msg, bool is_partial) const {
-        common_chat_parser_params parser_params(params_);
-        parser_params.debug = detailed_debug_;
-        return common_chat_peg_parse(arena_, common_chat_input(msg), is_partial, parser_params);
-    }
-};
-
 // Global template filter for --template flag
 static std::string g_template_filter;
 
@@ -1161,14 +1141,19 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         tc.expect.role = "assistant";
     }
 
-    auto parser = make_peg_parser(tmpls, tc.params, detailed_debug);
+    common_chat_session_params session_params;
+    session_params.debug = detailed_debug;
+    common_chat_session session(tmpls, nullptr, tc.params, session_params);
+    const auto & parser = session.parser();
+    common_params_sampling sampling;
+    session.apply_sampling(sampling);
     if (detailed_debug) {
-        LOG_DBG("Using parser: \n%s\n", parser.arena_.dump(parser.arena_.root()).c_str());
-        LOG_DBG("Generation prompt: '%s'\n", parser.params_.generation_prompt.c_str());
+        LOG_DBG("Using parser: \n%s\n", parser.dump(parser.root()).c_str());
+        LOG_DBG("Generation prompt: '%s'\n", session.generation_prompt().c_str());
     }
 
     for (const auto & rule : tc.expect_rules) {
-        if (!parser.arena_.has_rule(rule)) {
+        if (!parser.has_rule(rule)) {
             LOG_ERR("Missing rule: %s\n", rule.c_str());
             common_log_flush(common_log_main());
             throw std::runtime_error("Test failed");
@@ -1179,12 +1164,14 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     common_chat_msg msg_prev;
     msg_accum.role = msg_prev.role = "assistant";
 
+    size_t fed = 0;
     for (size_t i = 1; i <= tc.input.size(); ++i) {
         auto            is_partial  = i < tc.input.size() || tc.is_partial;
         // Use UTF-8 safe truncation to avoid corrupting multi-byte characters
         size_t          safe_len    = utf8_truncate_safe_len(std::string_view(tc.input).substr(0, i));
-        std::string     prefix      = tc.input.substr(0, safe_len);
-        common_chat_msg msg_current = parser.parse(prefix, is_partial);
+        common_chat_input chunk(tc.input.substr(fed, safe_len - fed));
+        fed = safe_len;
+        const common_chat_msg & msg_current = is_partial ? session.feed(chunk) : session.finish(chunk);
 
         for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
             if (!diff.reasoning_content_delta.empty()) {
@@ -1222,30 +1209,33 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     if (!tc.is_partial) {
-        assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
+        if (tc.input.empty()) {
+            session.finish();
+        }
+        assert_msg_equals(tc.expect, session.msg(), true);
     }
     assert_msg_equals(tc.expect, msg_accum, true);
 
     // A response format must be enforced by an eager grammar
     if (!tc.params.json_schema.empty()) {
-        if (parser.params_.grammar.empty()) {
+        if (session.grammar().empty()) {
             throw std::runtime_error("json_schema is set but no grammar was produced");
         }
-        if (parser.params_.grammar_lazy) {
+        if (sampling.grammar_lazy) {
             throw std::runtime_error("json_schema is set but the grammar is lazy");
         }
     }
 
     // Test grammar if present in params
-    if (!parser.params_.grammar.empty()) {
-        auto grammar = build_grammar(parser.params_.grammar);
+    if (!session.grammar().empty()) {
+        auto grammar = build_grammar(session.grammar());
         if (!grammar) {
-            throw std::runtime_error("Failed to build grammar: " + parser.params_.grammar);
+            throw std::runtime_error("Failed to build grammar: " + session.grammar());
         }
 
         // In production, grammar triggers match against the full generated text
         // including the generation prompt. All positions are in full_input coordinates.
-        const auto & gen_prompt = parser.params_.generation_prompt;
+        const auto & gen_prompt = sampling.generation_prompt;
         std::string full_input = gen_prompt + tc.input;
 
         // Determine whether the reasoning-budget sampler path applies: tool-call grammar
@@ -1253,9 +1243,9 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // budget sampler inhibits grammar application while inside thinking blocks —
         // triggers inside <think>...</think> are suppressed.
         bool use_reasoning_budget_path = false;
-        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tags.empty()) {
+        if (sampling.grammar_lazy && !session.thinking_end_tags().empty()) {
             use_reasoning_budget_path = true;
-            for (const auto & trigger : parser.params_.grammar_triggers) {
+            for (const auto & trigger : sampling.grammar_triggers) {
                 if (trigger.type != COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
                     use_reasoning_budget_path = false;
                     break;
@@ -1270,8 +1260,8 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             // Reasoning-budget path: simulate thinking-aware trigger detection.
             // Walk through full_input tracking thinking state; only match triggers
             // when outside thinking blocks.
-            const auto & think_start = parser.params_.thinking_start_tag;
-            const auto & think_ends  = parser.params_.thinking_end_tags;
+            const auto & think_start = session.thinking_start_tag();
+            const auto & think_ends  = session.thinking_end_tags();
 
             bool in_thinking = false;
             for (size_t i = 0; i < full_input.size(); ++i) {
@@ -1292,7 +1282,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                     continue;
                 }
                 // Outside thinking — check if any trigger word starts here
-                for (const auto & trigger : parser.params_.grammar_triggers) {
+                for (const auto & trigger : sampling.grammar_triggers) {
                     if (full_input.compare(i, trigger.value.size(), trigger.value) == 0) {
                         if (earliest_trigger_pos == std::string::npos || i < earliest_trigger_pos) {
                             earliest_trigger_pos = i;
@@ -1314,7 +1304,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 
         if (!use_reasoning_budget_path) {
             // Legacy path: find triggers without thinking-awareness
-            for (const auto & trigger : parser.params_.grammar_triggers) {
+            for (const auto & trigger : sampling.grammar_triggers) {
                 size_t      pos = std::string::npos;
                 std::smatch match;
                 switch (trigger.type) {
@@ -1370,16 +1360,16 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // If the test expects tool calls and the grammar is lazy, the trigger must fire.
         // Otherwise the grammar would never activate in production and tool calls wouldn't
         // be constrained. A silent skip here would hide broken triggers.
-        if (parser.params_.grammar_lazy && !tc.expect.tool_calls.empty() && !tc.is_partial
+        if (sampling.grammar_lazy && !tc.expect.tool_calls.empty() && !tc.is_partial
                 && earliest_trigger_pos == std::string::npos) {
             std::string trigger_desc;
-            for (const auto & trigger : parser.params_.grammar_triggers) {
+            for (const auto & trigger : sampling.grammar_triggers) {
                 trigger_desc += "\n  [type=" + std::to_string(trigger.type) + "] " + trigger.value;
             }
             throw std::runtime_error(
                 "Grammar trigger did not fire, but test expects tool calls (lazy grammar).\n"
                 ">>> Input: " + full_input + "\n"
-                ">>> Triggers (" + std::to_string(parser.params_.grammar_triggers.size()) + "):" + trigger_desc);
+                ">>> Triggers (" + std::to_string(sampling.grammar_triggers.size()) + "):" + trigger_desc);
         }
 
         // Determine the constrained portion of input to test against grammar.
@@ -1392,7 +1382,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             auto constrain_from = std::max(earliest_trigger_pos, gen_prompt.size());
             constrained = full_input.substr(constrain_from);
             grammar_triggered = true;
-        } else if (!parser.params_.grammar_lazy) {
+        } else if (!sampling.grammar_lazy) {
             // For non-lazy grammars, the entire input should match
             grammar_triggered = true;
         }
@@ -1411,7 +1401,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                         std::to_string(result.matched_codepoints) + " codepoints): " +
                         (result.matched_prefix.size() > 100 ? result.matched_prefix.substr(0, 100) + "..." : result.matched_prefix) +
                         "\n\n>>> Expected next: " + result.expected_description +
-                        "\n\n>>> Grammar: " + parser.params_.grammar;
+                        "\n\n>>> Grammar: " + session.grammar();
                 } else {
                     error_msg =
                         "Grammar match failed:\n\n"
@@ -1422,7 +1412,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                         (result.matched_prefix.size() > 100 ? result.matched_prefix.substr(0, 100) + "..." : result.matched_prefix) +
                         "\n\n>>> Failing character: " + result.failing_char +
                         "\n\n>>> Expected: " + result.expected_description +
-                        "\n\n>>> Grammar: " + parser.params_.grammar;
+                        "\n\n>>> Grammar: " + session.grammar();
                 }
                 throw std::runtime_error(error_msg);
             }
@@ -1437,7 +1427,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // Start from tc.expect but copy tool call arguments from the actual parser
         // output, which preserves original JSON formatting (e.g. {"arg1":1} vs {"arg1": 1}).
         auto reconstruction_msg = tc.expect;
-        auto parsed_msg         = parser.parse(tc.input, false);
+        const auto & parsed_msg = session.msg();
         for (size_t i = 0; i < reconstruction_msg.tool_calls.size() && i < parsed_msg.tool_calls.size(); i++) {
             reconstruction_msg.tool_calls[i].arguments = parsed_msg.tool_calls[i].arguments;
         }
@@ -1446,7 +1436,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         reconstruction_inputs.add_generation_prompt = false;
 
         auto reconstruction_params = common_chat_templates_apply(tmpls, reconstruction_inputs);
-        std::string expected_text  = parser.params_.prompt + tc.input;
+        std::string expected_text  = session.prompt() + tc.input;
         bool match = reconstruction_params.prompt == expected_text ||
             (reconstruction_params.prompt.size() > expected_text.size() &&
              reconstruction_params.prompt.compare(0, expected_text.size(), expected_text) == 0);
@@ -4644,8 +4634,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             inputs.messages = { msg };
 
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
-            common_peg_arena arena;
-            arena.load(params.parser);
+            const common_peg_arena & arena = params.parser;
             common_chat_parser_params pp(params);
 
             // generation_prompt is non-empty for thinking models, so result.end
@@ -7791,6 +7780,77 @@ static void test_deepseek_v4_tool_result_ordering() {
     }
 }
 
+static void test_chat_session() {
+    LOG_DBG("%s\n", __func__);
+    auto tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
+
+    common_chat_templates_inputs inputs;
+    inputs.messages         = { message_user };
+    inputs.tools            = { special_function_tool };
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+    const std::string output =
+        "I'm\nthinking\n</think>\n\n"
+        "<tool_call>\n"
+        "<function=special_function>\n"
+        "<parameter=arg1>\n1\n</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+
+    // the session renders the prompt and parses the output fed to it in small chunks
+    {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+
+        assert_contains(session.prompt(), "\"name\": \"special_function\"");
+        assert_contains(session.prompt(), "<|im_start|>user\nHey there!<|im_end|>\n<|im_start|>assistant\n<think>\n");
+        assert_equals(false, session.grammar().empty());
+        assert_equals(std::string("<|im_start|>assistant\n<think>\n"), session.generation_prompt());
+
+        const std::string thinking = "I'm\nthinking\n</think>\n\n";
+        for (size_t i = 0; i < thinking.size(); i += 3) {
+            session.feed(common_chat_input(thinking.substr(i, 3)));
+        }
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n"), session.msg());
+
+        for (size_t i = thinking.size(); i < output.size(); i += 3) {
+            session.feed(common_chat_input(output.substr(i, 3)));
+        }
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n", "special_function", "{\"arg1\":1}"), session.finish());
+    }
+
+    // a copy does not see what is fed to the original
+    {
+        common_chat_session a(tmpls.get(), nullptr, inputs);
+        common_chat_session b = a;
+        a.feed(common_chat_input(output));
+        assert_equals(true, b.msg().empty());
+        b.feed(common_chat_input("I'm\nthinking\n</think>\n\nHello"));
+        assert_equals(std::string("Hello"), b.msg().content);
+        assert_equals(std::string("special_function"), a.finish().tool_calls.at(0).name);
+    }
+
+    // a continued message starts from the prefill, unless it is echoed
+    {
+        common_chat_templates_inputs cont;
+        cont.messages               = { message_user, message_assist_prefill_content };
+        cont.add_generation_prompt  = false;
+        cont.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+        cont.reasoning_format       = COMMON_REASONING_FORMAT_AUTO;
+
+        common_chat_session session(tmpls.get(), nullptr, cont);
+        assert_equals(std::string("<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, "),
+                      session.generation_prompt());
+        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking\n"), session.msg());
+        session.feed(common_chat_input("world!"));
+        assert_equals(std::string("Hello, world!"), session.msg().content);
+
+        common_chat_session_params echo;
+        echo.echo = true;
+        common_chat_session echoed(tmpls.get(), nullptr, cont, echo);
+        assert_equals(true, echoed.msg().empty());
+    }
+}
+
 static void test_reasoning_budget_tokens_per_request() {
     LOG_DBG("%s\n", __func__);
     // Use Qwen3 template which has <think>...</think> reasoning markers.
@@ -7811,7 +7871,8 @@ static void test_reasoning_budget_tokens_per_request() {
         {"reasoning_budget_tokens", 0},
     };
     std::vector<raw_buffer> out_files;
-    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+    common_chat_session     out_session;
+    auto llama_params = oaicompat_chat_params_parse(nullptr, body, opt, out_files, out_session);
 
     // The per-request value must win over the server default (-1).
     if (!llama_params.contains("reasoning_budget_tokens")) {
@@ -7844,7 +7905,8 @@ static void test_reasoning_budget_message_per_request() {
         {"reasoning_budget_message", per_request_message},
     };
     std::vector<raw_buffer> out_files;
-    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+    common_chat_session     out_session;
+    auto llama_params = oaicompat_chat_params_parse(nullptr, body, opt, out_files, out_session);
 
     // The per-request value must win over the server default.
     if (!llama_params.contains("reasoning_budget_message")) {
@@ -8035,6 +8097,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
         test_reasoning_effort_caps();
+        test_chat_session();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);

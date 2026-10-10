@@ -593,7 +593,7 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
-    size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU
+    size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
@@ -625,7 +625,7 @@ struct common_params {
     std::string cls_sep    = "\t";  // separator of classification sequences
 
     // server params
-    int32_t port                = 8080;          // server listens on this network port
+    int32_t port                = 9931;          // server listens on this network port
     bool    reuse_port          = false;         // allow multiple sockets to bind to the same port
     int32_t timeout_read        = 3600;          // http read timeout in seconds
     int32_t timeout_write       = timeout_read;  // http write timeout in seconds
@@ -970,9 +970,13 @@ enum common_decision_type {
 
 common_decision_type common_get_decision_type(const struct llama_model * model);
 
-// same as above, but reads a GGUF file; it does not load the model
-// returns COMMON_DECISION_TYPE_UNKNOWN if the file is missing, unreadable, or invalid
-common_decision_type common_get_decision_type(const std::string & fname);
+// metadata of a GGUF file, read without loading the model
+struct common_gguf_info {
+    common_decision_type decision_type = COMMON_DECISION_TYPE_UNKNOWN; // UNKNOWN if the file is missing, unreadable, or invalid
+    uint32_t             n_ctx_train   = 0;                            // 0 if unknown
+};
+
+common_gguf_info common_get_gguf_info(const std::string & fname);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
@@ -1296,12 +1300,13 @@ struct common_prompt_checkpoint {
             llama_seq_id seq_id,
             llama_state_seq_flags flags);
 
-    void load_tgt(
+    // return false if the state could not be restored
+    bool load_tgt(
             llama_context * ctx,
             llama_seq_id seq_id,
             llama_state_seq_flags flags) const;
 
-    void load_dft(
+    bool load_dft(
             llama_context * ctx,
             llama_seq_id seq_id,
             llama_state_seq_flags flags) const;

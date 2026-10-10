@@ -18,6 +18,10 @@ export interface ModelOption {
 	model: string;
 	description?: string;
 	capabilities: string[];
+	/** Context size reported by the provider's model listing, when it reports one. */
+	contextLength?: number;
+	/** Draft sidecars downloaded alongside the model, e.g. `mtp` or `dflash`. */
+	draftSidecars?: ModelSidecarBadge[];
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
@@ -47,6 +51,13 @@ export interface ModelDownloadProgress {
 	files: Record<string, ModelDownloadFileProgress>;
 }
 
+/** One tracked download of the status feed, in flight or paused. */
+export interface ModelDownloadEntry {
+	isPaused: boolean;
+	progress: ModelDownloadProgress | null;
+	repoWithTag: string;
+}
+
 export interface ParsedModelId {
 	raw: string;
 	orgName: string | null;
@@ -58,9 +69,30 @@ export interface ParsedModelId {
 	tags: string[];
 }
 
+/** Draft sidecar of a model, shown as a `+ [KIND] [QUANT]` badge pair. */
+export interface ModelSidecarBadge {
+	kind: ModelSidecar;
+	/** Quantization of the sidecar file itself; null when the name carries none. */
+	quant: string | null;
+	/** Repo the sidecar file belongs to, which may differ from the model's. */
+	repo: string;
+}
+
 /** Modality capabilities for file validation. */
 export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;
 	hasVideo: boolean;
+}
+
+/** Sidecar file a listing reports as its own model entry, paired back to its model. */
+export interface ModelSidecarFile {
+	id: string;
+	kind: ModelSidecar;
+	/** Repo the sidecar belongs to, e.g. `ggml-org/Qwen3.6-35B-A3B-GGUF`. */
+	model: string;
+	/** Parameter count the sidecar reports, e.g. `35B-A3B`. */
+	params: string | null;
+	/** Quantization of the sidecar file, e.g. `Q4_0`. */
+	quant: string | null;
 }

@@ -1064,18 +1064,28 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
     return LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED;
 }
 
-// Maps the GGUF `<arch>.hidden_activation` string to the FFN op type used by the
-// graph builders. Only gated activations that map cleanly to llm_ffn_op_type are
-// listed; unrecognized values fall back to GeGLU, which matches the historical
-// default for ModernBert-style architectures.
+// Maps GGUF activation names to the FFN op type used by the graph builders.
 static const std::map<std::string, llm_ffn_op_type> LLM_FFN_OP_TYPES_FROM_STRING = {
-    { "gelu",   LLM_FFN_GEGLU  },
-    { "geglu",  LLM_FFN_GEGLU  },
-    { "silu",   LLM_FFN_SWIGLU },
-    { "swish",  LLM_FFN_SWIGLU },
-    { "swiglu", LLM_FFN_SWIGLU },
-    { "relu",   LLM_FFN_RELU   },
-    { "reglu",  LLM_FFN_REGLU  },
+    { "gelu",              LLM_FFN_GEGLU_ERF },
+    { "gelu_python",       LLM_FFN_GEGLU_ERF },
+    { "gelu_pytorch_tanh", LLM_FFN_GEGLU     },
+    { "gelu_new",          LLM_FFN_GEGLU     },
+    { "gelu_fast",         LLM_FFN_GEGLU     },
+    { "gelu_accurate",     LLM_FFN_GEGLU     },
+    { "gelu_python_tanh",  LLM_FFN_GEGLU     },
+    { "geglu",             LLM_FFN_GEGLU     },
+    { "silu",              LLM_FFN_SWIGLU    },
+    { "swish",             LLM_FFN_SWIGLU    },
+    { "swiglu",            LLM_FFN_SWIGLU    },
+    { "relu",              LLM_FFN_RELU      },
+    { "reglu",             LLM_FFN_REGLU     },
+};
+
+// transformers names, "gelu" is the exact (erf) variant
+static const std::map<std::string, ggml_unary_op> LLM_CLS_ACT_TYPES_FROM_STRING = {
+    { "gelu", GGML_UNARY_OP_GELU_ERF },
+    { "silu", GGML_UNARY_OP_SILU     },
+    { "tanh", GGML_UNARY_OP_TANH     },
 };
 
 llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback) {
@@ -1336,6 +1346,12 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_CLASSIFIER_POOLING_TYPE, hparams.pooling_type_cls, false);
+    std::string act_cls;
+    if (ml.get_key(LLM_KV_CLASSIFIER_ACTIVATION, act_cls, false)) {
+        const auto it = LLM_CLS_ACT_TYPES_FROM_STRING.find(act_cls);
+        GGML_ASSERT(it != LLM_CLS_ACT_TYPES_FROM_STRING.end() && "unsupported classifier activation");
+        hparams.act_cls = it->second;
+    }
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
     GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,    hparams.n_layer_nextn,   false);

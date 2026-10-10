@@ -1195,7 +1195,9 @@ common_decision_type common_get_decision_type(const struct llama_model * model) 
     return common_decision_type_from_string(buf);
 }
 
-common_decision_type common_get_decision_type(const std::string & fname) {
+common_gguf_info common_get_gguf_info(const std::string & fname) {
+    common_gguf_info info;
+
     struct gguf_init_params gguf_params = {
         /* .no_alloc = */ true,
         /* .ctx      = */ nullptr,
@@ -1203,31 +1205,32 @@ common_decision_type common_get_decision_type(const std::string & fname) {
 
     gguf_context_ptr gguf_ctx(gguf_init_from_file(fname.c_str(), gguf_params));
     if (!gguf_ctx) {
-        return COMMON_DECISION_TYPE_UNKNOWN; // missing or unreadable file
+        return info; // missing or unreadable file
     }
 
-    std::string arch;
     const int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
-    if (arch_id < 0) {
-        return COMMON_DECISION_TYPE_UNKNOWN; // no architecture in the metadata
+    if (arch_id < 0 || gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
+        return info; // no architecture in the metadata
     }
-    if (gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
-        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
-    }
-    arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
     if (arch.empty()) {
-        return COMMON_DECISION_TYPE_UNKNOWN;
+        return info;
     }
 
-    const std::string key = arch + ".decision.type";
-    const int64_t type_id = gguf_find_key(gguf_ctx.get(), key.c_str());
+    const int64_t type_id = gguf_find_key(gguf_ctx.get(), (arch + ".decision.type").c_str());
     if (type_id < 0) {
-        return COMMON_DECISION_TYPE_NONE;
+        info.decision_type = COMMON_DECISION_TYPE_NONE;
+    } else if (gguf_get_kv_type(gguf_ctx.get(), type_id) == GGUF_TYPE_STRING) {
+        info.decision_type = common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
     }
-    if (gguf_get_kv_type(gguf_ctx.get(), type_id) != GGUF_TYPE_STRING) {
-        return COMMON_DECISION_TYPE_UNKNOWN; // malformed metadata
+
+    // same key and type as the model loader
+    const int64_t ctx_id = gguf_find_key(gguf_ctx.get(), (arch + ".context_length").c_str());
+    if (ctx_id >= 0 && gguf_get_kv_type(gguf_ctx.get(), ctx_id) == GGUF_TYPE_UINT32) {
+        info.n_ctx_train = gguf_get_val_u32(gguf_ctx.get(), ctx_id);
     }
-    return common_decision_type_from_string(gguf_get_val_str(gguf_ctx.get(), type_id));
+
+    return info;
 }
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
@@ -2388,40 +2391,36 @@ void common_prompt_checkpoint::update_dft(
     }
 }
 
-void common_prompt_checkpoint::load_tgt(
+bool common_prompt_checkpoint::load_tgt(
         llama_context * ctx,
         llama_seq_id seq_id,
         llama_state_seq_flags flags) const {
     if (ctx == nullptr) {
-        return;
+        return true;
     }
 
     if (data_tgt.empty()) {
-        return;
+        return true;
     }
 
     const size_t n = llama_state_seq_set_data_ext(ctx, data_tgt.data(), data_tgt.size(), seq_id, flags);
-    if (n != data_tgt.size()) {
-        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_tgt.size(), n);
-    }
+    return n == data_tgt.size();
 }
 
-void common_prompt_checkpoint::load_dft(
+bool common_prompt_checkpoint::load_dft(
         llama_context * ctx,
         llama_seq_id seq_id,
         llama_state_seq_flags flags) const {
     if (ctx == nullptr) {
-        return;
+        return true;
     }
 
     if (data_dft.empty()) {
-        return;
+        return true;
     }
 
     const size_t n = llama_state_seq_set_data_ext(ctx, data_dft.data(), data_dft.size(), seq_id, flags);
-    if (n != data_dft.size()) {
-        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_dft.size(), n);
-    }
+    return n == data_dft.size();
 }
 
 void common_prompt_checkpoint::clear_tgt() {

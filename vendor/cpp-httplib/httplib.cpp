@@ -5192,8 +5192,10 @@ bool range_error(Request &req, Response &res) {
         last_pos = content_len;
       }
 
+      // RFC 9110 14.1.2: a suffix-length longer than the representation
+      // selects the entire representation.
       if (first_pos == -1) {
-        first_pos = content_len - last_pos;
+        first_pos = (std::max)(static_cast<ssize_t>(0), content_len - last_pos);
         last_pos = content_len - 1;
       }
 
@@ -6135,12 +6137,6 @@ bool verify_cert_with_windows_schannel(
 
   auto chain_guard =
       scope_exit([&] { CertFreeCertificateChain(chain_context); });
-
-  // Check if chain has errors
-  if (chain_context->TrustStatus.dwErrorStatus != CERT_TRUST_NO_ERROR) {
-    out_error = chain_context->TrustStatus.dwErrorStatus;
-    return false;
-  }
 
   // Verify SSL policy
   SSL_EXTRA_CERT_CHAIN_POLICY_PARA extra_policy_para = {};

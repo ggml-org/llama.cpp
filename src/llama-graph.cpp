@@ -1963,6 +1963,11 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_geglu(ctx0, cur);
                 cb(cur, "ffn_geglu", il);
             } break;
+        case LLM_FFN_GEGLU_ERF:
+            {
+                cur = ggml_geglu_erf(ctx0, cur);
+                cb(cur, "ffn_geglu_erf", il);
+            } break;
         case LLM_FFN_REGLU:
             {
                 cur = ggml_reglu(ctx0, cur);
@@ -2448,10 +2453,10 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
     // the slot map is a host weight, so the scheduler starts a new split here and copies it with the copy callback
     // the callback reads the selected experts, uploads the missing ones and updates the slot map
     ggml_tensor * slots = ggml_get_rows(ctx0, slot_map, ids); // [1, n_expert_used*n_tokens]
-    if (!ggml_backend_supports_op(moe_cache->backend(), slots)) {
+    if (!ggml_backend_supports_op(moe_cache->backend(il), slots)) {
         return nullptr;
     }
-    ggml_backend_sched_set_tensor_backend(sched, slots, moe_cache->backend());
+    ggml_backend_sched_set_tensor_backend(sched, slots, moe_cache->backend(il));
     cb(slots, "ffn_moe_slots", il);
 
     return ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]); // [n_expert_used, n_tokens]
@@ -2466,19 +2471,57 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
-    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
-    cb(inp->tokens, "inp_tokens", -1);
-    ggml_set_input(inp->tokens);
-    res->t_inp_tokens = inp->tokens;
+    // mixed path (ubatch.is_mixed()): set_rows the token rows into a copy of the embd rows, with its own inputs as select branches must not share tensors
+    // TODO: use inp->tokens and inp->embd once ggml_build_forward_select allows it
+    const bool has_mixed = llm_arch_supports_mixed_batch(arch) && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT;
 
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
-    cb(inp->embd, "inp_embd", -1);
-    ggml_set_input(inp->embd);
+    const int64_t n_tok_rows = has_mixed ? llm_graph_n_tok_rows(ubatch) : 0;
 
-    // token embeddings with lora and padding
-    auto build_tok = [&](ggml_tensor * ids) {
-        ggml_tensor * cur = ggml_get_rows(ctx0, tok_embd, ids);
+    // we have 3 standard paths to produce the input embeddings for the first layer:
+    // - embd0: extract from the token embeddings weight (`tok_embd`) using the input token ids
+    // - embd1: pass raw embeddings, skipping the `tok_embd`
+    // - embd2: mixed path of both tokens ids + raw embeddings (if supported)
+    ggml_tensor * embd0 = nullptr;
+    ggml_tensor * embd1 = nullptr;
+    ggml_tensor * embd2 = nullptr;
 
+    // construct the input tensors
+    {
+        inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+        cb(inp->tokens, "inp_tokens", -1);
+        ggml_set_input(inp->tokens);
+        res->t_inp_tokens = inp->tokens;
+
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
+        cb(inp->embd, "inp_embd", -1);
+        ggml_set_input(inp->embd);
+
+        if (has_mixed) {
+            inp->mixed_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tok_rows);
+            cb(inp->mixed_tokens, "inp_mixed_tokens", -1);
+            ggml_set_input(inp->mixed_tokens);
+        }
+    }
+
+    // the embeddings placeholders for the 3 paths
+    // we use ggml_build_forward_order to make the GET_ROWS ops stick at the beginning of the compute graph
+    // this way the embeddings remain in the host buffer, and the GET_ROWS run before any other computations
+    {
+        embd0 = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+        ggml_build_forward_order(gf, embd0);
+
+        embd1 = inp->embd;
+
+        if (has_mixed) {
+            embd2 = ggml_get_rows(ctx0, tok_embd, inp->mixed_tokens);
+            ggml_build_forward_order(gf, embd2);
+        }
+    }
+
+    // helper for extracting token embeddings with lora and padding
+    // TODO: when lora is active, this is likely going to cause issues similar to https://github.com/ggml-org/llama.cpp/pull/30160
+    //       need to add lora tests and refactor the logic to make the lora GET_ROWS go at the front of the graph
+    auto build_tok = [&](ggml_tensor * cur, ggml_tensor * ids) {
         // apply lora for embedding tokens if needed
         for (const auto & lora : *loras) {
             llama_adapter_lora_weight * lw = lora.first->get_weight(tok_embd);
@@ -2509,21 +2552,15 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     std::array<ggml_tensor *, 3> inps = {};
 
     // token embeddings path (ubatch.token != nullptr)
-    inps[0] = build_tok(inp->tokens);
+    inps[0] = build_tok(embd0, inp->tokens);
 
     // vector embeddings path (ubatch.embd != nullptr)
-    inps[1] = inp->embd;
+    inps[1] = embd1;
 
-    // mixed path (ubatch.is_mixed()): set_rows the token rows into a copy of the embd rows, with its own inputs as select branches must not share tensors
-    // TODO: use inp->tokens and inp->embd once ggml_build_forward_select allows it
-    const bool has_mixed = llm_arch_supports_mixed_batch(arch) && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT;
+    assert(ggml_are_same_shape (inps[0], inps[1]));
+    assert(ggml_are_same_stride(inps[0], inps[1]));
+
     if (has_mixed) {
-        const int64_t n_tok_rows = llm_graph_n_tok_rows(ubatch);
-
-        inp->mixed_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tok_rows);
-        cb(inp->mixed_tokens, "inp_mixed_tokens", -1);
-        ggml_set_input(inp->mixed_tokens);
-
         inp->mixed_slots = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_tok_rows);
         cb(inp->mixed_slots, "inp_mixed_slots", -1);
         ggml_set_input(inp->mixed_slots);
@@ -2533,11 +2570,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
         ggml_set_input(inp->mixed_embd);
 
         // note: set_rows writes into its destination, so it gets a copy of the input
-        inps[2] = ggml_set_rows(ctx0, ggml_dup(ctx0, inp->mixed_embd), build_tok(inp->mixed_tokens), inp->mixed_slots);
-    }
+        ggml_tensor * embd_mixed = build_tok(embd2, inp->mixed_tokens);
+        inps[2] = ggml_set_rows(ctx0, ggml_dup(ctx0, inp->mixed_embd), embd_mixed, inp->mixed_slots);
 
-    assert(ggml_are_same_shape (inps[0], inps[1]));
-    assert(ggml_are_same_stride(inps[0], inps[1]));
+        assert(ggml_are_same_shape (inps[0], inps[2]));
+        assert(ggml_are_same_stride(inps[0], inps[2]));
+    }
 
     const int idx = ubatch.is_mixed() ? 2 : ubatch.token ? 0 : 1;
 
@@ -3903,11 +3941,7 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    if (arch == LLM_ARCH_MODERN_BERT) {
-                        cur = ggml_gelu(ctx0, cur);
-                    } else {
-                        cur = ggml_tanh(ctx0, cur);
-                    }
+                    cur = ggml_unary(ctx0, cur, hparams.act_cls);
                     if (cls_norm) {
                         // head norm
                         cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
@@ -3969,8 +4003,7 @@ void llm_graph_context::build_sampling() const {
     // res->t_logits will contain logits for all tokens that want the logits calculated (logits=1 or output=1)
     GGML_ASSERT(res->t_logits != nullptr && "missing t_logits tensor");
 
-    // add a dummy row to keep the single-output graph static regardless of active samplers
-    // multi-output graphs can still vary with the number of output rows
+    // the padding row gives the chains without a row of the ubatch a valid input, even with no output at all
     ggml_tensor * logits_t = ggml_pad(ctx0, res->t_logits, 0, 1, 0, 0);
 
     for (const auto & entry : samplers) {
@@ -3979,18 +4012,20 @@ void llm_graph_context::build_sampling() const {
         }
     }
 
-    static const std::vector<uint32_t> dummy_row = { 0 };
+    static const std::vector<uint32_t> no_rows;
 
+    // every sampler builds n_outputs_max_per_seq chains, like the reserve, so the graph keeps its topology
+    // whatever rows the ubatch outputs: a chain without a row works on the first row and is not selected
     for (const auto & [seq_id, sampler] : samplers) {
         const auto it = sampling_rows.find(seq_id);
+        const auto & rows = it != sampling_rows.end() ? it->second : no_rows;
 
-        // inactive samplers always work on the first row
-        const bool active = it != sampling_rows.end();
-        const auto & rows = active ? it->second : dummy_row;
-        const int i_out   = active ? 1          : 0;
+        for (uint32_t i = 0; i < cparams.n_outputs_max_per_seq; ++i) {
+            const bool     active = i < rows.size();
+            const uint32_t row    = active ? rows[i] : 0;
+            const int      i_out  = active ? 1       : 0;
 
-        for (uint32_t i = 0; i < rows.size(); ++i) {
-            ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, logits_t->ne[0], rows[i] * logits_t->nb[1]);
+            ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, logits_t->ne[0], row * logits_t->nb[1]);
             ggml_format_name(logits_seq, "logits_seq_%d_%u", seq_id, i);
 
             struct llama_sampler_data data = {
@@ -4005,7 +4040,7 @@ void llm_graph_context::build_sampling() const {
 
             if (data.sampled != nullptr) {
                 if (active) {
-                    res->t_sampled[rows[i]] = data.sampled;
+                    res->t_sampled[row] = data.sampled;
                 }
                 outs[1] = data.sampled;
                 ggml_build_forward_select(gf, outs.data(), outs.size(), i_out);
@@ -4013,7 +4048,7 @@ void llm_graph_context::build_sampling() const {
 
             if (data.probs != nullptr) {
                 if (active) {
-                    res->t_sampled_probs[rows[i]] = data.probs;
+                    res->t_sampled_probs[row] = data.probs;
                 }
                 outs[1] = data.probs;
                 ggml_build_forward_select(gf, outs.data(), outs.size(), i_out);
@@ -4021,7 +4056,7 @@ void llm_graph_context::build_sampling() const {
 
             if (data.logits != nullptr) {
                 if (active) {
-                    res->t_sampled_logits[rows[i]] = data.logits;
+                    res->t_sampled_logits[row] = data.logits;
                 }
                 outs[1] = data.logits;
                 ggml_build_forward_select(gf, outs.data(), outs.size(), i_out);
@@ -4029,7 +4064,7 @@ void llm_graph_context::build_sampling() const {
 
             if (data.candidates != nullptr) {
                 if (active) {
-                    res->t_candidates[rows[i]] = data.candidates;
+                    res->t_candidates[row] = data.candidates;
                 }
                 outs[1] = data.candidates;
                 ggml_build_forward_select(gf, outs.data(), outs.size(), i_out);
