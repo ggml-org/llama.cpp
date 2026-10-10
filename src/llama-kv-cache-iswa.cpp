@@ -145,7 +145,18 @@ llama_pos llama_kv_cache_iswa::seq_pos_min(llama_seq_id seq_id) const {
 }
 
 llama_pos llama_kv_cache_iswa::seq_pos_max(llama_seq_id seq_id) const {
-    return kv_swa->seq_pos_max(seq_id);
+    const llama_pos pos_swa  = kv_swa->seq_pos_max(seq_id);
+    const llama_pos pos_base = kv_base->seq_pos_max(seq_id);
+
+    // the base cache is a superset of the SWA cache, but after a partial seq_rm below the
+    // sliding window the SWA cache can be empty while the base cache still holds cells.
+    // answering from the SWA cache alone would then return -1 for a non-empty sequence and callers
+    // that derive positions from it (e.g. llama_batch_get_one) would restart at position 0.
+    // continuing from the base position instead would leave the SWA data missing and give
+    // subtly wrong results, so do not let that happen silently
+    GGML_ASSERT((pos_swa >= 0 || pos_base < 0) && "SWA cache is empty but the base cache is not - the SWA state was not restored");
+
+    return pos_swa;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_iswa::memory_breakdown() const {
