@@ -44,6 +44,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
     switch (arch) {
         case LLM_ARCH_CLIP:
             return new llama_model_clip(params);
+        case LLM_ARCH_DORY:
+            return new llama_model_dory(params);
         case LLM_ARCH_LLAMA:
             return new llama_model_llama(params);
         case LLM_ARCH_LLAMA4:
@@ -2825,6 +2827,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     llama_memory_i::layer_reuse_cb reuse = nullptr;
                     llama_kv_cache::layer_share_cb share = nullptr;
 
+                    if (arch == LLM_ARCH_DORY) {
+                        filter = [&](uint32_t il) {
+                            const auto & dory = static_cast<const llama_model_dory &>(*this);
+                            return hparams.n_head_kv(il) > 0 && dory.cache_layer[il] == (int) il;
+                        };
+                    }
+
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
                         reuse = [&](uint32_t il) {
                             GGML_ASSERT(hparams.n_layer_kv_from_start >= 2);
@@ -3149,6 +3158,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
+        case LLM_ARCH_DORY:
         case LLM_ARCH_FALCON:
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_GROK:

@@ -6,6 +6,7 @@
 #include <vector>
 
 static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+    { LLM_ARCH_DORY,             "dory"             },
     { LLM_ARCH_CLIP,             "clip"             }, // dummy, only used by llama-quantize
     { LLM_ARCH_LLAMA,            "llama"            },
     { LLM_ARCH_LLAMA4,           "llama4"           },
@@ -447,6 +448,12 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 };
 
 static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+    { LLM_TENSOR_DORY_ALPHA,       "blk.%d.dory_alpha" },
+    { LLM_TENSOR_DORY_SQK,         "blk.%d.dory_sqk" },
+    { LLM_TENSOR_DORY_S_GATE,      "blk.%d.dory_s_gate" },
+    { LLM_TENSOR_DORY_SUV_GATE,    "blk.%d.dory_suv_gate" },
+    { LLM_TENSOR_DORY_SUV_UP,      "blk.%d.dory_suv_up" },
+    { LLM_TENSOR_DORY_LOGIT_SCALE, "dory_logit_scale" },
     { LLM_TENSOR_TOKEN_EMBD,                             "token_embd" },
     { LLM_TENSOR_OUTPUT_NORM,                            "output_norm" },
     { LLM_TENSOR_OUTPUT_NORM_LFM2,                       "token_embd_norm" }, // fix for wrong tensor name
@@ -754,6 +761,12 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
 // example: https://github.com/ggml-org/llama.cpp/pull/17548
 //
 static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+    {LLM_TENSOR_DORY_ALPHA,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_DORY_SQK,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_DORY_S_GATE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_DORY_SUV_GATE,    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_DORY_SUV_UP,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_DORY_LOGIT_SCALE, {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_TOKEN_EMBD,                 {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_POS_EMBD,                   {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_TOKEN_TYPES,                {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},

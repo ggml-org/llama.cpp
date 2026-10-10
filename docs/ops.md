@@ -2,6 +2,8 @@
 
 List of GGML operations and backend support status.
 
+For CUDA `MUL_MAT` with F32 weights and activations, an explicit `ggml_prec_set_src(result, GGML_PREC_F32, 1)` preserves F32 input precision. On NVIDIA GPUs this bypasses the TF32 small-matrix kernel and selects full F32 cuBLAS computation where needed. Default precision and BF16/quantized-weight dispatch are unchanged. This does not extend the source-precision guarantee to `MUL_MAT_ID` or other weight types.
+
 ## How to add a backend to this table:
 
 1. Run `test-backend-ops support --output csv` with your backend name and redirect output to a csv file in `docs/ops/` (e.g., `docs/ops/CUDA.csv`)

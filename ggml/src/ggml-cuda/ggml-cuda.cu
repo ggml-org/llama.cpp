@@ -1540,7 +1540,16 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     // Theoretically cublasGemmStridedBatchedEx would always work, even for a single matrix.
     // However, for some old NVIDIA and AMD GPUs the strided/Ex GEMM is much slower,
     //     probably because the internal kernel selection logic is suboptimal.
-    if (compute_type == GGML_TYPE_F32 && ne12 == 1 && ne13 == 1) {
+    bool full_f32 = false;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    full_f32 = compute_type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 &&
+        ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32;
+    if (full_f32) {
+        // The shared handle allows TF32; use an explicit compute type instead of changing its math mode.
+        cu_compute_type = CUBLAS_COMPUTE_32F_PEDANTIC;
+    }
+#endif
+    if (!full_f32 && compute_type == GGML_TYPE_F32 && ne12 == 1 && ne13 == 1) {
         CUBLAS_CHECK(
             cublasSgemm(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
                     ne01, ne11, ne10,
@@ -1943,7 +1952,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
         return;
     }
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
+    // F32 MMF uses TF32 inputs on NVIDIA GPUs. Honor an explicit full-precision source request.
+    const bool full_f32 = GGML_CUDA_CC_IS_NVIDIA(cc) && src0->type == GGML_TYPE_F32 &&
+        ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32;
+    if (!full_f32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }

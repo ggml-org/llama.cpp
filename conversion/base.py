@@ -120,6 +120,8 @@ class ModelBase:
     supports_mtp_export: bool = False
     mtp_only: bool = False
     no_mtp: bool = False
+    # Opt in only when the model graph casts stored scale vectors before F32 math.
+    allow_non_f32_vectors: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
@@ -1080,7 +1082,7 @@ class ModelBase:
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
-                if n_dims <= 1 or new_name.endswith("_norm.weight"):
+                if (n_dims <= 1 and not self.allow_non_f32_vectors) or new_name.endswith("_norm.weight"):
                     data_qtype = gguf.GGMLQuantizationType.F32
 
                 # Conditions should closely match those in llama_model_quantize_internal in llama.cpp
