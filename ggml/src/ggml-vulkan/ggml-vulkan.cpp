@@ -745,10 +745,14 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         pipeline_shader_create_info.setPNext(&pipeline_shader_stage_required_subgroup_size_create_info);
     }
 
+    // FA pipelines may be dispatched with a base group (query-row slicing)
+    vk::PipelineCreateFlags pipeline_create_flags = pipeline->name.rfind("flash_attn_", 0) == 0 ?
+        vk::PipelineCreateFlags(vk::PipelineCreateFlagBits::eDispatchBase) : vk::PipelineCreateFlags{};
+    if (device->pipeline_executable_properties_support) {
+        pipeline_create_flags |= vk::PipelineCreateFlagBits::eCaptureStatisticsKHR;
+    }
     vk::ComputePipelineCreateInfo compute_pipeline_create_info(
-        device->pipeline_executable_properties_support ?
-            vk::PipelineCreateFlagBits::eCaptureStatisticsKHR :
-            vk::PipelineCreateFlags{},
+        pipeline_create_flags,
         pipeline_shader_create_info,
         pipeline->layout);
 
@@ -4018,6 +4022,11 @@ vk_device ggml_vk_get_device(size_t idx) {
         const std::vector<vk::ExtensionProperties> ext_props = device->physical_device.enumerateDeviceExtensionProperties();
 
         device->architecture = get_device_architecture(device->physical_device);
+
+        if (device->architecture == AMD_RDNA3) {
+            device->fa_qslice_rows = 512;
+            device->fa_qslice_min_kv = 12288;
+        }
 
         const char* GGML_VK_PREFER_HOST_MEMORY = getenv("GGML_VK_PREFER_HOST_MEMORY");
         device->prefer_host_memory = GGML_VK_PREFER_HOST_MEMORY != nullptr;
@@ -8172,6 +8181,12 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                             (int64_t)KV >= std::max<int64_t>(4096, min_ratio * (int64_t)n_kv_max) &&
                             (gqa_ratio > 1 || (tuning_params.path == FA_SCALAR && N == 1));
 
+    // At deep KV, a large-N dispatch is slower per row than the same rows issued as smaller serialized slices.
+    // Only the plain dispatch path is sliced (no GQA rewrite, no sparse mask, split_k == 1, checked below).
+    const uint32_t fa_qslice = ctx->device->fa_qslice_rows / tuning_params.block_rows * tuning_params.block_rows;
+    const bool fa_qslice_ready = fa_qslice > 0 && gqa_ratio == 1 && !use_sparse && N > fa_qslice && KV >= ctx->device->fa_qslice_min_kv;
+    const uint32_t fa_qslice_n = fa_qslice_ready ? CEIL_DIV(N, fa_qslice) : 1;
+
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
@@ -8237,7 +8252,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     assert(pipeline);
     // Compile early to initialize wg_denoms.
-    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, fa_qslice_n);
 
     uint32_t split_kv = KV;
     uint32_t split_k = 1;
@@ -8572,9 +8587,23 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             // When using gqa, we want one actual workgroup per batch, so cancel out wg_denoms
             workgroups_x *= pipeline->wg_denoms[0];
         }
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, mask_opt_buf, sparse_buf},
-                                    pc, { workgroups_x, workgroups_y, workgroups_z });
+        if (fa_qslice_ready && split_k == 1 && fa_qslice % pipeline->wg_denoms[0] == 0) {
+            // the FA shaders find their rows from gl_WorkGroupID.x only, so a base group selects the slice
+            for (uint32_t q0 = 0; q0 < N; q0 += fa_qslice) {
+                const uint32_t qs = std::min(fa_qslice, N - q0);
+                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+                                            {q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, mask_opt_buf, sparse_buf},
+                                            pc, { qs, workgroups_y, workgroups_z },
+                                            { q0 / pipeline->wg_denoms[0], 0, 0 });
+                if (q0 + qs < N) {
+                    ggml_vk_sync_buffers(ctx, subctx);
+                }
+            }
+        } else {
+            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+                                        {q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, mask_opt_buf, sparse_buf},
+                                        pc, { workgroups_x, workgroups_y, workgroups_z });
+        }
     }
 
     if (use_dequant_kv) {

@@ -258,7 +258,7 @@ uint32_t ggml_vk_concat_unit_size(ggml_type type);
 bool ggml_vk_concat_supported(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst);
 
 template <typename T>
-inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, const T &push_constants, std::array<uint32_t, 3> elements) {
+inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, const T &push_constants, std::array<uint32_t, 3> elements, std::array<uint32_t, 3> base_group = {0, 0, 0}) {
     const uint32_t wg0 = CEIL_DIV(elements[0], pipeline->wg_denoms[0]);
     const uint32_t wg1 = CEIL_DIV(elements[1], pipeline->wg_denoms[1]);
     const uint32_t wg2 = CEIL_DIV(elements[2], pipeline->wg_denoms[2]);
@@ -267,9 +267,12 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
         std::cerr << "(" << buffer.buffer << ", " << buffer.offset << ", " << buffer.range << "), ";
     }
     std::cerr << "}, (" << wg0 << "," << wg1 << "," << wg2 << "))");
-    GGML_ASSERT(wg0 <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
-                wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
-                wg2 <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
+    GGML_ASSERT(base_group[0] < ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
+                base_group[1] < ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
+                base_group[2] < ctx->device->properties.limits.maxComputeWorkGroupCount[2] &&
+                wg0 <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] - base_group[0] &&
+                wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] - base_group[1] &&
+                wg2 <= ctx->device->properties.limits.maxComputeWorkGroupCount[2] - base_group[2]);
     GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
     GGML_ASSERT(descriptor_buffer_infos.size() <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
@@ -315,7 +318,12 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
                                 {});
     {
         ggml_vk_debug_label dbg(subctx, pipeline->name, wg0, wg1, wg2);
-        subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
+        if (base_group[0] != 0 || base_group[1] != 0 || base_group[2] != 0) {
+            // requires a pipeline created with VK_PIPELINE_CREATE_DISPATCH_BASE_BIT
+            subctx->s->buffer->buf.dispatchBase(base_group[0], base_group[1], base_group[2], wg0, wg1, wg2);
+        } else {
+            subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
+        }
     }
 }
 
