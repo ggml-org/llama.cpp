@@ -431,8 +431,7 @@ void main() {
                         [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
                             // [WNITER][TN][WMITER][TM / 2] -> [wsic][cc][wsir][cr]
                             const uint sums_idx = (wsic * TN + cc) * WMITER * (TM / 2) + wsir * (TM / 2) + cr;
-                            sums[sums_idx].x = dot_product(cache_a[wsir * TM + 2 * cr    ], cache_b, sums[sums_idx].x);
-                            sums[sums_idx].y = dot_product(cache_a[wsir * TM + 2 * cr + 1], cache_b, sums[sums_idx].y);
+                            sums[sums_idx] = dot_product_v2(cache_a[wsir * TM + 2 * cr], cache_a[wsir * TM + 2 * cr + 1], cache_b, sums[sums_idx]);
                         }
                     }
                 }
