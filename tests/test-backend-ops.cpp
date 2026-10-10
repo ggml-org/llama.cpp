@@ -5308,6 +5308,75 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// Preserve the Q8_0 N=1 input pattern.
+// Standard MUL_MAT tests use uniform initialization and do not cover it.
+struct test_mul_mat_q8_0_varying_range : public test_mul_mat {
+    test_mul_mat_q8_0_varying_range(int64_t m, int64_t k)
+        : test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, m, 1, k, {1, 1}, {1, 1}) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "a") == 0) {
+                GGML_ASSERT(ggml_blck_size(t->type) == 32);
+                GGML_ASSERT(ggml_type_size(t->type) == 34);
+
+                const size_t row_size = ggml_row_size(t->type, k);
+                const size_t n_blocks = k / 32;
+                std::vector<uint8_t> data(row_size * m);
+
+                for (int64_t row = 0; row < m; ++row) {
+                    for (size_t block = 0; block < n_blocks; ++block) {
+                        const int64_t block_idx = (int64_t) block;
+                        uint8_t * dst = data.data() + row * row_size + block * 34;
+
+                        // Cycle Q8_0 block scales from 1/64 to 5/64 across adjacent blocks.
+                        const ggml_fp16_t scale = ggml_fp32_to_fp16(0.015625f * (1 + (row + block_idx) % 5));
+                        memcpy(dst, &scale, sizeof(scale));
+                        for (int i = 0; i < 32; ++i) {
+                            dst[2 + i] = (uint8_t) (int8_t) (((row * 7 + block_idx * 3 + i * 5) % 31) - 15);
+                        }
+                    }
+                }
+
+                ggml_backend_tensor_set(t, data.data(), 0, data.size());
+            } else if (strcmp(t->name, "b") == 0) {
+                std::vector<float> data(ggml_nelements(t));
+
+                // Contour a layer-29 N=1 decode capture. This is not an activation replay.
+                // Uniform initialization gives every group the same value range.
+                for (int64_t i = 0; i < k; ++i) {
+                    const int64_t tile = i / 128;
+                    const int group = (i / 32) % 4;
+                    const int inner = i % 32;
+
+                    float ratio;
+                    float tile_max;
+                    if (k == 2048) {
+                        ratio = tile == 0 ? 0.311f : tile < 5 ? 0.420f : 0.628f;
+                        tile_max = 0.904f;
+                    } else {
+                        GGML_ASSERT(k == 10752);
+                        ratio = tile == 0 ? 0.076f : tile < 18 ? 0.186f : tile < 65 ? 0.345f : tile < 83 ? 0.620f : 0.800f;
+                        tile_max = 0.173f;
+                    }
+
+                    const float group_scale[4] = {ratio, std::max(ratio, 0.75f), 1.0f, std::max(ratio, 0.60f)};
+
+                    // Use a fixed synthetic waveform within each captured range.
+                    float value = std::sin((float) (inner + 1) * 0.049087385f);
+                    if (k == 10752) {
+                        value = value * value * value;
+                    }
+                    data[i] = tile_max * group_scale[group] * value;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -10648,6 +10717,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  1, 16*256, { 1,  1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  8, 16*256, { 1,  1}, {1, 1}));
     }
+
+    test_cases.emplace_back(new test_mul_mat_q8_0_varying_range(32, 2048));
+    test_cases.emplace_back(new test_mul_mat_q8_0_varying_range(32, 10752));
 
     // Multi-column MMVQ coverage for the Q4_K weight-reuse path and a Q5_K control.
     for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K }) {
