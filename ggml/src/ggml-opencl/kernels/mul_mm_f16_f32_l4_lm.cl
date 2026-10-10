@@ -3,13 +3,32 @@
 #define LOAD_VEC_A 4
 #define LOAD_VEC_B 4
 
+// Tile shape is overridable at build time so the same source also builds a narrow
+// instance for skinny-N matmuls (KQ/KQV of a speculative verify batch, ne11 = 2..8).
+// With the default BN=64/TN=8 most of the tile is masked at that width; BN=8/TN=1 with
+// the same 128 threads covers up to 8 columns in one tile.
+#ifndef BM
 #define BM 64
+#endif
+#ifndef BN
 #define BN 64
+#endif
+#ifndef BK
 #define BK 16
+#endif
+#ifndef TM
 #define TM 4
+#endif
+#ifndef TN
 #define TN 8
+#endif
 
-kernel void kernel_mul_mm_f16_f32_l4_lm(
+// The narrow instance exports a distinct symbol so profiles can tell the two apart.
+#ifndef KERNEL_NAME_LM
+#define KERNEL_NAME_LM kernel_mul_mm_f16_f32_l4_lm
+#endif
+
+kernel void KERNEL_NAME_LM(
     global half4 * src0,
     ulong offset0,
     global float4 * src1,
@@ -93,8 +112,12 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
             }
         }
 
+        // loadc_b spans get_local_size(0)/(BK/LOAD_VEC_B) regardless of BN; when BN is
+        // narrower, the extra threads skip the load to avoid writing past buf_b[BN*BK].
         for (int l = 0; l < BN; l += loadstride_b) {
-            if (ic*BN + loadc_b + l < ne11) {
+            if (loadc_b + l >= BN) {
+                // nothing to load for this thread at this tile width
+            } else if (ic*BN + loadc_b + l < ne11) {
                 const int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
                 buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = src1[idx].s0;
                 buf_b[(loadr_b * LOAD_VEC_B + 1) * BN + loadc_b + l] = src1[idx].s1;
