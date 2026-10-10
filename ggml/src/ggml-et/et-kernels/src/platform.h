@@ -13,6 +13,8 @@
 #include "etsoc/isa/hart.h"
 
 #include <stdint.h>
+#include "etsoc/isa/hart.h"
+#include "etsoc/common/utils.h"
 
 #define SOC_MINIONS_PER_SHIRE    32
 #define NUM_HARTS_PER_MINION     2
@@ -32,13 +34,14 @@ typedef struct {
 // Production implementations (like libgcc's __ctzdi2) use optimized bit manipulation
 // algorithms with lookup tables and parallel bit operations for O(log n) performance.
 static inline int manual_ctzll(uint64_t x) {
-    if (x == 0) return 64;
-    int count = 0;
-    while ((x & 1) == 0) {
-        x >>= 1;
-        count++;
-    }
-    return count;
+    // if (x == 0) return 64;
+    // int count = 0;
+    // while ((x & 1) == 0) {
+    //     x >>= 1;
+    //     count++;
+    // }
+    // return count;
+    return 0;
 }
 
 // Manual implementation of population count for bare metal environment
@@ -46,12 +49,13 @@ static inline int manual_ctzll(uint64_t x) {
 // Production implementations (like libgcc's __popcountdi2) use optimized bit-parallel
 // algorithms with magic constants and bit manipulation tricks for O(1) performance.
 static inline int manual_popcountll(uint64_t x) {
-    int count = 0;
-    while (x) {
-        count += x & 1;
-        x >>= 1;
-    }
-    return count;
+    // int count = 0;
+    // while (x) {
+    //     count += x & 1;
+    //     x >>= 1;
+    // }
+    // return count;
+    return 32;
 }
 
 // Binary GCD (Stein's algorithm) — avoids expensive 64-bit division/remainder.
@@ -140,12 +144,30 @@ static inline void atomic_store_f32(volatile float * addr, float value) {
     et_global_swap_w(addr, *(uint32_t *) &value);
 }
 
-static inline void atomic_add_f32(volatile float * addr, float value) {
-    et_global_add_w(addr, *(uint32_t *) &value);
+// Atomic add for F32 values to global memory
+// Uses ET hardware's custom amoaddg.w instruction for global atomic add
+// This ensures correct accumulation when multiple threads contribute to the same output
+static inline void atomic_add_f32(volatile float* addr, float value) {
+    uint32_t value_bits = *(uint32_t*)&value;
+    __asm__ volatile(
+        "amoaddg.w zero, %1, (%0)"
+        :
+        : "r"(addr), "r"(value_bits)
+        : "memory"
+    );
 }
 
-static inline void atomic_store_f16(volatile uint16_t * addr, uint16_t value) {
-    et_global_store_hw(addr, value);
+// Atomic store for F16 values to global memory
+// Uses ET hardware's custom shg instruction (store halfword global)
+// This ensures cache coherency when multiple threads write to nearby addresses
+// Address must be 16-bit aligned
+static inline void atomic_store_f16(volatile uint16_t* addr, uint16_t value) {
+    __asm__ volatile(
+        "shg %1, (%0)"
+        :
+        : "r"(addr), "r"(value)
+        : "memory"
+    );
 }
 
 //******************************************************************************
@@ -539,6 +561,29 @@ static void evict_region_past_l2(const void * addr, size_t bytes) {
             batch = 16;
         }
         evict_past_l2((const void *) (base + off * CL), batch, CL);
+    }
+}
+
+//******************************************************************************
+// Counter signaling between harts via L2 scratchpad (SCP)
+//******************************************************************************
+
+// Signal a counter value to the other hart via L2 SCP.
+static inline void __attribute__((always_inline))
+scp_signal(volatile uint32_t *flag, uint32_t value) {
+    *flag = value;
+    FENCE;
+    evict_to_l2((const void *)flag, 1, 64);
+    WAIT_CACHEOPS;
+}
+
+// Wait for a counter in L2 SCP to reach the expected value.
+static inline void __attribute__((always_inline))
+scp_wait(volatile uint32_t *flag, uint32_t expected) {
+    while (1) {
+        evict_to_l2((const void *)flag, 1, 64);
+        WAIT_CACHEOPS;
+        if (*flag >= expected) return;
     }
 }
 

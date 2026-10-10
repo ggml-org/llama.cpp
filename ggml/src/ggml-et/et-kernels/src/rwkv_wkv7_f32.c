@@ -266,6 +266,22 @@ int entry_point(struct ggml_et_rwkv_wkv7_params * params, void * env) {
                 dst_data[th + i] = hsum_f10();
             }
         }
+
+#ifdef ET_UBERKERNEL
+        for (int32_t t = 0; t < T; t++) {
+            FENCE;
+            evict_region_past_l2(dst_data + t * C + h_off + i_start, (size_t) i_tile * sizeof(float));
+            WAIT_CACHEOPS;
+            FENCE;
+        }
+
+        for (int32_t seq = 0; seq < n_seqs; seq++) {
+            FENCE;
+            evict_region_past_l2(state_out + seq * S * C + s2d + i_start * S, (size_t) i_tile * S * sizeof(float));
+            WAIT_CACHEOPS;
+            FENCE;
+        }
+#endif
     }
 
     return 0;
