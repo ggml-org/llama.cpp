@@ -351,6 +351,9 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
     if (!stream && !probs_output.empty()) {
         res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
     }
+    if (!logit_gate.is_null()) {
+        res["logit_gate"] = logit_gate;
+    }
     return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
@@ -372,7 +375,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         };
     }
     json finish_reason = "length";
-    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS || !logit_gate.is_null()) {
         finish_reason = "stop";
     }
     json res = json {
@@ -391,6 +394,10 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
+
+    if (!logit_gate.is_null()) {
+        res["logit_gate"] = logit_gate;
+    }
 
     // extra fields for debugging purposes
     if (verbose) {
@@ -412,7 +419,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         msg.role = "assistant";
         msg.content = content.text;
     }
-    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS || !logit_gate.is_null()) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
 
@@ -440,6 +447,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"id", oaicompat_cmpl_id}
     };
 
+    if (!logit_gate.is_null()) {
+        res["logit_gate"] = logit_gate;
+    }
+
     // extra fields for debugging purposes
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
@@ -454,7 +465,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::time_t t = std::time(0);
     std::string finish_reason = "length";
-    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS || !logit_gate.is_null()) {
         finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
 
@@ -476,7 +487,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         });
     }
 
-    deltas.push_back({
+    json final_chunk = {
         {"choices", json::array({
             json {
                 {"finish_reason", finish_reason},
@@ -489,7 +500,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"model",              oaicompat_model},
         {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "chat.completion.chunk"},
-    });
+    };
+    if (!logit_gate.is_null()) {
+        final_chunk["logit_gate"] = logit_gate;
+    }
+    deltas.push_back(final_chunk);
 
     if (include_usage) {
         // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage

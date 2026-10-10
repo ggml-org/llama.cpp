@@ -48,6 +48,28 @@ enum stop_type {
     STOP_TYPE_LIMIT,
 };
 
+// one alternative of a logit-gate decision: probability mass is summed over
+// all token ids (a single-token text is exact; extra ids act as aliases)
+struct server_logit_gate_candidate {
+    std::string label;
+    llama_tokens ids;
+};
+
+// single-pass decision gate evaluated on the logits of the last prompt token,
+// before any autoregressive decoding. ref: ggml-org/llama.cpp issue #29022
+struct server_logit_gate {
+    bool enabled = false;
+    bool gate_then_chat = false; // false: always return the distribution; true: only stop when best prob >= threshold
+    float threshold = 0.5f;      // fire threshold for gate_then_chat mode
+    // temperature scaling: divide the candidate logits by this so the returned
+    // probabilities are honest (most models are over-confident). explicit value
+    // from the request wins; else 1.0 (no scaling)
+    float temperature = 1.0f;
+    bool temperature_scaling = true;  // false: ignore the temperature entirely
+    bool return_logits = false;       // also return the raw label logits (for fitting a temperature)
+    std::vector<server_logit_gate_candidate> candidates;
+};
+
 struct task_params {
     bool stream          = false;
     bool include_usage   = false;
@@ -75,6 +97,8 @@ struct task_params {
 
     bool timings_per_token   = false;
     bool post_sampling_probs = false;
+
+    server_logit_gate logit_gate;
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
@@ -378,6 +402,9 @@ struct server_task_result_cmpl_final : server_task_result {
     std::vector<std::string>  response_fields;
 
     task_params generation_params;
+
+    // non-null when the request carried logit_gate and the gate fired
+    json logit_gate;
 
     // response formatting
     bool               verbose  = false;
