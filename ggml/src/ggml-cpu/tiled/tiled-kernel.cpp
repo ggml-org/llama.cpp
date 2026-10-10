@@ -208,6 +208,21 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
 
 #if defined(__AVX2__)
 
+// Return the eight column sums in acc[0]..acc[7] order. All additions wrap modulo 2^32.
+static inline __m256i tiled_hsum8_epi32(const __m256i acc[8]) {
+    const __m256i ab = _mm256_hadd_epi32(acc[0], acc[1]);
+    const __m256i cd = _mm256_hadd_epi32(acc[2], acc[3]);
+    const __m256i ef = _mm256_hadd_epi32(acc[4], acc[5]);
+    const __m256i gh = _mm256_hadd_epi32(acc[6], acc[7]);
+
+    // Each 128-bit half now holds four column sums over input lanes 0..3 or 4..7.
+    const __m256i abcd = _mm256_hadd_epi32(ab, cd);
+    const __m256i efgh = _mm256_hadd_epi32(ef, gh);
+    const __m256i lo = _mm256_permute2x128_si256(abcd, efgh, 0x20);
+    const __m256i hi = _mm256_permute2x128_si256(abcd, efgh, 0x31);
+    return _mm256_add_epi32(lo, hi);
+}
+
 // AVX2 kernel.
 // We're effectively applying the existing vec_dot algorithms to an 8x16 block here.
 // Different paths based on subblock size as it affects when/where we multiply in scales and apply mins
@@ -243,16 +258,6 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
     const int nb_off = seff * NB;
     const int bs_stride = (nkr == 1) ? TILED_TILE_ROWS : TILED_MICRO;
     const int bs_off = seff * TILED_MICRO;
-
-    // Horizontal sum helper: converts 8x32-bit int lane inside a YMM register to scalar int32
-    auto hsum256_epi32 = [](const __m256i v) -> int32_t {
-        __m128i low = _mm256_castsi256_si128(v);
-        __m128i high = _mm256_extracti128_si256(v, 1);
-        __m128i sum128 = _mm_add_epi32(low, high);
-        sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(2, 3, 0, 1)));
-        sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(1, 0, 3, 2)));
-        return _mm_cvtsi128_si32(sum128);
-    };
 
     for (int i = 0; i < TILED_MICRO; i++) {
         const int ar = i0 + i;
@@ -363,13 +368,7 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
             }
 
             // OPTIMIZATION 2: Vectorized Epilogue with FMA3 gating
-            // Reduce accumulators into a 256-bit vector across 8 columns
-            alignas(32) int32_t s1_vals[GROUP];
-            #pragma GCC unroll 8
-            for (int t = 0; t < GROUP; t++) {
-                s1_vals[t] = hsum256_epi32(acc[t]);
-            }
-            __m256i s1_vec = _mm256_load_si256((const __m256i *) s1_vals);
+            __m256i s1_vec = tiled_hsum8_epi32(acc);
 
             if constexpr (BIAS != 0 && ACTBIAS) {
                 // act-bias correction: raw = desired + 128*sum_s scales[s]*w_bsum[s]; corr precomputed in repack_src0
