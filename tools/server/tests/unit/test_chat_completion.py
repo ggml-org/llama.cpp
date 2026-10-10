@@ -1,5 +1,8 @@
+from typing import Literal
+
 import pytest
 from openai import OpenAI
+from pydantic import BaseModel
 from utils import *
 
 server: ServerProcess
@@ -137,6 +140,27 @@ def test_chat_completion_with_openai_library():
     assert res.choices[0].finish_reason == "length"
     assert res.choices[0].message.content is not None
     assert match_regex("(Suddenly)+", res.choices[0].message.content)
+
+
+def test_chat_completion_parse_nested_model():
+    class Detail(BaseModel):
+        status: Literal["ready"]
+
+    class Result(BaseModel):
+        detail: Detail
+
+    server.start()
+    client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
+    res = client.chat.completions.parse(
+        model=server.model_alias,
+        messages=[{"role": "user", "content": "Return the requested result."}],
+        response_format=Result,
+        max_tokens=64,
+        temperature=0.0,
+    )
+    parsed = res.choices[0].message.parsed
+    assert isinstance(parsed, Result)
+    assert parsed.detail.status == "ready"
 
 
 def test_chat_template():
