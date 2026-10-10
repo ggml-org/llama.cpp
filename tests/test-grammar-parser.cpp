@@ -165,6 +165,14 @@ int main()
         root ::= "a"{5000,6000}
     )""");
 
+    verify_failure(R"""(
+        root ::= <[9-5]>
+    )""");
+
+    verify_failure(R"""(
+        root ::= <[4294967296]>
+    )""");
+
     verify_parsing(R"""(
         root ::= "a"{0,5000}
     )""", {
@@ -577,6 +585,22 @@ int main()
         {LLAMA_GRETYPE_TOKEN, 1000},
         {LLAMA_GRETYPE_TOKEN_NOT, 1001},
         {LLAMA_GRETYPE_TOKEN, 1001},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
+    verify_parsing(R"""(
+        root  ::= <[1,5-9,12]> !<[11,20-29]>
+    )""", {
+        {"root", 0}
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_TOKEN, 1},
+        {LLAMA_GRETYPE_TOKEN_ALT, 5},
+        {LLAMA_GRETYPE_TOKEN_RNG_UPPER, 9},
+        {LLAMA_GRETYPE_TOKEN_ALT, 12},
+        {LLAMA_GRETYPE_TOKEN_NOT, 11},
+        {LLAMA_GRETYPE_TOKEN_ALT, 20},
+        {LLAMA_GRETYPE_TOKEN_RNG_UPPER, 29},
         {LLAMA_GRETYPE_END, 0},
     });
 
