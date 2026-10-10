@@ -233,6 +233,10 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         tool_start = format.per_call_start;
     }
 
+    if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+        return ctx.reasoning_parser + tools_parser + p.end();
+    }
+
     return ctx.reasoning_parser + p.optional(p.content(p.until(tool_start))) + tools_parser + p.end();
 }
 
