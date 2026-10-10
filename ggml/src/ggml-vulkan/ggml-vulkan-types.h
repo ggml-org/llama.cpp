@@ -403,6 +403,7 @@ enum vk_conv_shapes {
     CONV_SHAPE_64x32,
     CONV_SHAPE_32x256,
     CONV_SHAPE_64x128,
+    CONV_SHAPE_256x128,
     CONV_SHAPE_COUNT,
 };
 
@@ -418,6 +419,7 @@ inline vk_conv_block_size vk_conv_block_sizes[CONV_SHAPE_COUNT] = {
     {  64,  32, 32 }, // CONV_SHAPE_64x32
     {  32, 256, 16 }, // CONV_SHAPE_32x256
     {  64, 128, 16 }, // CONV_SHAPE_64x128
+    { 256, 128, 16 }, // CONV_SHAPE_256x128
 };
 
 enum dmmv_wg_sizes {
@@ -468,15 +470,15 @@ struct vk_conv2d_pipeline_state {
 
 struct vk_conv3d_pipeline_state {
     vk_conv3d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t s2, uint32_t p0, uint32_t p1, uint32_t p2,
-                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned)
-        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned) {}
+                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned, uint32_t split_k)
+        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned), split_k(split_k) {}
 
     uint32_t s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD;
-    uint32_t aligned;
+    uint32_t aligned, split_k;
 
     bool operator<(const vk_conv3d_pipeline_state &b) const {
-        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned) <
-               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned);
+        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned, split_k) <
+               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned, b.split_k);
     }
 };
 

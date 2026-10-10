@@ -3816,7 +3816,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         auto shmem_req = [&](uint32_t pad, bool csh_store, bool fp16_shmem) {
             const uint32_t elem_size = fp16_shmem ? (uint32_t)sizeof(uint16_t) : (uint32_t)sizeof(float);
-            const uint32_t csh_elems = csh_store ? conv2d_BS.K * conv2d_BS.NPQ : 0u;
+            const uint32_t csh_elems = csh_store ? conv2d_BS.K * conv2d_BS.NPQ : (fp16_shmem ? 8u : 0u);
             return (conv2d_BS.K * (conv2d_BS.CRS + pad) + conv2d_BS.CRS * (conv2d_BS.NPQ + pad) + csh_elems) * elem_size;
         };
 
@@ -3844,9 +3844,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 
         // stage cm2 accumulator through shmem for coalesced global stores;
-        // skipped on 128x128 where the extra Csh footprint hurts occupancy.
+        // skipped on large tiles where the extra Csh footprint hurts occupancy.
         // cm1 always uses the staged path.
-        uint32_t conv2d_csh_store = (device->coopmat2 && s != CONV_SHAPE_128x128) ? 1u : 0u;
+        uint32_t conv2d_csh_store = (device->coopmat2 && s != CONV_SHAPE_128x128 && s != CONV_SHAPE_256x128) ? 1u : 0u;
         if (conv2d_use_cm1) {
             conv2d_csh_store = 1;
         }
@@ -3935,6 +3935,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             spec_constants_cpy.push_back(conv2d_csh_store); \
             spec_constants_cpy.push_back(conv2d_WM); \
             spec_constants_cpy.push_back(conv2d_WN); \
+            spec_constants_cpy.push_back(state.split_k); \
             ggml_vk_create_pipeline( \
                 device, c.second, "conv3d" #type_suffix, \
                 conv3d##type_suffix##spv_suffix##_len, conv3d##type_suffix##spv_suffix##_data, "main", 3, \
@@ -8617,6 +8618,57 @@ static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, u
     }
 }
 
+static vk_conv_shapes ggml_vk_conv3d_select_shape(ggml_backend_vk_context * ctx, const ggml_tensor * kernel, const ggml_tensor * dst, uint32_t & split_k) {
+    split_k = 1;
+    const uint32_t K = ggml_get_op_params_i32(dst, 11);
+    const uint32_t NPQ = ggml_get_op_params_i32(dst, 10) * dst->ne[0] * dst->ne[1] * dst->ne[2];
+    const vk_conv_shapes fallback = ggml_vk_conv_select_shape(ctx, K, NPQ);
+    const uint32_t shader_core_count = ctx->device->shader_core_count;
+    if (!ctx->device->coopmat2 || shader_core_count == 0 || K == 0 || NPQ == 0) {
+        return fallback;
+    }
+    const auto & block = vk_conv_block_sizes[CONV_SHAPE_256x128];
+    const auto & limits = ctx->device->properties.limits;
+    // Use the largest cm2 padding and include the dummy Csh[8].
+    const uint32_t pad = 8, csh_elems = 8;
+    const uint32_t shmem = (block.K * (block.CRS + pad) + block.CRS * (block.NPQ + pad) + csh_elems) * sizeof(uint16_t);
+    if (shmem > limits.maxComputeSharedMemorySize) {
+        return fallback;
+    }
+    const uint32_t channel_tiles = CEIL_DIV(K, block.K);
+    const uint64_t n_tiles = (uint64_t)channel_tiles * CEIL_DIV(NPQ, block.NPQ);
+    // Keep full channel tiles when the grid already fills the GPU.
+    if (n_tiles >= shader_core_count) {
+        return K % block.K == 0 ? CONV_SHAPE_256x128 : fallback;
+    }
+    static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV3D_SPLIT_K") != nullptr;
+    // Do not use a tile with more than half its output channels padded.
+    if (disable_split_k || K < block.K / 2 || !ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0) {
+        return fallback;
+    }
+    // Use power-of-two splits to give each core at least one workgroup.
+    uint64_t splits = 1;
+    while (n_tiles * splits < shader_core_count) {
+        splits *= 2;
+    }
+    const uint64_t crs = (uint64_t)ggml_get_op_params_i32(dst, 9) * kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
+    const uint64_t operand_bytes = block.K * ggml_type_size(kernel->type) + block.NPQ * sizeof(float);
+    const uint64_t scratch_bytes = 2 * sizeof(float) * block.K * block.NPQ;
+    // Do not add more scratch bytes than the estimated operand load bytes.
+    if (crs * operand_bytes < splits * scratch_bytes) {
+        return fallback;
+    }
+    const uint64_t ne = ggml_nelements(dst);
+    const uint64_t bytes = ggml_nbytes(dst);
+    if (ne == 0 || CEIL_DIV(ne, ctx->device->pipeline_matmul_split_k_reduce->wg_denoms[0]) > limits.maxComputeWorkGroupCount[0] ||
+        splits > limits.maxStorageBufferRange / bytes ||
+        splits > limits.maxComputeWorkGroupCount[0] / channel_tiles) {
+        return fallback;
+    }
+    split_k = (uint32_t)splits;
+    return CONV_SHAPE_256x128;
+}
+
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * dst, ggml_op op) {
     switch (op) {
     case GGML_OP_GET_ROWS:
@@ -9282,7 +9334,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             const uint32_t IC = (uint32_t)ggml_get_op_params_i32(dst, 9);
             const uint32_t N  = (uint32_t)ggml_get_op_params_i32(dst, 10);
             const uint32_t NPQ = N * dst->ne[2] * dst->ne[1] * dst->ne[0];
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, OC, NPQ);
+            uint32_t split_k;
+            const vk_conv_shapes shape = ggml_vk_conv3d_select_shape(ctx, src0, dst, split_k);
 
             const uint32_t KW = (uint32_t)src0->ne[0];
             const uint32_t KH = (uint32_t)src0->ne[1];
@@ -9305,7 +9358,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                                       (CRS % BS_CRS == 0) &&
                                       (NPQ % BS_NPQ == 0)) ? 1u : 0u;
 
-            vk_conv3d_pipeline_state conv3d_pipeline_state(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned);
+            vk_conv3d_pipeline_state conv3d_pipeline_state(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned, split_k);
 
             std::map<vk_conv3d_pipeline_state, vk_pipeline> *pipelines = nullptr;
             if (src0->type == GGML_TYPE_F32) {
@@ -9422,6 +9475,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     init_pushconst_tensor_offsets(ctx, pc, src0, src1, src2, src3, dst);
 
     std::array<uint32_t, 3> elements;
+    uint32_t split_k = 1;
 
     switch (op) {
     case GGML_OP_NORM:
@@ -9594,10 +9648,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_3D:
         if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
             const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, pc.OC, NPQ);
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, vk_conv_block_sizes[shape].NPQ);
+            const vk_conv_shapes shape = ggml_vk_conv3d_select_shape(ctx, src0, dst, split_k);
+            const auto & block = vk_conv_block_sizes[shape];
+            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
+            const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.OC, block.K) * block.K * split_k : pc.OC;
 
-            elements = { pc.OC, NPQ_blocks, 1 };
+            elements = { channel_groups, NPQ_blocks, 1 };
             if (elements[1] > 512) {
                 elements[2] = CEIL_DIV(elements[1], 512);
                 elements[1] = 512;
@@ -9717,6 +9773,29 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     default:
         elements = { (uint32_t)ggml_nelements(src0), 1, 1 };
         break;
+    }
+
+    if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
+        if (split_k > 1) {
+            const uint32_t ne = (uint32_t)ggml_nelements(dst);
+            const size_t scratch_size = ggml_nbytes(dst) * split_k;
+            if (ctx->prealloc_size_split_k < scratch_size) {
+                ctx->prealloc_size_split_k = scratch_size;
+                ggml_vk_preallocate_buffers(ctx, subctx);
+            }
+            if (ctx->prealloc_split_k_need_sync) {
+                ggml_vk_sync_buffers(ctx, subctx);
+            }
+            vk_subbuffer scratch = { ctx->prealloc_split_k, 0, scratch_size };
+            pc.dst_offset = 0;
+            ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, 1);
+            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, src1_buf, scratch }, pc, elements);
+            ggml_vk_sync_buffers(ctx, subctx);
+            const std::array<uint32_t, 2> reduce_pc = { ne, split_k };
+            ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_matmul_split_k_reduce, { scratch, dst_buf }, reduce_pc, { ne, 1, 1 });
+            ctx->prealloc_split_k_need_sync = true;
+            return;
+        }
     }
 
     if (op == GGML_OP_ADD || op == GGML_OP_RMS_NORM) {
