@@ -5311,10 +5311,6 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    if (dst->ne[3] != 1) {
-        return false;
-    }
-
     struct htp_fa_kernel_params kparams;
     if (!ggml_hexagon_precompute_flash_attn_params(sess, op, &kparams)) {
         return false;
