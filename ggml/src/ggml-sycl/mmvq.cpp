@@ -2958,6 +2958,7 @@ bool ggml_sycl_mul_mat_vec_q_id(
     size_t             dst_row_stride,
     size_t             src1_row_stride,
     dpct::queue_ptr    stream) {
+    // if adding a new type, ensure it is also added to ggml_sycl_supports_mmvq_id
     switch (src0_type) {
         case GGML_TYPE_Q4_0:
             launch_mul_mat_vec_q_moe<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
