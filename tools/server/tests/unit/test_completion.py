@@ -237,6 +237,29 @@ def test_nocache_long_input_prompt():
     })
     assert res.status_code == 400
 
+
+# a request pinned to a busy slot leaves the generation running on it untouched
+def test_pinned_request_on_busy_slot():
+    global server
+    server.n_ctx = 4096
+    server.start()
+    story = "Once upon a time a dragon named Ember guarded a golden key in a deep cave. " * 8
+
+    def run(pin_busy: bool) -> str:
+        server.make_request("POST", "/completion", data={"prompt": story, "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        res = server.make_stream_request("POST", "/completion", data={
+            "prompt": "To bake bread, mix flour, water and salt, then",
+            "id_slot": 0, "n_predict": 1024, "ignore_eos": True, "temperature": 0.0, "stream": True,
+        })
+        content = next(res)["content"]
+        if pin_busy:
+            server.make_request("POST", "/completion", data={"prompt": story + "The dragon", "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        return content + "".join(chunk["content"] for chunk in res)
+
+    baseline = run(pin_busy=False)
+    assert run(pin_busy=True) == baseline
+
+
 def test_json_prompt_no_mtmd():
     global server
     server.start()
