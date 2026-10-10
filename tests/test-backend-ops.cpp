@@ -12738,7 +12738,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
 
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
-        
+
         bool ran_any = true;
         if (tests_run == 0 && (not_supported == 0 || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_ACCEL)) {
             if (not_supported == 0) {
