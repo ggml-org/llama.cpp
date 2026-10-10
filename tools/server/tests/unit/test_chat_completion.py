@@ -587,6 +587,9 @@ def test_chat_completions_multiple_choices():
         for choice in res.body["choices"]:
             assert "assistant" == choice["message"]["role"]
             assert choice["finish_reason"] == "length"
+        # usage must be summed across all choices, not just the first one
+        assert res.body["usage"]["completion_tokens"] == 16
+        assert res.body["usage"]["total_tokens"] == res.body["usage"]["prompt_tokens"] + 16
 
 
 def test_chat_completions_token_count():
