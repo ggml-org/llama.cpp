@@ -10983,6 +10983,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // test src1 f16 overflow
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4}) {
+        for (int n : {1, 8, 9}) {
+            for (bool b : {false, true}) {
+                test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 4, b, 64, n, 256, 3e5f, 80));
+            }
+        }
+    }
     for (int n : {16, 32, 64}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 4, false, 4096, n, 2048, 1e5f));
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8,   2, false, 512,  n, 256,  1e5f));
