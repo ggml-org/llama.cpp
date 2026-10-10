@@ -729,6 +729,25 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     return n >= n_seqs;
 }
 
+bool llama_memory_recurrent::seq_fork(llama_seq_id seq_id, llama_pos pos) {
+    if (seq_id < 0 || (uint32_t) seq_id >= size) {
+        return false;
+    }
+    const int32_t tail_id = cells[seq_id].tail;
+    if (tail_id < 0) {
+        return false;
+    }
+    auto & cell = cells[tail_id];
+    if (!cell.has_seq_id(seq_id)) {
+        return false;
+    }
+    if ((uint32_t) seq_id < rs_idx.size()) {
+        set_rs_idx(seq_id, 0);
+    }
+    cell.pos = pos;
+    return true;
+}
+
 bool llama_memory_recurrent::get_can_shift() const {
     // shifting the pos is trivial for recurrent models
     return true;

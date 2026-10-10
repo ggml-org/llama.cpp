@@ -592,7 +592,7 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
     }
 
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
-    GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_add() is only supported for n_pos_per_embd() == 1");
+    GGML_ASSERT((hparams.n_pos_per_embd() == 1 || get_can_shift()) && "seq_add() is only supported for n_pos_per_embd() == 1");
 
     auto & cells = v_cells[seq_to_stream[seq_id]];
     auto & head  = v_heads[seq_to_stream[seq_id]];
@@ -1211,7 +1211,13 @@ bool llama_kv_cache::get_can_shift() const {
         return false;
     }
     if (hparams.n_pos_per_embd() > 1) {
-        return false;
+        // opt-in: for text tokens all M-RoPE sections hold the same position, so the NEOX shift in build_rope_shift is exact
+        // the caller must not shift cached image/audio tokens
+        static const bool LLAMA_KV_SHIFT_MROPE = [] {
+            const char * env = getenv("LLAMA_KV_SHIFT_MROPE");
+            return env && atoi(env) != 0;
+        }();
+        return LLAMA_KV_SHIFT_MROPE;
     }
     return true;
 }

@@ -115,6 +115,8 @@ class ServerProcess:
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
+    n_cache_reuse_hybrid: int | None = None
+    cache_reuse_hybrid_min_share: float | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
@@ -283,6 +285,10 @@ class ServerProcess:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
+        if self.n_cache_reuse_hybrid is not None:
+            server_args.extend(["--cache-reuse-hybrid", self.n_cache_reuse_hybrid])
+        if self.cache_reuse_hybrid_min_share is not None:
+            server_args.extend(["--cache-reuse-hybrid-min-share", self.cache_reuse_hybrid_min_share])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
@@ -677,6 +683,21 @@ class ServerPreset:
         server.n_batch = 512
         server.n_slots = 2
         server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinylfm2() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        server.model_hf_repo = "ggml-org/LFM2-test-ci-80M"
+        server.model_hf_file = None
+        server.model_alias = "tinylfm2"
+        server.n_ctx = 1024
+        server.n_batch = 256
+        server.n_slots = 1
+        server.n_predict = 4
+        server.temperature = 0.0
         server.seed = 42
         return server
 

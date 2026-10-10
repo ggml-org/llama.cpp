@@ -236,6 +236,9 @@ public:
 
     bool empty() const { return tokens.empty(); }
 
+    // true if any image/audio chunk is held (has_mtmd only means that mtmd is loaded)
+    bool has_media() const { return !map_idx_to_media.empty(); }
+
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();

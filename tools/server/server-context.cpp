@@ -18,6 +18,8 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include "../../src/llama-ext.h" // staging API: llama_memory_seq_rs_fork
+
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
@@ -26,6 +28,7 @@
 #include <filesystem>
 #include <random>
 #include <utility>
+#include <unordered_map>
 #include <fstream>
 
 // fix problem with std::min and std::max
@@ -249,6 +252,9 @@ struct server_slot {
     llama_context * ctx_dft = nullptr;
 
     common_memory mem;
+
+    // --cache-reuse-hybrid: prompt ranges [first, second) whose KV is already in place, prompt processing skips them
+    std::vector<std::pair<int, int>> scr_spans;
 
     // multimodal
     mtmd_context * mctx = nullptr;
@@ -1310,8 +1316,7 @@ private:
             }
 
             if (params_base.n_cache_reuse) {
-                params_base.n_cache_reuse = 0;
-                SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
+                SRV_WRN("%s\n", "cache_reuse with multimodal: only applied while the cached and new prompts are text-only");
             }
         }
 
@@ -3142,6 +3147,147 @@ private:
     };
 #endif
 
+    // cache reuse for recurrent/hybrid memory (--cache-reuse-hybrid)
+    // find cached spans that reappear in order after the common prefix, move their KV to the new positions and drop the rest
+    // the recurrent state of the previous prompt is relabeled as the state at the end of the prefix (approximate)
+    // the spans go to slot.scr_spans, the last n_tail tokens of each span are processed again
+    int scr_plan(server_slot & slot, const server_tokens & input_tokens, int n_past, int n_min) {
+        const int n_tail = std::max(1, params_base.n_cache_reuse_hybrid);
+        const int n_c = (int) slot.prompt.tokens.size();
+        const int n_p = (int) input_tokens.size();
+        n_min = std::max(1, n_min);
+
+        if (n_past < 1 || n_c - n_past < n_min || n_p - n_past < n_min) {
+            return n_past;
+        }
+
+        const auto & cache = slot.prompt.tokens;
+
+        auto hash_at = [n_min](const server_tokens & t, int i) {
+            uint64_t h = 1469598103934665603ULL;
+            for (int k = 0; k < n_min; k++) {
+                h ^= (uint64_t) (uint32_t) t[i + k];
+                h *= 1099511628211ULL;
+            }
+            return h;
+        };
+
+        std::unordered_multimap<uint64_t, int> idx;
+        for (int j = n_past; j + n_min <= n_c; j++) {
+            idx.emplace(hash_at(cache, j), j);
+        }
+
+        struct span { int p0, c0, len; };
+        std::vector<span> plan;
+
+        int hp = n_past;
+        int hc = n_past;
+        while (hp + n_min <= n_p && hc + n_min <= n_c) {
+            bool found = false;
+            for (int i = hp; i + n_min <= n_p && !found; i++) {
+                const auto range = idx.equal_range(hash_at(input_tokens, i));
+                int best = -1;
+                for (auto it = range.first; it != range.second; ++it) {
+                    const int j = it->second;
+                    if (j < hc || (best >= 0 && j >= best)) {
+                        continue;
+                    }
+                    bool eq = true;
+                    for (int k = 0; k < n_min && eq; k++) {
+                        eq = cache[j + k] == input_tokens[i + k];
+                    }
+                    if (eq) {
+                        best = j;
+                    }
+                }
+                if (best >= 0) {
+                    int len = n_min;
+                    while (i + len < n_p && best + len < n_c && cache[best + len] == input_tokens[i + len]) {
+                        len++;
+                    }
+                    plan.push_back({ i, best, len });
+                    hp = i + len;
+                    hc = best + len;
+                    found = true;
+                }
+            }
+            if (!found) {
+                break;
+            }
+        }
+
+        auto * mem_tgt = llama_get_memory(ctx_tgt);
+        auto * mem_dft = ctx_dft ? llama_get_memory(ctx_dft) : nullptr;
+
+        // the last prompt token is always processed
+        std::vector<span> kept;
+        int n_reused = 0;
+        for (auto sp : plan) {
+            sp.len = std::min(sp.len - n_tail, n_p - 1 - sp.p0);
+            if (sp.len < n_min) {
+                continue;
+            }
+            kept.push_back(sp);
+            n_reused += sp.len;
+        }
+        if (kept.empty()) {
+            return n_past;
+        }
+
+        // the stale recurrent state costs quality, so take this path only when it saves enough
+        const float min_share = params_base.cache_reuse_hybrid_min_share;
+        if (n_reused < n_min || (double) n_reused < (double) min_share * n_p) {
+            SLT_INF(slot, "scr: would reuse only %d of %d tokens (%.0f%%; gate: >= %.0f%% and >= %d) - stock processing\n",
+                    n_reused, n_p, 100.0*n_reused/n_p, 100.0*min_share, n_min);
+            return n_past;
+        }
+
+        const llama_pos pos_fork = n_past - 1;
+        bool ok = llama_memory_seq_rs_fork(mem_tgt, slot.id, pos_fork);
+        if (mem_dft) {
+            ok = llama_memory_seq_rs_fork(mem_dft, slot.id, pos_fork) && ok;
+        }
+        if (!ok) {
+            SLT_WRN(slot, "%s", "scr: no recurrent state to fork - stock processing\n");
+            return n_past;
+        }
+
+        int prev = n_past;
+        for (const auto & sp : kept) {
+            if (sp.c0 > prev) {
+                slot.mem.seq_rm(slot.id, prev, sp.c0);
+            }
+            prev = sp.c0 + sp.len;
+        }
+        slot.mem.seq_rm(slot.id, prev, -1);
+
+        // move all spans above both prompts first, so that no span lands on cells of another one
+        const llama_pos far = (llama_pos) (n_c + n_p + 1);
+        for (auto it = kept.rbegin(); it != kept.rend(); ++it) {
+            slot.mem.seq_add(slot.id, it->c0, it->c0 + it->len, far);
+        }
+        for (const auto & sp : kept) {
+            slot.mem.seq_add(slot.id, sp.c0 + far, sp.c0 + far + sp.len, sp.p0 - sp.c0 - far);
+            slot.scr_spans.emplace_back(sp.p0, sp.p0 + sp.len);
+            SLT_INF(slot, "scr: reusing span of %d tokens, KV [%d, %d) -> [%d, %d)\n", sp.len, sp.c0, sp.c0 + sp.len, sp.p0, sp.p0 + sp.len);
+        }
+
+        // a draft without recurrent state (MTP) cannot decode the gap below the moved spans, so drop its cells after the prefix
+        // a hybrid draft reports pos_max = n_past - 1 after the fork and keeps its spans
+        if (mem_dft) {
+            const llama_pos pos_max_dft = llama_memory_seq_pos_max(mem_dft, slot.id);
+            if (pos_max_dft >= n_past) {
+                llama_memory_seq_rm(mem_dft, slot.id, n_past, -1);
+                SLT_INF(slot, "scr: draft memory has no recurrent state - dropped its cells [%d, %d]\n", n_past, pos_max_dft);
+            }
+        }
+
+        SLT_INF(slot, "scr: prefix %d, reused %d of %d tokens in %zu spans, to prefill %d; recurrent state forked to pos %d\n",
+                n_past, n_reused, n_p, kept.size(), n_p - n_past - n_reused, pos_fork);
+
+        return n_past;
+    }
+
     void update_slots() {
 #ifdef DEBUG_TIMINGS
         static int64_t t_prev = 0;
@@ -3500,6 +3646,8 @@ private:
                     if (slot.state == SLOT_STATE_STARTED) {
                         slot.stats.update_prompt_start();
 
+                        slot.scr_spans.clear();
+
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
                         SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
@@ -3603,25 +3751,25 @@ private:
 
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
+                                const bool scr_fork = params_base.n_cache_reuse_hybrid > 0 &&
+                                    (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt));
+
                                 const bool can_cache_reuse =
                                     llama_memory_can_shift(llama_get_memory(ctx_tgt)) &&
-                                    !slot.prompt.tokens.has_mtmd;
+                                    !slot.prompt.tokens.has_media() &&
+                                    !input_tokens.has_media();
 
                                 if (!can_cache_reuse && n_cache_reuse > 0) {
                                     SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
                                 }
 
-                                // reuse chunks from the cached prompt by shifting their KV cache in the new position
-                                if (can_cache_reuse && n_cache_reuse > 0) {
-                                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
-
+                                if (can_cache_reuse && n_cache_reuse > 0 && scr_fork) {
+                                    // recurrent/hybrid memory: move the surviving spans and fork the recurrent state
+                                    n_past = scr_plan(slot, input_tokens, n_past, n_cache_reuse);
+                                } else if (can_cache_reuse && n_cache_reuse > 0) {
+                                    // reuse chunks from the cached prompt by shifting their KV cache in the new position
                                     size_t head_c = n_past; // cache
                                     size_t head_p = n_past; // current prompt
-
-                                    if (mctx) {
-                                        // we should never reach this
-                                        GGML_ABORT("not supported by multimodal");
-                                    }
 
                                     SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", n_cache_reuse, n_past);
 
@@ -3828,7 +3976,10 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    slot.mem.seq_rm(slot.id, p0, -1);
+                    // the cells above p0 are the moved spans of scr_plan
+                    if (slot.scr_spans.empty()) {
+                        slot.mem.seq_rm(slot.id, p0, -1);
+                    }
 
                     // shared prompt prefix: once it is processed, the children continue from it with their own prompt
                     bool wait_shared = false;
@@ -3934,8 +4085,28 @@ private:
 
                     const int32_t n_decision_first = slot.task->type == SERVER_TASK_TYPE_DECISION ? slot.task->decision.pos_first() : -1;
 
+                    // a moved span starts here and the tokens before it are decoded: take it as cached and relabel the recurrent state
+                    while (!slot.scr_spans.empty() && (int) slot.prompt.n_tokens() == slot.scr_spans.front().first) {
+                        const auto sp = slot.scr_spans.front();
+                        slot.scr_spans.erase(slot.scr_spans.begin());
+                        for (int i = sp.first; i < sp.second; i++) {
+                            slot.prompt.tokens.push_back(input_tokens[i]);
+                        }
+                        const llama_pos pos_fork = slot.prompt.tokens.pos_next() - 1;
+                        llama_memory_seq_rs_fork(llama_get_memory(ctx_tgt), slot.id, pos_fork);
+                        if (ctx_dft) {
+                            llama_memory_seq_rs_fork(llama_get_memory(ctx_dft), slot.id, pos_fork);
+                        }
+                        SLT_INF(slot, "scr: skipped [%d, %d), recurrent state forked to pos %d\n", sp.first, sp.second, pos_fork);
+                    }
+
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
+                        // decode the tokens before a moved span first
+                        if (!slot.scr_spans.empty() && (int) slot.prompt.n_tokens() == slot.scr_spans.front().first) {
+                            break;
+                        }
+
                         // get next token to process
                         llama_token cur_tok = input_tokens[slot.prompt.n_tokens()];
                         if (cur_tok == LLAMA_TOKEN_NULL) {

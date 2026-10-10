@@ -7,6 +7,9 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-recurrent.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -4343,6 +4346,26 @@ llama_pos llama_memory_seq_pos_max(
     }
 
     return mem->seq_pos_max(seq_id);
+}
+
+bool llama_memory_seq_rs_fork(llama_memory_t mem, llama_seq_id seq_id, llama_pos pos) {
+    if (!mem) {
+        return true;
+    }
+
+    llama_memory_recurrent * recr = nullptr;
+    if (auto * h = dynamic_cast<llama_memory_hybrid *>(mem)) {
+        recr = h->get_mem_recr();
+    } else if (auto * hi = dynamic_cast<llama_memory_hybrid_iswa *>(mem)) {
+        recr = hi->get_mem_recr();
+    } else {
+        recr = dynamic_cast<llama_memory_recurrent *>(mem);
+    }
+
+    if (!recr) {
+        return true;
+    }
+    return recr->seq_fork(seq_id, pos);
 }
 
 bool llama_memory_can_shift(llama_memory_t mem) {

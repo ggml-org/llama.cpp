@@ -3609,6 +3609,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
     add_opt(common_arg(
+        {"--cache-reuse-hybrid"}, "N",
+        string_format(
+            "allow --cache-reuse on recurrent/hybrid models (approximate): the recurrent state of the previous prompt is reused as is\n"
+            "N = number of tokens at the end of each reused chunk to process again (default: %d, 0 = disabled)", params.n_cache_reuse_hybrid
+        ),
+        [](common_params & params, int value) {
+            params.n_cache_reuse_hybrid = value;
+            if (value > 0) {
+                // allow K-shift of text-only M-RoPE caches, see llama_kv_cache::get_can_shift
+                common_set_env("LLAMA_KV_SHIFT_MROPE", "1");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE_HYBRID"));
+    add_opt(common_arg(
+        {"--cache-reuse-hybrid-min-share"}, "F",
+        string_format(
+            "with --cache-reuse-hybrid, min fraction of the prompt that the reused chunks must cover (default: %.2f, 0 = disabled)", (double) params.cache_reuse_hybrid_min_share
+        ),
+        [](common_params & params, const std::string & value) {
+            const float f = std::stof(value);
+            if (f < 0.0f || f > 1.0f) {
+                throw std::invalid_argument("--cache-reuse-hybrid-min-share must be in [0, 1]");
+            }
+            params.cache_reuse_hybrid_min_share = f;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE_HYBRID_MIN_SHARE"));
+    add_opt(common_arg(
         {"--metrics"},
         string_format("enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled"),
         [](common_params & params) {

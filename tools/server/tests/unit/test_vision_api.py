@@ -204,3 +204,36 @@ def test_vision_embeddings_oai_content():
     # same prompt and image in both formats
     assert data[0]["embedding"] == data[1]["embedding"]
     assert data[0]["embedding"] != data[2]["embedding"]
+
+
+def test_vision_cache_reuse_text_only():
+    global server
+    server.swa_full = True
+    server.n_slots = 1
+    server.start()
+    head = " ".join(f"intro{i}" for i in range(20)) + ". "
+    body = " ".join(f"word{i}" for i in range(60))
+
+    def completion(prompt, images=None):
+        if images:
+            prompt = { JSON_PROMPT_STRING_KEY: prompt, JSON_MULTIMODAL_KEY: images }
+        res = server.make_request("POST", "/completions", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "id_slot": 0,
+            "cache_prompt": True,
+            "n_cache_reuse": 4,
+        })
+        assert res.status_code == 200
+        return res.body["timings"]
+
+    # text-only: the cached chunk after the removed text is shifted, not re-processed
+    completion(head + "alpha beta gamma. " + body)
+    timings = completion(head + body)
+    assert timings["prompt_n"] < 10
+
+    # cached prompt with an image: no reuse
+    body = " ".join(f"item{i}" for i in range(60))
+    completion(head + "<__media__> alpha beta gamma. " + body, [ get_img_url("IMG_BASE64_0") ])
+    timings = completion(head + body)
+    assert timings["prompt_n"] > 100
