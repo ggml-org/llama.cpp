@@ -1992,6 +1992,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 pipeline->push_constant_size = push_constant_size;
                 pipeline->wg_denoms = wg_denoms;
                 pipeline->align = align;
+                pipeline->subgroup_size = (device->subgroup_size_control && required_subgroup_size > 0) ? required_subgroup_size : device->subgroup_size;
                 pipeline->initialized = true;
 #if defined(VK_EXT_shader_64bit_indexing)
                 pipeline->is_64b_indexing = (i == 1);
@@ -2250,6 +2251,11 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                     spv_len, spv_data, "main", param_count, push_constant_size,
                     tc.wg_denoms, spec_fn(tc.warptile, true), tc.align,
                     disable_robustness, rfs, rsgs);
+            }
+
+            vec[i].unaligned->wg_size = tc.warptile[0];
+            if (vec[i].aligned) {
+                vec[i].aligned->wg_size = tc.warptile[0];
             }
         }
     };
@@ -5880,7 +5886,18 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
     }
 
     uint32_t split_k = 1;
-    if (ctx->device->shader_core_count != 0 && n >= pipeline->wg_denoms[1]) {
+    if ((ctx->device->architecture == AMD_RDNA3 || ctx->device->architecture == AMD_RDNA4) &&
+        ctx->device->shader_core_count != 0 && k >= 2048 && pipeline->wg_size != 0 && pipeline->subgroup_size != 0 &&
+        (n < pipeline->wg_denoms[1] || n <= 64)) {
+        // Small n gives too few waves to hide latency. RDNA has 2 SIMDs per CU, aim for 4 waves per SIMD.
+        const uint32_t waves = CEIL_DIV(m, pipeline->wg_denoms[0]) * CEIL_DIV(n, pipeline->wg_denoms[1]) * CEIL_DIV(pipeline->wg_size, pipeline->subgroup_size);
+        const uint32_t simds = ctx->device->shader_core_count * 2;
+        if (waves < 2 * simds) {
+            split_k = std::min(8u, CEIL_DIV(4 * simds, waves));
+        }
+    }
+
+    if (split_k == 1 && ctx->device->shader_core_count != 0 && n >= pipeline->wg_denoms[1]) {
         // If k is 'large' and the SMs will fill less than halfway, use split_k.
         uint32_t m_tiles = CEIL_DIV(m, pipeline->wg_denoms[0]);
         uint32_t n_tiles = CEIL_DIV(n, pipeline->wg_denoms[1]);
@@ -5893,22 +5910,22 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
             }
             // Cap the split at 8x. Unless k is huge this is a lot of overhead.
             split_k = std::min(split_k, 8u);
-
-            // ggml_vk_matmul will align the splits to be a multiple of 256.
-            // If this rounded up size would cause the last split to be empty,
-            // then reduce the split count.
-            while (true) {
-                if (split_k == 1) {
-                    break;
-                }
-                uint32_t k_split = CEIL_DIV(k, split_k);
-                k_split = ROUNDUP_POW2(k_split, 256);
-                if (k_split * (split_k - 1) < k) {
-                    break;
-                }
-                split_k--;
-            }
         }
+    }
+
+    // ggml_vk_matmul will align the splits to be a multiple of 256.
+    // If this rounded up size would cause the last split to be empty,
+    // then reduce the split count.
+    while (true) {
+        if (split_k == 1) {
+            break;
+        }
+        uint32_t k_split = CEIL_DIV(k, split_k);
+        k_split = ROUNDUP_POW2(k_split, 256);
+        if (k_split * (split_k - 1) < k) {
+            break;
+        }
+        split_k--;
     }
 
     return split_k;
