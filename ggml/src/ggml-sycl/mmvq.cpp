@@ -6,6 +6,10 @@
 #include "quants.hpp"
 #include "vecdotq.hpp"
 
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+#    include "esimd.hpp"
+#endif // GGML_SYCL_MMVQ_HAS_XMX
+
 // vec_dot_q_sycl_t adapters for the IQ vec_dots that take their codebook tables as extra
 // arguments: bind the constant tables here (as vec_dot_iq2_s_q8_1 / vec_dot_iq1_m_q8_1 already do
 // internally) so they can be used as template arguments of mul_mat_vec_q_moe.
@@ -2491,6 +2495,158 @@ static void mul_mat_vec_iq4_xs_q8_1_sycl_switch_ncols(
     }
 }
 
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+// vgate is the gate weight of the fused gate and up kernel, nullptr for a plain mat-vec
+template <template <bool> class Traits>
+static void ggml_sycl_mul_mat_vec_q_xmx_run(bool            short_rows,
+                                            const void *    vx,
+                                            const void *    vgate,
+                                            const char *    vy,
+                                            float *         dst,
+                                            int             ne00,
+                                            int64_t         nrows,
+                                            int64_t         ncols_dst,
+                                            int             stride_y_bytes,
+                                            int             ldd,
+                                            int             glu_op,
+                                            dpct::queue_ptr stream) {
+    namespace esimd = ggml_sycl_esimd;
+    if (vgate) {
+        if (short_rows) {
+            esimd::xmx_mul_mat_ncols<Traits<true>, true>(vx, vgate, vy, dst, ne00, nrows, ncols_dst, stride_y_bytes,
+                                                         ldd, glu_op, stream);
+        } else {
+            esimd::xmx_mul_mat_ncols<Traits<false>, true>(vx, vgate, vy, dst, ne00, nrows, ncols_dst, stride_y_bytes,
+                                                          ldd, glu_op, stream);
+        }
+    } else if (short_rows) {
+        esimd::xmx_mul_mat_ncols<Traits<true>>(vx, nullptr, vy, dst, ne00, nrows, ncols_dst, stride_y_bytes, ldd, 0,
+                                               stream);
+    } else {
+        esimd::xmx_mul_mat_ncols<Traits<false>>(vx, nullptr, vy, dst, ne00, nrows, ncols_dst, stride_y_bytes, ldd, 0,
+                                                stream);
+    }
+}
+
+static bool ggml_sycl_mul_mat_vec_q_xmx_type(ggml_type       type,
+                                             bool            short_rows,
+                                             const void *    vx,
+                                             const void *    vgate,
+                                             const char *    vy,
+                                             float *         dst,
+                                             int             ne00,
+                                             int64_t         nrows,
+                                             int64_t         ncols_dst,
+                                             int             stride_y_bytes,
+                                             int             ldd,
+                                             int             glu_op,
+                                             dpct::queue_ptr stream) {
+#    define XMX_RUN(TRAITS)                                                                                       \
+        ggml_sycl_mul_mat_vec_q_xmx_run<ggml_sycl_esimd::TRAITS>(short_rows, vx, vgate, vy, dst, ne00, nrows,     \
+                                                                 ncols_dst, stride_y_bytes, ldd, glu_op, stream); \
+        return true
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+            XMX_RUN(xmx_traits_q2_k);
+        case GGML_TYPE_Q3_K:
+            XMX_RUN(xmx_traits_q3_k);
+        case GGML_TYPE_Q4_K:
+            XMX_RUN(xmx_traits_q4_k);
+        case GGML_TYPE_Q5_K:
+            XMX_RUN(xmx_traits_q5_k);
+        case GGML_TYPE_Q6_K:
+            XMX_RUN(xmx_traits_q6_k);
+        case GGML_TYPE_Q8_0:
+            XMX_RUN(xmx_traits_q8_0);
+        default:
+            return false;
+    }
+#    undef XMX_RUN
+}
+
+// multi-column XMX path for reordered weights, returns false when it does not apply
+static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
+                                        const ggml_tensor * src0,
+                                        const ggml_tensor * dst,
+                                        const char *        src0_dd_i,
+                                        const char *        src1_ddq_i,
+                                        float *             dst_dd_i,
+                                        int64_t             row_diff,
+                                        int64_t             src1_ncols,
+                                        int64_t             src1_padded_col_size,
+                                        dpct::queue_ptr     stream) {
+    const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if (!ggml_sycl_xmx_enabled(device) || !ggml_sycl_xmx_supports_type(src0->type) || !extra ||
+        !extra->optimized_feature.reorder) {
+        return false;
+    }
+    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type) || src1_ncols > g_ggml_sycl_xmx_max_cols) {
+        return false;
+    }
+
+    const int ne00 = src0->ne[0];
+    const int ldd  = dst->ne[0];
+    if (!ggml_sycl_esimd::xmx_supported(src0_dd_i, ne00)) {
+        return false;
+    }
+
+    // rows under 64 bytes use the variant without 2D block loads, it is not built for the widest tile
+    const bool short_rows = ne00 < 4 * QK_K;
+    if (short_rows && src1_ncols > 8) {
+        return false;
+    }
+
+    const int stride_y_bytes = src1_padded_col_size * sizeof(block_q8_1) / QK8_1;
+    // the 2D block loads of the activations need a 64 byte aligned base and a pitch of 16 bytes
+    if ((uintptr_t) src1_ddq_i % 64 != 0 || stride_y_bytes % 16 != 0) {
+        return false;
+    }
+    return ggml_sycl_mul_mat_vec_q_xmx_type(src0->type, short_rows, src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, ne00,
+                                            row_diff, src1_ncols, stride_y_bytes, ldd, 0, stream);
+}
+#endif // GGML_SYCL_MMVQ_HAS_XMX
+
+bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
+                                     enum ggml_type   src0_type,
+                                     enum ggml_glu_op glu_op,
+                                     const void *     vx,
+                                     const void *     vgate,
+                                     const void *     vy,
+                                     float *          dst,
+                                     int              ncols,
+                                     int              nrows,
+                                     int              ncols_dst,
+                                     int              stride_col_y_bytes,
+                                     int              stride_col_dst,
+                                     dpct::queue_ptr  stream) {
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+    if (!ggml_sycl_xmx_enabled(device) || !ggml_sycl_xmx_supports_type(src0_type)) {
+        return false;
+    }
+    if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
+        return false;
+    }
+    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type) || ncols_dst > g_ggml_sycl_xmx_glu_max_cols) {
+        return false;
+    }
+    if (!ggml_sycl_esimd::xmx_supported(vx, ncols) || !ggml_sycl_esimd::xmx_supported(vgate, ncols) ||
+        (uintptr_t) vy % 64 != 0 || stride_col_y_bytes % 16 != 0) {
+        return false;
+    }
+    // rows under 64 bytes use the variant without 2D block loads, it is not built for the wide tiles
+    const bool short_rows = ncols < 4 * QK_K;
+    if (short_rows && ncols_dst > 8) {
+        return false;
+    }
+    return ggml_sycl_mul_mat_vec_q_xmx_type(src0_type, short_rows, vx, vgate, (const char *) vy, dst, ncols, nrows,
+                                            ncols_dst, stride_col_y_bytes, stride_col_dst, (int) glu_op, stream);
+#else
+    GGML_UNUSED_VARS(device, src0_type, glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes,
+                     stride_col_dst, stream);
+    return false;
+#endif // GGML_SYCL_MMVQ_HAS_XMX
+}
+
 void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                                 ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
                                 const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low,
@@ -2501,6 +2657,13 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
 
     const int64_t ne00     = src0->ne[0];
     const int64_t row_diff = row_high - row_low;
+
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+    if (ggml_sycl_mul_mat_vec_q_xmx(ctx.device, src0, dst, src0_dd_i, src1_ddq_i, dst_dd_i, row_diff, src1_ncols,
+                                    src1_padded_col_size, stream)) {
+        return;
+    }
+#endif // GGML_SYCL_MMVQ_HAS_XMX
 
     int id;
     SYCL_CHECK(CHECK_TRY_ERROR(id = get_current_device_id()));
