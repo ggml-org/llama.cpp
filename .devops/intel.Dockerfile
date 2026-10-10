@@ -24,7 +24,7 @@ FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 RUN echo "Download oneDNN installation package" && \
     wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh && \
     echo "Install oneDNN components" && \
-    sudo bash intel-onednn_offline.sh -s -a --silent --eula accept
+    bash intel-onednn_offline.sh -s -a --silent --eula accept
 
 ARG GGML_SYCL_F16=ON
 ARG LEVEL_ZERO_VERSION=1.28.2
