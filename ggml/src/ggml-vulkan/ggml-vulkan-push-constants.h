@@ -132,8 +132,10 @@ struct vk_fa_xe_opt_push_constants {
     uint32_t qk_ratio;
     uint32_t qk_sub_groups;
     uint32_t flag;
-    uint32_t nbkv_tok;
-    uint32_t nbkv_head;
+    uint32_t nbk_tok;
+    uint32_t nbk_head;
+    uint32_t nbv_tok;
+    uint32_t nbv_head;
     uint32_t batch_stride_q;
     uint32_t batch_stride_k;
     uint32_t batch_stride_v;
