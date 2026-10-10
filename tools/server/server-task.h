@@ -623,6 +623,10 @@ struct server_prompt {
         return tokens.size();
     }
 
+    const common_prompt_checkpoint * find_checkpoint(llama_pos pos_next, llama_pos pos_min_thold) const;
+
+    size_t get_reusable_prefix(const server_tokens & tokens_new, llama_pos pos_min, int32_t n_swa) const;
+
     server_prompt clone() const {
         return server_prompt {
             tokens.clone(),
@@ -643,6 +647,8 @@ struct server_prompt_data {
 struct server_prompt_cache_state {
     server_prompt prompt;
     server_prompt_data data;
+    bool pinned = false;
+    llama_pos pos_min = -1;
 
     size_t size() const {
         size_t res = data.size();
@@ -656,9 +662,10 @@ struct server_prompt_cache_state {
 };
 
 struct server_prompt_cache {
-    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
+    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens, int32_t n_swa) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
         this->limit_tokens = limit_tokens;
+        this->n_swa        = n_swa;
     }
 
     std::list<server_prompt_cache_state> states;
@@ -666,18 +673,25 @@ struct server_prompt_cache {
     // in bytes, 0 = no limit
     size_t limit_size = 0;
 
-    // in tokens, 0 = no limit
+    // ordinary tokens, 0 = no limit
     size_t limit_tokens = 0;
+
+    int32_t n_swa = 0;
 
     size_t size() const;
 
-    size_t n_tokens() const;
+    size_t n_tokens_ordinary() const;
 
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft, bool pinned = false);
+
+    bool has_pinned(const server_prompt & prompt, const server_tokens & tokens_new, llama_pos pos_min) const;
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
+
+private:
+    bool evict(std::list<server_prompt_cache_state>::iterator & it, size_t & size, size_t & n_tokens);
 };
 
 // used exclusively by router mode

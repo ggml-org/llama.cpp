@@ -1724,6 +1724,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--cache-prompt-dir"}, "DIR",
+        "prefill .txt prefixes from DIR at startup and pin them in RAM (default: disabled, requires cache-ram)",
+        [](common_params & params, const std::string & value) {
+            params.cache_prompt_dir = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_PROMPT_DIR").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",

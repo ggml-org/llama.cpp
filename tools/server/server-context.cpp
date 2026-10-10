@@ -305,7 +305,7 @@ struct server_slot {
 
     server_prompt prompt;
 
-    bool prompt_save(server_prompt_cache & prompt_cache) const {
+    bool prompt_save(server_prompt_cache & prompt_cache, bool pinned = false) const {
         if (prompt.tokens.size() == 0) {
             return false;
         }
@@ -318,11 +318,12 @@ struct server_slot {
         SRV_TRC(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
                 (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0));
 
-        auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
+        auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft, pinned);
         if (cur == nullptr) {
             return false;
         }
 
+        cur->pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), id);
         llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         if (ctx_dft) {
             llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
@@ -1489,7 +1490,7 @@ private:
             }
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx, n_swa);
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
@@ -1519,6 +1520,10 @@ private:
         // propagate new defaults back to caller
         params = params_base;
 
+        if (!preload_prompts()) {
+            return false;
+        }
+
         if (!is_resume) {
             return init();
         }
@@ -1528,6 +1533,115 @@ private:
         }
 
         return true;
+    }
+
+    bool preload_prompts() {
+        if (params_base.cache_prompt_dir.empty()) {
+            return true;
+        }
+
+        auto & slot = slots.front();
+        try {
+            if (!prompt_cache || !params_base.cache_prompt) {
+                throw std::runtime_error("--cache-prompt-dir requires --cache-prompt and a nonzero --cache-ram");
+            }
+            if (params_base.embedding || llama_model_has_encoder(model_tgt) || !llama_get_memory(ctx_tgt)) {
+                throw std::runtime_error("--cache-prompt-dir requires a causal decoder with sequence memory");
+            }
+            if (spec || !params_base.lora_adapters.empty()) {
+                throw std::runtime_error("--cache-prompt-dir does not support speculative decoding or LoRA adapters");
+            }
+            if (!std::filesystem::is_directory(params_base.cache_prompt_dir)) {
+                throw std::runtime_error("prefix directory does not exist: " + params_base.cache_prompt_dir);
+            }
+
+            std::vector<std::filesystem::path> paths;
+            for (const auto & entry : std::filesystem::directory_iterator(params_base.cache_prompt_dir)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".txt") {
+                    paths.push_back(entry.path());
+                }
+            }
+            std::sort(paths.begin(), paths.end());
+            if (paths.empty()) {
+                throw std::runtime_error("prefix directory contains no .txt files");
+            }
+
+            const bool checkpoint = params_base.n_ctx_checkpoints > 0 && (
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS || n_swa > 0);
+
+            for (const auto & path : paths) {
+                std::ifstream file(path, std::ios::binary);
+                if (!file) {
+                    throw std::runtime_error("failed to open prefix file: " + path.string());
+                }
+                const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                const server_tokens tokens(common_tokenize(vocab, text, true, true), mctx != nullptr);
+                if (file.bad() || text.empty() || tokens.empty()) {
+                    throw std::runtime_error("failed to read a nonempty prefix: " + path.string());
+                }
+                if (tokens.size() >= (size_t) slot.n_ctx) {
+                    throw std::runtime_error("prefix exceeds slot context: " + path.string());
+                }
+
+                bool duplicate = false;
+                for (const auto & state : prompt_cache->states) {
+                    if (state.prompt.tokens.size() == tokens.size() && state.prompt.tokens.get_common_prefix(tokens) == tokens.size()) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) {
+                    SRV_INF("skipping duplicate prefix: %s\n", path.string().c_str());
+                    continue;
+                }
+
+                slot.prompt_clear();
+                const int n_tokens = tokens.size();
+                const int checkpoint_at = std::max(1, n_tokens - (n_swa > 0 ? 2 : 1));
+                for (int pos = 0; pos < n_tokens;) {
+                    int n = std::min<int>(llama_n_batch(ctx_tgt), n_tokens - pos);
+                    if (checkpoint && pos < checkpoint_at) {
+                        n = std::min(n, checkpoint_at - pos);
+                    } else if (checkpoint && pos == checkpoint_at) {
+                        // Keep a rollback point for requests that need logits at the end of the prefix.
+                        auto & cur = slot.prompt.checkpoints.emplace_back();
+                        cur.update_pos(pos, llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id),
+                                            llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id));
+                        cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    }
+
+                    batch.clear();
+                    for (int i = 0; i < n; ++i) {
+                        batch.add(slot.id, tokens[pos + i], pos + i, false, true);
+                    }
+                    batch.render();
+                    if (llama_decode(ctx_tgt, batch.batch) != 0) {
+                        throw std::runtime_error("failed to prefill prefix: " + path.string());
+                    }
+                    for (int i = 0; i < n; ++i) {
+                        slot.prompt.tokens.push_back(tokens[pos + i]);
+                    }
+                    pos += n;
+                }
+
+                if (!slot.prompt_save(*prompt_cache, true)) {
+                    throw std::runtime_error("failed to pin prefix; increase --cache-ram: " + path.string());
+                }
+                SRV_INF("preloaded pinned prefix: %s, %d tokens, %.3f MiB\n", path.string().c_str(),
+                        n_tokens, prompt_cache->states.back().size() / (1024.0 * 1024.0));
+                slot.prompt_clear();
+            }
+            batch.clear();
+            prompt_cache->update();
+            return true;
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to preload prefixes: %s\n", e.what());
+            batch.clear();
+            slot.prompt_clear();
+            prompt_cache.reset();
+            return false;
+        }
     }
 
     // unlike load_model(), this is only called once during initialization
@@ -1766,12 +1880,11 @@ private:
             }
         }
 
-        if (ret) {
-            update_cache = update_cache && prompt_cache;
-
-            // cache prompts only for completion tasks
-            update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
-
+        if (ret && !ret->is_processing() && prompt_cache && task.type == SERVER_TASK_TYPE_COMPLETION && task.params.cache_prompt) {
+            if (!update_cache && !params_base.cache_prompt_dir.empty() &&
+                    prompt_cache->has_pinned(ret->prompt, task.tokens, llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), ret->id))) {
+                update_cache = true;
+            }
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
 
@@ -3725,21 +3838,9 @@ private:
 
                                 if (pos_min >= pos_min_thold) {
                                     // search for a context checkpoint
-                                    const auto it = std::find_if(
-                                        slot.prompt.checkpoints.rbegin(),
-                                        slot.prompt.checkpoints.rend(),
-                                        [&](const auto & cur) {
-                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                                            SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
-                                            // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                            if (cur.pos_max > pos_next) {
-                                                return false;
-                                            }
-                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
-                                        }
-                                    );
+                                    const auto * it = slot.prompt.find_checkpoint(pos_next, pos_min_thold);
 
-                                    bool do_reset = it == slot.prompt.checkpoints.rend();
+                                    bool do_reset = it == nullptr;
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
