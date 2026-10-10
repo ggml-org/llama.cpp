@@ -1686,6 +1686,11 @@ private:
         if (task.id_slot != -1) {
             ret = get_slot_by_id(task.id_slot);
             if (ret) {
+                // a busy slot is returned untouched, the caller defers the task
+                if (ret->is_processing()) {
+                    return ret;
+                }
+
                 SLT_INF(*ret, "selected slot by id (%d)\n", task.id_slot);
             }
         }
