@@ -12653,6 +12653,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
 
         std::atomic<size_t> n_ok = 0;
         std::atomic<size_t> tests_run = 0;
+        std::atomic<size_t> not_supported = 0;
         std::vector<std::string> failed_tests;
         std::mutex failed_tests_mutex;
 
@@ -12677,7 +12678,11 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
                 for (size_t i = my_begin; i < my_end; ++i) {
                     auto & test = test_cases[i];
                     test_status_t status = test->eval(b, b_cpu, op_names_filter, output_printer);
-                    if (status == test_status_t::SKIPPED || status == test_status_t::NOT_SUPPORTED) {
+                    if (status == test_status_t::NOT_SUPPORTED) {
+                        not_supported++;
+                        continue;
+                    }
+                    if (status == test_status_t::SKIPPED) {
                         continue;
                     }
                     tests_run++;
@@ -12734,9 +12739,19 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
+        bool ran_any = true;
+        if (tests_run == 0 && (not_supported == 0 || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_ACCEL)) {
+            if (not_supported == 0) {
+                printf("  no test case ran: no test case matches the filters\n");
+            } else {
+                printf("  no test case ran: %zu matching test cases are not supported\n", (size_t)not_supported);
+            }
+            ran_any = false;
+        }
+
         const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
 
-        return n_ok == tests_run && slice_ok;
+        return n_ok == tests_run && slice_ok && ran_any;
     }
 
     if (mode == MODE_GRAD) {
