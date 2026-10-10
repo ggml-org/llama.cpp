@@ -2484,7 +2484,8 @@ static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_toke
     float epsilon_hat = s_hat - 1;
     float k = powf((epsilon_hat * powf(2, ctx->mu)) / (1 - powf(ctx->n_vocab, -epsilon_hat)), 1 / s_hat);
 
-    llama_sampler_top_k_impl(cur_p, std::max(int(k), 1));
+    const int kk = (std::isfinite(k) && k > 0.0f) ? std::max((int)k, 1) : 1;
+    llama_sampler_top_k_impl(cur_p, kk);
 
     llama_sampler_softmax_impl(cur_p, true);
 
@@ -2592,6 +2593,20 @@ static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_t
 
     // Normalize the probabilities of the remaining words
     llama_sampler_softmax_impl(cur_p, true);
+
+    // guard against non-finite / zero-sum probabilities reaching std::discrete_distribution
+    bool any_valid = false;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        if (std::isfinite(cur_p->data[i].p) && cur_p->data[i].p > 0.0f) {
+            any_valid = true;
+            break;
+        }
+    }
+    if (!any_valid) {
+        cur_p->size = 1;
+        cur_p->data[0].p = 1.0f;
+        cur_p->data[0].logit = 0.0f;
+    }
 
     const int idx = llama_sample_dist(cur_p, ctx->rng);
 
