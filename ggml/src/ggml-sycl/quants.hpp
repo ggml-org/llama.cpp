@@ -199,6 +199,27 @@ template <> struct block_q_t<GGML_TYPE_Q8_0> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }  // 1
 };
 
+template <> struct block_q_t<GGML_TYPE_MXFP4> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_MXFP4;  // 32
+        static constexpr uint32_t qi       = QI_MXFP4;  // 4
+        static constexpr uint32_t qr       = QR_MXFP4;  // 2
+        static constexpr uint32_t vdr_mmvq = 2;
+    };
+
+    // MXFP4 reorder layout: [qs0|qs1|...|qsN][e0|e1|...|eN]
+    // The 17-byte AoS block leaves qs unaligned; split out, every 16-byte nibble block is aligned.
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK_MXFP4 / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols / 2 * nrows) + block_index, 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }  // 1
+};
+
 }  // namespace ggml_sycl_reordered
 
 #endif  // GGML_SYCL_QUANTS_HPP
