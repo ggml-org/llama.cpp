@@ -2996,6 +2996,16 @@ private:
                     // nread is the end offset of the llama state payload within the file
                     const size_t nread_ckpt = load_slot_checkpoints(filepath, nread, *slot);
 
+                    // A restored slot has no context checkpoint, so the next
+                    // request with cache_prompt finds no reuse anchor and
+                    // reprocesses the entire restored prefix. Create a
+                    // checkpoint spanning the restored span so the restored
+                    // KV is actually reused.
+                    if (params_base.n_ctx_checkpoints > 0) {
+                        create_checkpoint(*slot, (int64_t) 0, 0,
+                                          (llama_pos) (token_count > 0 ? token_count - 1 : 0));
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
 
