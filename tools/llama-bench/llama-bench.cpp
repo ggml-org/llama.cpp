@@ -367,6 +367,7 @@ struct cmd_params {
     std::vector<bool>                repack;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
+    std::vector<llama_model_kv_override> kv_overrides;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -413,6 +414,7 @@ static const cmd_params cmd_params_defaults = {
     /* repack               */ { llama_model_default_params().use_extra_bufts },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
+    /* kv_overrides         */ {},
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -484,6 +486,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                                    (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                      (default: 0)\n");
+    printf("  --override-kv <key>=<type>:<value>                 override model metadata by key; types int, float, bool, str\n");
+    printf("                                                    (default: none; can be given multiple times)\n");
     printf("  --no-host <0|1>                                   (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("  --repack <0|1>                                    (default: %s)\n", join(cmd_params_defaults.repack, ",").c_str());
     printf("\n");
@@ -895,6 +899,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.embeddings.insert(params.embeddings.end(), p.begin(), p.end());
+            } else if (arg == "--override-kv") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                if (!string_parse_kv_override(argv[i], params.kv_overrides)) {
+                    fprintf(stderr, "error: invalid override-kv value: '%s'\n", argv[i]);
+                    invalid_param = true;
+                    break;
+                }
             } else if (arg == "-nopo" || arg == "--no-op-offload") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1174,6 +1188,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.tensor_buft_overrides.empty()) {
         params.tensor_buft_overrides = cmd_params_defaults.tensor_buft_overrides;
     }
+    if (!params.kv_overrides.empty()) {
+        params.kv_overrides.emplace_back();
+        params.kv_overrides.back().key[0] = 0;
+    }
     if (params.embeddings.empty()) {
         params.embeddings = cmd_params_defaults.embeddings;
     }
@@ -1232,6 +1250,7 @@ struct cmd_params_instance {
     std::vector<ggml_backend_dev_t> devices;
     std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    const std::vector<llama_model_kv_override> * kv_overrides;
     bool               embeddings;
     bool               no_op_offload;
     bool               no_host;
@@ -1251,6 +1270,9 @@ struct cmd_params_instance {
         mparams.lazy_mode     = lazy_mode;
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
+        if (kv_overrides && !kv_overrides->empty()) {
+            mparams.kv_overrides = kv_overrides->data();
+        }
         mparams.no_host       = no_host;
         mparams.use_extra_bufts = repack;
 
@@ -1380,6 +1402,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .devices               = */ devs,
                 /* .tensor_split          = */ ts,
                 /* .tensor_buft_overrides = */ ot,
+                /* .kv_overrides          = */ &params.kv_overrides,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
                 /* .no_host               = */ noh,
@@ -1418,6 +1441,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .devices               = */ devs,
                 /* .tensor_split          = */ ts,
                 /* .tensor_buft_overrides = */ ot,
+                /* .kv_overrides          = */ &params.kv_overrides,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
                 /* .no_host               = */ noh,
@@ -1456,6 +1480,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .devices               = */ devs,
                 /* .tensor_split          = */ ts,
                 /* .tensor_buft_overrides = */ ot,
+                /* .kv_overrides          = */ &params.kv_overrides,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
                 /* .no_host               = */ noh,
