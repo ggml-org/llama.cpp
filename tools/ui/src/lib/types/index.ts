@@ -86,6 +86,7 @@ export type {
 export type {
 	McpServerOverride,
 	DatabaseConversation,
+	DatabaseMemoryEntry,
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtraImageFile,
@@ -97,7 +98,8 @@ export type {
 	DatabaseMessageExtra,
 	DatabaseMessage,
 	ExportedConversation,
-	ExportedConversations
+	ExportedConversations,
+	ExportedMemory
 } from './database';
 
 // Model types
