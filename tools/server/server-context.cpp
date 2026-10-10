@@ -1171,7 +1171,8 @@ private:
         }
 
         // optionally fit mmproj memory usage
-        if (has_mmproj && params_base.fit_params) {
+        // on resume params_base already holds the margin from the first load
+        if (has_mmproj && params_base.fit_params && !is_resume) {
             const auto & mmproj_mem = mmproj_usage.backend_mem_usage;
             const int64_t t_elapsed = mmproj_usage_t_us;
             if (!mmproj_mem.empty()) {
