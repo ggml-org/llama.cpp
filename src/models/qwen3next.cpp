@@ -324,11 +324,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen3next::graph::build_qkvz
 
     if (model.layers[il].wqkv) {
         // optimized path
-        ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input);
+        ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
         qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
         cb(qkv_mixed, "linear_attn_qkv_mixed", il);
 
-        ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input);
+        ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
         cb(z, "z", il);
 
         return { qkv_mixed, z };
