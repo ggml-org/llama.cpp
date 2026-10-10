@@ -191,7 +191,9 @@ private:
             output.reserve(output.size() + symbol.n);
             for (int j = 0; j < (int)symbol.n; ++j) {
                 llama_token id = vocab.byte_to_token(symbol.text[j]);
-                output.push_back(id);
+                if (id != LLAMA_TOKEN_NULL) {
+                    output.push_back(id);
+                }
             }
             return;
         }
@@ -4159,11 +4161,19 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
             }
             // Try to fall back to just the byte as a string
             const char buf2[2] = { (char)ch, 0 };
-            return pimpl->token_to_id.at(buf2);
+            auto token2 = pimpl->token_to_id.find(buf2);
+            if (token2 != pimpl->token_to_id.end()) {
+                return (*token2).second;
+            }
+            return LLAMA_TOKEN_NULL;
         }
         case LLAMA_VOCAB_TYPE_WPM:
         case LLAMA_VOCAB_TYPE_BPE: {
-            return pimpl->token_to_id.at(unicode_byte_to_utf8(ch));
+            auto token = pimpl->token_to_id.find(unicode_byte_to_utf8(ch));
+            if (token != pimpl->token_to_id.end()) {
+                return (*token).second;
+            }
+            return LLAMA_TOKEN_NULL;
         }
         case LLAMA_VOCAB_TYPE_PLAMO2:
         case LLAMA_VOCAB_TYPE_PLAMO3: {
