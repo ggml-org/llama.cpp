@@ -2,12 +2,16 @@
 
 #include "llama.h"
 
+#include <cstdint>
 #include <map>
 #include <regex>
 #include <string>
 #include <vector>
 
 struct llama_vocab;
+
+// default cap on rules a grammar repetition (`{m,n}`, `*`, `+`) may expand into
+#define LLAMA_GRAMMAR_DEFAULT_MAX_REPETITION 2000
 
 // grammar element type
 enum llama_gretype {
@@ -89,6 +93,9 @@ struct llama_grammar_parser {
 
     llama_grammar_rules rules;
 
+    // max number of rules a repetition (`{m,n}`, `*`, `+`) may expand into (guards against explosion)
+    uint64_t max_repetition = LLAMA_GRAMMAR_DEFAULT_MAX_REPETITION;
+
     llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
     llama_grammar_stack c_rules() const;
@@ -169,7 +176,8 @@ struct llama_grammar * llama_grammar_init_impl(
                      const char ** trigger_patterns,
                             size_t num_trigger_patterns,
                const llama_token * trigger_tokens,
-                            size_t num_trigger_tokens);
+                            size_t num_trigger_tokens,
+                           int32_t max_repetition = 0); // 0 = use LLAMA_GRAMMAR_DEFAULT_MAX_REPETITION
 
 void llama_grammar_free_impl(struct llama_grammar * grammar);
 

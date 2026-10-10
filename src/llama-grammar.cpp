@@ -10,7 +10,6 @@
 #include <set>
 #include <stdexcept>
 
-#define MAX_REPETITION_THRESHOLD 2000
 //
 // helpers
 //
@@ -496,7 +495,7 @@ const char * llama_grammar_parser::parse_sequence(
             total_rules = min_times;
         }
 
-        if (n_prev_rules * total_rules > MAX_REPETITION_THRESHOLD) {
+        if (n_prev_rules * total_rules > max_repetition) {
             throw std::runtime_error("number of rules that are going to be repeated multiplied by the new repetition exceeds sane defaults, please reduce the number of repetitions or rule complexity");
         }
 
@@ -653,10 +652,10 @@ const char * llama_grammar_parser::parse_sequence(
             } else {
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
             }
-            if (min_times > MAX_REPETITION_THRESHOLD) {
+            if (min_times > max_repetition) {
                 throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
             }
-            if (max_times != UINT64_MAX && max_times > MAX_REPETITION_THRESHOLD) {
+            if (max_times != UINT64_MAX && max_times > max_repetition) {
                 max_times = UINT64_MAX;
             }
             handle_repetitions(min_times, max_times);
@@ -1220,8 +1219,12 @@ struct llama_grammar * llama_grammar_init_impl(
                      const char ** trigger_patterns,
                             size_t num_trigger_patterns,
                const llama_token * trigger_tokens,
-                            size_t num_trigger_tokens) {
+                            size_t num_trigger_tokens,
+                           int32_t max_repetition) {
     llama_grammar_parser parser(vocab);
+    if (max_repetition > 0) {
+        parser.max_repetition = (uint64_t) max_repetition;
+    }
 
     // if there is a grammar, parse it
     // rules will be empty (default) if there are parse errors
