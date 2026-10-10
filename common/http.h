@@ -54,11 +54,11 @@ static common_http_url common_http_parse_url(const std::string & url) {
         rest = rest.substr(at_pos + 1);
     }
 
-    auto slash_pos = rest.find('/');
+    auto path_pos = rest.find_first_of("/?");
 
-    if (slash_pos != std::string::npos) {
-        parts.host = rest.substr(0, slash_pos);
-        parts.path = rest.substr(slash_pos);
+    if (path_pos != std::string::npos) {
+        parts.host = rest.substr(0, path_pos);
+        parts.path = rest.substr(path_pos);
     } else {
         parts.host = rest;
         parts.path = "/";
