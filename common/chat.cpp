@@ -1155,7 +1155,7 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         src.find("<|content_text|>") != std::string::npos &&
         src.find("<|message_model|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Inkling\n");
-        return common_chat_params_init_inkling(tmpl, params);
+        return common_chat_params_init_inkling;
     }
 
     if (is_lfm2_template(src)) {

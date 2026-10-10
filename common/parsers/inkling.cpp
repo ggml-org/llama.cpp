@@ -48,7 +48,7 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
         data.prompt += data.generation_prompt;
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(MSG_MODEL);
         auto end               = p.end();
 
@@ -113,8 +113,6 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
         return generation_prompt + reasoning + body +
                p.optional(p.literal(END_SAMPLING)) + end;
     });
-
-    data.parser = parser.save();
 
     return data;
 }
