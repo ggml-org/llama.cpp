@@ -1,8 +1,38 @@
 import Foundation
 import llama
 
-enum LlamaError: Error {
+public enum LlamaError: Error {
     case couldNotInitializeContext
+}
+
+public enum Backend: String, CaseIterable {
+    case metalTensor = "Metal-4 Tensor"
+    case metalLegacy = "Metal Legacy"
+    case cpu = "CPU"
+
+    public var displayName: String {
+        return self.rawValue
+    }
+}
+
+public struct InferenceMetrics {
+    public var backend: Backend
+    public var ttft: Double  // Time to first token (seconds)
+    public var tokensPerSecond: Double
+    public var totalTokens: Int32
+    public var totalTime: Double  // Total inference time (seconds)
+    public var memoryUsed: UInt64  // Bytes
+    public var thermalState: String
+
+    public init(backend: Backend, ttft: Double, tokensPerSecond: Double, totalTokens: Int32, totalTime: Double, memoryUsed: UInt64, thermalState: String) {
+        self.backend = backend
+        self.ttft = ttft
+        self.tokensPerSecond = tokensPerSecond
+        self.totalTokens = totalTokens
+        self.totalTime = totalTime
+        self.memoryUsed = memoryUsed
+        self.thermalState = thermalState
+    }
 }
 
 func llama_batch_clear(_ batch: inout llama_batch) {
@@ -21,24 +51,33 @@ func llama_batch_add(_ batch: inout llama_batch, _ id: llama_token, _ pos: llama
     batch.n_tokens += 1
 }
 
-actor LlamaContext {
+public actor LlamaContext {
     private var model: OpaquePointer
     private var context: OpaquePointer
     private var vocab: OpaquePointer
     private var sampling: UnsafeMutablePointer<llama_sampler>
     private var batch: llama_batch
     private var tokens_list: [llama_token]
-    var is_done: Bool = false
+    public var is_done: Bool = false
 
     /// This variable is used to store temporarily invalid cchars
     private var temporary_invalid_cchars: [CChar]
 
-    var n_len: Int32 = 1024
+    public var n_len: Int32 = 1024
     var n_cur: Int32 = 0
 
     var n_decode: Int32 = 0
 
-    init(model: OpaquePointer, context: OpaquePointer) {
+    private var backend: Backend
+
+    // Metrics tracking
+    private var inferenceStartTime: UInt64 = 0
+    private var firstTokenTime: UInt64 = 0
+    private var totalTokensGenerated: Int32 = 0
+    public var lastMetrics: InferenceMetrics?
+
+    init(model: OpaquePointer, context: OpaquePointer, backend: Backend) {
+        self.backend = backend
         self.model = model
         self.context = context
         self.tokens_list = []
@@ -59,14 +98,30 @@ actor LlamaContext {
         llama_backend_free()
     }
 
-    static func create_context(path: String) throws -> LlamaContext {
+    public static func create_context(path: String, backend: Backend = .metalTensor) throws -> LlamaContext {
         llama_backend_init()
         var model_params = llama_model_default_params()
 
+        // Configure backend
 #if targetEnvironment(simulator)
         model_params.n_gpu_layers = 0
-        print("Running on simulator, force use n_gpu_layers = 0")
+        print("Running on simulator, forcing CPU backend")
+        let actualBackend = Backend.cpu
+#else
+        switch backend {
+        case .metalTensor:
+            model_params.n_gpu_layers = 99  // Full GPU offload
+            print("Using Metal-4 Tensor backend")
+        case .metalLegacy:
+            model_params.n_gpu_layers = 99  // Full GPU offload (legacy Metal)
+            print("Using Metal Legacy backend")
+        case .cpu:
+            model_params.n_gpu_layers = 0   // CPU only
+            print("Using CPU backend")
+        }
+        let actualBackend = backend
 #endif
+
         let model = llama_model_load_from_file(path, model_params)
         guard let model else {
             print("Could not load model at \(path)")
@@ -87,10 +142,10 @@ actor LlamaContext {
             throw LlamaError.couldNotInitializeContext
         }
 
-        return LlamaContext(model: model, context: context)
+        return LlamaContext(model: model, context: context, backend: actualBackend)
     }
 
-    func model_info() -> String {
+    public func model_info() -> String {
         let result = UnsafeMutablePointer<Int8>.allocate(capacity: 256)
         result.initialize(repeating: Int8(0), count: 256)
         defer {
@@ -114,8 +169,14 @@ actor LlamaContext {
         return batch.n_tokens;
     }
 
-    func completion_init(text: String) {
+    public func completion_init(text: String) {
         print("attempting to complete \"\(text)\"")
+
+        // Reset metrics
+        inferenceStartTime = DispatchTime.now().uptimeNanoseconds
+        firstTokenTime = 0
+        totalTokensGenerated = 0
+        lastMetrics = nil
 
         tokens_list = tokenize(text: text, add_bos: true)
         temporary_invalid_cchars = []
@@ -148,18 +209,46 @@ actor LlamaContext {
         n_cur = batch.n_tokens
     }
 
-    func completion_loop() -> String {
+    public func completion_loop() -> String {
         var new_token_id: llama_token = 0
 
         new_token_id = llama_sampler_sample(sampling, context, batch.n_tokens - 1)
 
+        // Track first token time (TTFT)
+        if totalTokensGenerated == 0 && firstTokenTime == 0 {
+            firstTokenTime = DispatchTime.now().uptimeNanoseconds
+        }
+
         if llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_len {
             print("\n")
             is_done = true
+
+            // Finalize metrics
+            let endTime = DispatchTime.now().uptimeNanoseconds
+            let totalTime = Double(endTime - inferenceStartTime) / 1_000_000_000.0
+            let ttft = firstTokenTime > 0 ? Double(firstTokenTime - inferenceStartTime) / 1_000_000_000.0 : 0.0
+            let tokensPerSec = totalTokensGenerated > 0 ? Double(totalTokensGenerated) / totalTime : 0.0
+
+            // Get memory and thermal state
+            let memoryUsed = getMemoryUsage()
+            let thermalState = getThermalState()
+
+            lastMetrics = InferenceMetrics(
+                backend: backend,
+                ttft: ttft,
+                tokensPerSecond: tokensPerSec,
+                totalTokens: totalTokensGenerated,
+                totalTime: totalTime,
+                memoryUsed: memoryUsed,
+                thermalState: thermalState
+            )
+
             let new_token_str = String(cString: temporary_invalid_cchars + [0])
             temporary_invalid_cchars.removeAll()
             return new_token_str
         }
+
+        totalTokensGenerated += 1
 
         let new_token_cchars = token_to_piece(token: new_token_id)
         temporary_invalid_cchars.append(contentsOf: new_token_cchars)
@@ -191,7 +280,7 @@ actor LlamaContext {
         return new_token_str
     }
 
-    func bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) -> String {
+    public func bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) -> String {
         var pp_avg: Double = 0
         var tg_avg: Double = 0
 
@@ -273,7 +362,7 @@ actor LlamaContext {
         let model_desc     = model_info();
         let model_size     = String(format: "%.2f GiB", Double(llama_model_size(model)) / 1024.0 / 1024.0 / 1024.0);
         let model_n_params = String(format: "%.2f B", Double(llama_model_n_params(model)) / 1e9);
-        let backend        = "Metal";
+        let backend_str    = backend.displayName;
         let pp_avg_str     = String(format: "%.2f", pp_avg);
         let tg_avg_str     = String(format: "%.2f", tg_avg);
         let pp_std_str     = String(format: "%.2f", pp_std);
@@ -283,16 +372,38 @@ actor LlamaContext {
 
         result += String("| model | size | params | backend | test | t/s |\n")
         result += String("| --- | --- | --- | --- | --- | --- |\n")
-        result += String("| \(model_desc) | \(model_size) | \(model_n_params) | \(backend) | pp \(pp) | \(pp_avg_str) ± \(pp_std_str) |\n")
-        result += String("| \(model_desc) | \(model_size) | \(model_n_params) | \(backend) | tg \(tg) | \(tg_avg_str) ± \(tg_std_str) |\n")
+        result += String("| \(model_desc) | \(model_size) | \(model_n_params) | \(backend_str) | pp \(pp) | \(pp_avg_str) ± \(pp_std_str) |\n")
+        result += String("| \(model_desc) | \(model_size) | \(model_n_params) | \(backend_str) | tg \(tg) | \(tg_avg_str) ± \(tg_std_str) |\n")
 
         return result;
     }
 
-    func clear() {
+    public func clear() {
         tokens_list.removeAll()
         temporary_invalid_cchars.removeAll()
         llama_memory_clear(llama_get_memory(context), true)
+    }
+
+    private func getMemoryUsage() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return kerr == KERN_SUCCESS ? info.resident_size : 0
+    }
+
+    private func getThermalState() -> String {
+        let state = ProcessInfo.processInfo.thermalState
+        switch state {
+        case .nominal: return "Nominal"
+        case .fair: return "Fair"
+        case .serious: return "Serious"
+        case .critical: return "Critical"
+        @unknown default: return "Unknown"
+        }
     }
 
     private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
