@@ -585,17 +585,15 @@ void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
     }
 }
 
-void server_tokens::push_back(server_tokens & tokens) {
+void server_tokens::push_back(const server_tokens & tokens) {
     size_t start_idx = size();
-    for (size_t i = 0; i < tokens.size(); i++) {
-        push_back(tokens[i]);
-    }
+    this->tokens.insert(this->tokens.end(), tokens.tokens.begin(), tokens.tokens.end());
     if (tokens.has_mtmd) {
         // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
         // We could also just check, but this will prevent silently dropping MTMD data.
         GGML_ASSERT(has_mtmd);
-        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
-            auto * chunk = tokens.map_idx_to_media[it->first].get();
+        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ++it) {
+            auto * chunk = it->second.get();
             mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
             map_idx_to_media[start_idx + it->first] = std::move(new_chunk);
         }
