@@ -4736,12 +4736,23 @@ server_context_meta server_context::get_meta() const {
 // may have bypass_sleep = true if the task does not use ctx_server
 struct server_res_generator : server_res_spipe {
     server_response_reader rd;
+    server_queue & queue_tasks;
+    // true if this generator holds an in-flight claim on the queue (see
+    // server_queue::n_inflight): released in the destructor so the claim is
+    // balanced even when the handler returns early without posting a task
+    bool hold_inflight = false;
     server_res_generator(server_queue & queue_tasks, server_response & queue_results, int sleep_idle_seconds, bool bypass_sleep = false)
-            : rd(queue_tasks, queue_results, HTTP_POLLING_SECONDS) {
+            : rd(queue_tasks, queue_results, HTTP_POLLING_SECONDS), queue_tasks(queue_tasks) {
         // fast path in case sleeping is disabled
         bypass_sleep |= sleep_idle_seconds < 0;
         if (!bypass_sleep) {
             queue_tasks.wait_until_no_sleep();
+            hold_inflight = true;
+        }
+    }
+    ~server_res_generator() {
+        if (hold_inflight) {
+            queue_tasks.release_inflight();
         }
     }
     void ok(const json & response_data) {
