@@ -354,13 +354,35 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
     return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
-json server_task_result_cmpl_final::usage_json_oaicompat() {
+static json format_usage_oaicompat(int32_t n_decoded, int32_t n_prompt_tokens, int32_t n_prompt_tokens_cache) {
     return json {
         {"completion_tokens", n_decoded},
         {"prompt_tokens",     n_prompt_tokens},
         {"total_tokens",      n_decoded + n_prompt_tokens},
         {"prompt_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
     };
+}
+
+json server_task_result_cmpl_final::usage_json_oaicompat() {
+    return format_usage_oaicompat(n_decoded, n_prompt_tokens, n_prompt_tokens_cache);
+}
+
+//
+// server_task_result_usage
+//
+
+void server_task_result_usage::add(const server_task_result_cmpl_final & res) {
+    n_decoded += res.n_decoded;
+    // the n_cmpl results of the same prompt have consecutive indices, starting with the parent task
+    // the prompt is shared by all of them, so it is only counted once
+    if (res.index % (size_t) n_cmpl == 0) {
+        n_prompt_tokens       += res.n_prompt_tokens;
+        n_prompt_tokens_cache += res.n_prompt_tokens_cache;
+    }
+}
+
+json server_task_result_usage::to_json_oaicompat() const {
+    return format_usage_oaicompat(n_decoded, n_prompt_tokens, n_prompt_tokens_cache);
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat() {

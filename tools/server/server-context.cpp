@@ -4758,6 +4758,50 @@ void server_context::set_state_callback(server_state_callback_t callback) {
     impl->callback_state = std::move(callback);
 }
 
+// in a streamed OAI-compat request with multiple choices, the final result of each choice
+// reports its own usage: keep it only for the last one, with the usage of the whole request
+static void server_stream_aggregate_usage(
+        server_task_result_usage & usage,
+        task_response_type res_type,
+        const server_task_result_ptr & result,
+        bool is_last,
+        json & res_json) {
+    if (res_type != TASK_RESPONSE_TYPE_OAI_CHAT && res_type != TASK_RESPONSE_TYPE_OAI_CMPL) {
+        return;
+    }
+    const auto * res_final = dynamic_cast<const server_task_result_cmpl_final*>(result.get());
+    if (res_final == nullptr) {
+        return; // partial result
+    }
+    usage.add(*res_final);
+
+    // find the chunk carrying the usage of this choice, if any
+    json * chunk = nullptr;
+    if (res_type == TASK_RESPONSE_TYPE_OAI_CHAT) {
+        // array of chunks, the usage (if requested) is in the last one
+        if (res_json.is_array() && !res_json.empty() && res_json.back().contains("usage")) {
+            chunk = &res_json.back();
+        }
+    } else if (res_json.is_object() && res_json.contains("usage")) {
+        chunk = &res_json;
+    }
+    if (chunk == nullptr) {
+        return;
+    }
+
+    if (is_last) {
+        (*chunk)["usage"] = usage.to_json_oaicompat();
+    } else if (res_type == TASK_RESPONSE_TYPE_OAI_CHAT) {
+        // drop the usage-only chunk, moving its timings (if any) to the previous chunk
+        if (chunk->contains("timings") && res_json.size() > 1) {
+            res_json[res_json.size() - 2]["timings"] = std::move((*chunk)["timings"]);
+        }
+        res_json.erase(res_json.size() - 1);
+    } else {
+        chunk->erase("usage");
+    }
+}
+
 //
 // server_routes
 //
@@ -4779,6 +4823,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     res->set_req(&req); // will also set spipe if needed
 
     int32_t sse_ping_interval = params.sse_ping_interval;
+    int32_t n_cmpl = 1; // number of choices generated per prompt
 
     try {
         std::vector<server_task> tasks;
@@ -4826,6 +4871,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
             task.id_slot = json_value(data, "id_slot", -1);
             sse_ping_interval = task.params.sse_ping_interval;
+            n_cmpl            = task.params.n_cmpl;
 
             // OAI-compat
             task.params.res_type          = res_type;
@@ -4875,6 +4921,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 for (size_t i = 1; i < arr.size(); i++) {
                     choices.push_back(std::move(arr[i]["choices"][0]));
                 }
+                // the usage must account for all choices, not only the first one
+                server_task_result_usage usage(n_cmpl);
+                for (auto & res : all_results.results) {
+                    usage.add(*static_cast<server_task_result_cmpl_final*>(res.get()));
+                }
+                arr[0]["usage"] = usage.to_json_oaicompat();
                 res->ok(arr[0]);
             } else {
                 // multi-results, non-OAI compat
@@ -4901,9 +4953,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
         );
 
+        // aggregated usage of all choices, only needed when there are multiple tasks
+        server_task_result_usage usage(n_cmpl);
+        const bool aggregate_usage = rd.id_tasks.size() > 1;
+
         // next responses are streamed
         // to be sent immediately
         json first_result_json = first_result->to_json();
+        if (aggregate_usage) {
+            server_stream_aggregate_usage(usage, res_type, first_result, !rd.has_next(), first_result_json);
+        }
         if (first_result_json == nullptr) {
             res->data = ""; // simply send HTTP headers and status code
         } else if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
@@ -4915,7 +4974,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         }
         res->status = 200;
         res->content_type = "text/event-stream";
-        res->set_next([res_this = res.get(), res_type, sse_ping_interval](std::string & output) -> bool {
+        res->set_next([res_this = res.get(), res_type, sse_ping_interval, usage, aggregate_usage](std::string & output) mutable -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({
@@ -5001,6 +5060,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
                     );
                     json res_json = result->to_json();
+                    if (aggregate_usage) {
+                        server_stream_aggregate_usage(usage, res_type, result, !rd.has_next(), res_json);
+                    }
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
                     } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {

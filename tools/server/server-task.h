@@ -430,6 +430,23 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_anthropic_stream();
 };
 
+// OAI-compat usage of a request producing multiple choices (n > 1 and/or multiple prompts)
+// the completion tokens are summed over all choices, while the prompt shared by the
+// n_cmpl choices generated from the same input is counted once
+struct server_task_result_usage {
+    int32_t n_cmpl = 1;
+
+    int32_t n_decoded             = 0;
+    int32_t n_prompt_tokens       = 0;
+    int32_t n_prompt_tokens_cache = 0;
+
+    server_task_result_usage(int32_t n_cmpl) : n_cmpl(n_cmpl > 0 ? n_cmpl : 1) {}
+
+    void add(const server_task_result_cmpl_final & res);
+
+    json to_json_oaicompat() const;
+};
+
 struct server_task_result_cmpl_partial : server_task_result {
     common_chat_input content;
     llama_tokens      tokens;
