@@ -3739,6 +3739,39 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                     wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column}, 1, true, use_subgroup_ops, gdn_subgroup_size);
             }
         }
+
+        // chunked coopmat GDN prefill: coopmat2 on NVIDIA, coopmat1 on RDNA4 (the scan wins on RDNA3)
+        const bool gdn_chunked = getenv("GGML_VK_DISABLE_GDN_CHUNKED") == nullptr;
+#if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
+        if (gdn_chunked && device->coopmat2 && device->coopmat2_bf16_support) {
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
+                "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
+                "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+        }
+#endif
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
+        if (gdn_chunked && device->architecture == vk_device_architecture::AMD_RDNA4 &&
+            device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
+            device->subgroup_size == 64) {
+            const bool bf16acc = device->coopmat_bf16_acc_support;
+            // V=64: state mirror in shared, 7 bindings
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64" : "gated_delta_net_f32_cm1_wave64",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_len : gated_delta_net_f32_cm1_wave64_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_data : (const void *)gated_delta_net_f32_cm1_wave64_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+            // V=128: state mirror in a gmem scratch buffer, 8 bindings
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64_v128" : "gated_delta_net_f32_cm1_wave64_v128",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_v128_len : gated_delta_net_f32_cm1_wave64_v128_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v128_data : (const void *)gated_delta_net_f32_cm1_wave64_v128_data,
+                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+        }
+#endif
+        GGML_UNUSED(gdn_chunked);
     }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
@@ -4077,6 +4110,11 @@ vk_device ggml_vk_get_device(size_t idx) {
                        !getenv("GGML_VK_DISABLE_COOPMAT2")) {
                 coopmat2_support = true;
 #endif
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+            } else if (strcmp("VK_EXT_cooperative_matrix_maintenance1", properties.extensionName) == 0 &&
+                       !getenv("GGML_VK_DISABLE_COOPMAT_MAINTENANCE1")) {
+                device->coopmat_maintenance1 = true;
+#endif
             } else if (strcmp(VK_NV_COOPERATIVE_MATRIX_DECODE_VECTOR_EXTENSION_NAME, properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) {
                 coopmat2_decode_vector_support = true;
@@ -4389,6 +4427,15 @@ vk_device ggml_vk_get_device(size_t idx) {
         }
 #endif
 
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+        VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT coopmat_m1_features {};
+        coopmat_m1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT;
+        if (device->coopmat_support && device->coopmat_maintenance1) {
+            last_struct->pNext = (VkBaseOutStructure *)&coopmat_m1_features;
+            last_struct = (VkBaseOutStructure *)&coopmat_m1_features;
+        }
+#endif
+
         VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV coopmat2_decode_vector_features {};
         coopmat2_decode_vector_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_DECODE_VECTOR_FEATURES_NV;
         if (coopmat2_decode_vector_support) {
@@ -4539,6 +4586,17 @@ vk_device ggml_vk_get_device(size_t idx) {
 #if defined(VK_KHR_cooperative_matrix)
         device->coopmat_support = device->coopmat_support && coopmat_features.cooperativeMatrix;
         device->coopmat1_fa_support = device->coopmat_support && device->subgroup_require_full_support;
+#endif
+
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+        device->coopmat_maintenance1 = device->coopmat_support && device->coopmat_maintenance1;
+        if (device->coopmat_maintenance1) {
+            device->coopmat_m1_reductions      = coopmat_m1_features.cooperativeMatrixReductions;
+            device->coopmat_m1_conversions     = coopmat_m1_features.cooperativeMatrixConversions;
+            device->coopmat_m1_per_element_ops = coopmat_m1_features.cooperativeMatrixPerElementOperations;
+            device->coopmat_m1_get_coordinate  = coopmat_m1_features.cooperativeMatrixGetCoordinate;
+            device_extensions.push_back(VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_EXTENSION_NAME);
+        }
 #endif
 
         if (coopmat2_support) {
@@ -4751,6 +4809,18 @@ vk_device ggml_vk_get_device(size_t idx) {
                         device->coopmat_bf16_support = true;
                     }
                 }
+                // bf16 accumulator (bf16/bf16/bf16/bf16) at the shader's fixed 16x16x16
+                // shape lets the GDN coopmat1 path keep the hi/lo split as accumulators.
+                if (bfloat16_support &&
+                    prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    prop.BType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    prop.CType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    prop.ResultType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    (vk::ScopeKHR)prop.scope == vk::ScopeKHR::eSubgroup &&
+                    prop.MSize == 16 && prop.NSize == 16 && prop.KSize == 16
+                ) {
+                    device->coopmat_bf16_acc_support = true;
+                }
 #endif
             }
 
@@ -4955,6 +5025,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     bool coopmat_support = false;
     bool coopmat2_support = false;
     bool coopmat2_decode_vector_support = false;
+    bool coopmat_maintenance1_support = false;
     bool integer_dot_product = false;
     bool bfloat16_support = false;
     bool dot2_f16_support = false;
@@ -4975,6 +5046,11 @@ static void ggml_vk_print_gpu_info(size_t idx) {
         } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0 &&
                    !getenv("GGML_VK_DISABLE_COOPMAT2")) {
             coopmat2_support = true;
+#endif
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+        } else if (strcmp("VK_EXT_cooperative_matrix_maintenance1", properties.extensionName) == 0 &&
+                   !getenv("GGML_VK_DISABLE_COOPMAT_MAINTENANCE1")) {
+            coopmat_maintenance1_support = true;
 #endif
         } else if (strcmp(VK_NV_COOPERATIVE_MATRIX_DECODE_VECTOR_EXTENSION_NAME, properties.extensionName) == 0 &&
                    !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) {
@@ -5055,6 +5131,15 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     if (coopmat_support) {
         last_struct->pNext = (VkBaseOutStructure *)&coopmat_features;
         last_struct = (VkBaseOutStructure *)&coopmat_features;
+    }
+#endif
+
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+    VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT coopmat_m1_features {};
+    coopmat_m1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT;
+    if (coopmat_support && coopmat_maintenance1_support) {
+        last_struct->pNext = (VkBaseOutStructure *)&coopmat_m1_features;
+        last_struct = (VkBaseOutStructure *)&coopmat_m1_features;
     }
 #endif
 
@@ -5149,13 +5234,17 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     coopmat2_support = false;
 #endif
 
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+    coopmat_maintenance1_support = coopmat_maintenance1_support && coopmat_m1_features.cooperativeMatrixPerElementOperations;
+#endif
+
     coopmat2_decode_vector_support = coopmat2_decode_vector_support && coopmat2_decode_vector_features.cooperativeMatrixDecodeVector;
 #if !defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT)
     coopmat2_decode_vector_support = false;
 #endif
 
     std::string matrix_cores = coopmat2_support ? (coopmat2_decode_vector_support ? "NV_coopmat2v" : "NV_coopmat2")
-                             : coopmat_support  ? "KHR_coopmat"
+                             : coopmat_support  ? (coopmat_maintenance1_support ? "KHR_coopmat_m1" : "KHR_coopmat")
                              : "none";
 
     bool dot2_f16 = dot2_f16_support && dot2_features.shaderMixedFloatDotProductFloat16AccFloat32;
@@ -10239,7 +10328,30 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     const uint32_t s_off = S_v * H * n_tokens * n_seqs;
 
-    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op);
+    const ggml_tensor * src_g = dst->src[3];
+    const bool use_cm = ctx->device->pipeline_gated_delta_net_cm != nullptr &&
+        src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= 64;
+
+    bool use_v128 = false;
+    if (use_cm && ctx->device->pipeline_gated_delta_net_cm_v128 != nullptr) {
+        const uint32_t nsm = ctx->device->shader_core_count;
+        if (nsm != 0) {
+            const uint32_t wg64  = 2u * H * n_seqs;
+            const uint32_t wg128 = H * n_seqs;
+            const uint32_t waves64  = (wg64  + nsm - 1) / nsm;
+            const uint32_t waves128 = (wg128 + nsm - 1) / nsm;
+            // prefer v128 when occupancy (wgs / (waves * nsm)) is at least as good
+            use_v128 = (uint64_t)wg128 * waves64 >= (uint64_t)wg64 * waves128;
+        }
+    }
+
+    const uint32_t cm_V     = use_v128 ? 128u : GGML_VK_GDN_CM_V;
+    const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;
+
+    vk_pipeline pipeline = use_v128
+        ? ctx->device->pipeline_gated_delta_net_cm_v128
+        : (use_cm ? ctx->device->pipeline_gated_delta_net_cm
+                   : ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op));
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -10248,6 +10360,21 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     vk_subbuffer src_buf[6] = {};
     for (int i = 0; i < 6; i++) {
         src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+
+    vk_subbuffer mirror_buf{};
+    if (cm_gmem) {
+        const uint32_t LDP = GGML_VK_GDN_CM_LDP;
+        const uint32_t blocks = (S_v / cm_V) * n_seqs * H;
+        const size_t scratch_size = (size_t)blocks * LDP * cm_V * 2u * sizeof(uint16_t);
+        if (ctx->prealloc_size_x < scratch_size) {
+            ctx->prealloc_size_x = scratch_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->prealloc_x_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
+        }
+        mirror_buf = vk_subbuffer{ ctx->prealloc_x, 0, ctx->prealloc_x->size };
     }
 
     const uint32_t sq1 = (uint32_t)(src_q->nb[1] / sizeof(float));
@@ -10274,9 +10401,16 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         K
     };
 
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-        pc, { H, n_seqs, S_v });
+    if (cm_gmem) {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+            {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf, mirror_buf},
+            pc, std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H });
+        ctx->prealloc_x_need_sync = true;
+    } else {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+            {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
+            pc, use_cm ? std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
+    }
 }
 
 void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {

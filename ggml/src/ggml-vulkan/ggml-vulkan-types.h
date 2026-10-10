@@ -36,6 +36,21 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 } VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV;
 #endif
 
+#ifndef VK_EXT_cooperative_matrix_maintenance1
+#define VK_EXT_cooperative_matrix_maintenance1 1
+#define VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_EXTENSION_NAME "VK_EXT_cooperative_matrix_maintenance1"
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT ((VkStructureType)1000659000)
+typedef struct VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           cooperativeMatrixProperties2;
+    VkBool32           cooperativeMatrixReductions;
+    VkBool32           cooperativeMatrixConversions;
+    VkBool32           cooperativeMatrixPerElementOperations;
+    VkBool32           cooperativeMatrixGetCoordinate;
+} VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT;
+#endif
+
 #if __has_include(<spirv/unified1/spirv.hpp>)
 #    include <spirv/unified1/spirv.hpp>
 #elif __has_include(<spirv-headers/spirv.hpp>)
@@ -241,6 +256,11 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define MAX_PARAMETER_COUNT 12
 
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
+
+#define GGML_VK_GDN_CM_V 64u
+#define GGML_VK_GDN_CM_D 128u
+#define GGML_VK_GDN_CM_PAD 8u
+#define GGML_VK_GDN_CM_LDP (GGML_VK_GDN_CM_D + GGML_VK_GDN_CM_PAD)
 
 struct vk_pipeline_struct;
 
@@ -753,6 +773,12 @@ struct vk_device_struct {
     bool coopmat_acc_f32_support {};
     bool coopmat_acc_f16_support {};
     bool coopmat_bf16_support {};
+    bool coopmat_bf16_acc_support {};
+    bool coopmat_maintenance1 {};
+    bool coopmat_m1_reductions {};
+    bool coopmat_m1_conversions {};
+    bool coopmat_m1_per_element_ops {};
+    bool coopmat_m1_get_coordinate {};
     bool coopmat_support_16x16x16_f16acc {};
     bool coopmat_support_16x16x16_f32acc {};
     bool coopmat1_fa_support {};
@@ -986,6 +1012,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_lightning_indexer_f32[GGML_TYPE_COUNT];
     // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
     vk_pipeline pipeline_gated_delta_net[4][2];
+    vk_pipeline pipeline_gated_delta_net_cm;
+    vk_pipeline pipeline_gated_delta_net_cm_v128;
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
