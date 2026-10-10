@@ -108,6 +108,7 @@ llama_context::llama_context(
     cparams.moe_direct_io = params.moe_direct_io;
     cparams.moe_slots     = params.moe_slots;
     cparams.moe_gguf_path = params.moe_gguf_path;
+    cparams.moe_profile_path = params.moe_profile_path;
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
@@ -3920,6 +3921,7 @@ llama_context_params llama_context_default_params() {
         /*.moe_direct_io              =*/ false,
         /*.moe_slots                  =*/ 4096,
         /*.moe_gguf_path              =*/ nullptr,
+        /*.moe_profile_path           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.abort_callback              =*/ nullptr,
@@ -4722,24 +4724,52 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
 // per layer ≈ 70% cold-hit coverage (trace-measured).
 void llama_context::moe_seed_hot() {
     if (!moe_ready) return;
+    // file profile (--moe-profile) wins; else the checked-in table.
+    // format: u32 n_layer, u32 per_layer, then u16 expert ids in rank order.
+    std::vector<uint16_t> file_hot;
+    int file_nl = 0, file_nt = 0;
+    if (cparams.moe_profile_path && cparams.moe_profile_path[0]) {
+        FILE * f = fopen(cparams.moe_profile_path, "rb");
+        if (!f) {
+            LLAMA_LOG_WARN("%s: cannot open %s, using built-in profile\n",
+                           __func__, cparams.moe_profile_path);
+        } else {
+            uint32_t nl = 0, nt = 0;
+            bool ok = fread(&nl, 4, 1, f) == 1 && fread(&nt, 4, 1, f) == 1 &&
+                      nl == (uint32_t) moe.n_layer && nt > 0 && nt <= (uint32_t) moe.n_expert;
+            if (ok) {
+                file_hot.resize((size_t) nl * nt);
+                ok = fread(file_hot.data(), 2, file_hot.size(), f) == file_hot.size();
+            }
+            fclose(f);
+            if (ok) { file_nl = (int) nl; file_nt = (int) nt; }
+            else LLAMA_LOG_WARN("%s: bad profile %s, using built-in\n", __func__, cparams.moe_profile_path);
+        }
+    }
 #include "moe_hot_profile.h"
     static_assert(MOE_HOT_NLAYER == 48, "hot profile layer count");
     const int64_t t0 = ggml_time_us();
     const int64_t budget_us = 4000000;
+    const int per_layer = file_nt > 0 ? file_nt : MOE_HOT_PER_LAYER;
+    const int total = moe.n_layer * per_layer;
     int seeded = 0;
-    for (int k = 0; k < MOE_HOT_PER_LAYER; k++) {
+    for (int k = 0; k < per_layer; k++) {
         for (int il = 0; il < moe.n_layer; il++) {
             if (ggml_time_us() - t0 > budget_us) {
-                LLAMA_LOG_WARN("%s: budget hit at round %d, %d seeded\n", __func__, k, seeded);
+                LLAMA_LOG_WARN("%s: budget hit at round %d, %d seeded (profile: %s)\n", __func__, k, seeded,
+                               file_nt > 0 ? cparams.moe_profile_path : "built-in");
                 return;
             }
-            const int32_t e = moe_hot_experts[il][k];
+            const int32_t e = file_nt > 0 ? file_hot[(size_t) il * file_nt + k]
+                                          : moe_hot_experts[il][k];
             if (e < 0 || e >= moe.n_expert) continue;
             if (moe_page(il, e) >= 0) seeded++;
         }
     }
-    LLAMA_LOG_INFO("%s: seeded %d/3456 hot experts in %.2fs\n",
-                   __func__, seeded, (ggml_time_us() - t0) / 1000000.0);
+    LLAMA_LOG_INFO("%s: loaded %d layers x %d hot experts from %s, seeded %d/%d in %.2fs\n",
+                   __func__, moe.n_layer, per_layer,
+                   file_nt > 0 ? cparams.moe_profile_path : "built-in",
+                   seeded, total, (ggml_time_us() - t0) / 1000000.0);
 }
 
 // Queue async reads for experts the next layer(s) will likely need. Runs at
@@ -4852,22 +4882,24 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         return true;   // split the graph here and sync afterwards
     }
     // data phase: page the selected experts (I32 [n_used, n_tokens]).
+    // the graph only reads the pool when the slot_ids remap node exists;
+    // detect it by name so full-tensor prefill never pays paging stalls.
+    // (slot remap engages for decode and for micro-chunks <= 8 tokens.)
     const int64_t ntok = t->ne[1];
     const int64_t nw = t->ne[0];
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
-    if (ntok == 1) {
-        // decode: batch-pin + page, same as before
-        ctx->moe_page_batch(il, ids.data(), (int) nw);
-    } else {
-        // prefill micro-chunk: page each <=8-token row through the normal
-        // batch path (pinning holds within the row). the row union fits the
-        // slots (measured worst case 59 < 72), so rows do not evict each
-        // other mid-chunk and the graph sees one consistent mapping.
+    if (ntok == 1 || (ntok > 1 && ntok <= ctx->get_cparams().moe_chunk_max)) {
+        // decode, or prefill micro-chunk the graph routed through the pool:
+        // page each row through the pinned batch path. the row union fits
+        // the slots (measured worst case 59 < 72), so rows do not evict
+        // each other mid-chunk and the mapping stays consistent.
         for (int64_t j = 0; j < ntok; j++) {
             ctx->moe_page_batch(il, ids.data() + (size_t) j * nw, (int) nw);
         }
     }
+    // else: large prefill batch runs on the full tensors; skip paging so no
+    // QD1 fetch stalls land on the prompt path
     // layer-ahead + token-ahead async reads for the layers after this one;
     // admission-controlled inside, never blocks
     for (int64_t j = 0; j < ntok; j++) {

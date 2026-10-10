@@ -591,6 +591,7 @@ struct common_params {
     // ---- sparse MoE direct-IO engine (FluxAeros) -------------------------
     bool    moe_direct_io   = false; // stream routed-expert weights via O_DIRECT into a VRAM slot pool
     int32_t moe_slots       = 4096;  // total VRAM slots shared across all MoE layers
+    std::string moe_profile = "";    // hot-expert profile for slot seeding (empty = built-in table)
 
     bool single_turn       = false; // single turn chat conversation
 

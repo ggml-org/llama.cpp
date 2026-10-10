@@ -1984,6 +1984,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION}));
 
     add_opt(common_arg(
+        {"--moe-profile"},
+        "PATH",
+        "hot-expert profile for MoE slot seeding (default: built-in table)",
+        [](common_params & params, const std::string & value) {
+            params.moe_profile = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION}));
+
+    add_opt(common_arg(
         {"--warmup"},
         {"--no-warmup"},
         string_format("whether to perform warmup with an empty run (default: %s)", params.warmup ? "enabled" : "disabled"),

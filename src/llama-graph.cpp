@@ -2175,9 +2175,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // tokens); larger batches keep the full tensors. the fused gate_up path
     // is unsupported (falls back to full tensors).
     ggml_tensor * slot_ids = selected_experts;
-    // micro-chunk ceiling: residency check below needs the per-row union in
-    // registers; keep it small and bounded at build time
-    const int64_t moe_chunk_max = 8;
+    // pool engages for decode and for prefill micro-chunks; the paging
+    // callback uses the same ceiling, so both sides always agree
+    const int64_t moe_chunk_max = cparams.moe_chunk_max;
     bool moe_use_pool = false;
     if (cparams.moe_direct_io && moe_n_layer > il && il >= 0 &&
         moe_gate && moe_up && moe_down && moe_table &&

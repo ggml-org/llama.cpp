@@ -402,6 +402,8 @@ extern "C" {
         int32_t moe_slots     = 4096;     // total VRAM slots shared across all MoE layers
         // GGUF to stream experts from; must outlive the context
         const char * moe_gguf_path;
+        // hot-expert profile for slot seeding; null = built-in table
+        const char * moe_profile_path;
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
