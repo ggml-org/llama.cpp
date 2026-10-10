@@ -995,6 +995,15 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
     static constexpr int bs = sizeof(block_q2_0);
 };
 
+// TQ2_0 (group 256): same 2-bit codec as Q2_0, stored as 4 bit planes of 32 bytes.
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ2_0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = 1;
+    static constexpr int qi = QK_K/32;
+    static constexpr int bs = sizeof(block_tq2_0);
+};
+
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q4_0> {
     static constexpr int qk = QK4_0;
