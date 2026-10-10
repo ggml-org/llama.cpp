@@ -5669,9 +5669,10 @@ struct test_out_prod : public test_case {
     const std::array<int64_t, 2> bs; // dims 3 and 4
     const std::array<int64_t, 2> nr; // repeat in dims 3 and 4
     const bool trans_b;
+    const bool trans_a; // only possible for k == 1, a view of a [1, m] tensor
 
     std::string vars() override {
-        return VARS_TO_STR8(type_a, type_b, m, n, k, bs, nr, trans_b);
+        return VARS_TO_STR9(type_a, type_b, m, n, k, bs, nr, trans_b, trans_a);
     }
 
     double max_nmse_err() override {
@@ -5682,11 +5683,19 @@ struct test_out_prod : public test_case {
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
             std::array<int64_t, 2> bs = {10, 10},
             std::array<int64_t, 2> nr = {2, 2},
-            bool trans_b = false)
-        : type_a(type_a), type_b(type_b), m(m), n(n), k(k), bs(bs), nr(nr), trans_b(trans_b) {}
+            bool trans_b = false,
+            bool trans_a = false)
+        : type_a(type_a), type_b(type_b), m(m), n(n), k(k), bs(bs), nr(nr), trans_b(trans_b), trans_a(trans_a) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type_a, m, k, bs[0], bs[1]);
+        ggml_tensor * a;
+        if (trans_a) {
+            GGML_ASSERT(k == 1);
+            a = ggml_new_tensor_4d(ctx, type_a, k, m, bs[0], bs[1]);
+            a = ggml_transpose(ctx, a);
+        } else {
+            a = ggml_new_tensor_4d(ctx, type_a, m, k, bs[0], bs[1]);
+        }
         ggml_set_name(a, "a");
 
         ggml_tensor * b;
@@ -11043,6 +11052,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // transposed b as produced by the MUL_MAT backward pass, k == 1 makes the stride of the size-1 dimension unused
+    for (int n : {1, 16}) {
+        for (int k : {1, 16}) {
+            for (int bs2 : {1, 3}) {
+                for (int nr2 : {1, 2}) {
+                    test_cases.emplace_back(new test_out_prod(GGML_TYPE_F32, GGML_TYPE_F32, 256, n, k, {bs2, 1}, {nr2, 1}, true));
+                }
+            }
+        }
+    }
+    // same for a: a [m, 1] view of a [1, m] tensor has a stride of one element for its size-1 dimension
+    for (int n : {1, 16}) {
+        for (int bs2 : {1, 3}) {
+            for (int nr2 : {1, 2}) {
+                test_cases.emplace_back(new test_out_prod(GGML_TYPE_F32, GGML_TYPE_F32, 256, n, 1, {bs2, 1}, {nr2, 1}, false, true));
+                test_cases.emplace_back(new test_out_prod(GGML_TYPE_F32, GGML_TYPE_F32, 256, n, 1, {bs2, 1}, {nr2, 1}, true,  true));
             }
         }
     }

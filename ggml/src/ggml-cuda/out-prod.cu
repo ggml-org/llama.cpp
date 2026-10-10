@@ -1,5 +1,6 @@
 #include "out-prod.cuh"
 
+#include <algorithm>
 #include <cstdint>
 
 static __global__ void k_compute_out_prod_ptrs(
@@ -54,13 +55,16 @@ void ggml_cuda_out_prod(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const float alpha = 1.0f;
     const float beta = 0.0f;
 
-    const int64_t lda = nb01 / sizeof(float);
+    // cuBLAS requires the leading dimensions to be at least the number of rows of the stored matrices.
+    // The ggml stride of a size-1 dimension is unused and can be smaller than that,
+    // e.g. ggml_transpose of a [1, n] tensor yields a [n, 1] tensor with nb[1] == sizeof(float).
+    const int64_t lda = std::max<int64_t>(nb01 / sizeof(float), ne00);
     const int64_t ldc = nb1  / sizeof(float);
 
     const bool src1_T = ggml_is_transposed(src1);
     const cublasOperation_t src1_cublas_op =  src1_T ? CUBLAS_OP_N : CUBLAS_OP_T;
-    const int64_t           ldb            = (src1_T ?        nb10 :        nb11) /  sizeof(float);
-    GGML_ASSERT(                             (src1_T ?        nb11 :        nb10) == sizeof(float));
+    const int64_t           ldb            = std::max<int64_t>((src1_T ? nb10 : nb11) / sizeof(float), src1_T ? ne11 : ne10);
+    GGML_ASSERT(                                               (src1_T ? nb11 : nb10) == sizeof(float));
 
     // data strides in dimensions 2/3
     const size_t s02 = nb02 / sizeof(float);
