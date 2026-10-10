@@ -123,7 +123,7 @@ static bool host_experts_test(const llm_arch arch) {
     }
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const float stdev) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -133,7 +133,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
-    if (arch == LLM_ARCH_LLAMA4) {
+    if (arch == LLM_ARCH_DORY) {
+        n_layer = 6;
+        n_head = 4;
+    } else if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
     } else if (arch == LLM_ARCH_GEMMA4) {
         n_embd = 128;
@@ -470,6 +473,25 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
+
+    if (arch == LLM_ARCH_DORY) {
+        gguf_set_val_u32(ms.gguf_ctx, "dory.input_layer_count", 2);
+        gguf_set_val_u32(ms.gguf_ctx, "dory.recurrent_layer_count", 2);
+        gguf_set_val_u32(ms.gguf_ctx, "dory.output_layer_count", 2);
+        gguf_set_val_u32(ms.gguf_ctx, "dory.recurrent_loop_count", 4);
+        gguf_set_val_str(ms.gguf_ctx, "dory.layer_pattern", "*-S-*-");
+        gguf_set_val_str(ms.gguf_ctx, "dory.recurrent_kv_cache_mode", "per_loop");
+        const uint32_t profile[] = {1, 1, 2, 1, 1, 1};
+        gguf_set_arr_data(ms.gguf_ctx, "dory.rope.profile", GGUF_TYPE_UINT32, profile, 6);
+        gguf_set_val_f32(ms.gguf_ctx, "dory.init_std", stdev);
+        gguf_set_val_f32(ms.gguf_ctx, "dory.alpha_init", 0.05f);
+        gguf_set_val_f32(ms.gguf_ctx, "dory.gate_init", sqrtf(n_embd));
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE, 10000000.0f);
+        gguf_set_val_f32(ms.gguf_ctx, "dory.rope.freq_base_2", 10000.0f);
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH, n_embd_head);
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT, n_embd_head);
+    }
 
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
@@ -829,7 +851,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, stdev);
             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
@@ -974,7 +996,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 continue;
             }
             const std::string config_name = moe ? "MoE" : "Dense";
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, stdev);
             if (arch == LLM_ARCH_BAILINGMOE3) {
                 GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
             }

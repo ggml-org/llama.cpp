@@ -144,6 +144,33 @@ struct llm_build_rwkv7_base : public llm_graph_context {
 // models
 //
 
+struct llama_model_dory : public llama_model_base {
+    llama_model_dory(const llama_model_params & params) : llama_model_base(params) {}
+    uint32_t n_input = 0, n_recurrent = 0, n_output = 0, n_loops = 0;
+    float init_std = 0.0f, alpha_init = 0.0f, gate_init = 0.0f;
+    float theta_1 = 0.0f, theta_2 = 0.0f;
+    std::string pattern;
+    std::string recurrent_kv_cache_mode = "per_loop";
+    std::vector<uint32_t> profile;
+    std::vector<int> physical;
+    std::vector<int> cache_layer;
+    struct scales {
+        ggml_tensor * alpha = nullptr;
+        ggml_tensor * sqk = nullptr;
+        ggml_tensor * gate = nullptr;
+        ggml_tensor * suv_gate = nullptr;
+        ggml_tensor * suv_up = nullptr;
+    };
+    std::vector<scales> scale;
+    ggml_tensor * logit_scale = nullptr;
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    struct graph : public llm_graph_context {
+        graph(const llama_model_dory & model, const llm_graph_params & params);
+    };
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_llama : public llama_model_base {
     llama_model_llama(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

@@ -7,6 +7,7 @@ from .constants import MODEL_ARCH, MODEL_TENSOR, MODEL_TENSORS, TENSOR_NAMES
 
 class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.DORY_LOGIT_SCALE: ("lm_head.logit_scale",),
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
             "gpt_neox.embed_in",                         # gptneox
@@ -185,6 +186,11 @@ class TensorNameMap:
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.DORY_ALPHA: ("backbone.layers.{bid}.attn_alpha", "backbone.layers.{bid}.mlp_alpha"),
+        MODEL_TENSOR.DORY_SQK: ("backbone.layers.{bid}.mixer.sqk",),
+        MODEL_TENSOR.DORY_S_GATE: ("backbone.layers.{bid}.mixer.s_gate",),
+        MODEL_TENSOR.DORY_SUV_GATE: ("backbone.layers.{bid}.mixer.suv_gate",),
+        MODEL_TENSOR.DORY_SUV_UP: ("backbone.layers.{bid}.mixer.suv_up",),
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
@@ -260,6 +266,7 @@ class TensorNameMap:
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
+            "backbone.layers.{bid}.mixer.q_proj",  # dory
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "model.layers.{bid}.attention.q_proj",                       # bailingmoe3
             "layers.{bid}.self_attn.q_proj",                             # embeddinggemma
@@ -281,6 +288,7 @@ class TensorNameMap:
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
+            "backbone.layers.{bid}.mixer.k_proj",  # dory
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe olmo2 phimoe
             "model.layers.{bid}.attention.k_proj",                     # bailingmoe3
             "layers.{bid}.self_attn.k_proj",                           # embeddinggemma
@@ -303,6 +311,7 @@ class TensorNameMap:
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
+            "backbone.layers.{bid}.mixer.v_proj",  # dory
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "model.layers.{bid}.attention.v_proj",                       # bailingmoe3
             "layers.{bid}.self_attn.v_proj",                             # embeddinggemma
@@ -324,6 +333,7 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
+            "backbone.layers.{bid}.mixer.o_proj",  # dory
             "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
             "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
             "transformer.blocks.{bid}.attn.out_proj",                       # mpt
@@ -396,6 +406,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
+            "backbone.layers.{bid}.mixer.g_proj",  # dory
             "model.layers.{bid}.self_attn.gate_proj", # afmoe muse-glimmer
             "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "layers.{bid}.linear_attn.in_proj_z",        # qwen3.5 text
@@ -504,6 +515,7 @@ class TensorNameMap:
 
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
+            "backbone.layers.{bid}.mixer.up_proj",  # dory
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox
             "transformer.h.{bid}.mlp.c_fc",                           # gpt2 jais
             "transformer.blocks.{bid}.ffn.up_proj",                   # mpt
@@ -581,6 +593,7 @@ class TensorNameMap:
 
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
+            "backbone.layers.{bid}.mixer.gate_proj",  # dory
             "model.layers.{bid}.mlp.gate_proj",               # llama-hf refact olmo2
             "layers.{bid}.mlp.gate_proj",                     # embeddinggemma
             "layers.{bid}.feed_forward.w1",                   # llama-pth
@@ -640,6 +653,7 @@ class TensorNameMap:
 
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
+            "backbone.layers.{bid}.mixer.down_proj",  # dory
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
             "transformer.h.{bid}.mlp.c_proj",                         # gpt2 refact qwen jais
             "transformer.blocks.{bid}.ffn.down_proj",                 # mpt

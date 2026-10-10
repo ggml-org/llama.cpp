@@ -150,6 +150,23 @@ endif ()
 
 llama_build(test-recurrent-state-rollback.cpp)
 llama_build(test-save-load-state.cpp)
+llama_build(test-dory-logits.cpp)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_FOUND)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy" RESULT_VARIABLE DORY_NUMPY_STATUS OUTPUT_QUIET ERROR_QUIET)
+    if (DORY_NUMPY_STATUS EQUAL 0)
+        set(DORY_QUANTIZER_ARGS)
+        if (LLAMA_BUILD_TOOLS)
+            list(APPEND DORY_QUANTIZER_ARGS --quantizer $<TARGET_FILE:llama-quantize>)
+        endif()
+        add_test(NAME test-dory COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-dory.py
+            --runner $<TARGET_FILE:test-dory-logits>
+            ${DORY_QUANTIZER_ARGS}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/dory)
+        set_tests_properties(test-dory PROPERTIES LABELS "model;python")
+    endif()
+endif()
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)

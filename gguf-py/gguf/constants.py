@@ -507,6 +507,7 @@ class GGUFType:
 
 
 class MODEL_ARCH(IntEnum):
+    DORY             = auto()
     MMPROJ           = auto() # dummy arch for clip.cpp
     LLAMA            = auto()
     LLAMA4           = auto()
@@ -681,6 +682,12 @@ class VISION_PROJECTOR_TYPE(IntEnum):
 
 
 class MODEL_TENSOR(IntEnum):
+    DORY_ALPHA          = auto()
+    DORY_SQK            = auto()
+    DORY_S_GATE         = auto()
+    DORY_SUV_GATE       = auto()
+    DORY_SUV_UP         = auto()
+    DORY_LOGIT_SCALE    = auto()
     TOKEN_EMBD           = auto()
     TOKEN_EMBD_NORM      = auto()
     MASKED_EMBD_CENTROIDS= auto()
@@ -1291,6 +1298,7 @@ class MODEL_TENSOR(IntEnum):
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+    MODEL_ARCH.DORY: "dory",
     MODEL_ARCH.MMPROJ:           "clip", # dummy arch for clip.cpp
     MODEL_ARCH.LLAMA:            "llama",
     MODEL_ARCH.LLAMA4:           "llama4",
@@ -1463,6 +1471,12 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+    MODEL_TENSOR.DORY_ALPHA: "blk.{bid}.dory_alpha",
+    MODEL_TENSOR.DORY_SQK: "blk.{bid}.dory_sqk",
+    MODEL_TENSOR.DORY_S_GATE: "blk.{bid}.dory_s_gate",
+    MODEL_TENSOR.DORY_SUV_GATE: "blk.{bid}.dory_suv_gate",
+    MODEL_TENSOR.DORY_SUV_UP: "blk.{bid}.dory_suv_up",
+    MODEL_TENSOR.DORY_LOGIT_SCALE: "dory_logit_scale",
     MODEL_TENSOR.TOKEN_EMBD:                "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:           "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:               "token_types",
@@ -2067,6 +2081,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+    MODEL_ARCH.DORY: [
+        MODEL_TENSOR.TOKEN_EMBD, MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_Q, MODEL_TENSOR.ATTN_K, MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT, MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.FFN_GATE, MODEL_TENSOR.FFN_UP, MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.DORY_ALPHA, MODEL_TENSOR.DORY_SQK, MODEL_TENSOR.DORY_S_GATE,
+        MODEL_TENSOR.DORY_SUV_GATE, MODEL_TENSOR.DORY_SUV_UP, MODEL_TENSOR.DORY_LOGIT_SCALE,
+    ],
     MODEL_ARCH.MMPROJ: [
         MODEL_TENSOR.V_MMPROJ,
         MODEL_TENSOR.V_MMPROJ_FC,

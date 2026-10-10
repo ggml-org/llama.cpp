@@ -5308,6 +5308,25 @@ struct test_mul_mat : public test_case {
     }
 };
 
+struct test_mul_mat_f32_src : public test_mul_mat {
+    test_mul_mat_f32_src(int64_t n, std::array<int64_t, 2> bs, std::array<int64_t, 2> nr)
+        : test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 256, n, 256, bs, nr) {}
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",src1_prec=f32";
+    }
+
+    double max_nmse_err() override {
+        return 1e-12;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+        GGML_ASSERT(ggml_prec_set_src(out, GGML_PREC_F32, 1));
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -10603,6 +10622,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 4096, 1, 4096));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 8192, 1, 8192));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 1024, 7, 1024));  // many rows
+
+    for (int64_t n : {1, 3, 8, 16, 32}) {
+        test_cases.emplace_back(new test_mul_mat_f32_src(n, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat_f32_src(n, {2, 1}, {2, 1}));
+    }
 
     // FP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
