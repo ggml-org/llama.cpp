@@ -588,6 +588,18 @@ ggml_tensor * clip_graph::build_inp_raw(int channels) {
     return inp_raw;
 }
 
+static std::string get_attn_mask_name(int idx) {
+    return idx == 0 ? "attn_mask" : "attn_mask_" + std::to_string(idx);
+}
+
+ggml_tensor * clip_graph::build_inp_attn_mask(int64_t n_kv, int64_t n_q, int idx) {
+    const ggml_type type = flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx0, type, n_kv, n_q);
+    ggml_set_name(mask, get_attn_mask_name(idx).c_str());
+    ggml_set_input(mask);
+    return mask;
+}
+
 ggml_tensor * clip_graph::build_norm(
         ggml_tensor * cur,
         ggml_tensor * mw,
@@ -777,9 +789,8 @@ ggml_tensor * clip_graph::build_attn(
 
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         v = ggml_cast(ctx0, v, GGML_TYPE_F16);
-        if (kq_mask) {
-            kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
-        }
+        // mask must be f16 here, use build_inp_attn_mask()
+        GGML_ASSERT(!kq_mask || kq_mask->type == GGML_TYPE_F16);
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
         ggml_prec_set_acc(cur, GGML_PREC_F32);
@@ -4591,6 +4602,20 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
 
+    // mask from build_inp_attn_mask(), f16 if flash attn is enabled
+    auto set_input_attn_mask = [&get_inp_tensor](const std::vector<float> & values, int idx = 0) {
+        ggml_tensor * cur = get_inp_tensor(get_attn_mask_name(idx).c_str());
+        GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
+        if (cur->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> values_f16(values.size());
+            ggml_fp32_to_fp16_row(values.data(), values_f16.data(), values.size());
+            ggml_backend_tensor_set(cur, values_f16.data(), 0, ggml_nbytes(cur));
+        } else {
+            GGML_ASSERT(cur->type == GGML_TYPE_F32);
+            ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
+        }
+    };
+
     auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_I32);
@@ -4639,7 +4664,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 }
             }
         }
-        set_input_f32("kq_mask", mask);
+        set_input_attn_mask(mask);
     };
 
     // set input pixel values
@@ -4753,7 +4778,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                         off += s;
                     }
                 }
-                set_input_f32("muse_glimmer_sp_mask", sp_mask);
+                set_input_attn_mask(sp_mask);
 
                 // pixel-shuffle gather (original order): f*f spatial neighbours grouped
                 std::vector<int32_t> dsp; dsp.reserve(n_tok);
@@ -4876,7 +4901,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                             }
                         }
                     }
-                    set_input_f32("vit_merger_window_mask", window_mask_data);
+                    set_input_attn_mask(window_mask_data);
 
                     // ViT merger 2x2 downsample indices
                     auto vit_merger_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
@@ -5061,7 +5086,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                     set_input_i32("window_idx",     idx);
                     set_input_i32("inv_window_idx", inv_idx);
-                    set_input_f32("window_mask",    mask);
+                    set_input_attn_mask(mask);
                 } else {
                     for (int i = 0; i < ph * pw; i++) {
                         idx[i] = i;
@@ -5172,7 +5197,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 set_input_i32("mimovl_positions_row", positions_row);
                 set_input_i32("mimovl_positions_col", positions_col);
                 set_input_f32("mimovl_idx_col",       idx_col);
-                set_input_f32("mimovl_window_mask",   mask);
+                set_input_attn_mask(mask);
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
@@ -5366,7 +5391,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                             qwen2_mask[static_cast<size_t>(i) * seq_len + j] = zero ? 0.0f : -1e9f;
                         }
                     }
-                    set_input_f32("qwen2_attn_mask", qwen2_mask);
+                    set_input_attn_mask(qwen2_mask);
                 }
             } break;
         case PROJECTOR_TYPE_GEMMA3:
@@ -5612,8 +5637,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                         window_mask[(size_t) q * n_pos + k] = (causal_ok && (q - k) <= window) ? 0.0f : neg_inf;
                     }
                 }
-                set_input_f32("mimo_audio_full_mask", full_mask);
-                set_input_f32("mimo_audio_window_mask", window_mask);
+                set_input_attn_mask(full_mask, 0);
+                set_input_attn_mask(window_mask, 1);
 
                 // input_local_transformer: block-diagonal mask + in-group positions
                 {
@@ -5636,7 +5661,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                             local_mask[(size_t) q * n_padded + k] = same_group ? 0.0f : neg_inf;
                         }
                     }
-                    set_input_f32("mimo_audio_local_mask", local_mask);
+                    set_input_attn_mask(local_mask, 2);
                 }
             } break;
         case PROJECTOR_TYPE_LFM2A:

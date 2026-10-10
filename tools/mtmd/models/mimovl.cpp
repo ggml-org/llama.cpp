@@ -84,13 +84,7 @@ ggml_cgraph * clip_graph_mimovl::build() {
     ggml_tensor * idx_col     = ggml_cast(ctx0, idx_col_f, GGML_TYPE_I32);
     ggml_tensor * idx_col_inv = ggml_argsort(ctx0, idx_col_f, GGML_SORT_ORDER_ASC);
 
-    ggml_tensor * window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-    ggml_set_name(window_mask, "mimovl_window_mask");
-    ggml_set_input(window_mask);
-
-    ggml_tensor * window_mask_attn = (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED)
-        ? ggml_cast(ctx0, window_mask, GGML_TYPE_F16)
-        : window_mask;
+    ggml_tensor * window_mask = build_inp_attn_mask(n_pos, n_pos);
 
     // Reorder helper: permute patches at merge-unit granularity. The patch
     // sequence is laid out as n_units groups of merge_unit (=4) consecutive
@@ -151,7 +145,7 @@ ggml_cgraph * clip_graph_mimovl::build() {
         cb(Kcur, "Kcur_rope", il);
 
         // Full layers: plain attention. Windowed layers: banded mask and per-head sinks.
-        ggml_tensor * mask  = is_full ? nullptr : window_mask_attn;
+        ggml_tensor * mask  = is_full ? nullptr : window_mask;
         ggml_tensor * sinks = is_full ? nullptr : layer.attn_sinks;
         if (!is_full) {
             GGML_ASSERT(layer.attn_sinks != nullptr);

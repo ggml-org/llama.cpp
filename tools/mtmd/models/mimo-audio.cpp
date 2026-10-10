@@ -21,13 +21,8 @@ ggml_cgraph * clip_graph_mimo_audio::build() {
     ggml_set_name(inp_pos, "mimo_audio_positions");
     ggml_set_input(inp_pos);
 
-    ggml_tensor * full_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-    ggml_set_name(full_mask, "mimo_audio_full_mask");
-    ggml_set_input(full_mask);
-
-    ggml_tensor * window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-    ggml_set_name(window_mask, "mimo_audio_window_mask");
-    ggml_set_input(window_mask);
+    ggml_tensor * full_mask   = build_inp_attn_mask(n_pos, n_pos, 0);
+    ggml_tensor * window_mask = build_inp_attn_mask(n_pos, n_pos, 1);
 
     build_vit_opts opts;
     opts.attn_mask_layers.resize(n_layer);
@@ -150,9 +145,7 @@ ggml_cgraph * clip_graph_mimo_audio::build() {
         ggml_set_name(local_pos, "mimo_audio_local_positions");
         ggml_set_input(local_pos);
 
-        ggml_tensor * local_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_padded, n_padded);
-        ggml_set_name(local_mask, "mimo_audio_local_mask");
-        ggml_set_input(local_mask);
+        ggml_tensor * local_mask = build_inp_attn_mask(n_padded, n_padded, 2);
 
         const float local_rope_theta = 640000.0f; // audio_config.rope_theta (differs from the encoder's)
         auto apply_local_rope = [&](ggml_tensor * x) {
