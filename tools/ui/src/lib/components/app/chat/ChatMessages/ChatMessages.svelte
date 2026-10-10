@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
+	import LazyChatMessage from './LazyChatMessage.svelte';
+	import { ChatMessageUserPending } from '$lib/components/app';
 	import { MessageRole } from '$lib/enums';
 	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import type { ChatMessageActions } from '$lib/types';
@@ -51,8 +52,9 @@
 			newExtras?: DatabaseMessageExtra[]
 		) => {
 			onUserAction?.();
+			// in-place edit: the store already updated activeMessages and no
+			// branch is created, so sibling info stays valid without a refetch
 			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-			refreshAllMessages();
 		},
 
 		editWithBranching: async (
@@ -72,7 +74,10 @@
 		) => {
 			onUserAction?.();
 			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
-			refreshAllMessages();
+
+			// only a branch changes sibling info; an in-place edit already
+			// landed in activeMessages
+			if (shouldBranch) refreshAllMessages();
 		},
 
 		forkConversation: async (
@@ -97,9 +102,17 @@
 		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
-			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
-				allConversationMessages = messages;
-			});
+			// reuse the array loadConversation just read, when present; branch
+			// actions fall through to a fresh fetch
+			const preloaded = conversationsStore.consumeLastLoadedMessages(conversation.id);
+
+			if (preloaded) {
+				allConversationMessages = preloaded;
+			} else {
+				conversationsStore.getConversationMessages(conversation.id).then((messages) => {
+					allConversationMessages = messages;
+				});
+			}
 		} else {
 			allConversationMessages = [];
 		}
@@ -224,48 +237,76 @@
 	});
 </script>
 
-<div>
-	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
-		<ChatMessage
-			{chatActions}
-			class="mx-auto mt-12 w-full max-w-3xl"
-			{isLastAssistantMessage}
-			{isLastUserMessage}
-			{message}
-			{nextAssistantMessage}
-			{siblingInfo}
-			{toolMessages}
-		/>
-	{/each}
-
-	{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
-		{@const convId = conversationsStore.activeConversation!.id}
-		{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
-
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={agenticStore.getPendingSteeringMessageExtras(convId)}
-				onDelete={() => agenticStore.clearSteeringMessage(convId)}
-				onEdit={(newContent, extras) =>
-					agenticStore.injectSteeringMessage(convId, newContent, extras)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+<!-- Re-created per conversation, so the CSS fade-in below plays on every
+     navigation into a chat route. -->
+{#key conversationsStore.activeConversation?.id ?? 'new'}
+	<div class="chat-messages">
+		{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
+			<LazyChatMessage
+				{chatActions}
+				class="mx-auto mt-12 w-full max-w-3xl"
+				{isLastAssistantMessage}
+				{isLastUserMessage}
+				{message}
+				{nextAssistantMessage}
+				{siblingInfo}
+				{toolMessages}
 			/>
-		{/if}
-	{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
-		{@const convId = conversationsStore.activeConversation!.id}
-		{@const pendingContent = chatStore.getPendingMessageContent(convId)}
+		{/each}
 
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={chatStore.getPendingMessageExtras(convId)}
-				onDelete={() => chatStore.clearPendingMessage(convId)}
-				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			/>
+		{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+			{@const convId = conversationsStore.activeConversation!.id}
+			{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
+
+			{#if pendingContent}
+				<ChatMessageUserPending
+					class="mx-auto mt-12 w-full max-w-[48rem]"
+					content={pendingContent}
+					extras={agenticStore.getPendingSteeringMessageExtras(convId)}
+					onDelete={() => agenticStore.clearSteeringMessage(convId)}
+					onEdit={(newContent, extras) =>
+						agenticStore.injectSteeringMessage(convId, newContent, extras)}
+					onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				/>
+			{/if}
+		{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
+			{@const convId = conversationsStore.activeConversation!.id}
+			{@const pendingContent = chatStore.getPendingMessageContent(convId)}
+
+			{#if pendingContent}
+				<ChatMessageUserPending
+					class="mx-auto mt-12 w-full max-w-[48rem]"
+					content={pendingContent}
+					extras={chatStore.getPendingMessageExtras(convId)}
+					onDelete={() => chatStore.clearPendingMessage(convId)}
+					onEdit={(newContent, extras) =>
+						chatStore.injectPendingMessage(convId, newContent, extras)}
+					onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				/>
+			{/if}
 		{/if}
-	{/if}
-</div>
+	</div>
+{/key}
+
+<style>
+	/* Compositor-friendly opacity fade; the keyed block re-creates the list per
+	 * conversation, so the animation plays on every navigation into a chat. */
+	.chat-messages {
+		animation: chat-messages-fade-in 150ms ease-out;
+	}
+
+	@keyframes chat-messages-fade-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.chat-messages {
+			animation: none;
+		}
+	}
+</style>

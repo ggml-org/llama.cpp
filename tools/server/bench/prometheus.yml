@@ -6,4 +6,4 @@ global:
 scrape_configs:
   - job_name: 'llama.cpp server'
     static_configs:
-      - targets: ['localhost:8080']
+      - targets: ['localhost:9931']

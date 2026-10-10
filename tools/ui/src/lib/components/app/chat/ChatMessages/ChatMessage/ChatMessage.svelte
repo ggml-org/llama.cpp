@@ -404,7 +404,7 @@
 	}
 </script>
 
-<div class:chat-message--synthetic={isSynthetic} class="chat-message">
+<div>
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem bind:textareaElement class={className} {message} />
 	{:else if mcpPromptExtra}
@@ -425,25 +425,3 @@
 		/>
 	{/if}
 </div>
-
-<style>
-	/*
-	 * The browser skips layout and paint for messages outside the
-	 * viewport. contain-intrinsic-size reuses the last rendered size
-	 * once known; 500px sizes messages that have never been rendered.
-	 */
-	.chat-message {
-		--chat-message-intrinsic-size: 500px;
-		content-visibility: auto;
-		contain-intrinsic-size: auto var(--chat-message-intrinsic-size);
-	}
-
-	/*
-	 * Synthetic rows (e.g. the working-directory change) are small, so an
-	 * accurate placeholder keeps the injected row from inflating the
-	 * auto-scroll offset; the 500px default is for ordinary bubbles.
-	 */
-	.chat-message--synthetic {
-		--chat-message-intrinsic-size: 40px;
-	}
-</style>

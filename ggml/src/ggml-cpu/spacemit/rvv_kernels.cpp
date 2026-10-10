@@ -639,7 +639,7 @@ static void permute_transpose_impl(const ggml_tensor * src0,
         }
     } else if (n_src_stride == sizeof(int16_t)) {
         for (int64_t bi = ith; bi < batch; bi += nth) {
-            rvv_transposed_s32_mn_to_nm((int8_t *) ((char *) dst->data + bi * batch_stride), n_dst_stride,
+            rvv_transposed_s16_mn_to_nm((int8_t *) ((char *) dst->data + bi * batch_stride), n_dst_stride,
                                         (int8_t *) ((char *) src0->data + bi * batch_stride), m_src_stride, m, n);
         }
     } else {

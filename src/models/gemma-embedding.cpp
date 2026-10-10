@@ -2,9 +2,7 @@
 
 void llama_model_gemma_embedding::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
-    uint32_t swa_period = 6;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-    hparams.set_swa_pattern(swa_period);
+    load_swa_pattern(ml, 6);
 
     hparams.causal_attn = false; // embeddings do not use causal attention
 
@@ -79,10 +77,8 @@ llama_model_gemma_embedding::graph::graph(const llama_model & model, const llm_g
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
-    inpL = build_inp_embd(model.tok_embd);
-
     // important: do not normalize weights for raw embeddings input (i.e. encoded image embeddings)
-    inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
+    inpL = build_inp_embd(model.tok_embd, sqrtf(n_embd));
     cb(inpL, "inp_scaled", -1);
 
     // inp_pos - contains the positions

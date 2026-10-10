@@ -1,6 +1,6 @@
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#if !defined(GGML_USE_HIP) && (defined(GGML_USE_MUSA) || CUDART_VERSION >= 11070)
 #define USE_CUB
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#endif // !defined(GGML_USE_HIP) && (defined(GGML_USE_MUSA) || CUDART_VERSION >= 11070)
 
 #ifdef USE_CUB
 #include <cub/cub.cuh>
@@ -163,13 +163,19 @@ __global__ void __launch_bounds__(d_state, 1)
     const int lane     = threadIdx.x % WARP_SIZE;
     const int warp_idx = blockIdx.x  * c_factor + warp;
 
+    ggml_cuda_pdl_sync();
+
+    // the last block can have unused warps when n_head*d_head is not a multiple of c_factor
+    if (warp_idx >= n_head * d_head) {
+        return;
+    }
+
     const int head_idx =  warp_idx / d_head;
     const int head_off = (warp_idx % d_head) * sizeof(float);
     const int seq_idx  = blockIdx.y;
 
     const int group_off = (head_idx / (n_head / n_group)) * d_state * sizeof(float);
 
-    ggml_cuda_pdl_sync();
     // TODO: refactor strides to be in elements/floats instead of bytes to be cleaner and consistent with the rest of the codebase
     const float * s0_warp = (const float *) ((const char *) src0 + src6[seq_idx] * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
     const float * x_warp  = (const float *) ((const char *) src1 + (seq_idx * src1_nb3) + (warp_idx * sizeof(float)));
@@ -246,7 +252,17 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     if (src3_nb1 == sizeof(float)) {
         // Mamba-2
-        if (d_state == 128) {
+        if (d_state == 96) {
+            constexpr int threads   = 96;
+            constexpr int num_warps = threads/WARP_SIZE;
+
+            const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<96/WARP_SIZE, 96>, launch_params,
+                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
+        } else if (d_state == 128) {
             constexpr int threads   = 128;
             constexpr int num_warps = threads/WARP_SIZE;
 
@@ -267,7 +283,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
                     src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
         } else {
-            GGML_ABORT("doesn't support d_state!=(128 or 256).");
+            GGML_ABORT("doesn't support d_state!=(96, 128 or 256).");
         }
     } else {
         // Mamba-1
@@ -342,7 +358,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     }
 }
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if !defined(GGML_USE_HIP)
 // ============================================================================
 // SSD (State Space Duality) kernels for Mamba-2 prefill (n_tok > SSM_SSD_MIN_TOKENS)
 //
@@ -821,7 +837,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src5->nb[2] <= (size_t)INT_MAX);
     GGML_ASSERT(src5->nb[3] <= (size_t)INT_MAX);
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if !defined(GGML_USE_HIP)
     // Mamba-2 with scalar A per head: use SSD matmul path for long sequences.
     // Requires NVIDIA Turing+ otherwise fallback to scan.
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));

@@ -4,7 +4,7 @@
 #include "llama-kv-cache-dsa.h"
 
 void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
     hparams.f_norm_eps = 1e-6;  // eps for layer norm
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
@@ -20,7 +20,7 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl, false);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_mla_impl, false);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
 
     // DSA parameters
@@ -37,10 +37,6 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
         hparams.rope_yarn_log_mul /= 0.1f;
     }
 
-    // NextN/MTP parameters
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
-
     switch (hparams.n_layer()) {
         case 61: type = LLM_TYPE_685B_A37B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -50,15 +46,9 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_deepseek32::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only   ? TENSOR_NOT_REQUIRED : 0;
-    int       mtp_flags   = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     const bool is_mla = hparams.is_mla();
     if (!is_mla) {
@@ -75,7 +65,7 @@ void llama_model_deepseek32::load_arch_tensors(llama_model_loader & ml) {
     const int64_t q_lora_rank  = hparams.n_lora_q;
     const int64_t kv_lora_rank = hparams.n_lora_kv;
 
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -406,7 +396,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
         }
         // when unmasked nextn embeddings are requested, t_h_nextn must keep all rows,
         // so the early output masking has to be skipped (it is applied after the final norm instead)
-        if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -473,7 +463,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -539,6 +529,7 @@ llama_model_deepseek32::graph_mtp::graph_mtp(const llama_model & model, const ll
     ggml_set_input(inp->embd);
 
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 

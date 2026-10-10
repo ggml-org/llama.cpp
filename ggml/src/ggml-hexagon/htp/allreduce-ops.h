@@ -2,6 +2,8 @@
 #define ALLREDUCE_OPS_H
 
 #include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
 #define HTP_ALLREDUCE_MAX_RANKS 4
 
@@ -14,6 +16,20 @@ enum htp_allreduce_kernel_type {
     HTP_ALLREDUCE_KERNEL_DMA_1D,
     HTP_ALLREDUCE_KERNEL_DMA_2D,
 };
+
+enum htp_allreduce_mode {
+    HTP_ALLREDUCE_FULL           = 0, // all ranks reduce full tensor
+    HTP_ALLREDUCE_SHARDED_FANOUT = 1, // each rank reduces 1/N shard and fans out to all buffers
+};
+
+static inline size_t htp_allreduce_vtcm_buffer_count(
+    uint32_t n_ranks,
+    uint32_t n_threads,
+    bool has_add,
+    bool is_row_bcast
+) {
+    return (size_t) (n_ranks + 1) * n_threads + (has_add ? (is_row_bcast ? 1 : n_threads) : 0);
+}
 
 struct htp_allreduce_kernel_params {
     int32_t rank;
@@ -31,6 +47,7 @@ struct htp_allreduce_kernel_params {
     int32_t rank_nelem;
     int32_t n_dsts;
     int32_t is_row_bcast;
+    int32_t mode;                 // enum htp_allreduce_mode: FULL or SHARDED_FANOUT
 };
 
 #ifdef __cplusplus

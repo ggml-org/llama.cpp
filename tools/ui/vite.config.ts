@@ -26,7 +26,7 @@ const browserBaseConfig: any = {
 
 export default defineConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), 'VITE_PUBLIC_');
-	const SERVER_ORIGIN = env.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
+	const SERVER_ORIGIN = env.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:9931';
 
 	return {
 		build: {

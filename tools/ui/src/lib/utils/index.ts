@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
+export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -42,10 +42,21 @@ export {
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
+export { buildProxiedIconUrl, buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
 export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from './url';
+
+// Model list helpers
+export {
+	filterModelOptions,
+	groupFavoriteOptions,
+	groupModelOptions,
+	windowLocalGroups,
+	type GroupedModelOptions,
+	type ModelItem,
+	type OrgGroup
+} from './model-list';
 
 // Progress helpers
 export { modelLoadFraction, modelLoadProgressText } from './progress';
@@ -105,7 +116,10 @@ export {
 } from './modality-file-validation';
 
 // Model name utilities
-export { normalizeModelName, isValidModelName } from './model-names';
+export { isValidModelName, normalizeModelName, orgOf, repoOf } from './model-names';
+
+// Sidecar token utilities
+export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken, sidecarFromTag } from './sidecars';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';
@@ -285,7 +299,8 @@ export {
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
-	isWebSearchToolName
+	isWebSearchToolName,
+	looksLikeSearchResult
 } from './search-results';
 
 // Cache utilities
@@ -339,7 +354,13 @@ export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-t
 export { executeGetDatetimeTool } from './get-datetime';
 
 // Browser fallback for the server's get_info tool
-export { executeBrowserInfoTool } from './browser-info';
+export { detectOs, executeBrowserInfoTool } from './browser-info';
+
+// Tool-use support detection from a chat template
+export { detectToolUseSupport } from './chat-template-tool-detector';
+
+// Model memory estimation
+export { minMemoryTierGb } from './model-compatibility';
 
 // Cryptography utilities
 
@@ -350,3 +371,7 @@ export { remToPx } from './css';
 
 // Audio format helper (used by agentic store and chat service)
 export { getAudioInputFormat } from './audio-format';
+export { groupModelFamilies, modelFamilyKey, type ModelFamilyGroup } from './model-families';
+
+// Svelte actions
+export { nearViewport } from './near-viewport';

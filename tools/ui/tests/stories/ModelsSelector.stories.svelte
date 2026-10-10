@@ -1,10 +1,10 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ModelsSelectorList from '$lib/components/app/models/ModelsSelectorList.svelte';
-	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelectorOption.svelte';
-	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/models/utils';
+	import ModelsSelectorList from '$lib/components/app/models/ModelsSelector/ModelsSelectorList.svelte';
+	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelector/ModelsSelectorOption.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores/models/index.svelte';
+	import type { GroupedModelOptions, ModelItem } from '$lib/utils';
 
 	const { Story } = defineMeta({
 		parameters: {
@@ -60,24 +60,23 @@
 	mockModelsStore();
 
 	const loadedModels: ModelItem[] = [
-		{ flatIndex: 0, option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
-		{ flatIndex: 1, option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
+		{ option: mockModel('llama3.1-8b', 'Llama-3.1-8B-Instruct', 'meta') },
+		{ option: mockModel('mistral-7b', 'Mistral-7B-v0.3', 'mistralai') }
 	];
 
 	const favoriteModels: ModelItem[] = [
-		{ flatIndex: 2, option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
-		{ flatIndex: 3, option: mockModel('llama3.2-3b', 'Llama-3.2-3B-Instruct', 'meta') }
+		{ option: mockModel('qwen2.5-7b', 'Qwen2.5-7B-Instruct', 'Qwen') },
+		{ option: mockModel('llama3.2-3b', 'Llama-3.2-3B-Instruct', 'meta') }
 	];
 
 	const availableModels: ModelItem[] = [
 		{
-			flatIndex: 4,
 			option: mockModel('deepseek-coder-6.7b', 'DeepSeek-Coder-6.7B', 'deepseek', ['coding'])
 		},
-		{ flatIndex: 5, option: mockModel('gemma-2-9b', 'Gemma-2-9B-IT', 'google') },
-		{ flatIndex: 6, option: mockModel('phi-3-mini', 'Phi-3-mini-4k', 'microsoft') },
-		{ flatIndex: 7, option: mockModel('codellama-7b', 'CodeLlama-7B', 'codellama', ['coding']) },
-		{ flatIndex: 8, option: mockModel('neural-chat-7b', 'Neural-Chat-7B-v3-3', 'intel') }
+		{ option: mockModel('gemma-2-9b', 'Gemma-2-9B-IT', 'google') },
+		{ option: mockModel('phi-3-mini', 'Phi-3-mini-4k', 'microsoft') },
+		{ option: mockModel('codellama-7b', 'CodeLlama-7B', 'codellama', ['coding']) },
+		{ option: mockModel('neural-chat-7b', 'Neural-Chat-7B-v3-3', 'intel') }
 	];
 
 	const groupedOptions: GroupedModelOptions = {
@@ -102,9 +101,7 @@
 				items: [availableModels[4]],
 				orgName: 'intel'
 			}
-		],
-		favorites: favoriteModels,
-		loaded: loadedModels
+		]
 	};
 
 	function handleSelect(modelId: string) {
@@ -124,8 +121,8 @@
 		<ModelsSelectorList
 			{activeId}
 			currentModel={selectedModel}
+			favorites={favoriteModels}
 			groups={groupedOptions}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -136,12 +133,8 @@
 		<ModelsSelectorList
 			activeId={null}
 			currentModel={null}
-			groups={{
-				available: [],
-				favorites: [],
-				loaded: [loadedModels[0]]
-			}}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
+			groups={{ available: [] }}
+			loaded={[loadedModels[0]]}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -152,12 +145,8 @@
 		<ModelsSelectorList
 			activeId={null}
 			currentModel={null}
-			groups={{
-				available: [],
-				favorites: favoriteModels,
-				loaded: []
-			}}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
+			favorites={favoriteModels}
+			groups={{ available: [] }}
 			onSelect={handleSelect}
 		/>
 	</div>

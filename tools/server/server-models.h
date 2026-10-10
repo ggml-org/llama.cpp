@@ -9,6 +9,7 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -83,8 +84,8 @@ struct server_model_meta {
     json progress; // reflect load or download progress info, if any
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
-    mtmd_caps multimodal; // multimodal capabilities
     bool hidden = false; // hidden from GET /models, but still accept if requested
+    json architecture = server_model_architecture_json(false, false, false, {"text"});
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -103,31 +104,33 @@ struct server_model_meta {
     }
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
-    void update_caps();
+    void update_caps(const common_params & base);
 };
 
 struct server_models_routes;
-struct server_subproc;   // defined in server-models.cpp
 struct server_lru_sched; // defined in server-models.cpp
+struct server_monitor;   // defined in server-models.cpp
 
 struct server_models {
     friend struct server_models_routes;
     friend struct server_lru_sched;
+    friend struct server_monitor;
 
 private:
     struct instance_t {
-        std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
-        std::thread th;
+        std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
+
+        // ask the child to exit (it handles the command on its stdin, see server_child::setup)
+        void request_exit() const;
     };
 
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
 
-    // for stopping models
-    std::condition_variable cv_stop;
+    // models asked to stop, still counted as running until the monitor records their exit
     std::set<std::string> stopping_models;
 
     // set to true while load_models() is executing a reload; load() will wait until clear
@@ -216,6 +219,13 @@ private:
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 
+    // ask the monitor to stop a running instance; send_exit is false for a child that was already force-killed
+    // not thread-safe, caller must hold mutex
+    void request_stop(const std::string & name, bool send_exit = true);
+
+    // called by the monitor once a child exited and was reaped
+    void on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code);
+
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
@@ -293,18 +303,27 @@ public:
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
-    // this function is not thread-safe, must be called from instance's monitoring thread
+    // called from the monitor thread
     // payload per state:
     //     state = loading     -> payload = {} (TODO: add progress info)
     //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
     //     state = sleeping    -> payload = {}
     void handle_child_state(const std::string & name, const std::string & raw_input);
+
+private:
+    // one thread watching every child; keep last, the destructor joins the thread
+    std::unique_ptr<server_monitor> monitor;
 };
 
 struct server_child {
     // serializes the notify_to_router writes
     std::mutex mtx_stdout;
     std::atomic<bool> is_finished_downloading = false; // set by run_download
+
+    // in a child, keeps stdout for the commands to the router, so it is created before anything is written;
+    // everything else written to stdout goes to stderr with the logs
+    server_child();
+    ~server_child();
 
     // return true if the current process is a child server instance
     bool is_child();
@@ -318,6 +337,9 @@ struct server_child {
     // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
     // message will be handled by server_models::handle_child_state() on the router side
     void notify_to_router(const std::string & state_name, const json & payload);
+
+private:
+    FILE * cmd_out = nullptr; // the stdout the router reads the commands from
 };
 
 struct server_models_routes {

@@ -295,7 +295,7 @@ def example_concurrent(host):
 
 def main():
     parser = argparse.ArgumentParser(description=sys.modules[__name__].__doc__)
-    parser.add_argument("--host", default="localhost:8080", help="llama.cpp server")
+    parser.add_argument("--host", default="localhost:9931", help="llama.cpp server")
     parser.add_argument("-v", "--verbose", action="store_true", help="enables logging")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO if args.verbose else logging.ERROR)

@@ -53,7 +53,10 @@ endif()
 
 set(TARGET llama-common)
 
+include(parsers/sources.cmake)
+
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp
@@ -81,6 +84,8 @@ add_library(${TARGET}
     imatrix-loader.cpp
     imatrix-loader.h
     json-schema-to-grammar.cpp
+    json-schema.cpp
+    json-schema.h
     json.cpp
     json.h
     llguidance.cpp

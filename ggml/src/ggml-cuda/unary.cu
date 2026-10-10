@@ -124,7 +124,7 @@ static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
     }
 
     ggml_cuda_pdl_sync();
-    dst[i] = (T)op((float)x[i]);
+    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[i])));
 }
 
 template <float (*op)(float), typename T>
@@ -134,23 +134,67 @@ static void unary_cuda(const T * x, T * dst, const int k, cudaStream_t stream) {
     ggml_cuda_kernel_launch(unary_op_kernel<op, T>, launch_params, x, dst, k);
 }
 
+template <float (*op)(float), typename T>
+static __global__ void unary_op_kernel_strided(const T * x, T * dst, const int k,const int64_t ne00,const int64_t ne01,const int64_t ne02,const size_t nb00,const size_t nb01,const size_t nb02,const size_t nb03) {
+    ggml_cuda_pdl_lc();
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    int64_t rem = i;
+    const int64_t i0 = rem % ne00; rem /= ne00;
+    const int64_t i1 = rem % ne01; rem /= ne01;
+    const int64_t i2 = rem % ne02;
+    const int64_t i3 = rem / ne02;
+    const size_t src_byte_offset = i0 * nb00 + i1 * nb01 + i2 * nb02 + i3 * nb03;
+    const T * src_ptr = (const T *)((const char *)x + src_byte_offset);
+
+    ggml_cuda_pdl_sync();
+    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(*src_ptr)));
+}
+
+template <float (*op)(float), typename T>
+static void unary_cuda_strided(const T * x, T * dst, const int k,const int64_t ne00,const int64_t ne01,const int64_t ne02,const size_t nb00,const size_t nb01,const size_t nb02,const size_t nb03, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream);
+    ggml_cuda_kernel_launch(unary_op_kernel_strided<op, T>, launch_params, x, dst, k, ne00,ne01,ne02,nb00,nb01,nb02,nb03);
+}
+
 template <float (*op)(float)>
 void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const void * src0_d = src0->data;
     void * dst_d = dst->data;
+
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
     GGML_ASSERT(src0->type == dst->type);
 
-    if (src0->type == GGML_TYPE_F16) {
-        unary_cuda<op>((const half *)src0_d, (half *)dst_d, ggml_nelements(src0), stream);
+    if (ggml_is_contiguous(src0)) {
+        if (src0->type == GGML_TYPE_F16) {
+            unary_cuda<op>((const half *)src0_d, (half *)dst_d, ggml_nelements(src0), stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            unary_cuda<op>((const nv_bfloat16 *)src0_d, (nv_bfloat16 *)dst_d, ggml_nelements(src0), stream);
+        } else {
+            unary_cuda<op>((const float *)src0_d, (float *)dst_d, ggml_nelements(src0), stream);
+        }
     } else {
-        unary_cuda<op>((const float *)src0_d, (float *)dst_d, ggml_nelements(src0), stream);
+        if (src0->type == GGML_TYPE_F16) {
+            unary_cuda_strided<op>((const half *)src0_d, (half *)dst_d, ggml_nelements(src0),
+                src0->ne[0], src0->ne[1], src0->ne[2],
+                src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            unary_cuda_strided<op>((const nv_bfloat16 *)src0_d, (nv_bfloat16 *)dst_d, ggml_nelements(src0),
+                src0->ne[0], src0->ne[1], src0->ne[2],
+                src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], stream);
+        } else {
+            unary_cuda_strided<op>((const float *)src0_d, (float *)dst_d, ggml_nelements(src0),
+                src0->ne[0], src0->ne[1], src0->ne[2],
+                src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], stream);
+        }
     }
 }
 
@@ -273,7 +317,7 @@ static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, 
     const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
 
     ggml_cuda_pdl_sync();
-    dst[i] = (T)(op((float)x[j0]) * (float)g[j1]);
+    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[j0])) * ggml_cuda_cast<float>(g[j1]));
 }
 
 template <float (*op)(float), typename T>
@@ -299,8 +343,7 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
     GGML_ASSERT(src0->type == dst->type);
     GGML_ASSERT(dst->ne[0] == nc);
     GGML_ASSERT(ggml_nrows(dst) == ggml_nrows(src0));
@@ -324,6 +367,16 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         }
 
         unary_gated_cuda<op>(src0_p, src1_p, (half *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(half), src1_o / sizeof(half), stream);
+    } else if (src0->type == GGML_TYPE_BF16) {
+        nv_bfloat16 * src0_p = (nv_bfloat16 *) src0_d;
+        nv_bfloat16 * src1_p = (nv_bfloat16 *) src1_d;
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        unary_gated_cuda<op>(src0_p, src1_p, (nv_bfloat16 *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(nv_bfloat16), src1_o / sizeof(nv_bfloat16), stream);
     } else {
         float * src0_p = (float *) src0_d;
         float * src1_p = (float *) src1_d;
@@ -537,8 +590,8 @@ void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(ggml_is_contiguous(src0));
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16 ||  dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(src0->type == dst->type);
 
     const float alpha_n = ggml_get_op_params_f32(dst, 1);
@@ -548,6 +601,8 @@ void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     if (src0->type == GGML_TYPE_F16) {
         xielu_cuda((const half *)src0_d, (half *)dst_d, ggml_nelements(src0), alpha_n, alpha_p, beta, eps, stream);
+    } else if (src0->type == GGML_TYPE_BF16) {
+        xielu_cuda((const nv_bfloat16 *)src0_d, (nv_bfloat16 *)dst_d, ggml_nelements(src0), alpha_n, alpha_p, beta, eps, stream);
     } else {
         xielu_cuda((const float *)src0_d, (float *)dst_d, ggml_nelements(src0), alpha_n, alpha_p, beta, eps, stream);
     }
@@ -664,7 +719,7 @@ static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_te
     GGML_ASSERT(other_src->nb[0] == ggml_element_size(other_src));
     GGML_ASSERT(ggml_are_same_shape(unary_src, other_src));
 
-    GGML_ASSERT(unary_src->type == GGML_TYPE_F32 || unary_src->type == GGML_TYPE_F16);
+    GGML_ASSERT(unary_src->type == GGML_TYPE_F32 || unary_src->type == GGML_TYPE_F16 || unary_src->type == GGML_TYPE_BF16);
     GGML_ASSERT(unary_src->type == other_src->type);
     GGML_ASSERT(unary_src->type == mul_node->type);
 
@@ -679,6 +734,10 @@ static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_te
         unary_gated_cuda<op>((const half *) unary_src->data, (const half *) other_src->data,
                              (half *) mul_node->data, k, nc,
                              unary_stride / sizeof(half), other_stride / sizeof(half), stream);
+    } else if (unary_src->type == GGML_TYPE_BF16) {
+        unary_gated_cuda<op>((const nv_bfloat16 *) unary_src->data, (const nv_bfloat16 *) other_src->data,
+                             (nv_bfloat16 *) mul_node->data, k, nc,
+                             unary_stride / sizeof(nv_bfloat16), other_stride / sizeof(nv_bfloat16), stream);
     } else {
         unary_gated_cuda<op>((const float *) unary_src->data, (const float *) other_src->data,
                              (float *) mul_node->data, k, nc,

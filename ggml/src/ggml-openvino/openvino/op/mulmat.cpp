@@ -29,19 +29,11 @@ OutputVector translate_mulmat(const NodeContext & context) {
 
     int op_case = context.get_op_case();
 
-    ov::Output<Node> res;
-    ov::Output<ov::Node> B;
-    ov::Output<ov::Node> A;
-    if (op_case == 3) {
-        B = process_view_input(context, 0);
-        A = process_view_input(context, 1);
-    } else {
-        B = process_view_input_new(context, 0);
-        A = process_view_input_new(context, 1);
-    }
+    ov::Output<ov::Node> B = process_view_input_new(context, 0);
+    ov::Output<ov::Node> A = process_view_input_new(context, 1);
 
     if (A.get_element_type() != B.get_element_type()) {
-        B = std::make_shared<ov::op::v0::Convert>(context.get_input(0), context.get_input_type(1));
+        B = std::make_shared<ov::op::v0::Convert>(B, context.get_input_type(1));
     }
 
     auto B_shape = context.get_input_shape(0).to_shape();
@@ -84,7 +76,7 @@ OutputVector translate_mulmat(const NodeContext & context) {
     }
 
     bool transpose_b = true;
-    res = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
+    ov::Output<Node> res = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
 
     const auto output_type = context.get_output_type();
     if (res.get_element_type() != output_type) {

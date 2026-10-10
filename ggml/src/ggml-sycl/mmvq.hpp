@@ -15,6 +15,12 @@
 
 #include "common.hpp"
 
+// q5_K multi-column MMVQ shares weights across columns, pairs rows and fuses gate/up in the reorder
+// layout: faster on Xe2 (BMG), so untested archs keep the per-column kernel
+inline bool ggml_sycl_q5_k_mmvq_reuse(int device) {
+    const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31;
+}
 
 void ggml_sycl_op_mul_mat_vec_q(
     ggml_backend_sycl_context & ctx,
@@ -70,6 +76,26 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(
     int                nrows,                // output rows, i.e. weight ne[1]
     int                ncols_dst,            // activation columns, 1..MMVQ_MAX_BATCH_SIZE
     int                stride_col_y_bytes,   // bytes between activation columns in vy
+    int                stride_col_dst,       // floats between output columns in dst
+    dpct::queue_ptr    stream);
+
+
+// Fused dense-FFN GEMV + GLU over the standard (non-reorder) layout; the gate and up
+// weights may carry different block types (q5_K / iq4_xs, mixed included).
+// vy: src1 quantized with plain quantize_q8_1 (padded rows). stride_col_y is in
+// block_q8_1 units. Returns false if the pair or batch is unhandled; caller falls back.
+bool ggml_sycl_mul_mat_vec_q_glu_plain(
+    enum ggml_type     gate_type,
+    enum ggml_type     up_type,
+    enum ggml_glu_op   glu_op,
+    const void *       vgate,
+    const void *       vup,
+    const void *       vy,
+    float *            dst,
+    int                ncols,                // K, shared by both weights
+    int                nrows,                // output rows, i.e. weight ne[1]
+    int                ncols_dst,            // activation columns, 1..MMVQ_MAX_BATCH_SIZE
+    int                stride_col_y,         // block_q8_1 units between activation columns
     int                stride_col_dst,       // floats between output columns in dst
     dpct::queue_ptr    stream);
 

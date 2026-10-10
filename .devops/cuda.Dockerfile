@@ -123,6 +123,7 @@ ENTRYPOINT [ "/app/llama-cli" ]
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
+ENV LLAMA_ARG_PORT=8080
 
 COPY --from=build /app/full/llama /app/full/llama-server /app
 

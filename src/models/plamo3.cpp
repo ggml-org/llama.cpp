@@ -6,9 +6,7 @@ void llama_model_plamo3::load_arch_hparams(llama_model_loader & ml) {
     if (found_swa && hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
-        uint32_t swa_period = 8;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-        hparams.set_swa_pattern(swa_period);
+        load_swa_pattern(ml, 8);
     } else {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }

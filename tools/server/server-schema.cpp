@@ -257,6 +257,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (data.contains("json_schema") && !data.contains("grammar")) {
                 try {
                     auto schema                  = json_value(data, "json_schema", json::object());
+                    if (schema.is_object() && schema.empty()) {
+                        // an empty schema means any object
+                        schema["type"] = "object";
+                    }
                     SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
                     std::string grammar_str      = json_schema_to_grammar(schema);
                     SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
@@ -307,8 +311,14 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Generation prompt appended to the chat template output")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             std::string s = data.at("generation_prompt").get<std::string>();
-            ctx.params.chat_parser_params.generation_prompt = s;
             ctx.params.sampling.generation_prompt = s;
+
+            if (ctx.vocab == nullptr) {
+                ctx.params.chat_parser_params.generation_prompt = common_chat_input(s);
+                return;
+            }
+
+            ctx.params.chat_parser_params.generation_prompt = common_chat_input_tokenize(ctx.vocab, s);
         }));
 
     add((new field_bool("parse_tool_calls", params.chat_parser_params.parse_tool_calls))

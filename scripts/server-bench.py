@@ -54,8 +54,8 @@ def get_server(path_server: str, path_log: Optional[str]) -> dict:
         logger.info("LLAMA_ARG_HOST not explicitly set, using 127.0.0.1")
         os.environ["LLAMA_ARG_HOST"] = "127.0.0.1"
     if os.environ.get("LLAMA_ARG_PORT") is None:
-        logger.info("LLAMA_ARG_PORT not explicitly set, using 8080")
-        os.environ["LLAMA_ARG_PORT"] = "8080"
+        logger.info("LLAMA_ARG_PORT not explicitly set, using 9931")
+        os.environ["LLAMA_ARG_PORT"] = "9931"
     hostname: Optional[str] = os.environ.get("LLAMA_ARG_HOST")
     port: Optional[str] = os.environ.get("LLAMA_ARG_PORT")
     assert hostname is not None

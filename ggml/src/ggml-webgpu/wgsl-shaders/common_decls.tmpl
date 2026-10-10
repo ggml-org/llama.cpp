@@ -124,7 +124,12 @@ fn load_v_u32_at(byte_offset: u32) -> u32 {
 
 #endif // U32_DEQUANT_HELPERS
 
-
+// bf16 helpers
+#if defined(TYPE_BF16) || defined(BF16)
+fn bf16_word_to_f32(word: u32, odd: u32) -> f32 {
+    return bitcast<f32>(select(word << 16u, word & 0xFFFF0000u, odd == 1u));
+}
+#endif // TYPE_BF16 || BF16
 
 #ifdef Q4_1_T
 struct q4_1 {

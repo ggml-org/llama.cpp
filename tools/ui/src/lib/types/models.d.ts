@@ -1,3 +1,4 @@
+import type { ModelSidecar } from '$lib/constants/model-id.constants';
 import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
 
 export interface ModelModalities {
@@ -8,6 +9,7 @@ export interface ModelModalities {
 
 export interface ModelCapabilities {
 	reasoning: boolean;
+	tools: boolean;
 }
 
 export interface ModelOption {
@@ -16,6 +18,10 @@ export interface ModelOption {
 	model: string;
 	description?: string;
 	capabilities: string[];
+	/** Context size reported by the provider's model listing, when it reports one. */
+	contextLength?: number;
+	/** Draft sidecars downloaded alongside the model, e.g. `mtp` or `dflash`. */
+	draftSidecars?: ModelSidecarBadge[];
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
@@ -24,15 +30,32 @@ export interface ModelOption {
 	tags?: string[];
 }
 
-/**
- * Ephemeral UI-only load progress for one model instance.
- * Lives only while a load runs, driven by the /models/sse feed.
- * stage is absent until the feed reports its first stage.
- */
+/** UI-only load progress for one model, driven by the /models/sse feed. */
 export interface ModelLoadProgress {
 	stages: ApiModelLoadStage[];
 	current: ApiModelLoadStage;
 	value: number;
+}
+
+/** Per-file bytes of an in-flight download. */
+export interface ModelDownloadFileProgress {
+	done: number;
+	total: number;
+}
+
+/** Progress of an in-flight download, summed across its files. */
+export interface ModelDownloadProgress {
+	downloadedBytes: number;
+	totalBytes: number;
+	/** Per-file progress keyed by file URL. */
+	files: Record<string, ModelDownloadFileProgress>;
+}
+
+/** One tracked download of the status feed, in flight or paused. */
+export interface ModelDownloadEntry {
+	isPaused: boolean;
+	progress: ModelDownloadProgress | null;
+	repoWithTag: string;
 }
 
 export interface ParsedModelId {
@@ -42,14 +65,34 @@ export interface ParsedModelId {
 	params: string | null;
 	activatedParams: string | null;
 	quantization: string | null;
+	sidecar: ModelSidecar | null;
 	tags: string[];
 }
 
-/**
- * Modality capabilities for file validation
- */
+/** Draft sidecar of a model, shown as a `+ [KIND] [QUANT]` badge pair. */
+export interface ModelSidecarBadge {
+	kind: ModelSidecar;
+	/** Quantization of the sidecar file itself; null when the name carries none. */
+	quant: string | null;
+	/** Repo the sidecar file belongs to, which may differ from the model's. */
+	repo: string;
+}
+
+/** Modality capabilities for file validation. */
 export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;
 	hasVideo: boolean;
+}
+
+/** Sidecar file a listing reports as its own model entry, paired back to its model. */
+export interface ModelSidecarFile {
+	id: string;
+	kind: ModelSidecar;
+	/** Repo the sidecar belongs to, e.g. `ggml-org/Qwen3.6-35B-A3B-GGUF`. */
+	model: string;
+	/** Parameter count the sidecar reports, e.g. `35B-A3B`. */
+	params: string | null;
+	/** Quantization of the sidecar file, e.g. `Q4_0`. */
+	quant: string | null;
 }

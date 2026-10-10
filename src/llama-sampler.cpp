@@ -644,7 +644,7 @@ static bool llama_sampler_backend_support(
         return true;
     }
 
-    auto probe = llama_sampler_backend_probe_graph(smpl, 1024*1024, GGML_DEFAULT_GRAPH_SIZE, true);
+    auto probe = llama_sampler_backend_probe_graph(smpl, 128*1024, GGML_DEFAULT_GRAPH_SIZE, true);
 
     for (int i = 0; i < ggml_graph_n_nodes(probe.gf); i++) {
         struct ggml_tensor * op = ggml_graph_node(probe.gf, i);
@@ -764,7 +764,7 @@ static bool llama_sampler_chain_backend_init(
         res = res && cur_prefix;
     }
 
-    auto probe = llama_sampler_backend_probe_graph(smpl, 1024*1024, GGML_DEFAULT_GRAPH_SIZE, false);
+    auto probe = llama_sampler_backend_probe_graph(smpl, 128*1024, GGML_DEFAULT_GRAPH_SIZE, false);
     chain->n_nodes = llama_sampler_backend_probe_n_nodes(probe);
 
     return res;
@@ -1006,7 +1006,7 @@ struct llama_sampler * llama_sampler_chain_remove(struct llama_sampler * chain, 
     return result;
 }
 
-int llama_sampler_chain_n(const struct llama_sampler * chain) {
+int32_t llama_sampler_chain_n(const struct llama_sampler * chain) {
     const auto * p = (const llama_sampler_chain *) chain->ctx;
 
     return p->samplers.size();
@@ -1086,6 +1086,12 @@ static void llama_sampler_greedy_backend_apply(
     struct ggml_tensor * curl = ggml_argmax(ctx, logits);
     ggml_set_name(curl, "greedy_argmax");
 
+    if (data->candidates != nullptr) {
+        struct ggml_tensor * candidates = ggml_reshape_2d(ctx, data->candidates, 1, ggml_nelements(data->candidates));
+        curl = ggml_get_rows(ctx, candidates, curl);
+        ggml_set_name(curl, "greedy_sampled_token");
+    }
+
     data->sampled = curl;
 }
 
@@ -1162,7 +1168,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
 
     if (cur_p->size == 1) {
         // keep the RNG state aligned with backend sampling, which draws once per output
-        dist(ctx->rng);
+        (void) dist(ctx->rng);
         cur_p->data[0].p = 1.0f;
         return;
     }
@@ -1377,7 +1383,7 @@ static void llama_sampler_dist_accept(struct llama_sampler * smpl, llama_token t
     }
 
     std::uniform_real_distribution<double> dist(0.0f, 1.0f);
-    dist(sctx->rng);
+    (void) dist(sctx->rng);
     ++sctx->n_backend_draws_committed;
 }
 

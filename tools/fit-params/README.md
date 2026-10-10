@@ -37,7 +37,7 @@ system info: n_threads = 16, n_threads_batch = 16, total_threads = 32
 system_info: n_threads = 16 (n_threads_batch = 16) / 32 | CUDA : ARCHS = 890 | USE_GRAPHS = 1 | PEER_MAX_BATCH_SIZE = 128 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 |
 
 main: binding port with default address family
-main: HTTP server is listening, hostname: 127.0.0.1, port: 8080, http threads: 31
+main: HTTP server is listening, hostname: 127.0.0.1, port: 9931, http threads: 31
 main: loading model
 srv    load_model: loading model '/opt/models/qwen_3-30b3a-f16.gguf'
 llama_params_fit_impl: projected to use 19187 MiB of device memory vs. 24077 MiB of free device memory
@@ -45,7 +45,7 @@ llama_params_fit_impl: will leave 1199 >= 1024 MiB of free device memory, no cha
 llama_params_fit: successfully fit params to free device memory
 llama_params_fit: fitting params to free memory took 0.28 seconds
 [...]
-main: server is listening on http://127.0.0.1:8080 - starting the main loop
+main: server is listening on http://127.0.0.1:9931 - starting the main loop
 srv  update_slots: all slots are idle
 ^Csrv    operator(): operator(): cleaning up before exit...
 

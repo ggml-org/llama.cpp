@@ -37,38 +37,57 @@ static void caps_try_execute(jinja::program & prog,
                              const caps_ctx_fn & ctx_fn,
                              const caps_json_fn & tools_fn,
                              const caps_analyze_fn & analyze_fn) {
-    context ctx;
-    ctx.is_get_stats = true;
-    jinja::global_from_json(ctx, json{
-        {"messages", messages_fn()},
-        {"tools", tools_fn ? tools_fn() : json::array()},
-        {"bos_token", ""},
-        {"eos_token", ""},
-        {"add_generation_prompt", true}
-    }, true);
+    json msgs = messages_fn();
+    for (int attempt = 0; attempt < 2; attempt++) {
+        context ctx;
+        ctx.is_get_stats = true;
+        jinja::global_from_json(ctx, json{
+            {"messages", msgs},
+            {"tools", tools_fn ? tools_fn() : json::array()},
+            {"bos_token", ""},
+            {"eos_token", ""},
+            {"add_generation_prompt", true}
+        }, true);
 
-    if (ctx_fn) {
-        ctx_fn(ctx);
+        if (ctx_fn) {
+            ctx_fn(ctx);
+        }
+
+        auto messages = ctx.get_val("messages");
+        auto tools = ctx.get_val("tools");
+
+        bool success = false;
+        std::string result;
+        try {
+            jinja::runtime runtime(ctx);
+            auto results = runtime.execute(prog);
+            auto parts = jinja::runtime::gather_string_parts(results);
+            result = parts->as_string().str();
+            success = true;
+        } catch (const std::exception & e) {
+            JJ_DEBUG("Exception during execution: %s", e.what());
+            result = "";
+            // ignore exceptions during capability analysis
+        }
+
+        // some templates require a thinking field on every assistant turn (e.g. K2 Horizon):
+        // retry once with an empty reasoning_content on the assistant turns that lack one
+        if (!success && attempt == 0) {
+            bool added = false;
+            for (auto & msg : msgs) {
+                if (msg.is_object() && msg.value("role", "") == "assistant" && !msg.contains("reasoning_content")) {
+                    msg["reasoning_content"] = "";
+                    added = true;
+                }
+            }
+            if (added) {
+                continue;
+            }
+        }
+
+        analyze_fn(ctx, success, messages, tools, result);
+        return;
     }
-
-    auto messages = ctx.get_val("messages");
-    auto tools = ctx.get_val("tools");
-
-    bool success = false;
-    std::string result;
-    try {
-        jinja::runtime runtime(ctx);
-        auto results = runtime.execute(prog);
-        auto parts = jinja::runtime::gather_string_parts(results);
-        result = parts->as_string().str();
-        success = true;
-    } catch (const std::exception & e) {
-        JJ_DEBUG("Exception during execution: %s", e.what());
-        result = "";
-        // ignore exceptions during capability analysis
-    }
-
-    analyze_fn(ctx, success, messages, tools, result);
 }
 
 // for debugging only
@@ -117,6 +136,7 @@ caps caps_get(jinja::program & prog) {
 
     JJ_DEBUG("%s\n", ">>> Running capability check: typed content");
 
+    bool checks_for_string = false;
     static const std::string content_marker = "STRING_MARKER";
 
     // case: typed content support
@@ -136,6 +156,10 @@ caps caps_get(jinja::program & prog) {
         [&](context &, bool success, value & messages, value &, const std::string & rendered) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
+            if (has_op(content, "test_is_string")) {
+                // checked if content is string
+                checks_for_string = true;
+            }
             bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
             if (used_as_array) {
                 // accessed as an array
@@ -150,6 +174,33 @@ caps caps_get(jinja::program & prog) {
             }
         }
     );
+
+    if (checks_for_string) {
+        caps_try_execute(
+            prog,
+            [&]() {
+                // messages
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", json::array({
+                        })}
+                    }
+                });
+            },
+            nullptr, // ctx_fn
+            nullptr, // tools_fn
+            [&](context &, bool success, value & messages, value &, const std::string &) {
+                auto & content = messages->at(0)->at("content");
+                caps_print_stats(content, "messages[0].content");
+                bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
+                if (used_as_array && success) {
+                    // accessed as an array
+                    result.supports_typed_content = true;
+                }
+            }
+        );
+    }
 
     JJ_DEBUG("%s\n", ">>> Running capability check: system prompt");
 

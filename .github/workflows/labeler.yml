@@ -2,6 +2,10 @@ name: "Pull Request Labeler"
 on:
 - pull_request_target
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   labeler:
     permissions:

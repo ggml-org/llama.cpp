@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { parseEditFileMeta } from './parsers/edit-file';
+	import { parseEditFileMeta, parseEditFileTitleMeta } from './parsers/edit-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
@@ -16,24 +16,32 @@
 
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
-	const editFileMeta = $derived(parseEditFileMeta(section));
+	const editFileMeta = $derived(parseEditFileTitleMeta(section));
+	// body-only: the full meta parses the embedded edit strings, and these
+	// deriveds are read solely from the children snippet, which renders only
+	// while the block is expanded
+	const editFileBody = $derived(parseEditFileMeta(section));
 	const home = $derived(toolsStore.serverHome);
 	const editDiffs = $derived(
-		(editFileMeta?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
+		(editFileBody?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
 	);
 </script>
 
 <ToolCallBlock {isStreaming} meta={editFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
-		<span class="text-muted-foreground">Edit file </span>
+		<span class="flex min-w-0 flex-wrap items-baseline gap-x-1">
+			<span class="shrink-0 text-muted-foreground">Edit file</span>
 
-		<span class="font-mono" title={editFileMeta?.filePath}
-			>{abbreviateHome(editFileMeta?.filePath ?? '', home)}</span
-		>
+			<span class="flex min-w-0 items-baseline gap-1.5">
+				<span class="min-w-0 overflow-x-auto font-mono" title={editFileMeta?.filePath}>
+					{abbreviateHome(editFileMeta?.filePath ?? '', home)}
+				</span>
 
-		{#if editFileMeta?.errorMessage}
-			<span class="ml-1 text-xs italic text-muted-foreground/70">(failed)</span>
-		{/if}
+				{#if editFileMeta?.errorMessage}
+					<span class="shrink-0 text-xs italic text-muted-foreground/70">(failed)</span>
+				{/if}
+			</span>
+		</span>
 	{/snippet}
 
 	{#snippet children(meta, _ctx)}
@@ -45,11 +53,11 @@
 
 				<span>{meta.errorMessage}</span>
 			</div>
-		{:else if meta && meta.edits.length > 0}
+		{:else if meta && editFileBody && editFileBody.edits.length > 0}
 			{#each editDiffs as diffLines, ei (ei)}
 				<div class={ei === 0 ? '' : 'mt-3'}>
 					<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
-						Edit {ei + 1}&nbsp;of&nbsp;{meta.edits.length}
+						Edit {ei + 1}&nbsp;of&nbsp;{editFileBody.edits.length}
 					</div>
 
 					<div style:max-height={MAX_HEIGHT_CODE_BLOCK} class="diff-block">

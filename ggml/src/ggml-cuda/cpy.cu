@@ -459,7 +459,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     const bool contiguous_srcs = ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
     const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0) &&
-        src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
+        src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0) &&
+        ggml_is_contiguous(src1);
 
     size_t mc_width = 0, mc_height = 0, mc_spitch = 0, mc_dpitch = 0;
 
@@ -587,6 +588,14 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
         } else {
             ggml_cpy_scalar_cuda<int32_t, int32_t>
+                (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
+    } else if (src0->type == GGML_TYPE_I16 && src1->type == GGML_TYPE_I16) {
+        if (can_be_transposed) {
+            ggml_cpy_scalar_cuda<int16_t, int16_t, true>
+                (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_scalar_cuda<int16_t, int16_t>
                 (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
         }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_I32) {

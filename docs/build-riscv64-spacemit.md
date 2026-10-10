@@ -63,7 +63,7 @@ ${QEMU_ROOT_PATH}/bin/qemu-riscv64 -L ${RISCV_ROOT_PATH_IME1}/sysroot -cpu max,v
 | Q5_1 |  | :heavy_check_mark: |
 | Q5_K |  | :heavy_check_mark: |
 | Q6_K |  | :heavy_check_mark: |
-| Q8_0 |  | :heavy_check_mark: |
+| Q8_0 | :heavy_check_mark: | :heavy_check_mark: |
 
 
 ## Performance

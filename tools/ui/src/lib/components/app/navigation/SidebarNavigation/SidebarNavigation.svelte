@@ -5,6 +5,9 @@
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogManageModels,
+		DialogMcpServers,
+		DialogModelInformation,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -93,6 +96,7 @@
 
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
+	let mcpDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -306,6 +310,15 @@
 			pendingCollapse = null;
 		}
 	}
+
+	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
+	function openDialog(open: () => void): void {
+		if (deviceStore.isMobile) {
+			scheduleMobileCollapse();
+		}
+
+		open();
+	}
 </script>
 
 <svelte:window bind:innerWidth onkeydown={handleKeydown} />
@@ -365,9 +378,9 @@
 				>
 					<ActionIcon
 						ariaLabel="Collapse navigation"
-						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
+						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 max-md:-mr-1 max-md:-mt-1 hover:bg-accent!"
 						icon={deviceStore.isMobile ? X : PanelLeftClose}
-						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+						iconSize="h-4 w-4"
 						onclick={toggleExpandedMode}
 						size="lg"
 						tooltip="Close Sidebar"
@@ -389,6 +402,8 @@
 				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
+				onManageModelsClick={() => openDialog(() => uiStore.openModelsManager())}
+				onMcpClick={() => openDialog(() => (mcpDialogOpen = true))}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
@@ -402,7 +417,7 @@
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
-				onSettingsClick={() => (settingsDialogOpen = true)}
+				onSettingsClick={() => openDialog(() => (settingsDialogOpen = true))}
 			/>
 
 			{#if uiStore.isSidebarExpanded || isOnMobile}
@@ -451,6 +466,12 @@
 />
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
+
+<DialogMcpServers bind:open={mcpDialogOpen} />
+
+<DialogManageModels bind:open={uiStore.manageModelsOpen} />
+
+<DialogModelInformation />
 
 <style>
 	aside {

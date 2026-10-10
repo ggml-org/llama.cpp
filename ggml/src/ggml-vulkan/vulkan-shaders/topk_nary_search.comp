@@ -60,7 +60,13 @@ void topk(const uint row) {
     if (gl_GlobalInvocationID.x < p.ncols_input) {
         if (p.first_pass != 0) {
             const uint row_offset = row * p.ncols_input;
-            dst_row[tid] = ivec2(gl_GlobalInvocationID.x, floatBitsToInt(data_a[row_offset + gl_GlobalInvocationID.x]));
+            // NaN ranks lowest, like -inf, so that every value has a place in
+            // the ordering the search below counts
+            float a = float(data_a[row_offset + gl_GlobalInvocationID.x]);
+            if (isnan(a)) {
+                a = uintBitsToFloat(0xFF800000);
+            }
+            dst_row[tid] = ivec2(gl_GlobalInvocationID.x, floatBitsToInt(a));
         } else {
             const uint row_offset = row * p.ncols_input;
             dst_row[tid] = data_s[row_offset + gl_GlobalInvocationID.x];
@@ -76,8 +82,10 @@ void topk(const uint row) {
             if (tid < s) {
                 ivec2 a = dst_row[tid];
                 ivec2 b = dst_row[tid + s];
+                // compare as floats: the bit patterns of negative values
+                // order the other way as integers
                 if (a.x >= p.orig_ncols ||
-                    b.x < p.orig_ncols && b.y > a.y) {
+                    b.x < p.orig_ncols && intBitsToFloat(b.y) > intBitsToFloat(a.y)) {
                     dst_row[tid] = b;
                 }
             }
@@ -95,9 +103,11 @@ void topk(const uint row) {
         int shift = 32 - SUBGROUP_SIZE_LOG2;
         uint mask = ((1 << SUBGROUP_SIZE_LOG2) - 1) << shift;
 
-        // The current range.
+        // The current range, [range_min, range_max). It starts as every value
+        // (+inf maps to 0xFF800000 and NaN was replaced by -inf), so the
+        // buckets always hold at least limit values.
         uint range_min = 0;
-        uint range_max = 0xFF800000;
+        uint range_max = 0xFFFFFFFF;
         // How many are above the current range, and how many we need to find.
         uint total = 0;
         uint limit = min(p.k, p.ncols_input - gl_WorkGroupID.x * BLOCK_SIZE);
@@ -138,8 +148,12 @@ void topk(const uint row) {
             total = sh_total;
 
             // Update the range, and break if we've found the K-th largest.
-            range_max = range_min + ((min_idx + 1) << shift);
-            range_min = range_min + (min_idx << shift);
+            // The end of the top bucket wraps past 2^32, clamp it instead.
+            range_min = range_min + (uint(min_idx) << shift);
+            range_max = range_min + (1u << shift);
+            if (range_max < range_min) {
+                range_max = 0xFFFFFFFF;
+            }
 
             if (total == p.k) {
                 break;

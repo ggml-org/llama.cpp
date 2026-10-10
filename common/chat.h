@@ -282,6 +282,31 @@ struct common_chat_params {
     common_chat_msg_delimiters          message_delimiters;
 };
 
+struct common_chat_input {
+    std::string              text;
+    std::vector<llama_token> tokens;
+
+    common_chat_input() = default;
+
+    // plain text, with no tokens
+    explicit common_chat_input(std::string text) : text(std::move(text)), tokens(this->text.size(), LLAMA_TOKEN_NULL) {}
+
+    size_t size() const { return text.size(); }
+    bool empty() const { return text.empty(); }
+
+    void append(const std::string & piece, llama_token token);
+    void append(const common_chat_input & chunk);
+
+    void prepend(const std::string & prefix);
+    void prepend(const common_chat_input & prefix);
+
+    void truncate(size_t pos);
+
+    common_chat_input substr(size_t pos, size_t n = std::string::npos) const;
+};
+
+common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const std::string & text);
+
 // per-message parsing syntax
 // should be derived from common_chat_params
 struct common_chat_parser_params {
@@ -289,7 +314,7 @@ struct common_chat_parser_params {
     common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
-    std::string             generation_prompt;
+    common_chat_input       generation_prompt;
     bool                    parse_tool_calls     = true;
     bool                    is_continuation      = false;
     bool                    echo                 = false;  // Include assistant prefilled msg in output
@@ -298,7 +323,7 @@ struct common_chat_parser_params {
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
         format  = chat_params.format;
-        generation_prompt = chat_params.generation_prompt;
+        generation_prompt = common_chat_input(chat_params.generation_prompt);
     }
 };
 
@@ -337,8 +362,8 @@ std::string common_chat_format_example(const struct common_chat_templates *     
                                        const std::map<std::string, std::string> & chat_template_kwargs);
 
 const char *    common_chat_format_name(common_chat_format format);
-common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & params);
-common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const std::string & input, bool is_partial, const common_chat_parser_params & params);
+common_chat_msg common_chat_parse(const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
+common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 
 // used by arg and server
 const char *            common_reasoning_format_name(common_reasoning_format format);
@@ -359,6 +384,9 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
 common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
 common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+
+// The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
+common_json common_chat_tool_parameters(const common_json & function);
 
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);

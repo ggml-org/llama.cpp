@@ -133,6 +133,7 @@ ENTRYPOINT [ "/llama.cpp/bin/llama-cli" ]
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
+ENV LLAMA_ARG_PORT=8080
 
 WORKDIR /llama.cpp/bin
 

@@ -36,60 +36,11 @@ endif()
 set(UI_CPP "${CMAKE_CURRENT_BINARY_DIR}/ui.cpp")
 set(UI_H   "${CMAKE_CURRENT_BINARY_DIR}/ui.h")
 
-if(CMAKE_CROSSCOMPILING)
-    find_program(HOST_CXX_COMPILER NAMES g++ clang++ NO_CMAKE_FIND_ROOT_PATH)
-    if(NOT HOST_CXX_COMPILER)
-        message(FATAL_ERROR "UI: no host C++ compiler (g++/clang++) found to build llama-ui-embed; set -DHOST_CXX_COMPILER=<path>")
-    endif()
-    message(STATUS "UI: building llama-ui-embed with host compiler ${HOST_CXX_COMPILER}")
-
-    if(CMAKE_HOST_WIN32)
-        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed-host.exe")
-    else()
-        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed-host")
-    endif()
-
-    add_custom_command(
-        OUTPUT  "${LLAMA_UI_EMBED_EXE}"
-        COMMAND "${HOST_CXX_COMPILER}" -O2 -std=c++17
-                -o "${LLAMA_UI_EMBED_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
-        COMMENT "Building llama-ui-embed (host)"
-        VERBATIM
-    )
-
-    # phony target to tie it into the dependency graph
-    add_custom_target(llama-ui-embed DEPENDS "${LLAMA_UI_EMBED_EXE}")
-else()
-    # exclude llama-ui-embed from sanitizer flags,
-    # it's a build-time-only tool, no need to instrument it
-    # this is to fix TSan "memory layout is incompatible" error on CI
-    get_directory_property(_llama_ui_dir_co COMPILE_OPTIONS)
-    get_directory_property(_llama_ui_dir_ll LINK_LIBRARIES)
-    set(_llama_ui_embed_co ${_llama_ui_dir_co})
-    set(_llama_ui_embed_ll ${_llama_ui_dir_ll})
-    list(FILTER _llama_ui_embed_co EXCLUDE REGEX ".*-fsanitize=.*")
-    list(FILTER _llama_ui_embed_ll EXCLUDE REGEX ".*-fsanitize=.*")
-    set_directory_properties(PROPERTIES
-        COMPILE_OPTIONS "${_llama_ui_embed_co}"
-        LINK_LIBRARIES  "${_llama_ui_embed_ll}")
-
-    add_executable(llama-ui-embed embed.cpp)
-    target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
-    set_target_properties(llama-ui-embed PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-    )
-    set(LLAMA_UI_EMBED_EXE "$<TARGET_FILE:llama-ui-embed>")
-
-    # restore so the llama-ui library below keeps sanitizer instrumentation
-    set_directory_properties(PROPERTIES
-        COMPILE_OPTIONS "${_llama_ui_dir_co}"
-        LINK_LIBRARIES  "${_llama_ui_dir_ll}")
-endif()
-
-# Run the provisioning script every build so source changes in tools/ui/ are
-# always picked up. The script uses copy_if_different for ui.cpp/ui.h, so the
-# library only recompiles when contents actually change.
+# Provision assets and generate ui.cpp/ui.h natively in CMake at build time.
+# The generated sources are compiled by the regular target toolchain; no
+# build-time host executable is needed (works in any cross-compile setup).
+# The script uses copy_if_different semantics, so the library below only
+# recompiles when the generated contents actually change.
 add_custom_target(llama-ui-assets ALL
     BYPRODUCTS ${UI_CPP} ${UI_H}
     COMMAND ${CMAKE_COMMAND}
@@ -101,14 +52,11 @@ add_custom_target(llama-ui-assets ALL
         "-DHF_VERSION=${HF_UI_VERSION}"
         "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
         "-DBUILD_UI=${LLAMA_BUILD_UI}"
-        "-DLLAMA_UI_EMBED=${LLAMA_UI_EMBED_EXE}"
         "-DLLAMA_UI_GZIP=${LLAMA_UI_GZIP}"
         -P "${PROJECT_SOURCE_DIR}/scripts/ui-assets.cmake"
     COMMENT "Provisioning UI assets"
     VERBATIM
 )
-
-add_dependencies(llama-ui-assets llama-ui-embed)
 
 set_source_files_properties(${UI_CPP} ${UI_H} PROPERTIES GENERATED TRUE)
 

@@ -10,6 +10,7 @@ ggml_add_backend_library(ggml-metal
                          ggml-metal-device.cpp
                          ggml-metal-common.cpp
                          ggml-metal-context.m
+                         ggml-metal-fusion.cpp
                          ggml-metal-ops.cpp
                          ggml-metal-tuning.cpp
                         )
@@ -28,10 +29,31 @@ set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-common.h")
 set(METALLIB_KERNELS_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/common.h")
 set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.h")
 set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h")
+set(METALLIB_KERNELS_FA_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_common.metal")
+set(METALLIB_KERNELS_FA_VEC_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_vec_common.metal")
+set(METALLIB_KERNELS_FA_SHARED
+    ${METALLIB_KERNELS_FA_COMMON}
+    ${METALLIB_KERNELS_FA_VEC_COMMON}
+)
 
 set(METALLIB_KERNEL_SOURCES
-    kernels/fa.metal
+    kernels/fa_aux.metal
+    kernels/fa_f16.metal
+    kernels/fa_f32.metal
+    kernels/fa_q4_0.metal
+    kernels/fa_q4_1.metal
+    kernels/fa_q5_0.metal
+    kernels/fa_q5_1.metal
+    kernels/fa_q8_0.metal
+    kernels/fa_vec_f16.metal
+    kernels/fa_vec_f32.metal
+    kernels/fa_vec_q4_0.metal
+    kernels/fa_vec_q4_1.metal
+    kernels/fa_vec_q5_0.metal
+    kernels/fa_vec_q5_1.metal
+    kernels/fa_vec_q8_0.metal
     kernels/mul_mv.metal
+    kernels/mul_mv_mma.metal
     kernels/mul_mm.metal
     kernels/quantize.metal
     kernels/softmax.metal
@@ -81,13 +103,21 @@ if (GGML_METAL_EMBED_LIBRARY)
         if(_has_quantize)
             list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_QUANTIZE})
         endif()
+        file(STRINGS ${SRC} _has_fa_common REGEX "#include \"fa_common\\.metal\"")
+        file(STRINGS ${SRC} _has_fa_vec_common REGEX "#include \"fa_vec_common\\.metal\"")
+        if(_has_fa_common)
+            list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_FA_COMMON})
+        endif()
+        if(_has_fa_vec_common)
+            list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_FA_VEC_COMMON})
+        endif()
 
         add_custom_command(
             OUTPUT "${ASM}"
             # Step 1: concatenate shared headers + this kernel source
             COMMAND cat ${HEADERS_FOR_SRC} ${SRC} > "${EMBED}.tmp1"
             # Step 2: remove internal #include and #pragma once
-            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
+            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#include \"fa_common.metal\"/d" -e "/\#include \"fa_vec_common.metal\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
             # Step 3: inline ggml-common.h (replacing __embed_ggml-common.h__ sentinel)
             COMMAND sed -e "/__embed_ggml-common.h__/r ${METALLIB_COMMON}" -e "/__embed_ggml-common.h__/d" < "${EMBED}.tmp2" > "${EMBED}.tmp3"
             # Step 4: inline ggml-metal-impl.h
@@ -102,8 +132,7 @@ if (GGML_METAL_EMBED_LIBRARY)
             COMMAND echo .incbin "\"${EMBED}\""                                  >> "${ASM}"
             COMMAND echo ".globl _ggml_metallib_${kind_sym}_end"                 >> "${ASM}"
             COMMAND echo "_ggml_metallib_${kind_sym}_end:"                       >> "${ASM}"
-            DEPENDS ../ggml-common.h ggml-metal-impl.h
-                    kernels/common.h kernels/dequantize.h kernels/quantize.h
+            DEPENDS ${HEADERS_FOR_SRC} ../ggml-common.h ggml-metal-impl.h
                     kernels/${kind}.metal
             COMMENT "Generate embedded Metal library for ${kind}"
             VERBATIM
@@ -122,10 +151,26 @@ else()
     configure_file(kernels/common.h     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/common.h     COPYONLY)
     configure_file(kernels/dequantize.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/dequantize.h COPYONLY)
     configure_file(kernels/quantize.h   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/quantize.h   COPYONLY)
+    foreach(hdr ${METALLIB_KERNELS_FA_SHARED})
+        get_filename_component(hdr_name ${hdr} NAME)
+        configure_file(${hdr} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/${hdr_name} COPYONLY)
+    endforeach()
 
     foreach(src ${METALLIB_KERNEL_SOURCES})
         configure_file(${src} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} COPYONLY)
     endforeach()
+
+    # CMAKE_OSX_SYSROOT is an SDK name or path - xcrun accepts both
+    set(METAL_SDK ${CMAKE_OSX_SYSROOT})
+    if (NOT METAL_SDK)
+        set(METAL_SDK macosx)
+    endif()
+
+    if (CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+        set(METAL_TARGET_SIM "-simulator")
+    else()
+        set(METAL_TARGET_SIM "")
+    endif()
 
     if (GGML_METAL_SHADER_DEBUG)
         # note: disabling fast math is needed in order to pass tests/test-backend-ops
@@ -138,9 +183,19 @@ else()
         set(XC_FLAGS -O3)
     endif()
 
+    execute_process(COMMAND xcrun -sdk ${METAL_SDK} --show-sdk-version OUTPUT_VARIABLE METAL_SDK_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if (METAL_SDK_VERSION VERSION_GREATER_EQUAL 26.0)
+        set(GGML_METAL_HAS_TENSOR_LIB ON)
+    else()
+        message(STATUS "Metal SDK ${METAL_SDK_VERSION} does not support the tensor API, skipping ggml-tensor.metallib")
+    endif()
+
     if (GGML_METAL_MACOSX_VERSION_MIN)
         message(STATUS "Adding  -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN} flag to metal compilation")
         list   (APPEND XC_FLAGS -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN})
+    elseif (NOT GGML_METAL_TARGET_OS STREQUAL "macos" AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        message(STATUS "Adding  -mtargetos=${GGML_METAL_TARGET_OS}${CMAKE_OSX_DEPLOYMENT_TARGET}${METAL_TARGET_SIM} flag to metal compilation")
+        list   (APPEND XC_FLAGS -mtargetos=${GGML_METAL_TARGET_OS}${CMAKE_OSX_DEPLOYMENT_TARGET}${METAL_TARGET_SIM})
     endif()
 
     if (GGML_METAL_STD)
@@ -156,26 +211,60 @@ else()
         list(APPEND AIR_FILES ${AIR})
         add_custom_command(
             OUTPUT ${AIR}
-            COMMAND xcrun -sdk macosx metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
-            DEPENDS ${src} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
+            DEPENDS ${src} ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
             COMMENT "Compiling ${src}"
             VERBATIM
         )
     endforeach()
 
+    set(METALLIB_FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib)
+
+    # the tensor API kernels go in a separate metallib, loaded only where supported
+    if (GGML_METAL_HAS_TENSOR_LIB)
+        set(AIR_MM_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mul_mm_tensor.air")
+        # the tensor API needs OS 26+
+        set(XC_FLAGS_TENSOR ${XC_FLAGS} -mtargetos=${GGML_METAL_TARGET_OS}26.0${METAL_TARGET_SIM})
+        add_custom_command(
+            OUTPUT ${AIR_MM_TENSOR}
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/mul_mm.metal -o ${AIR_MM_TENSOR}
+            DEPENDS kernels/mul_mm.metal kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMENT "Compiling kernels/mul_mm.metal (tensor API)"
+            VERBATIM
+        )
+
+        set(AIR_FA_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fa_f16_tensor.air")
+        add_custom_command(
+            OUTPUT ${AIR_FA_TENSOR}
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/fa_f16.metal -o ${AIR_FA_TENSOR}
+            DEPENDS kernels/fa_f16.metal ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMENT "Compiling kernels/fa_f16.metal (tensor API)"
+            VERBATIM
+        )
+
+        add_custom_command(
+            OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+            COMMAND xcrun -sdk ${METAL_SDK} metallib ${AIR_MM_TENSOR} ${AIR_FA_TENSOR} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+            DEPENDS ${AIR_MM_TENSOR} ${AIR_FA_TENSOR}
+            COMMENT "Linking tensor API Metal kernels into ggml-tensor.metallib"
+        )
+
+        list(APPEND METALLIB_FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib)
+    endif()
+
     add_custom_command(
         OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-        COMMAND xcrun -sdk macosx metallib ${AIR_FILES} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+        COMMAND xcrun -sdk ${METAL_SDK} metallib ${AIR_FILES} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal-impl.h
         COMMAND rm -rf ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels
-        DEPENDS ${AIR_FILES}
+        DEPENDS ${AIR_FILES} ${AIR_MM_TENSOR} ${AIR_FA_TENSOR}
         COMMENT "Linking Metal kernels into default.metallib"
     )
 
     add_custom_target(
         ggml-metal-lib ALL
-        DEPENDS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+        DEPENDS ${METALLIB_FILES}
     )
 endif() # GGML_METAL_EMBED_LIBRARY
 
@@ -187,7 +276,7 @@ if (NOT GGML_METAL_EMBED_LIBRARY)
     )
 
     install(
-        FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+        FILES ${METALLIB_FILES}
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()

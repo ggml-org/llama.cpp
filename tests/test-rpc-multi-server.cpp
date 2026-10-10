@@ -17,7 +17,7 @@ int main(int argc, char ** argv) {
     GGML_ASSERT(backend_b != nullptr);
 
     ggml_init_params params = {
-        /* .mem_size   = */ ggml_tensor_overhead() + ggml_graph_overhead_custom(1, false),
+        /* .mem_size   = */ 3*ggml_tensor_overhead() + ggml_graph_overhead_custom(1, false),
         /* .mem_buffer = */ nullptr,
         /* .no_alloc   = */ true,
     };
@@ -40,6 +40,28 @@ int main(int argc, char ** argv) {
     ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
     GGML_ASSERT(total_mem > 0);
     ggml_backend_buffer_free(buffer);
+
+    // Two tensors with the same ne[] but different nb[] must not share a cached alloc size.
+    // ref: https://github.com/ggml-org/llama.cpp/issues/28360
+    ggml_backend_buffer_type_t buft = ggml_backend_rpc_buffer_type(endpoint_a, 0);
+    GGML_ASSERT(buft != nullptr);
+
+    // MUL_MAT may need extra memory, so the size is read from the server [TAG_ALLOC_SIZE_EXPAND]
+    ggml_tensor * packed = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
+    packed->op = GGML_OP_MUL_MAT;
+
+    // same ne[], twice the row stride
+    ggml_tensor * strided = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
+    strided->op = GGML_OP_MUL_MAT;
+    strided->nb[1] = 2*strided->nb[1];
+    strided->nb[2] = strided->ne[1]*strided->nb[1];
+    strided->nb[3] = strided->nb[2];
+    GGML_ASSERT(ggml_nbytes(strided) > ggml_nbytes(packed));
+
+    // ask for the packed tensor first, so a cache keyed without nb[] holds the smaller size
+    GGML_ASSERT(ggml_backend_buft_get_alloc_size(buft, packed)  >= ggml_nbytes(packed));
+    GGML_ASSERT(ggml_backend_buft_get_alloc_size(buft, strided) >= ggml_nbytes(strided));
+
     ggml_free(ctx);
     ggml_backend_free(backend_b);
     ggml_backend_free(backend_a);

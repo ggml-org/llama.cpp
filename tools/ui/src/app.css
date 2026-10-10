@@ -6,6 +6,33 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* shadcn components key their orientation styles off these, toggle-group among them */
+@custom-variant data-horizontal (&[data-orientation='horizontal']);
+@custom-variant data-vertical (&[data-orientation='vertical']);
+
+/*
+ * Tailwind v4 dropped the pointer cursor from buttons. Every control a user can
+ * press gets it back, and anything disabled keeps the cursor its own class asks for.
+ */
+@layer base {
+	button:not(:disabled),
+	[role='button']:not([data-disabled]),
+	[role='checkbox']:not([data-disabled]),
+	[role='combobox']:not([data-disabled]),
+	[role='menuitem']:not([data-disabled]),
+	[role='menuitemcheckbox']:not([data-disabled]),
+	[role='menuitemradio']:not([data-disabled]),
+	[role='option']:not([data-disabled]),
+	[role='radio']:not([data-disabled]),
+	[role='switch']:not([data-disabled]),
+	[role='tab']:not([data-disabled]),
+	label[for],
+	select,
+	summary {
+		cursor: pointer;
+	}
+}
+
 :root {
 	--radius: 0.625rem;
 	--background: oklch(1 0 0);
@@ -140,7 +167,7 @@
 	}
 
 	body {
-		@apply bg-background text-foreground;
+		@apply bg-background text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
 	}

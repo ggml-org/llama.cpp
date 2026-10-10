@@ -80,7 +80,7 @@ static const command cmds[] = {
 #undef UPDATE_HIDDEN
 
 static int version(int /*argc*/, char ** /*argv*/) {
-    llama_print_build_info(llama_version());
+    llama_print_build_info(llama_version(), stdout);
     return 0;
 }
 

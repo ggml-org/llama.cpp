@@ -1,0 +1,110 @@
+{%- if not messages %}
+    {{- raise_exception('No messages provided.') }}
+{%- endif %}
+
+{%- set enable_thinking = enable_thinking | default(true) %}
+
+{#- Render a string or a list of text blocks. -#}
+{%- macro render_content(content, context_name) %}
+    {%- if content is string %}
+        {{- content }}
+    {%- elif content is none or content is undefined %}
+        {{- '' }}
+    {%- elif content is iterable and content is not mapping %}
+        {%- for block in content %}
+            {%- if block.type == 'text' %}
+                {{- block.text }}
+            {%- else %}
+                {{- raise_exception('Unsupported ' ~ context_name ~ ' content block type: ' ~ (block.type | string)) }}
+            {%- endif %}
+        {%- endfor %}
+    {%- else %}
+        {{- raise_exception(context_name ~ ' content must be a string or a list of text blocks') }}
+    {%- endif %}
+{%- endmacro %}
+
+{#- Default system prompt. -#}
+{%- set default_system = 'you are a helpful assistant.' %}
+
+{#- The first message-level system is placed in the initial system block. -#}
+{%- set ns = namespace(initial_system='') %}
+{%- if messages[0].role == 'system' %}
+    {%- set ns.initial_system = render_content(messages[0].content, 'system') %}
+{%- endif %}
+
+{#- System block. -#}
+{{- '<｜start▁of▁sentence｜><|System|>' + '\n' + default_system }}
+{%- if tools %}
+    {{- '## Tools' + '\n' + 'You have access to the following functions:' + '\n' + '<tools>' }}
+    {%- for tool in tools %}
+        {{- '\n' + tool.function | tojson }}
+    {%- endfor %}
+    {{- '\n' + '</tools>' }}
+{%- endif %}
+{%- if ns.initial_system %}
+    {{- '\n\n' + ns.initial_system }}
+{%- endif %}
+{{- '<｜end▁of▁sentence｜>' }}
+
+{#- Conversation turns. -#}
+{%- for message in messages %}
+    {%- if message.role == 'system' %}
+        {#- The first system message was consumed by the initial block. -#}
+        {%- if not loop.first %}
+            {{- '<｜start▁of▁sentence｜><|System|>\n' + render_content(message.content, 'system') + '<｜end▁of▁sentence｜>' }}
+        {%- endif %}
+    {%- elif message.role == 'user' %}
+        {{- '<｜start▁of▁sentence｜><|User|>' + render_content(message.content, 'user') + '<｜end▁of▁sentence｜>' }}
+    {%- elif message.role == 'assistant' %}
+        {%- set assistant_content = render_content(message.content, 'assistant') %}
+        {%- if message.reasoning_content is defined and message.reasoning_content %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- set reasoning_content = '' %}
+        {%- endif %}
+        {{- '<｜start▁of▁sentence｜><|Bot|>' }}
+        {%- if reasoning_content %}
+            {{- '<think>' + reasoning_content + '</think>' }}
+        {%- else %}
+            {{- '</think>' }}
+        {%- endif %}
+        {%- if assistant_content %}
+            {{- assistant_content }}
+        {%- endif %}
+        {%- if message.tool_calls is defined and message.tool_calls is not none %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if tool_call.function.arguments is not mapping %}
+                    {{- raise_exception('tool_call.function.arguments must be a dictionary; normalize JSON strings before apply_chat_template') }}
+                {%- endif %}
+                {%- set args = tool_call.function.arguments %}
+                {{- '<tool_call>' + tool_call.function.name }}
+                {%- for k, v in args.items() %}
+                    {{- '<arg_key>' ~ k ~ '</arg_key><arg_value>' ~ (v if v is string else v | tojson) ~ '</arg_value>' }}
+                {%- endfor %}
+                {{- '</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<｜end▁of▁sentence｜>' }}
+    {%- elif message.role == 'tool' %}
+        {%- if loop.previtem is undefined or loop.previtem.role != 'tool' %}
+            {{- '<｜start▁of▁sentence｜><|Tool|>' }}
+        {%- endif %}
+        {{- '<tool_response>' ~ message.content ~ '</tool_response>' }}
+        {%- if loop.nextitem is undefined or loop.nextitem.role != 'tool' %}
+            {{- '<｜end▁of▁sentence｜>' }}
+        {%- endif %}
+    {%- else %}
+        {{- raise_exception('Unsupported message role: ' ~ message.role) }}
+    {%- endif %}
+{%- endfor %}
+
+{#- Generation prompt. -#}
+{%- if add_generation_prompt %}
+    {{- '<｜start▁of▁sentence｜><|Bot|>' }}
+    {%- if enable_thinking is defined and enable_thinking %}
+        {{- '<think>' }}
+    {%- endif %}
+    {%- if enable_thinking is defined and not enable_thinking %}
+        {{- '</think>' }}
+    {%- endif %}
+{%- endif %}

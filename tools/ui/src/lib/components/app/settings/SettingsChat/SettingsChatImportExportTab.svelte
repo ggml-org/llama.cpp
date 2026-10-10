@@ -139,12 +139,8 @@
 
 	async function handleExportConfirm(selectedConversations: DatabaseConversation[]) {
 		try {
-			const allData: ExportedConversation[] = await Promise.all(
-				selectedConversations.map(async (conv) => {
-					const messages = await conversationsStore.getConversationMessages(conv.id);
-
-					return { conv: $state.snapshot(conv), messages: $state.snapshot(messages) };
-				})
+			const allData = await conversationsStore.getConversationsForExport(
+				selectedConversations.map((conv) => conv.id)
 			);
 
 			if (allData.length === 1) {

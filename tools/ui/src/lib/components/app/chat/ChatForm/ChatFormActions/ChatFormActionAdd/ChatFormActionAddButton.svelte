@@ -15,11 +15,11 @@
 <Tooltip.Root>
 	<Tooltip.Trigger class="w-full">
 		<Button
-			class="file-upload-button md:h-8 md:w-8 h-9 w-9 rounded-full p-0"
+			class="file-upload-button bg-background h-9 w-9 rounded-full p-0 shadow-sm md:h-8 md:w-8 dark:bg-muted-foreground/15"
 			{disabled}
 			{onclick}
 			type="button"
-			variant="secondary"
+			variant="ghost"
 		>
 			<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 

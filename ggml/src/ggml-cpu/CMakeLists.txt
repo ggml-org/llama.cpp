@@ -31,8 +31,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ggml-cpu.cpp
         ggml-cpu/repack.cpp
         ggml-cpu/repack.h
-        ggml-cpu/iqp.cpp
-        ggml-cpu/iqp.h
         ggml-cpu/hbm.cpp
         ggml-cpu/hbm.h
         ggml-cpu/quants.c
@@ -43,6 +41,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/amx/amx.h
         ggml-cpu/amx/mmq.cpp
         ggml-cpu/amx/mmq.h
+        ggml-cpu/tiled/tiled.cpp
+        ggml-cpu/tiled/tiled.h
+        ggml-cpu/tiled/tiled-kernel.cpp
+        ggml-cpu/tiled/tiled-kernel.h
         ggml-cpu/ggml-cpu-impl.h
         ggml-cpu/common.h
         ggml-cpu/binary-ops.h
@@ -104,54 +106,79 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/arm/repack.cpp
             )
 
+        # MSVC proper (not clang-cl) has no -mcpu/-march for ARM: features can only be
+        # selected by probing the host at configure time and forwarding -D__ARM_FEATURE_*
         if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
-            message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
+            set(GGML_ARM_MSVC ON)
         else()
-            check_cxx_compiler_flag(-mfp16-format=ieee GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E)
-            if (NOT "${GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E}" STREQUAL "")
-                list(APPEND ARCH_FLAGS -mfp16-format=ieee)
+            set(GGML_ARM_MSVC OFF)
+        endif()
+
+        if (GGML_ARM_MSVC AND NOT GGML_NATIVE)
+            message(FATAL_ERROR "MSVC on ARM requires GGML_NATIVE=ON, use clang for GGML_CPU_ARM_ARCH / GGML_CPU_ALL_VARIANTS")
+        else()
+            if (NOT GGML_ARM_MSVC)
+                check_cxx_compiler_flag(-mfp16-format=ieee GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E)
+                if (NOT "${GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E}" STREQUAL "")
+                    list(APPEND ARCH_FLAGS -mfp16-format=ieee)
+                endif()
             endif()
 
             if (GGML_NATIVE)
                 # -mcpu=native does not always enable all the features in some compilers,
                 # so we check for them manually and enable them if available
 
-                execute_process(
-                    COMMAND ${CMAKE_C_COMPILER} -mcpu=native -E -v -
-                    INPUT_FILE "/dev/null"
-                    OUTPUT_QUIET
-                    ERROR_VARIABLE ARM_MCPU
-                    RESULT_VARIABLE ARM_MCPU_RESULT
-                )
-                if (NOT ARM_MCPU_RESULT)
-                    string(REGEX MATCH "-mcpu=[^ ']+" ARM_MCPU_FLAG "${ARM_MCPU}")
-                    string(REGEX MATCH "-march=[^ ']+" ARM_MARCH_FLAG "${ARM_MCPU}")
+                # cl.exe cannot be queried this way: no /dev/null, and it rejects the flags.
+                # ARM_NATIVE_FLAG stays empty for MSVC and is never appended below.
+                if (NOT GGML_ARM_MSVC)
+                    execute_process(
+                        COMMAND ${CMAKE_C_COMPILER} -mcpu=native -E -v -
+                        INPUT_FILE "/dev/null"
+                        OUTPUT_QUIET
+                        ERROR_VARIABLE ARM_MCPU
+                        RESULT_VARIABLE ARM_MCPU_RESULT
+                    )
+                    if (NOT ARM_MCPU_RESULT)
+                        string(REGEX MATCH "-mcpu=[^ ']+" ARM_MCPU_FLAG "${ARM_MCPU}")
+                        string(REGEX MATCH "-march=[^ ']+" ARM_MARCH_FLAG "${ARM_MCPU}")
 
-                    # on some old GCC we need to read -march=
-                    if (ARM_MARCH_FLAG AND NOT "${ARM_MARCH_FLAG}" STREQUAL "-march=native")
-                        set(ARM_NATIVE_FLAG "${ARM_MARCH_FLAG}")
-                    elseif(ARM_MCPU_FLAG AND NOT "${ARM_MCPU_FLAG}" STREQUAL "-mcpu=native")
-                        set(ARM_NATIVE_FLAG "${ARM_MCPU_FLAG}")
+                        # on some old GCC we need to read -march=
+                        if (ARM_MARCH_FLAG AND NOT "${ARM_MARCH_FLAG}" STREQUAL "-march=native")
+                            set(ARM_NATIVE_FLAG "${ARM_MARCH_FLAG}")
+                        elseif(ARM_MCPU_FLAG AND NOT "${ARM_MCPU_FLAG}" STREQUAL "-mcpu=native")
+                            set(ARM_NATIVE_FLAG "${ARM_MCPU_FLAG}")
+                        endif()
                     endif()
-                endif()
 
-                if ("${ARM_NATIVE_FLAG}" STREQUAL "")
-                    set(ARM_NATIVE_FLAG -mcpu=native)
-                    message(WARNING "ARM -march/-mcpu not found, -mcpu=native will be used")
-                else()
-                    message(STATUS "ARM detected flags: ${ARM_NATIVE_FLAG}")
+                    if ("${ARM_NATIVE_FLAG}" STREQUAL "")
+                        set(ARM_NATIVE_FLAG -mcpu=native)
+                        message(WARNING "ARM -march/-mcpu not found, -mcpu=native will be used")
+                    else()
+                        message(STATUS "ARM detected flags: ${ARM_NATIVE_FLAG}")
+                    endif()
                 endif()
 
                 include(CheckCXXSourceRuns)
 
                 macro(check_arm_feature tag feature code)
                     set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
-                    set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+${tag}")
+                    if (GGML_ARM_MSVC)
+                        set(ARM_PROBE_FLAG   "")
+                        set(ARM_PROBE_NOFLAG "")
+                    else()
+                        set(ARM_PROBE_FLAG   "${ARM_NATIVE_FLAG}+${tag}")
+                        set(ARM_PROBE_NOFLAG "${ARM_NATIVE_FLAG}+no${tag}")
+                    endif()
+                    set(CMAKE_REQUIRED_FLAGS "${ARM_PROBE_FLAG}")
                     check_cxx_source_runs("${code}" GGML_MACHINE_SUPPORTS_${tag})
                     if (GGML_MACHINE_SUPPORTS_${tag})
                         set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+${tag}")
+                        if (GGML_ARM_MSVC)
+                            # forward runtime probing decisions for MSVC
+                            list(APPEND ARCH_FLAGS "-D__ARM_FEATURE_${feature}=1")
+                        endif()
                     else()
-                        set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+no${tag}")
+                        set(CMAKE_REQUIRED_FLAGS "${ARM_PROBE_NOFLAG}")
                         check_cxx_source_compiles("int main() { return 0; }" GGML_MACHINE_SUPPORTS_no${tag})
                         if (GGML_MACHINE_SUPPORTS_no${tag})
                             set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+no${tag}")
@@ -161,12 +188,24 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
                 endmacro()
 
-                check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
-                check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
-                check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main()  { svfloat32_t _a, _b; volatile svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
+                if (GGML_ARM_MSVC)
+                    # drop volatile
+                    check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a = vdupq_n_s8(0), _b = vdupq_n_s8(0); int32x4_t _s = vdupq_n_s32(0); _s = vdotq_s32(_s, _a, _b); return 0; }")
+                    check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a = vdupq_n_s8(0), _b = vdupq_n_s8(0); int32x4_t _s = vdupq_n_s32(0); _s = vmmlaq_s32(_s, _a, _b); return 0; }")
+                    check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main() { const svbool_t pg = svptrue_b8(); const svint8_t a = svdup_n_s8(0), b = svdup_n_s8(0); svint32_t s = svdup_n_s32(0); s = svdot_s32(s, a, b); (void) pg; (void) s; return 0; }")
+                    # FMA is mandatory on ARMv8-A but MSVC never defines __ARM_FEATURE_FMA,
+                    # so probe it like the others and forward the define
+                    check_arm_feature(fma     FMA         "#include <arm_neon.h>\nint main() { float32x4_t _a = vdupq_n_f32(0), _b = vdupq_n_f32(0), _c = vdupq_n_f32(0); _a = vfmaq_f32(_a, _b, _c); return 0; }")
+                else()
+                    check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
+                    check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
+                    check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main()  { svfloat32_t _a, _b; volatile svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
+                endif()
                 check_arm_feature(sme     SME         "#include <arm_sme.h>\n__arm_locally_streaming int main() { __asm__ volatile(\"smstart; smstop;\"); return 0; }")
 
-                list(APPEND ARCH_FLAGS "${ARM_NATIVE_FLAG}${ARM_NATIVE_FLAG_FIX}")
+                if (NOT GGML_ARM_MSVC)
+                    list(APPEND ARCH_FLAGS "${ARM_NATIVE_FLAG}${ARM_NATIVE_FLAG_FIX}")
+                endif()
             else()
                 if (GGML_CPU_ARM_ARCH)
                     list(APPEND ARCH_FLAGS -march=${GGML_CPU_ARM_ARCH})
@@ -455,12 +494,16 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ggml-cpu/spacemit/repack.h
                 ggml-cpu/spacemit/ime_env.cpp
                 ggml-cpu/spacemit/ime_env.h
-                ggml-cpu/spacemit/ime1_kernels.cpp
-                ggml-cpu/spacemit/ime2_kernels.cpp
                 ggml-cpu/spacemit/ime_kernels.h
                 ggml-cpu/spacemit/rvv_kernels.cpp
                 ggml-cpu/spacemit/rvv_kernels.h
             )
+            if ("RISCV64_SPACEMIT_IME1" IN_LIST RISCV64_SPACEMIT_IME_SPEC)
+                list(APPEND GGML_CPU_SOURCES ggml-cpu/spacemit/ime1_kernels.cpp)
+            endif()
+            if ("RISCV64_SPACEMIT_IME2" IN_LIST RISCV64_SPACEMIT_IME_SPEC)
+                list(APPEND GGML_CPU_SOURCES ggml-cpu/spacemit/ime2_kernels.cpp)
+            endif()
         endif()
         if(NOT GGML_CPU_ALL_VARIANTS)
             set(MARCH_STR "rv64gc")
@@ -516,7 +559,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
         message(STATUS "s390x detected")
         list(APPEND GGML_CPU_SOURCES
-            ggml-cpu/arch/s390/quants.c)
+            ggml-cpu/arch/s390/quants.c
+            ggml-cpu/arch/s390/repack.cpp
+            )
 
         # for native compilation
         if (GGML_NATIVE)

@@ -6,9 +6,13 @@
 #include "ggml-openvino-extra.h"
 
 #include <cerrno>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 #include <openvino/core/version.hpp>
 #include <string>
 #include <sys/stat.h>
@@ -16,7 +20,19 @@
 #include <vector>
 
 #if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#    include <psapi.h>
 #    include <direct.h>
+#    include <process.h>
+#else
+#    include <unistd.h>
+#endif
+#ifdef __linux__
+#    include <sys/sysmacros.h>
 #endif
 
 namespace {
@@ -37,10 +53,7 @@ inline uint64_t fnv1a_u64(uint64_t h, uint64_t v) {
 
 constexpr uint64_t FNV_OFFSET = 0xcbf29ce484222325ull;
 
-// Bytes sampled from each end of a weight tensor for the sampled hash. The whole
-// model is never hashed (that would cost seconds every run); instead we sample a
-// bounded window from the head and tail of each weight's bytes. The manifest
-// re-verify (same sample) guards the residual collision risk.
+// Fallback when source-file identity is unavailable outside cache-only mode.
 constexpr size_t WEIGHT_SAMPLE_BYTES = 4096;
 
 // Is this src a model weight, mirroring create_weight_nodes()'s selection:
@@ -52,8 +65,7 @@ bool is_weight_src(const ggml_tensor * src) {
     return src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type);
 }
 
-// Per-weight sampled fingerprint: identity (name/shape/type) + a bounded byte
-// sample. Returns FNV offset basis if data is unavailable (kept deterministic).
+// Weight metadata and source identity; do not read repacked or unloaded buffers.
 uint64_t weight_fingerprint(const ggml_tensor * t) {
     uint64_t h = FNV_OFFSET;
     h = fnv1a(h, t->name, strlen(t->name));
@@ -63,15 +75,7 @@ uint64_t weight_fingerprint(const ggml_tensor * t) {
     h = fnv1a_u64(h, static_cast<uint64_t>(t->type));
     const size_t nbytes = ggml_nbytes(t);
     h = fnv1a_u64(h, nbytes);
-    if (t->data != nullptr && nbytes > 0) {
-        const size_t head = nbytes < WEIGHT_SAMPLE_BYTES ? nbytes : WEIGHT_SAMPLE_BYTES;
-        h = fnv1a(h, t->data, head);
-        if (nbytes > WEIGHT_SAMPLE_BYTES) {
-            const size_t tail = nbytes < 2 * WEIGHT_SAMPLE_BYTES ? nbytes - WEIGHT_SAMPLE_BYTES : WEIGHT_SAMPLE_BYTES;
-            h = fnv1a(h, static_cast<const uint8_t *>(t->data) + (nbytes - tail), tail);
-        }
-    }
-    return h;
+    return fnv1a_u64(h, ggml_backend_openvino_weight_fingerprint(t));
 }
 
 // Walk the cgraph and invoke fn(weight_tensor) for each distinct weight, in node
@@ -156,12 +160,162 @@ bool make_dirs(const std::string & path) {
 
 }  // namespace
 
+bool ggml_openvino_model_cache_only() {
+    return ggml_openvino_getenv_int("GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY") != 0;
+}
+
+static const char * cache_settings[] = {
+    "GGML_OPENVINO_REQUANT_KQUANT",
+    "GGML_OPENVINO_NATIVE_SOFTPLUS",
+    "GGML_OPENVINO_DISABLE_KV_SLICE",
+    "GGML_OPENVINO_MANUAL_GQA_ATTN",
+    "GGML_OPENVINO_STATEFUL_EXECUTION",
+    "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
+    "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
+    "GGML_OPENVINO_REDUCE_COMPILE_MEM",
+    "GGML_OPENVINO_MEMORY_OPTIMIZE",
+    "GGML_OPENVINO_PROFILING",
+};
+
+void ggml_openvino_model_cache_init() {
+    const bool cache_only = ggml_openvino_model_cache_only();
+    const std::string dir = ggml_openvino_model_cache_dir();
+    if (dir.empty()) {
+        if (cache_only) {
+            GGML_ABORT("ggml-openvino: cache-only mode requires GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
+        }
+        return;
+    }
+    if (cache_only && (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC") ||
+                       ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
+                       ggml_openvino_getenv_int("GGML_OPENVINO_ENABLE_FALLBACK"))) {
+        GGML_ABORT("ggml-openvino: cache-only mode requires dynamic CPU/GPU execution with caching and without fallback");
+    }
+#if !defined(__linux__) && !defined(_WIN32)
+    if (cache_only) {
+        GGML_ABORT("ggml-openvino: cache-only mmap identification requires Linux or Windows");
+    }
+#endif
+    if (cache_only) {
+        auto & config = ggml_openvino_get_device_config();
+        config.environment_variables.erase("GGML_OPENVINO_SPILL_DIR");
+        config.environment_variables["GGML_OPENVINO_RELEASE_WEIGHTS"] = "0";
+    }
+}
+
+uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::vector<ggml_openvino_source_mapping> & mappings) {
+    const uintptr_t address = reinterpret_cast<uintptr_t>(data);
+    auto contains = [&](const ggml_openvino_source_mapping & m) {
+        return address >= m.begin && address < m.end && size <= m.end - address;
+    };
+    auto fingerprint = [&](const ggml_openvino_source_mapping & m) {
+        return fnv1a_u64(m.identity, m.offset + address - m.begin);
+    };
+    for (const auto & m : mappings) {
+        if (contains(m)) {
+            return fingerprint(m);
+        }
+    }
+#ifdef __linux__
+    std::ifstream maps("/proc/self/maps");
+    std::string line;
+    while (std::getline(maps, line)) {
+        unsigned long long begin, end, offset, inode;
+        unsigned int dev_major, dev_minor;
+        char permissions[5];
+        int path_start = 0;
+        if (sscanf(line.c_str(), "%llx-%llx %4s %llx %x:%x %llu %n", &begin, &end, permissions,
+                   &offset, &dev_major, &dev_minor, &inode, &path_start) != 7 || inode == 0) {
+            continue;
+        }
+        ggml_openvino_source_mapping m{uintptr_t(begin), uintptr_t(end), offset, FNV_OFFSET};
+        if (!contains(m)) {
+            continue;
+        }
+        struct stat st;
+        const std::string path = line.substr(path_start);
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || uint64_t(st.st_ino) != inode ||
+            major(st.st_dev) != dev_major || minor(st.st_dev) != dev_minor) {
+            break;
+        }
+        m.identity = fnv1a_u64(m.identity, st.st_dev);
+        m.identity = fnv1a_u64(m.identity, st.st_ino);
+        m.identity = fnv1a_u64(m.identity, st.st_size);
+        m.identity = fnv1a_u64(m.identity, st.st_mtim.tv_sec);
+        m.identity = fnv1a_u64(m.identity, st.st_mtim.tv_nsec);
+        m.identity = fnv1a_u64(m.identity, st.st_ctim.tv_sec);
+        m.identity = fnv1a_u64(m.identity, st.st_ctim.tv_nsec);
+        mappings.push_back(m);
+        return fingerprint(m);
+    }
+#elif defined(_WIN32)
+    MEMORY_BASIC_INFORMATION memory;
+    if (VirtualQuery(data, &memory, sizeof(memory)) == sizeof(memory) && memory.Type == MEM_MAPPED) {
+        std::wstring name(MAX_PATH, L'\0');
+        DWORD length = 0;
+        while (name.size() <= 32768) {
+            length = GetMappedFileNameW(GetCurrentProcess(), const_cast<void *>(data), name.data(), static_cast<DWORD>(name.size()));
+            if (length == 0 || length < name.size() - 1) {
+                break;
+            }
+            name.resize(name.size() * 2);
+        }
+        if (length > 0 && length < name.size() - 1) {
+            name.resize(length);
+            const std::wstring path = L"\\\\?\\GLOBALROOT" + name;
+            HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE) {
+                BY_HANDLE_FILE_INFORMATION info;
+                FILE_BASIC_INFO basic;
+                const bool valid = GetFileInformationByHandle(file, &info) &&
+                                   GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic));
+                CloseHandle(file);
+                if (valid) {
+                    const uint64_t file_size = (uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+                    const uintptr_t begin = reinterpret_cast<uintptr_t>(memory.AllocationBase);
+                    if (file_size <= std::numeric_limits<uintptr_t>::max() - begin) {
+                        ggml_openvino_source_mapping m{begin, begin + static_cast<uintptr_t>(file_size), 0,
+                                                       fnv1a(FNV_OFFSET, "win32", 5)};
+                        if (contains(m)) {
+                            m.identity = fnv1a_u64(m.identity, info.dwVolumeSerialNumber);
+                            m.identity = fnv1a_u64(m.identity, (uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow);
+                            m.identity = fnv1a_u64(m.identity, file_size);
+                            m.identity = fnv1a_u64(m.identity, (uint64_t(info.ftLastWriteTime.dwHighDateTime) << 32) |
+                                                                 info.ftLastWriteTime.dwLowDateTime);
+                            m.identity = fnv1a_u64(m.identity, static_cast<uint64_t>(basic.ChangeTime.QuadPart));
+                            mappings.push_back(m);
+                            return fingerprint(m);
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
+    if (ggml_openvino_model_cache_only()) {
+        GGML_ABORT("ggml-openvino: could not identify mapped GGUF weight; use --load-mode mmap");
+    }
+    uint64_t h = FNV_OFFSET;
+    const size_t head = std::min(size, WEIGHT_SAMPLE_BYTES);
+    h = fnv1a(h, data, head);
+    if (size > head) {
+        const size_t tail = std::min(size - head, WEIGHT_SAMPLE_BYTES);
+        h = fnv1a(h, static_cast<const uint8_t *>(data) + size - tail, tail);
+    }
+    return h;
+}
+
 std::string ggml_openvino_model_cache_dir() {
     const char * dir = ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
     if (!dir || strlen(dir) == 0) {
         return std::string();
     }
     std::string path(dir);
+    if (ggml_openvino_model_cache_only()) {
+        return path;
+    }
     // Create the cache directory (and parents) on first use so callers don't
     // have to pre-create it; a missing dir would otherwise silently disable the
     // cache (manifest/blob writes fail with no directory to write into).
@@ -173,13 +327,36 @@ std::string ggml_openvino_model_cache_dir() {
     return path;
 }
 
+std::string ggml_openvino_model_cache_temp_path(const std::string & path) {
+#ifdef _WIN32
+    const int pid = _getpid();
+#else
+    const int pid = getpid();
+#endif
+    return path + ".tmp." + std::to_string(pid) + "." + std::to_string(ggml_time_us());
+}
+
 uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
                                          const std::string & device,
                                          bool fa,
                                          const int32_t * rope_params,
                                          int rope_len,
-                                         uint64_t extra_cfg) {
+                                         uint64_t extra_cfg,
+                                         const std::string & graph_signature) {
     uint64_t h = FNV_OFFSET;
+    h = fnv1a_u64(h, 2);
+    h = fnv1a(h, graph_signature.data(), graph_signature.size());
+    for (const char * name : cache_settings) {
+        const char * value = ggml_openvino_getenv_str(name, "");
+        h = fnv1a(h, value, strlen(value) + 1);
+    }
+    if (const char * debug_nodes = ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
+        h = fnv1a(h, "GGML_OPENVINO_DEBUG_NODE", sizeof("GGML_OPENVINO_DEBUG_NODE"));
+        h = fnv1a(h, debug_nodes, strlen(debug_nodes) + 1);
+    }
+    if (ggml_openvino_is_gpu() && ggml_openvino_getenv_int("GGML_OPENVINO_MOE_OP", 1) == 0) {
+        h = fnv1a(h, "GGML_OPENVINO_MOE_OP=0", sizeof("GGML_OPENVINO_MOE_OP=0"));
+    }
 
     // Topology: node count + each node's op and name (cheap, and distinguishes
     // graphs that share weights but differ structurally).
@@ -193,7 +370,7 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Weights: the model identity.
     for_each_weight(cgraph, [&](const ggml_tensor * t) { h = fnv1a_u64(h, weight_fingerprint(t)); });
 
-    // Config that changes the produced blob.
+    // Device, model parameters, and backend configuration.
     h = fnv1a(h, device.data(), device.size());
     h = fnv1a_u64(h, fa ? 1u : 0u);
     if (rope_params && rope_len > 0) {
@@ -216,7 +393,9 @@ std::string ggml_openvino_model_cache_manifest_path(const std::string & dir, uin
 
 bool ggml_openvino_model_cache_write_manifest(const std::string & path,
                                               const ggml_cgraph * cgraph,
-                                              uint64_t fingerprint) {
+                                              uint64_t fingerprint,
+                                              const std::vector<std::string> & inputs,
+                                              const std::vector<std::string> & outputs) {
     std::ofstream f(path, std::ios::trunc);
     if (!f.is_open()) {
         return false;
@@ -227,17 +406,27 @@ bool ggml_openvino_model_cache_write_manifest(const std::string & path,
         f << t->name << " " << t->ne[0] << " " << t->ne[1] << " " << t->ne[2] << " " << t->ne[3] << " "
           << static_cast<int>(t->type) << " " << hex64(weight_fingerprint(t)) << "\n";
     });
+    f << "ports\n";
+    for (const auto * names : { &inputs, &outputs }) {
+        f << names->size() << '\n';
+        for (const auto & name : *names) {
+            f << std::quoted(name) << '\n';
+        }
+    }
     return f.good();
 }
 
 bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
                                                const ggml_cgraph * cgraph,
-                                               uint64_t fingerprint) {
+                                               uint64_t fingerprint,
+                                               std::vector<std::string> & inputs,
+                                               std::vector<std::string> & outputs) {
     std::ifstream f(path);
     if (!f.is_open()) {
         return false;
     }
-    std::string tag, val;
+    std::string tag;
+    std::string val;
     // header: fingerprint
     if (!(f >> tag >> val) || tag != "fingerprint" || val != hex64(fingerprint)) {
         return false;
@@ -259,7 +448,7 @@ bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
     size_t idx = 0;
     std::string line;
     std::getline(f, line);  // consume rest of ov_version line
-    while (std::getline(f, line)) {
+    while (idx < expected.size() && std::getline(f, line)) {
         if (line.empty()) {
             continue;
         }
@@ -268,5 +457,28 @@ bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
         }
         ++idx;
     }
-    return idx == expected.size();
+    if (idx != expected.size()) {
+        return false;
+    }
+    if (!std::getline(f, line)) {
+        return true;
+    }
+    if (line != "ports") {
+        return false;
+    }
+    for (auto * names : { &inputs, &outputs }) {
+        size_t count;
+        if (!(f >> count) || count > 100000) {
+            return false;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            std::string name;
+            if (!(f >> std::quoted(name))) {
+                return false;
+            }
+            names->push_back(name);
+        }
+    }
+    f >> std::ws;
+    return f.eof();
 }

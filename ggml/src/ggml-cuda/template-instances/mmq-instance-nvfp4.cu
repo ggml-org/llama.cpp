@@ -3,3 +3,5 @@
 #include "../mmq.cuh"
 
 DECL_MMQ_CASE(GGML_TYPE_NVFP4);
+
+DECL_MMQ_CASE_W4A4(GGML_TYPE_NVFP4);

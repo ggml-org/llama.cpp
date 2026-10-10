@@ -451,7 +451,14 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                 op->type != GGML_TYPE_IQ1_S   &&
                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
         case GGML_OP_MUL_MAT:
-            return src1->type == GGML_TYPE_F32 || src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
+            if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+                src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
+                return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
+            }
+            // BF16 in src1 is widened into the F32 work buffer
+            return src1->type == GGML_TYPE_F32 ||
+                   src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type ||
+                   (src1->type == GGML_TYPE_BF16 && ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_F32);
         case GGML_OP_SOFT_MAX_BACK: {
             if (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32) {
                 return false;

@@ -8,11 +8,13 @@
 	let {
 		children,
 		class: className,
+		overlayClass,
 		portalProps,
 		ref = $bindable(null),
 		showCloseButton = false,
 		...restProps
 	}: WithoutChildrenOrChild<DialogPrimitive.ContentProps> & {
+		overlayClass?: string;
 		portalProps?: DialogPrimitive.PortalProps;
 		children: Snippet;
 		showCloseButton?: boolean;
@@ -20,7 +22,7 @@
 </script>
 
 <Dialog.Portal {...portalProps}>
-	<Dialog.Overlay />
+	<Dialog.Overlay class={overlayClass} />
 
 	<DialogPrimitive.Content
 		bind:ref

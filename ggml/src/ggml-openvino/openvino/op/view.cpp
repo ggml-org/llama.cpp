@@ -7,7 +7,6 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
-#include <set>
 
 namespace ov {
 namespace frontend {
@@ -45,7 +44,18 @@ OutputVector translate_view(const NodeContext & context) {
                 auto ss = src_ps.to_shape();
                 auto dd = dst_ps.to_shape();
                 const size_t nd = ss.size();
-                if (sst.size() == nd && dst.size() == nd) {
+                // Stateful models drop the leading size-1 batch dim, so the real OV tensor can
+                // be one rank lower than the ggml shape metadata above. Axis indices derived
+                // from that metadata must be shifted down by the difference before they are
+                // used as OV axes. Bail out if the dims we would drop are not all 1.
+                const auto in_rank = context.get_input(0).get_partial_shape().rank();
+                const int axis_shift =
+                    in_rank.is_static() ? (int) nd - (int) in_rank.get_length() : 0;
+                bool shift_ok = axis_shift >= 0 && (size_t) axis_shift < nd;
+                for (int a = 0; a < axis_shift && shift_ok; ++a) {
+                    shift_ok = (ss[a] == 1 && dd[a] == 1);
+                }
+                if (shift_ok && sst.size() == nd && dst.size() == nd) {
                     // Map each dst axis of size>1 to a src axis with equal (size,stride);
                     // the unmatched src axis of size>1 is the indexed expert axis.
                     // dst_to_src[d] records which src axis each dst axis came from, so we can
@@ -94,7 +104,8 @@ OutputVector translate_view(const NodeContext & context) {
                                     ov::op::v0::Constant::create(ov::element::i64, {1}, {sel}),
                                     ov::op::v0::Constant::create(ov::element::i64, {1}, {sel + 1}),
                                     ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
-                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {dropped}));
+                                    ov::op::v0::Constant::create(ov::element::i64, {1},
+                                                                 {dropped - axis_shift}));
                                 // Build the reshape target from the (concrete) dst shape, but
                                 // keep the dynamic token axis dynamic instead of freezing it
                                 // to the captured n_tokens. Without this the constant dst
@@ -107,20 +118,22 @@ OutputVector translate_view(const NodeContext & context) {
                                 // dynamic dim from the correct SOURCE axis via ShapeOf+Gather
                                 // and place it at the dst token position.
                                 const int32_t dyn = context.get_op_dynamic_dim();  // output ggml axis, -1 if none
-                                int dst_ov_axis = (dyn != -1) ? (3 - (int) dyn) : -1;  // get_shape() reverses ggml order
-                                int src_ov_axis = (dst_ov_axis >= 0 && dst_ov_axis < (int) nd)
+                                // still in ggml metadata axis space; get_shape() reverses ggml order
+                                int dst_ov_axis = (dyn != -1) ? ((int) nd - 1 - (int) dyn) : -1;
+                                int src_ov_axis = (dst_ov_axis >= axis_shift && dst_ov_axis < (int) nd)
                                                       ? dst_to_src[dst_ov_axis]
                                                       : -1;
-                                if (dst_ov_axis >= 0 && src_ov_axis >= 0) {
+                                if (dst_ov_axis >= 0 && src_ov_axis >= axis_shift) {
                                     // target = concat of per-axis scalars; the token axis is a
                                     // runtime Gather of the slice's shape, the rest are constants.
                                     auto sl_shape = std::make_shared<ov::op::v3::ShapeOf>(sl, ov::element::i64);
                                     auto tok_dim = std::make_shared<ov::op::v8::Gather>(
                                         sl_shape,
-                                        ov::op::v0::Constant::create(ov::element::i64, {1}, {src_ov_axis}),
+                                        ov::op::v0::Constant::create(ov::element::i64, {1},
+                                                                     {src_ov_axis - axis_shift}),
                                         ov::op::v0::Constant::create(ov::element::i64, {}, {0}));
                                     ov::OutputVector parts;
-                                    for (int a = 0; a < (int) nd; ++a) {
+                                    for (int a = axis_shift; a < (int) nd; ++a) {
                                         if (a == dst_ov_axis) {
                                             parts.push_back(tok_dim);
                                         } else {
@@ -132,8 +145,8 @@ OutputVector translate_view(const NodeContext & context) {
                                     auto rs = std::make_shared<ov::op::v1::Reshape>(sl, dc, false);
                                     return rename_outputs_with_suffix({rs}, context.get_name());
                                 }
-                                auto dc = ov::op::v0::Constant::create(
-                                    ov::element::i64, {nd}, std::vector<int64_t>(dd.begin(), dd.end()));
+                                std::vector<int64_t> dd_ov(dd.begin() + axis_shift, dd.end());
+                                auto dc = ov::op::v0::Constant::create(ov::element::i64, {dd_ov.size()}, dd_ov);
                                 auto rs = std::make_shared<ov::op::v1::Reshape>(sl, dc, false);
                                 return rename_outputs_with_suffix({rs}, context.get_name());
                             }
@@ -153,7 +166,8 @@ OutputVector translate_view(const NodeContext & context) {
         return {input};
     }
 
-    int64_t src_elems = 1, dst_elems = 1;
+    int64_t src_elems = 1;
+    int64_t dst_elems = 1;
     for (int64_t i = 0; i < src_shape.rank().get_length(); ++i) {
         if (src_shape[i].is_dynamic()) {
             return {input};

@@ -57,6 +57,8 @@ export {
 	SpecialFileType
 } from './files.enums';
 
+export { HfEntryType, HfModelSort, SidecarForm } from './huggingface.enums';
+
 export {
 	MCPConnectionPhase,
 	MCPLogLevel,
@@ -67,7 +69,16 @@ export {
 	JsonSchemaType
 } from './mcp.enums';
 
-export { ModelCapability, ModelModality } from './model.enums';
+export { ModelAuxSidecar, ModelCapability, ModelDraftSidecar, ModelModality } from './model.enums';
+
+export {
+	ModelDownloadConfirmAction,
+	ModelDownloadStopRequest,
+	ModelGroupKind,
+	ModelRowDownloadState,
+	ModelsTableGroupKind,
+	ModelsTableSortKey
+} from './model.enums';
 
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 

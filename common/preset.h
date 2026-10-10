@@ -67,7 +67,7 @@ struct common_preset_context {
     common_preset_context(llama_example ex);
 
     // load presets from INI file
-    common_presets load_from_ini(const std::string & path, common_preset & global) const;
+    common_presets load_from_ini(const std::filesystem::path & path, common_preset & global) const;
 
     // generate presets from cached models
     common_presets load_from_cache() const;

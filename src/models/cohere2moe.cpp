@@ -13,27 +13,19 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
-
     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
     }
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    uint32_t swa_period = 4;
-    if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false)) {
-        hparams.set_swa_pattern(swa_period, true);
-    } else {
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
-    }
+    load_swa_pattern(ml, 4, true);
 
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -48,18 +40,9 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    // Trunk-only: the GGUF declares MTP layers in metadata but the actual MTP
-    // tensors live in a separate file. Mark MTP tensors NOT_REQUIRED so the
-    // trunk loads cleanly.
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only  ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
@@ -92,7 +75,7 @@ void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, flags);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, flags);
         } else {
-            const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff;
+            const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff;
 
             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert }, flags);
             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, flags);
@@ -116,7 +99,7 @@ void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
         create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_gqa, n_embd_gqa, flags);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, flags);
 
-        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff;
+        const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff;
 
         // Routed experts
         layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert }, flags);
@@ -213,7 +196,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
                     1.0f / sqrtf(float(n_embd_head)), il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
             ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
@@ -277,7 +260,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -325,6 +308,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     // TODO: make static using `ggml_build_forward_select()`
     //       see llm_graph_context::build_inp_embd() for reference
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);

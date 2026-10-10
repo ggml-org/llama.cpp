@@ -3,8 +3,14 @@ export function parseExecShellCommandError(
 ): string | undefined {
 	if (!toolResultString) return undefined;
 
+	// Exec results are usually large plain-text stdout; only a JSON object
+	// root can carry an error field, so skip the parse otherwise
+	const trimmed = toolResultString.trimStart();
+
+	if (trimmed[0] !== '{') return undefined;
+
 	try {
-		const parsed: unknown = JSON.parse(toolResultString);
+		const parsed: unknown = JSON.parse(trimmed);
 
 		if (
 			parsed &&

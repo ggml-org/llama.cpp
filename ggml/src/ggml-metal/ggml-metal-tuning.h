@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ggml-metal-device.h"  // enum ggml_metal_device_id
 #include "ggml.h"
 
 #include <cstdint>
@@ -18,7 +17,7 @@ constexpr int FA_VEC_NE01_BUCKETS[] = { 2, 3, 4, 5 };
 int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
-// NE baked into each (dk,dv) baseline instantiation in kernels/fa.metal.
+// NE baked into each (dk,dv) baseline instantiation in kernels/fa_vec_*.metal.
 // Hand-maintained mirror; keep in sync with those instantiations.
 // The Metal test slice covers every legal config for dk=128 and dk=576.
 int fa_vec_baseline_ne(int dk, int dv);
@@ -32,7 +31,7 @@ constexpr int8_t FA_VEC_DOMAIN_DECODE = 0;  // ne01 == 1
 constexpr int8_t FA_VEC_DOMAIN_BATCH  = 1;  // ne01 >= 2
 
 struct fa_vec_key_t {
-    int8_t  device_id;
+    int8_t  family;
     int8_t  dtype;
     int16_t dk;
     int16_t dv;
@@ -70,8 +69,7 @@ void         fa_vec_set_override(fa_vec_cfg_t cfg);
 void         fa_vec_clear_override();
 fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 
-// device_id selects a per-SKU row; on a miss, gpu_family (0 if unknown) maps to a representative
-// SKU and the table is retried. No match -> baseline.
-fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
+// Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
+fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
 }  // namespace ggml_metal_tuning

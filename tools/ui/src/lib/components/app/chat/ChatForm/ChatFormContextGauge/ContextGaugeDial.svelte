@@ -10,8 +10,9 @@
 
 	let { level, percent, size = 'sm' }: Props = $props();
 
-	const RADIUS = 11;
-	const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+	// the md dial fills its box: the ring would sit inside a padding ring otherwise
+	const RADIUS = $derived(size === 'md' ? 13 : 11);
+	const CIRCUMFERENCE = $derived(2 * Math.PI * RADIUS);
 
 	const strokeLevelClass = $derived(colorLevelTextClass(level));
 	const dimensions = $derived(size === 'md' ? 'h-6 w-6' : 'h-5 w-5');

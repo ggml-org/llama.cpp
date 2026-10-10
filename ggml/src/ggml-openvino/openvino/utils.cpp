@@ -1,7 +1,5 @@
 #include "utils.h"
 
-#include "ggml-impl.h"
-
 #include <cmath>
 #include <cstddef>
 #include <ctime>
@@ -27,13 +25,6 @@
 namespace ov {
 namespace frontend {
 namespace ggml {
-
-std::string getCurrentTime() {
-    std::time_t now = std::time(nullptr);
-    char buf[100];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-    return buf;
-}
 
 void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs) {
     auto input_size = context.get_input_size();
@@ -79,11 +70,10 @@ OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std:
 }
 
 namespace {
-ov::Output<ov::Node> rope_yarn_ramp_mix(int n_dims, const float corr_dims[2], float ext_factor) {
-    int half_n_dims = n_dims / 2;
-    std::vector<float> dim_ids_vec(half_n_dims);
-    std::iota(dim_ids_vec.begin(), dim_ids_vec.end(), 0);
-    auto dim_ids = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, (size_t) half_n_dims}, dim_ids_vec);
+ov::Output<ov::Node> rope_yarn_ramp_mix(int num_elements, const float corr_dims[2], float ext_factor) {
+    std::vector<float> dim_ids_vec(num_elements);
+    std::iota(dim_ids_vec.begin(), dim_ids_vec.end(), 0.0f);
+    auto dim_ids = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, (size_t) num_elements}, dim_ids_vec);
     auto corr_low = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {corr_dims[0]});
     auto corr_high = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {corr_dims[1]});
     auto denom = std::make_shared<ov::op::v1::Maximum>(
@@ -123,8 +113,18 @@ void ggml_rope_yarn_corr_dims(int n_dims,
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight,
-                                                           bool imrope,
-                                                           bool stateful) {
+                                                           int mode,
+                                                           bool stateful,
+                                                           int64_t head_dim) {
+    constexpr int TYPE_IMROPE = 2;
+    constexpr int TYPE_VISION = 3;
+    constexpr int TYPE_MROPE = 4;
+
+    const bool is_imrope = (mode == TYPE_IMROPE);
+    const bool is_vision = (mode == TYPE_VISION);
+    const bool is_mrope = (mode == TYPE_MROPE);
+    const bool is_multi = is_imrope || is_vision || is_mrope;
+
     if (stateful) {
         inp_pos =
             std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
@@ -132,7 +132,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         auto pos_perm =
             std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, std::vector<int64_t>{2, 1, 0});
         inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
-    } else if (imrope) {
+    } else if (is_multi) {
         inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
         auto pos_shape = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{5}, {0, 0, 0, 4, -1});
         inp_pos = std::make_shared<ov::op::v1::Reshape>(inp_pos, pos_shape, true);
@@ -164,25 +164,102 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
-    std::vector<float> factor(n_dims_half);
-
-    Output<Node> freq_factors;
-
     Output<Node> theta;
     float mscale = attn_factor;
-    if (imrope) {
-        std::vector<int64_t> gather_indices(n_dims_half);
-        for (size_t j = 0; j < n_dims_half; j++) {
-            gather_indices[j] = j % 3;
-            factor[j] = std::pow(theta_scale, j);
+    if (is_multi) {
+        const size_t num_pairs = is_vision ? (n_dims > 0 ? (size_t) n_dims : (size_t) (head_dim / 2)) : n_dims_half;
+        int sections[4];
+        memcpy(sections, rope_params + 11, sizeof(int) * 4);
+        int sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
+        if (sect_dims <= 0) {
+            sect_dims = num_pairs;
+        }
+        int sec_w = sections[0] + sections[1];
+        int sec_e = sec_w + sections[2];
+        std::vector<int64_t> gather_indices(num_pairs);
+        std::vector<float> factor(num_pairs);
+        for (size_t j = 0; j < num_pairs; j++) {
+            int sector = j % sect_dims;
+            int plane = 0;
+            if (is_imrope) {
+                if (sector % 3 == 1 && sector < 3 * sections[1]) {
+                    plane = 1;
+                } else if (sector % 3 == 2 && sector < 3 * sections[2]) {
+                    plane = 2;
+                } else if (sector % 3 == 0 && sector < 3 * sections[0]) {
+                    plane = 0;
+                } else {
+                    plane = 3;
+                }
+                factor[j] = std::pow(theta_scale, j);
+            } else if (is_vision) {
+                int p_idx = 0;
+                if (sector < sections[0]) {
+                    plane = 0;
+                    p_idx = sector;
+                } else if (sector < sections[0] + sections[1]) {
+                    plane = 1;
+                    p_idx = sector - sections[0];
+                } else if (sector < sec_w + sections[2]) {
+                    plane = 2;
+                    p_idx = sector - sec_w;
+                } else {
+                    plane = 3;
+                    p_idx = sector - sec_e;
+                }
+                factor[j] = std::pow(theta_scale, p_idx);
+            } else {
+                if (sector >= sections[0] && sector < sec_w) {
+                    plane = 1;
+                } else if (sector >= sec_w && sector < sec_e) {
+                    plane = 2;
+                } else if (sector >= sec_e) {
+                    plane = 3;
+                } else {
+                    plane = 0;
+                }
+                factor[j] = std::pow(theta_scale, j);
+            }
+            gather_indices[j] = plane;
         }
         auto gather_indices_const =
-            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{n_dims_half}, gather_indices);
+            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{num_pairs}, gather_indices);
         auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {4});
         inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, gather_indices_const, gather_axis);
-        auto factor_const = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{n_dims_half}, factor);
-        theta = std::make_shared<ov::op::v1::Multiply>(inp_pos, factor_const);
+        Output<Node> factor_node =
+            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{num_pairs}, factor);
+        if (rope_freqs_weight) {
+            Output<Node> rope_factors = std::make_shared<ov::op::v8::Slice>(
+                rope_freqs_weight,
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {0}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) num_pairs}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {rope_freqs_weight->get_output_partial_shape(0).rank().get_length() - 1}));
+            rope_factors = std::make_shared<ov::op::v1::Reshape>(
+                rope_factors,
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) num_pairs}),
+                false);
+            factor_node = std::make_shared<ov::op::v1::Divide>(factor_node, rope_factors);
+        }
+        auto theta_extrap = std::make_shared<ov::op::v1::Multiply>(inp_pos, factor_node);
+        auto theta_interp = std::make_shared<ov::op::v1::Multiply>(
+            theta_extrap, ov::op::v0::Constant::create(ov::element::f32, {1}, {freq_scale}));
+        if (ext_factor == 0.0f) {
+            theta = theta_interp;
+        } else {
+            float corr_dims[2];
+            ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+            auto ramp_mix = rope_yarn_ramp_mix(num_pairs, corr_dims, ext_factor);
+            Output<Node> one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
+            auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
+            theta = std::make_shared<ov::op::v1::Add>(
+                std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),
+                std::make_shared<ov::op::v1::Multiply>(theta_extrap, ramp_mix));
+            mscale *= (1.0f + 0.1f * std::log(1.0f / freq_scale));
+        }
     } else {
+        std::vector<float> factor(n_dims_half);
+        Output<Node> freq_factors;
         float corr_dims[2];
         ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
         factor[0] = 1.0f;
@@ -224,7 +301,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         if (ext_factor == 0.0f) {
             theta = theta_interp;
         } else {
-            auto ramp_mix = rope_yarn_ramp_mix(n_dims, corr_dims, ext_factor);
+            auto ramp_mix = rope_yarn_ramp_mix(n_dims_half, corr_dims, ext_factor);
             Output<Node> one;
             if (stateful) {
                 one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {1.0f});
@@ -243,7 +320,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     Output<Node> cos_theta = std::make_shared<ov::op::v0::Cos>(theta);
     Output<Node> sin_theta = std::make_shared<ov::op::v0::Sin>(theta);
 
-    if (!imrope) {
+    if (mscale != 1.0f) {
         auto mscale_node = ov::op::v0::Constant::create(ov::element::f32, Shape{}, {mscale});
 
         cos_theta = std::make_shared<ov::op::v1::Multiply>(cos_theta, mscale_node);
@@ -314,18 +391,32 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     // here would re-slice/re-flatten the already-resolved single-plane view against the
     // recorded (multi-plane) source strides and emit a constant-target Reshape whose baked
     // dims no longer divide the concretized input -> "dimensions do not evenly divide".
+    // A fourth case matters for stateful execution: `expected` comes from ggml metadata and is
+    // always GGML_MAX_DIMS ranks, but stateful drops the leading size-1 batch dim, so the
+    // resolved view is one rank lower. Compare the common trailing dims and require the
+    // leading expected dims we skip to be 1. Without this the rank test below never matches on
+    // the stateful path and every already-resolved MoE expert-plane view is re-sliced.
     auto expected_ov_shape = context.get_view_input_ov_shape(input_index, 0);
     auto actual_shape = input.get_partial_shape();
     if (expected_ov_shape.rank().is_static() && actual_shape.rank().is_static() &&
-        expected_ov_shape.rank() == actual_shape.rank()) {
+        expected_ov_shape.rank().get_length() >= actual_shape.rank().get_length()) {
+        const int64_t n_actual = actual_shape.rank().get_length();
+        const int64_t shift = expected_ov_shape.rank().get_length() - n_actual;
         bool shapes_match = true;
-        for (int64_t i = 0; i < expected_ov_shape.rank().get_length(); ++i) {
-            const bool both_dynamic = expected_ov_shape[i].is_dynamic() && actual_shape[i].is_dynamic();
-            const bool both_static_equal = expected_ov_shape[i].is_static() && actual_shape[i].is_static() &&
-                                           expected_ov_shape[i] == actual_shape[i];
+        for (int64_t i = 0; i < shift; ++i) {
+            if (!expected_ov_shape[i].is_static() || expected_ov_shape[i].get_length() != 1) {
+                shapes_match = false;
+                break;
+            }
+        }
+        for (int64_t i = 0; i < n_actual && shapes_match; ++i) {
+            const auto & exp = expected_ov_shape[i + shift];
+            const bool both_dynamic = exp.is_dynamic() && actual_shape[i].is_dynamic();
+            const bool both_static_equal =
+                exp.is_static() && actual_shape[i].is_static() && exp == actual_shape[i];
             // expected dynamic, actual static: the resolved view already carries the
             // concrete size for this fragment; reuse it rather than re-materializing.
-            const bool expected_dyn_actual_static = expected_ov_shape[i].is_dynamic() && actual_shape[i].is_static();
+            const bool expected_dyn_actual_static = exp.is_dynamic() && actual_shape[i].is_static();
             if (!both_dynamic && !both_static_equal && !expected_dyn_actual_static) {
                 shapes_match = false;
                 break;
@@ -408,6 +499,15 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
            const ov::Shape & view_ggml_shape, const ov::PartialShape & view_ov_shape, const std::string & view_name,
            size_t view_src_offset, const std::vector<size_t> & view_src_stride, const ov::Shape & view_src_ggml_shape,
            const ov::PartialShape & view_src_ov_shape, const std::string & view_src_name) -> ov::Output<ov::Node> {
+        // Stateful execution drops a leading size-1 axis, so `current` can be one rank lower
+        // than the ggml shape metadata (view_stride/view_ggml_shape, always GGML_MAX_DIMS
+        // entries) assumes. Shift any axis index built from that metadata down by the
+        // difference before using it as an OV Slice axis.
+        const auto current_rank = current.get_partial_shape().rank();
+        const int axis_shift = current_rank.is_static() ?
+                                    static_cast<int>(view_stride.size()) - static_cast<int>(current_rank.get_length()) :
+                                    0;
+
         auto build_reshape_pattern = [](const ov::PartialShape & target_ov_shape,
                                         const ov::Shape & target_ggml_shape) -> std::vector<int64_t> {
             const size_t ndims = target_ggml_shape.size();
@@ -518,7 +618,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             current, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {end_val}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
-                            ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim}));
+                            ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim - axis_shift}));
 
                         if (view_ov_shape.is_static()) {
                             auto reshaped = std::make_shared<ov::op::v1::Reshape>(
@@ -551,6 +651,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
                 if (tail_begin >= 0 && tail_end <= tail_src_elems) {
                     std::vector<int64_t> flat_shape;
+                    flat_shape.reserve(slice_dim);
                     for (int i = 0; i < slice_dim; ++i) {
                         flat_shape.push_back(static_cast<int64_t>(view_src_ggml_shape[i]));
                     }

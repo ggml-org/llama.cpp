@@ -71,6 +71,7 @@ def test_v1_models_supports_multimodal_capability():
         ("What is this:\n", "malformed",              False, None),
         ("What is this:\n", "https://google.com/404", False, None), # non-existent image
         ("What is this:\n", "https://ggml.ai",        False, None), # non-image data
+        ("What is this:\n", "data:text/html;base64,aGVsbG8=", False, None), # unsupported data uri mime
         # TODO @ngxson : test with multiple images, no images and with audio
     ]
 )
@@ -178,3 +179,28 @@ def test_vision_embeddings(prompt, image_data, success):
         assert content[0]['embedding'] != content[2]['embedding']
     else:
         assert res.status_code != 200
+
+
+def test_vision_embeddings_oai_content():
+    global server
+    server.server_embeddings = True
+    server.pooling = 'mean'
+    server.n_batch = 512
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": [
+            {"content": [
+                {"type": "text", "text": "What is this: "},
+                {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
+                {"type": "text", "text": "\n"},
+            ]},
+            {JSON_PROMPT_STRING_KEY: "What is this: <__media__>\n", JSON_MULTIMODAL_KEY: [get_img_url("IMG_BASE64_0")]},
+            "What is this: \n",
+        ],
+    })
+    assert res.status_code == 200
+    data = res.body["data"]
+    assert len(data) == 3
+    # same prompt and image in both formats
+    assert data[0]["embedding"] == data[1]["embedding"]
+    assert data[0]["embedding"] != data[2]["embedding"]

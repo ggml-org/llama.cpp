@@ -27,6 +27,12 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 }
 #endif
 
+#ifdef BF16
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[dst_base + offset] = bf16_word_to_f32(src[(src_base + offset) / 2u], (src_base + offset) & 1u);
+}
+#endif
+
 #ifdef Q1_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_byte_base = (src_base + offset) * 18;

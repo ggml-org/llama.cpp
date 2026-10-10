@@ -117,7 +117,7 @@ int main(int argc, char ** argv) {
 
     // create a llama_batch
     // we use this object to submit token data for decoding
-    llama_batch batch = llama_batch_init(std::max(tokens_list.size(), (size_t) n_parallel), 0, n_parallel);
+    common_batch batch(ctx);
 
     std::vector<llama_seq_id> seq_ids(n_parallel, 0);
     for (int32_t i = 0; i < n_parallel; ++i) {
@@ -126,12 +126,12 @@ int main(int argc, char ** argv) {
 
     // evaluate the initial prompt
     for (size_t i = 0; i < tokens_list.size(); ++i) {
-        common_batch_add(batch, tokens_list[i], i, seq_ids, false);
+        batch.add(tokens_list[i], i, seq_ids, false);
     }
-    GGML_ASSERT(batch.n_tokens == (int) tokens_list.size());
+    GGML_ASSERT(batch.size() == (int) tokens_list.size());
 
     if (llama_model_has_encoder(model)) {
-        if (llama_encode(ctx, batch)) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get())) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return 1;
         }
@@ -141,14 +141,14 @@ int main(int argc, char ** argv) {
             decoder_start_token_id = llama_vocab_bos(vocab);
         }
 
-        common_batch_clear(batch);
-        common_batch_add(batch, decoder_start_token_id, 0, seq_ids, false);
+        batch.clear();
+        batch.add(decoder_start_token_id, 0, seq_ids, false);
     }
 
     // llama_decode will output logits only for the last token of the prompt
-    batch.logits[batch.n_tokens - 1] = true;
+    batch.set_output(batch.size() - 1, true);
 
-    if (llama_decode(ctx, batch) != 0) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
         LOG_ERR("%s: llama_decode() failed\n", __func__);
         return 1;
     }
@@ -170,16 +170,16 @@ int main(int argc, char ** argv) {
 
     // remember the batch index of the last token for each parallel sequence
     // we need this to determine which logits to sample from
-    std::vector<int32_t> i_batch(n_parallel, batch.n_tokens - 1);
+    std::vector<int32_t> i_batch(n_parallel, batch.size() - 1);
 
-    int n_cur    = batch.n_tokens;
+    int n_cur    = batch.size();
     int n_decode = 0;
 
     const auto t_main_start = ggml_time_us();
 
     while (n_cur <= n_predict) {
         // prepare the next batch
-        common_batch_clear(batch);
+        batch.clear();
 
         // sample the next token for each parallel sequence / stream
         for (int32_t i = 0; i < n_parallel; ++i) {
@@ -208,23 +208,23 @@ int main(int argc, char ** argv) {
 
             streams[i] += common_token_to_piece(ctx, new_token_id);
 
-            i_batch[i] = batch.n_tokens;
+            i_batch[i] = batch.size();
 
             // push this new token for next evaluation
-            common_batch_add(batch, new_token_id, n_cur, { i }, true);
+            batch.add(new_token_id, n_cur, i, true);
 
             n_decode += 1;
         }
 
         // all streams are finished
-        if (batch.n_tokens == 0) {
+        if (batch.size() == 0) {
             break;
         }
 
         n_cur += 1;
 
         // evaluate the current batch with the transformer model
-        if (llama_decode(ctx, batch)) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("%s : failed to eval, return code %d\n", __func__, 1);
             return 1;
         }
@@ -249,7 +249,6 @@ int main(int argc, char ** argv) {
 
     fprintf(stderr, "\n");
 
-    llama_batch_free(batch);
 
     for (auto & sampler_config : sampler_configs) {
         llama_sampler_free(sampler_config.sampler);

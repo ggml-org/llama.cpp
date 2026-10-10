@@ -57,12 +57,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
-
     const int n_iters = 3;
 
     // warm-up
-    llama_decode(ctx, batch);
+    {
+        common_batch batch = common_batch_get_one(ctx, prompt_tokens);
+        llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+    }
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_synchronize(ctx);
 
@@ -71,13 +72,16 @@ int main(int argc, char ** argv) {
         double t_sum2_us = 0.0;
 
         for (int i = 0; i < n_iters; i++) {
+            // positions continue from the memory
+            common_batch batch = common_batch_get_one(ctx, prompt_tokens);
+
             // this pause is important - it simulates "idle GPU"
             std::this_thread::sleep_for(std::chrono::milliseconds(t_pause_ms));
 
             const int64_t t_start_us = llama_time_us();
 
             // this should take constant time
-            llama_decode(ctx, batch);
+            llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
             llama_synchronize(ctx);
 
             const int64_t t_end_us = llama_time_us();

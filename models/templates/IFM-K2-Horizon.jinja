@@ -1,0 +1,994 @@
+{{- bos_token }}
+{%- if tool_presentation is defined -%}
+    {{- raise_exception("Unsupported argument: tool_presentation. Use tool_presentation_format with one of: json, xml, markdown.") -}}
+{%- endif -%}
+{%- if tool_calling_format is defined -%}
+    {{- raise_exception("Unsupported argument: tool_calling_format. Use tool_call_format with one of: json, xml, xml_typed.") -}}
+{%- endif -%}
+{%- if tool_format is defined -%}
+    {{- raise_exception("Unsupported argument: tool_format. Use tool_call_format with one of: json, xml, xml_typed.") -}}
+{%- endif -%}
+{%- set tool_presentation_fmt = tool_presentation_format | default('markdown') -%}
+{%- set tool_call_fmt = tool_call_format | default('xml') -%}
+{%- if tool_presentation_fmt != 'json' and tool_presentation_fmt != 'xml' and tool_presentation_fmt != 'markdown' -%}
+    {{- raise_exception("Unsupported tool_presentation_format: '" ~ tool_presentation_fmt ~ "'. Supported formats: json, xml, markdown.") -}}
+{%- endif -%}
+{%- if tool_call_fmt != 'json' and tool_call_fmt != 'xml' and tool_call_fmt != 'xml_typed' -%}
+    {{- raise_exception("Unsupported tool_call_format: '" ~ tool_call_fmt ~ "'. Supported formats: json, xml, xml_typed.") -}}
+{%- endif -%}
+
+{#- Renderability state, computed during validate_tools (single walk, no extra -#}
+{#- traversal at render time): ok = working flag for the tool being validated; -#}
+{#- bad = pipe-delimited indices of tools that must render as verbatim JSON. -#}
+{%- set RB = namespace(ok=true, bad='|') -%}
+
+{%- macro value_contains_mapping(v) -%}
+{%- if v is mapping -%}
+true
+{%- elif v is sequence and v is not string -%}
+{%- set f = namespace(x='false') -%}
+{%- for c in v -%}{%- if value_contains_mapping(c) == 'true' -%}{%- set f.x = 'true' -%}{%- endif -%}{%- endfor -%}
+{{- f.x -}}
+{%- else -%}
+false
+{%- endif -%}
+{%- endmacro -%}
+
+{#- $ref inlining state: defs = local $defs of the tool being rendered; seen = -#}
+{#- pipe-delimited names already expanded for this tool (each def inlines at most -#}
+{#- once; later references render by def name; cycles terminate immediately). -#}
+{#- $ref-sibling annotations (description/default/...) merge OVER the def at -#}
+{#- the inline site, so use-site annotations win and are never dropped. -#}
+{%- set REFS = namespace(defs={}, seen='|') -%}
+
+{%- macro render_compact_type_name(type_name, spec) -%}
+{%- if type_name == "array" -%}
+array[{%- if 'items' in spec -%}{{ render_compact_type(spec['items']) }}{%- else -%}any{%- endif -%}]
+{%- elif type_name -%}
+{{- type_name -}}
+{%- else -%}
+any
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_compact_type(spec) -%}
+{%- if spec is not mapping -%}
+any
+{%- elif spec.type is defined and spec.type is sequence and spec.type is not string and spec.type | length > 0 -%}
+{%- for type_name in spec.type -%}{{ render_compact_type_name(type_name, spec) }}{%- if not loop.last -%}|{%- endif -%}{%- endfor -%}
+{%- elif spec.type is defined and spec.type is sequence and spec.type is not string -%}
+any
+{%- elif spec.type -%}
+{{- render_compact_type_name(spec.type, spec) -}}
+{%- elif spec['$ref'] is string -%}
+{{- spec['$ref'].split('/') | last -}}
+{%- elif spec.oneOf -%}
+oneOf[{%- for variant in spec.oneOf -%}{{ render_compact_type(variant) }}{%- if not loop.last -%}|{%- endif -%}{%- endfor -%}]
+{%- elif spec.anyOf -%}
+anyOf[{%- for variant in spec.anyOf -%}{{ render_compact_type(variant) }}{%- if not loop.last -%}|{%- endif -%}{%- endfor -%}]
+{%- elif spec.properties -%}
+object
+{%- elif 'items' in spec -%}
+array[{{ render_compact_type(spec['items']) }}]
+{%- else -%}
+any
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_type_name(type_name, spec) -%}
+{%- if type_name == "array" -%}
+array of {% if 'items' in spec %}{{ render_markdown_type(spec['items']) }}{% else %}any{% endif %}
+{%- elif type_name -%}
+{{- type_name -}}
+{%- else -%}
+any
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_type(spec) -%}
+{%- if spec is sameas true -%}
+True
+{%- elif spec is sameas false -%}
+False
+{%- elif spec is not mapping -%}
+any
+{%- elif spec.type is defined and spec.type is sequence and spec.type is not string and spec.type | length > 0 -%}
+{%- for type_name in spec.type -%}{{ render_markdown_type_name(type_name, spec) }}{% if not loop.last %} or {% endif %}{%- endfor -%}
+{%- elif spec.type is defined and spec.type is sequence and spec.type is not string -%}
+any
+{%- elif spec.type -%}
+{{- render_markdown_type_name(spec.type, spec) -}}
+{%- elif spec['$ref'] is string -%}
+{{- spec['$ref'].split('/') | last -}}
+{%- elif spec.oneOf -%}
+oneOf[{%- for variant in spec.oneOf -%}{{ render_markdown_type(variant) }}{% if not loop.last %} or {% endif %}{%- endfor -%}]
+{%- elif spec.anyOf -%}
+anyOf[{%- for variant in spec.anyOf -%}{{ render_markdown_type(variant) }}{% if not loop.last %} or {% endif %}{%- endfor -%}]
+{%- elif spec.properties -%}
+object
+{%- elif 'items' in spec -%}
+array of {{ render_markdown_type(spec['items']) }}
+{%- else -%}
+any
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_text(value) -%}
+{{- value.split() | join(" ") -}}
+{%- endmacro -%}
+
+{%- macro render_python_string(value) -%}
+'{{- value.split() | join(" ") | replace("\\", "\\\\") | replace("'", "\\'") -}}'
+{%- endmacro -%}
+
+{%- macro render_python_repr(value) -%}
+{%- if value is string -%}
+{{ render_python_string(value) }}
+{%- elif value is sameas true -%}
+True
+{%- elif value is sameas false -%}
+False
+{%- elif value is none -%}
+None
+{%- elif value is mapping -%}
+{{- "{" -}}
+{%- for key, child in value | items -%}
+{{ render_python_repr(key) }}: {{ render_python_repr(child) }}{%- if not loop.last -%}, {% endif -%}
+{%- endfor -%}
+{{- "}" -}}
+{%- elif value is sequence -%}
+{{- "[" -}}
+{%- for child in value -%}
+{{ render_python_repr(child) }}{%- if not loop.last -%}, {% endif -%}
+{%- endfor -%}
+{{- "]" -}}
+{%- else -%}
+{{- value -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_value(value) -%}
+{%- if value is string -%}{{ render_xml_text(value) }}{%- else -%}{{ render_python_repr(value) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_enum_value(value) -%}
+{%- if value is string -%}"{{- value | replace("\\", "\\\\") | replace("\"", "\\\"") -}}"{%- else -%}"{{- render_python_repr(value) | replace("\\", "\\\\") | replace("\"", "\\\"") -}}"{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_enum(values) -%}
+{%- for value in values -%}{{ render_xml_enum_value(value) }}{%- if not loop.last -%}|{%- endif -%}{%- endfor -%}
+{%- endmacro -%}
+
+{%- macro render_xml_default_attr(value) -%}
+{{- " default=" }}{%- if value is string -%}"{{- value | replace("\\", "\\\\") | replace("\"", "\\\"") -}}"{%- else -%}{{ render_xml_value(value) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_attr(name, value) -%}
+{{- " " + name + "=" }}{%- if value == "" -%}""{%- else -%}{{ render_xml_value(value) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro validate_schema(spec, path, lenient=false, classify=true, in_variant=false) -%}
+{%- if spec is mapping -%}
+    {%- if not lenient -%}
+    {%- if spec.required is defined -%}
+        {%- if spec.required is string or spec.required is not sequence -%}
+            {{- raise_exception("Schema '" + path + "' has 'required' but it is not a list.") -}}
+        {%- endif -%}
+        {%- if spec.required | length > 0 and not spec.properties and not in_variant -%}
+            {{- raise_exception("Schema '" + path + "' has required fields but no properties object to define them.") -}}
+        {%- endif -%}
+        {%- if spec.properties -%}
+            {%- for required_name in spec.required -%}
+                {%- if required_name not in spec.properties -%}
+                    {{- raise_exception("Schema '" + path + "' marks '" + required_name + "' as required, but that property is not defined in properties.") -}}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- endif -%}
+    {%- endif -%}
+    {%- endif -%}
+    {#- renderability classification, piggybacking on this walk (no raises here): -#}
+    {#- constructs the pretty renderer does not fully handle flip RB.ok so the -#}
+    {#- tool falls back to verbatim JSON. Skipped entirely for json presentation. -#}
+    {%- if classify -%}
+    {%- for key, value in spec | items -%}
+        {%- if key == '$ref' -%}
+            {%- if value is not string -%}{%- set RB.ok = false -%}
+            {%- elif not (value.startswith('#/$defs/') or value.startswith('#/definitions/')) -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- elif key == '$defs' or key == 'definitions' -%}
+            {%- if value is mapping -%}
+                {%- for dk, dv in value | items -%}
+                    {{- validate_schema(dv, path + ".$defs." + dk, true) -}}
+                {%- endfor -%}
+            {%- else -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- elif key == 'type' -%}
+            {%- if value is mapping -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- elif key == 'enum' -%}
+            {%- if value is string or value is mapping or value is not sequence -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- elif key == 'items' -%}
+            {#- any items shape renders: mapping structurally, others via repr detail -#}
+        {%- elif key == 'oneOf' or key == 'anyOf' -%}
+            {%- if value is mapping or value is string or value is not sequence -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- elif key == 'required' -%}
+            {%- if value and not spec.properties -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- elif ('|' ~ key ~ '|') in '|description|default|title|examples|properties|patternProperties|additionalProperties|returns|' -%}
+        {%- elif value is mapping -%}
+            {%- for uk, uv in value | items -%}
+                {%- if value_contains_mapping(uv) == 'true' -%}{%- set RB.ok = false -%}{%- endif -%}
+            {%- endfor -%}
+        {%- elif value is sequence and value is not string -%}
+            {%- if value_contains_mapping(value) == 'true' -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {%- endif -%}
+    {%- if spec.properties -%}
+        {%- for child_name, child_spec in spec.properties | items -%}
+            {{- validate_schema(child_spec, path + "." + child_name, lenient, classify) -}}
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if 'items' in spec -%}{{- validate_schema(spec['items'], path + "[]", lenient, classify) -}}{%- endif -%}
+    {%- if spec.oneOf -%}
+        {%- for variant in spec.oneOf -%}{{- validate_schema(variant, path + ".oneOf[" + (loop.index0 | string) + "]", lenient, classify, true) -}}{%- endfor -%}
+    {%- endif -%}
+    {%- if spec.anyOf -%}
+        {%- for variant in spec.anyOf -%}{{- validate_schema(variant, path + ".anyOf[" + (loop.index0 | string) + "]", lenient, classify, true) -}}{%- endfor -%}
+    {%- endif -%}
+    {%- if spec.additionalProperties is mapping -%}{{- validate_schema(spec.additionalProperties, path + ".additionalProperties", lenient, classify) -}}{%- endif -%}
+    {%- if spec.patternProperties is mapping -%}
+        {%- for pattern, pattern_spec in spec.patternProperties | items -%}
+            {{- validate_schema(pattern_spec, path + ".patternProperties[" + pattern + "]", lenient, classify) -}}
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if spec.returns is mapping -%}{{- validate_schema(spec.returns, path + ".returns", lenient, classify) -}}{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro validate_tools(tools_list, classify=true) -%}
+{%- set RB.bad = '|' -%}
+{%- for tool in tools_list -%}
+    {%- set fn = tool.function if tool.function is defined else tool -%}
+    {%- set RB.ok = true -%}
+    {%- if fn.parameters is defined and fn.parameters is string -%}
+        {{- raise_exception("tool.function.parameters must be a dict, not a JSON string. Parse it before passing to the template.") -}}
+    {%- endif -%}
+    {%- if fn.parameters is not defined or fn.parameters is none -%}
+        {%- if fn.arguments is defined -%}
+            {{- raise_exception("Tool '" + fn.name + "' has 'arguments' instead of 'parameters'. Rename 'arguments' to 'parameters'.") -}}
+        {%- else -%}
+            {{- raise_exception("Tool '" + fn.name + "' is missing required 'parameters' field. Each tool must have a 'parameters' dict with 'type', 'properties', and 'required' keys.") -}}
+        {%- endif -%}
+    {%- endif -%}
+    {{- validate_schema(fn.parameters, "tool." + fn.name + ".parameters", false, classify) -}}
+    {%- if classify -%}
+    {%- if fn.parameters is mapping -%}
+        {#- unknown container-valued keys at the parameters ROOT are never rendered -#}
+        {#- by the pretty path (root extras are dropped) -> verbatim fallback. -#}
+        {%- for rk, rv in fn.parameters | items -%}
+            {%- if rk not in ['type', 'description', 'enum', 'default', 'properties', 'required', 'optional', 'title', 'items', 'oneOf', 'anyOf', 'additionalProperties', 'patternProperties', 'returns', 'examples', '$defs', 'definitions', '$ref'] -%}
+                {%- if rv is mapping or (rv is sequence and rv is not string) -%}{%- set RB.ok = false -%}{%- endif -%}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {%- set RB.ok = false -%}
+    {%- endif -%}
+    {%- endif -%}
+    {%- if fn.returns is mapping -%}{{- validate_schema(fn.returns, "tool." + fn.name + ".returns", false, classify) -}}{%- endif -%}
+    {%- if classify and fn.returns is not defined and fn.response is mapping -%}{{- validate_schema(fn.response, "tool." + fn.name + ".response", true) -}}{%- endif -%}
+    {#- unknown container-valued keys at the FUNCTION level are never rendered -> fallback. -#}
+    {%- if classify -%}
+    {%- for fk, fv in fn | items -%}
+        {%- if fk not in ['name', 'description', 'parameters', 'returns', 'response', 'type', 'function'] -%}
+            {%- if fv is mapping or (fv is sequence and fv is not string) -%}{%- set RB.ok = false -%}{%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {%- endif -%}
+    {%- if not RB.ok -%}{%- set RB.bad = RB.bad ~ loop.index0 ~ '|' -%}{%- endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+
+{%- macro render_tools_json(tools_list) -%}
+{{- "<ifm|tools>" }}
+{%- for tool in tools_list %}
+{{- "\n" }}
+{{- tool | tojson }}
+{%- endfor %}
+{{- "\n</ifm|tools>" }}
+{%- endmacro -%}
+
+{%- macro render_xml_schema_attrs(spec, include_value_attrs) -%}
+{%- if spec is mapping -%}
+{%- set structural_keys = ["type", "description", "enum", "default", "properties", "required", "items", "oneOf", "anyOf", "additionalProperties", "patternProperties", "returns"] -%}
+{%- if include_value_attrs and spec.enum -%}{{- " enum=" }}{{ render_xml_enum(spec.enum) }}{%- endif -%}
+{%- if include_value_attrs and spec.default is defined -%}{{ render_xml_default_attr(spec.default) }}{%- endif -%}
+{%- if spec.additionalProperties is defined and spec.additionalProperties is not mapping -%}{{ render_xml_attr("additionalProperties", spec.additionalProperties) }}{%- endif -%}
+{%- if spec.patternProperties is defined and spec.patternProperties is not mapping -%}{{ render_xml_attr("patternProperties", spec.patternProperties) }}{%- endif -%}
+{%- for key, value in spec | items -%}
+    {%- if key not in structural_keys -%}
+{{ render_xml_attr(key, value) }}
+    {%- endif -%}
+{%- endfor -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro xml_schema_has_children(spec, include_properties, include_description) -%}
+{%- if spec is not mapping -%}
+false
+{%- elif (include_description and spec.description is defined) or (include_properties and spec.properties) or 'items' in spec or spec.oneOf or spec.anyOf or spec.additionalProperties is mapping or spec.patternProperties is mapping or spec.returns is defined -%}
+true
+{%- else -%}
+false
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_schema_node(tag, spec, include_properties) -%}
+{%- if spec is mapping and spec['$ref'] is string -%}
+    {%- set _r = spec['$ref'] -%}
+    {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+    {%- if _k is not none and ('|' + _k + '|') not in REFS.seen and REFS.defs[_k] is mapping -%}
+        {%- set spec = dict((REFS.defs[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+        {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- if spec['$ref'] is string -%}
+            {%- set _r2 = spec['$ref'] -%}
+            {%- set _k2 = _r2[8:] if _r2.startswith('#/$defs/') else (_r2[14:] if _r2.startswith('#/definitions/') else none) -%}
+            {%- if _k2 is not none and REFS.defs[_k2] is mapping -%}
+                {%- set spec = dict((REFS.defs[_k2] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+                {%- set REFS.seen = REFS.seen + _k2 + '|' -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if spec is mapping -%}
+{{- "<" + tag + " type=" + render_compact_type(spec) }}{{ render_xml_schema_attrs(spec, true) }}
+{%- if xml_schema_has_children(spec, include_properties, true) == 'true' -%}
+{{- ">" }}{{ render_xml_schema_children(spec, include_properties, true) }}{{- "</" + tag + ">" }}
+{%- else -%}
+{{- "/>" }}
+{%- endif -%}
+{%- else -%}
+{{- "<" + tag + ">" }}{{ render_xml_value(spec) }}{{- "</" + tag + ">" }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_pattern_property(pattern, spec) -%}
+{%- if spec is mapping and spec['$ref'] is string -%}
+    {%- set _r = spec['$ref'] -%}
+    {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+    {%- if _k is not none and ('|' + _k + '|') not in REFS.seen and REFS.defs[_k] is mapping -%}
+        {%- set spec = dict((REFS.defs[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+        {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- if spec['$ref'] is string -%}
+            {%- set _r2 = spec['$ref'] -%}
+            {%- set _k2 = _r2[8:] if _r2.startswith('#/$defs/') else (_r2[14:] if _r2.startswith('#/definitions/') else none) -%}
+            {%- if _k2 is not none and REFS.defs[_k2] is mapping -%}
+                {%- set spec = dict((REFS.defs[_k2] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+                {%- set REFS.seen = REFS.seen + _k2 + '|' -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if spec is mapping -%}
+{{- "<patternProperty" }}{{ render_xml_attr("pattern", pattern) }}{{- " type=" + render_compact_type(spec) }}{{ render_xml_schema_attrs(spec, true) }}
+{%- if xml_schema_has_children(spec, true, true) == 'true' -%}
+{{- ">" }}{{ render_xml_schema_children(spec, true, true) }}{{- "</patternProperty>" }}
+{%- else -%}
+{{- "/>" }}
+{%- endif -%}
+{%- else -%}
+{{- "<patternProperty" }}{{ render_xml_attr("pattern", pattern) }}{{- ">" }}{{ render_xml_value(spec) }}{{- "</patternProperty>" }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_schema_children(spec, include_properties, include_description) -%}
+{%- if include_description and spec.description is defined -%}{{- "<description>" }}{{ spec.description }}{{- "</description>" }}{%- endif -%}
+{%- if include_properties and spec.properties -%}
+{%- for child_name, child_spec in spec.properties | items -%}
+{{- render_xml_param(child_name, child_spec, spec.required or []) }}
+{%- endfor -%}
+{%- endif -%}
+{%- if 'items' in spec -%}{{ render_xml_schema_node("items", spec['items'], true) }}{%- endif -%}
+{%- if spec.oneOf -%}
+{{- "<oneOf>" }}
+{%- for variant in spec.oneOf -%}{{ render_xml_schema_node("variant", variant, true) }}{%- endfor -%}
+{{- "</oneOf>" }}
+{%- endif -%}
+{%- if spec.anyOf -%}
+{{- "<anyOf>" }}
+{%- for variant in spec.anyOf -%}{{ render_xml_schema_node("variant", variant, true) }}{%- endfor -%}
+{{- "</anyOf>" }}
+{%- endif -%}
+{%- if spec.additionalProperties is mapping -%}{{ render_xml_schema_node("additionalProperties", spec.additionalProperties, true) }}{%- endif -%}
+{%- if spec.patternProperties is mapping -%}
+{{- "<patternProperties>" }}
+{%- for pattern, pattern_spec in spec.patternProperties | items -%}{{ render_xml_pattern_property(pattern, pattern_spec) }}{%- endfor -%}
+{{- "</patternProperties>" }}
+{%- elif spec.patternProperties is defined -%}<patternProperties>{{ render_xml_value(spec.patternProperties) }}</patternProperties>{%- endif -%}
+{%- if spec.returns is mapping -%}{{ render_xml_schema_node("returns", spec.returns, true) }}{%- elif spec.returns is defined -%}<returns>{{ render_xml_value(spec.returns) }}</returns>{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_xml_param(name, spec, required_list) -%}
+{%- if spec is mapping and spec['$ref'] is string -%}
+    {%- set _r = spec['$ref'] -%}
+    {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+    {%- if _k is not none and ('|' + _k + '|') not in REFS.seen and REFS.defs[_k] is mapping -%}
+        {%- set spec = dict((REFS.defs[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+        {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- if spec['$ref'] is string -%}
+            {%- set _r2 = spec['$ref'] -%}
+            {%- set _k2 = _r2[8:] if _r2.startswith('#/$defs/') else (_r2[14:] if _r2.startswith('#/definitions/') else none) -%}
+            {%- if _k2 is not none and REFS.defs[_k2] is mapping -%}
+                {%- set spec = dict((REFS.defs[_k2] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+                {%- set REFS.seen = REFS.seen + _k2 + '|' -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{{- "<param name=" + name + " type=" + render_compact_type(spec) }}
+{%- if name in (required_list or []) -%}{{- " required=true" }}{%- endif -%}
+{%- if spec.enum -%}{{- " enum=" }}{{ render_xml_enum(spec.enum) }}{%- endif -%}
+{%- if spec.default is defined -%}{{ render_xml_default_attr(spec.default) }}{%- endif -%}
+{{- render_xml_schema_attrs(spec, false) }}
+{%- if spec.description or xml_schema_has_children(spec, true, false) == 'true' -%}
+{{- ">" }}
+{%- if spec.description -%}{{ spec.description }}{%- endif -%}
+{{- render_xml_schema_children(spec, true, false) }}
+{{- "</param>" }}
+{%- else -%}
+{{- "/>" }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_tools_xml(tools_list) -%}
+{{- "<ifm|tools>" }}
+{%- for tool in tools_list -%}
+    {%- set fn = tool.function if tool.function is defined else tool -%}
+    {%- set REFS.defs = fn.parameters['$defs'] if (fn.parameters is mapping and fn.parameters['$defs'] is mapping) else (fn.parameters['definitions'] if (fn.parameters is mapping and fn.parameters['definitions'] is mapping) else {}) -%}
+    {%- set REFS.seen = '|' -%}
+    {%- set fnp = namespace(p=fn.parameters) -%}
+    {%- if fnp.p is mapping and fnp.p['$ref'] is string -%}
+        {%- set _r = fnp.p['$ref'] -%}
+        {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+        {%- if _k is not none and REFS.defs[_k] is mapping -%}
+            {%- set fnp.p = dict((REFS.defs[_k] | items | list) + (fnp.p | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+            {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- endif -%}
+    {%- endif -%}
+{{- "\n<function name=" + fn.name + ">" }}
+{%- if fn.description -%}
+{{- "<description>" }}{{ fn.description }}{{- "</description>" }}
+{%- endif -%}
+{{- "<parameters>" }}
+{%- if fnp.p and fnp.p.properties -%}
+    {%- for pname, pspec in fnp.p.properties | items -%}
+{{- render_xml_param(pname, pspec, fnp.p.required or []) }}
+    {%- endfor -%}
+{%- elif fnp.p is mapping and (fnp.p.oneOf or fnp.p.anyOf or 'items' in fnp.p) -%}
+{{- render_xml_schema_children(fnp.p, true, false) }}
+{%- endif -%}
+{{- "</parameters>" }}
+{%- set fn_ret = fn.returns if fn.returns is defined else fn.response -%}
+{%- if fn_ret is mapping -%}{{ render_xml_schema_node("returns", fn_ret, true) }}{%- elif fn_ret is defined -%}<returns>{{ render_xml_value(fn_ret) }}</returns>{%- endif -%}
+{{- "</function>" }}
+{%- endfor -%}
+{{- "\n</ifm|tools>" }}
+{%- endmacro -%}
+
+{%- macro render_markdown_literal(value) -%}
+{%- if value is string and value == "" -%}""
+{%- elif value is string -%}`{{ value | replace("\n", "\\n") }}`
+{%- else -%}`{{ render_python_repr(value) }}`
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_allowed_values(values) -%}
+{%- for value in values -%}{{ render_markdown_literal(value) }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_value(value) -%}
+{%- if value is string and value == "" -%}""{%- elif value is string -%}{{ value }}{%- else -%}{{ render_python_repr(value) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_detail(indent, label, value) -%}
+{{- "\n" + indent + "  - " + label + ": " }}{{ render_markdown_value(value) }}
+{%- endmacro -%}
+
+{%- macro render_markdown_metadata_detail(label, value) -%}
+{{- "\n- " + label + ": " }}{{ render_markdown_value(value) }}
+{%- endmacro -%}
+
+{%- macro render_markdown_schema_annotations(spec, indent, include_value_details) -%}
+{%- if include_value_details and spec.description is defined -%}{{ render_markdown_detail(indent, "Description", spec.description | replace("\n", "\n" + indent + "    ")) }}{%- endif -%}
+{%- if include_value_details and spec.enum is defined -%}{{- "\n" + indent + "  - Allowed values: " }}{{ render_allowed_values(spec.enum) }}{%- endif -%}
+{%- if include_value_details and spec.default is defined -%}{{- "\n" + indent + "  - Default: " }}{{ render_markdown_literal(spec.default) }}{%- endif -%}
+{%- if spec.additionalProperties is defined -%}
+    {%- if spec.additionalProperties is mapping -%}
+{{- "\n" + indent + "  - Additional properties *(" + render_markdown_type(spec.additionalProperties) + ")*" }}
+{{- render_markdown_schema_details(spec.additionalProperties, indent + "  ", true) }}
+    {%- else -%}
+{{ render_markdown_detail(indent, "Additional properties", spec.additionalProperties) }}
+    {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_metadata_annotations(spec) -%}
+{%- if spec.description is defined -%}{{ render_markdown_metadata_detail("Description", spec.description | replace("\n", "\n    ")) }}{%- endif -%}
+{%- if spec.enum is defined -%}{{- "\n- Allowed values: " }}{{ render_allowed_values(spec.enum) }}{%- endif -%}
+{%- if spec.default is defined -%}{{- "\n- Default: " }}{{ render_markdown_literal(spec.default) }}{%- endif -%}
+{%- if spec.additionalProperties is defined -%}
+    {%- if spec.additionalProperties is mapping -%}
+{{- "\n- Additional properties *(" + render_markdown_type(spec.additionalProperties) + ")*" }}
+{{- render_markdown_schema_details(spec.additionalProperties, "", true) }}
+    {%- else -%}
+{{ render_markdown_metadata_detail("Additional properties", spec.additionalProperties) }}
+    {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_schema_extras(spec, indent) -%}
+{%- set rendered_keys = ["type", "description", "enum", "default", "properties", "required", "items", "oneOf", "anyOf", "additionalProperties", "patternProperties", "returns"] -%}
+{%- for key, value in spec | items -%}
+    {%- if key not in rendered_keys -%}
+{{- "\n" + indent + "  - " + key + ": " }}{{ render_markdown_value(value) }}
+    {%- endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_metadata_extras(spec) -%}
+{%- set rendered_keys = ["type", "description", "enum", "default", "properties", "required", "items", "oneOf", "anyOf", "additionalProperties", "patternProperties", "returns"] -%}
+{%- for key, value in spec | items -%}
+    {%- if key not in rendered_keys -%}
+{{- "\n- " + key + ": " }}{{ render_markdown_value(value) }}
+    {%- endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+
+{%- macro markdown_schema_has_extra(spec) -%}
+{%- set rendered_keys = ["type", "description", "enum", "default", "properties", "required", "items", "oneOf", "anyOf", "additionalProperties", "patternProperties", "returns"] -%}
+{%- set found = namespace(value='false') -%}
+{%- for key, value in spec | items -%}
+    {%- if key not in rendered_keys -%}{%- set found.value = 'true' -%}{%- endif -%}
+{%- endfor -%}
+{{- found.value -}}
+{%- endmacro -%}
+
+{%- macro markdown_parameter_schema_has_details(spec) -%}
+{%- if spec.description is defined or spec.enum is defined or spec.default is defined or spec.additionalProperties is defined or spec.patternProperties is defined or 'items' in spec or spec.oneOf or spec.anyOf or spec.returns is defined or markdown_schema_has_extra(spec) == 'true' -%}
+true
+{%- else -%}
+false
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_schema_structure(spec, indent, include_properties) -%}
+{%- if include_properties and spec.properties -%}
+    {%- for child_name, child_spec in spec.properties | items -%}
+{{- render_markdown_param(child_name, child_spec, spec.required or [], indent + "  ") }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if 'items' in spec and spec['items'] is mapping -%}
+{{- "\n" + indent + "  - Items *(" + render_markdown_type(spec['items']) + ")*" }}
+{{- render_markdown_schema_details(spec['items'], indent + "  ", true) }}
+{%- elif 'items' in spec -%}
+{{ render_markdown_detail(indent, "Items", spec['items']) }}
+{%- endif -%}
+{%- if spec.oneOf -%}
+{{- "\n" + indent + "  - oneOf:" }}
+    {%- for variant in spec.oneOf -%}
+{{- "\n" + indent + "    - Variant " }}{{ loop.index }}{{- " *(" + render_markdown_type(variant) + ")*" }}
+{{- render_markdown_schema_details(variant, indent + "    ", true) }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if spec.anyOf -%}
+{{- "\n" + indent + "  - anyOf:" }}
+    {%- for variant in spec.anyOf -%}
+{{- "\n" + indent + "    - Variant " }}{{ loop.index }}{{- " *(" + render_markdown_type(variant) + ")*" }}
+{{- render_markdown_schema_details(variant, indent + "    ", true) }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if spec.patternProperties is mapping -%}
+{{- "\n" + indent + "  - Pattern properties:" }}
+    {%- for pattern, pattern_spec in spec.patternProperties | items -%}
+        {%- if pattern_spec is mapping -%}
+{{- "\n" + indent + "    - `" + pattern + "` *(" + render_markdown_type(pattern_spec) + ")*" }}
+{{- render_markdown_schema_details(pattern_spec, indent + "    ", true) }}
+        {%- else -%}
+{{- "\n" + indent + "    - `" + pattern + "`: " }}{{ render_markdown_value(pattern_spec) }}
+        {%- endif -%}
+    {%- endfor -%}
+{%- elif spec.patternProperties is defined -%}
+{{ render_markdown_detail(indent, "Pattern properties", spec.patternProperties) }}
+{%- endif -%}
+{%- if spec.returns is mapping -%}
+{{- "\n" + indent + "  - Returns *(" + render_markdown_type(spec.returns) + ")*" }}
+{{- render_markdown_schema_details(spec.returns, indent + "  ", true) }}
+{%- elif spec.returns is defined -%}
+{{ render_markdown_detail(indent, "Returns", spec.returns) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_schema_details(spec, indent, include_value_details) -%}
+{%- if spec is mapping and spec['$ref'] is string -%}
+    {%- set _r = spec['$ref'] -%}
+    {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+    {%- if _k is not none and ('|' + _k + '|') not in REFS.seen and REFS.defs[_k] is mapping -%}
+        {%- set spec = dict((REFS.defs[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+        {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- if spec['$ref'] is string -%}
+            {%- set _r2 = spec['$ref'] -%}
+            {%- set _k2 = _r2[8:] if _r2.startswith('#/$defs/') else (_r2[14:] if _r2.startswith('#/definitions/') else none) -%}
+            {%- if _k2 is not none and REFS.defs[_k2] is mapping -%}
+                {%- set spec = dict((REFS.defs[_k2] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+                {%- set REFS.seen = REFS.seen + _k2 + '|' -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if spec is mapping -%}
+{{- render_markdown_schema_annotations(spec, indent, include_value_details) }}
+{{- render_markdown_schema_structure(spec, indent, true) }}
+{{- render_markdown_schema_extras(spec, indent) }}
+{%- elif spec is not sameas true and spec is not sameas false -%}
+{{- "\n" + indent + "  - Value: " }}{{ render_markdown_literal(spec) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_parameter_schema(spec) -%}
+{%- if spec is mapping and spec['$ref'] is string -%}
+    {%- set _r = spec['$ref'] -%}
+    {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+    {%- if _k is not none and ('|' + _k + '|') not in REFS.seen and REFS.defs[_k] is mapping -%}
+        {%- set spec = dict((REFS.defs[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+        {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- if spec['$ref'] is string -%}
+            {%- set _r2 = spec['$ref'] -%}
+            {%- set _k2 = _r2[8:] if _r2.startswith('#/$defs/') else (_r2[14:] if _r2.startswith('#/definitions/') else none) -%}
+            {%- if _k2 is not none and REFS.defs[_k2] is mapping -%}
+                {%- set spec = dict((REFS.defs[_k2] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+                {%- set REFS.seen = REFS.seen + _k2 + '|' -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if spec is mapping -%}
+{{- render_markdown_metadata_annotations(spec) }}
+{%- if 'items' in spec and spec['items'] is mapping -%}
+{{- "\n- Items *(" + render_markdown_type(spec['items']) + ")*" }}
+{{- render_markdown_schema_details(spec['items'], "", true) }}
+{%- elif 'items' in spec -%}
+{{ render_markdown_metadata_detail("Items", spec['items']) }}
+{%- endif -%}
+{%- if spec.oneOf -%}
+{{- "\n- oneOf:" }}
+    {%- for variant in spec.oneOf -%}
+{{- "\n  - Variant " }}{{ loop.index }}{{- " *(" + render_markdown_type(variant) + ")*" }}
+{{- render_markdown_schema_details(variant, "  ", true) }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if spec.anyOf -%}
+{{- "\n- anyOf:" }}
+    {%- for variant in spec.anyOf -%}
+{{- "\n  - Variant " }}{{ loop.index }}{{- " *(" + render_markdown_type(variant) + ")*" }}
+{{- render_markdown_schema_details(variant, "  ", true) }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if spec.patternProperties is mapping -%}
+{{- "\n- Pattern properties:" }}
+    {%- for pattern, pattern_spec in spec.patternProperties | items -%}
+        {%- if pattern_spec is mapping -%}
+{{- "\n  - `" + pattern + "` *(" + render_markdown_type(pattern_spec) + ")*" }}
+{{- render_markdown_schema_details(pattern_spec, "  ", true) }}
+        {%- else -%}
+{{- "\n  - `" + pattern + "`: " }}{{ render_markdown_value(pattern_spec) }}
+        {%- endif -%}
+    {%- endfor -%}
+{%- elif spec.patternProperties is defined -%}
+{{ render_markdown_metadata_detail("Pattern properties", spec.patternProperties) }}
+{%- endif -%}
+{%- if spec.returns is mapping -%}
+{{- "\n- Returns *(" + render_markdown_type(spec.returns) + ")*" }}
+{{- render_markdown_schema_details(spec.returns, "", true) }}
+{%- elif spec.returns is defined -%}
+{{ render_markdown_metadata_detail("Returns", spec.returns) }}
+{%- endif -%}
+{{- render_markdown_metadata_extras(spec) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_markdown_param(name, spec, required_list, indent) -%}
+{%- if spec is mapping and spec['$ref'] is string -%}
+    {%- set _r = spec['$ref'] -%}
+    {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+    {%- if _k is not none and ('|' + _k + '|') not in REFS.seen and REFS.defs[_k] is mapping -%}
+        {%- set spec = dict((REFS.defs[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+        {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- if spec['$ref'] is string -%}
+            {%- set _r2 = spec['$ref'] -%}
+            {%- set _k2 = _r2[8:] if _r2.startswith('#/$defs/') else (_r2[14:] if _r2.startswith('#/definitions/') else none) -%}
+            {%- if _k2 is not none and REFS.defs[_k2] is mapping -%}
+                {%- set spec = dict((REFS.defs[_k2] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+                {%- set REFS.seen = REFS.seen + _k2 + '|' -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{{- "\n" + indent + "- `" + name + "` *(" + render_markdown_type(spec) }}
+{%- if name in (required_list or []) -%}{{- ", required" }}{%- endif -%}
+{{- ")*" }}
+{%- if spec.description -%}{{- " - " + spec.description | replace("\n", "\n" + indent + "  ") }}{%- endif -%}
+{%- if spec.enum -%}
+{{- "\n" + indent + "  - Allowed values: " }}{{ render_allowed_values(spec.enum) }}
+{%- endif -%}
+{%- if spec.default is defined -%}
+{{- "\n" + indent + "  - Default: " }}{{ render_markdown_literal(spec.default) }}
+{%- endif -%}
+{{- render_markdown_schema_details(spec, indent, false) }}
+{%- endmacro -%}
+
+{%- macro render_tools_markdown(tools_list) -%}
+{{- "<ifm|tools>" }}
+{%- for tool in tools_list -%}
+    {%- set fn = tool.function if tool.function is defined else tool -%}
+    {%- set REFS.defs = fn.parameters['$defs'] if (fn.parameters is mapping and fn.parameters['$defs'] is mapping) else (fn.parameters['definitions'] if (fn.parameters is mapping and fn.parameters['definitions'] is mapping) else {}) -%}
+    {%- set REFS.seen = '|' -%}
+    {%- set fnp = namespace(p=fn.parameters) -%}
+    {%- if fnp.p is mapping and fnp.p['$ref'] is string -%}
+        {%- set _r = fnp.p['$ref'] -%}
+        {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+        {%- if _k is not none and REFS.defs[_k] is mapping -%}
+            {%- set fnp.p = dict((REFS.defs[_k] | items | list) + (fnp.p | items | rejectattr('0', 'equalto', '$ref') | list)) -%}
+            {%- set REFS.seen = REFS.seen + _k + '|' -%}
+        {%- endif -%}
+    {%- endif -%}
+{{- "\n## " + fn.name }}
+{%- if fn.description -%}
+{{- "\n" + fn.description }}
+{%- endif -%}
+{{- "\n\n**Parameters**" }}
+{%- if fnp.p and fnp.p.properties -%}
+    {%- for pname, pspec in fnp.p.properties | items -%}
+{{- render_markdown_param(pname, pspec, fnp.p.required or [], "") }}
+    {%- endfor -%}
+{%- elif fnp.p is mapping and (fnp.p.oneOf or fnp.p.anyOf or 'items' in fnp.p) -%}
+{{- render_markdown_parameter_schema(fnp.p) }}
+{%- else -%}
+{{- "\n- None" }}
+{%- endif -%}
+{%- set fn_ret = fn.returns if fn.returns is defined else fn.response -%}
+{%- if fn_ret is mapping -%}
+{{- "\n\n**Returns**" }}
+{{- "\n- Return *(" + render_markdown_type(fn_ret) + ")*" }}
+{{- render_markdown_schema_details(fn_ret, "", true) }}
+{%- elif fn_ret is defined -%}
+{{- "\n\n**Returns**\n- " }}{{ render_markdown_value(fn_ret) }}
+{%- endif -%}
+{%- if not loop.last -%}{{- "\n" }}{%- endif -%}
+{%- endfor -%}
+{{- "\n</ifm|tools>" }}
+{%- endmacro -%}
+
+{%- macro render_tool_presentation(tools_list, fmt) -%}
+{%- if fmt == 'json' -%}
+{{- render_tools_json(tools_list) }}
+{%- elif RB.bad != '|' -%}
+{#- some tool uses constructs the pretty renderers cannot represent (verdicts -#}
+{#- computed during validate_tools): render the WHOLE toolset exactly as the -#}
+{#- json presentation would, so the block stays uniform and model-familiar. -#}
+{{- render_tools_json(tools_list) }}
+{%- elif fmt == 'xml' -%}
+{{- render_tools_xml(tools_list) }}
+{%- elif fmt == 'markdown' -%}
+{{- render_tools_markdown(tools_list) }}
+{%- else -%}
+{{- raise_exception("Unsupported tool_presentation_format: '" + fmt + "'. Supported formats: json, xml, markdown.") }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_call_instructions(fmt) -%}
+{%- if fmt == 'json' -%}
+{{- "Wrap all tool calls in a single <ifm|tool_calls></ifm|tool_calls> block. For each call, emit one JSON object with the function name and arguments on the same line inside <ifm|tool_call></ifm|tool_call> tags:\n\n<ifm|tool_calls>\n<ifm|tool_call>{\"name\": <function-name>, \"arguments\": <args-json-object>}</ifm|tool_call>\n</ifm|tool_calls>" }}
+{%- elif fmt == 'xml' -%}
+{{- "Wrap all tool calls in a single <ifm|tool_calls></ifm|tool_calls> block. For each call, write the function name at the start of <ifm|tool_call>, followed by paired <ifm|arg_key> and <ifm|arg_value> tags for each argument:\n\n<ifm|tool_calls>\n<ifm|tool_call>$FUNCTION_NAME\n<ifm|arg_key>$PARAMETER_NAME</ifm|arg_key>\n<ifm|arg_value>$PARAMETER_VALUE</ifm|arg_value>\n...\n</ifm|tool_call>\n</ifm|tool_calls>\n\nString and scalar parameters should be written as plain text. Array and object parameters should be written as JSON literals." }}
+{%- elif fmt == 'xml_typed' -%}
+{{- "Wrap all tool calls in a single <ifm|tool_calls></ifm|tool_calls> block. For each call, write the function name at the start of <ifm|tool_call>, followed by <ifm|arg_key>, <ifm|arg_type>, and <ifm|arg_value> tags for each argument:\n\n<ifm|tool_calls>\n<ifm|tool_call>$FUNCTION_NAME\n<ifm|arg_key>$PARAMETER_NAME</ifm|arg_key>\n<ifm|arg_type>$ARGUMENT_TYPE</ifm|arg_type>\n<ifm|arg_value>$PARAMETER_VALUE</ifm|arg_value>\n...\n</ifm|tool_call>\n</ifm|tool_calls>\n\nUse the parameter type shown in the tool definition. If that type contains anyOf or oneOf, use the actual argument value type instead. String and scalar parameters should be written as plain text. Array and object parameters should be written as JSON literals." }}
+{%- else -%}
+{{- raise_exception("Unsupported tool_call_format: '" + fmt + "'. Supported formats: json, xml, xml_typed.") }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_system_with_tools(tools_list, system_content, presentation_fmt, call_fmt) -%}
+{{- "<|ifm|im_start|>system\n# Tools\nYou may call one or more tools to assist with the user query.\n\nAvailable tools are:\n\n" }}
+{{- render_tool_presentation(tools_list, presentation_fmt) }}
+{{- "\n\nWhen calling tools, you MUST follow the tool-call format below:\n\n" }}
+{{- render_call_instructions(call_fmt) }}
+{%- if system_content -%}
+{{- "\n\n" + system_content }}
+{%- endif -%}
+{{- "<|ifm|im_end|>" }}
+{%- endmacro -%}
+
+{%- macro render_argument_value(value) -%}
+{%- if value is string -%}{{- value -}}{%- else -%}{{- value | tojson -}}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_value_type(value) -%}
+{%- if value is none -%}null
+{%- elif value is boolean -%}boolean
+{%- elif value is integer -%}integer
+{%- elif value is number -%}number
+{%- elif value is string -%}string
+{%- elif value is mapping -%}object
+{%- elif value is sequence -%}array
+{%- else -%}any
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro schema_has_combinator(spec) -%}
+{%- if spec.oneOf or spec.anyOf -%}
+true
+{%- elif spec.type is defined and spec.type is sequence and spec.type is not string and spec.type | length > 1 -%}
+true
+{%- elif spec.type == "array" and 'items' in spec -%}
+{{- schema_has_combinator(spec['items']) -}}
+{%- elif spec.properties -%}
+    {%- set found = namespace(value='false') -%}
+    {%- for child_name, child_spec in spec.properties | items -%}
+        {%- if schema_has_combinator(child_spec) == 'true' -%}
+            {%- set found.value = 'true' -%}
+        {%- endif -%}
+    {%- endfor -%}
+{{- found.value -}}
+{%- else -%}
+false
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_arg_type(tools_list, tool_name, arg_name, value) -%}
+{%- set found = namespace(type='any') -%}
+{%- for tool in tools_list -%}
+    {%- set fn = tool.function if tool.function is defined else tool -%}
+    {%- if fn.name == tool_name and fn.parameters and fn.parameters.properties and arg_name in fn.parameters.properties -%}
+        {%- set spec = fn.parameters.properties[arg_name] -%}
+        {%- if spec is mapping and spec['$ref'] is string -%}
+            {%- set _r = spec['$ref'] -%}
+            {%- set _k = _r[8:] if _r.startswith('#/$defs/') else (_r[14:] if _r.startswith('#/definitions/') else none) -%}
+            {%- set _d = fn.parameters['$defs'] if fn.parameters['$defs'] is mapping else fn.parameters['definitions'] -%}
+            {%- set spec = dict((_d[_k] | items | list) + (spec | items | rejectattr('0', 'equalto', '$ref') | list)) if (_k is not none and _d is mapping and _d[_k] is mapping) else spec -%}
+        {%- endif -%}
+        {%- if schema_has_combinator(spec) == 'true' -%}
+            {%- set found.type = render_value_type(value) -%}
+        {%- else -%}
+            {%- set found.type = render_compact_type(spec) -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+{{- found.type -}}
+{%- endmacro -%}
+
+{%- macro render_tool_calls_block(tool_calls, fmt, tools_list) -%}
+{{- "<ifm|tool_calls>" }}
+{%- for raw_tool_call in tool_calls -%}
+    {%- set tool_call = raw_tool_call.function if raw_tool_call.function else raw_tool_call -%}
+    {%- if tool_call.arguments is string -%}
+        {{- raise_exception("tool_call.arguments must be a dict, not a JSON string. Parse it before passing to the template.") -}}
+    {%- endif -%}
+    {%- if fmt == 'json' -%}
+{{- "\n<ifm|tool_call>{\"name\": \"" + tool_call.name + "\", \"arguments\": " }}{{ tool_call.arguments | tojson }}{{- "}</ifm|tool_call>" }}
+    {%- elif fmt == 'xml' or fmt == 'xml_typed' -%}
+{{- "\n<ifm|tool_call>" + tool_call.name + "\n" }}
+        {%- for key, value in tool_call.arguments | items -%}
+{{- "<ifm|arg_key>" + key + "</ifm|arg_key>\n" }}
+{%- if fmt == 'xml_typed' -%}
+{{- "<ifm|arg_type>" + render_arg_type(tools_list, tool_call.name, key, value) + "</ifm|arg_type>\n" }}
+{%- endif -%}
+{{- "<ifm|arg_value>" }}{{ render_argument_value(value) }}{{- "</ifm|arg_value>\n" }}
+        {%- endfor -%}
+{{- "</ifm|tool_call>" }}
+    {%- else -%}
+        {{- raise_exception("Unsupported tool_call_format: '" + fmt + "'. Supported formats: json, xml, xml_typed.") -}}
+    {%- endif -%}
+{%- endfor -%}
+{{- "\n</ifm|tool_calls>" }}
+{%- endmacro -%}
+
+{%- macro render_tool_response_messages(raw_content) -%}
+{%- if raw_content is string -%}
+{{- '<|ifm|im_start|>tool\n' + raw_content + '<|ifm|im_end|>' }}
+{%- elif raw_content is sequence and raw_content is not string and raw_content is not mapping -%}
+    {%- if raw_content | length == 0 -%}
+        {{- raise_exception("tool message content list must not be empty.") -}}
+    {%- endif -%}
+{{- '<|ifm|im_start|>tool\n' -}}
+    {%- for item in raw_content -%}
+        {%- if not loop.first -%}{{- '\n' -}}{%- endif -%}
+        {%- if item is string -%}
+{{- item -}}
+        {%- elif item is mapping and item.text is string -%}
+{{- item.text -}}
+        {%- else -%}
+{{- (item | tojson) -}}
+        {%- endif -%}
+    {%- endfor -%}
+{{- '<|ifm|im_end|>' -}}
+{%- else -%}
+{{- '<|ifm|im_start|>tool\n' }}{{ raw_content | tojson }}{{- '<|ifm|im_end|>' }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- set available_tools = tools if tools else [] -%}
+{%- if (not available_tools) and messages[0].role == 'system' and messages[0].get('tools') -%}
+    {%- set available_tools = messages[0]['tools'] -%}
+{%- endif -%}
+{%- if available_tools -%}
+    {{- validate_tools(available_tools, tool_presentation_fmt != 'json') }}
+    {%- set system_content = '' -%}
+    {%- if messages[0].role == 'system' and messages[0].content -%}
+        {%- set system_content = messages[0].content -%}
+    {%- endif -%}
+    {{- render_system_with_tools(available_tools, system_content, tool_presentation_fmt, tool_call_fmt) }}
+{%- else -%}
+    {%- if messages[0].role == 'system' -%}
+        {{- '<|ifm|im_start|>system\n' + messages[0].content + '<|ifm|im_end|>' }}
+    {%- endif -%}
+{%- endif -%}
+
+{%- for message in messages -%}
+    {%- if message.content is string -%}
+        {%- set content = message.content -%}
+    {%- else -%}
+        {%- set content = '' -%}
+    {%- endif -%}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) -%}
+        {{- '<|ifm|im_start|>' + message.role + '\n' + content + '<|ifm|im_end|>' }}
+    {%- elif message.role == "assistant" -%}
+        {%- set thinking_content = '' -%}
+        {%- set think_tag = 'ifm|think' -%}
+        {%- if message.think is defined and message.think is string -%}
+            {%- set thinking_content = message.think -%}
+            {%- set think_tag = 'ifm|think' -%}
+        {%- elif message.think_fast is defined and message.think_fast is string -%}
+            {%- set thinking_content = message.think_fast -%}
+            {%- set think_tag = 'ifm|think_fast' -%}
+        {%- elif message.think_faster is defined and message.think_faster is string -%}
+            {%- set thinking_content = message.think_faster -%}
+            {%- set think_tag = 'ifm|think_faster' -%}
+        {%- elif message.reasoning_content is defined and message.reasoning_content is string -%}
+            {%- set thinking_content = message.reasoning_content -%}
+            {%- set think_tag = 'ifm|think' -%}
+        {%- elif message.reasoning is defined and message.reasoning is string -%}
+            {%- set thinking_content = message.reasoning -%}
+            {%- set think_tag = 'ifm|think' -%}
+        {%- elif message.think is not defined and message.reasoning is not defined and message.reasoning_content is not defined and message.think_fast is not defined and message.think_faster is not defined -%}
+            {{- raise_exception("Assistant message is missing a thinking field. Provide one of: think, reasoning, reasoning_content, think_fast, think_faster.") -}}
+        {%- else -%}
+            {{- raise_exception("Assistant thinking fields must be strings. Provide one of: think, reasoning, reasoning_content, think_fast, think_faster as a string.") -}}
+        {%- endif -%}
+        {{- '<|ifm|im_start|>' + message.role }}
+        {% generation %}
+        {%- if think_tag -%}
+            {%- if thinking_content -%}
+                {{- '<' + think_tag + '>\n' + thinking_content + '</' + think_tag + '>' + content }}
+            {%- else -%}
+                {{- '<' + think_tag + '>\n</' + think_tag + '>' + content }}
+            {%- endif -%}
+        {%- else -%}
+            {{- content }}
+        {%- endif -%}
+        {%- if message.tool_calls -%}
+            {{- render_tool_calls_block(message.tool_calls, tool_call_fmt, available_tools) }}
+        {%- endif -%}
+        {{- '<|ifm|im_end|>' -}}
+        {%- endgeneration -%}
+    {%- elif message.role == "tool" -%}
+        {{- render_tool_response_messages(message.content) }}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {%- set effort = reasoning_effort | default('high') -%}
+    {%- if effort == 'high' -%}
+        {{- '<|ifm|im_start|>assistant\n<ifm|think>\n' }}
+    {%- elif effort == 'medium' -%}
+        {{- '<|ifm|im_start|>assistant\n<ifm|think_fast>\n' }}
+    {%- elif effort == 'low' -%}
+        {{- '<|ifm|im_start|>assistant\n<ifm|think_faster>\n' }}
+    {%- else -%}
+        {{- raise_exception("Unsupported reasoning_effort: '" + effort + "'. Supported values: high, medium, low.") -}}
+    {%- endif -%}
+{%- endif -%}

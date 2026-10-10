@@ -164,11 +164,11 @@ export ZENDNNL_MATMUL_ALGO=1    # Blocked AOCL DLP algo for best performance
 ./build/bin/llama-server \
     -m models/Llama-3.1-8B-Instruct.BF16.gguf \
     --host 0.0.0.0 \
-    --port 8080 \
+    --port 9931 \
     -t 64
 ```
 
-Access the server at `http://localhost:8080`.
+Access the server at `http://localhost:9931`.
 
 **Performance tips**:
 - Use `ZENDNNL_MATMUL_ALGO=1` for optimal performance

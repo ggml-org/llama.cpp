@@ -2,7 +2,7 @@
 
 ggml_tensor * clip_graph_mimovl::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
-    ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+    ggml_prec_set_acc(cur, GGML_PREC_F32);
     return cur;
 }
 

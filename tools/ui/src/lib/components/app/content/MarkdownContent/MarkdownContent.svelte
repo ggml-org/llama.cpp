@@ -1,23 +1,12 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
+	import { getMarkdownProcessor, type MarkdownProcessor } from './markdown-processor';
 	import {
 		getCodeInfoFromTarget,
 		getHastNodeId,
 		getMdastNodeHash,
 		isAppendMode
 	} from './markdown-utils';
-	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
-	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
-	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
-	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
-	import { rehypeFileBadge } from './plugins/rehype/file-badge';
-	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
-	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
-	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
-	import { rehypeSvgPre } from './plugins/rehype/svg-pre';
-	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
-	import { remarkLiteralHtml } from './plugins/remark/literal-html';
-	import { browser } from '$app/environment';
 	import {
 		ActionIconCopyToClipboard,
 		CodeBlockActions,
@@ -38,10 +27,10 @@
 		MERMAID_WRAPPER_CLASS,
 		SETTINGS_KEYS,
 		SVG,
-		TOGGLE_SOURCE_BTN_CLASS
+		TOGGLE_SOURCE_BTN_CLASS,
+		UI_DATA_ATTRS
 	} from '$lib/constants';
 	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
-	import { FileTypeText } from '$lib/enums/files.enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
@@ -58,17 +47,8 @@
 	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
-	import { all as lowlightAll } from 'lowlight';
 	import type { Root as MdastRoot } from 'mdast';
 	import { mode } from 'mode-watcher';
-	import rehypeHighlight from 'rehype-highlight';
-	import rehypeKatex from 'rehype-katex';
-	import rehypeStringify from 'rehype-stringify';
-	import { remark } from 'remark';
-	import remarkBreaks from 'remark-breaks';
-	import remarkGfm from 'remark-gfm';
-	import remarkMath from 'remark-math';
-	import remarkRehype from 'remark-rehype';
 	import { onDestroy, tick } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 
@@ -144,44 +124,6 @@
 	const transformCache = new SvelteMap<string, string>();
 	let previousContent = '';
 
-	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
-
-	let processor = $derived(() => {
-		void attachments;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
-
-		if (!disableMath) {
-			proc = proc.use(remarkMath); // Parse $inline$ and $$block$$ math
-		}
-
-		proc = proc
-			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
-			.use(remarkRehype); // Convert Markdown AST to rehype
-
-		if (!disableMath) {
-			proc = proc.use(rehypeKatex); // Render math using KaTeX
-		}
-
-		return proc
-			.use(rehypeHighlight, {
-				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] },
-				languages: lowlightAll
-			}) // Add syntax highlighting
-			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
-			.use(rehypeEnhanceLinks) // Add target="_blank" to links
-			.use(rehypeFileBadge) // Render file:// anchors as inline badge chips
-			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
-			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
-			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
-			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
-			.use(rehypeEnhanceSvgBlocks) // Wrap svg blocks with header and actions
-			.use(rehypeResolveAttachmentImages, { attachments })
-			.use(rehypeRtlSupport) // Add bidirectional text support
-			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
-	});
-
 	/**
 	 * Removes click event listeners from copy and preview buttons.
 	 * Called on component destroy.
@@ -202,32 +144,21 @@
 	}
 
 	/**
-	 * Removes this component's highlight.js theme style from the document head.
-	 * Called on component destroy to clean up injected styles.
-	 */
-	function cleanupHighlightTheme() {
-		if (!browser) return;
-
-		const existingTheme = document.getElementById(themeStyleId);
-
-		existingTheme?.remove();
-	}
-
-	/**
 	 * Loads the appropriate highlight.js theme based on dark/light mode.
-	 * Injects a scoped style element into the document head.
+	 * One shared style element for every markdown block, mirroring
+	 * SyntaxHighlightedCode.svelte. The old per-instance copies duplicated the
+	 * full theme CSS once per rendered message, which grows without bound in
+	 * long conversations.
 	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
 	 */
 	function loadHighlightTheme(isDark: boolean) {
-		if (!browser) return;
-
-		const existingTheme = document.getElementById(themeStyleId);
-
-		existingTheme?.remove();
+		document
+			.querySelectorAll(`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`)
+			.forEach((style) => style.remove());
 
 		const style = document.createElement('style');
 
-		style.id = themeStyleId;
+		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
 		style.textContent = isDark ? githubDarkCss : githubLightCss;
 
 		document.head.appendChild(style);
@@ -247,7 +178,7 @@
 	 * @returns Object containing the HTML string and cache hash
 	 */
 	async function transformMdastNode(
-		processorInstance: ReturnType<typeof processor>,
+		processorInstance: MarkdownProcessor,
 		node: unknown,
 		index: number
 	): Promise<{ html: string; hash: string }> {
@@ -369,7 +300,7 @@
 
 			if (prefixMarkdown.trim()) {
 				const normalizedPrefix = preprocessLaTeX(prefixMarkdown);
-				const processorInstance = processor();
+				const processorInstance = getMarkdownProcessor({ attachments, disableMath });
 				const ast = processorInstance.parse(normalizedPrefix) as MdastRoot;
 				const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
 				const nextBlocks: MarkdownBlock[] = [];
@@ -419,7 +350,7 @@
 		incompleteCodeBlock = null;
 
 		const normalized = preprocessLaTeX(markdown);
-		const processorInstance = processor();
+		const processorInstance = getMarkdownProcessor({ attachments, disableMath });
 		const ast = processorInstance.parse(normalized) as MdastRoot;
 		const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
 		const stableCount = Math.max(mdastChildren.length - 1, 0);
@@ -858,7 +789,6 @@
 
 	onDestroy(() => {
 		cleanupEventListeners();
-		cleanupHighlightTheme();
 		streamingAutoScroll.destroy();
 	});
 </script>

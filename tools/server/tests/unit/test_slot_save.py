@@ -10,10 +10,10 @@ STATE_FILE_HEADER_SIZE = 12
 server = ServerPreset.tinyllama2()
 
 @pytest.fixture(autouse=True)
-def create_server():
+def create_server(tmp_path):
     global server
     server = ServerPreset.tinyllama2()
-    server.slot_save_path = "./tmp"
+    server.slot_save_path = str(tmp_path)
     server.temperature = 0.0
 
 
@@ -37,6 +37,8 @@ def test_slot_save_restore():
     })
     assert res.status_code == 200
     assert res.body["n_saved"] == 84
+    slot_file = os.path.join(server.slot_save_path, "slot1.bin")
+    assert res.body["n_written"] == os.path.getsize(slot_file)
 
     # Since we have cache, this should only process the last tokens
     res = server.make_request("POST", "/completion", data={
@@ -54,6 +56,7 @@ def test_slot_save_restore():
     })
     assert res.status_code == 200
     assert res.body["n_restored"] == 84
+    assert res.body["n_read"] == os.path.getsize(slot_file)
 
     # Since we have cache, slot 0 should only process the last tokens
     res = server.make_request("POST", "/completion", data={
@@ -94,7 +97,7 @@ def test_slot_restore_legacy_token_list():
     assert res.body["n_saved"] == 84
 
     # rewrite the token payload into a plain token list, as written by servers that predate the packed server_tokens format
-    path = os.path.join("tmp", "slot_legacy.bin")
+    path = os.path.join(server.slot_save_path, "slot_legacy.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
 
@@ -462,7 +465,7 @@ def test_slot_save_restore_image_payload_larger_than_context(mmproj_server):
     })
     assert res.status_code == 200
 
-    path = os.path.join("tmp", "mm_slot_large_payload.bin")
+    path = os.path.join(server.slot_save_path, "mm_slot_large_payload.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
@@ -546,3 +549,243 @@ def test_slot_restore_media_file_without_mmproj(mmproj_server):
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == 0
     assert res.body["content"] == content
+
+
+@pytest.fixture
+def swa_server():
+    swa = ServerPreset.tinygemma3()
+    swa.slot_save_path = "./tmp"
+    swa.temperature = 0.0
+    swa.cache_ram = 0
+    # Keep the first prompt checkpoint before the divergence point.
+    swa.n_ubatch = 32
+    return swa
+
+
+# the non-ASCII name checks that the appendix lands in the same file as the llama state on Windows
+@pytest.mark.parametrize("filename", ["ckpt_slot1.bin", "ckpt_slot1_é.bin"])
+def test_slot_restore_preserves_context_checkpoints(swa_server, filename):
+    server = swa_server
+    server.start()
+
+    base = "The quick brown fox jumps over the lazy dog. " * 20
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_full = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_live = res.body["timings"]["prompt_n"]
+    assert n_live < n_full
+
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": filename,
+    })
+    assert res.status_code == 200
+    assert res.body["n_saved"] > 0
+    ckpt_file = os.path.join(server.slot_save_path, filename)
+    assert res.body["n_written"] == os.path.getsize(ckpt_file)
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Unrelated text with no common prefix occupies the slot now.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": filename,
+    })
+    assert res.status_code == 200
+    assert res.body["n_read"] == os.path.getsize(ckpt_file)
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["prompt_n"] == n_live
+
+
+# checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
+# n_tokens(8) pos_min(4) pos_max(4) and three blobs (target, draft, speculative), each size(8) + data
+def parse_ckpt_appendix(data):
+    off = data.find(struct.pack("<II", 0x504b4353, 1))
+    assert off > 0
+    count = struct.unpack_from("<I", data, off + 8)[0]
+    ckpts = []
+    pos = off + 12
+    for _ in range(count):
+        start = pos
+        pos += 16
+        blobs = []
+        for _ in range(3):
+            n = struct.unpack_from("<Q", data, pos)[0]
+            blobs.append(pos + 8)
+            pos += 8 + n
+        ckpts.append((start, pos, blobs[0]))
+    assert pos == len(data)
+    return off, ckpts
+
+
+# a damaged appendix must be ignored, or its checkpoints dropped when they fail to load, without aborting the server
+@pytest.mark.parametrize("damage", ["oversized_blob", "empty_target", "corrupt_state", "many_checkpoints"])
+def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
+    server = swa_server
+    server.start()
+
+    base = "The quick brown fox jumps over the lazy dog. " * 20
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_live = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "ckpt_damaged.bin",
+    })
+    assert res.status_code == 200
+
+    path = os.path.join(server.slot_save_path, "ckpt_damaged.bin")
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+    off, ckpts = parse_ckpt_appendix(data)
+
+    if damage == "oversized_blob":
+        # the first target blob declares a size that cannot be allocated, it must be rejected before allocating
+        data = data[:ckpts[0][0] + 16] + struct.pack("<Q", 1 << 62)
+    elif damage == "empty_target":
+        # the target blobs are removed and their size set to 0, a valid save never writes an empty target state
+        for start, end, tgt in reversed(ckpts):
+            size = struct.unpack_from("<Q", data, tgt - 8)[0]
+            data = data[:tgt - 8] + struct.pack("<Q", 0) + data[tgt + size:]
+    elif damage == "corrupt_state":
+        # the sizes are intact, but the target states do not load
+        for _, _, tgt in ckpts:
+            struct.pack_into("<I", data, tgt, 0xdeadbeef)
+    else:
+        # more than 1024 entries: one-byte fillers that never match go first, the real checkpoints stay last
+        filler = struct.pack("<qiiQBQQ", 0, 0, 1 << 30, 1, 0, 0, 0)
+        data = data[:off + 12] + filler * (1025 - len(ckpts)) + data[off + 12:]
+        struct.pack_into("<I", data, off + 8, 1025)
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "ckpt_damaged.bin",
+    })
+    assert res.status_code == 200
+    if damage in ("oversized_blob", "empty_target"):
+        assert res.body["n_read"] == off
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    if damage == "many_checkpoints":
+        assert res.body["timings"]["prompt_n"] == n_live
+    else:
+        assert res.body["timings"]["prompt_n"] > n_live
+
+
+# the draft blobs of the checkpoint appendix are not covered by the main payload checks,
+# so restoring into a server with another draft KV cache type must not abort
+@pytest.mark.parametrize("ctkd_restore", ["f16", "q8_0"])
+def test_slot_restore_checkpoints_draft_kv_type_change(swa_server, ctkd_restore):
+    server = swa_server
+    server.model_draft_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"  # same file as the target, already in the HF cache
+    server.spec_type = "draft-simple"
+    server.ctkd = "f16"
+    server.start()
+
+    base = "The quick brown fox jumps over the lazy dog. " * 20
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_live = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "ckpt_draft_slot1.bin",
+    })
+    assert res.status_code == 200
+
+    server.stop()
+    server.ctkd = ctkd_restore
+    server.start()
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "ckpt_draft_slot1.bin",
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["prompt_n"] == n_live

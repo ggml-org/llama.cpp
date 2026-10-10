@@ -26,10 +26,13 @@ Sweep the grid (6 dtypes x 10 head sizes x 4 KV depths x 9 batch widths; a few h
 ./build/bin/ggml-metal-tuning fa-vec > fa_vec_rows.txt 2> fa_vec_sweep.log
 ```
 
-`fa_vec_rows.txt` holds nothing but table rows, ready to paste into `fa_vec_tuned_table`: the min-max-regret target, the aggregate benefit gate, the short-KV drop and the pointwise compression are already applied.
+`fa_vec_rows.txt` holds nothing but table rows: the min-max-regret target, the aggregate benefit gate, the short-KV drop and the pointwise compression are already applied.
+The rows carry the SKU token the runtime reported, but `fa_vec_tuned_table` is keyed by Apple GPU family, so that column has to be retagged before the rows compile.
+Your family number is on the `MTLGPUFamilyApple<N>` line the backend logs at init, near the top of `fa_vec_sweep.log`; `N` is the value, and the `MTLGPUFamilyCommon`/`MTLGPUFamilyMetal` lines beside it are not it.
+If your log is the only sweep for that family, its rows become the family's segment; where the family already has rows, post the log and let the two be compared before anything is replaced.
 A config represents a bucket only if it is no slower than the baseline config at every point that bucket covers, so a config that wins on average but loses at one batch width leaves its bucket at baseline.
 `fa_vec_sweep.log` holds the per-cell timings, bucket coverage, noise floor, any cooldown activity, and every config the no-harm rule refused together with the point that refused it.
-Post both: the log is what makes the rows reviewable.
+Post both, always: the rows now speak for every device in the family, so the log is what makes them reviewable.
 
 Long sweeps can be split.
 `--dtype f16,q4_0` and `--dk 128,192` restrict the grid, and the emitted rows for one `(dtype, head size)` do not depend on the others.

@@ -25,6 +25,11 @@ on:
       'tools/server/tests/**.*'
     ]
 
+cache-mode: none
+permissions:
+  actions: read
+  contents: read
+
 env:
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
@@ -39,6 +44,9 @@ jobs:
   ui-build:
     name: Build static output
     uses: ./.github/workflows/ui-build.yml
+    permissions:
+      actions: write
+      contents: read
 
   ui-checks:
     name: Checks
@@ -57,8 +65,9 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          # cache: "npm"
+          # cache-dependency-path: "tools/ui/package-lock.json"
+          package-manager-cache: false
 
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
@@ -114,8 +123,9 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          # cache: "npm"
+          # cache-dependency-path: "tools/ui/package-lock.json"
+          package-manager-cache: false
 
       - name: Install dependencies
         id: setup

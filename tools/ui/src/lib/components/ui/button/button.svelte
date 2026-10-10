@@ -27,7 +27,9 @@
 				outline:
 					'shadow-sm hover:text-accent-foreground hover:bg-muted-foreground/10 backdrop-blur-sm dark:border-input border',
 				secondary:
-					'bg-background dark:bg-muted-foreground/15 dark:text-secondary-foreground shadow-sm text-foreground hover:bg-muted-foreground/20 dark:hover:bg-muted-foreground/25'
+					'bg-muted/30 dark:bg-muted-foreground/15 dark:text-secondary-foreground shadow-sm border-muted border text-foreground hover:bg-muted dark:hover:bg-muted-foreground/25',
+				tertiary:
+					'bg-muted/60 dark:bg-muted/75 shadow-sm border border-border/30 text-foreground hover:bg-muted/80 dark:border-border/20 dark:hover:bg-muted'
 			}
 		}
 	});

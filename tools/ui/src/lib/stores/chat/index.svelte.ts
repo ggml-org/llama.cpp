@@ -55,7 +55,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		string,
 		{ response: string; messageId: string; model?: string | null }
 	>();
-	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
 	// true while the active conversation has a local pipe (send, attach or resume-wait)
 	isLoading = $derived(this.activity.isLocal(conversationsStore.activeConversation?.id ?? ''));
@@ -256,8 +255,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 
 		this.chatStreamingStates.delete(convId);
-
-		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
 	clearEditMode(): void {
 		this.isEditModeActive = false;
@@ -270,11 +267,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 	clearPendingMessage(convId: string): void {
 		this.pendingMessages.delete(convId);
-	}
-
-	/** Reset per-view state when (re)mounting the empty chat screen. */
-	clearUIState(): void {
-		this.currentResponse = '';
 	}
 
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
@@ -766,8 +758,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			model: model ?? this.chatStreamingStates.get(convId)?.model,
 			response
 		});
-
-		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
 
 	setEditModeActive(handler: (files: File[]) => void): void {
@@ -1244,7 +1234,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	syncLoadingStateForChat(convId: string): void {
 		const s = this.chatStreamingStates.get(convId);
 
-		this.currentResponse = s?.response || '';
 		this.processing.setActiveConversation(convId);
 
 		// Sync streaming content to activeMessages so UI displays current content

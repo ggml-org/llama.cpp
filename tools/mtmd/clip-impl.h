@@ -58,11 +58,13 @@
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
+#define KEY_IMAGE_RESIZE_ALGO       "clip.vision.image_resize_algo"
 #define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
 #define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
 #define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
 #define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
+#define KEY_SWIGLU_CLAMP            "clip.vision.swiglu_clamp"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
@@ -153,6 +155,9 @@
 #define TN_MM_MERGER_FC1   "mm.merger.fc1.%s"            // minimax-m3 patch-merge MLP
 #define TN_MM_MERGER_FC2   "mm.merger.fc2.%s"
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
+#define TN_TOK_IMG_START   "v.token_embd.img_start"     // deepseek4v
+#define TN_TOK_IMG_END     "v.token_embd.img_end"       // deepseek4v
+#define TN_TOK_IMG_PAD     "v.token_embd.img_pad"       // deepseek4v
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
 #define TN_DEEPSTACK_NORM  "v.deepstack.%d.norm.%s"     // qwen3vl deepstack
@@ -296,8 +301,8 @@
 
 // hunyuanvl (shared GGUF tensor names)
 #define TN_MM_PRE_NORM     "mm.pre_norm.%s"
-#define TN_TOK_IMG_BEGIN   "mm.image_begin"
-#define TN_TOK_IMG_END     "mm.image_end"
+#define TN_MM_IMG_BEGIN    "mm.image_begin" // note: legacy name, new models should use v.token_embd.*
+#define TN_MM_IMG_END      "mm.image_end"   // note: legacy name, new models should use v.token_embd.*
 
 // deepseek-ocr
 #define TN_SAM_POS_EMBD   "v.sam.pos_embd.%s"
@@ -447,6 +452,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_QWEN3VL,
+    PROJECTOR_TYPE_LING3VL,
     PROJECTOR_TYPE_STEP3VL,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_GEMMA3NV,
@@ -470,6 +476,7 @@ enum projector_type {
     PROJECTOR_TYPE_MERALION,
     PROJECTOR_TYPE_MUSIC_FLAMINGO,
     PROJECTOR_TYPE_LFM2,
+    PROJECTOR_TYPE_D1OMNI_V,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_PADDLEOCR,
     PROJECTOR_TYPE_LIGHTONOCR,
@@ -480,8 +487,11 @@ enum projector_type {
     PROJECTOR_TYPE_DOTS3NOTE_A,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
+    PROJECTOR_TYPE_DEEPSEEK4V,
     PROJECTOR_TYPE_LFM2A,
+    PROJECTOR_TYPE_D1OMNI_A,
     PROJECTOR_TYPE_GLM4V,
+    PROJECTOR_TYPE_GLM5V,
     PROJECTOR_TYPE_YOUTUVL,
     PROJECTOR_TYPE_YASA2,
     PROJECTOR_TYPE_KIMIK25,
@@ -500,6 +510,7 @@ enum projector_type {
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
+    PROJECTOR_TYPE_COHERE2V,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -512,6 +523,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN2VL,           "qwen2vl_merger"},
     { PROJECTOR_TYPE_QWEN25VL,          "qwen2.5vl_merger"},
     { PROJECTOR_TYPE_QWEN3VL,           "qwen3vl_merger"},
+    { PROJECTOR_TYPE_LING3VL,           "ling3vl"},
     { PROJECTOR_TYPE_STEP3VL,           "step3vl"},
     { PROJECTOR_TYPE_GEMMA3,            "gemma3"},
     { PROJECTOR_TYPE_GEMMA3NV,          "gemma3nv"},
@@ -534,6 +546,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MERALION,          "meralion"},
     { PROJECTOR_TYPE_MUSIC_FLAMINGO,    "musicflamingo"},
     { PROJECTOR_TYPE_LFM2,              "lfm2"},
+    { PROJECTOR_TYPE_D1OMNI_V,          "d1omni_v"},
     { PROJECTOR_TYPE_KIMIVL,            "kimivl"},
     { PROJECTOR_TYPE_PADDLEOCR,         "paddleocr"},
     { PROJECTOR_TYPE_LIGHTONOCR,        "lightonocr"},
@@ -544,8 +557,11 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_DOTS3NOTE_A,       "dots3note_a"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
+    { PROJECTOR_TYPE_DEEPSEEK4V,        "deepseek4v"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
+    { PROJECTOR_TYPE_D1OMNI_A,          "d1omni_a"},
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
+    { PROJECTOR_TYPE_GLM5V,             "glm5v"},
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
     { PROJECTOR_TYPE_YASA2,             "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,           "kimik25"},
@@ -564,6 +580,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
+    { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -655,6 +672,9 @@ struct clip_image_f32 {
     // appends a learned newline (or EOI) token after the image
     // no model uses it now (Granite4 Vision moved to anyres), kept for future models
     bool add_newline = false;
+    // deepseek4v: number of leading IMAGE_PAD embeddings, aligns IMAGE_START to the LLM compressor ratio
+    // depends on the chunk position, set at tokenize time (see mtmd_tokenizer::add_media)
+    int32_t lead_pad = 0;
 
     // llava-next "anyres" tiling, used by Granite4 Vision
     // the whole grid is encoded and assembled in a single graph
@@ -769,6 +789,22 @@ static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_
         off_x = (cur_w - new_w) / 2;
         out_w = cur_w - 2 * off_x;
     }
+}
+
+// deepseek4v: layout of the LLM token block built from the aligner grid
+struct dsv4_block_layout {
+    int rows;     // grid rows, padded to an even count
+    int row_len;  // grid width + 1 newline
+    int pad_last; // trailing pads
+    int n_out;    // total block size, including lead pads and the start/end sentinels
+};
+static inline dsv4_block_layout dsv4_get_block_layout(int n_llm_w, int n_llm_h, int lead_pad) {
+    dsv4_block_layout bl;
+    bl.rows     = n_llm_h + (n_llm_h % 2);
+    bl.row_len  = n_llm_w + 1;
+    bl.pad_last = (bl.rows / 2 * bl.row_len) % 2 * 2;
+    bl.n_out    = lead_pad + 1 + bl.rows * bl.row_len + bl.pad_last + 1;
+    return bl;
 }
 
 //

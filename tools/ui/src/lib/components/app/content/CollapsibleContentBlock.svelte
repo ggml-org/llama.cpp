@@ -65,7 +65,12 @@
 				<IconComponent class={cn('shrink-0 text-muted-foreground/60 mt-0.75', iconClass)} />
 			{/if}
 
-			<span class={cn('text-sm font-medium', shimmerTitle ? 'shimmer-text' : 'text-foreground/80')}>
+			<span
+				class={cn(
+					'min-w-0 overflow-x-auto text-sm font-medium',
+					shimmerTitle ? 'shimmer-text' : 'text-foreground/80'
+				)}
+			>
 				{#if titleSnippet}
 					{@render titleSnippet()}
 				{:else}

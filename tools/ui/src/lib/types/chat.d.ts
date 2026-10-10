@@ -325,8 +325,8 @@ export type ChatMessageEditContext = ChatMessageEditState &
 
 /**
  * Actions and capability flags for the ChatForm add-menu. Set once in
- * ChatFormActions.svelte and consumed by its deep descendants (the add sheet,
- * dropdown and MCP servers submenu) to avoid relaying them through props.
+ * ChatFormActions.svelte and consumed by its deep descendants (the add sheet
+ * and dropdown) to avoid relaying them through props.
  */
 export interface ChatFormActionsContext {
 	readonly disabled: boolean;
@@ -335,5 +335,4 @@ export interface ChatFormActionsContext {
 	readonly hasVisionModality: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpSettingsClick?: () => void;
 }

@@ -8,7 +8,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 if (EMSCRIPTEN)
 else()
-    if (NOT GGML_BACKEND_DL)
+    if (NOT GGML_BACKEND_DL AND GGML_CPU)
         add_subdirectory(vdot)
     endif()
 endif()

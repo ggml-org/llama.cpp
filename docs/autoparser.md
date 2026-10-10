@@ -509,11 +509,13 @@ The following templates have active tests in `tests/test-chat.cpp`:
 | Kimi-K2 / Kimi-K2-Instruct | JSON_NATIVE | JSON tools with special markers |
 | Llama 3.1/3.2/3.3 | JSON_NATIVE | Standard Llama tool format |
 | OpenAI GPT-OSS | Specialized | Channel-based (dedicated handler) |
+| LLM-jp-4.1 | Specialized | GPT-OSS dialect (dedicated handler) |
 | Apriel 1.5 | JSON_NATIVE | `<tool_calls>` wrapper with JSON array |
 | Apriel 1.6 Thinker | Reasoning | Implicit reasoning start |
 | Mistral Small 3.2 | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` with call ID |
 | Devstral | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` without call ID |
 | StepFun 3.5 Flash | TAG_WITH_TAGGED | `<function=X><parameter=Y>` format |
+| Spark2.5 | TAG_WITH_TAGGED | `<tool_call>name<arg_key>...<arg_value>...` format |
 
 ## Adding Support for New Templates
 

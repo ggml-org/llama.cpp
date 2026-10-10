@@ -37,9 +37,6 @@ static __global__ void mm_ids_helper(
     const int n_expert_used = n_expert_used_template == 0 ? n_expert_used_var : n_expert_used_template;
     const int expert = blockIdx.x;
 
-    // token slots per warp lane group, padded to a power of 2 so a warp divides evenly
-    constexpr int neu_padded = mm_ids_pow2<n_expert_used_template>::value;
-
     extern __shared__ char data_mm_ids_helper[];
     mm_ids_helper_store * store = (mm_ids_helper_store *) data_mm_ids_helper;
 
@@ -69,6 +66,7 @@ static __global__ void mm_ids_helper(
     } else {
         // Implementation optimized for specific numbers of experts used:
         // a warp holds a whole number of token slots, so the slot count is padded to a power of 2
+        constexpr int neu_padded = mm_ids_pow2<n_expert_used_template>::value;
         static_assert(neu_padded <= warp_size && warp_size % neu_padded == 0, "bad n_expert_used");
         for (int it0 = 0; it0 < n_tokens; it0 += warp_size/neu_padded) {
             const int it = it0 + threadIdx.x / neu_padded;
@@ -101,6 +99,7 @@ static __global__ void mm_ids_helper(
         }
     }
     nex_prev = warp_reduce_sum<warp_size>(nex_prev);
+    ggml_cuda_syncwarp();
 
     for (int itc = threadIdx.x; itc < it_compact; itc += warp_size) {
         const mm_ids_helper_store store_it = store[itc];
