@@ -1,0 +1,1 @@
+Diagnostic process terminated by this session with SIGTERM after repeated stalled snapshots; exit 143. This was not the runner watchdog. Service restored by runner trap.

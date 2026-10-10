@@ -1,0 +1,6 @@
+[av1_vaapi @ 0x65009644d440] Failed to map output buffers: 24 (internal encoding error).
+[av1_vaapi @ 0x65009644d440] Output failed: -5.
+[vost#0:0/av1_vaapi @ 0x65009644ce40] [enc:av1_vaapi @ 0x65009644d3c0] Error submitting video frame to the encoder
+[vost#0:0/av1_vaapi @ 0x65009644ce40] [enc:av1_vaapi @ 0x65009644d3c0] Error encoding a frame: Input/output error
+[vost#0:0/av1_vaapi @ 0x65009644ce40] Task finished with error code: -5 (Input/output error)
+[vost#0:0/av1_vaapi @ 0x65009644ce40] Terminating thread with return code -5 (Input/output error)

@@ -1,0 +1,75 @@
+Build with Macros:
+  GGML_SYCL_DNNL: no
+  GGML_SYCL_F16: yes
+  GGML_SYCL_FORCE_MMQ: no
+  GGML_SYCL_GRAPH: yes
+  GGML_SYCL_GRAPH_EVICTION_TIMEOUT: 10
+  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes
+  GGML_SYCL_SUPPORT_VMM: yes
+  GGML_SYCL_FORCE_MMQ: no
+  GGML_SYCL_GRAPH: yes
+  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes
+  GGML_SYCL_SUPPORT_VMM: yes
+Running with Environment Variables:
+  GGML_SYCL_DEBUG: 0
+  GGML_SYCL_DEV_DEBUG: 0
+  GGML_SYCL_DEV2DEV_MEMCPY: 0 (SYCL API)
+  GGML_SYCL_GET_MEM_API: 1 (SYCL API)
+  GGML_SYCL_ENABLE_DNN: DNN disabled by compile flag
+  GGML_SYCL_FA_ONEDNN: 1
+  GGML_SYCL_FA_ONEDNN_MAX_KV: 0
+  GGML_SYCL_ENABLE_MKL_FA: 1
+  GGML_SYCL_MEMTRACE: 0
+  GGML_SYCL_MEMTRACE_STEP: 64
+  GGML_SYCL_ENABLE_FLASH_ATTN: 1
+  GGML_SYCL_FA_FORCE_VEC_STANDARD: 0
+  GGML_SYCL_FA_Q8_GQA_TILE: 0
+  GGML_SYCL_FFN_FUSION: 1
+  GGML_SYCL_ENABLE_GRAPH: 1
+  GGML_SYCL_ENABLE_OPT: 1
+  GGML_SYCL_ENABLE_VMM: 1
+  GGML_SYCL_ENABLE_FUSION: 1
+  GGML_SYCL_PRIORITIZE_DMMV: 0
+  GGML_SYCL_USE_ASYNC_MEM_OP: 1
+  GGML_SYCL_USE_LEVEL_ZERO_API: 0
+  GGML_SYCL_USM_SYSTEM: 0
+  GGML_SYCL_ENABLE_GRAPH: 1
+  GGML_SYCL_ENABLE_OPT: 1
+  GGML_SYCL_XMX_GATHER_TYPES: -1
+  GGML_SYCL_ENABLE_VMM: 1
+  GGML_SYCL_ENABLE_FUSION: 1
+  GGML_SYCL_ENABLE_ESIMD: 1
+  GGML_SYCL_MMVQ_WIDE: 1
+  GGML_SYCL_PRIORITIZE_DMMV: 0
+  GGML_SYCL_USE_ASYNC_MEM_OP: 1
+  GGML_SYCL_USE_LEVEL_ZERO_API: 0
+  GGML_SYCL_USM_SYSTEM: 0
+  GGML_SYCL_ENABLE_HOST_PINNED_MEM: 0
+  GGML_SYCL_HOST_PINNED_MEM_2G: 0
+  GGML_SYCL_SPARSE_FA: 0
+  GGML_SYCL_SPARSE_FA_DEBUG: 0
+  GGML_SYCL_SPARSE_FA_MARGIN: 256
+Found 1 SYCL devices:
+|  |                   |                                       |       |Max    |        |Max  |Global |                     |
+|  |                   |                                       |       |compute|Max work|sub  |mem    |                     |
+|ID|        Device Type|                                   Name|Version|units  |group   |group|size   |       Driver version|
+|--|-------------------|---------------------------------------|-------|-------|--------|-----|-------|---------------------|
+| 0| [level_zero:gpu:0]|                Intel Arc A770 Graphics|  12.55|    512|    1024|   32| 16225M|           1.17.39758|
+SYCL Optimization Feature:
+|ID|        Device Type|Reorder|
+|--|-------------------|-------|
+| 0| [level_zero:gpu:0]|      Y|
+common_params_fit_impl: MoE cache fit selected main-device dense placement with 9537 MiB projected cache capacity for 18600 MiB of routed expert weights (up to 51.3% coverage)
+common_params_fit_impl: MoE cache fit device 0 leaves 9537 MiB after reserve; minimum complete pool set is 1024 MiB
+common_params_fit_impl: MoE cache fit selected main-device dense placement with 9820 MiB projected cache capacity for 18600 MiB of routed expert weights (up to 52.8% coverage)
+common_params_fit_impl: MoE cache fit device 0 leaves 9820 MiB after reserve; minimum complete pool set is 1024 MiB
+common_params_fit_impl: MoE cache fit selected main-device dense placement with 9027 MiB projected cache capacity for 18600 MiB of routed expert weights (up to 48.5% coverage)
+common_params_fit_impl: MoE cache fit device 0 leaves 9027 MiB after reserve; minimum complete pool set is 1024 MiB
+common_params_fit_impl: MoE cache fit selected main-device dense placement with 9030 MiB projected cache capacity for 18600 MiB of routed expert weights (up to 48.6% coverage)
+common_params_fit_impl: MoE cache fit device 0 leaves 9030 MiB after reserve; minimum complete pool set is 1024 MiB
+level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)
+Exception caught at file:/mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp, line:6230, func:operator()
+SYCL error: CHECK_TRY_ERROR( (stream)->memcpy((char *)tensor->data + offset, data, size)): Exception caught in this line of code.
+  in function ggml_backend_sycl_set_tensor_async at /mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp:6230
+/mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/../ggml-sycl/common.hpp:174: SYCL error
+timeout: the monitored command dumped core

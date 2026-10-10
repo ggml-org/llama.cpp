@@ -1,0 +1,3 @@
+zeInit with flags value of 1
+[2026-09-29 19:57:16.015] [thread-id: 130288152235328] [info] Loader Version 1.32.0 c671d49aa231a791a83775cddf054044b8bfbd2c
+[2026-09-29 19:57:16.016] [thread-id: 130288152235328] [info] Validation Layer Enabled

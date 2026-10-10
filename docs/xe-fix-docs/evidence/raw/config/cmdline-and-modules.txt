@@ -1,0 +1,2 @@
+zswap.enabled=0 quiet splash noresume init_on_alloc=0 rw amd_pstate=active amd_iommu=on iommu=pt nvme_core.default_ps_max_latency_us=0 mitigations=off spl.spl_hostid=56f961a5 i915.force_probe=!56a0 xe.force_probe=56a0 preempt=full nowatchdog nmi_watchdog=0 split_lock_detect=off skew_tick=1
+MODULES=(xe amdgpu zfs)

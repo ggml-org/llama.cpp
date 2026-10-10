@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec env LD_PRELOAD=/mnt/nvme1/oneapi-ab/xe-investigation-20260929/trace-copies.so /usr/bin/llama-bench "$@"

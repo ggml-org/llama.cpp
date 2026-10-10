@@ -1,0 +1,33 @@
+[New LWP 431276]
+[New LWP 431275]
+[New LWP 431274]
+[New LWP 431273]
+[New LWP 431272]
+[New LWP 431271]
+[New LWP 431270]
+[New LWP 431269]
+[New LWP 431268]
+[New LWP 431267]
+[New LWP 431266]
+[New LWP 431264]
+[New LWP 431209]
+warning: File "/opt/intel/oneapi/compiler/2026.1/lib/libsycl.so.9.0.0-gdb.py" auto-loading has been declined by your `auto-load safe-path' set to "$debugdir:$datadir/auto-load".
+To enable execution of this file add
+	add-auto-load-safe-path /opt/intel/oneapi/compiler/2026.1/lib/libsycl.so.9.0.0-gdb.py
+line to your configuration file "/root/.config/gdb/gdbinit".
+To completely disable this security protection add
+	set auto-load safe-path /
+line to your configuration file "/root/.config/gdb/gdbinit".
+For more information about this security protection see the
+"Auto-loading safe path" section in the GDB manual.  E.g., run from the shell:
+	info "(gdb)Auto-loading safe path"
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+0x00007c936183a46b in sched_yield () from /usr/lib/libc.so.6
+add symbol table from file "/mnt/nvme1/oneapi-ab/xe-investigation-20260929/trace-copies-debug.so" with all sections offset by 0x7c9381a8b000
+LIVE_COPY name=SYCL0#blk.1.ffn_down_exps.weight#0
+LIVE_COPY type=GGML_TYPE_Q6_K
+LIVE_COPY size=860672
+LIVE_COPY offset=202137600
+LIVE_COPY shape={512, 2048, 256, 1}
+[Inferior 1 (process 431199) detached]

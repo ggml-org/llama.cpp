@@ -42,6 +42,11 @@
 
 # Build Artifacts
 
+/check_queue
+/repro_l0
+/repro_bcs_reset
+/bcs_owned_memory_control
+/repro_mem_pressure
 /tags
 /.build/
 /build*

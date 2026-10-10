@@ -1,0 +1,51 @@
+#!/bin/sh
+# Intel Arc A770 (xe KMD) scheduler tuning for long-running compute (llama.cpp SYCL).
+# Runs at bind via xe-a770-tune.service. Sysfs defaults only apply to exec queues
+# created afterwards, so llama-gpu@.service orders After= this unit.
+#
+# Targets = i915 parity (+ headroom on job timeout, which i915 hit at 20 s on
+# 2026-09-27 during test-backend-ops):
+#   ccs/rcs preempt_timeout_us 7 500 000   (i915 ccs0/rcs0 preempt_timeout_ms = 7500; xe default 640 000)
+#   ccs     job_timeout_ms     60 000      wanted; kernel refuses job_timeout_max above
+#                                          CONFIG_DRM_XE_JOB_TIMEOUT_MAX (10 000 on
+#                                          7.3.0-rc1-273-tkg-bore, verified 2026-09-29),
+#                                          so we settle for whatever max the kernel allows.
+# Exit 0 whenever the card is on xe and every write landed on *some* value; the
+# journal line says which. Exit 1 only if the engine sysfs is missing.
+set -u
+DEV=/sys/bus/pci/devices/0000:03:00.0
+PREEMPT_US=7500000
+JOB_MS=60000
+
+driver=$(basename "$(readlink "$DEV/driver" 2>/dev/null || echo none)")
+[ "$driver" = xe ] || { echo "xe-a770-tune: 0000:03:00.0 bound to , nothing to do"; exit 0; }
+
+try_write() { # <dir> <attr> <value>  -> 0 if accepted
+  [ -w "$1/$2" ] && printf %s "$3" > "$1/$2" 2>/dev/null
+}
+report() { echo "xe-a770-tune: $(basename "$1")/$2 = $(cat "$1/$2")"; }
+
+found=0
+for eng in "$DEV"/tile*/gt*/engines/ccs "$DEV"/tile*/gt*/engines/rcs "$DEV"/tile*/gt*/engines/bcs; do
+  [ -d "$eng" ] || continue
+  found=1
+  cls=$(basename "$eng")
+
+  if [ "$cls" != bcs ]; then
+    try_write "$eng" preempt_timeout_us "$PREEMPT_US" || echo "xe-a770-tune: $cls/preempt_timeout_us=$PREEMPT_US rejected" >&2
+    report "$eng" preempt_timeout_us
+  fi
+
+  # bcs: both 2026-09-29 blitter resets were 5 s job timeouts on copy jobs; give copies the same cap as compute.
+  if [ "$cls" = ccs ] || [ "$cls" = bcs ]; then
+    if ! try_write "$eng" job_timeout_max "$JOB_MS"; then
+      echo "xe-a770-tune: $cls/job_timeout_max=$JOB_MS rejected (CONFIG_DRM_XE_JOB_TIMEOUT_MAX cap), using kernel max" >&2
+    fi
+    max=$(cat "$eng/job_timeout_max")
+    want=$JOB_MS; [ "$want" -le "$max" ] || want=$max
+    try_write "$eng" job_timeout_ms "$want" || echo "xe-a770-tune: $cls/job_timeout_ms=$want rejected" >&2
+    report "$eng" job_timeout_ms; report "$eng" job_timeout_max
+  fi
+done
+[ "$found" = 1 ] || { echo "xe-a770-tune: no ccs/rcs engine dirs under $DEV/tile*/gt*/engines" >&2; exit 1; }
+exit 0

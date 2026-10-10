@@ -1,0 +1,6 @@
+[h264_vaapi @ 0x572e11745440] Failed to map output buffers: 24 (internal encoding error).
+[h264_vaapi @ 0x572e11745440] Output failed: -5.
+[vost#0:0/h264_vaapi @ 0x572e11744e40] [enc:h264_vaapi @ 0x572e117453c0] Error submitting video frame to the encoder
+[vost#0:0/h264_vaapi @ 0x572e11744e40] [enc:h264_vaapi @ 0x572e117453c0] Error encoding a frame: Input/output error
+[vost#0:0/h264_vaapi @ 0x572e11744e40] Task finished with error code: -5 (Input/output error)
+[vost#0:0/h264_vaapi @ 0x572e11744e40] Terminating thread with return code -5 (Input/output error)

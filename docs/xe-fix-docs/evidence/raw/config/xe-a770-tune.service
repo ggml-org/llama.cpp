@@ -1,0 +1,14 @@
+[Unit]
+Description=Intel Arc A770 (xe) scheduler timeout tuning
+Documentation=file:/usr/local/bin/xe-a770-tune
+# Pulled in by udev (80-xe-a770-tune.rules) when 0000:03:00.0 binds to xe, and by
+# llama-gpu@.service (drop-in 10-xe-tune.conf). No-op under i915.
+ConditionPathIsDirectory=/sys/bus/pci/devices/0000:03:00.0/tile0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/xe-a770-tune
+
+[Install]
+WantedBy=multi-user.target

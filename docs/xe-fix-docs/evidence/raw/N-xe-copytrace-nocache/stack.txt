@@ -1,0 +1,176 @@
+PID 431199 - process
+TID 431199:
+#0  0x00007c936183a46b __sched_yield
+#1  0x00007c934d7ea622
+#2  0x00007c934d7dfb14
+#3  0x00007c934d7918a5
+#4  0x00007c934da047f2
+#5  0x00007c934d6d82c2
+#6  0x00007c934d3d6a2b enqueueMemCopyHelper(ur_command_t, ur_queue_handle_t_*, void*, unsigned char, unsigned long, void const*, unsigned int, ur_event_handle_t_* const*, ur_event_handle_t_**, bool)
+#7  0x00007c934d3e1b77 ur::level_zero::urEnqueueUSMMemcpy(ur_queue_handle_t_*, bool, void*, void const*, unsigned long, unsigned int, ur_event_handle_t_* const*, ur_event_handle_t_**)
+#8  0x00007c935292f116 urEnqueueUSMMemcpy
+#9  0x00007c935ea7ed45 sycl::_V1::detail::MemoryManager::copy_usm(void const*, sycl::_V1::detail::queue_impl&, unsigned long, void*, std::vector<ur_event_handle_t_*, std::allocator<ur_event_handle_t_*> >, ur_event_handle_t_**)
+#10 0x00007c935ead1ee5 sycl::_V1::detail::queue_impl::memcpy(void*, void const*, unsigned long, std::vector<sycl::_V1::event, std::allocator<sycl::_V1::event> > const&, bool, sycl::_V1::detail::code_location const&)
+#11 0x00007c935eb9b6d5 sycl::_V1::queue::memcpy(void*, void const*, unsigned long, sycl::_V1::detail::code_location const&)
+#12 0x00007c93625df6ef
+#13 0x00007c9381a8c3b7 ggml_backend_tensor_set_async
+#14 0x00007c9361dd5b23 ggml_backend_sched_graph_compute_async
+#15 0x00007c9381a8c229 ggml_backend_sched_graph_compute_async
+#16 0x00007c9381346c51 llama_context::graph_compute(ggml_cgraph*, bool)
+#17 0x00007c9381345f79 llama_context::process_ubatch(llama_ubatch const&, llm_graph_type, llama_memory_context_i*, ggml_status&)
+#18 0x00007c9381348662 llama_context::decode(llama_batch_ext const&)
+#19 0x00007c938134e049 llama_decode
+#20 0x00007c9381a45648
+#21 0x00007c9381a3ebd8 llama_bench(int, char**)
+#22 0x00007c936175e781
+#23 0x00007c936175e8b9 __libc_start_main
+#24 0x0000000000405405
+TID 431209:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c9361b9f971 std::condition_variable::wait(std::unique_lock<std::mutex>&)
+#4  0x00007c934de557eb
+#5  0x00007c93617cf042
+#6  0x00007c936185772c
+TID 431264:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c9361b9f971 std::condition_variable::wait(std::unique_lock<std::mutex>&)
+#4  0x00007c93817df05b common_log::resume()::{lambda()#1}::operator()() const
+#5  0x00007c9361baa859
+#6  0x00007c93617cf042
+#7  0x00007c936185772c
+TID 431266:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431267:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431268:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431269:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431270:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431271:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431272:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431273:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431274:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431275:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c
+TID 431276:
+#0  0x00007c93617d78f2
+#1  0x00007c93617cbc79
+#2  0x00007c93617ce4ec pthread_cond_wait
+#3  0x00007c935ed575d6 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)
+#4  0x00007c935ec84de0 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)
+#5  0x00007c935ec7f1b7 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)
+#6  0x00007c935ec82ced __kmp_fork_barrier(int, int)
+#7  0x00007c935ecd0bfd __kmp_launch_thread
+#8  0x00007c935ed52e62 __kmp_launch_worker(void*)
+#9  0x00007c93617cf042
+#10 0x00007c936185772c

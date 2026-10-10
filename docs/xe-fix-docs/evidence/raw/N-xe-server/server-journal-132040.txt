@@ -1,0 +1,113 @@
+2026-09-29T13:20:03+00:00 vinbonesjr sh[318738]: 2.28.806.431 W srv    operator(): unauthorized: Invalid API Key
+2026-09-29T13:20:16+00:00 vinbonesjr sh[318738]: 2.41.859.303 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+2026-09-29T13:20:16+00:00 vinbonesjr sh[318738]: 2.41.859.311 I srv        update: prompt cache: 0 prompts, 0.0 MiB (limit 8192.0 MiB, 131072 tokens)
+2026-09-29T13:20:16+00:00 vinbonesjr sh[318738]: 2.41.859.342 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0
+2026-09-29T13:20:19+00:00 vinbonesjr sh[318738]: 2.45.053.976 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =    538, progress = 0.99, t =   3.19 s / 168.41 tokens per second
+2026-09-29T13:20:23+00:00 vinbonesjr sh[318738]: 2.48.461.267 I slot print_timing: id  0 | task 0 | n_gen =    100, tg =  30.11 t/s, tg_3s =  30.42 t/s
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.469.105 I slot print_timing: id  0 | task 0 | n_gen =    237, tg =  37.49 t/s, tg_3s =  45.55 t/s
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.887.950 I slot print_timing: id  0 | task 0 | prompt eval time =    3314.34 ms /   542 tokens (    6.12 ms per token,   163.53 tokens per second)
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.887.953 I slot print_timing: id  0 | task 0 |        eval time =    6714.23 ms /   256 tokens (   26.33 ms per token,    37.98 tokens per second)
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.887.953 I slot print_timing: id  0 | task 0 |       total time =   10028.56 ms /   798 tokens
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.887.955 I slot print_timing: id  0 | task 0 |    graphs reused =        254
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.888.020 I slot      release: id  0 | task 0 | stop processing: n_tokens = 797, truncated = 0
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.909.784 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 1.000 (> 0.100 thold), f_keep = 0.680
+2026-09-29T13:20:26+00:00 vinbonesjr sh[318738]: 2.51.909.816 I slot launch_slot_: id  0 | task 259 | processing task, is_child = 0
+2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]: level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)
+2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]: Exception caught at file:/mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp, line:6230, func:operator()
+2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]: SYCL error: CHECK_TRY_ERROR( (stream)->memcpy((char *)tensor->data + offset, data, size)): Exception caught in this line of code.
+2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]:   in function ggml_backend_sycl_set_tensor_async at /mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp:6230
+2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]: /mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/../ggml-sycl/common.hpp:174: SYCL error
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [warning] warning: The current terminal doesn't support styling.  Styled output might not appear as expected.
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319503]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319371]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319370]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319369]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319368]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319367]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319366]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319365]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319364]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319363]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319362]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319361]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318932]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318930]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318929]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318928]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318927]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318926]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318925]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318924]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318923]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318922]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318921]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318920]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318919]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318918]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318917]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318916]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318915]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318914]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318913]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318912]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318911]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318910]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318909]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318908]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318907]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318800]
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 318799]
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: Registering SYCL extensions for gdb
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: [Thread debugging using libthread_db enabled]
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: Using host libthread_db library "/usr/lib/libthread_db.so.1".
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: 0x0000769106c0d8f2 in ?? () from /usr/lib/libc.so.6
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #0  0x0000769106c0d8f2 in ?? () from /usr/lib/libc.so.6
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #1  0x0000769106c724cb in wait4 () from /usr/lib/libc.so.6
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #2  0x00007691079afd8a in ggml_print_backtrace () from /usr/lib/libggml-base.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #3  0x00007691079aeeb9 in ggml_abort () from /usr/lib/libggml-base.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #4  0x00007691081cf818 in ?? () from /usr/lib/libggml-sycl.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #5  0x00007691081e4a28 in ?? () from /usr/lib/libggml-sycl.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #6  0x00007691079dab23 in ggml_backend_sched_graph_compute_async () from /usr/lib/libggml-base.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #7  0x0000769126f4bc51 in llama_context::graph_compute(ggml_cgraph*, bool) () from /usr/lib/libllama.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #8  0x0000769126f4af79 in llama_context::process_ubatch(llama_ubatch const&, llm_graph_type, llama_memory_context_i*, ggml_status&) () from /usr/lib/libllama.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #9  0x0000769126f4d662 in llama_context::decode(llama_batch_ext const&) () from /usr/lib/libllama.so.0
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #10 0x000076912796ec13 in std::_Function_handler<void (), server_context_impl::decode(int&, int)::{lambda()#1}>::_M_invoke(std::_Any_data const&) () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #11 0x0000769127909671 in server_queue::yield_to_queue(std::function<void ()>&&) () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #12 0x0000769127963937 in server_context_impl::decode(int&, int) () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #13 0x0000769127962898 in server_context_impl::update_slots() () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #14 0x0000769127909ab5 in server_queue::start_loop(long) () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #15 0x00007691278a78ad in llama_server(common_params&, int, char**) () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #16 0x000076912789752c in llama_server(int, char**) () from /usr/lib/libllama-server-impl.so
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #17 0x0000769106b94781 in ?? () from /usr/lib/libc.so.6
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #18 0x0000769106b948b9 in __libc_start_main () from /usr/lib/libc.so.6
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: #19 0x0000000000407405 in ?? ()
+2026-09-29T13:20:41+00:00 vinbonesjr sh[325416]: [Inferior 1 (process 318738) detached]
+2026-09-29T13:20:41+00:00 vinbonesjr systemd[1]: llama-gpu@Ornith-1.5-35B-Q4_K_M.service: Main process exited, code=dumped, status=6/ABRT
+2026-09-29T13:20:41+00:00 vinbonesjr systemd[1]: llama-gpu@Ornith-1.5-35B-Q4_K_M.service: Failed with result 'core-dump'.
+2026-09-29T13:20:41+00:00 vinbonesjr systemd[1]: llama-gpu@Ornith-1.5-35B-Q4_K_M.service: Consumed 1min 53.360s CPU time over 3min 6.700s wall clock time, 703.5M memory peak.
+2026-09-29T13:20:46+00:00 vinbonesjr systemd[1]: llama-gpu@Ornith-1.5-35B-Q4_K_M.service: Scheduled restart job, restart counter is at 1.
+2026-09-29T13:20:46+00:00 vinbonesjr systemd[1]: Starting llama.cpp server (SYCL, Arc A770, Ornith-1.5-35B-Q4_K_M)...
+2026-09-29T13:20:46+00:00 vinbonesjr systemd[1]: Started llama.cpp server (SYCL, Arc A770, Ornith-1.5-35B-Q4_K_M).
+2026-09-29T13:20:46+00:00 vinbonesjr sh[325687]: model: /mnt/ssd2/models/ornith-1.5-35b-a3b/Ornith-1.5-35B-Q4_K_M.gguf
+2026-09-29T13:20:46+00:00 vinbonesjr sh[325687]: 0.00.000.186 I srv  llama_server: initializing ...
+2026-09-29T13:20:46+00:00 vinbonesjr sh[325687]: 0.00.000.597 W server tools or MCP servers are enabled, using localhost as default CORS origin (change via --cors-origins)
+2026-09-29T13:20:46+00:00 vinbonesjr sh[325687]: 0.00.075.043 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+2026-09-29T13:20:46+00:00 vinbonesjr sh[325687]: 0.00.437.144 I srv         start: MCP warmup: 'fetch' discovered 1 tools
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.719.838 I srv         start: MCP warmup: 'hindsight' discovered 32 tools
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.895.650 I srv         start: MCP warmup: 'playwright' discovered 25 tools
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.932 I srv         setup: Added 58 MCP tools
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.937 W srv  llama_server: -----------------
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.937 W srv  llama_server: the following feature(s) are enabled:
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.938 W srv  llama_server:     server tools (experimental)
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.938 W srv  llama_server:     MCP servers (experimental)
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.938 W srv  llama_server: do not expose the server to untrusted environments
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.900.938 W srv  llama_server: -----------------
+2026-09-29T13:20:47+00:00 vinbonesjr sh[325687]: 0.00.902.511 I srv    load_model: loading model '/mnt/ssd2/models/ornith-1.5-35b-a3b/Ornith-1.5-35B-Q4_K_M.gguf'
+2026-09-29T13:20:49+00:00 vinbonesjr sh[325687]: 0.03.041.979 I cmn  common_init_: MoE cache: mode=off
+2026-09-29T13:20:49+00:00 vinbonesjr sh[325687]: 0.03.253.341 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for better performance
+2026-09-29T13:20:54+00:00 vinbonesjr sh[325687]: 0.07.518.732 I cmn          init: llama threadpool init, n_threads = 12
+2026-09-29T13:20:54+00:00 vinbonesjr sh[325687]: 0.07.786.175 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 131072, kv_unified = 'false'
+2026-09-29T13:20:54+00:00 vinbonesjr sh[325687]: 0.07.789.975 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+2026-09-29T13:20:54+00:00 vinbonesjr sh[325687]: 0.07.793.697 W srv          init: chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)
+2026-09-29T13:20:54+00:00 vinbonesjr sh[325687]: 0.07.793.726 I srv  llama_server: model loaded
+2026-09-29T13:20:54+00:00 vinbonesjr sh[325687]: 0.07.793.730 I srv  llama_server: listening on http://127.0.0.1:8089

@@ -1,0 +1,45 @@
+0.00.000.609 I llama_completion: llama backend init
+0.00.131.790 I llama_completion: load the model and apply lora adapter, if any
+0.02.227.922 I cmn  common_init_: MoE cache: mode=off
+0.02.414.919 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for better performance
+0.02.420.564 W model has unused tensor blk.40.attn_norm.weight (size = 8192 bytes) -- ignoring
+0.02.420.567 W model has unused tensor blk.40.post_attention_norm.weight (size = 8192 bytes) -- ignoring
+0.02.420.571 W model has unused tensor blk.40.attn_q.weight (size = 9437184 bytes) -- ignoring
+0.02.420.573 W model has unused tensor blk.40.attn_k.weight (size = 589824 bytes) -- ignoring
+0.02.420.574 W model has unused tensor blk.40.attn_v.weight (size = 860160 bytes) -- ignoring
+0.02.420.580 W model has unused tensor blk.40.attn_output.weight (size = 4718592 bytes) -- ignoring
+0.02.420.581 W model has unused tensor blk.40.attn_q_norm.weight (size = 1024 bytes) -- ignoring
+0.02.420.583 W model has unused tensor blk.40.attn_k_norm.weight (size = 1024 bytes) -- ignoring
+0.02.420.584 W model has unused tensor blk.40.ffn_gate_inp.weight (size = 2097152 bytes) -- ignoring
+0.02.420.586 W model has unused tensor blk.40.ffn_down_exps.weight (size = 220200960 bytes) -- ignoring
+0.02.420.588 W model has unused tensor blk.40.ffn_gate_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.420.590 W model has unused tensor blk.40.ffn_up_exps.weight (size = 150994944 bytes) -- ignoring
+0.02.420.592 W model has unused tensor blk.40.ffn_gate_inp_shexp.weight (size = 8192 bytes) -- ignoring
+0.02.420.593 W model has unused tensor blk.40.ffn_gate_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.420.595 W model has unused tensor blk.40.ffn_up_shexp.weight (size = 589824 bytes) -- ignoring
+0.02.420.596 W model has unused tensor blk.40.ffn_down_shexp.weight (size = 860160 bytes) -- ignoring
+0.02.420.600 W model has unused tensor blk.40.nextn.eh_proj.weight (size = 4718592 bytes) -- ignoring
+0.02.420.602 W model has unused tensor blk.40.nextn.enorm.weight (size = 8192 bytes) -- ignoring
+0.02.420.604 W model has unused tensor blk.40.nextn.hnorm.weight (size = 8192 bytes) -- ignoring
+0.02.420.609 W model has unused tensor blk.40.nextn.shared_head_norm.weight (size = 8192 bytes) -- ignoring
+0.06.900.383 I cmn          init: llama threadpool init, n_threads = 12
+0.07.111.929 I 
+0.07.111.982 I system_info: n_threads = 12 (n_threads_batch = 12) / 24 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.07.111.983 I 
+0.07.113.484 I sampler seed: 2088463505
+0.07.113.493 I sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64
+	top_k = 20, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+0.07.113.500 I sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist 
+0.07.113.500 I generate: n_ctx = 32768, n_batch = 2048, n_predict = 128, n_keep = 0
+0.07.113.500 I 
+0.13.890.619 I common_perf_print:    sampling time =      29.43 ms
+0.13.890.620 I common_perf_print:    samplers time =      13.64 ms /   690 tokens
+0.13.890.621 I common_perf_print:        load time =    4826.04 ms
+0.13.890.622 I common_perf_print: prompt eval time =    2823.53 ms /   562 tokens (    5.02 ms per token,   199.04 tokens per second)
+0.13.890.623 I common_perf_print:        eval time =    3922.70 ms /   127 runs   (   30.89 ms per token,    32.38 tokens per second)
+0.13.890.623 I common_perf_print:       total time =    6778.70 ms /   689 tokens
+0.13.890.625 I common_perf_print: unaccounted time =       3.04 ms /   0.0 %      (total - sampling - prompt eval - eval) / (total)
+0.13.890.625 I common_perf_print:    graphs reused =        126

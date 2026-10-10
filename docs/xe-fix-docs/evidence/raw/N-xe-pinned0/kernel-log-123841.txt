@@ -1,0 +1,5 @@
+2026-09-29T12:38:41+00:00 vinbonesjr kernel: xe 0000:03:00.0: [drm] Tile0: GT0: Engine reset: engine_class=bcs, logical_mask: 0x1, guc_id=6, state=0x3
+2026-09-29T12:38:41+00:00 vinbonesjr kernel: xe 0000:03:00.0: [drm] Tile0: GT0: Timedout job: seqno=106926, lrc_seqno=106926, guc_id=6, flags=0x20 in llama-bench [260404]
+2026-09-29T12:38:41+00:00 vinbonesjr kernel: xe 0000:03:00.0: [drm] Xe device coredump has been created
+2026-09-29T12:38:41+00:00 vinbonesjr kernel: xe 0000:03:00.0: [drm] Check your /sys/class/drm/card0/device/devcoredump/data
+2026-09-29T12:39:58+00:00 vinbonesjr kernel: xe 0000:03:00.0: [drm] Xe device coredump has been deleted.
