@@ -139,8 +139,20 @@ static void verify_failure(const char * grammar_bytes) {
     assert(result.rules.empty() && "should have failed");
 }
 
+static std::string grammar_with_alternates(size_t n_alternates) {
+    std::string grammar = "root ::= \"a\"";
+    for (size_t i = 0; i < n_alternates; ++i) {
+        grammar += " | \"a\"";
+    }
+    return grammar;
+}
+
 int main()
 {
+    verify_failure(
+        grammar_with_alternates(2001).c_str()
+    );
+
     verify_failure(R"""(
         root ::= "a"{,}"
     )""");
