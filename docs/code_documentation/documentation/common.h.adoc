@@ -1,0 +1,19 @@
+[[docs:funcstructs:common.h]]
+== common.h
+
+
+[[docs:funcstructs:common.h:struct-common_init_result]]
+=== struct common_init_result
+
+This structure is just a wrapper containing [.codebit]##`std::unique_ptr`##s to a [.codebit]#`llama_model`#, a [.codebit]#`llama_context`# and lora adapters:
+
+[source,C++]
+----
+// note: defines object's lifetime
+struct common_init_result {
+    llama_model_ptr   model;
+    llama_context_ptr context;
+
+    std::vector<llama_adapter_lora_ptr> lora;
+};
+----

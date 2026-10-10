@@ -1,0 +1,147 @@
+[[docs:funcstructs:ggml.c]]
+== ggml.c
+
+
+[[docs:funcstructs:ggml.c:variable-type_traits]]
+=== variable type_traits
+
+Full declaration: [.codebit]#`static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT]`#
+
+Holds the [.codebit]#`ggml_type_traits`# for every supported tensor data type.
+
+
+[[docs:funcstructs:ggml.c:struct-ggml_object]]
+=== struct ggml_object
+
+Acts as a handler for objects rather than "`being`" one. Holds the following information about them:
+
+* [.codebit]#`size_t offs`#: offset to handled object/data (relative to [.codebit]#`ggml_context`#'s memory buffer)
+* [.codebit]#`size_t size`#: size of memory chunk handled (not necessarily object size, see [.codebit]#`ggml_context`#)
+* [.codebit]#`struct ggml_object * next`#: pointer to the next [.codebit]#`ggml_object`# in the buffer
+* [.codebit]#`enum ggml_object_type type`#
+* [.codebit]#`char padding[4]`#: padding to 32 bytes (must multiple of [.codebit]#`GGML_MEM_ALIGN`#, which is 4 or 16, see [.codebit]#`ggml_context`# for details)
+
+
+[[docs:funcstructs:ggml.c:struct-ggml_context]]
+=== struct ggml_context
+
+Contains the following members:
+
+* [.codebit]#`size_t mem_size`#
+* [.codebit]#`void * mem_buffer`#
+* [.codebit]#`bool   mem_buffer_owned`#
+* [.codebit]#`bool   no_alloc`#
+* [.codebit]#`int    n_objects`#
+* [.codebit]#`struct ggml_object * objects_begin`#
+* [.codebit]#`struct ggml_object * objects_end`#
+
+The memory buffer is structured like this:
+
+[.codebit]#`GGML_OBJECT_1`#, [.codebit]#`DATA_1`#, (optional empty space for alignment), [.codebit]#`GGML_OBJECT_2`#, [.codebit]#`DATA_2`#, (optional empty space for alignment),...
+
+[.codebit]##`GGML_OBJECT`##s and [.codebit]##`DATA`##s are always [.codebit]#`GGML_MEM_ALIGN`# aligned ([.codebit]#`GGML_MEM_ALIGN`# is either 16 or 4). Note that currently the alignment of [.codebit]#`GGML_OBJECT`# is based solely on its size being a multiple of [.codebit]#`GGML_MEM_ALIGN`# and the correct alignment of the preceeding [.codebit]#`GGML_OBJECT`# and [.codebit]#`DATA`#. Moreover, when space is allocated, the optional space for alignment is calculated based solely on the size of [.codebit]#`DATA`# (this is done by [.codebit]#`ggml_new_object(...)`#).
+
+[.codebit]#`GGML_OBJECT.size`# = [.codebit]#`DATA_size`# + optional_padding_size
+
+[.codebit]#`GGML_OBJECT.offs`# = [.codebit]#`&DATA`# - [.codebit]#`ggml_context.mem_buffer`# (i.e. offset of [.codebit]#`DATA`# in the buffer)
+
+
+[[docs:funcstructs:ggml.c:ggml_type_size]]
+=== ggml_type_size
+
+Signature: [.codebit]#`size_t ggml_type_size(enum ggml_type type)`#
+
+Looks up the [.codebit]#`type_size`# in the [.codebit]#`type_traits`# array.
+
+
+[[docs:funcstructs:ggml.c:ggml_init]]
+=== ggml_init
+
+Signature:
+[.codebit]#`struct ggml_context * ggml_init(struct ggml_init_params params)`#
+
+Generates a [.codebit]#`ggml_context`# based on the [.codebit]#`params`# argument. On the first call it also thread-safely initializes the time system through [.codebit]#`ggml_time_init()`# (required only for Windows, this function is empty when compiled for Linux or macOS) and the [.codebit]#`ggml_table_f32_f16`# array.
+
+
+[[docs:funcstructs:ggml.c:ggml_free]]
+=== ggml_free
+
+Signature: [.codebit]#`void ggml_free(struct ggml_context * ctx)`#
+
+Frees the [.codebit]#`ggml_context`#'s memory buffer.
+
+
+[[docs:funcstructs:ggml.c:ggml_new_object]]
+=== ggml_new_object
+
+Signature:
+[.codebit]#`static struct ggml_object * ggml_new_object(struct ggml_context * ctx, enum ggml_object_type type, size_t size)`#
+
+Generates a [.codebit]#`ggml_object`# in [.codebit]#`ctx`#'s memory buffer while reserving memory for its associated data and taking care of alignment. See [.codebit]#`ggml_context`# for how that works.
+
+
+[[docs:funcstructs:ggml.c:ggml_new_tensor_impl]]
+=== ggml_new_tensor_impl
+
+Signature:
+[.codebit]#`static struct ggml_tensor * ggml_new_tensor_impl(struct ggml_context * ctx, enum   ggml_type      type, int n_dims, const int64_t * ne, struct ggml_tensor * view_src, size_t view_offs)`#
+
+Generates a [.codebit]#`ggml_tensor`#, along with its handler [.codebit]#`ggml_object`#, inside [.codebit]#`ctx`#'s buffer. The [.codebit]#`ggml_object`#'s [.codebit]#`DATA`# (see [.codebit]#`ggml_context`#) is composed of the [.codebit]#`ggml_tensor`# object and [.codebit]#`ggml_tensor->data`#.
+
+
+[[docs:funcstructs:ggml.c:ggml_new_tensor]]
+=== ggml_new_tensor
+
+Signature:
+[.codebit]#`struct ggml_tensor * ggml_new_tensor(struct ggml_context * ctx, enum ggml_type type, int n_dims, const int64_t * ne)`#
+
+Wrapper for [.codebit]#`ggml_new_tensor_impl(...)`#.
+
+
+[[docs:funcstructs:ggml.c:ggml_set_name]]
+=== ggml_set_name
+
+Signature:
+[.codebit]#`struct ggml_tensor * ggml_set_name(struct ggml_tensor * tensor, const char * name)`#
+
+Sets a tensor's name to [.codebit]#`name`#. If [.codebit]#`name`# is longer than the [.codebit]#`ggml_tensor.name`# array, it is truncated and always ended in [.codebit]#`NULL`#.
+
+
+[[docs:funcstructs:ggml.c:ggml_format_name]]
+=== ggml_format_name
+
+Signature:
+[.codebit]#`struct ggml_tensor * ggml_format_name(struct ggml_tensor * tensor, const char * fmt, ...)`#
+
+Uses [.codebit]#`vsnprintf(...)`# to set a tensor's name according to the given format and arguments.
+
+
+[[docs:funcstructs:ggml.c:incr_ptr_aligned]]
+=== incr_ptr_aligned
+
+Signature:
+[.codebit]#`static void * incr_ptr_aligned(void ** p, size_t size, size_t align)`#
+
+Returns the next [.codebit]#`align`#-aligned pointer while setting the [.codebit]#`void*`# pointed to by [.codebit]#`p`# to [.codebit]#`return_value + size`#, i.e. the end of the memory region in which an object of size [.codebit]#`size`# that must be [.codebit]#`align`#-aligned would be allocated. Note that for it to work [.codebit]#`align`# *_must_* be a power of 2.
+
+
+[[docs:funcstructs:ggml.c:ggml_graph_nbytes]]
+=== ggml_graph_nbytes
+
+Signature:
+[.codebit]#`static size_t ggml_graph_nbytes(size_t size, bool grads)`#
+
+Returns the number of bytes needed to store a [.codebit]#`ggml_cgraph`# with [.codebit]#`size`# nodes and [.codebit]#`size`# leaves, followed by its corresponding pointer-size-aligned arrays ([.codebit]#`nodes`#, [.codebit]#`leaves`#, [.codebit]#`visited_hash_set.keys`#, [.codebit]#`grads`# (optional), [.codebit]#`grad_accs`# (optional) and [.codebit]#`visited_hash_set.used`#, in that order).
+
+
+[[docs:funcstructs:ggml.c:ggml_new_graph_custom]]
+=== ggml_new_graph_custom
+
+Signature:
+[.codebit]#`struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t size, bool grads)`#
+
+Generates a [.codebit]#`ggml_cgraph`#, along with its handler [.codebit]#`ggml_object`#, inside [.codebit]#`ctx`#'s buffer. The [.codebit]#`ggml_object`#'s [.codebit]#`DATA`# (see [.codebit]#`ggml_context`#) is arranged as such:
+
+[.codebit]#`nodes`# array, [.codebit]#`leaves`# array, [.codebit]#`visited_hash_set.keys`# array, [.codebit]#`grads`# array (optional), [.codebit]#`grad_accs`# array (optional) and [.codebit]#`visited_hash_set.used`# array
+
+Everything is pointer-size-aligned, as described in the section on [.codebit]#`ggml_graph_nbytes(...)`#.

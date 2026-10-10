@@ -1,0 +1,47 @@
+[[docs:funcstructs:ggml-cuda.cu]]
+== ggml-cuda.cu
+
+
+[[docs:funcstructs:ggml-cuda.cu:variable-ggml_backend_cuda_interface]]
+=== variable ggml_backend_cuda_interface
+
+Full declaration:
+[.codebit]#`static const ggml_backend_i ggml_backend_cuda_interface`#
+
+Sets the members of [.codebit]#`ggml_backend_i`# to cuda-specific functions, with the exception of [.codebit]#`graph_plan_create`#, [.codebit]#`graph_plan_free`#, [.codebit]#`graph_plan_update`# and [.codebit]#`graph_plan_compute`#. Notably, [.codebit]#`graph_compute`# is set to point to [.codebit]#`ggml_backend_cuda_graph_compute(...)`#
+
+
+[[docs:funcstructs:ggml-cuda.cu:ggml_backend_cuda_device_init_backend]]
+=== ggml_backend_cuda_device_init_backend
+
+Signature:
+[.codebit]#`static ggml_backend_t ggml_backend_cuda_device_init_backend(ggml_backend_dev_t dev, const char * params)`#
+
+Deffers to [.codebit]#`ggml_backend_cuda_init(...)`#, calling it with the device's index (taken from [.codebit]#`+dev->context+`#).
+
+
+[[docs:funcstructs:ggml-cuda.cu:variable-ggml_backend_cuda_device_interface]]
+=== variable ggml_backend_cuda_device_interface
+
+Full declaration:
+[.codebit]#`static const ggml_backend_device_i ggml_backend_cuda_device_interface`#
+
+This sets all the members of [.codebit]#`ggml_backend_device_i`#, with the exception of [.codebit]#`buffer_from_host_ptr`#, to cuda specific functions. The [.codebit]#`init_backend`# member points to [.codebit]#`ggml_backend_cuda_device_init_backend(...)`#.
+
+
+[[docs:funcstructs:ggml-cuda.cu:ggml_backend_cuda_reg]]
+=== ggml_backend_cuda_reg
+
+Signature:
+[.codebit]#`ggml_backend_reg_t ggml_backend_cuda_reg()`#
+
+Thread safely initializes and returns the cuda backend registry in a singleton-like manner. This is were the [.codebit]##`ggml_backend_device`##s for cuda are created. Their interface is set to [.codebit]#`ggml_backend_cuda_device_interface`#.
+
+
+[[docs:funcstructs:ggml-cuda.cu:ggml_backend_cuda_init]]
+=== ggml_backend_cuda_init
+
+Signature:
+[.codebit]#`ggml_backend_t ggml_backend_cuda_init(int device)`#
+
+Initializes a cuda-specific [.codebit]#`ggml_backend`#. Its [.codebit]#`interface`# member is set to [.codebit]#`ggml_backend_cuda_interface`#.
