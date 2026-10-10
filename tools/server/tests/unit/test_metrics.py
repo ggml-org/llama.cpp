@@ -142,6 +142,37 @@ def test_metrics_generation_rate_excludes_first_token():
     assert abs(timings["predicted_per_second"] - expected) < 1e-6
 
 
+def test_metrics_generation_rate_during_active_request():
+    global server
+    server.start()
+
+    stream = server.make_stream_request("POST", "/completion", data={
+        "prompt": "I believe",
+        "n_predict": 128,
+        "ignore_eos": True,
+        "stream": True,
+    })
+    try:
+        for _ in range(4):
+            next(stream)
+
+        metrics = parse_metrics(fetch_metrics(server))
+        assert metrics["llamacpp:requests_processing"][1] == 1
+        assert metrics["llamacpp:predicted_tokens_seconds"][1] > 0
+
+        for _ in range(4):
+            next(stream)
+
+        metrics = parse_metrics(fetch_metrics(server))
+        assert metrics["llamacpp:requests_processing"][1] == 1
+        assert metrics["llamacpp:predicted_tokens_seconds"][1] > 0
+    finally:
+        list(stream)
+
+    metrics = parse_metrics(fetch_metrics(server))
+    assert metrics["llamacpp:tokens_predicted_total"][1] == 128
+
+
 @pytest.mark.parametrize("n_predict", [1, 8])
 def test_metrics_timings_are_finite(n_predict: int):
     global server
