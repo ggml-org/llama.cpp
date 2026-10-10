@@ -98,6 +98,9 @@ struct buffer_view {
 
 void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size);
 
+// weights in host memory, e.g. the MoE experts kept in the CPU
+bool llama_tensor_is_host_weight(const ggml_tensor * t);
+
 void replace_all(std::string & s, const std::string & search, const std::string & replace);
 
 // TODO: rename to llama_format ?

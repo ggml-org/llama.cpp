@@ -16,6 +16,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -32,6 +33,27 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
     }
     throw std::runtime_error("Unsupported ctx type");
+}
+
+// with pipeline parallelism, each device uploads the host weights of its own layers, so they must be spread over the devices
+static bool llama_host_weights_spread(const llama_model & model) {
+    std::unordered_map<ggml_backend_dev_t, size_t> dev_bytes;
+    size_t total = 0;
+    for (const auto & [name, t] : model.tensors_by_name) {
+        int il = -1;
+        if (sscanf(name.c_str(), "blk.%d.", &il) != 1 || il < 0 || il >= (int) model.hparams.n_layer_all || !llama_tensor_is_host_weight(t)) {
+            continue;
+        }
+        dev_bytes[model.dev_layer(il)] += ggml_nbytes(t);
+        total += ggml_nbytes(t);
+    }
+    // no device holds more than 2/3 of them
+    for (const auto & [dev, bytes] : dev_bytes) {
+        if (3*bytes > 2*total) {
+            return false;
+        }
+    }
+    return true;
 }
 
 struct llm_fused_op_probe {
@@ -431,13 +453,13 @@ llama_context::llama_context(
 
         // TODO: move these checks to ggml_backend_sched
         // enabling pipeline parallelism in the scheduler increases memory usage, so it is only done when necessary
+        // with tensor overrides, the weights in host memory must be offloaded to the devices and spread over them
         bool pipeline_parallel =
             model.n_devices() > 1 &&
             model.n_gpu_layers() > model.hparams.n_layer_all &&
             model.split_mode() == LLAMA_SPLIT_MODE_LAYER &&
             cparams.offload_kqv &&
-            !model.has_tensor_overrides() &&
-            cparams.moe_cache_size == 0; // not supported by the MoE cache
+            (!model.has_tensor_overrides() || (cparams.op_offload && llama_host_weights_spread(model)));
 
         // pipeline parallelism requires support for async compute and events in all devices
         if (pipeline_parallel) {
@@ -783,6 +805,7 @@ void llama_context::synchronize() {
     }
 
     ggml_backend_sched_synchronize(sched.get());
+    copy_experts.in_flight = false;
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -1412,6 +1435,20 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    // [TAG_PIPELINE_RESERVE] with pipeline parallelism, reserve the worst-case graph of sched_reserve again after a different graph
+    // (e.g. a small batch with host weights), otherwise every ubatch of the prompt reallocates the compute buffers
+    if (cparams.pipeline_parallel && gtype == ctx_type_to_graph_type(cparams.ctx_type)) {
+        const uint32_t n_tokens_reserve = std::min(cparams.n_ctx, cparams.n_ubatch);
+        if (ubatch.n_tokens != n_tokens_reserve) {
+            worst_case_reserved = false;
+        } else if (!worst_case_reserved) {
+            const auto mctx_reserve = memory ? memory->init_full() : nullptr;
+            if ((memory && !mctx_reserve) || !graph_reserve(n_tokens_reserve, n_seqs_worst_case, std::min(n_tokens_reserve, cparams.n_outputs_max), mctx_reserve.get())) {
+                LLAMA_LOG_ERROR("%s: failed to reserve the worst-case graph\n", __func__);
+            }
+        }
+    }
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1433,6 +1470,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // that the previous compute is still reading.
         if (cparams.pipeline_parallel) {
             ggml_backend_sched_synchronize(sched.get());
+            copy_experts.in_flight = false;
         }
 
         n_reused++;
@@ -2528,6 +2566,9 @@ ggml_cgraph * llama_context::graph_reserve(
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
+    // [TAG_PIPELINE_RESERVE] the worst-case graph of sched_reserve
+    const bool worst_case = n_tokens == std::min(cparams.n_ctx, cparams.n_ubatch) && n_outputs == std::min(n_tokens, cparams.n_outputs_max);
+
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
@@ -2576,6 +2617,13 @@ ggml_cgraph * llama_context::graph_reserve(
         GGML_ASSERT(!sizes);
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         return nullptr;
+    } else {
+        // [TAG_PIPELINE_RESERVE]
+        worst_case_reserved = worst_case;
+        if (worst_case) {
+            n_seqs_worst_case = n_seqs;
+        }
+        copy_experts.in_flight = false; // the reserve synchronizes the scheduler
     }
 
     return gf;
@@ -2627,6 +2675,8 @@ ggml_status llama_context::graph_compute(
     }
 
     copy_experts.reset();
+    copy_experts.prev_in_flight = copy_experts.in_flight;
+    copy_experts.in_flight      = true;
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
@@ -2664,6 +2714,18 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
 
     const int64_t n_expert    = src->ne[2];
     const size_t  expert_size = src->nb[2];
+
+    // with pipeline parallelism, reading the ids would stall the graphs in flight, so upload all the experts of a large batch:
+    // 16 ids per expert while a previous graph runs, else a full batch with 64 ids per expert (the graph may be alone)
+    // the flag stays for the rest of the graph, e.g. for the last layer on the output rows
+    if (lctx->cparams.pipeline_parallel) {
+        const int64_t n_ids      = ggml_nelements(ids);
+        const bool    full_batch = ids->ne[1] >= (int64_t) std::min(lctx->cparams.n_ctx, lctx->cparams.n_ubatch);
+        st.upload_all = st.upload_all || (st.prev_in_flight ? n_ids >= 16*n_expert : full_batch && n_ids >= 64*n_expert);
+        if (st.upload_all) {
+            return false;
+        }
+    }
 
     if (ids != st.ids || (int64_t) st.used.size() != n_expert) {
         st.ids_data.resize(ggml_nbytes(ids)/sizeof(int32_t));
@@ -2722,6 +2784,15 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     return true;
 }
 
+static bool llama_has_host_weight(const ggml_tensor * t) {
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (t->src[i] && llama_tensor_is_host_weight(t->src[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 llm_graph_cb llama_context::graph_get_cb() const {
     return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
         if (il >= 0) {
@@ -2742,6 +2813,21 @@ llm_graph_cb llama_context::graph_get_cb() const {
                         if (ggml_backend_supports_op(backend.get(), cur)) {
                             ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
                         }
+                    }
+                }
+            }
+        }
+
+        // with pipeline parallelism, run the ops with host weights on the device of their layer, also the small ones (a CPU op stalls the pipeline)
+        // cur can be a bias or a scale after the matmul, row lookups (e.g. token embeddings) copy only the needed rows
+        if (cparams.pipeline_parallel && cparams.op_offload && il != -1 && ubatch.n_tokens >= 32) {
+            for (ggml_tensor * t : { cur, cur->src[0] }) {
+                if (t == nullptr || t->op == GGML_OP_GET_ROWS || !llama_has_host_weight(t)) {
+                    continue;
+                }
+                for (const auto & backend : backends) {
+                    if (ggml_backend_get_device(backend.get()) == model.dev_layer(il) && ggml_backend_supports_op(backend.get(), t)) {
+                        ggml_backend_sched_set_tensor_backend(sched.get(), t, backend.get());
                     }
                 }
             }
