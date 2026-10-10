@@ -18,6 +18,7 @@
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 //------------------------------------------------------------------------------
 // rms_norm
 //------------------------------------------------------------------------------
@@ -94,7 +95,9 @@ kernel void kernel_rms_norm(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 //------------------------------------------------------------------------------
 // rms_norm_mul
 //------------------------------------------------------------------------------
@@ -188,6 +191,68 @@ kernel void kernel_rms_norm_mul(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)];
     }
 }
+#endif
+
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 3
+//------------------------------------------------------------------------------
+// Fused add (residual) + rms_norm + mul (norm weight): s = a + b (written, it is the residual
+// stream), y = rmsnorm(s) * w. One workgroup per row of ne00 floats; w is one row.
+//------------------------------------------------------------------------------
+#ifdef INTEL_GPU
+REQD_SUBGROUP_SIZE_32
+#elif defined (ADRENO_GPU)
+REQD_SUBGROUP_SIZE_64
+#endif
+kernel void kernel_add_rms_norm_mul(
+        global char * src_a,
+        ulong offset_a,
+        global char * src_b,
+        ulong offset_b,
+        global char * src_w,
+        ulong offset_w,
+        global char * dst_s,
+        ulong offset_s,
+        global char * dst_y,
+        ulong offset_y,
+        int ne00,
+        float eps,
+        local float * sum
+) {
+    const ulong row = get_group_id(0);
+    global const float4 * a = (global const float4 *) (src_a + offset_a) + row*(ne00/4);
+    global const float4 * b = (global const float4 *) (src_b + offset_b) + row*(ne00/4);
+    global const float4 * w = (global const float4 *) (src_w + offset_w);
+    global       float4 * s = (global       float4 *) (dst_s + offset_s) + row*(ne00/4);
+    global       float4 * y = (global       float4 *) (dst_y + offset_y) + row*(ne00/4);
+
+    if (get_sub_group_id() == 0) {
+        sum[get_sub_group_local_id()] = 0.0f;
+    }
+
+    float sumf = 0.0f;
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        const float4 v = a[i00] + b[i00];
+        s[i00] = v;
+        sumf += dot(v, v);
+    }
+    sumf = sub_group_reduce_add(sumf);
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (get_sub_group_local_id() == 0) {
+        sum[get_sub_group_id()] = sumf;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    sumf = sum[get_sub_group_local_id()];
+    sumf = sub_group_reduce_add(sumf);
+
+    const float scale = 1.0f/sqrt(sumf/ne00 + eps);
+
+    // each lane reads back only the s elements it wrote itself, so no global barrier is needed
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        y[i00] = (s[i00] * scale) * w[i00];
+    }
+}
 
 //------------------------------------------------------------------------------
 // rms_norm + mul (norm weight) + add (residual), fused. Mirrors
@@ -275,7 +340,9 @@ kernel void kernel_rms_norm_mul_add(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)] + g[i00%(ne20/4)];
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 4
 //------------------------------------------------------------------------------
 // rms_norm + mul(norm weight) + add(residual) + mul(scalar scale), fused.
 // Computes y = ((rmsnorm(x) * w) + g) * s, where s is a broadcast SCALAR (e.g.
@@ -367,3 +434,4 @@ kernel void kernel_rms_norm_mul_add_scale(
         y[i00] = ((x[i00] * scale) * f[i00%(ne10/4)] + g[i00%(ne20/4)]) * sc;
     }
 }
+#endif
