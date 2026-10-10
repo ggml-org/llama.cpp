@@ -4169,6 +4169,21 @@ bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler *
     return ctx->set_sampler(seq_id, smpl);
 }
 
+llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+    llama_sampling_output_view result{};
+    result.token = ctx->get_sampled_token_ith(i);
+    result.probs = ctx->get_sampled_probs_ith(i);
+    result.sampled_logits = ctx->get_sampled_logits_ith(i);
+    result.candidates = ctx->get_sampled_candidates_ith(i);
+    result.n_probs = static_cast<uint32_t>(ctx->get_sampled_probs_count(i));
+    result.n_logits = static_cast<uint32_t>(ctx->get_sampled_logits_count(i));
+    if (!result.sampled_logits) {
+        result.logits = ctx->get_logits_ith(i);
+    }
+    return result;
+}
+
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 

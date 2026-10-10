@@ -146,3 +146,15 @@ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_mode
 // if out is nullptr, returns the number of tokens without writing to out
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
+
+// Read one sampling row after synchronization. Borrowed pointers are valid until the context outputs change.
+struct llama_sampling_output_view {
+    llama_token token;
+    const float * probs;
+    const float * sampled_logits;
+    const llama_token * candidates;
+    const float * logits;
+    uint32_t n_probs;
+    uint32_t n_logits;
+};
+LLAMA_API llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, int32_t i);
