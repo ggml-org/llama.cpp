@@ -5,6 +5,7 @@
 #ifdef USE_SUBGROUPS
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_vote : enable
 #endif
 
 #include "types.glsl"
@@ -18,40 +19,47 @@ layout (push_constant) uniform parameter
     uint32_t nb01;
     uint32_t a_offset;
     uint32_t n_experts;
-    uint32_t hoist_row_ids;
     uint32_t ne00mp;
     uint32_t ne00L;
+    uint32_t row_tile_size;
+    uint32_t row_ids_offset;
 } p;
 
 #define BLOCK_SIZE 256
+#define EXPERTS_PER_CHUNK 1024
 
 layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
 
-// Upper bound on n_experts for the hoisted row-id path. Must match the limit in
-// ggml_vk_mul_mat_id_q_f16 (hoist_row_ids). The non-hoisted reduction below only
-// needs BLOCK_SIZE entries.
-#define MAX_EXPERTS 1024
+shared uint vals[EXPERTS_PER_CHUNK];
+shared uint offsets[EXPERTS_PER_CHUNK];
+shared uint cursors[EXPERTS_PER_CHUNK];
 
-shared uint vals[MAX_EXPERTS];
-shared uint offsets[MAX_EXPERTS];
-shared uint cursors[MAX_EXPERTS];
+// data_d[0] is the tile count. Each tile has (expert, valid rows).
+// Packed (token << 16) | slot row ids start at p.row_ids_offset, with each expert on a tile boundary.
+void write_tiles(uint expert, uint count, uint tile_begin, uint n_tiles) {
+    for (uint t = 0; t < n_tiles; ++t) {
+        const uint descriptor = 1 + 2 * (tile_begin + t);
+        data_d[descriptor] = expert;
+        data_d[descriptor + 1] = min(p.row_tile_size, count - t * p.row_tile_size);
+    }
+}
 
-// data_d layout when p.hoist_row_ids is set:
-//   [0,              n_experts)   per-expert row count
-//   [n_experts,    2*n_experts)   per-expert start offset into the row id region
-//   [2*n_experts]                 total row count
-//   [2*n_experts + 1,         )   row ids grouped by expert, packed as (i01 << 16) | (i00 & 0xffff)
-// Otherwise only data_d[expert_id] is written, holding that expert's row count.
 void main() {
-    const uint expert_id = gl_WorkGroupID.x;
     const uint num_elements = p.ne00 * p.ne01;
     const uint tid = gl_LocalInvocationID.x;
+    const uint tile_shift = findLSB(p.row_tile_size);
+    uint total_tiles = 0;
+#ifdef USE_SUBGROUPS
+    // Use the subgroup that contains invocation 0.
+    const bool prefix_subgroup = subgroupAny(tid == 0);
+#endif
 
-    if (p.hoist_row_ids != 0) {
-        for (uint e = tid; e < p.n_experts; e += BLOCK_SIZE) {
+    for (uint expert_base = 0; expert_base < p.n_experts;) {
+        const uint n_experts = min(EXPERTS_PER_CHUNK, p.n_experts - expert_base);
+        for (uint e = tid; e < n_experts; e += BLOCK_SIZE) {
             vals[e] = 0;
         }
         barrier();
@@ -59,46 +67,43 @@ void main() {
         for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
             const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
             const uint i00 = idx - i01 * p.ne00;
-            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
-            if (expert < p.n_experts) {
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00] - expert_base;
+            if (expert < n_experts) {
                 atomicAdd(vals[expert], 1);
             }
         }
         barrier();
 
 #ifdef USE_SUBGROUPS
-        if (gl_SubgroupID == 0) {
-            // pad the trip count so the subgroup ops stay in uniform control flow
-            const uint n_experts_padded = (p.n_experts + gl_SubgroupSize - 1) & ~(gl_SubgroupSize - 1);
-            uint base = 0;
-            for (uint expert = gl_SubgroupInvocationID; expert < n_experts_padded; expert += gl_SubgroupSize) {
-                const bool in_range = expert < p.n_experts;
-                const uint count = in_range ? vals[expert] : 0;
-                const uint offset = base + subgroupExclusiveAdd(count);
+        if (prefix_subgroup) {
+            const uint n_experts_padded = (n_experts + gl_SubgroupSize - 1) & ~(gl_SubgroupSize - 1);
+            uint base = subgroupAdd(tid == 0 ? total_tiles : 0u);
+            for (uint e = gl_SubgroupInvocationID; e < n_experts_padded; e += gl_SubgroupSize) {
+                const bool in_range = e < n_experts;
+                const uint count = in_range ? vals[e] : 0;
+                const uint n_tiles = (count + p.row_tile_size - 1) >> tile_shift;
+                const uint tile_begin = base + subgroupExclusiveAdd(n_tiles);
                 if (in_range) {
-                    data_d[expert] = count;
-                    data_d[p.n_experts + expert] = offset;
-                    offsets[expert] = offset;
-                    cursors[expert] = 0;
+                    offsets[e] = tile_begin * p.row_tile_size;
+                    cursors[e] = 0;
+                    write_tiles(expert_base + e, count, tile_begin, n_tiles);
                 }
-                base += subgroupAdd(count);
+                base += subgroupAdd(n_tiles);
             }
-            if (subgroupElect()) {
-                data_d[2 * p.n_experts] = base;
+            if (tid == 0) {
+                total_tiles = base;
             }
         }
 #else
         if (tid == 0) {
-            uint offset = 0;
-            for (uint expert = 0; expert < p.n_experts; ++expert) {
-                const uint count = vals[expert];
-                data_d[expert] = count;
-                data_d[p.n_experts + expert] = offset;
-                offsets[expert] = offset;
-                cursors[expert] = 0;
-                offset += count;
+            for (uint e = 0; e < n_experts; ++e) {
+                const uint count = vals[e];
+                const uint n_tiles = (count + p.row_tile_size - 1) >> tile_shift;
+                offsets[e] = total_tiles * p.row_tile_size;
+                cursors[e] = 0;
+                write_tiles(expert_base + e, count, total_tiles, n_tiles);
+                total_tiles += n_tiles;
             }
-            data_d[2 * p.n_experts] = offset;
         }
 #endif
         barrier();
@@ -106,35 +111,16 @@ void main() {
         for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
             const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
             const uint i00 = idx - i01 * p.ne00;
-            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
-            if (expert < p.n_experts) {
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00] - expert_base;
+            if (expert < n_experts) {
                 const uint row = atomicAdd(cursors[expert], 1);
-                const uint packed_row_id = (i01 << 16) | (i00 & 0xffffu);
-                data_d[2 * p.n_experts + 1 + offsets[expert] + row] = packed_row_id;
+                data_d[p.row_ids_offset + offsets[expert] + row] = (i01 << 16) | i00;
             }
         }
-        return;
+        // The next chunk clears vals. Scatter uses only offsets and cursors.
+        expert_base += n_experts;
     }
-
-    uint count = 0;
-    for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
-        const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
-        const uint i00 = idx - i01 * p.ne00;
-        const uint a = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
-
-        count += uint(a == expert_id);
-    }
-
-    vals[tid] = count;
-    barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-            vals[tid] += vals[tid + s];
-        }
-        barrier();
-    }
-
     if (tid == 0) {
-        data_d[expert_id] = vals[0];
+        data_d[0] = total_tiles;
     }
 }
