@@ -217,23 +217,29 @@ GET_ROWS_THREAD_DT_FN(q8_0, Q8_0_BYTES, int32_t, { compute_get_rows_q8_0((float 
 GET_ROWS_THREAD_DT_FN(q8_0, Q8_0_BYTES, int64_t, { compute_get_rows_q8_0((float *)dst_spad, src_spad, cur_elems); })
 
 
-static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const uint8_t * tile, uint32_t row, bool q4, bool q4_k) {
+// bytes row, row + 32, row + 64 and row + 96 of v, to bytes 0..3
+static inline HVX_Vector get_rows_gather4(HVX_Vector v, uint32_t row) {
+    v = Q6_V_vror_VR(v, row);
+    HVX_Vector packed = Q6_V_vmux_QVV(Q6_Q_vsetq_R(1), v, Q6_V_vror_VR(v, 31));
+    packed = Q6_V_vmux_QVV(Q6_Q_vsetq_R(2), packed, Q6_V_vror_VR(v, 62));
+    return Q6_V_vmux_QVV(Q6_Q_vsetq_R(3), packed, Q6_V_vror_VR(v, 93));
+}
+
+// q5_k: the Q4_K tile followed by the plane of 5th bits, see HTP_MM_WEIGHT_TILE_SIZE_Q5_K
+static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const uint8_t * tile, uint32_t row, bool q4, bool q4_k, bool q5_k) {
     const HVX_VectorPred first2 = Q6_Q_vsetq_R(2);
     const HVX_VectorPred first4 = Q6_Q_vsetq_R(4);
     HVX_Vector vq = Q6_V_vzero();
     if (q4) {
-        const HVX_VectorPred first1 = Q6_Q_vsetq_R(1);
-        const HVX_VectorPred first3 = Q6_Q_vsetq_R(3);
+        const HVX_Vector p5 = q5_k ? get_rows_gather4(hvx_vmem(tile + 640), row) : Q6_V_vzero();
+        HVX_Vector vh = Q6_V_vzero();
         for (int group = 3; group >= 0; --group) {
-            const HVX_Vector v = Q6_V_vror_VR(hvx_vmem(tile + group * VLEN), row);
-            // Four planes contribute bytes at 0, 32, 64 and 96 after rotation.
-            HVX_Vector packed = Q6_V_vmux_QVV(first1, v, Q6_V_vror_VR(v, 31));
-            packed = Q6_V_vmux_QVV(first2, packed, Q6_V_vror_VR(v, 62));
-            packed = Q6_V_vmux_QVV(first3, packed, Q6_V_vror_VR(v, 93));
-            vq = Q6_V_vmux_QVV(first4, packed, Q6_V_vror_VR(vq, VLEN - 4));
+            vq = Q6_V_vmux_QVV(first4, get_rows_gather4(hvx_vmem(tile + group * VLEN), row), Q6_V_vror_VR(vq, VLEN - 4));
+            vh = Q6_V_vmux_QVV(first4, Q6_Vub_vlsr_VubR(p5, 2 * group), Q6_V_vror_VR(vh, VLEN - 4));
         }
-        const HVX_Vector lo = Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F));
-        const HVX_Vector hi = Q6_Vub_vlsr_VubR(vq, 4);
+        const HVX_Vector one = Q6_Vb_vsplat_R(1);
+        const HVX_Vector lo = Q6_V_vor_VV(Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F)), Q6_Vw_vasl_VwR(Q6_V_vand_VV(vh, one), 4));
+        const HVX_Vector hi = Q6_V_vor_VV(Q6_Vub_vlsr_VubR(vq, 4), Q6_Vw_vasl_VwR(Q6_V_vand_VV(Q6_Vub_vlsr_VubR(vh, 1), one), 4));
         vq = Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -1));
         if (!q4_k) {
             vq = Q6_Vb_vsub_VbVb(vq, Q6_Vb_vsplat_R(8));
@@ -349,8 +355,9 @@ static void get_rows_thread_tiled(unsigned int nth, unsigned int ith, void * dat
     const uint32_t tile_size   = grctx->tile_size;
     const uint32_t tile_stride = grctx->tile_stride;
     const uint32_t dst_bytes   = ne00 * sizeof(float);
-    const bool is_q4 = octx->src[0]->type == HTP_TYPE_Q4_0 || octx->src[0]->type == HTP_TYPE_Q4_K;
-    const bool is_q4_k = octx->src[0]->type == HTP_TYPE_Q4_K;
+    const bool is_q5_k = octx->src[0]->type == HTP_TYPE_Q5_K;
+    const bool is_q4_k = octx->src[0]->type == HTP_TYPE_Q4_K || is_q5_k;
+    const bool is_q4 = octx->src[0]->type == HTP_TYPE_Q4_0 || is_q4_k;
     const bool is_q6_k = octx->src[0]->type == HTP_TYPE_Q6_K;
 
     for (uint32_t step = 0, spad_idx = 0; step < ir1 - ir0 && spad_idx < 2; ++step, ++spad_idx) {
@@ -382,7 +389,7 @@ static void get_rows_thread_tiled(unsigned int nth, unsigned int ith, void * dat
             if (is_q6_k) {
                 compute_get_rows_q6_k(dst_block, tile, task.row);
             } else {
-                compute_get_rows_tiled(dst_block, tile, task.row, is_q4, is_q4_k);
+                compute_get_rows_tiled(dst_block, tile, task.row, is_q4, is_q4_k, is_q5_k);
             }
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
@@ -412,6 +419,7 @@ int op_get_rows(struct htp_ops_context * octx) {
         octx->src[0]->type != HTP_TYPE_F16 &&
         octx->src[0]->type != HTP_TYPE_Q4_0 &&
         octx->src[0]->type != HTP_TYPE_Q4_K &&
+        octx->src[0]->type != HTP_TYPE_Q5_K &&
         octx->src[0]->type != HTP_TYPE_Q6_K &&
         octx->src[0]->type != HTP_TYPE_Q8_0 &&
         octx->src[0]->type != HTP_TYPE_I32) {

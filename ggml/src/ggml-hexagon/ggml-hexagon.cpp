@@ -2781,6 +2781,11 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
     }
     try {
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false);
+        // the kernel aligns an IOVA mapping to its size rounded up to a power of 2: map a large buffer now,
+        // a lazy mapping comes after the small ones and can find no aligned hole (dma64 needs the usage, not known yet)
+        if (sess && !opt_dma64 && size > ((size_t) 256 << 20)) {
+            sbuf->mmap(false);
+        }
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate device buffer context: %s\n", dev_ctx->c_name(), exc.what());
@@ -2846,8 +2851,14 @@ static size_t parse_size(const char * str, size_t default_unit = 1024 * 1024) {
     return (size_t) (val * default_unit);
 }
 
+// the IOMMU maps a buffer in a slot aligned to the next power of two of its size: keep the 4 KiB guard page of
+// ggml_hexagon_shared_buffer inside the limit, a full chunk of limit + 4 KiB would take a slot twice as large
+static size_t ggml_hexagon_chunk_limit(size_t limit) {
+    return limit > 4096 ? limit - 4096 : limit;
+}
+
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    return opt_mbuf_dyn;
+    return ggml_hexagon_chunk_limit(opt_mbuf_dyn);
     GGML_UNUSED(buft);
 }
 
@@ -2891,7 +2902,7 @@ static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buf
     ggml_backend_hexagon_alloc_buffer_n_plan_t plan;
 
     const size_t alignment = ggml_backend_buft_get_alignment(buft);
-    const size_t max_size  = opt_mbuf_static > 0 ? opt_mbuf_static : SIZE_MAX;
+    const size_t max_size  = opt_mbuf_static > 0 ? ggml_hexagon_chunk_limit(opt_mbuf_static) : SIZE_MAX;
 
     std::vector<ggml_backend_hexagon_alloc_unit> units;
 
@@ -3643,6 +3654,9 @@ struct ggml_hexagon_opbatch {
         const ggml_tensor * src1 = last_node.src1();
 
         if (src2->type != GGML_TYPE_F32) return false;
+
+        // the fused kernel writes the shape of the MUL_MAT output: the ADD must not broadcast it
+        if (!ggml_are_same_shape(mm_out, node.dst())) return false;
 
         const struct htp_mm_kernel_params * orig_kparams = (const struct htp_mm_kernel_params *) last_node.kernel_params;
         struct htp_mm_kernel_params kparams;
@@ -5433,8 +5447,8 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
         return false;
     }
 
-    // HMX paths require K aligned to 32.
-    if (ne00 % 32 != 0) {
+    // HMX paths require K aligned to 32, the plain 2D kernel pads the K of F16/F32 weights (not repacked).
+    if (ne00 % 32 != 0 && (ggml_hexagon_is_repack_type((ggml_type) wtype) || is_matmul_id || is_batched)) {
         return false;
     }
 
@@ -5740,7 +5754,7 @@ static void ggml_hexagon_precompute_matmul_params_impl(
 
     const int wtype = src0->type;
     const bool is_repack = ggml_hexagon_is_repack_type((ggml_type) wtype);
-    const int ne00_padded = is_repack ? hex_round_up(ne00, 32) : ne00;
+    const int ne00_padded = hex_round_up(ne00, 32);
     const int ne01_padded = is_repack ? hex_round_up(ne01, 32) : ne01;
     const int ne11_padded = hex_round_up(ne11, 32);
     // VTCM has to hold whole 32-row weight tiles, so size for the rounded-up N
@@ -7432,7 +7446,7 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src1 = op->src[1]; // indices
     const struct ggml_tensor * dst  = op;
 
-    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K) && src0->view_src) {
+    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) && src0->view_src) {
         return false;
     }
 
@@ -7441,7 +7455,7 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     if (src0_base->buffer && ggml_backend_buffer_is_hexagon(src0_base->buffer) && src0_base->extra) {
         const auto * extra = (const ggml_hexagon_tensor_extra *) src0_base->extra;
         is_repacked = (extra->flags & GGML_HEXAGON_TENSOR_REPACK) != 0;
-        if (is_repacked && src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0) {
+        if (is_repacked && src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0) {
             return false;
         }
     }
@@ -7452,7 +7466,7 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
         return false;
     }
 
-    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K) && src0->buffer && ggml_backend_buffer_get_size(src0->buffer) != 0 && !is_repacked) {
+    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) && src0->buffer && ggml_backend_buffer_get_size(src0->buffer) != 0 && !is_repacked) {
         return false;
     }
 
@@ -7461,11 +7475,11 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     }
 
     if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 &&
-        src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_I32) {
+        src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_I32) {
         return false;
     }
 
-    if ((src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K) && (!ggml_is_contiguous(src0) || ggml_is_permuted(src0) || src0->ne[0] % QK_K)) {
+    if ((src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) && (!ggml_is_contiguous(src0) || ggml_is_permuted(src0) || src0->ne[0] % QK_K)) {
         return false;
     }
 
@@ -7495,7 +7509,7 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     }
 
     // Tiled quantized weights have no raw fallback. Mark only accepted tensors for repacking.
-    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K) && !src0->buffer) {
+    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) && !src0->buffer) {
         sess->needs_repack.insert(src0);
     }
 
@@ -7945,7 +7959,8 @@ static bool mm_is_hmx_eligible(const ggml_tensor * t) {
 
 static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
     if (kparams->n_hmx) {
-        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D;
+        // only the plain 2D kernel pads a K that is not a multiple of 32
+        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D && src0->ne[0] % 32 == 0;
     }
 
     if (!ggml_hexagon_is_repack_type(src0->type) || src0->type == GGML_TYPE_Q6_K) {
@@ -7957,7 +7972,7 @@ static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struc
 
 static bool is_supported_mul_mat_id_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
     if (kparams->n_hmx) {
-        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D;
+        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D && src0->ne[0] % 32 == 0;
     }
 
     if (!ggml_hexagon_is_repack_type(src0->type)) {
@@ -8491,8 +8506,11 @@ static bool ggml_hexagon_cpy_tensor_async_virt(ggml_backend_t backend_src, ggml_
     HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu\n",
                 sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src));
 
+    // src may come from ops still queued on sess_src, and those may need ops queued on sess_dst before this copy:
+    // run them now, a later flush of the peers could send the copy first
+    sess_src->flush_sync();
+
     sess_dst->enqueue_cpy(src, dst);
-    sess_dst->add_peer(sess_src);
 
     return true;
 }
@@ -8641,6 +8659,8 @@ static void ggml_backend_hexagon_set_tensor_async(ggml_backend_t backend, struct
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     HEX_VERBOSE("ggml-hex: %s set-tensor-async %s : data %p offset %zu size %zu usage %d\n",
                 sess->c_name(), tensor->name, data, offset, size, tensor->buffer ? (int) tensor->buffer->usage : -1);
+    // the host writes the memory directly: queued ops may still read or write it
+    sess->flush_sync();
     ggml_backend_tensor_set(tensor, data, offset, size);
 }
 
@@ -8666,6 +8686,8 @@ static void ggml_backend_hexagon_set_tensor_2d_async(ggml_backend_t backend,
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     HEX_VERBOSE("ggml-hex: %s set-tensor-2d-async %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d\n",
                 sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, tensor->buffer ? (int) tensor->buffer->usage : -1);
+    // the host writes the memory directly: queued ops may still read or write it
+    sess->flush_sync();
     ggml_backend_tensor_set_2d(tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 

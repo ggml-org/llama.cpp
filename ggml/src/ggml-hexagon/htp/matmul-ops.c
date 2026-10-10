@@ -2453,7 +2453,7 @@ static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned i
 static void dequantize_tiled_weight_chunk_to_fp16_tiles(
         struct htp_context *ctx, __fp16 *vtcm_dst,
         const void *weight_src_ddr,
-        int n_cols, int k_block,
+        int n_cols, int k_block, int k_valid,
         size_t row_stride, int weight_type,
         int n_k_tiles, struct fastdiv_values n_k_tiles_div,
         worker_callback_t dequant_worker_fn, int n_threads) {
@@ -2473,6 +2473,7 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     state.src              = (const uint8_t *)weight_src_ddr;
     state.n_cols           = n_cols;
     state.k_block          = k_block;
+    state.k_valid          = k_valid;
     state.row_stride       = row_stride;
     state.weight_type      = weight_type;
     state.n_k_tiles        = n_k_tiles;
@@ -2802,9 +2803,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
     const size_t vec_dot_size = k * sizeof(__fp16);
     const size_t vtcm_budget  = ctx->vtcm_size;
 
+    // F16/F32 rows: copy the k_valid values only, the conversion reads the padding up to k as zero
     const uint32_t dma_dst_stride  = is_quant ? aligned_tile_size : row_stride;
     const uint32_t dma_src_stride  = is_quant ? tile_size : weight_stride;
-    const uint32_t dma_width_bytes = is_quant ? tile_size : row_stride;
+    const uint32_t dma_width_bytes = is_quant ? tile_size : htp_mm_get_tiled_row_stride(weight_type, k_valid);
 
     size_t m_chunk_n_rows = m_chunk;
     size_t n_chunk_n_cols = n_chunk;
@@ -2906,7 +2908,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 // 2. dequantize A_i
                 dequantize_tiled_weight_chunk_to_fp16_tiles(
                     ctx, vtcm_weight_bufs[i % 2], curr_raw,
-                    n_cols, k, row_stride, weight_type,
+                    n_cols, k, k_valid, row_stride, weight_type,
                     n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads);
 
                 // 3. push A_{i+2} (if i+2 < n_chunk_cnt)
@@ -2989,7 +2991,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 // B: Weight Dequantize (Threaded)
                 dequantize_tiled_weight_chunk_to_fp16_tiles(
                     ctx, vtcm_scratch0, curr_raw,
-                    n_cols, k, row_stride, weight_type,
+                    n_cols, k, k_valid, row_stride, weight_type,
                     n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads);
 
                 // Start weight DMA for the next chunk early
@@ -3205,7 +3207,7 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
 
                     dequantize_tiled_weight_chunk_to_fp16_tiles(
                         ctx, vtcm_weight_bufs[i % 2], curr_raw,
-                        n_cols, k, row_stride, weight_type,
+                        n_cols, k, k, row_stride, weight_type,
                         n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads);
 
                     if (i + 2 < n_chunk_cnt) {
@@ -3295,7 +3297,7 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
 
                     dequantize_tiled_weight_chunk_to_fp16_tiles(
                         ctx, vtcm_scratch0, curr_raw,
-                        n_cols, k, row_stride, weight_type,
+                        n_cols, k, k, row_stride, weight_type,
                         n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads);
 
                     const size_t nc_next = nc + n_chunk_n_cols;
@@ -3765,7 +3767,7 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
             // B: Weight Dequantize (Threaded)
             dequantize_tiled_weight_chunk_to_fp16_tiles(
                 ctx, vtcm_scratch0, curr_raw,
-                n_cols, k, row_stride, weight_type,
+                n_cols, k, k, row_stride, weight_type,
                 n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads
             );
 
@@ -3798,7 +3800,8 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
 static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
     htp_matmul_tensors_preamble;
 
-    int k = (int) src0->ne[0];
+    // HMX tiles k by 32: repacked weights are padded already, the 2D kernel pads F16/F32 rows
+    int k = (int) hex_align_up(src0->ne[0], HTP_MM_HMX_TILE_N_COLS);
     int n = (int) src0->ne[1];
     const int m_total    = (int) act->ne[1];
     const uint32_t act_elem_size = (act->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
