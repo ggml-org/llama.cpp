@@ -249,8 +249,11 @@ kernel void Q6K_O4_NAME(
     // ne01/4 apart) is slower because two distant cache-line streams have worse
     // locality than the adjacent pair whose reads interleave into the same lines
     // each iteration.
-    int gid_a = gid * 2;
-    int gid_b = gid * 2 + 1;
+    // The x-grid is padded to a whole wave of quads, so the tail lanes hold pair indices
+    // past the packed weight and only the stores below are guarded. Clamp the pair index
+    // every fetch reads; the lanes stay active, which the sub_group ops require.
+    int gid_a = min(gid * 2,     ne01 / 2 - 1);
+    int gid_b = min(gid * 2 + 1, ne01 / 2 - 1);
 
     int nb = ne00 / 32;
 
