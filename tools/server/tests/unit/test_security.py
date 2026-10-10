@@ -243,3 +243,36 @@ def test_local_media_file(media_path, image_url, success,):
         assert res.status_code == 200
     else:
         assert res.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "origin, content_type, expected_status",
+    [
+        # drive-by webpage: simple request shape must be rejected
+        ("https://evil-attacker.example", "text/plain", 403),
+        # preflighted JSON request from a foreign origin is also rejected server-side
+        ("https://evil-attacker.example", "application/json", 403),
+        # non-JSON content type without any Origin (e.g. an HTML form) is rejected
+        (None, "application/x-www-form-urlencoded", 400),
+        # same-origin browser usage (WebUI) keeps working
+        ("http://localhost:18400", "application/json", 200),
+        # plain API clients without Origin keep working
+        (None, "application/json", 200),
+    ],
+)
+def test_tools_post_cross_site_protection(origin, content_type, expected_status):
+    """POST /tools executes built-in tools on the host; cross-origin browser
+    requests and non-JSON bodies must be rejected (CSRF, issue: drive-by)."""
+    server = ServerPreset.tinyllama2()
+    server.server_tools = "exec_shell_command"
+    server.start()
+    headers = {"Content-Type": content_type}
+    if origin:
+        headers["Origin"] = origin
+    res = server.make_request("POST", "/tools", headers=headers, data={
+        "tool": "exec_shell_command",
+        "params": {"command": "echo csrf-guard-test"},
+    })
+    assert res.status_code == expected_status
+    if expected_status == 200:
+        assert "csrf-guard-test" in res.body.get("plain_text_response", "")
