@@ -294,6 +294,47 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
 
+    {
+        common_params moe_params;
+        argv = {"binary_name", "-m", "dummy.gguf", "--moe-cache-mib", "16"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_params, LLAMA_EXAMPLE_COMMON));
+        assert(moe_params.moe_cache_size == (size_t) 16 * 1024 * 1024);
+        assert(moe_params.moe_cache_per_device == false);
+        assert(moe_params.moe_cache_sizes[0] == 0);
+    }
+
+    {
+        common_params moe_params;
+        argv = {"binary_name", "-m", "dummy.gguf", "--moe-cache-mib", "16,32"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_params, LLAMA_EXAMPLE_COMMON));
+        assert(moe_params.moe_cache_per_device == true);
+        assert(moe_params.moe_cache_sizes[0] == (size_t) 16 * 1024 * 1024);
+        assert(moe_params.moe_cache_sizes[1] == (size_t) 32 * 1024 * 1024);
+        assert(moe_params.moe_cache_size == (size_t) 48 * 1024 * 1024);
+    }
+
+    {
+        common_params moe_params;
+        argv = {"binary_name", "-m", "dummy.gguf", "--moe-cache-mib", "0,16"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_params, LLAMA_EXAMPLE_COMMON));
+        assert(moe_params.moe_cache_per_device == true);
+        assert(moe_params.moe_cache_sizes[0] == 0);
+        assert(moe_params.moe_cache_sizes[1] == (size_t) 16 * 1024 * 1024);
+        assert(moe_params.moe_cache_size == (size_t) 16 * 1024 * 1024);
+    }
+
+    {
+        common_params moe_params;
+        argv = {"binary_name", "--moe-cache-mib", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_params, LLAMA_EXAMPLE_COMMON));
+    }
+
+    {
+        common_params moe_params;
+        argv = {"binary_name", "--moe-cache-mib", "16,foo"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_params, LLAMA_EXAMPLE_COMMON));
+    }
+
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
