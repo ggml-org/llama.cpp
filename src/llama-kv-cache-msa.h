@@ -42,6 +42,10 @@ public:
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
+    bool try_lazy_quantize(llama_context * lctx) override;
+
+    bool get_has_lazy_quant() const override;
+
     bool get_can_shift() const override;
 
     void clear(bool data) override;

@@ -97,6 +97,15 @@ struct llama_memory_i {
     // status == LLAMA_MEMORY_STATUS_NO_UPDATE if there is nothing to update
     virtual llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) = 0;
 
+    virtual bool try_lazy_quantize(llama_context * lctx) {
+        GGML_UNUSED(lctx);
+        return false;
+    }
+
+    virtual bool get_has_lazy_quant() const {
+        return false;
+    }
+
     // getters
     virtual bool get_can_shift() const = 0;
 
