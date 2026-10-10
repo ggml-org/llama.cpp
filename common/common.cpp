@@ -199,6 +199,44 @@ static int cpu_count_math_cpus(int n_cpu) {
 
 #endif // __x86_64__ && __linux__
 
+#if defined(__linux__) && !defined(__ANDROID__)
+// Return the number of CPUs allowed by the current cgroup, or zero when no
+// quota is configured or the cgroup files are unavailable.
+static int32_t common_cpu_get_cgroup_limit() {
+    auto read_v2_quota = []() -> int32_t {
+        std::ifstream quota_file("/sys/fs/cgroup/cpu.max");
+        std::string quota;
+        int64_t period_us = 0;
+        if (!quota_file || !(quota_file >> quota >> period_us) || quota == "max") {
+            return 0;
+        }
+        int64_t quota_us = 0;
+        std::istringstream quota_stream(quota);
+        if (!(quota_stream >> quota_us) ||
+                quota_us <= 0 || period_us <= 0) {
+            return 0;
+        }
+        return static_cast<int32_t>(std::max<int64_t>(1, quota_us / period_us));
+    };
+
+    // cgroup v2: a single line containing "quota period" or "max period".
+    if (const int32_t limit = read_v2_quota()) {
+        return limit;
+    }
+
+    // cgroup v1: separate quota and period files.
+    std::ifstream quota_file("/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
+    std::ifstream period_file("/sys/fs/cgroup/cpu/cpu.cfs_period_us");
+    int64_t quota_us = 0;
+    int64_t period_us = 0;
+    if (!quota_file || !period_file || !(quota_file >> quota_us) ||
+            !(period_file >> period_us) || quota_us <= 0 || period_us <= 0) {
+        return 0;
+    }
+    return static_cast<int32_t>(std::max<int64_t>(1, quota_us / period_us));
+}
+#endif
+
 /**
  * Returns number of CPUs on system that are useful for math.
  */
@@ -214,6 +252,11 @@ int32_t common_cpu_get_num_math() {
             int result = cpu_count_math_cpus(n_cpu);
             pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);
             if (result > 0) {
+#if defined(__linux__) && !defined(__ANDROID__)
+                if (const int32_t cgroup_limit = common_cpu_get_cgroup_limit()) {
+                    result = std::min(result, cgroup_limit);
+                }
+#endif
                 return result;
             }
         }
@@ -227,7 +270,13 @@ int32_t common_cpu_get_num_math() {
     }
     return phy_cpus * std::min(smt_factor, 2);
 #endif
-    return common_cpu_get_num_physical_cores();
+    int32_t result = common_cpu_get_num_physical_cores();
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (const int32_t cgroup_limit = common_cpu_get_cgroup_limit()) {
+        result = std::min(result, cgroup_limit);
+    }
+#endif
+    return result;
 }
 
 // Helper for setting process priority
