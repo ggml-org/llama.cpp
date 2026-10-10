@@ -31,6 +31,7 @@ enum htp_data_type {
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
     HTP_TYPE_MXFP4  = 39,
+    HTP_TYPE_Q1_0   = 41,
 
     // types used internally for repack, dyn.quant, etc
     HTP_TYPE_Q4_0_TILED = 200,

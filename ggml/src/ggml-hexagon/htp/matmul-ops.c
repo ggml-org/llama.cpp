@@ -239,7 +239,7 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
 #include "hmx-mm-kernels-tiled.h"
 
 // Specialized repacked matmul macros
-#define MATMUL_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                       \
+#define MATMUL_2D_REPACKED_IMPL(SUFFIX, TILE_K, TILE_SIZE, DOT_2X2, DOT_2X1)                                                               \
 static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                                 \
     htp_matmul_preamble;                                                                                                                   \
                                                                                                                                            \
@@ -270,8 +270,8 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const uint32_t tile_size = TILE_SIZE;                                                                                                  \
     const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                                       \
                                                                                                                                            \
-    uint32_t n_k_tiles_w = ne00 / 32;                                                                                                      \
-    uint32_t n_k_tiles_a = ne10 / 32;                                                                                                      \
+    uint32_t n_k_tiles_w = ne00 / TILE_K;                                                                                                  \
+    uint32_t n_k_tiles_a = ne10 / TILE_K;                                                                                                  \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                                    \
     uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                             \
                                                                                                                                            \
@@ -340,7 +340,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     }                                                                                                                                      \
 }
 
-#define MATVEC_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X1)                                                              \
+#define MATVEC_2D_REPACKED_IMPL(SUFFIX, TILE_K, TILE_SIZE, DOT_2X1)                                                      \
 static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                               \
     htp_matmul_preamble;                                                                                                 \
                                                                                                                          \
@@ -373,8 +373,8 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const uint32_t tile_size = TILE_SIZE;                                                                                \
     const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                     \
                                                                                                                          \
-    uint32_t n_k_tiles_w = ne00 / 32;                                                                                    \
-    uint32_t n_k_tiles_a = ne10 / 32;                                                                                    \
+    uint32_t n_k_tiles_w = ne00 / TILE_K;                                                                                \
+    uint32_t n_k_tiles_a = ne10 / TILE_K;                                                                                \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                  \
     uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                           \
                                                                                                                          \
@@ -537,15 +537,38 @@ static void hvx_mm_nx_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, v
     }                                                                                                                             \
 }
 
-MATMUL_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
-MATMUL_2D_REPACKED_IMPL(q4_1,       640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_dot_q4_1_32x1)
-MATMUL_2D_REPACKED_IMPL(q8_0,       1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
-MATMUL_2D_REPACKED_IMPL(q6_k,       896,  tiled_vec_dot_q6_k_32x2,  tiled_vec_dot_q6_k_32x1)
-MATMUL_2D_REPACKED_IMPL(q5_k,       768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
-MATMUL_2D_REPACKED_IMPL(q3_k,       512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
-MATMUL_2D_REPACKED_IMPL(q2_k,       512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
-MATMUL_2D_REPACKED_IMPL(iq4nl,      576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
-MATMUL_2D_REPACKED_IMPL(mxfp4,      544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
+MATMUL_2D_REPACKED_IMPL(q4_0,  32,  576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
+MATMUL_2D_REPACKED_IMPL(q4_1,  32,  640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_dot_q4_1_32x1)
+MATMUL_2D_REPACKED_IMPL(q8_0,  32,  1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
+MATMUL_2D_REPACKED_IMPL(q6_k,  32,  896,  tiled_vec_dot_q6_k_32x2,  tiled_vec_dot_q6_k_32x1)
+MATMUL_2D_REPACKED_IMPL(q5_k,  32,  768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
+MATMUL_2D_REPACKED_IMPL(q3_k,  32,  512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
+MATMUL_2D_REPACKED_IMPL(q2_k,  32,  512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
+MATMUL_2D_REPACKED_IMPL(iq4nl, 32,  576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
+MATMUL_2D_REPACKED_IMPL(mxfp4, 32,  544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
+MATMUL_2D_REPACKED_IMPL(q1_0,  128, HTP_MM_WEIGHT_TILE_SIZE_Q1_0, tiled_vec_dot_q1_0_32x2, tiled_vec_dot_q1_0_32x1)
+
+static void hvx_mm_expand_src1_f16_to_f32(uint8_t * data, size_t row_stride, uint32_t ne0, uint32_t nrows) {
+    const HVX_Vector one = hvx_vec_splat_f16(1.0);
+
+    for (uint32_t ir = 0; ir < nrows; ++ir) {
+        uint8_t * row = data + ir * row_stride;
+        uint32_t end = ne0;
+        while (end > 0) {
+            const uint32_t start = end > 64 ? end - 64 : 0;
+            const uint32_t count = end - start;
+            const HVX_Vector src = hvx_vmemu(row + start * sizeof(__fp16));
+            const HVX_VectorPair converted = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(src), one);
+            const HVX_Vector converted_lo = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(converted));
+            hvx_vec_store_u(row + start * sizeof(float), MIN(count, 32) * sizeof(float), converted_lo);
+            if (count > 32) {
+                const HVX_Vector converted_hi = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(converted));
+                hvx_vec_store_u(row + (start + 32) * sizeof(float), (count - 32) * sizeof(float), converted_hi);
+            }
+            end = start;
+        }
+    }
+}
 
 static void hvx_mm_transfer_act_dma(
     struct htp_ops_context * octx,
@@ -755,15 +778,16 @@ static inline worker_callback_t htp_mm_act_quant_block_func(int weight_type) {
     return htp_mm_weight_has_offset(weight_type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
 }
 
-MATVEC_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x1)
-MATVEC_2D_REPACKED_IMPL(q4_1,       640,  tiled_vec_dot_q4_1_32x1)
-MATVEC_2D_REPACKED_IMPL(q8_0,       1088, tiled_vec_dot_q8_0_32x1)
-MATVEC_2D_REPACKED_IMPL(q5_k,       768,  tiled_vec_dot_q5_k_32x1)
-MATVEC_2D_REPACKED_IMPL(q6_k,       896,  tiled_vec_dot_q6_k_32x1)
-MATVEC_2D_REPACKED_IMPL(q3_k,       512,  tiled_vec_dot_q3_k_32x1)
-MATVEC_2D_REPACKED_IMPL(q2_k,       512,  tiled_vec_dot_q2_k_32x1)
-MATVEC_2D_REPACKED_IMPL(iq4nl,      576,  tiled_vec_dot_iq4nl_32x1)
-MATVEC_2D_REPACKED_IMPL(mxfp4,      544,  tiled_vec_dot_mxfp4_32x1)
+MATVEC_2D_REPACKED_IMPL(q4_0,  32,  576,  tiled_vec_dot_q4_0_32x1)
+MATVEC_2D_REPACKED_IMPL(q4_1,  32,  640,  tiled_vec_dot_q4_1_32x1)
+MATVEC_2D_REPACKED_IMPL(q8_0,  32,  1088, tiled_vec_dot_q8_0_32x1)
+MATVEC_2D_REPACKED_IMPL(q5_k,  32,  768,  tiled_vec_dot_q5_k_32x1)
+MATVEC_2D_REPACKED_IMPL(q6_k,  32,  896,  tiled_vec_dot_q6_k_32x1)
+MATVEC_2D_REPACKED_IMPL(q3_k,  32,  512,  tiled_vec_dot_q3_k_32x1)
+MATVEC_2D_REPACKED_IMPL(q2_k,  32,  512,  tiled_vec_dot_q2_k_32x1)
+MATVEC_2D_REPACKED_IMPL(iq4nl, 32,  576,  tiled_vec_dot_iq4nl_32x1)
+MATVEC_2D_REPACKED_IMPL(mxfp4, 32,  544,  tiled_vec_dot_mxfp4_32x1)
+MATVEC_2D_REPACKED_IMPL(q1_0,  128, HTP_MM_WEIGHT_TILE_SIZE_Q1_0, tiled_vec_dot_q1_0_32x1)
 
 MATMUL_NX_2D_REPACKED_IMPL(q4_0,    576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
 MATMUL_NX_2D_REPACKED_IMPL(q4_1,    640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_dot_q4_1_32x1)
@@ -774,7 +798,7 @@ MATMUL_NX_2D_REPACKED_IMPL(q5_k,    768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_do
 MATMUL_NX_2D_REPACKED_IMPL(q3_k,    512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
 MATMUL_NX_2D_REPACKED_IMPL(q2_k,    512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
 
-#define MATMUL_4D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                                        \
+#define MATMUL_4D_REPACKED_IMPL(SUFFIX, TILE_K, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                                \
 static void hvx_mm_4d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                                                  \
     htp_matmul_preamble;                                                                                                                                    \
                                                                                                                                                             \
@@ -800,8 +824,8 @@ static void hvx_mm_4d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const uint32_t tile_size = TILE_SIZE;                                                                                                                   \
     const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                                                        \
                                                                                                                                                             \
-    const uint32_t n_k_tiles_w = ne00 / 32;                                                                                                                 \
-    const uint32_t n_k_tiles_a = ne10 / 32;                                                                                                                 \
+    const uint32_t n_k_tiles_w = ne00 / TILE_K;                                                                                                             \
+    const uint32_t n_k_tiles_a = ne10 / TILE_K;                                                                                                             \
     const uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                                               \
     const uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                                        \
     const uint32_t src0_slice_stride = ((ne01 + 31) / 32) * tile_row_stride;                                                                                \
@@ -901,15 +925,16 @@ static void hvx_mm_4d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     }                                                                                                                                                       \
 }
 
-MATMUL_4D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
-MATMUL_4D_REPACKED_IMPL(q4_1,       640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_dot_q4_1_32x1)
-MATMUL_4D_REPACKED_IMPL(q8_0,       1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
-MATMUL_4D_REPACKED_IMPL(q6_k,       896,  tiled_vec_dot_q6_k_32x2,  tiled_vec_dot_q6_k_32x1)
-MATMUL_4D_REPACKED_IMPL(q5_k,       768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
-MATMUL_4D_REPACKED_IMPL(q3_k,       512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
-MATMUL_4D_REPACKED_IMPL(q2_k,       512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
-MATMUL_4D_REPACKED_IMPL(iq4nl,      576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
-MATMUL_4D_REPACKED_IMPL(mxfp4,      544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
+MATMUL_4D_REPACKED_IMPL(q4_0,  32,  576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
+MATMUL_4D_REPACKED_IMPL(q4_1,  32,  640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_dot_q4_1_32x1)
+MATMUL_4D_REPACKED_IMPL(q8_0,  32,  1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
+MATMUL_4D_REPACKED_IMPL(q6_k,  32,  896,  tiled_vec_dot_q6_k_32x2,  tiled_vec_dot_q6_k_32x1)
+MATMUL_4D_REPACKED_IMPL(q5_k,  32,  768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
+MATMUL_4D_REPACKED_IMPL(q3_k,  32,  512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
+MATMUL_4D_REPACKED_IMPL(q2_k,  32,  512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
+MATMUL_4D_REPACKED_IMPL(iq4nl, 32,  576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
+MATMUL_4D_REPACKED_IMPL(mxfp4, 32,  544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
+MATMUL_4D_REPACKED_IMPL(q1_0,  128, HTP_MM_WEIGHT_TILE_SIZE_Q1_0, tiled_vec_dot_q1_0_32x2, tiled_vec_dot_q1_0_32x1)
 
 static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
@@ -1665,6 +1690,10 @@ static int hvx_mm_init_vec_dot(struct htp_mm_context * mmctx, enum htp_data_type
             mmctx->type         = "mxfp4_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_mxfp4_32x1;
             return 0;
+        case HTP_TYPE_Q1_0:
+            mmctx->type         = "q1_0_tiled-f32";
+            mmctx->vec_dot_32x1 = tiled_vec_dot_q1_0_32x1;
+            return 0;
         default:
             return -1;
     }
@@ -1709,7 +1738,8 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                         src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
                         src0->type == HTP_TYPE_MXFP4 || src0->type == HTP_TYPE_Q6_K ||
                         src0->type == HTP_TYPE_Q4_K || src0->type == HTP_TYPE_Q5_K ||
-                        src0->type == HTP_TYPE_Q3_K || src0->type == HTP_TYPE_Q2_K);
+                        src0->type == HTP_TYPE_Q3_K || src0->type == HTP_TYPE_Q2_K ||
+                        src0->type == HTP_TYPE_Q1_0);
 
     // Compute src0_nrows_per_thread
     mmctx->src0_nrows_per_thread  = fastdiv(nrows + octx->n_threads - 1, &octx->n_threads_div);
@@ -1742,6 +1772,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mm_4d_repacked_q2_k;   break;
                 case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_4d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_4d_repacked_mxfp4;  break;
+                case HTP_TYPE_Q1_0:   matmul_job_func = hvx_mm_4d_repacked_q1_0;   break;
                 default:              return HTP_STATUS_NO_SUPPORT;
             }
         } else {
@@ -1760,6 +1791,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mm_2d_repacked_q2_k;   break;
                 case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_2d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_2d_repacked_mxfp4;  break;
+                case HTP_TYPE_Q1_0:   matmul_job_func = hvx_mm_2d_repacked_q1_0;   break;
                 default:              return HTP_STATUS_NO_SUPPORT;
             }
         } else {
@@ -1778,6 +1810,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mv_2d_repacked_q2_k;   break;
                 case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mv_2d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mv_2d_repacked_mxfp4;  break;
+                case HTP_TYPE_Q1_0:   matmul_job_func = hvx_mv_2d_repacked_q1_0;   break;
                 default:              return HTP_STATUS_NO_SUPPORT;
             }
         } else {
@@ -1900,6 +1933,9 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
 
             if (need_quant) {
                 hvx_mm_transfer_act_dma(octx, kparams, act, mmctx->vtcm_act_raw, mmctx->vtcm_act_raw_stride, m_start, cur_m_rows);
+                if (act->type == HTP_TYPE_F16) {
+                    hvx_mm_expand_src1_f16_to_f32(mmctx->vtcm_act_raw, mmctx->vtcm_act_raw_stride, ne10, cur_m_rows);
+                }
 
                 const uint32_t qk = QK_Q8_0_TILED;
                 const uint32_t nb = (ne10 + qk - 1) / qk;
@@ -1936,6 +1972,9 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
 
         if (need_quant) {
             hvx_mm_transfer_act_dma(octx, kparams, act, mmctx->vtcm_act_raw, mmctx->vtcm_act_raw_stride, 0, act_nrows);
+            if (act->type == HTP_TYPE_F16) {
+                hvx_mm_expand_src1_f16_to_f32(mmctx->vtcm_act_raw, mmctx->vtcm_act_raw_stride, ne10, act_nrows);
+            }
             mmctx->n_quant_rows_per_thread = (act_nrows + n_quant_tasks - 1) / n_quant_tasks;
             mmctx->n_quant_tasks = n_quant_tasks;
             work_queue_run(octx->ctx->work_queue, quant_task_func, mmctx, n_quant_tasks);
