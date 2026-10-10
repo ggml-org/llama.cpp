@@ -3,12 +3,31 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
 
+// vec_dot SIMD + generic prototypes (normally in internal quants.h)
+extern "C" void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+extern "C" void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 #undef NDEBUG
 #include <assert.h>
 #include <algorithm>
 #include <cmath>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <string>
 #include <vector>
 
@@ -152,6 +171,180 @@ static int test_vec_dot_f32(bool verbose) {
                    n, RESULT_STR[failed], ref, result, error);
         }
     }
+    return num_failed;
+}
+
+// regression test for exact -128 handling in the x86 int8 dot-product helpers
+// (adapted from the unit test in #29356, thanks @AnkitNakhawa)
+static int test_vec_dot_q8_0_i8_min(bool verbose) {
+    struct test_block_q8_0 {
+        ggml_fp16_t d;
+        int8_t qs[32];
+    };
+
+    // the pair lives in block blk at byte offset off; the other block stays
+    // zero, so with per-block x scales dx0/dx1 a dropped byte range, a missing
+    // block or a wrong block/scale association changes the result
+    const struct {
+        int8_t blk;   // 0 or 1 (n = 64 -> two blocks)
+        int8_t off;   // byte offset of the pair within the block
+        int8_t x0;
+        int8_t x1;
+        int8_t y0;
+        int8_t y1;
+        float  dx0;   // x scale of block 0
+        float  dx1;   // x scale of block 1
+        float  expected;
+    } cases[] = {
+        { 0,  0,    -1,    0, -128,    0, 1.0f, 1.0f,   128.0f },
+        { 0,  0,     1,    0, -128,    0, 1.0f, 1.0f,  -128.0f },
+        { 0,  0,  -128,    0, -128,    0, 1.0f, 1.0f, 16384.0f },
+        { 0,  0,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // two (-128)*(-128) products sum to 2^15
+        { 0,  0,  -128, -128,  127,  127, 1.0f, 1.0f, -32512.0f }, // x = -128 without y = -128
+        { 0,  0,   127,  127, -128, -128, 1.0f, 1.0f, -32512.0f },
+        { 0,  8,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // second 8-byte half of the first 16
+        { 0, 16,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // second 16-byte half
+        { 0, 30,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // last pair of the block
+        { 1,  0,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // second block needs the -128 check, too
+        { 1, 30,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f },
+        { 1,  0,  -128, -128, -128, -128, 0.5f, 1.0f, 32768.0f }, // dot of block 1 must use block 1's scale
+    };
+
+    const auto * q8_0 = ggml_get_type_traits_cpu(GGML_TYPE_Q8_0);
+    int num_failed = 0;
+
+    assert(sizeof(test_block_q8_0) == ggml_row_size(GGML_TYPE_Q8_0, 32));
+
+    for (const auto & test : cases) {
+        test_block_q8_0 x[2] = {};
+        test_block_q8_0 y[2] = {};
+        x[0].d = ggml_fp32_to_fp16(test.dx0);
+        x[1].d = ggml_fp32_to_fp16(test.dx1);
+        y[0].d = y[1].d = ggml_fp32_to_fp16(1.0f);
+        x[test.blk].qs[test.off + 0] = test.x0;
+        x[test.blk].qs[test.off + 1] = test.x1;
+        y[test.blk].qs[test.off + 0] = test.y0;
+        y[test.blk].qs[test.off + 1] = test.y1;
+
+        float result = 0.0f;
+        q8_0->vec_dot(64, &result, 0, x, 0, y, 0, 1);
+
+        const bool failed = result != test.expected;
+        num_failed += failed;
+        if (failed || verbose) {
+            printf(" q8_0 vec_dot blk=%d off=%2d x={%4d,%4d} y={%4d,%4d}: %s (ref=%f got=%f)\n",
+                   test.blk, test.off, test.x0, test.x1, test.y0, test.y1,
+                   RESULT_STR[failed], test.expected, result);
+        }
+    }
+
+    return num_failed;
+}
+
+// regression test: a -128 byte in the activation (y) side must be handled exactly
+// for every in-scope type, catching operand-order regressions at the call sites.
+// Each type is tested with its q8_0 / q8_K activation pairing (the pairings whose
+// vec_dot goes through the swapped int8 helpers).
+
+// dequant helpers for types whose trait has no to_float (iq1_s, iq1_m, q8_K)
+extern "C" void dequantize_row_iq1_s(const void * x, float * y, int64_t k);
+extern "C" void dequantize_row_iq1_m(const void * x, float * y, int64_t k);
+extern "C" void dequantize_row_q8_K (const void * x, float * y, int64_t k);
+
+static int test_vec_dot_neg128(bool verbose) {
+    const size_t test_size = 4096;  // multiple of 32 (q8_0) and 256 (q8_K)
+
+    // deterministic correlated input (xf = yf -> large coherent dot product)
+    std::vector<float> x_f32(test_size), y_f32(test_size);
+    generate_data(0.0, test_size, x_f32.data());
+    memcpy(y_f32.data(), x_f32.data(), test_size * sizeof(float));
+
+    // iq1_s requires an importance matrix; uniform weights are fine
+    // (block_q8_K layout: float d, int8 qs[256], int16 bsums[16])
+    struct test_block_q8_K {
+        float d;
+        int8_t qs[256];
+        int16_t bsums[16];
+    };
+    std::vector<float> imatrix(256, 1.0f);
+
+    struct {
+        ggml_type wtype;
+        const char * name;
+        void (*sim)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
+        void (*gen)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
+    } types[] = {
+        { GGML_TYPE_Q4_0,   "q4_0",   ggml_vec_dot_q4_0_q8_0,   ggml_vec_dot_q4_0_q8_0_generic   },
+        { GGML_TYPE_Q5_0,   "q5_0",   ggml_vec_dot_q5_0_q8_0,   ggml_vec_dot_q5_0_q8_0_generic   },
+        { GGML_TYPE_MXFP4,  "mxfp4",  ggml_vec_dot_mxfp4_q8_0,  ggml_vec_dot_mxfp4_q8_0_generic  },
+        { GGML_TYPE_NVFP4,  "nvfp4",  ggml_vec_dot_nvfp4_q8_0,  ggml_vec_dot_nvfp4_q8_0_generic  },
+        { GGML_TYPE_IQ4_NL, "iq4_nl", ggml_vec_dot_iq4_nl_q8_0, ggml_vec_dot_iq4_nl_q8_0_generic },
+        { GGML_TYPE_IQ1_S,  "iq1_s",  ggml_vec_dot_iq1_s_q8_K,  ggml_vec_dot_iq1_s_q8_K_generic  },
+        { GGML_TYPE_IQ1_M,  "iq1_m",  ggml_vec_dot_iq1_m_q8_K,  ggml_vec_dot_iq1_m_q8_K_generic  },
+        { GGML_TYPE_IQ4_XS, "iq4_xs", ggml_vec_dot_iq4_xs_q8_K, ggml_vec_dot_iq4_xs_q8_K_generic },
+    };
+
+    int num_failed = 0;
+
+    for (const auto & t : types) {
+        ggml_quantize_init(t.wtype);
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(t.wtype);
+        const ggml_type atype = qfns_cpu->vec_dot_type;
+        const auto * atf_cpu = ggml_get_type_traits_cpu(atype);
+
+        const size_t bx = ggml_row_size(t.wtype, test_size);
+        const size_t by = ggml_row_size(atype, test_size);
+        std::vector<uint8_t> xb(bx), yb(by);
+
+        // quantize weights (iq1_s / iq1_m have no trait from_float)
+        if (qfns_cpu->from_float) {
+            qfns_cpu->from_float(x_f32.data(), xb.data(), test_size);
+        } else {
+            ggml_quantize_chunk(t.wtype, x_f32.data(), xb.data(), 0, 1, test_size, imatrix.data());
+        }
+
+        // quantize activations
+        atf_cpu->from_float(y_f32.data(), yb.data(), test_size);
+
+        // inject -128 into the activation bytes (and fix up q8_K bsums)
+        if (atype == GGML_TYPE_Q8_K) {
+            struct test_block_q8_K {
+                float d;
+                int8_t qs[256];
+                int16_t bsums[16];
+            };
+            test_block_q8_K * y = (test_block_q8_K *) yb.data();
+            const size_t nb = test_size / 256;
+            for (size_t i = 0; i < nb; i++) {
+                const int old = y[i].qs[5];
+                y[i].qs[5] = -128;
+                y[i].bsums[0] += (-128 - old);
+            }
+        } else {  // Q8_0
+            struct test_block_q8_0 {
+                ggml_fp16_t d;
+                int8_t qs[32];
+            };
+            test_block_q8_0 * y = (test_block_q8_0 *) yb.data();
+            const size_t nb = test_size / 32;
+            for (size_t i = 0; i < nb; i++) {
+                y[i].qs[5] = -128;
+            }
+        }
+
+        float sim = 0.0f, gen = 0.0f;
+        t.sim(test_size, &sim, 0, xb.data(), 0, yb.data(), 0, 1);
+        t.gen(test_size, &gen, 0, xb.data(), 0, yb.data(), 0, 1);
+
+        const float err = fabsf(sim - gen) / fmaxf(fabsf(gen), 1e-30f);
+        const bool failed = !(err < 1e-4f);
+        num_failed += failed;
+        if (failed || verbose) {
+            printf(" %-5s vec_dot -128 contract:         %s (sim=%f gen=%f rel=%f)\n",
+                   t.name, RESULT_STR[failed], sim, gen, err);
+        }
+    }
+
     return num_failed;
 }
 
@@ -299,6 +492,8 @@ int main(int argc, char * argv[]) {
     int num_failed = 0;
 
     num_failed += test_vec_dot_f32(verbose);
+    num_failed += test_vec_dot_q8_0_i8_min(verbose);
+    num_failed += test_vec_dot_neg128(verbose);
     num_failed += test_vec_dot_q(verbose);
     num_failed += test_quantize_imatrix_degenerate(verbose);
 
