@@ -5476,6 +5476,7 @@ void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
 
     if (vk_perf_logger_enabled) {
         ctx->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
+        ctx->perf_logger->device = ctx->device;
     }
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
@@ -7923,11 +7924,25 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     }
 }
 
-bool ggml_vk_use_mul_mat_vec_id(const struct ggml_cgraph * cgraph, int node_idx) {
-    ggml_tensor * dst = cgraph->nodes[node_idx];
-    ggml_tensor * src0 = dst->src[0];
-    ggml_tensor * src2 = dst->src[2];
-    return (src2->ne[1] <= 8) && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
+bool ggml_vk_use_mul_mat_vec_id(const vk_device_struct * device, const ggml_tensor * src0, const ggml_tensor * src2) {
+    bool use_vec_id = src2->ne[1] <= 8;
+    if (!device->coopmat2) {
+        // Tiled mul_mat_id is slow at low batch without coopmat2; keep the
+        // vector path while the routed density is low.
+        const int64_t n_tokens  = src2->ne[1];
+        const int64_t n_per_tok = src2->ne[0];
+        const int64_t n_experts = src0->ne[2];
+        // With coopmat2 off, NVIDIA crosses to the tiled path earlier than AMD/Intel does.
+        const int64_t max_tokens = device->vendor_id == VK_VENDOR_ID_NVIDIA ? 32 : 64;
+        use_vec_id |= (n_tokens * n_per_tok <= 2 * n_experts) && (n_tokens <= max_tokens);
+    }
+
+    return use_vec_id && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
+}
+
+bool ggml_vk_use_mul_mat_vec_id(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx) {
+    const ggml_tensor * dst = cgraph->nodes[node_idx];
+    return ggml_vk_use_mul_mat_vec_id(ctx->device.get(), dst->src[0], dst->src[2]);
 }
 
 void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
@@ -7936,7 +7951,7 @@ void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const
     ggml_tensor * src1 = dst->src[1];
     ggml_tensor * src2 = dst->src[2];
     VK_LOG_DEBUG("ggml_vk_mul_mat_id(" << src0 << ", " << src1 << ", " << src2 << ", " << dst << ")");
-    if (ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+    if (ggml_vk_use_mul_mat_vec_id(ctx, cgraph, node_idx)) {
         ggml_vk_mul_mat_vec_id_q_f16(ctx, subctx, cgraph, node_idx);
     } else {
         ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, src1, src2, dst);
@@ -13640,7 +13655,7 @@ bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgr
             return false;
         }
         // mat-vec only
-        if (!ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+        if (!ggml_vk_use_mul_mat_vec_id(ctx, cgraph, node_idx)) {
             return false;
         }
         // shaders assume the types match
@@ -13675,7 +13690,7 @@ bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgr
             return false;
         }
         // mat-vec only
-        if (!ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+        if (!ggml_vk_use_mul_mat_vec_id(ctx, cgraph, node_idx)) {
             return false;
         }
         // shaders assume the types match
@@ -16488,7 +16503,8 @@ std::string vk_perf_logger::get_node_fusion_name(const ggml_tensor * node, const
         const uint64_t batch = node->ne[2] * node->ne[3];
         std::string    name  = ggml_op_name(node->op);
         if ((node->op == GGML_OP_MUL_MAT && n <= mul_mat_vec_max_cols) ||
-            (node->op == GGML_OP_MUL_MAT_ID && node->src[2]->ne[1] == 1)) {
+            (node->op == GGML_OP_MUL_MAT_ID && device &&
+             ggml_vk_use_mul_mat_vec_id(device.get(), node->src[0], node->src[2]))) {
             name += "_VEC";
         }
         name += " ";

@@ -1204,6 +1204,7 @@ class vk_perf_logger {
   public:
     void print_timings(bool force = false);
 
+    vk_device device;
 
     std::string get_node_fusion_name(const ggml_tensor * node, const char *fusion_name, uint64_t *n_flops);
 
