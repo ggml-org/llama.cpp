@@ -2,6 +2,7 @@ import pytest
 from utils import *
 import base64
 import requests
+import subprocess
 
 server: ServerProcess
 
@@ -39,6 +40,40 @@ def create_server():
     global server
     os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
     server = ServerPreset.tinygemma3()
+
+@pytest.mark.skipif("LLAMA_CLI_BIN_PATH" not in os.environ, reason="LLAMA_CLI_BIN_PATH is not set")
+@pytest.mark.parametrize(
+    "media,error",
+    [
+        ("missing.png", "file does not exist or cannot be opened"),
+        ("invalid.png", "Failed to load image or audio file"),
+        (None, None),
+    ],
+    ids=["missing", "invalid", "success"],
+)
+def test_cli_single_turn_exit_code(tmp_path, media, error):
+    """llama-cli --single-turn must exit with 1 on media errors; reuses the vision server via --server-base"""
+    server.start()
+    transcript = tmp_path / "output.txt"
+    args = [
+        os.environ["LLAMA_CLI_BIN_PATH"],
+        "--server-base", f"http://{server.server_host}:{server.server_port}",
+        "--simple-io", "--single-turn", "--prompt", "test",
+        "--output-file", str(transcript),
+    ]
+    if media is not None:
+        path = tmp_path / media
+        if media == "invalid.png":
+            path.write_bytes(b"not an image")
+        args.extend(["--image", str(path)])
+    result = subprocess.run(args, input="/exit\n", encoding="utf-8", errors="replace", capture_output=True, timeout=30)
+    output = result.stdout + result.stderr
+    assert result.returncode == (1 if error else 0), output
+    if error:
+        assert error in output
+    else:
+        assert "Error:" not in output
+        assert transcript.read_text(encoding="utf-8").partition("Assistant:\n")[2].strip(), output
 
 def test_models_supports_multimodal_capability():
     global server

@@ -487,6 +487,9 @@ int cli_context::run() {
                 for (auto & fname : params.image) {
                     if (!stage_media_file(fname, media_type_from_ext(fname))) {
                         ui::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
+                        if (params.single_turn) {
+                            return 1;
+                        }
                         break;
                     }
                     ui::show_message(string_format("Loaded media from '%s'", fname.c_str()));
@@ -626,7 +629,9 @@ int cli_context::run() {
 
         cli_timings timings;
         generated_content content;
-        generate_completion(content, timings);
+        if (!generate_completion(content, timings) && params.single_turn) {
+            return 1;
+        }
 
         json assistant_msg = {
             {"role",    "assistant"},
