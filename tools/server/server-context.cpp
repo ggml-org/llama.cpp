@@ -938,6 +938,9 @@ public:
     //  - and, with thread-safe APIs (e.g., tokenizer calls)
     llama_model * model_tgt = nullptr;
 
+    // prefix-LM model (hrm-text with prefix_lm set): the prompt attends in both directions
+    bool prefix_lm = false;
+
     mtmd_context * mctx = nullptr;
     // note: video_params.ffmpeg_bin_dir points into params_base, which outlives this struct
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
@@ -1213,6 +1216,16 @@ private:
         if (model_tgt == nullptr) {
             SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
             return false;
+        }
+
+        {
+            char buf[8];
+            prefix_lm = llama_model_meta_val_str(model_tgt, "hrm_text.hrm.prefix_lm", buf, sizeof(buf)) > 0 && std::string(buf) == "true";
+        }
+
+        if (prefix_lm && params_base.cache_prompt) {
+            SRV_WRN("%s", "prefix-LM model: prompt caching disabled, a cached prompt prefix would have been computed without the tokens that follow it\n");
+            params_base.cache_prompt = false;
         }
 
         if (ctx_tgt == nullptr) {
@@ -1838,6 +1851,11 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // prefix-LM models: the whole prompt is recomputed for every request
+        if (task.params.cache_prompt && prefix_lm) {
+            task.params.cache_prompt = false;
+        }
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);

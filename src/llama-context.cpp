@@ -1802,6 +1802,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
 
+    if (model.hparams.hrm_prefix_lm && n_tokens_all > cparams.n_ubatch) {
+        LLAMA_LOG_WARN("%s: prefix-LM: a batch of %d tokens is split into ubatches of %d; prompt tokens in different ubatches do not see each other (use -ub >= the longest prompt)\n",
+                __func__, n_tokens_all, cparams.n_ubatch);
+    }
+
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
     if (!embd_seq.empty()) {

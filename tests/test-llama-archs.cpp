@@ -840,6 +840,36 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
     return 0;
 }
 
+// hrm-text with prefix_lm set attends to the whole prompt in both directions: changing the last
+// prompt token must change the logits of the first one. Without prefix_lm the model is causal and
+// the logits of the first token must stay the same.
+static bool test_prefix_lm(const size_t seed, const float stdev) {
+    const uint32_t n_vocab = 128;
+    std::vector<llama_token> tokens_a = get_tokens(32, n_vocab, seed);
+    std::vector<llama_token> tokens_b = tokens_a;
+    tokens_b.back() = (tokens_b.back() + 1) % n_vocab;
+
+    bool ok = true;
+    for (bool prefix_lm : {false, true}) {
+        gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_HRM_TEXT, false);
+        gguf_set_val_bool(gguf_ctx.get(), "hrm_text.hrm.prefix_lm", prefix_lm);
+
+        auto mc_a = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
+        auto mc_b = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
+        const std::vector<float> logits_a = get_logits(mc_a.first.get(), mc_a.second.get(), tokens_a);
+        const std::vector<float> logits_b = get_logits(mc_b.first.get(), mc_b.second.get(), tokens_b);
+
+        const std::vector<float> first_a(logits_a.begin(), logits_a.begin() + n_vocab);
+        const std::vector<float> first_b(logits_b.begin(), logits_b.begin() + n_vocab);
+        const bool changed = first_a != first_b;
+        const bool pass = changed == prefix_lm;
+        LOG("hrm_text prefix_lm=%d: first-token logits %s -> %s\n", prefix_lm,
+            changed ? "changed" : "unchanged", pass ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+        ok = ok && pass;
+    }
+    return ok;
+}
+
 static int test_backends(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * target_backend) {
     struct user_data_t {
         struct {
@@ -1211,7 +1241,11 @@ int main(int argc, char ** argv) {
         if (!out.empty()) {
             return save_models(arch_filter, seed, stdev, verbosity, out);
         }
-        return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
+        int ret = test_backends(arch_filter, seed, stdev, verbosity, target_backend);
+        if (arch_matches(arch_filter, LLM_ARCH_HRM_TEXT) && !test_prefix_lm(seed, stdev)) {
+            ret = 1;
+        }
+        return ret;
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;
