@@ -126,6 +126,12 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
         k = raw_k;
     }
 
+    if (context.get_op_case() == 1 && ggml_openvino_gdn_prescale_enabled()) {
+        // the output is linear in q and the state does not depend on q; the next rms_norm removes the scale
+        q = std::make_shared<ov::op::v1::Multiply>(
+            q, ov::op::v0::Constant::create(ov::element::f32, ov::Shape{1}, {ggml_openvino_gdn_q_scale()}));
+    }
+
     // ggml maps GQA heads in tiled order, while OV GDN maps repeated heads in grouped order.
     if (H_v != H_k) {
         const int64_t repeat = H_v / H_k;

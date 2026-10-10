@@ -293,6 +293,33 @@ void GgmlOvDecoder::set_input_output() {
     }
 }
 
+// True if the GDN attention output is only read by rms_norm (gated norm, e.g. qwen3.5) and the state by
+// cache writeback CPYs. Then q may be pre-scaled, since rms_norm cancels the scale. Static (NPU) path only.
+bool GgmlOvDecoder::is_gdn_out_prescaled(const ggml_tensor * gdn) const {
+    if (!ggml_openvino_is_npu()) {
+        return false;
+    }
+    bool has_norm = false;
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const ggml_tensor * n = m_cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            const ggml_tensor * s = n->src[j];
+            if (s == gdn && n->op != GGML_OP_VIEW) {
+                return false;
+            }
+            if (s == nullptr || s->op != GGML_OP_VIEW || s->src[0] != gdn) {
+                continue;
+            }
+            if (n->op == GGML_OP_RMS_NORM) {
+                has_norm = true;
+            } else if (n->op != GGML_OP_CPY) {
+                return false;
+            }
+        }
+    }
+    return has_norm;
+}
+
 int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     int op_case = 0;
     switch (node->op) {
@@ -533,8 +560,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 // GDN attention is routed directly to this VIEW by get_output_names().
                 op_case = 3;
             } else if (node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET) {
-                op_case = 2;
+                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 2;
             }
+        }
+        break;
+    }
+    case GGML_OP_GATED_DELTA_NET: {
+        if (is_gdn_out_prescaled(node)) {
+            op_case = 1;
         }
         break;
     }

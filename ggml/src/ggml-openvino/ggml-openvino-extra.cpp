@@ -144,6 +144,8 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_REQUANT_KQUANT",
         "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
         "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
+        "GGML_OPENVINO_GDN_PRESCALE",
+        "GGML_OPENVINO_GDN_Q_SCALE",
         // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
         "GGML_OPENVINO_FULL_GRAPH_KEY",
     };
@@ -297,6 +299,22 @@ const char * ggml_openvino_getenv_str(const char * var, const char * default_val
 int ggml_openvino_getenv_int(const char * var, int default_value) {
     const char * v = ggml_openvino_getenv_str(var, nullptr);
     return v ? std::atoi(v) : default_value;
+}
+
+bool ggml_openvino_gdn_prescale_enabled() {
+    return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_PRESCALE") != 0;
+}
+
+float ggml_openvino_gdn_q_scale() {
+    constexpr float default_scale = 64.0f;
+    const char * v = ggml_openvino_getenv_str("GGML_OPENVINO_GDN_Q_SCALE", nullptr);
+    float scale = v ? std::strtof(v, nullptr) : default_scale;
+    if (scale < default_scale) {
+        GGML_LOG_WARN("ggml-openvino: GGML_OPENVINO_GDN_Q_SCALE=%s is below the minimum %.1f, clamping\n", v,
+                      default_scale);
+        scale = default_scale;
+    }
+    return scale;
 }
 
 bool ggml_openvino_reduce_compile_mem_enabled() {

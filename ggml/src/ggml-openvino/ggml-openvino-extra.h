@@ -123,6 +123,16 @@ bool ggml_openvino_is_gpu();
 // Read n_seq_active and attention_size(_swa) from the KQ mask shape (off with GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK=1)
 bool ggml_openvino_shape_from_mask_enabled();
 
+// GDN q pre-scale (NPU static path, keeps the tiny GDN output above the f16
+// subnormal range). Off by default; enable with GGML_OPENVINO_GDN_PRESCALE=1.
+bool ggml_openvino_gdn_prescale_enabled();
+
+// GDN q pre-scale factor (NPU static path, keeps the tiny GDN output above the
+// f16 subnormal range). Default 64.0f, overridable via GGML_OPENVINO_GDN_Q_SCALE;
+// clamped to a minimum of 64.0f since smaller values defeat the fix. Only
+// consulted when ggml_openvino_gdn_prescale_enabled() is true.
+float ggml_openvino_gdn_q_scale();
+
 // Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
 size_t ggml_openvino_max_alloc_size();
 
