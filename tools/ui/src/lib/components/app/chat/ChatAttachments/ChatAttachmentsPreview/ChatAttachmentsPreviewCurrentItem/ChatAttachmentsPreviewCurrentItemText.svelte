@@ -10,12 +10,7 @@
 </script>
 
 {#if displayTextContent}
-	<div class="px-4 pb-4">
-		<SyntaxHighlightedCode
-			class="max-w-4xl"
-			code={displayTextContent}
-			{language}
-			maxHeight="none"
-		/>
+	<div class="px-4 pb-4 min-h-0 min-w-0 max-w-full md:max-w-[80vw]">
+		<SyntaxHighlightedCode code={displayTextContent} {language} maxHeight="80dvh" />
 	</div>
 {/if}
