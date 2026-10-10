@@ -389,15 +389,15 @@ llama_context::llama_context(
     }
 
     // init the memory module
-    if (!hparams.vocab_only) {
-        llama_memory_params params_mem = {
-            /*.type_k    =*/ params.type_k,
-            /*.type_v    =*/ params.type_v,
-            /*.swa_full  =*/ params.swa_full,
-            /*.ctx_type  =*/ cparams.ctx_type,
-            /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
-        };
+    const llama_memory_params params_mem = {
+        /*.type_k    =*/ params.type_k,
+        /*.type_v    =*/ params.type_v,
+        /*.swa_full  =*/ params.swa_full,
+        /*.ctx_type  =*/ cparams.ctx_type,
+        /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
+    };
 
+    if (!hparams.vocab_only) {
         memory.reset(model.create_memory(params_mem, cparams));
     }
 
@@ -465,11 +465,27 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
+        const bool flash_attn_requested = cparams.flash_attn;
+
         if (cparams.moe_cache_size > 0) {
             moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
         }
 
         sched_reserve();
+
+        // The memory module was created with attn_v_trans = !flash_attn from the requested value, but
+        // under LLAMA_FLASH_ATTN_TYPE_AUTO resolve_fused_ops may turn flash attention off afterwards,
+        // and ggml would then insert a cont(transpose(v)) per layer per token. Re-create it to match.
+        // This only happens on the first reserve (auto_fa is then cleared), while the cache is empty.
+        if (memory && flash_attn_requested && !cparams.flash_attn) {
+            LLAMA_LOG_INFO("%s: flash attention resolved to disabled - re-creating the memory "
+                    "module so the V cache is transposed for the unfused path\n", __func__);
+
+            memory.reset(model.create_memory(params_mem, cparams));
+
+            sched_need_reserve = true;
+            sched_reserve();
+        }
 
         if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
