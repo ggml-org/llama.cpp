@@ -10816,6 +10816,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 1, false, 512, 1, 256));
     }
 
+    // few tokens (speculative verify, small batches): experts with one token or a few, experts that take every token
+    // (n_used == n_mats), a broadcast src1, and src0 rows that do not fill the last tile
+    for (ggml_type type_a : all_types) {
+        for (int n : {2, 3, 5, 8, 9, 16, 31}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 64, 8, false, 200, n, 512));
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4,  4, false, 100, n, 256));
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8,  2, true,  64,  n, 1024));
+        }
+    }
+    // past 32 tokens: about one token per expert (mat-vec), a few (MMA), and many (mat-mat)
+    for (ggml_type type_a : {GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS}) {
+        for (int n : {40, 100, 200}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 256, 8, false, 72, n, 1024));
+        }
+        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 8, false, 72, 100, 1024));
+    }
+
     for (ggml_type type_a : other_types) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {
             if (ggml_blck_size(type_a) != 256) {

@@ -818,6 +818,9 @@ static constexpr int     GGML_METAL_MMA_NSG_FEW_ROWS  = 32;
 static constexpr int     GGML_METAL_MMA_NSG_MID_ROWS  = 16;
 static constexpr int     GGML_METAL_MMA_NSG_MANY_ROWS = 8;
 
+// the fewest K steps per simdgroup of the MUL_MAT_ID MMA kernels
+static constexpr int64_t GGML_METAL_MMA_ID_MIN_STEPS  = 8;
+
 struct ggml_metal_mma_tiling {
     int nsg; // simdgroups per threadgroup, each over a slice of K
     int nt;  // 8-row src0 tiles per threadgroup
@@ -849,6 +852,13 @@ static ggml_metal_mma_tiling ggml_metal_op_mul_mat_mma_tiling(const ggml_tensor 
     res.rt = ggml_metal_mul_mv_mma_rt(op);
 
     const int64_t n_steps = ne00/ggml_metal_mul_mv_mma_k_step(type, res.rt);
+
+    // the experts give MUL_MAT_ID enough threadgroups: the widest tiles, and a K split only for long rows
+    if (op->op == GGML_OP_MUL_MAT_ID) {
+        res.nt  = GGML_METAL_MMA_NT_MAX;
+        res.nsg = ggml_metal_halve_to_limit(GGML_METAL_MMA_NSG_MANY_ROWS, std::max<int64_t>(1, n_steps/GGML_METAL_MMA_ID_MIN_STEPS));
+        return res;
+    }
 
     int nsg = GGML_METAL_MMA_NSG_MANY_ROWS;
     if (ne01 <= GGML_METAL_MMA_FEW_ROWS) {
@@ -884,16 +894,21 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_mma(ggml_
 
     const ggml_type tsrc0 = op->src[0]->type;
     const ggml_type tsrc1 = op->src[1]->type;
-    const int       ne12  = op->src[1]->ne[2];
-    const int       r2    = ne12 / op->src[0]->ne[2];
-    const int       r3    = op->src[1]->ne[3] / op->src[0]->ne[3];
+
+    // MUL_MAT_ID takes the expert matrix from the token list, not from the batch dims
+    const bool is_id = op->op == GGML_OP_MUL_MAT_ID;
+
+    const int ne12 = is_id ? 1 : op->src[1]->ne[2];
+    const int r2   = is_id ? 1 : ne12 / op->src[0]->ne[2];
+    const int r3   = is_id ? 1 : op->src[1]->ne[3] / op->src[0]->ne[3];
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
+    GGML_ASSERT(!is_id || !add);
 
     // the specialized kernels unroll over a compile-time row length
     const int ne00 = ggml_metal_mul_mv_mma_kind(tsrc0, rt) != GGML_METAL_MMA_KIND_GEN ? op->src[0]->ne[0] : 0;
 
-    snprintf(base, 256, "kernel_mul_mv_mma_%s_%s_nt%d_rt%d", ggml_type_name(tsrc0), ggml_type_name(tsrc1), nt, rt);
+    snprintf(base, 256, "kernel_mul_mv_mma_%s%s_%s_nt%d_rt%d", is_id ? "id_" : "", ggml_type_name(tsrc0), ggml_type_name(tsrc1), nt, rt);
     snprintf(name, 256, "%s_nsg=%d_ne12=%d_r2=%d_r3=%d_ne00=%d_add=%d", base, nsg, ne12, r2, r3, ne00, add);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
