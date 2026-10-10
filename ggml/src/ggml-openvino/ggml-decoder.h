@@ -496,6 +496,7 @@ public:
 private:
     void set_input_output();
     int compute_op_case(const ggml_tensor * node) const;
+    bool is_gdn_out_prescaled(const ggml_tensor * gdn) const;
     bool node_is_used_as_src(const int node_idx);
     void compute_model_inputs();
     void compute_model_outputs();

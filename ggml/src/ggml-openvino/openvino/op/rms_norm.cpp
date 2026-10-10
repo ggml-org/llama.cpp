@@ -1,6 +1,7 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <memory>
 #include <openvino/op/add.hpp>
@@ -35,7 +36,7 @@ OutputVector translate_rms_norm(const NodeContext & context) {
             false);
     } else if (op_case == 1) {
         input_node = process_view_input_new(context, 0);
-    } else if (op_case == 2) {
+    } else if (op_case == 2 || op_case == 3) {
         auto ssm_state_size = context.get_ssm_state_size();
         // The GDN op packs [attn | new_state] along the row axis; the state occupies the last
         // ssm_state_size * n_seqs rows. Slice it off (scaling by the active sequence count) to keep
@@ -64,13 +65,20 @@ OutputVector translate_rms_norm(const NodeContext & context) {
     } else {
         input_node = process_view_input_new(context, 0);
     }
+
+    float eps;
+    memcpy(&eps, context.get_output_op_params(), sizeof(float));
+
+    if (op_case == 3 && ggml_openvino_gdn_prescale_enabled()) {
+        // input is the GDN output pre-scaled by ggml_openvino_gdn_q_scale(): rms_norm(s*x, s*s*eps) == rms_norm(x, eps)
+        const float q_scale = ggml_openvino_gdn_q_scale();
+        eps *= q_scale * q_scale;
+    }
+
     auto square = std::make_shared<ov::op::v1::Multiply>(input_node, input_node);
 
     auto mean = std::make_shared<ov::op::v1::ReduceMean>(
         square, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {-1}), true);
-
-    float eps;
-    memcpy(&eps, context.get_output_op_params(), sizeof(float));
 
     auto rms = std::make_shared<ov::op::v0::Sqrt>(
         std::make_shared<ov::op::v1::Add>(mean, ov::op::v0::Constant::create(ov::element::f32, ov::Shape{1}, {eps})));
