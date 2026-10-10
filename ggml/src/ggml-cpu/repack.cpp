@@ -5075,10 +5075,12 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &iq4_nl_8x8_q8_0;
             }
         }
-        if (ggml_cpu_has_neon() && ggml_cpu_has_dotprod()) {
+        if (ggml_cpu_has_neon()) {
+	# if defined(__aarch64__)
             if (cur->ne[1] % 4 == 0) {
                 return &iq4_nl_4x4_q8_0;
             }
+	# endif
         }
         if (ggml_cpu_has_riscv_v()) {
             #if defined __riscv_zvfh
