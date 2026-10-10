@@ -5906,8 +5906,27 @@ static bool ggml_hexagon_precompute_binary_params(
     const bool is_complex   = !is_add_id && !is_scalar && !is_same_shape && !is_row_bcast && (src1->ne[0] == src0->ne[0]);
     const bool is_contig    = ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst);
     const bool is_scalar_broadcast = !is_add_id && (ggml_nelements(src1) == 1);
+    const bool is_extended_src1 = opt_dma64 && src1->buffer &&
+        ggml_backend_buffer_get_usage(src1->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    const bool is_extended_scalar = is_scalar && is_extended_src1 && ggml_is_contiguous(src1);
+    if (is_scalar && is_extended_src1 && !is_extended_scalar) {
+        return false;
+    }
 
-    if (!is_add_id && is_contig && (ggml_are_same_shape(src0, src1) || is_scalar_broadcast)) {
+    size_t extended_scalar_size = 0;
+    if (is_extended_scalar) {
+        const size_t src1_nbytes = ggml_nbytes(src1);
+        if (src1_nbytes > UINT32_MAX - 127u) {
+            return false;
+        }
+        extended_scalar_size = (src1_nbytes + 127u) & ~(size_t) 127u;
+        if (extended_scalar_size > sess->vtcm_size) {
+            return false;
+        }
+    }
+
+    if (!is_add_id && !is_extended_scalar && is_contig &&
+        (ggml_are_same_shape(src0, src1) || is_scalar_broadcast)) {
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
         const uint32_t n_threads = sess->n_threads;
         const uint32_t max_chunk_elems = 32768 / elem_size;
@@ -5949,9 +5968,9 @@ static bool ggml_hexagon_precompute_binary_params(
     } else if (is_scalar) {
         const bool is_scalar_static = (src1->ne[2] == 1 && src1->ne[3] == 1) &&
             (src1->ne[1] == 1 || src1->nb[1] == elem_size);
-        if (is_scalar_static) {
+        if (is_scalar_static || is_extended_scalar) {
             kernel_type = HTP_BINARY_KERNEL_SCALAR_DMA;
-            src1_size = hex_round_up(src1->ne[1] * elem_size, 128);
+            src1_size = is_extended_scalar ? extended_scalar_size : hex_round_up(ggml_nbytes(src1), 128);
         } else {
             kernel_type = HTP_BINARY_KERNEL_SCALAR;
         }

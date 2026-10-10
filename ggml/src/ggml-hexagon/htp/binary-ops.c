@@ -283,7 +283,7 @@ static void compute_add_id_f32(
     }
 }
 
-// 1a. Scalar src1 in VTCM via DMA (ne10 == 1, ne12 == 1, ne13 == 1)
+// 1a. Scalar src1 in VTCM via DMA (ne10 == 1)
 static void binary_thread_scalar_dma(unsigned int nth, unsigned int ith, void * data) {
     struct htp_binary_context * bctx = (struct htp_binary_context *) data;
     struct htp_ops_context * octx = bctx->octx;
@@ -344,10 +344,15 @@ static void binary_thread_scalar_dma(unsigned int nth, unsigned int ith, void * 
         i02 = fastdiv(rem, &bctx->src0_dim1_div);
         i01 = rem - i02 * ne01;
 
-        uint32_t cur_i11 = fastmodulo(i01, ne11, &bctx->src1_dim1_div);
+        uint32_t i13 = fastmodulo(i03, ne13, &bctx->src1_dim3_div);
+        uint32_t i12 = fastmodulo(i02, ne12, &bctx->src1_dim2_div);
+        uint32_t i11 = fastmodulo(i01, ne11, &bctx->src1_dim1_div);
+        const uint32_t scalar_size = row_size_bytes / ne00;
+        const uint8_t * scalar_table = (const uint8_t *) s1_table +
+            (((size_t) i13 * ne12 * ne11 + (size_t) i12 * ne11) * scalar_size);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
-        compute(d_spad, s0_spad, s1_table, cur_i11, ne11, current_block_size,
+        compute(d_spad, s0_spad, scalar_table, i11, ne11, current_block_size,
                 bctx->dst_row_size_aligned, bctx->src0_row_size_aligned, ne00);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
@@ -1260,7 +1265,12 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     if (kparams->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST) {
         dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1->ne[0] * elem_size, 1);
     } else if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR_DMA) {
-        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1->ne[1] * elem_size, 1);
+        const uint64_t src1_size64 = (uint64_t) src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3] * elem_size;
+        if (src1_size64 > bctx.vtcm_layout.src1_size || src1_size64 > SIZE_MAX) {
+            return HTP_STATUS_INVAL_PARAMS;
+        }
+        const size_t src1_size = (size_t) src1_size64;
+        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1_size, 1);
     } else if (kparams->kernel_type == HTP_BINARY_KERNEL_ADD_ID) {
         dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data),
                        kparams->src1_row_size_aligned, src1->nb[1],
