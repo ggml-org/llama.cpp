@@ -2,9 +2,12 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "preset.h"
 #include "speculative.h"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -13,6 +16,33 @@
 
 #undef NDEBUG
 #include <cassert>
+
+static std::string write_temp_ini(const std::string & contents) {
+    const auto dir = std::filesystem::temp_directory_path() / "llama-test-preset";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "preset.ini";
+    std::ofstream out(path);
+    assert(out.good());
+    out << contents;
+    out.close();
+    return path.string();
+}
+
+static std::string preset_opt(const common_preset & preset, const char * env) {
+    std::string value;
+    assert(preset.get_option(env, value));
+    return value;
+}
+
+static std::string arg_value(const std::vector<std::string> & args, const std::string & flag) {
+    for (size_t i = 0; i + 1 < args.size(); ++i) {
+        if (args[i] == flag) {
+            return args[i + 1];
+        }
+    }
+    assert(false);
+    return "";
+}
 
 static void test(void) {
     common_params params;
@@ -362,6 +392,48 @@ static void test(void) {
     assert(params.model.path == "overwritten.gguf");
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
+
+    printf("test-arg-parser: test INI preset quoted model paths\n\n");
+    {
+        const std::string ini_path = write_temp_ini(R"(
+[*]
+ctx-size = 4096
+
+[Ministral3]
+model = "D:\llama-cpp\models\Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"
+ctx-size = 4096
+
+[posix-quoted]
+model = "/abs/path with spaces.gguf"
+
+[posix-plain]
+model = /abs/path.gguf
+
+[posix-single]
+model = '/tmp/quoted.gguf'
+
+[json-kwargs]
+model = /tmp/m.gguf
+chat-template-kwargs = {"reasoning_effort": "high"}
+)");
+
+        common_preset_context ctx(LLAMA_EXAMPLE_SERVER);
+        common_preset global;
+        const auto presets = ctx.load_from_ini(ini_path, global);
+
+        const std::string win_path = "D:\\llama-cpp\\models\\Ministral-3-8B-Instruct-2512-Q4_K_M.gguf";
+        assert(preset_opt(presets.at("Ministral3"), "LLAMA_ARG_MODEL") == win_path);
+        assert(arg_value(presets.at("Ministral3").to_args("llama-server"), "--model") == win_path);
+
+        common_params loaded;
+        presets.at("Ministral3").apply_to_params(loaded);
+        assert(loaded.model.path == win_path);
+
+        assert(preset_opt(presets.at("posix-quoted"), "LLAMA_ARG_MODEL") == "/abs/path with spaces.gguf");
+        assert(preset_opt(presets.at("posix-plain"),  "LLAMA_ARG_MODEL") == "/abs/path.gguf");
+        assert(preset_opt(presets.at("posix-single"), "LLAMA_ARG_MODEL") == "/tmp/quoted.gguf");
+        assert(preset_opt(presets.at("json-kwargs"),  "LLAMA_ARG_CHAT_TEMPLATE_KWARGS") == "{\"reasoning_effort\": \"high\"}");
+    }
 
     printf("test-arg-parser: test download functions\n\n");
     const char * GOOD_URL = "http://ggml.ai/";
