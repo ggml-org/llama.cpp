@@ -183,6 +183,72 @@ template [[host_name("kernel_rms_norm_f32_4")]]         kernel kernel_rms_norm_f
 template [[host_name("kernel_rms_norm_mul_f32_4")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 2>;
 template [[host_name("kernel_rms_norm_mul_add_f32_4")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 3>;
 
+
+template <typename T>
+kernel void kernel_rms_norm_back_impl(
+        constant ggml_metal_kargs_norm_back & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup float * shmem_xx  [[threadgroup(0)]],
+        threadgroup float * shmem_xdz [[threadgroup(1)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i01 = tgpig.x;
+    const int i02 = tgpig.y;
+    const int i03 = tgpig.z;
+
+    if (sgitg == 0) {
+        shmem_xx[tiisg]  = 0.0f;
+        shmem_xdz[tiisg] = 0.0f;
+    }
+
+    device const T * dz = (device const T *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
+    device const T * x  = (device const T *) (src1 + i03*args.nb13 + i02*args.nb12 + i01*args.nb11);
+    device       T * dx = (device       T *) (dst  + i03*args.nb3  + i02*args.nb2  + i01*args.nb1);
+
+    float sum_xx  = 0.0f;
+    float sum_xdz = 0.0f;
+
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        sum_xx  += dot(x[i00], x[i00]);
+        sum_xdz += dot(x[i00], dz[i00]);
+    }
+    sum_xx  = simd_sum(sum_xx);
+    sum_xdz = simd_sum(sum_xdz);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tiisg == 0) {
+        shmem_xx[sgitg]  = sum_xx;
+        shmem_xdz[sgitg] = sum_xdz;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    sum_xx  = shmem_xx[tiisg];
+    sum_xx  = simd_sum(sum_xx);
+    sum_xdz = shmem_xdz[tiisg];
+    sum_xdz = simd_sum(sum_xdz);
+
+    const float mean     = sum_xx/args.ne00;
+    const float sum_eps  = sum_xx + args.eps*args.ne00;
+    const float rrms     = 1.0f/sqrt(mean + args.eps);
+    const float scale_x  = -sum_xdz/sum_eps;
+
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        dx[i00] = rrms * (dz[i00] + x[i00]*scale_x);
+    }
+}
+
+typedef decltype(kernel_rms_norm_back_impl<float4>) kernel_rms_norm_back_t;
+
+template [[host_name("kernel_rms_norm_back_f32")]]   kernel kernel_rms_norm_back_t kernel_rms_norm_back_impl<float>;
+template [[host_name("kernel_rms_norm_back_f32_4")]] kernel kernel_rms_norm_back_t kernel_rms_norm_back_impl<float4>;
+
 template <typename T0, typename T>
 kernel void kernel_l2_norm_impl(
         constant ggml_metal_kargs_l2_norm & args,
