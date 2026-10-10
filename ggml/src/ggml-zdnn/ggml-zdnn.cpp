@@ -4,6 +4,7 @@
 
 #include "ggml-zdnn/common.hpp"
 #include "ggml-zdnn/mmf.hpp"
+#include "ggml-zdnn/mmq.hpp"
 #include "ggml-zdnn/utils.hpp"
 #include "ggml.h"
 
@@ -13,15 +14,17 @@
 #include <unistd.h>
 
 static void ggml_zdnn_compute_forward_mul_mat(
-    const ggml_backend_zdnn_context * ctx,
+    ggml_backend_zdnn_context * ctx,
           ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];  // weights
     const ggml_tensor * src1 = dst->src[1];  // inputs
 
-    // TODO: implement support for quantized types
-    // we currently only support f32, f16, and bf16
-    ggml_zdnn_mul_mat_f(ctx, src0, src1, dst);
+    if (ggml_is_quantized(src0->type)) {
+        ggml_zdnn_mul_mat_q(ctx, src0, src1, dst);
+    } else {
+        ggml_zdnn_mul_mat_f(ctx, src0, src1, dst);
+    }
 }
 
 static bool ggml_zdnn_compute_forward(
@@ -98,7 +101,7 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
                 if (!ggml_is_matrix(weights) || !ggml_is_matrix(inputs) ||
                     !ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs) ||
-                    weights->view_src != nullptr || inputs->view_src != nullptr ||
+                    weights->view_src != nullptr ||
                     ne0 > max_batch || ne1 > max_batch || ne10 > max_batch) {
                         return false;
                 }
@@ -107,7 +110,11 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
-                        return true;
+                        // the inputs ztensor is used, and views have none
+                        return inputs->view_src == nullptr;
+                    case GGML_TYPE_Q8_0:
+                        // the inputs are quantized from their data, so views work as well
+                        return ctx_dev->has_parmblkformat_1 && inputs->type == GGML_TYPE_F32;
                     default:
                         return false;
                 }
@@ -186,6 +193,7 @@ static ggml_backend_zdnn_context * ggml_zdnn_init(ggml_backend_dev_t dev) {
     GGML_LOG_INFO("%s: NNPA_PARMBLKFORMAT_0 = %s\n", __func__, ctx_dev->has_parmblkformat_0 ? "true" : "false");
     GGML_LOG_INFO("%s: NNPA_PARMBLKFORMAT_1 = %s\n", __func__, ctx_dev->has_parmblkformat_1 ? "true" : "false");
 
+    ctx->n_threads = GGML_DEFAULT_N_THREADS;
     ctx->gf = nullptr;
 
     return ctx;
@@ -193,6 +201,14 @@ static ggml_backend_zdnn_context * ggml_zdnn_init(ggml_backend_dev_t dev) {
 
 static void ggml_zdnn_free(ggml_backend_zdnn_context * ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
+
+    for (const auto & it : ctx->zero_bias) {
+        ZDNN_CHECK(zdnn_free_ztensor_buffer(&it.second->ztensor));
+    }
+    for (void * scratch : ctx->scratch_ztensor) {
+        free(scratch);
+    }
+
     delete ctx;
 }
 
@@ -295,9 +311,19 @@ static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
 
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
 
+    if (ggml_is_quantized(tensor->type)) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor));
+        ggml_zdnn_load_tensor_q(extra, tensor);
+        return;
+    }
+
     // Fixes the LLAMA_SET_ROWS bug
     // see: https://github.com/ggml-org/llama.cpp/issues/15414
-    if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE && extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
+    // compute tensors are transformed on first use instead, as not every op reads the ztensor
+    if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+        zdnn_reset_ztensor(&extra->ztensor);
+        return;
+    }
     if (extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
 
     GGML_UNUSED(buffer);
@@ -621,9 +647,19 @@ static ggml_backend_feature * ggml_backend_zdnn_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+static void ggml_backend_zdnn_set_n_threads(ggml_backend_t backend, int n_threads) {
+    GGML_ASSERT(ggml_backend_is_zdnn(backend));
+
+    ggml_backend_zdnn_context * ctx = (ggml_backend_zdnn_context *)backend->context;
+    ctx->n_threads = n_threads;
+}
+
 static void * ggml_backend_zdnn_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *) ggml_backend_zdnn_get_features;
+    }
+    if (strcmp(name, "ggml_backend_set_n_threads") == 0) {
+        return (void *) ggml_backend_zdnn_set_n_threads;
     }
 
     return NULL;

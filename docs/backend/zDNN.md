@@ -27,6 +27,9 @@ The llama.cpp zDNN backend is designed to enable llama.cpp on IBM z17 and later 
 | F32       | Supported |
 | F16       | Supported |
 | BF16      | Supported |
+| Q8_0      | Supported |
+
+Note: Quantized weights are requantized to int8 with one scale per group of up to 2048 values in each row (or 1024 with `GGML_ZDNN_HIGH_PREC=1`), after each input channel is divided by its RMS (the activations are multiplied by it instead), and each activation is quantized to two int8 values (about 15 bits). This requires `NNPA_PARMBLKFORMAT_1` (IBM z17 / LinuxONE 5).
 
 ## CMake Options
 
@@ -36,6 +39,12 @@ The IBM zDNN backend has the following CMake options that control the behaviour 
 | ------------ | ------------- | ----------------------------------- |
 | `GGML_ZDNN`  | `OFF`         | Compile llama.cpp with zDNN support |
 | `ZDNN_ROOT`  | `""`          | Override zDNN library lookup        |
+
+## Environment Variables
+
+| Environment Variable  | Default Value | Description                                                                            |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------- |
+| `GGML_ZDNN_HIGH_PREC` | `0`           | Set to `1` to requantize Q8_0 weights in smaller groups, for lower loss at lower speed |
 
 ## 1. Install zDNN Library
 
