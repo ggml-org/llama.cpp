@@ -1190,6 +1190,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
+        // mtmd image chunks are decoded into the target context by the mtmd helper
+        // and never pass through this hook, so the draft cache is left with a
+        // positional hole and the next injection fails the consecutive-position
+        // check. The same hole appears when the target reuses a cached prefix the
+        // draft cache never saw. Seed the hole with zero target-layer features:
+        // drafted tokens are still verified by the target, so this degrades
+        // post-image draft acceptance only, never output correctness.
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_batch_beg[seq_id] < 0) {
+                continue;
+            }
+            const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
+            const llama_pos gap_beg = pos_max + 1;
+            const llama_pos gap_end = batch_in.tokens[i_batch_beg[seq_id]].pos[0]; // exclusive
+            if (gap_end <= gap_beg) {
+                continue;
+            }
+            LOG_WRN("%s: draft cache hole for seq %d: [%d, %d) - seeding with zero features\n",
+                    __func__, (int) seq_id, (int) gap_beg, (int) gap_end);
+            for (llama_pos off = gap_beg; off < gap_end; off += n_ubatch) {
+                const int32_t n_chunk = std::min<int32_t>(n_ubatch, (int32_t) (gap_end - off));
+                features_buf.assign((size_t) n_chunk * n_embd_enc, 0.0f);
+                batch_inject.clear();
+                for (int32_t i = 0; i < n_chunk; ++i) {
+                    const llama_pos p = off + i;
+                    const llama_pos pos_arr[4] = { p, p, p, 0 };
+                    const float * feat = features_buf.data() + (size_t) i * n_embd_enc;
+                    batch_inject.add_embd({ feat, 1, (size_t) n_embd_enc }, pos_arr, seq_id, false);
+                }
+                const int32_t rc = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_inject.get());
+                if (rc != 0) {
+                    LOG_ERR("%s: zero-fill llama_process(ctx_dft) failed rc=%d (n_tokens=%d, pos=%d)\n",
+                            __func__, rc, (int) n_chunk, (int) off);
+                    return false;
+                }
+            }
+        }
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_batch_beg[seq_id] < 0) {
                 continue;
