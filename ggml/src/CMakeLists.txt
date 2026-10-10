@@ -637,7 +637,11 @@ endif()
 
 if (BUILD_SHARED_LIBS)
     foreach (target ggml-base ggml)
-        set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        set_target_properties(${target} PROPERTIES
+            POSITION_INDEPENDENT_CODE ON
+            C_VISIBILITY_PRESET hidden
+            CXX_VISIBILITY_PRESET hidden
+        )
         target_compile_definitions(${target} PRIVATE GGML_BUILD)
         target_compile_definitions(${target} PUBLIC  GGML_SHARED)
     endforeach()
