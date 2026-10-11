@@ -79,6 +79,9 @@ set_target_properties(llama PROPERTIES
 
 # exclude non-model sources from unity build
 set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
+    llama-context-memory.cpp llama-context-workspace.cpp llama-memory-executor.cpp
+    llama-memory-executor-cuda.cpp llama-memory-workspace.cpp llama-memory-transition.cpp
+    llama-memory-layout.cpp llama-memory-plan.cpp llama-memory-requirements.cpp
     PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
