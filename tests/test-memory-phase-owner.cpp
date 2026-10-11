@@ -330,5 +330,124 @@ int main(int argc, char ** argv) {
     });
 
 
+    t.test("measured_workloads_fit_exactly_and_report_missing_kernels_separately", [](testing & t) {
+        using phase = llama_memory_work_phase;
+        llama_memory_cache_requirement cache{{201, 1}, {}, llama_memory_cache_role::bounded_resident,
+                                           5, 262144, 2048, 256, 256, 1664};
+        cache.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
+        std::vector<llama_memory_workload_requirement> work{
+            {phase::draft_feature_injection,cache.identity,256,0,0,0,256,true,true,false},
+            {phase::draft_block_prediction,cache.identity,8,8,8,0,256,true,true,false},
+            {phase::target_verify,cache.identity,8,8,8,7,256,true,true,true}};
+        std::vector<llama_memory_workload_measurement> measured;
+        const std::vector<llama_memory_cache_allocation_measurement> allocation{{cache.identity,19169280,16,2304,cache.format}};
+        for (const auto & r : work) measured.push_back({r, 100, 20, 25, 16, true, false, false});
+        measured[1].graph_bytes = 200;
+        measured[2].live_device_bytes = 80;
+        llama_memory_workload_budget budget;
+        auto result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(19169280), budget.persistent_cache_bytes);
+        t.assert_equal(size_t(224), budget.workspace_peak_bytes);
+        t.assert_equal(size_t(19169504), budget.parent_minimum_bytes);
+        t.assert_equal(size_t(25), budget.host_feature_peak_bytes);
+        const auto before = budget;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169503, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::insufficient_budget);
+        t.assert_equal(size_t(1), result.additional_bytes);
+        t.assert_equal(before.parent_minimum_bytes, budget.parent_minimum_bytes);
+        measured[1].execution_available = false;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 1, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::missing_kernel);
+        t.assert_equal(size_t(1), result.workload);
+        measured[1].execution_available = true;
+        measured[1].workload.query_rows = 4;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::missing_measurement);
+        measured[1].workload = work[1];
+        measured[1].fallback_selected = true;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::unbudgeted_fallback);
+        measured[1].fallback_measured = true;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, 19169504, budget).status ==
+                      llama_memory_workload_budget_status::success);
+        measured[1].live_device_bytes = SIZE_MAX;
+        result = llama_memory_workload_budget_make({cache}, allocation, work, measured, 0, SIZE_MAX, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::invalid_measurement);
+        auto padded_allocation = allocation;
+        padded_allocation[0].alignment = 64;
+        measured[1].live_device_bytes = 20;
+        result = llama_memory_workload_budget_make({cache}, padded_allocation, work, measured, 1, 19169567, budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::insufficient_budget);
+        t.assert_equal(size_t(1), result.additional_bytes);
+    });
+
+    t.test("workload_admission_rejects_stale_and_duplicate_cache_catalogs", [](testing & t) {
+        llama_memory_cache_requirement cache{{201, 2}, {}, llama_memory_cache_role::full_history,
+                                           16, 262144, 0, 0, 256, 1664};
+        cache.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,4,false};
+        llama_memory_workload_requirement work{llama_memory_work_phase::target_verify,cache.identity,8,8,8,7,256,true,true,true};
+        llama_memory_workload_measurement measured{work, 100, 20, 25, 16, true, false, false};
+        const std::vector<llama_memory_cache_allocation_measurement> allocation{{cache.identity,0,16,262144,cache.format}};
+        llama_memory_workload_budget budget;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(0), budget.persistent_cache_bytes);
+        const auto padded = llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 1, 143, budget);
+        t.assert_true(padded.status == llama_memory_workload_budget_status::insufficient_budget);
+        t.assert_equal(size_t(1), padded.additional_bytes);
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 1, 144, budget).status ==
+                      llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(144), budget.parent_minimum_bytes);
+        t.assert_true(llama_memory_workload_budget_make({cache,cache}, {allocation[0],allocation[0]}, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::invalid_cache);
+        work.cache.generation++;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::stale_cache);
+        work.cache.id++;
+        t.assert_true(llama_memory_workload_budget_make({cache}, allocation, {work}, {measured}, 0, 128, budget).status ==
+                      llama_memory_workload_budget_status::missing_cache);
+    });
+
+    t.test("measured_cache_padding_and_aliases_are_accounted_once", [](testing & t) {
+        llama_memory_cache_requirement source{{201,2},{},llama_memory_cache_role::bounded_resident,
+                                            5,262144,2048,256,256,1664};
+        source.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
+        auto alias = source;
+        alias.identity = {202,1};
+        alias.role = llama_memory_cache_role::read_only_source;
+        alias.source = source.identity;
+        alias.layers = 1;
+        llama_memory_workload_requirement work{llama_memory_work_phase::target_verify,alias.identity,8,8,8,0,256,true,false,false};
+        llama_memory_workload_measurement measurement{work,100,20,0,64,true,false,false};
+        std::vector<llama_memory_cache_allocation_measurement> allocations{
+            {source.identity,19169312,64,2304,source.format},{alias.identity,0,64,2304,alias.format}};
+        llama_memory_workload_budget budget;
+        auto result = llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,19169472,budget);
+        t.assert_true(result.status == llama_memory_workload_budget_status::success);
+        t.assert_equal(size_t(19169312), budget.persistent_cache_bytes);
+        t.assert_equal(size_t(19169472), budget.parent_minimum_bytes);
+        allocations[1].bytes = 1;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::invalid_measurement);
+        allocations[1].bytes = 0;
+        allocations[0].bytes = 19169279;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::invalid_measurement);
+        allocations[0].bytes = 19169312;
+        allocations[0].cache.generation++;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::missing_measurement);
+        allocations[0].cache = source.identity;
+        allocations[0].capacity_rows--;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::missing_measurement);
+        allocations[0].capacity_rows++;
+        allocations[0].format.key_head_dim *= 2;
+        allocations[0].format.kv_heads /= 2;
+        t.assert_true(llama_memory_workload_budget_make({source,alias},allocations,{work},{measurement},0,SIZE_MAX,budget).status ==
+                      llama_memory_workload_budget_status::missing_measurement);
+    });
+
     return t.summary();
 }

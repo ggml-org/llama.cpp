@@ -116,6 +116,9 @@ int main() {
         llama_memory_cache_requirement target{{101, 2}, {}, role::full_history, 16, 262144, 0, 0, 256, 1664};
         llama_memory_cache_requirement qwen{{102, 7}, {}, role::bounded_resident, 5, 262144, 2048, 256, 256, 1664};
         llama_memory_cache_requirement gemma{{103, 3}, {}, role::bounded_resident, 50, 131072, 1024, 512, 256, 1152};
+        target.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,4,false};
+        qwen.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
+        gemma.format = {GGML_TYPE_Q4_0,GGML_TYPE_Q4_0,128,128,8,false};
         llama_memory_cache_bound result;
         t.assert_true(llama_memory_cache_bound_make(target, nullptr, result));
         t.assert_equal(size_t(6979321856), result.storage_bytes);
@@ -143,7 +146,12 @@ int main() {
         t.assert_equal(uint32_t(262144), result.capacity_rows);
         t.assert_true(!result.writable);
         const auto valid_alias = alias;
-        for (int fault = 0; fault < 6; ++fault) {
+        alias.format.key_head_dim = 128;
+        alias.format.value_head_dim = 128;
+        alias.format.kv_heads = 8;
+        t.assert_true(!llama_memory_cache_bound_make(alias, &target, result));
+        alias = valid_alias;
+        for (int fault = 0; fault < 8; ++fault) {
             auto bad = valid_alias;
             switch (fault) {
                 case 0: bad.source_first_layer = 16; break;
@@ -152,6 +160,8 @@ int main() {
                 case 3: bad.identity.id = target.identity.id; break;
                 case 4: bad.row_padding *= 2; break;
                 case 5: bad.history_rows--; break;
+                case 6: std::swap(bad.format.key_type, bad.format.value_type); break;
+                case 7: bad.format.value_transposed = !bad.format.value_transposed; break;
             }
             const auto before = result;
             t.assert_true(!llama_memory_cache_bound_make(bad, &target, result));
@@ -169,7 +179,8 @@ int main() {
     t.test("cache_bounds_fail_transactionally_before_overflow", [](testing & t) {
         llama_memory_cache_requirement base{{101, 1}, {}, llama_memory_cache_role::bounded_resident,
                                           5, 262144, 2048, 256, 256, 1664};
-        for (int fault = 0; fault < 14; ++fault) {
+        base.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
+        for (int fault = 0; fault < 16; ++fault) {
             auto r = base;
             switch (fault) {
                 case 0: r.identity.id = 0; break;
@@ -186,6 +197,8 @@ int main() {
                 case 11: r.row_padding = 0; break;
                 case 12: r.role = static_cast<llama_memory_cache_role>(-1); break;
                 case 13: r.role = llama_memory_cache_role::full_history; r.history_rows = UINT32_MAX; r.window_rows = r.headroom_rows = 0; break;
+                case 14: r.format = {}; break;
+                case 15: r.format.value_type = static_cast<ggml_type>(-1); break;
             }
             llama_memory_cache_bound out{31, 17, false};
             t.assert_true(!llama_memory_cache_bound_make(r, nullptr, out));
@@ -199,6 +212,7 @@ int main() {
         using phase = llama_memory_work_phase;
         llama_memory_cache_requirement cache{{101, 1}, {}, llama_memory_cache_role::bounded_resident,
                                            5, 262144, 2048, 256, 256, 1664};
+        cache.format = {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,128,128,8,false};
         llama_memory_workload_requirement inject{phase::draft_feature_injection, cache.identity, 256, 0, 0, 0, 256, true, true, false};
         t.assert_true(llama_memory_workload_requirement_valid(inject, cache));
         auto predict = inject;

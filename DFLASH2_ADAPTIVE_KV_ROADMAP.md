@@ -296,7 +296,7 @@ Add failing tests first and retain the red result; implement the minimum coheren
 | Milestone | Status | Completion gate |
 | --- | --- | --- |
 | D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b at `1cd9036ce`; D1c complete | Pinned metadata, controls and physical-fit ledger |
-| D2 Common contracts | D2a complete; D2b next | Neutral workload/cache roles and unchanged current paths |
+| D2 Common contracts | D2a at `4db05567e`; D2b contracts complete | Neutral workload/cache roles and unchanged current paths |
 | D3 Target TG1-TG8 | D3a committed at `0f9c78645`; D3b/D3c planned | Stock-order span/resume and bounded workspace |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
 | D5 Draft KV and phase arena | Planned | Reusable bounded resident KV consumer, synthetic Qwen/Gemma coverage and one participating parent |
@@ -420,6 +420,20 @@ Implemented on 2026-10-11. Existing phase infrastructure now distinguishes featu
 The existing phase cache-identity type is reused, and current MTP/target enum values and paths remain unchanged. No server admission, runtime allocation, CUDA kernel, target ring policy or current MTP budgeting changes in this stage. Overflow/padding/type/range failures preserve the output descriptor.
 
 TDD: the initial build failed because the new contracts did not exist. The phase suite now passes 224 assertions across ten tests, including independent synthetic Qwen/Gemma groups, short/long window bounds, source aliases, stale generations, layer/geometry mismatches, zero sizes, padding and multiplication overflow, invalid enums, writer rejection, distinct injection/block/verification widths, metadata TG16 and microbatch limits. ASan/UBSan passes this suite and the 88-assertion owner suite. Five focused host CTests and four CUDA-build CTests pass; a full CUDA server rebuild and the 43-assertion real-model native regression also pass. Logs use `/tmp/dflash2-d2a-*`. Production is restored and healthy.
+
+### D2b measured primary-arena admission
+
+Implemented on 2026-10-11. `llama_memory_workload_budget_make` checks a complete declared workload catalog against matching cache and execution measurements. It distinguishes missing/stale caches, missing measurements, unavailable execution, unmeasured fallback, invalid/overflowing measurements and insufficient arena capacity. Exact-fit succeeds; one-byte-short reports the additional byte without modifying the previous budget. A cached TG4 measurement cannot satisfy TG8, and a selected fallback must supply its own validated measurements.
+
+Cache allocation measurements include backend padding, byte alignment, capacity, generation and format. Encoded payload size is a lower bound, not an allocation quote. Equal row-byte counts can hide different formats: Qwen's target 256-dimensional/four-head KV and draft 128-dimensional/eight-head KV have equal flattened row lengths. Aliases and cached allocation quotes now also compare K/V types, head dimensions, KV-head count and V transposition. This closes a metadata ambiguity discovered while implementing measured admission; no runtime alias is introduced.
+
+The budget keeps measured persistent cache storage live, places it after any preplanned persistent prefix, aligns workspace after that storage, and takes the maximum serial workload rather than summing all graph workspaces. Separately live target KV grants, staging and retained device outputs must appear in each quote. Read-only aliases add no storage. Full-history host backing adds no implicit device allocation; any persistent device part must be explicitly measured. Host-feature peak is reported separately and still needs host-domain capacity/lifetime validation during integration.
+
+This is the backend-neutral admission contract, not a hardware probe or new resource owner. Adapters must supply measurements from the exact compiled/device-valid path and retain prepared native resources. D3c/D5/D6 connect those adapters and leases to the live model. The current server's DFlash2-streaming rejection and existing MTP/native allocation paths remain unchanged; passing a synthetic metadata budget does not qualify execution or full-context fit.
+
+TDD evidence: missing-contract builds failed first, and alignment tests then exposed three failures (persistent-prefix alignment) plus two failures (cache-allocation alignment). Those cases now pass. The phase suite passes 239 assertions and the owner/budget suite 121, including same-byte/different-format aliases, measured backend padding, duplicate/stale cache catalogs, exact/short quota, width-eight versus width-four quotes, fallback rejection and checked byte addition/alignment. Both suites pass ASan/UBSan; five focused host and four CUDA-build CTests pass. The full CUDA server is rebuilt, and its 43-assertion ordinary real-model regression passes. Logs use `/tmp/dflash2-d2b-*`. Production is restored and healthy.
+
+Next is D3b: real TG5-TG8 span/resume kernels and matched numerical qualification. D3a's geometry descriptions and D2's budget contracts must not be mistaken for that implementation.
 
 ### D3a checked launch planning
 

@@ -3,17 +3,26 @@
 #include <limits>
 #include <algorithm>
 
+bool llama_memory_cache_format_equal(const llama_memory_cache_format & a, const llama_memory_cache_format & b) noexcept {
+    return a.key_type == b.key_type && a.value_type == b.value_type && a.key_head_dim == b.key_head_dim &&
+        a.value_head_dim == b.value_head_dim && a.kv_heads == b.kv_heads && a.value_transposed == b.value_transposed;
+}
+
 bool llama_memory_cache_bound_make(const llama_memory_cache_requirement & r,
         const llama_memory_cache_requirement * source, llama_memory_cache_bound & output) noexcept {
     if (!r.identity.id || !r.identity.generation || !r.layers || !r.history_rows || !r.row_bytes ||
-            !r.row_padding || (r.row_padding & (r.row_padding-1))) return false;
+            !r.row_padding || (r.row_padding & (r.row_padding-1)) ||
+            r.format.key_type < GGML_TYPE_F32 || r.format.key_type >= GGML_TYPE_COUNT ||
+            r.format.value_type < GGML_TYPE_F32 || r.format.value_type >= GGML_TYPE_COUNT ||
+            !r.format.key_head_dim || !r.format.value_head_dim || !r.format.kv_heads) return false;
     if (r.role == llama_memory_cache_role::read_only_source) {
         if (!source || source->role == llama_memory_cache_role::read_only_source ||
                 r.source.id != source->identity.id || r.source.generation != source->identity.generation ||
                 r.identity.id == source->identity.id || r.source_first_layer > source->layers ||
                 r.layers > source->layers-r.source_first_layer || r.row_bytes != source->row_bytes ||
                 r.history_rows != source->history_rows || r.window_rows != source->window_rows ||
-                r.headroom_rows != source->headroom_rows || r.row_padding != source->row_padding) return false;
+                r.headroom_rows != source->headroom_rows || r.row_padding != source->row_padding ||
+                !llama_memory_cache_format_equal(r.format, source->format)) return false;
         llama_memory_cache_bound bound;
         if (!llama_memory_cache_bound_make(*source, nullptr, bound)) return false;
         output = {bound.capacity_rows, 0, false};

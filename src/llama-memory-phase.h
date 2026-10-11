@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "ggml.h"
 
 struct llama_memory_phase_cache_identity {
     uint64_t id = 0;
@@ -13,6 +14,17 @@ enum class llama_memory_cache_role {
     bounded_resident,
     read_only_source,
 };
+
+struct llama_memory_cache_format {
+    ggml_type key_type = GGML_TYPE_COUNT;
+    ggml_type value_type = GGML_TYPE_COUNT;
+    uint32_t key_head_dim = 0;
+    uint32_t value_head_dim = 0;
+    uint32_t kv_heads = 0;
+    bool value_transposed = false;
+};
+
+bool llama_memory_cache_format_equal(const llama_memory_cache_format & a, const llama_memory_cache_format & b) noexcept;
 
 // row_bytes is encoded K+V bytes per position per layer, not an element count.
 struct llama_memory_cache_requirement {
@@ -26,6 +38,7 @@ struct llama_memory_cache_requirement {
     uint32_t row_padding = 1;
     size_t row_bytes = 0;
     uint32_t source_first_layer = 0;
+    llama_memory_cache_format format;
 };
 
 struct llama_memory_cache_bound {
