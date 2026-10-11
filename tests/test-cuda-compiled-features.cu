@@ -13,9 +13,9 @@ int ggml_cuda_get_device() { std::abort(); }
 #endif
 #endif
 #if __CUDA_ARCH__ == 750 || __CUDA_ARCH__ == 860 || __CUDA_ARCH__ == 890 || __CUDA_ARCH__ == 1200
-static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,2) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep stock generation-specific staging");
-static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,2,8) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG2 stock staging");
-static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,8) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG3/TG4 stock staging");
+static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,2,false) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep stock generation-specific staging");
+static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,2,8,false) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG2 stock staging");
+static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,8,false) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG3/TG4 stock staging");
 static_assert(ggml_cuda_fattn_mma_get_nthreads(256,256,8) == (__CUDA_ARCH__ == 750 ? 128 : 64),"keep stock thread geometry");
 #endif
 #if __CUDA_ARCH__ < 750 && defined(TURING_MMA_AVAILABLE)
@@ -70,7 +70,7 @@ int main() {
 #elif defined(GGML_CUDA_FA_ALL_QUANTS)
     printf("Flash attention: all supported KV quant pairs compiled\n");
 #else
-    printf("Flash attention: default KV quant pairs compiled\n");
+    printf("Flash attention: selected or default KV quant pairs compiled\n");
 #endif
 
     const int devices[] = {500, 600, 610, 620, 700, 750, 800, 860, 890, 900, 1000, 1200, 1210, 1300};
