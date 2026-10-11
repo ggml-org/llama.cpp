@@ -5470,6 +5470,17 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (op->op == GGML_OP_MUL_MAT_ID && ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
                     return false;
                 }
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+                {
+                    // no MMQ below DP4A: non-contiguous quantized src0 goes to cuBLAS and needs a nc converter
+                    const int cc_mm = ggml_cuda_info().devices[dev_ctx->device].cc;
+                    if (ggml_is_quantized(a->type) && !ggml_is_contiguously_allocated(a) &&
+                            ggml_cuda_highest_compiled_arch(cc_mm) < GGML_CUDA_CC_DP4A &&
+                            ggml_get_to_fp32_nc_cuda(a->type) == nullptr) {
+                        return false;
+                    }
+                }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #ifdef GGML_USE_MUSA
                 const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
                 if (b->ne[2]*b->ne[3] > 1 && !ggml_is_transposed(a) && !ggml_is_transposed(b)) {
