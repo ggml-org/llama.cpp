@@ -14,6 +14,9 @@
 #include "llama.h"
 
 #include <cinttypes>
+#include <chrono>
+
+static thread_local double moe_diag_publish_ms = 0.0;
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -1644,11 +1647,38 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    // ---- diagnostic timers (MOE_DIAG=1) ------------------------------------
+    // T1 = inside graph_compute (the CUDA graph launch + any host wait)
+    // T2 = host-side table/copy work (moe_publish + tensor_set), measured in
+    //      moe_publish and accumulated into a thread-safe counter
+    const bool diag = [] {
+        static int v = -1;
+        if (v < 0) v = getenv("MOE_DIAG") ? atoi(getenv("MOE_DIAG")) : 0;
+        return v != 0;
+    }();
+    const auto t_gpu0 = std::chrono::high_resolution_clock::now();
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
-        LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+        LLAMA_LOG_ERROR("%s: failed to compute graph, compute status = %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    if (diag) {
+        const double t1 = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t_gpu0).count();
+        static double s_t1 = 0.0, s_t2 = 0.0;
+        static long s_n = 0;
+        s_t1 += t1;
+        s_t2 += moe_diag_publish_ms;
+        moe_diag_publish_ms = 0.0;
+        if (++s_n == 20) {
+            LLAMA_LOG_INFO("%s: DIAG steps=%ld T1_compute=%.2f ms T2_publish=%.2f ms per step\n",
+                           __func__, s_n, s_t1 / s_n, s_t2 / s_n);
+            s_t1 = s_t2 = 0.0;
+            s_n = 0;
+        }
     }
 
     ret = GGML_STATUS_SUCCESS;
@@ -4946,7 +4976,19 @@ void llama_context::moe_publish(int il, int e, int slot) {
         const int k = moe.slot_key[(size_t) base + s];
         if (k >= 0) tab[k - il * n_exp] = s;
     }
-    ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
+    {
+        static const bool diag = [] {
+            static int v = -1;
+            if (v < 0) v = getenv("MOE_DIAG") ? atoi(getenv("MOE_DIAG")) : 0;
+            return v != 0;
+        }();
+        const auto tp0 = std::chrono::high_resolution_clock::now();
+        ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
+        if (diag) {
+            moe_diag_publish_ms += std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - tp0).count();
+        }
+    }
 }
 
 const ggml_tensor * llama_context::moe_pool_tensor(const char * which, int il) const {
