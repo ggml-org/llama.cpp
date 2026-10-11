@@ -1,10 +1,13 @@
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
 
+#include <HAP_farf.h>
+
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
 
+#include "dma-queue.h"
 #include "hex-profile.h"
 #include "htp-ctx.h"
 #include "htp-tensor.h"
@@ -22,7 +25,11 @@ struct dsv4_hc_pre_context {
     uint32_t total_jobs;
     uint32_t jobs_per_thread;
     float scale;
-    int gated;
+    uint8_t * vtcm_x;
+    uint8_t * vtcm_g;
+    uint32_t dma_block_chunks;
+    uint32_t dma_row_stride;
+    uint32_t dma_buffer_size;
 };
 
 static inline HVX_Vector dsv4_hc_fast_sigmoid_f32_2it(HVX_Vector v) {
@@ -77,6 +84,7 @@ static inline void dsv4_hc_l2fetch_4rows(const uint8_t * p, size_t row_stride, u
 }
 
 #define DSV4_HC_PF_CHUNKS 16
+#define DSV4_HC_DMA_CHUNKS 128
 
 // prefetch x and gate for the aligned block after the one with chunk c, block does not cross tokens
 static inline void dsv4_hc_prefetch_gated(
@@ -282,6 +290,128 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
     (void) nth;
 }
 
+struct dsv4_hc_dma_block {
+    uint32_t it;
+    uint32_t chunk;
+    uint32_t count;
+};
+
+static inline struct dsv4_hc_dma_block dsv4_hc_dma_block_make(
+        const struct dsv4_hc_pre_context * dctx,
+        uint32_t job,
+        uint32_t end) {
+    const uint32_t local_token = job / dctx->n_chunks;
+    const uint32_t chunk       = job - local_token*dctx->n_chunks;
+    const uint32_t count       = MIN(dctx->dma_block_chunks, MIN(dctx->n_chunks - chunk, end - job));
+    return (struct dsv4_hc_dma_block) {
+        .it    = dctx->token_start + local_token,
+        .chunk = chunk,
+        .count = count,
+    };
+}
+
+static inline void dsv4_hc_dma_push_gated(
+        dma_queue * dma_q,
+        const struct dsv4_hc_pre_context * dctx,
+        const struct dsv4_hc_dma_block * block,
+        uint8_t * x_spad,
+        uint8_t * g_spad) {
+    const struct htp_tensor * x = dctx->octx->src[0];
+    const struct htp_tensor * g = dctx->octx->src[1];
+    const uint32_t row_size = block->count * VLEN;
+    const dma_addr_t x_src = x->data + (uint64_t) block->it*x->nb[2] + (uint64_t) block->chunk*VLEN;
+    const dma_addr_t g_src = g->data + (uint64_t) block->it*g->nb[2] + (uint64_t) block->chunk*VLEN;
+
+    dma_queue_push(dma_q, dma_make_data(x_spad, x_src), dctx->dma_row_stride, x->nb[1], row_size, 4);
+    dma_queue_push(dma_q, dma_make_data(g_spad, g_src), dctx->dma_row_stride, g->nb[1], row_size, 4);
+}
+
+static void dsv4_hc_pre_thread_gated_dma_f32(unsigned int nth, unsigned int ith, void * data) {
+    struct dsv4_hc_pre_context * dctx = (struct dsv4_hc_pre_context *) data;
+    struct htp_ops_context *     octx = dctx->octx;
+
+    const struct htp_tensor * dst = octx->dst;
+    uint8_t * dst_data = (uint8_t *) dst->data;
+
+    const uint32_t start = dctx->jobs_per_thread * ith;
+    const uint32_t end   = MIN(start + dctx->jobs_per_thread, dctx->total_jobs);
+    if (start >= end) {
+        return;
+    }
+
+    const uint32_t thread_offset = 2*dctx->dma_buffer_size*ith;
+    uint8_t * x_spad[2] = {
+        dctx->vtcm_x + thread_offset,
+        dctx->vtcm_x + thread_offset + dctx->dma_buffer_size,
+    };
+    uint8_t * g_spad[2] = {
+        dctx->vtcm_g + thread_offset,
+        dctx->vtcm_g + thread_offset + dctx->dma_buffer_size,
+    };
+
+    dma_queue * dma_q = octx->ctx->dma[ith];
+    uint32_t prefetch_job = start;
+    for (uint32_t i = 0; i < 2 && prefetch_job < end; ++i) {
+        const struct dsv4_hc_dma_block block = dsv4_hc_dma_block_make(dctx, prefetch_job, end);
+        dsv4_hc_dma_push_gated(dma_q, dctx, &block, x_spad[i], g_spad[i]);
+        prefetch_job += block.count;
+    }
+
+    const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
+    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
+    const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    uint32_t job = start;
+    uint32_t curr = 0;
+    while (job < end) {
+        const struct dsv4_hc_dma_block block = dsv4_hc_dma_block_make(dctx, job, end);
+        dma_queue_pop(dma_q);
+        dma_queue_pop(dma_q);
+
+        for (uint32_t c = 0; c < block.count; ++c) {
+            const uint32_t i0 = (block.chunk + c) * VLEN_FP32;
+            const uint8_t * xb = x_spad[curr] + c*VLEN;
+            const uint8_t * gb = g_spad[curr] + c*VLEN;
+            uint8_t * db = dst_data + i0*dst->nb[0] + block.it*dst->nb[1];
+
+            const HVX_Vector x0 = *(const HVX_Vector *) xb;
+            const HVX_Vector x1 = *(const HVX_Vector *) (xb + dctx->dma_row_stride);
+            const HVX_Vector x2 = *(const HVX_Vector *) (xb + 2*dctx->dma_row_stride);
+            const HVX_Vector x3 = *(const HVX_Vector *) (xb + 3*dctx->dma_row_stride);
+
+            const HVX_Vector g0 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) gb, one, max_exp, min_exp);
+            const HVX_Vector g1 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + dctx->dma_row_stride), one, max_exp, min_exp);
+            const HVX_Vector g2 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 2*dctx->dma_row_stride), one, max_exp, min_exp);
+            const HVX_Vector g3 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 3*dctx->dma_row_stride), one, max_exp, min_exp);
+
+            HVX_Vector acc = hvx_vec_mul_f32_f32(x0, g0);
+            acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x1, g1));
+            acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x2, g2));
+            acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x3, g3));
+            acc = hvx_vec_mul_f32_f32(acc, scale_v);
+            hvx_vec_store_u(db, VLEN, acc);
+        }
+
+        if (prefetch_job < end) {
+            const struct dsv4_hc_dma_block next = dsv4_hc_dma_block_make(dctx, prefetch_job, end);
+            dsv4_hc_dma_push_gated(dma_q, dctx, &next, x_spad[curr], g_spad[curr]);
+            prefetch_job += next.count;
+        }
+
+        job += block.count;
+        curr ^= 1;
+    }
+
+    dma_queue_flush(dma_q);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    (void) nth;
+}
+
 int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     const struct htp_tensor * x       = octx->src[0];
     const struct htp_tensor * weights = octx->src[1];
@@ -337,17 +467,43 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
+    const uint32_t dma_block_chunks = MIN(DSV4_HC_DMA_CHUNKS, n_chunks);
+    const uint32_t dma_row_stride   = dma_block_chunks * VLEN;
+    const uint32_t dma_buffer_size  = 4*dma_row_stride;
+    const uint32_t jobs_per_thread  = (total_jobs + n_threads - 1) / n_threads;
+    const size_t   dma_input_size   = 2*(size_t) dma_buffer_size*n_threads;
+    const size_t   dma_vtcm_size    = 2*dma_input_size;
+    uint8_t *      vtcm_base        = (uint8_t *) octx->ctx->vtcm_base;
+    const bool     use_dma          = gated &&
+                                     n_tokens > 1 &&
+                                     x->ne[0] % VLEN_FP32 == 0 &&
+                                     jobs_per_thread >= 2*dma_block_chunks &&
+                                     vtcm_base != NULL &&
+                                     dma_vtcm_size <= octx->ctx->vtcm_size;
+
     struct dsv4_hc_pre_context dctx = {
-        .octx            = octx,
-        .token_start     = token_start,
-        .n_chunks        = n_chunks,
-        .total_jobs      = total_jobs,
-        .jobs_per_thread = (total_jobs + n_threads - 1) / n_threads,
-        .scale           = scale,
-        .gated           = gated,
+        .octx             = octx,
+        .token_start      = token_start,
+        .n_chunks         = n_chunks,
+        .total_jobs       = total_jobs,
+        .jobs_per_thread  = jobs_per_thread,
+        .scale            = scale,
+        .vtcm_x           = vtcm_base,
+        .vtcm_g           = vtcm_base ? vtcm_base + dma_input_size : NULL,
+        .dma_block_chunks = dma_block_chunks,
+        .dma_row_stride   = dma_row_stride,
+        .dma_buffer_size  = dma_buffer_size,
     };
 
-    if (gated) {
+    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : gated %d dma %d scale %.6f tokens %u:%u n-threads %u\n",
+         x->ne[0], x->ne[1], x->ne[2], x->ne[3],
+         weights->ne[0], weights->ne[1], weights->ne[2], weights->ne[3],
+         dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+         gated, use_dma, scale, token_start, token_start + n_tokens, n_threads);
+
+    if (use_dma) {
+        work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_gated_dma_f32, &dctx, n_threads);
+    } else if (gated) {
         work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_gated_f32, &dctx, n_threads);
     } else {
         work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_plain_f32, &dctx, n_threads);
