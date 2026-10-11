@@ -4804,7 +4804,13 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
     for (int k = 0; k < n; k++) {
         const int32_t e = sel[k];
         if (e < 0 || e >= n_exp) continue;
-        moe_page_pinned(il, e, (const bool *) pinned.data());
+        const int got = moe_page_pinned(il, e, (const bool *) pinned.data());
+        // a later miss in this same batch must not evict what an earlier miss
+        // just paged: pinned was built before any of them ran
+        if (got >= 0) {
+            const int local = got - (int) il * s_pl;
+            pinned[(size_t) local] = 1;
+        }
     }
 }
 
