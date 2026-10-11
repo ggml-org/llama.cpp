@@ -8,17 +8,20 @@
 static std::atomic<size_t> execution_buffers{0};
 bool ggml_backend_execution_buffers_present() { return execution_buffers.load(std::memory_order_acquire) != 0; }
 
+static constexpr size_t external_workspace_param = GGML_MAX_OP_PARAMS/sizeof(int32_t)-1;
+static_assert(external_workspace_param > 4, "private dispatch metadata must not overlap stock attention parameters");
+
 void ggml_backend_execution_set_external_workspace(ggml_tensor * op, bool external) {
     GGML_ASSERT(op && op->op == GGML_OP_FLASH_ATTN_EXT);
-    // FLASH_ATTN_EXT uses parameter words 0-3 for arithmetic; word 4 is private dispatch metadata.
+    // Keep dispatch metadata outside the stock arithmetic and sparse-mask words.
     const int32_t value = external ? 1 : 0;
-    std::memcpy(op->op_params + 4, &value, sizeof(value));
+    std::memcpy(op->op_params + external_workspace_param, &value, sizeof(value));
 }
 
 bool ggml_backend_execution_has_external_workspace(const ggml_tensor * op) {
     if (!op || op->op != GGML_OP_FLASH_ATTN_EXT) return false;
     int32_t value = 0;
-    std::memcpy(&value, op->op_params + 4, sizeof(value));
+    std::memcpy(&value, op->op_params + external_workspace_param, sizeof(value));
     return value == 1;
 }
 

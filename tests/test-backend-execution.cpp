@@ -31,8 +31,9 @@ int main(int argc, char ** argv) {
         auto * k = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 32, 256, 2, 1);
         auto * v = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 32, 256, 2, 1);
         auto * attention = ggml_flash_attn_ext(ctx.get(), q, k, v, nullptr, .125f, 0, 0);
-        ggml_flash_attn_ext_set_prec(attention, GGML_PREC_F32);
-        int32_t arithmetic[4];
+        ggml_prec_set_acc(attention, GGML_PREC_F32);
+        ggml_flash_attn_ext_set_n_kv_max(attention, 128);
+        int32_t arithmetic[5];
         std::memcpy(arithmetic, attention->op_params, sizeof(arithmetic));
         t.assert_true(!ggml_backend_execution_has_external_workspace(attention));
         t.assert_true(!ggml_backend_execution_has_external_workspace(q));
@@ -41,6 +42,9 @@ int main(int argc, char ** argv) {
         t.assert_true(ggml_backend_execution_has_external_workspace(attention));
         t.assert_true(std::memcmp(arithmetic, attention->op_params, sizeof(arithmetic)) == 0);
         ggml_backend_execution_set_external_workspace(attention, false);
+        t.assert_true(!ggml_backend_execution_has_external_workspace(attention));
+        t.assert_true(std::memcmp(arithmetic, attention->op_params, sizeof(arithmetic)) == 0);
+        ggml_flash_attn_ext_set_n_kv_max(attention, 1);
         t.assert_true(!ggml_backend_execution_has_external_workspace(attention));
     });
     t.test("execution_buffer_retains_backing_and_dispatches_only_its_owner", [&](testing & t) {
@@ -191,7 +195,7 @@ int main(int argc, char ** argv) {
         // Short prefill uses native MMA conversion scratch even with a managed KV owner.
         t.assert_equal(stock, ggml_backend_buft_get_alloc_size(buft, attention));
         t.assert_equal(stock_prefill, ggml_backend_buft_get_alloc_size(buft, prefill_attention));
-        ggml_flash_attn_ext_set_prec(attention, GGML_PREC_F32);
+        ggml_prec_set_acc(attention, GGML_PREC_F32);
         ggml_backend_execution_set_external_workspace(attention, true);
         t.assert_true(ggml_backend_execution_has_external_workspace(attention));
         t.assert_equal(GGML_PREC_F32, ggml_flash_attn_ext_get_prec(attention));

@@ -1496,8 +1496,16 @@ static ggml_backend_buffer_type_t ggml_backend_cuda_kv_host_buffer_type(int devi
     auto & type = types[device];
     if (!type.context) {
         type = {
-            {ggml_backend_cuda_kv_host_name, ggml_backend_cuda_kv_host_alloc,
-             ggml_backend_cuda_buffer_type_get_alignment, nullptr, nullptr, ggml_backend_cuda_kv_host_is_host},
+            {
+                /* .get_name         = */ ggml_backend_cuda_kv_host_name,
+                /* .alloc_buffer     = */ ggml_backend_cuda_kv_host_alloc,
+                /* .alloc_buffer_n   = */ nullptr,
+                /* .get_alignment    = */ ggml_backend_cuda_buffer_type_get_alignment,
+                /* .get_max_size     = */ nullptr,
+                /* .get_alloc_size   = */ nullptr,
+                /* .get_alloc_size_n = */ nullptr,
+                /* .is_host          = */ ggml_backend_cuda_kv_host_is_host,
+            },
             ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
             new ggml_backend_cuda_buffer_type_context{device, "CUDA" + std::to_string(device) + "_KV_Host", false},
         };
@@ -2917,6 +2925,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
             if (cgraph->nodes[i]->src[j]) {
                 prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j]->data;
+                prop.node_src_types[j] = cgraph->nodes[i]->src[j]->type;
                 memcpy(prop.node_src_ne[j], cgraph->nodes[i]->src[j]->ne, sizeof(prop.node_src_ne[j]));
                 memcpy(prop.node_src_nb[j], cgraph->nodes[i]->src[j]->nb, sizeof(prop.node_src_nb[j]));
             }
