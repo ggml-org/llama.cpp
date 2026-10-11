@@ -334,6 +334,10 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
         if (!model_tensor) {
             throw std::runtime_error("LoRA tensor '" + name + "' does not exist in base model (hint: maybe wrong base model?)");
         }
+        // the LoRA delta of a Hadamard-folded weight reads the transformed input, so the result is wrong
+        if (model.hdmd.weight_blocks.count(name) || model.hdmd.inverse_blocks.count(name)) {
+            throw std::runtime_error("LoRA tensor '" + name + "' targets a prism.hadamard folded weight, which is not supported");
+        }
 
         auto * buft = ggml_backend_buffer_get_type(model_tensor->buffer);
 

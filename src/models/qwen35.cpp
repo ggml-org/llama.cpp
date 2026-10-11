@@ -534,6 +534,16 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+
+        // a Hadamard-latent table stores rotated rows; restore the primal basis
+        if (hdmd) {
+            if (const auto it = hdmd->inv.find(tok_embd_w); it != hdmd->inv.end()) {
+                tok_embd = llama_mul_mat_hadamard(ctx0, tok_embd, it->second.rot);
+                if (it->second.signs) {
+                    tok_embd = ggml_mul(ctx0, tok_embd, it->second.signs);
+                }
+            }
+        }
     } else {
         tok_embd = inp->embd;
     }

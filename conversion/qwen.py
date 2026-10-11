@@ -570,17 +570,25 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         elif name.endswith((".linear_attn.in_proj_a.weight", ".linear_attn.in_proj_b.weight")):
             weight, scale = reorder_rows(weight, scale, 1)
         elif name.endswith(".linear_attn.out_proj.weight"):
-            col_perm = self._reorder_v_heads(
-                torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
-                1, num_k_heads, num_v_per_k, head_v_dim,
-            ).squeeze(0)
-            weight, scale = apply_col_perm(weight, scale, col_perm)
+            if self._hadamard_folds_tensor(name):
+                # folded weight: keep the grouped V order, the runtime permutes the activation instead
+                self._hadamard_gdn_v_grouped = True
+            else:
+                col_perm = self._reorder_v_heads(
+                    torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
+                    1, num_k_heads, num_v_per_k, head_v_dim,
+                ).squeeze(0)
+                weight, scale = apply_col_perm(weight, scale, col_perm)
 
         return weight, scale
 
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         weight, scale = self._transform_nvfp4_weight(name, weight, scale)
         super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
+
+    def _hadamard_folds_tensor(self, name: str) -> bool:
+        # a manifest name and `name` can differ only by leading wrapper prefixes
+        return any(name.endswith(n) or n.endswith(name) for n in self.hadamard_folded_names())
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_k_heads = self.hparams.get("linear_num_key_heads", 0)
@@ -628,8 +636,12 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                 data_torch = torch.cat([qk_part, v_part], dim=0)
 
             elif ".out_proj." in name:
-                # Out projection weight: reorder columns (input dimension)
-                data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
+                if self._hadamard_folds_tensor(name):
+                    # folded weight: keep the grouped V order, the runtime permutes the activation instead
+                    self._hadamard_gdn_v_grouped = True
+                else:
+                    # Out projection weight: reorder columns (input dimension)
+                    data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
 
         yield from super().modify_tensors(data_torch, name, bid)
 
