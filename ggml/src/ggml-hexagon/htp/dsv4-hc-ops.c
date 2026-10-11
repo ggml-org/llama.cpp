@@ -20,6 +20,7 @@
 
 struct dsv4_hc_pre_context {
     struct htp_ops_context * octx;
+    const struct htp_dsv4_hc_pre_kernel_params * kparams;
     uint32_t token_start;
     uint32_t n_chunks;
     uint32_t total_jobs;
@@ -84,7 +85,6 @@ static inline void dsv4_hc_l2fetch_4rows(const uint8_t * p, size_t row_stride, u
 }
 
 #define DSV4_HC_PF_CHUNKS 16
-#define DSV4_HC_DMA_CHUNKS 128
 
 // prefetch x and gate for the aligned block after the one with chunk c, block does not cross tokens
 static inline void dsv4_hc_prefetch_gated(
@@ -159,7 +159,7 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
     const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
 
     const uint32_t n_chunks = dctx->n_chunks;
-    uint32_t       it       = start / n_chunks;
+    uint32_t       it       = fastdiv(start, &dctx->kparams->div_n_chunks);
     uint32_t       chunk    = start - it*n_chunks;
     it += dctx->token_start;
 
@@ -240,7 +240,7 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
     const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
 
     const uint32_t n_chunks = dctx->n_chunks;
-    uint32_t       it       = start / n_chunks;
+    uint32_t       it       = fastdiv(start, &dctx->kparams->div_n_chunks);
     uint32_t       chunk    = start - it*n_chunks;
     it += dctx->token_start;
 
@@ -300,7 +300,7 @@ static inline struct dsv4_hc_dma_block dsv4_hc_dma_block_make(
         const struct dsv4_hc_pre_context * dctx,
         uint32_t job,
         uint32_t end) {
-    const uint32_t local_token = job / dctx->n_chunks;
+    const uint32_t local_token = fastdiv(job, &dctx->kparams->div_n_chunks);
     const uint32_t chunk       = job - local_token*dctx->n_chunks;
     const uint32_t count       = MIN(dctx->dma_block_chunks, MIN(dctx->n_chunks - chunk, end - job));
     return (struct dsv4_hc_dma_block) {
@@ -470,29 +470,37 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_chunks   = (x->ne[0] + VLEN_FP32 - 1) / VLEN_FP32;
-    const uint32_t total_jobs = n_tokens * n_chunks;
-    const uint32_t n_threads  = MIN(octx->ctx->n_threads, total_jobs);
-    if (!htp_ops_context_set_n_threads(octx, n_threads)) {
+    const struct htp_dsv4_hc_pre_kernel_params * kparams =
+        (const struct htp_dsv4_hc_pre_kernel_params *) octx->kernel_params;
+    if (kparams->n_chunks == 0 || kparams->n_threads == 0) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t dma_block_chunks = MIN(DSV4_HC_DMA_CHUNKS, n_chunks);
-    const uint32_t dma_row_stride   = dma_block_chunks * VLEN;
-    const uint32_t dma_buffer_size  = 4*dma_row_stride;
-    const uint32_t jobs_per_thread  = (total_jobs + n_threads - 1) / n_threads;
-    const size_t   dma_input_size   = 2*(size_t) dma_buffer_size*n_threads;
-    const size_t   dma_vtcm_size    = 2*dma_input_size;
+    const uint32_t n_chunks   = kparams->n_chunks;
+    const uint32_t total_jobs = n_tokens * n_chunks;
+    const uint32_t n_threads  = kparams->n_threads;
+    if (!htp_ops_context_set_n_threads_div(octx, n_threads, kparams->div_n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    const uint32_t dma_block_chunks = kparams->dma_block_chunks;
+    const uint32_t dma_row_stride   = kparams->dma_row_stride;
+    const uint32_t dma_buffer_size  = kparams->dma_buffer_size;
+    const uint32_t jobs_per_thread  = octx->ctx->mdev.count > 1
+        ? fastdiv(total_jobs + n_threads - 1, &kparams->div_n_threads)
+        : kparams->jobs_per_thread;
+    const size_t   dma_input_size   = kparams->dma_input_size;
     uint8_t *      vtcm_base        = (uint8_t *) octx->ctx->vtcm_base;
-    const bool     use_dma          = gated &&
+    const bool     use_dma          = kparams->dma_eligible &&
+                                     gated &&
                                      n_tokens > 1 &&
-                                     x->ne[0] % VLEN_FP32 == 0 &&
                                      jobs_per_thread >= 2*dma_block_chunks &&
                                      vtcm_base != NULL &&
-                                     dma_vtcm_size <= octx->ctx->vtcm_size;
+                                     kparams->dma_vtcm_size <= octx->ctx->vtcm_size;
 
     struct dsv4_hc_pre_context dctx = {
         .octx             = octx,
+        .kparams          = kparams,
         .token_start      = token_start,
         .n_chunks         = n_chunks,
         .total_jobs       = total_jobs,

@@ -5,6 +5,7 @@
 #include "htp/binary-ops.h"
 #include "htp/cumsum-ops.h"
 #include "htp/diag-ops.h"
+#include "htp/dsv4-hc-ops.h"
 #include "htp/fill-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/gated-delta-net-ops.h"
@@ -185,6 +186,10 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
         snprintf(str, max_size, "%s-%s vtcm %u", path, kparams->kda ? "kda" : "scalar",
                  (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_DSV4_HC_PRE) {
+        const auto * kparams = node.kparams<htp_dsv4_hc_pre_kernel_params>();
+        snprintf(str, max_size, "%s nth %u vtcm %u", kparams->dma_eligible ? "dma" : "l2",
+                 (unsigned int) kparams->n_threads, (unsigned int) kparams->dma_vtcm_size);
     } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
         const auto * kparams = node.kparams<htp_binary_kernel_params>();
