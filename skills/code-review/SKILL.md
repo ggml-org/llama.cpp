@@ -132,6 +132,7 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Only add tests that bring meaningful results. Too-trivial tests just bloat the suite and CI.
 - No time-sensitive tests (timing thresholds, sleeps, races against wall-clock); they are flaky on CI.
 - Think twice about tests that significantly increase CI run time (expensive computation, large inputs, or long sleep/wait delays) or download large amounts of data from the internet (big models, datasets). Flag them and ask whether a smaller model/input or an existing fixture would do.
+- Server: small tests of internal components (helpers, `server_tokens`, queues, format converters, ...) belong in `tests/test-server-component.cpp`. The end-to-end pytest suite in `tools/server/tests` is costly in CI time; only add to it when the test requires end-to-end behavior with a real model.
 
 ## General (always)
 
