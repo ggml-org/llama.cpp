@@ -526,6 +526,16 @@ int main(int argc, char ** argv) {
         for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}, std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
                 std::pair{GGML_TYPE_Q4_0,GGML_TYPE_F16}, std::pair{GGML_TYPE_Q4_0,GGML_TYPE_BF16}}) {
             fixture f(backend.get(),true,pair.first,pair.second,4097,false,2,4,3);
+            const auto capabilities = ops->capabilities(backend.get(),pair.first,pair.second);
+            if (!capabilities.direct_pair) {
+                ggml_kv_stream_resume_plan unavailable;
+                unavailable.bytes = 77;
+                t.assert_true(!ops->resume_plan(backend.get(),pair.first,pair.second,24,4,queries,256,unavailable));
+                t.assert_equal(size_t(77),unavailable.bytes);
+                t.out << "pair not compiled: " << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second) << '\n';
+                continue;
+            }
+            t.assert_true(capabilities.direct_pair && capabilities.k.direct_attention && capabilities.v.direct_attention);
             f.policy.initial_ring_slots = 1;
             if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
                     f.resident->configure_resumed_decode(true))) return;
@@ -984,7 +994,13 @@ int main(int argc, char ** argv) {
                     close_values(t,a,value,1e-5f);
                     close_values(t,expected,value,1e-5f);
                 }
+                const auto before = input.read();
                 const auto b = evaluate(f, ops, *segmented, input, 0, accepted, &segmented_workspace);
+                if (cuts.size() > 4) {
+                    t.assert_true(!accepted && b.empty());
+                    t.assert_true(same_float_bits(before,input.read()));
+                    continue;
+                }
                 if (!t.assert_true(accepted)) continue;
                 ggml_kv_stream_layout gathered;
                 if (t.assert_true(ggml_kv_stream_layout_make(f.policy.shape, active, gathered).status ==
@@ -1069,7 +1085,13 @@ int main(int argc, char ** argv) {
                     if (!t.assert_true(storage && storage->plan)) continue;
                     bool accepted = false;
                     size_t workspace = 0;
+                    const auto before = input.read();
                     const auto actual = evaluate(f,ops,*storage,input,0,accepted,&workspace);
+                    if (cuts.size() > 4) {
+                        t.assert_true(!accepted && actual.empty());
+                        t.assert_true(same_float_bits(before,input.read()));
+                        continue;
+                    }
                     if (!t.assert_true(accepted)) continue;
                     maximum_workspace = std::max(maximum_workspace,workspace);
                     t.assert_true(workspace <= 1024*1024);

@@ -32,6 +32,18 @@ struct fixture {
 
 int main() {
     testing t;
+    t.test("vector_bulk_leaves_only_the_incomplete_native_tile_guarded", [](testing & t) {
+        for (size_t first : {size_t(0),size_t(128),size_t(256),size_t(131072)}) {
+            for (size_t tokens : {size_t(0),size_t(1),size_t(127),size_t(128),size_t(129),size_t(255),
+                    size_t(256),size_t(7933),size_t(131073),std::numeric_limits<size_t>::max()}) {
+                const auto bulk=ggml_cuda_kv_stream_vector_bulk_tokens(first,tokens);
+                t.assert_equal(tokens/128*128,bulk);
+                t.assert_true(bulk <= tokens && tokens-bulk < 128);
+            }
+        }
+        for (size_t first : {size_t(1),size_t(127),size_t(129),std::numeric_limits<size_t>::max()})
+            t.assert_equal(size_t(0),ggml_cuda_kv_stream_vector_bulk_tokens(first,8193));
+    });
     t.test("stock_family_is_supplied_not_selected_by_a_second_policy", [](testing & t) {
         fixture f;
         for (auto selected : {family::vector, family::tile, family::mma}) {

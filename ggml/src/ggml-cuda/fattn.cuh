@@ -27,4 +27,5 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
 
 bool ggml_cuda_flash_attn_ext_mma_convert_rows(
         ggml_backend_cuda_context & ctx, ggml_type type,
-        const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride);
+        const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride,
+        bool contiguous);

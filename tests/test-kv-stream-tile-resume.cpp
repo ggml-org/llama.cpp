@@ -1,4 +1,4 @@
-#include "../ggml/src/ggml-cuda/fattn-tile-resume.h"
+#include "../ggml/src/ggml-cuda/fattn-tile-spans.h"
 #include "ggml-cpp.h"
 #include "testing.h"
 

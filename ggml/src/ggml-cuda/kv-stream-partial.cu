@@ -126,6 +126,10 @@ static ggml_kv_stream_capabilities capabilities(ggml_backend_t backend, int32_t 
         side->convert_f16 = type == GGML_TYPE_F16 || ggml_get_to_fp16_cuda(type);
     }
     if (caps.k.storage && caps.v.storage) caps.direct_pair = ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value));
+    if (caps.direct_pair) {
+        caps.k.direct_attention = true;
+        caps.v.direct_attention = true;
+    }
     caps.f16_attention = ggml_cuda_kv_stream_kernel(GGML_TYPE_F16,GGML_TYPE_F16);
     return caps;
 }
@@ -133,7 +137,8 @@ static ggml_kv_stream_capabilities capabilities(ggml_backend_t backend, int32_t 
 // Admit only compiled native pairs with head size 256, one sequence, and no sinks/bias/softcap.
 // Segmented execution validates physical K/V through its retained plan rather than prototype data pointers.
 static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool segmented) {
-    if (!backend || !ggml_backend_is_cuda(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT) return false;
+    if (!backend || !ggml_backend_is_cuda(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT ||
+            ggml_get_op_params_i32(op,4) != 0) return false;
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * mask = op->src[3];
     if (!q || !k || !v || !mask || q->type != GGML_TYPE_F32 ||
             mask->type != GGML_TYPE_F16 || op->type != GGML_TYPE_F32 ||
@@ -433,6 +438,33 @@ static bool resume_launch(
     return true;
 }
 
+// Use unguarded native tiles only inside the validated physical span; retain guards for its short tail.
+static bool resume_span_launch(
+        ggml_backend_t backend, const ggml_tensor * op,
+        const ggml_tensor & k, const ggml_tensor & v,
+        ggml_backend_buffer_t workspace, const ggml_kv_stream_resume_plan & plan,
+        ggml_kv_resume_kernel_t guarded, size_t first, size_t mask_tokens, bool last) {
+    if (!guarded || k.type != op->src[1]->type || v.type != op->src[2]->type ||
+            k.ne[0] != 256 || v.ne[0] != 256 || k.ne[1] <= 0 || v.ne[1] != k.ne[1] ||
+            k.ne[2] != op->src[1]->ne[2] || v.ne[2] != k.ne[2] || first >= plan.tokens ||
+            size_t(k.ne[1]) > plan.tokens-first || last != (first+size_t(k.ne[1]) == plan.tokens) ||
+            mask_tokens < plan.tokens || mask_tokens > INT32_MAX) return false;
+    const size_t tokens=size_t(k.ne[1]);
+    const size_t bulk=ggml_cuda_kv_stream_vector_bulk_tokens(first,tokens);
+    if (!bulk) return resume_launch(backend,op,k,v,workspace,plan,guarded,first,mask_tokens,last);
+    auto aligned=ggml_cuda_kv_stream_resume_aligned_kernel(k.type,v.type,plan.queries);
+    if (!aligned) return false;
+    ggml_tensor bulk_k=k, bulk_v=v;
+    bulk_k.ne[1]=bulk_v.ne[1]=int64_t(bulk);
+    if (!resume_launch(backend,op,bulk_k,bulk_v,workspace,plan,aligned,first,mask_tokens,last && bulk == tokens)) return false;
+    if (bulk == tokens) return true;
+    ggml_tensor tail_k=k, tail_v=v;
+    tail_k.ne[1]=tail_v.ne[1]=int64_t(tokens-bulk);
+    tail_k.data=static_cast<char *>(k.data)+bulk*k.nb[1];
+    tail_v.data=static_cast<char *>(v.data)+bulk*v.nb[1];
+    return resume_launch(backend,op,tail_k,tail_v,workspace,plan,guarded,first+bulk,mask_tokens,last);
+}
+
 // Legacy session entry point: span order belongs to the caller and launches remain asynchronous.
 static bool resume(
         ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t workspace,
@@ -480,10 +512,6 @@ static bool resume(
     span touched;
     if (!tensor_span(backend,k,touched) || overlap(scratch,touched) ||
             !tensor_span(backend,v,touched) || overlap(scratch,touched)) return false;
-    if (plan.queries <= 2 && plan.tokens%256 == 0 && first%256 == 0 && size_t(k->ne[1])%256 == 0) {
-        kernel = ggml_cuda_kv_stream_resume_aligned_kernel(k->type,v->type,plan.queries);
-        if (!kernel) return false;
-    }
     ggml_tensor global_mask = *op->src[3];
     const size_t mask_offset = first*sizeof(ggml_fp16_t);
     const auto mask_base = uintptr_t(ggml_backend_buffer_get_base(global_mask.buffer));
@@ -494,39 +522,10 @@ static bool resume(
     if (!tensor_span(backend,&global_mask,touched) || overlap(scratch,touched)) return false;
     ggml_tensor logical = *op;
     logical.src[3] = &global_mask;
-    return resume_launch(
+    return resume_span_launch(
         backend,&logical,*k,*v,workspace,plan,kernel,first,plan.tokens,last);
 }
 
-// The stock vector body may address a full 128-token work tile inside each physical region.
-static bool vector_spans_fast_eligible(const ggml_kv_stream_span_plan_view & view) {
-    if (view.query_tokens != 1 || !view.count || view.count > 3) return false;
-    for (size_t i = 0; i < view.count; ++i) {
-        if (view.spans[i].token_begin%128 || (i+1 < view.count && view.spans[i].tokens%128)) return false;
-    }
-    return true;
-}
-
-static size_t vector_spans_physical_count(const ggml_kv_stream_span_plan_view & view) {
-    if (!vector_spans_fast_eligible(view)) return view.count;
-    const size_t tail = view.spans[view.count-1].tokens;
-    return view.count + (tail >= 128 && tail%128 != 0);
-}
-
-// Reserve at most one padded vector tile so an exact final tail can use stock affine addressing.
-static bool vector_spans_workspace(
-        const ggml_kv_stream_span_plan_view & view,
-        const ggml_kv_stream_resume_plan & plan, size_t & bytes) {
-    bytes = plan.bytes;
-    if (!vector_spans_fast_eligible(view) || view.spans[view.count-1].tokens%128 == 0) return true;
-    ggml_kv_stream_layout tail;
-    if (ggml_kv_stream_layout_make(view.shape,128,tail).status != ggml_kv_stream_status::success ||
-            plan.bytes > SIZE_MAX-127) return false;
-    const size_t offset = (plan.bytes+127)/128*128;
-    if (tail.bytes > SIZE_MAX-offset) return false;
-    bytes = offset+tail.bytes;
-    return true;
-}
 
 // Plan bounded scratch for either the vector or F16 MMA span family.
 struct streamed_plan {
@@ -544,7 +543,8 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     if (ggml_cuda_highest_compiled_arch(ggml_cuda_info().devices[ctx.device].cc) < 0) return plan_status::missing_stock_code;
     const auto family = ggml_cuda_flash_attn_ext_kernel_family(ctx.device, op);
     if (family == kernel_family::none) return plan_status::stock_unavailable;
-    if (!op->src[3] || op->src[4] || metadata.head_dim_k != 256 || metadata.head_dim_v != 256 ||
+    if (!op->src[3] || op->src[4] || ggml_get_op_params_i32(op,4) != 0 ||
+            metadata.head_dim_k != 256 || metadata.head_dim_v != 256 ||
             metadata.queries > 4) return plan_status::unsupported_geometry;
     if (op->src[3]->nb[1] < size_t(op->src[1]->ne[1])*sizeof(half) || op->src[3]->nb[1]%sizeof(half))
         return plan_status::unsupported_geometry;
@@ -577,8 +577,6 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
                 uint32_t(metadata.kv_heads), uint32_t(metadata.queries), view.active_tokens, next.resume))
             return plan_status::missing_streamed_implementation;
         requirements.scratch_bytes = next.resume.bytes;
-        if (style == execution_style::spanned && !vector_spans_workspace(view, next.resume, requirements.scratch_bytes))
-            return plan_status::overflow;
     } else if (family == kernel_family::tile) {
         if (!ggml_cuda_kv_stream_tile_plan(ctx,ggml_type(metadata.type_k),ggml_type(metadata.type_v),
                 uint32_t(metadata.query_heads),uint32_t(metadata.kv_heads),uint32_t(metadata.queries),
@@ -588,8 +586,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
                 next.resume,layout,&requirements.shared_bytes)) return plan_status::unsupported_launch_resources;
         requirements.scratch_bytes=next.resume.bytes;
     } else if (family == kernel_family::mma) {
-        if (style == execution_style::resumable ||
-                (metadata.queries <= 2 && metadata.type_k == GGML_TYPE_F16 && metadata.type_v == GGML_TYPE_F16))
+        if (style == execution_style::resumable)
             return plan_status::missing_streamed_implementation;
         plan_status failure;
         if (!ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(ctx, op, view.count, requirements, &failure)) return failure;
@@ -612,108 +609,6 @@ static bool spans_workspace(
     return true;
 }
 
-// Launch one stock-vector reduction over retained regions plus an optional padded tail tile.
-static bool vector_spans_launch(
-        ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t workspace,
-        const ggml_kv_stream_resume_plan & plan,
-        const ggml_cuda_kv_span * spans, size_t count) {
-    if (!spans || !count || count > 3) return false;
-    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
-    ggml_cuda_set_device(ctx.device);
-    const auto base = uintptr_t(ggml_backend_buffer_get_base(workspace));
-    const size_t capacity = ggml_backend_buffer_get_size(workspace);
-    const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * mask = op->src[3];
-    ggml_cuda_kv_span fixed[4] = {};
-    size_t logical_tokens[4] = {};
-    std::memcpy(fixed,spans,count*sizeof(*spans));
-    for (size_t i = 0; i < count; ++i) logical_tokens[i] = spans[i].tokens;
-    size_t fixed_count = count;
-    auto & source_tail = fixed[count-1];
-    const int tail_live = source_tail.tokens%128;
-    if (tail_live) {
-        if (plan.bytes > SIZE_MAX-127 || source_tail.k_token_stride <= 0 || source_tail.v_token_stride <= 0) return false;
-        const size_t tail_offset = (plan.bytes+127)/128*128;
-        const size_t k_bytes = size_t(source_tail.k_token_stride)*128;
-        const size_t v_bytes = size_t(source_tail.v_token_stride)*128;
-        if (k_bytes > SIZE_MAX-127) return false;
-        const size_t v_offset = (k_bytes+127)/128*128;
-        if (v_bytes > SIZE_MAX-v_offset || tail_offset > capacity || v_offset+v_bytes > capacity-tail_offset) return false;
-        const int prefix = source_tail.tokens-tail_live;
-        ggml_cuda_kv_span padded = source_tail;
-        padded.first += prefix;
-        padded.k += int64_t(prefix)*padded.k_token_stride;
-        padded.v += int64_t(prefix)*padded.v_token_stride;
-        padded.tokens = 128;
-        auto * tail_k = reinterpret_cast<char *>(base+tail_offset);
-        auto * tail_v = tail_k+v_offset;
-        const size_t live_k = size_t(padded.k_token_stride)*tail_live;
-        const size_t live_v = size_t(padded.v_token_stride)*tail_live;
-        CUDA_CHECK(cudaMemcpyAsync(tail_k,padded.k,live_k,cudaMemcpyDeviceToDevice,ctx.stream()));
-        CUDA_CHECK(cudaMemsetAsync(tail_k+live_k,0,k_bytes-live_k,ctx.stream()));
-        CUDA_CHECK(cudaMemcpyAsync(tail_v,padded.v,live_v,cudaMemcpyDeviceToDevice,ctx.stream()));
-        CUDA_CHECK(cudaMemsetAsync(tail_v+live_v,0,v_bytes-live_v,ctx.stream()));
-        padded.k = tail_k;
-        padded.v = tail_v;
-        if (prefix) {
-            source_tail.tokens = prefix;
-            logical_tokens[count-1] = prefix;
-            fixed[fixed_count] = padded;
-            logical_tokens[fixed_count++] = tail_live;
-        } else {
-            source_tail = padded;
-            logical_tokens[count-1] = tail_live;
-        }
-    }
-    if (fixed_count > 4 || plan.splits < fixed_count) return false;
-    auto kernel = ggml_cuda_kv_stream_vector_span_kernel(
-        k->type,v->type,uint32_t(q->ne[1]),uint32_t(fixed_count));
-    if (!kernel) return false;
-    auto * device_spans = reinterpret_cast<ggml_cuda_kv_span *>(base);
-    CUDA_CHECK(cudaMemcpyAsync(
-        device_spans,fixed,fixed_count*sizeof(*fixed),cudaMemcpyHostToDevice,ctx.stream()));
-    auto * partials = reinterpret_cast<float *>(base+plan.partial_offset);
-    auto * meta = reinterpret_cast<float2 *>(base+plan.meta_offset);
-    float scale;
-    std::memcpy(&scale,op->op_params,sizeof(scale));
-    int span_splits[4] = {};
-    int remaining_splits = int(plan.splits);
-    size_t remaining_tokens = plan.tokens;
-    for (size_t i = 0; i < fixed_count; ++i) {
-        const int remaining_spans = int(fixed_count-i);
-        int selected = remaining_spans == 1 ? remaining_splits :
-            std::max(1,int((int64_t(remaining_splits)*logical_tokens[i]+remaining_tokens/2)/remaining_tokens));
-        selected = std::min(selected,remaining_splits-(remaining_spans-1));
-        span_splits[i] = selected;
-        remaining_splits -= selected;
-        remaining_tokens -= logical_tokens[i];
-    }
-    if (remaining_splits) return false;
-    const ggml_cuda_kernel_launch_params launch(
-        {1,plan.splits,plan.heads},{32,4,1},0,ctx.stream());
-    ggml_cuda_kernel_launch(kernel,launch,
-        static_cast<const char *>(q->data),fixed[0].k,fixed[0].v,static_cast<const char *>(mask->data),
-        (const char *) nullptr,(const int *) nullptr,
-        plan.splits > 1 ? partials : static_cast<float *>(op->data),meta,
-        scale,0.0f,1.0f,1.0f,uint32_t(4),0.0f,
-        int32_t(q->ne[0]),init_fastdiv_values(q->ne[1]),int32_t(q->ne[2]),int32_t(q->ne[3]),
-        int32_t(q->nb[1]),int32_t(q->nb[2]),int32_t(q->nb[3]),
-        int32_t(k->ne[0]),int32_t(k->ne[1]),int32_t(k->ne[2]),int32_t(k->ne[3]),
-        int32_t(k->nb[1]),int32_t(k->nb[2]),int64_t(k->nb[3]),
-        int32_t(v->nb[1]),int32_t(v->nb[2]),int64_t(v->nb[3]),
-        int32_t(mask->ne[1]),int32_t(mask->ne[2]),int32_t(mask->ne[3]),
-        int32_t(mask->nb[1]),int32_t(mask->nb[2]),int64_t(mask->nb[3]),
-        device_spans,int(fixed_count),span_splits[0],span_splits[1],span_splits[2],span_splits[3]);
-    CUDA_CHECK(cudaGetLastError());
-    if (plan.splits > 1) {
-        const ggml_cuda_kernel_launch_params combine(
-            {plan.queries,plan.heads,1},{256,1,1},plan.splits*sizeof(float2),ctx.stream());
-        ggml_cuda_kernel_launch(
-            flash_attn_combine_results<256>,combine,partials,meta,
-            static_cast<float *>(op->data),int(plan.splits));
-        CUDA_CHECK(cudaGetLastError());
-    }
-    return true;
-}
 
 // Exercise the same row-local dequantizer used by span-aware MMA without allocating conversion planes.
 static bool convert_mma_rows(
@@ -732,7 +627,8 @@ static bool convert_mma_rows(
     ggml_cuda_set_device(ctx.device);
     return ggml_cuda_flash_attn_ext_mma_convert_rows(
         ctx,source->type,static_cast<const char *>(source->data),static_cast<half *>(destination->data),
-        int(source->ne[1]),int64_t(source->nb[1]),int64_t(destination->nb[1]));
+        int(source->ne[1]),int64_t(source->nb[1]),int64_t(destination->nb[1]),
+        source->nb[1] == ggml_row_size(source->type,source->ne[0]));
 }
 
 static bool mma_workspace(ggml_backend_t backend, int32_t key, int32_t value,
@@ -879,16 +775,6 @@ static bool spans(
     span scratch;
     if (!resume_common(backend,op,workspace,plan,kernel,base,scratch,true,true)) return false;
 
-    // Match the aligned native arithmetic; retain guards for every partial region.
-    bool aligned = view.active_tokens%256 == 0;
-    for (size_t i = 0; i < view.count; ++i) {
-        aligned &= view.spans[i].token_begin%256 == 0 && view.spans[i].tokens%256 == 0;
-    }
-    if (aligned) {
-        kernel = ggml_cuda_kv_stream_resume_aligned_kernel(op->src[1]->type,op->src[2]->type,plan.queries);
-        if (!kernel) return false;
-    }
-
     try {
         std::vector<std::pair<ggml_tensor,ggml_tensor>> physical;
         std::vector<ggml_cuda_kv_span> descriptors;
@@ -939,14 +825,10 @@ static bool spans(
                 int64_t(layout.k_token_bytes),int64_t(layout.v_token_bytes),
                 int64_t(layout.k_row_bytes),int64_t(layout.v_row_bytes)});
         }
-        if (vector_spans_fast_eligible(view) && plan.splits >= vector_spans_physical_count(view)) {
-            return vector_spans_launch(
-                backend,op,workspace,plan,descriptors.data(),descriptors.size());
-        }
         if (mask->nb[1]%sizeof(ggml_fp16_t)) return false;
         const size_t mask_stride = mask->nb[1]/sizeof(ggml_fp16_t);
         for (size_t i = 0; i < physical.size(); ++i) {
-            if (!resume_launch(
+            if (!resume_span_launch(
                     backend,op,physical[i].first,physical[i].second,workspace,plan,kernel,
                     view.spans[i].token_begin,mask_stride,i+1 == physical.size())) return false;
         }

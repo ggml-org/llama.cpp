@@ -1,6 +1,6 @@
 #pragma once
 #include "kv-stream-dispatch.cuh"
-#include "fattn-tile-resume.h"
+#include "fattn-tile-spans.h"
 #include "../ggml-kv-stream-device.h"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)

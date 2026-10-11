@@ -3,6 +3,12 @@
 #include "ggml.h"
 
 #include <cstdint>
+#include <cstddef>
+
+// Keep native 128-token ownership; only a final incomplete tile needs guarded loads.
+static inline size_t ggml_cuda_kv_stream_vector_bulk_tokens(size_t first, size_t tokens) {
+    return first%128 == 0 ? tokens/128*128 : 0;
+}
 
 enum class ggml_cuda_kv_stream_attention_path { none, vector, mma };
 
