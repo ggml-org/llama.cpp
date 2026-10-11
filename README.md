@@ -1,3 +1,25 @@
+# Adaptive KV Streaming V2: upstream attention integration
+
+This branch replays V2's memory ownership, bounded KV streaming, phase arena, MTP and vision consumers onto upstream revision `10a60cf30`. The attention port preserves stock logical traversal, quant conversion and reduction order while reading resident/ring/wrap spans. It does not add streamed Gemma or DFlash2 support.
+
+The qualified RTX 5070 Ti profile uses Unsloth Qwen3.8-27B `UD-IQ4_XS`, Q8_0 K / Q4_0 V, one serial slot, 256/256 batch sizes and UVM off. With a fixed 2240 MiB arena, MTP=3 measured 69.96, 54.06 and 28.51 tokens/s at 96, 128 and 192 Ki context. These are representative single-run results, not general speed guarantees. See the [port roadmap](UPSTREAM_ATTENTION_PORT_ROADMAP.md) for numerical checks, matching budgets, reference versions and qualification limits.
+
+```sh
+cmake -S . -B build-v2 -DGGML_CUDA=ON \
+  -DGGML_CUDA_FA_QUANTS="f16-f16;q8_0-q4_0" -DCMAKE_BUILD_TYPE=Release
+cmake --build build-v2 --target llama-server --parallel
+
+./build-v2/bin/llama-server --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --ctx-size 262144 --parallel 1 --batch-size 256 --ubatch-size 256 \
+  --n-gpu-layers all --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
+  --kv-stream-arena-mib 2240 --spec-type draft-mtp --spec-draft-n-max 3 \
+  --fit off --no-mmproj
+```
+
+Choose an arena that fits your GPU; it includes phase workspaces and the KV working set, not model weights. Attached MTP inherits the target KV types. Optional `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` makes ordinary weight allocations managed while the streaming arena stays device-local. OpenCL/SYCL/Vulkan memory-view tests do not qualify streaming kernels on those backends.
+
+The following V2 design overview and graphs are preserved from the published pre-port implementation. Their timings are historical baselines, not measurements of this upstream integration.
+
 # Adaptive KV Streaming for llama.cpp V2
 
 V2 runs full-context Qwen3.8-27B on a bounded GPU KV working set. The complete KV history stays in pinned system RAM; resident GPU pages and one shared ring supply attention without dropping old tokens. V1 (`feature/kv-stream-phase-arena`) already had streaming, cross-layer prefetch, and a CUDA phase arena. V2 rebuilds those ideas on explicit memory ownership, stays closer to stock attention arithmetic, and adds long-context MTP without a second full GPU KV allocation.

@@ -333,11 +333,11 @@ void load(half2 * destination, int row, int half2_column,
 
 The default native tag retains the original affine pointer loads and restrict qualifiers. Custom readers use their own copy implementation and explicit zero initialization for invalid rows. This load seam alone is not span attention or accumulator resume; the following tests qualify those layers separately.
 
-`test-cuda-tile-access` validates exact intermediate bits, float conversion, read counts, zero fill and padding/canaries on a real CUDA device. `test-kv-stream-tile` records native stock-selected tile outputs and compares a later build against those same files:
+The upstream port consolidates the old `test-cuda-tile-access` and `test-cuda-tile-spans` fixtures into `test-cuda-fattn-native`, `test-cuda-fattn-spans` and `test-cuda-fattn-resume`. The original tests remain in Git history. `test-kv-stream-tile` still records native stock-selected tile outputs and compares a later build against those same files:
 
 ```bash
-cmake --build build-sm61-eager --target test-cuda-tile-access test-kv-stream-tile -j
-./build-sm61-eager/bin/test-cuda-tile-access
+cmake --build build-sm61-eager --target test-cuda-fattn-native test-kv-stream-tile -j
+./build-sm61-eager/bin/test-cuda-fattn-native --backend CUDA0
 mkdir -p /tmp/tile-native-reference
 ./build-sm61-eager/bin/test-kv-stream-tile --record /tmp/tile-native-reference --pascal
 # Rebuild with the proposed change, keeping toolkit, architecture, GPU and options identical.
@@ -346,9 +346,9 @@ mkdir -p /tmp/tile-native-reference
 
 Omit `--pascal` for the ordinary-device native tile matrix. Recording a reference from an already modified build is not an upstream-equivalence check. The Pascal mode requires an SM61-only binary and changes only test-process CC metadata; forward-JIT checks on a newer card are not actual Pascal hardware or throughput qualification.
 
-`test-cuda-tile-spans` checks the complete-layer reader: bounded metadata, encoded tile conversion and stock/span attention outputs with one to three physical ranges. It reports table/split scratch without a context-sized F16 conversion plane. Build the target with the same CUDA options as the backend, then run it without arguments. Conversion, metadata and canaries remain byte-exact. Modern outputs are byte-exact; compiled SM61 FP32 outputs must satisfy both maximum absolute error <= 1e-8 and normalized L2 error <= eight FP32 epsilons. The summary reports every nonexact case and the maximum errors. `--policy-only` tests this comparator, including its negative cases, without initializing CUDA. Forward-JIT evidence is not actual Pascal hardware qualification or a full-model output guarantee. See `DEVICE_MEMORY_CONSUMERS_ROADMAP.md` for the separate live integration qualification.
+`test-cuda-fattn-spans` checks the complete-layer MMA reader, bounded metadata, encoded tile conversion and stock/span outputs with one to three physical ranges. `test-cuda-fattn-resume` checks generic tile and vector state across refill waves. Build these targets with the backend's CUDA settings and run them without arguments. They retain stock-order comparisons, source/state/output canaries and bounded scratch rather than a context-sized decode conversion plane. Actual-device evidence for this upstream port is RTX 5070 Ti; older-target evidence from the pre-port work does not automatically qualify these updated kernels. See `UPSTREAM_ATTENTION_PORT_ROADMAP.md` for the current numerical matrix and hardware limits.
 
-The C4c resume checks use `test-kv-stream-tile-resume` for metadata-only geometry, window and submission/publication contracts, plus `test-cuda-tile-spans` for the actual checkpoint/refill kernels. Build both targets with the backend's CUDA settings and run them without arguments. The device test compares one-wave versus multi-wave outputs/metadata byte-for-byte, reuses a bounded ring, poisons state before reset, and exercises pending read fences, cancellation, discarded work, publication failure and replay. Final stock comparisons retain the C4b SM61 bound; state bytes and refill equivalence do not receive a relaxed tolerance. The caller must reserve the reported resume scratch and retain every grant until the read fence completes.
+`test-kv-stream-tile-resume` retains the metadata-only geometry, window and submission/publication contracts. The integrated owner tests, including `test-kv-stream-resume --cuda`, cover pending read fences, cancellation, discarded work, publication failure and replay. Low-level refill comparisons remain in `test-cuda-fattn-resume`. The caller must reserve the reported scratch and retain every grant until its read fence completes; no numerical bound is widened by consolidating the fixtures.
 
 #### Live tile dispatch development checks
 
