@@ -1,6 +1,5 @@
 #include "common.cuh"
 #include "fattn-common.cuh"
-#include "kv-stream-span.h"
 
 static int ggml_cuda_fattn_vec_get_nthreads_host(const int cc) {
     return 128;
@@ -135,6 +134,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
 
     float KQ_max[ncols];
     float KQ_sum[ncols];
+    float VKQ_scale[ncols];
 #pragma unroll
     for (int j = 0; j < ncols; ++j) {
         KQ_max[j] = -FLT_MAX/2.0f;
@@ -145,6 +145,17 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
     constexpr int query_state_stride = 2 + 2*(D/2)/nthreads_V;
     constexpr int state_stride = ncols*query_state_stride;
     float * saved = nullptr;
+
+    // Convert Q to float2 (f16 K) or q8_1 (quantized K) and store in registers:
+#ifdef V_DOT2_F32_F16_AVAILABLE
+    half2  Q_reg[ncols][(D/2)/nthreads_KQ]; // Will be initialized completely.
+#else
+    __align__(16) float2 Q_reg[ncols][(D/2)/nthreads_KQ] = {{{0.0f, 0.0f}}}; // May be only partially initialized.
+#endif // V_DOT2_F32_F16_AVAILABLE
+    int    Q_i32[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
+    float2  Q_ds[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
+
+    ggml_cuda_pdl_sync();
     if constexpr (resumable) {
         saved = resume_state + (((size_t(blockIdx.z)*gridDim.x + blockIdx.x)*output_count + output_y)*nthreads + tid)*state_stride;
         if (!reset_state) {
@@ -159,17 +170,6 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
             }
         }
     }
-
-    // Convert Q to float2 (f16 K) or q8_1 (quantized K) and store in registers:
-#ifdef V_DOT2_F32_F16_AVAILABLE
-    half2  Q_reg[ncols][(D/2)/nthreads_KQ]; // Will be initialized completely.
-#else
-    __align__(16) float2 Q_reg[ncols][(D/2)/nthreads_KQ] = {{{0.0f, 0.0f}}}; // May be only partially initialized.
-#endif // V_DOT2_F32_F16_AVAILABLE
-    int    Q_i32[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
-    float2  Q_ds[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
-
-    ggml_cuda_pdl_sync();
     if constexpr (Q_q8_1) {
 #pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += nwarps) {
@@ -323,6 +323,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[j], offset, WARP_SIZE));
             }
             const float KQ_max_scale = expf(KQ_max[j] - KQ_max_new[j]);
+            VKQ_scale[j] = KQ_max_scale;
             KQ_max[j] = KQ_max_new[j];
 
             KQ_reg[j] = expf(KQ_reg[j] - KQ_max[j]);
@@ -338,8 +339,15 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
 #else
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V) {
-                VKQ[j][i_VKQ_0/nthreads_V].x *= KQ_max_scale;
-                VKQ[j][i_VKQ_0/nthreads_V].y *= KQ_max_scale;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+                if constexpr (resumable) {
+                    // The first value update applies stock's fused rescale below.
+                } else
+#endif
+                {
+                    VKQ[j][i_VKQ_0/nthreads_V].x *= KQ_max_scale;
+                    VKQ[j][i_VKQ_0/nthreads_V].y *= KQ_max_scale;
+                }
             }
 #endif // V_DOT2_F32_F16_AVAILABLE
         }
@@ -408,13 +416,29 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                 for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
 #pragma unroll
                     for (int j = 0; j < ncols; ++j) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+                        if constexpr (resumable) {
+                            auto & acc=VKQ[j][i_VKQ_0/nthreads_V + i_VKQ_1];
+                            if (k0 == 0) {
+                                acc.x=__fmaf_rn(acc.x,VKQ_scale[j],__fmul_rn(tmp[i_VKQ_1].x,KQ_k[j]));
+                                acc.y=__fmaf_rn(acc.y,VKQ_scale[j],__fmul_rn(tmp[i_VKQ_1].y,KQ_k[j]));
+                            } else {
+                                acc.x=__fmaf_rn(tmp[i_VKQ_1].x,KQ_k[j],acc.x);
+                                acc.y=__fmaf_rn(tmp[i_VKQ_1].y,KQ_k[j],acc.y);
+                            }
+                        } else
+#endif
+                        {
                         VKQ[j][i_VKQ_0/nthreads_V + i_VKQ_1].x += tmp[i_VKQ_1].x*KQ_k[j];
                         VKQ[j][i_VKQ_0/nthreads_V + i_VKQ_1].y += tmp[i_VKQ_1].y*KQ_k[j];
+                        }
                     }
                 }
             }
 #endif // V_DOT2_F32_F16_AVAILABLE
         }
+        // Retire all warp-local weight readers before the next tile overwrites KQ.
+        ggml_cuda_syncwarp();
     }
 
     if constexpr (resumable) {
@@ -643,61 +667,6 @@ static __global__ void flash_attn_ext_vec_resume(
 
 }
 
-// Map each output partial wholly onto one physical span, then run the untouched stock-vector body.
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, int nspans>
-__launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
-static __global__ void flash_attn_ext_vec_spans(
-        const char * Q_ptr, const char * K_ptr, const char * V_ptr, const char * mask_ptr,
-        const char * sinks_ptr, const int * KV_max_ptr, float * dst_ptr, float2 * dst_meta_ptr,
-        const float scale, const float max_bias, const float m0, const float m1,
-        const uint32_t n_head_log2, const float logit_softcap,
-        const int32_t ne00, const uint3 ne01, const int32_t ne02, const int32_t ne03,
-        const int32_t nb01, const int32_t nb02, const int32_t nb03,
-        const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
-        const int32_t nb11, const int32_t nb12, const int64_t nb13,
-        const int32_t nb21, const int32_t nb22, const int64_t nb23,
-        const int32_t ne31, const int32_t ne32, const int32_t ne33,
-        const int32_t nb31, const int32_t nb32, const int64_t nb33,
-        const ggml_cuda_kv_span * spans, int span_count,
-        int splits0, int splits1, int splits2, int splits3) {
-    GGML_UNUSED_VARS(K_ptr,V_ptr,KV_max_ptr,ne11,nb11,nb12,nb13,nb21,nb22,nb23,span_count);
-    int span_index = 0;
-    int span_begin = 0;
-    int span_splits = splits0;
-    if constexpr (nspans > 1) {
-        if (int(blockIdx.y) >= splits0) {
-            span_index = 1;
-            span_begin = splits0;
-            span_splits = splits1;
-        }
-    }
-    if constexpr (nspans > 2) {
-        if (int(blockIdx.y) >= splits0+splits1) {
-            span_index = 2;
-            span_begin = splits0+splits1;
-            span_splits = splits2;
-        }
-    }
-    if constexpr (nspans > 3) {
-        if (int(blockIdx.y) >= splits0+splits1+splits2) {
-            span_index = 3;
-            span_begin = splits0+splits1+splits2;
-            span_splits = splits3;
-        }
-    }
-    const auto physical = spans[span_index];
-    const char * span_mask = mask_ptr + int64_t(physical.first)*sizeof(half);
-    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,false>(
-        Q_ptr,physical.k,physical.v,span_mask,sinks_ptr,nullptr,dst_ptr,dst_meta_ptr,
-        scale,max_bias,m0,m1,n_head_log2,logit_softcap,
-        ne00,ne01,ne02,ne03,nb01,nb02,nb03,
-        ne10,physical.tokens,ne12,ne13,
-        int32_t(physical.k_token_stride),int32_t(physical.k_head_stride),0,
-        int32_t(physical.v_token_stride),int32_t(physical.v_head_stride),0,
-        ne31,ne32,ne33,nb31,nb32,nb33,
-        nullptr,0,0,true,true,
-        int(blockIdx.y)-span_begin,span_splits,int(blockIdx.y),int(gridDim.y));
-}
 
 #ifdef __clang__
 #pragma clang diagnostic pop

@@ -1,9 +1,14 @@
 #pragma once
 
-#include "fattn-tile-spans.h"
+#include "kv-stream-span.h"
 #include <cstddef>
-#include <algorithm>
-#include <utility>
+#include <initializer_list>
+
+struct ggml_cuda_fattn_tile_span_table {
+    ggml_cuda_kv_span spans[3];
+    int32_t count = 0, tokens = 0;
+    bool contiguous_k = false, contiguous_v = false;
+};
 
 struct ggml_cuda_fattn_tile_resume_geometry {
     uint32_t width = 0, query_heads = 0, kv_heads = 0, queries = 0;
@@ -16,7 +21,7 @@ struct ggml_cuda_fattn_tile_resume_control {
     bool reset = false, finish = false;
 };
 
-// The leading table keeps C4b's K-argument ABI; the caller retains scratch and source grants through completion.
+// The leading table preserves the K-argument ABI; the caller retains scratch and source grants through completion.
 struct ggml_cuda_fattn_tile_resume_descriptor {
     ggml_cuda_fattn_tile_span_table table;
     ggml_cuda_fattn_tile_resume_control control;
@@ -74,37 +79,49 @@ static inline bool ggml_cuda_fattn_tile_resume_layout_make(
     return true;
 }
 
-// Reject stale sizes, incomplete windows, overlapping scratch and non-tile wave boundaries before submitting work.
+// Physical allocation and grant checks belong to the owner; this validates the low-level wave and scratch metadata.
 static inline bool ggml_cuda_fattn_tile_resume_wave_make(
-        const ggml_kv_stream_span_plan_view & view, const ggml_cuda_fattn_tile_resume_layout & layout,
-        ggml_backend_buffer_t workspace, size_t first, size_t end, ggml_cuda_fattn_tile_resume_descriptor & output,
-        bool allow_masked_padding = false) {
+        const ggml_cuda_fattn_tile_span_table & table, const ggml_cuda_fattn_tile_resume_layout & layout,
+        void * workspace, size_t capacity, int64_t k_row_bytes, int64_t v_row_bytes, size_t first, size_t end,
+        ggml_cuda_fattn_tile_resume_descriptor & output, bool allow_masked_padding = false) {
     ggml_cuda_fattn_tile_resume_layout checked;
     if (!ggml_cuda_fattn_tile_resume_layout_make(layout.geometry,layout.tokens,checked) ||
             checked.thread_bytes != layout.thread_bytes || checked.state_bytes != layout.state_bytes ||
             checked.state_offset != layout.state_offset || checked.partial_offset != layout.partial_offset ||
             checked.meta_offset != layout.meta_offset || checked.output_offset != layout.output_offset ||
             checked.output_bytes != layout.output_bytes || checked.bytes != layout.bytes ||
-            !workspace || ggml_backend_buffer_get_size(workspace) < layout.bytes ||
-            (view.active_tokens != layout.tokens && (!allow_masked_padding ||
-                view.active_tokens > layout.tokens || layout.tokens != (view.active_tokens+255)/256*256 ||
-                end != layout.tokens || first >= view.active_tokens)) || view.query_tokens != layout.geometry.queries ||
-            view.shape.heads != layout.geometry.kv_heads || view.shape.head_dim_k != layout.geometry.width ||
-            view.shape.head_dim_v != layout.geometry.width || first >= end || end > layout.tokens ||
-            first%layout.geometry.nbatch_fa || (end != layout.tokens && end%layout.geometry.nbatch_fa)) return false;
-    const auto base = uintptr_t(ggml_backend_buffer_get_base(workspace));
-    if (!base || base%16 || layout.bytes > UINTPTR_MAX-base) return false;
-    ggml_cuda_fattn_tile_resume_descriptor next;
-    if (!ggml_cuda_fattn_tile_span_window_make(view,first,std::min(end,view.active_tokens),next.table)) return false;
-    // The caller's causal mask hides the absent padded tail; no address is formed outside a retained span.
-    next.table.tokens = int32_t(layout.tokens);
-    for (int i = 0; i < next.table.count; ++i) {
-        const auto & span = next.table.spans[i];
-        for (auto range : {std::pair{uintptr_t(span.k),size_t(span.tokens)*size_t(span.k_token_stride)},
-                std::pair{uintptr_t(span.v),size_t(span.tokens)*size_t(span.v_token_stride)}})
-            if (range.first < base+layout.bytes && base < range.first+range.second) return false;
+            !workspace || capacity < layout.bytes || table.count < 1 || table.count > 3 ||
+            table.tokens < int32_t(layout.geometry.queries) || size_t(table.tokens) > layout.tokens ||
+            (size_t(table.tokens) != layout.tokens && (!allow_masked_padding ||
+                layout.tokens != (size_t(table.tokens)+255)/256*256 || first >= size_t(table.tokens) ||
+                (end > size_t(table.tokens) && end != layout.tokens))) ||
+            first >= end || end > layout.tokens || first%layout.geometry.nbatch_fa ||
+            (end != layout.tokens && end%layout.geometry.nbatch_fa)) return false;
+    const auto base = reinterpret_cast<uintptr_t>(workspace);
+    if (base%16 || layout.bytes > UINTPTR_MAX-base) return false;
+    auto next = ggml_cuda_fattn_tile_resume_descriptor{};
+    next.table = table;
+    const size_t physical_end = end < size_t(table.tokens) ? end : size_t(table.tokens);
+    for (int i = 0; i < table.count; ++i) {
+        if (next.table.spans[i].first < int32_t(first)) return false;
+        next.table.spans[i].first -= int32_t(first);
     }
-    next.control = {reinterpret_cast<char *>(base+layout.state_offset),int32_t(first),int32_t(end),first == 0,end == layout.tokens};
+    if (!ggml_cuda_kv_spans_validate(next.table.spans,size_t(table.count),physical_end-first,
+            layout.geometry.kv_heads,k_row_bytes,v_row_bytes)) return false;
+    for (int i = 0; i < table.count; ++i) {
+        const auto & span = table.spans[i];
+        const uintptr_t addresses[2] = {uintptr_t(span.k),uintptr_t(span.v)};
+        const int64_t strides[2] = {span.k_token_stride,span.v_token_stride};
+        const int64_t heads[2] = {span.k_head_stride,span.v_head_stride};
+        const int64_t rows[2] = {k_row_bytes,v_row_bytes};
+        for (int plane = 0; plane < 2; ++plane) {
+            const size_t bytes = size_t((span.tokens-1)*strides[plane]+(layout.geometry.kv_heads-1)*heads[plane]+rows[plane]);
+            if (addresses[plane] < base+layout.bytes && base < addresses[plane]+bytes) return false;
+        }
+    }
+    next.table = table;
+    next.table.tokens = int32_t(layout.tokens);
+    next.control = {reinterpret_cast<char *>(workspace)+layout.state_offset,int32_t(first),int32_t(end),first == 0,end == layout.tokens};
     output = next;
     return true;
 }
@@ -112,32 +129,36 @@ static inline bool ggml_cuda_fattn_tile_resume_wave_make(
 // Host submission bookkeeping only; complete() is called after the caller's real read-completion fence.
 class ggml_cuda_fattn_tile_resume_cursor {
     size_t tokens_, tile_, next_ = 0, end_ = 0;
+    uint64_t generation_;
     bool pending_ = false, cancelled_ = false, published_ = false;
 public:
-    ggml_cuda_fattn_tile_resume_cursor(size_t tokens,size_t tile) : tokens_(tokens),tile_(tile) {
+    ggml_cuda_fattn_tile_resume_cursor(size_t tokens,size_t tile, uint64_t generation = 0) : tokens_(tokens),tile_(tile),generation_(generation) {
         cancelled_ = !tokens || tokens > INT32_MAX || !tile || (tile&(tile-1));
     }
     size_t next() const {return next_;}
     bool can_reuse() const {return !pending_;}
     bool ready_to_publish() const {return !cancelled_ && !pending_ && !published_ && next_ == tokens_;}
     // Reserve one ordered wave without advancing the committed read cursor.
-    bool begin(size_t end) {
-        if (!tile_ || pending_ || cancelled_ || published_ || next_ == tokens_ || end <= next_ || end > tokens_ ||
+    bool begin(size_t end) {return begin(end,generation_);}
+    bool begin(size_t end, uint64_t generation) {
+        if (generation != generation_ || !tile_ || pending_ || cancelled_ || published_ || next_ == tokens_ || end <= next_ || end > tokens_ ||
                 next_%tile_ || (end != tokens_ && end%tile_)) return false;
         end_ = end; pending_ = true; return true;
     }
     // Cancellation stops future work but does not release an in-flight source slot.
     void cancel() {cancelled_ = true;}
-    bool complete(bool success) {
-        if (!pending_) return false;
+    bool complete(bool success) {return complete(success,generation_);}
+    bool complete(bool success, uint64_t generation) {
+        if (generation != generation_ || !pending_) return false;
         pending_ = false;
         if (!success) cancelled_ = true;
         if (cancelled_) return false;
         next_ = end_; return true;
     }
     // This gates the caller's public copy; failed publication cannot be retried against possibly changed state.
-    bool publish(bool success) {
-        if (!ready_to_publish()) return false;
+    bool publish(bool success) {return publish(success,generation_);}
+    bool publish(bool success, uint64_t generation) {
+        if (generation != generation_ || !ready_to_publish()) return false;
         if (!success) {cancelled_ = true; return false;}
         published_ = true; return true;
     }

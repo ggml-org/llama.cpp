@@ -1,17 +1,11 @@
 #pragma once
 
-#include "kv-stream-span.h"
+#include "fattn-tile-resume.h"
 #include "../ggml-kv-stream.h"
 
 #include <limits>
+#include <algorithm>
 #include <initializer_list>
-
-// One complete layer: resident prefix, ring suffix, and optional ring wrap. The caller retains the original grants.
-struct ggml_cuda_fattn_tile_span_table {
-    ggml_cuda_kv_span spans[3];
-    int32_t count = 0, tokens = 0;
-    bool contiguous_k = false, contiguous_v = false;
-};
 
 struct ggml_cuda_fattn_tile_span_workspace {
     size_t partial_offset = 0, meta_offset = 0, bytes = 0;
@@ -88,4 +82,22 @@ static inline bool ggml_cuda_fattn_tile_span_window_make(
 static inline bool ggml_cuda_fattn_tile_spans_make(
         const ggml_kv_stream_span_plan_view & view, ggml_cuda_fattn_tile_span_table & output) {
     return ggml_cuda_fattn_tile_span_window_make(view,0,view.active_tokens,output);
+}
+
+// Adapt retained buffer grants to the checked low-level wave descriptor.
+static inline bool ggml_cuda_fattn_tile_resume_wave_make(
+        const ggml_kv_stream_span_plan_view & view, const ggml_cuda_fattn_tile_resume_layout & layout,
+        ggml_backend_buffer_t workspace, size_t first, size_t end,
+        ggml_cuda_fattn_tile_resume_descriptor & output, bool allow_masked_padding = false) {
+    if (!workspace || view.shape.head_dim_k != layout.geometry.width ||
+            view.shape.head_dim_v != layout.geometry.width || view.shape.heads != layout.geometry.kv_heads ||
+            view.query_tokens != layout.geometry.queries || first >= end) return false;
+    const size_t physical_end = std::min(end,view.active_tokens);
+    ggml_cuda_fattn_tile_span_table table;
+    ggml_kv_stream_layout row;
+    if (!ggml_cuda_fattn_tile_span_window_make(view,first,physical_end,table) ||
+            ggml_kv_stream_layout_make(view.shape,1,row).status != ggml_kv_stream_status::success) return false;
+    return ggml_cuda_fattn_tile_resume_wave_make(table,layout,
+        ggml_backend_buffer_get_base(workspace),ggml_backend_buffer_get_size(workspace),
+        int64_t(row.k_row_bytes),int64_t(row.v_row_bytes),first,end,output,allow_masked_padding);
 }

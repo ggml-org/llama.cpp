@@ -615,7 +615,8 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
 
     constexpr int DVp = (DV + 2*warp_size - 1) & ~(2*warp_size - 1); // DV padded to multiple of 2*warp_size.
 #ifdef FAST_FP16_AVAILABLE
-    constexpr bool fuse_half_rescale = !oob_check && (DVp == DV || ncols == 2);
+    constexpr bool fuse_half_rescale = !oob_check && (DVp == DV ||
+        (ncols == 2 && (np == 1 || DVp == 64)) || (np == 1 && nbatch_fa >= 128));
 #endif
 
     // KQ_cs == KQ chunk size, number of KQ values in j direction to store as one contiguous chunk in memory.
