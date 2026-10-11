@@ -268,6 +268,7 @@ public:
         std::vector<ggml_tensor *> pool_gate, pool_up, pool_gate_up, pool_down, slot_table;
         std::vector<int32_t> slot_of, slot_key;
         int n_layer = 0, n_expert = 0, n_used = 0, s_per_layer = 0;
+        int n_slots = 0;   // s_per_layer plus the sentinel slot when armed
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
         // previous decode step's top-k per layer, for the recency predictor
         // (moe_step_sel[il*n_used+k]); empty until the first decode step
@@ -276,6 +277,14 @@ public:
         uint32_t last_ntok = 0;
         // Direction 1: one extra all-zero slot per layer absorbing cold misses
         bool     sentinel_slot = false;
+        // adaptive swap tier (MOE_ADAPT>=1): decayed routing demand per
+        // (layer, expert) plus the pass that swaps cold VRAM victims out for
+        // the hottest non-resident candidates.
+        std::vector<float>   adapt_decay;   // n_layer * n_expert
+        std::vector<int32_t> adapt_last;    // last pass the expert was demanded
+        std::vector<int32_t> adapt_pend_e;  // n_layer * n_expert: pending swap candidate
+        long adapt_pass  = 0;               // decode steps seen
+        long adapt_swaps = 0, adapt_bytes = 0, adapt_cold = 0;
     };
     moe_pool moe;
     moe_pager pager;
@@ -288,6 +297,10 @@ public:
     // never blocks; admission-controlled inside.
     void moe_prefetch_ahead(int il, const int32_t * sel, int n);
     void moe_publish(int il, int e, int slot);
+    // adaptive swap tier (MOE_ADAPT>=1)
+    bool moe_adapt_on() const;
+    void moe_adapt_note(int il, int e);
+    void moe_adapt_run();
     const ggml_tensor * moe_pool_tensor(const char * which, int il) const;
     // pre-populate every layer's slots with the offline hot profile so the
     // first decode step starts warm; pages synchronously, failures are

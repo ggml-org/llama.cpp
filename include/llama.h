@@ -402,6 +402,8 @@ extern "C" {
         int32_t moe_slots     = 4096;     // total VRAM slots shared across all MoE layers
         // GGUF to stream experts from; must outlive the context
         const char * moe_gguf_path;
+        // iq_pack.py expert pack dir (experts.bin + native_experts.txt); null = off
+        const char * moe_pack_dir;
         // hot-expert profile for slot seeding; null = built-in table
         const char * moe_profile_path;
 

@@ -13,6 +13,8 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <fstream>
+#include <sstream>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -40,6 +42,7 @@ bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_us
 
     const int64_t data_off = gguf_get_data_offset(gctx);
     idx_.assign((size_t) n_layer * n_expert * 3, moe_expert_slice{0, 0, 0});
+    role_bytes_.assign((size_t) n_layer * 3, 0);
     size_t per_expert_bytes = 0;
 
     // role 0 = gate, role 1 = up, role 2 = down. qwen4exp on this box ships
@@ -69,6 +72,7 @@ bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_us
                     gguf_free(gctx); return false;
                 }
                 const size_t per = tbytes / (size_t) n_expert;
+                role_bytes_[(size_t) il * 3 + (size_t) r] = per;
                 // experts of a tensor are contiguous: slice e begins at
                 // base + e*per. Align DOWN for O_DIRECT and keep the pre-pad;
                 // align the LENGTH up so the read is a whole number of blocks
@@ -113,6 +117,68 @@ bool moe_pager::init(const char * gguf_path, int n_layer, int n_expert, int n_us
     return true;
 }
 
+bool moe_pager::use_pack(const char * experts_bin, const char * index_txt, std::string & err) {
+    if (n_layer_ <= 0 || n_expert_ <= 0) { err = "pager not indexed"; return false; }
+    if (pack_mode_) { err = "pack already active"; return false; }
+    std::ifstream f(index_txt);
+    if (!f) { err = "cannot open pack index"; return false; }
+    if (fd_pack_ < 0) {
+        fd_pack_ = open(experts_bin, O_RDONLY | O_DIRECT);
+        if (fd_pack_ < 0) { err = "open experts.bin O_DIRECT failed"; return false; }
+    }
+    bsrc_.assign((size_t) n_layer_ * n_expert_ * 3, 0);
+    // build into temporaries: a rejected pack must leave the GGUF index intact
+    std::vector<moe_expert_slice> new_idx = idx_;
+    std::vector<uint32_t>         new_bsrc(n_layer_ * n_expert_ * 3, 0);
+    size_t max_blob = 0;
+    std::string line;
+    int rows = 0;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        int il, gu, dt;
+        long long base = 0, blob = 0;
+        if (!(is >> il >> gu >> dt >> base >> blob)) { err = "bad pack index line"; return false; }
+        if (base < 0 || blob <= 0) { err = "bad pack index offsets"; return false; }
+        if (il < 0 || il >= n_layer_) { err = "pack index layer out of range"; return false; }
+        const size_t g = role_bytes_[(size_t) il * 3 + 0];
+        const size_t u = role_bytes_[(size_t) il * 3 + 1];
+        const size_t d = role_bytes_[(size_t) il * 3 + 2];
+        if (g + u + d != (size_t) blob) {
+            err = "pack blob_bytes do not match the GGUF gate|up|down sizes";
+            return false;
+        }
+        for (int e = 0; e < n_expert_; e++) {
+            const uint64_t fbo  = (uint64_t) base + (uint64_t) e * (uint64_t) blob;
+            const uint64_t pre  = (ALIGN - (fbo % ALIGN)) % ALIGN;
+            const size_t   alen = (size_t) (((blob + pre + ALIGN - 1) / ALIGN) * ALIGN);
+            moe_expert_slice * s = &new_idx[((size_t) il * n_expert_ + e) * 3];
+            s[0].off = fbo - pre;
+            s[0].len = (uint32_t) alen;
+            s[0].pre = (uint32_t) pre;
+            s[1] = s[2] = moe_expert_slice{0, 0, 0};
+            uint32_t * b = &new_bsrc[((size_t) il * n_expert_ + e) * 3];
+            b[0] = (uint32_t) pre;
+            b[1] = (uint32_t) (pre + g);
+            b[2] = (uint32_t) (pre + g + u);
+            if (pre + blob > alen) { err = "pack blob read underruns"; return false; }
+            max_blob = std::max(max_blob, alen);
+        }
+        rows++;
+    }
+    if (rows != n_layer_) {
+        char m[128];
+        snprintf(m, sizeof m, "pack index has %d rows, expected %d", rows, n_layer_);
+        err = m;
+        return false;
+    }
+    idx_.swap(new_idx);
+    bsrc_.swap(new_bsrc);
+    pack_mode_ = true;
+    stage_bytes_ = max_blob;
+    return true;
+}
+
 void moe_pager::attach_gpu(void * backend, size_t, size_t) { backend_ = backend; }
 
 int moe_pager::find_(int key) const {
@@ -127,8 +193,9 @@ int moe_pager::submit_(int key) {
     // data is stale by definition - nobody demanded it while it sat ready).
     // Never drop in-flight reads: a later commit may be waiting on them.
     if (free_stage_.empty()) {
+        const int need_ok = pack_mode_ ? 1 : 3;   // pack mode completes in 1 read
         for (size_t i = 0; i < reqs_.size(); i++) {
-            if (reqs_[i].used && reqs_[i].done >= 3) {
+            if (reqs_[i].used && reqs_[i].done >= need_ok) {
                 free_stage_.push_back(reqs_[i].stage);
                 reqs_[i].used = false;
                 break;
@@ -144,7 +211,9 @@ int moe_pager::submit_(int key) {
     int pending = 0;
     long got_self[3] = { -1, -1, -1 };
     size_t boff = 0;
-    for (int r = 0; r < 3; r++) {
+    // pack mode: the whole expert is one blob, so one read covers all roles
+    const int nread = pack_mode_ ? 1 : 3;
+    for (int r = 0; r < nread; r++) {
         struct io_uring_sqe * sqe = io_uring_get_sqe((struct io_uring *) ring_);
         while (!sqe) {
             io_uring_submit((struct io_uring *) ring_);
@@ -163,7 +232,8 @@ int moe_pager::submit_(int key) {
             }
             sqe = io_uring_get_sqe((struct io_uring *) ring_);
         }
-        io_uring_prep_read(sqe, fd_, stage_ + (size_t) st * stage_bytes_ + boff,
+        io_uring_prep_read(sqe, pack_mode_ ? fd_pack_ : fd_,
+                           stage_ + (size_t) st * stage_bytes_ + boff,
                            s[r].len, (off_t) s[r].off);
         sqe->user_data = (uint64_t)((ridx * 4) + r);
         boff += s[r].len;
@@ -172,15 +242,17 @@ int moe_pager::submit_(int key) {
     q.got[0] = got_self[0]; q.got[1] = got_self[1]; q.got[2] = got_self[2];
     reqs_.push_back(q);
     io_uring_submit((struct io_uring *) ring_);
-    io_ops_ += 3; io_bytes_ += (long) boff;
+    if (pack_mode_) { io_ops_ += 1; io_bytes_ += (long) boff; n_pack_reads_ += 1; }
+    else            { io_ops_ += 3; io_bytes_ += (long) boff; n_gguf_reads_ += 3; }
     return (int) reqs_.size() - 1;
 }
 
-// returns true when all 3 role reads for req r transferred their full length
+// returns true when every read this request needs transferred its full length
 bool moe_pager::wait_ok_(int r) {
     if (r < 0) return false;
     const moe_expert_slice * s = slices(reqs_[r].il, reqs_[r].e);
-    while (reqs_[r].done < 3) {
+    const int need = pack_mode_ ? 1 : 3;
+    while (reqs_[r].done < need) {
         struct io_uring_cqe * cqe = nullptr;
         if (io_uring_wait_cqe((struct io_uring *) ring_, &cqe) < 0) break;
         const uint64_t ud = cqe->user_data;
@@ -193,7 +265,7 @@ bool moe_pager::wait_ok_(int r) {
             if (role >= 0 && role < 3) reqs_[rr].got[role] = res;
         }
     }
-    for (int k = 0; k < 3; k++) {
+    for (int k = 0; k < need; k++) {
         if (reqs_[r].got[k] != (long) s[k].len) return false;
     }
     return true;
@@ -272,17 +344,24 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
     }
     if (was_prefetch) n_pf_hit_++;
     const moe_expert_slice * s = slices(il, e);
+    const uint32_t * bsrc = pack_mode_ ? &bsrc_[(size_t) (il * n_expert_ + e) * 3] : nullptr;
     char * src = stage_ + (size_t) reqs_[r].stage * stage_bytes_;
     // each slice starts at an aligned-down offset; skip the stored pre-pad
     // to reach the true expert data (len is aligned up for O_DIRECT).
+    // pack mode: all three roles come out of the one blob read at bsrc[k]
     size_t off = 0;
     void * dst[3] = { dst_gate, dst_up, dst_down };
     size_t want[3] = { gate_bytes, up_bytes, down_bytes };
     for (int k = 0; k < 3; k++) {
-        const size_t skip = s[k].pre;
-        cudaMemcpy(dst[k], src + off + skip,
-                   std::min(want[k], (size_t) s[k].len - skip), cudaMemcpyHostToDevice);
-        off += s[k].len;
+        const size_t skip = pack_mode_ ? bsrc[k] : s[k].pre;
+        // pack mode: the blob's role k spans role_bytes_[il][k]; GGUF mode
+        // each slice carries its own length minus the pre-pad
+        const size_t avail = pack_mode_
+            ? role_bytes_[(size_t) il * 3 + (size_t) k]
+            : ((size_t) s[k].len - skip);
+        cudaMemcpy(dst[k], src + (pack_mode_ ? 0 : off) + skip,
+                   std::min(want[k], avail), cudaMemcpyHostToDevice);
+        if (!pack_mode_) off += s[k].len;
     }
 
     free_stage_.push_back(reqs_[r].stage);

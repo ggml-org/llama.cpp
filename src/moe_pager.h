@@ -73,6 +73,16 @@ public:
     const moe_expert_slice * slices(int il, int e) const { return &idx_[((size_t) il * n_expert_ + e) * 3]; }
     const char * path() const { return path_.c_str(); }
 
+    // Optional single-blob expert pack (iq_pack.py output): experts.bin holds
+    // all n_expert experts of a layer back-to-back as gate|up|down, so one
+    // expert is ONE contiguous read instead of three fragmented GGUF ranges.
+    // The blob bytes are identical to the GGUF's, so this is an IO change only.
+    // native_experts.txt gives each layer's base offset and blob_bytes.
+    bool use_pack(const char * experts_bin, const char * index_txt, std::string & err);
+    bool pack_mode() const { return pack_mode_; }
+    long stats_gguf_reads() const { return n_gguf_reads_; }
+    long stats_pack_reads() const { return n_pack_reads_; }
+
     long stats_io_ops()   const { return io_ops_; }
     long stats_io_bytes() const { return io_bytes_; }
     long stats_io_fail()  const { return n_io_fail_; }
@@ -90,6 +100,15 @@ private:
     int fd_ = -1;
     std::vector<moe_expert_slice> idx_;   // n_layer * n_expert * 3
     size_t bytes_per_expert_ = 0;
+    // per-(layer,role) byte length taken from the GGUF index; the pack blob is
+    // the same gate|up|down concatenation, so these also size the pack layout
+    std::vector<size_t> role_bytes_;
+
+    // single-blob pack mode (see use_pack)
+    bool   pack_mode_ = false;
+    int    fd_pack_   = -1;                 // fd_ stays the GGUF, pack reads use this
+    std::vector<uint32_t> bsrc_;            // n_layer*n_expert*3: src offset inside the blob read
+    long n_gguf_reads_ = 0, n_pack_reads_ = 0;
 
     void * backend_ = nullptr;
     char * stage_ = nullptr;              // pinned staging, NSTAGE slots

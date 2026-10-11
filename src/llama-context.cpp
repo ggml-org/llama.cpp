@@ -112,6 +112,7 @@ llama_context::llama_context(
 
     cparams.moe_direct_io = params.moe_direct_io;
     cparams.moe_slots     = params.moe_slots;
+    cparams.moe_pack_dir  = params.moe_pack_dir;
     cparams.moe_gguf_path = params.moe_gguf_path;
     cparams.moe_profile_path = params.moe_profile_path;
 
@@ -389,6 +390,21 @@ llama_context::llama_context(
             if (!pager.init(cparams.moe_gguf_path, n_layer, n_exp, n_used, perr)) {
                 LLAMA_LOG_WARN("%s: moe_direct_io OFF: %s\n", __func__, perr.c_str());
             } else {
+                // optional single-blob pack: one contiguous read per expert.
+                // verified byte-identical to the GGUF's gate|up|down, so this
+                // only changes IO, not the weights.
+                if (cparams.moe_pack_dir) {
+                    std::string dir(cparams.moe_pack_dir);
+                    std::string bin = dir + "/experts.bin";
+                    std::string idx = dir + "/native_experts.txt";
+                    std::string e2;
+                    if (!pager.use_pack(bin.c_str(), idx.c_str(), e2)) {
+                        LLAMA_LOG_WARN("%s: moe pack OFF: %s\n", __func__, e2.c_str());
+                    } else {
+                        LLAMA_LOG_INFO("%s: moe pack ON: one blob read per expert (%d layers x %d experts)\n",
+                                       __func__, n_layer, n_exp);
+                    }
+                }
                 ggml_init_params ip = {
                     ggml_tensor_overhead()*(size_t)(n_layer*4 + 8) + ggml_graph_overhead(),
                     nullptr, /*no_alloc=*/true };
@@ -407,6 +423,13 @@ llama_context::llama_context(
 
                 size_t expect = 0;
                 bool pool_ok = true;
+                // Direction 1 (MOE_STATIC_HOT=1) keeps one extra all-zero slot
+                // per layer as a sentinel, so cold experts map to it (zero
+                // contribution) instead of a mid-graph host page.
+                static int s_hot = -1;
+                if (s_hot < 0) s_hot = getenv("MOE_STATIC_HOT") ? atoi(getenv("MOE_STATIC_HOT")) : 0;
+                const int64_t n_slots = s_pl + (s_hot ? 1 : 0);
+                moe.sentinel_slot = (s_hot != 0);
                 for (int il = 0; il < n_layer; il++) {
                     // qwen4exp has NO fused gate_up tensor; it uses the separate
                     // gate/up path, so all three pools are needed.
@@ -422,42 +445,21 @@ llama_context::llama_context(
                         moe_ready = false;
                         break;
                     }
+                    // allocate the final tensor set exactly once: a discardable
+                    // second set in the same no_alloc context is dead but still
+                    // counted by ggml_backend_alloc_ctx_tensors, so it doubles
+                    // the VRAM the pool needs for the same slot count.
                     moe.pool_gate[il] = ggml_new_tensor_3d(moe.ctx, gl->type,
-                            (int64_t) gl->ne[0], (int64_t) gl->ne[1], s_pl);
+                            (int64_t) gl->ne[0], (int64_t) gl->ne[1], n_slots);
                     moe.pool_up[il]   = ggml_new_tensor_3d(moe.ctx, ul->type,
-                            (int64_t) ul->ne[0], (int64_t) ul->ne[1], s_pl);
+                            (int64_t) ul->ne[0], (int64_t) ul->ne[1], n_slots);
                     // down_exps is [n_ff, n_embd] transposed relative to gate/up
                     // (GGUF ne = [640, 2560]), so take its geometry from dl itself.
                     moe.pool_down[il] = ggml_new_tensor_3d(moe.ctx, dl->type,
-                            (int64_t) dl->ne[0], (int64_t) dl->ne[1], s_pl);
+                            (int64_t) dl->ne[0], (int64_t) dl->ne[1], n_slots);
                     // get_rows needs table->ne[0] == idx->ne[0], so the table is
                     // laid out [1, n_expert] and looked up by [1, n_used] ids.
                     moe.slot_table[il] = ggml_new_tensor_2d(moe.ctx, GGML_TYPE_I32, 1, n_exp);
-                    // Direction 1 (MOE_STATIC_HOT=1): reallocate the three weight
-                    // pools one slot larger and keep the last slot zeroed as a
-                    // sentinel, so cold experts map to it (zero contribution)
-                    // instead of requiring a mid-graph host page.
-                    static int s_hot = -1;
-                    if (s_hot < 0) s_hot = getenv("MOE_STATIC_HOT") ? atoi(getenv("MOE_STATIC_HOT")) : 0;
-                    if (s_hot) {
-                        moe.pool_gate[il] = ggml_new_tensor_3d(moe.ctx, gl->type,
-                                (int64_t) gl->ne[0], (int64_t) gl->ne[1], s_pl + 1);
-                        moe.pool_up[il]   = ggml_new_tensor_3d(moe.ctx, ul->type,
-                                (int64_t) ul->ne[0], (int64_t) ul->ne[1], s_pl + 1);
-                        moe.pool_down[il] = ggml_new_tensor_3d(moe.ctx, dl->type,
-                                (int64_t) dl->ne[0], (int64_t) dl->ne[1], s_pl + 1);
-                        // zero the sentinel slot of each pool
-                        const size_t gb = ggml_nbytes(moe.pool_gate[il]) / (s_pl + 1);
-                        const size_t ub = ggml_nbytes(moe.pool_up[il])   / (s_pl + 1);
-                        const size_t db = ggml_nbytes(moe.pool_down[il]) / (s_pl + 1);
-                        // the pool is on the device buffer and this runs before
-                        // alloc_ctx_tensors: just record the intent, the actual
-                        // zero-fill happens after the buffer exists (below).
-                        (void) gb; (void) ub; (void) db;
-                        // sentinel index stored in slot_key; the table maps the
-                        // cold experts to it in the seed step below
-                        moe.sentinel_slot = true;
-                    }
                     expect += ggml_nbytes(moe.pool_gate[il]) + ggml_nbytes(moe.pool_up[il])
                             + ggml_nbytes(moe.pool_down[il]) + ggml_nbytes(moe.slot_table[il]);
                 }
@@ -487,6 +489,7 @@ llama_context::llama_context(
                     } else {
                         moe.n_layer = n_layer; moe.n_expert = n_exp;
                         moe.n_used = n_used;  moe.s_per_layer = s_pl;
+                        moe.n_slots = (int) n_slots;   // may include the sentinel
                         moe.slot_of.assign((size_t) n_layer*n_exp, -1);
                         moe.slot_key.assign((size_t) s_pl*n_layer, -1);
                         moe.step_sel.assign((size_t) n_layer * n_used, -1);
@@ -4005,6 +4008,7 @@ llama_context_params llama_context_default_params() {
         /*.moe_direct_io              =*/ false,
         /*.moe_slots                  =*/ 4096,
         /*.moe_gguf_path              =*/ nullptr,
+        /*.moe_pack_dir               =*/ nullptr,
         /*.moe_profile_path           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
@@ -4738,6 +4742,7 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
     const int n_exp = moe.n_expert;
     const int key = il * n_exp + e;
     const int cur = moe.slot_of[key];
+    moe_adapt_note(il, e);   // every demand feeds the decay histogram
     if (cur >= 0) {
         moe.n_hit++;
         return cur;
@@ -4760,9 +4765,9 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
 
     // DMA into the expert's OWN slot, not the pool base
     const int local = slot - base;
-    const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) s_pl;
-    const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) s_pl;
-    const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) s_pl;
+    const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) std::max(1, moe.n_slots);
+    const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) std::max(1, moe.n_slots);
+    const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) std::max(1, moe.n_slots);
     if (!pager.fetch(il, e,
                      (char *) moe.pool_gate[il]->data + (size_t) local * g_slot, g_slot,
                      (char *) moe.pool_up[il]->data   + (size_t) local * u_slot, u_slot,
@@ -4892,6 +4897,123 @@ void llama_context::moe_seed_hot() {
                    seeded, total, (ggml_time_us() - t0) / 1000000.0);
 }
 
+bool llama_context::moe_adapt_on() const {
+    static int v = -1;
+    if (v < 0) v = getenv("MOE_ADAPT") ? atoi(getenv("MOE_ADAPT")) : 0;
+    return moe_ready && v != 0;
+}
+
+void llama_context::moe_adapt_note(int il, int e) {
+    if (!moe_adapt_on()) return;
+    if (il < 0 || il >= moe.n_layer || e < 0 || e >= moe.n_expert) return;
+    const size_t k = (size_t) il * moe.n_expert + e;
+    if (moe.adapt_decay.empty()) {
+        moe.adapt_decay.assign((size_t) moe.n_layer * moe.n_expert, 0.0f);
+        moe.adapt_last.assign((size_t) moe.n_layer * moe.n_expert, -1);
+        moe.adapt_pend_e.assign((size_t) moe.n_layer * moe.n_expert, -1);
+    }
+    moe.adapt_decay[k] += 1.0f;
+    moe.adapt_last[k] = (int32_t) moe.adapt_pass;
+}
+
+// Decay the demand histogram, then swap the coldest resident experts out of
+// VRAM for the hottest non-resident ones. Runs once every MOE_ADAPT_EVERY
+// decode steps, from the LAST layer's topk callback, at which point every
+// layer's routing for this step is already in moe.step_sel.
+//
+// Reads are issued through the pager's async prefetch path and only DMA'd into
+// the victim slot on the next pass, so the GPU stream never waits on the SSD.
+void llama_context::moe_adapt_run() {
+    if (!moe_adapt_on()) return;
+    const int n_exp = moe.n_expert;
+    const int s_pl  = moe.s_per_layer;
+
+    moe.adapt_pass++;
+    if (moe.adapt_decay.empty()) return;
+
+    const int every = [] { const char * e = getenv("MOE_ADAPT_EVERY"); return (e && atoi(e) > 0) ? atoi(e) : 4; }();
+    if (moe.adapt_pass % every) return;
+
+    // decay: a demand 4 passes ago is worth ~2^-2 of a fresh one at 0.8
+    for (auto & d : moe.adapt_decay) d *= 0.8f;
+
+    // DMA the previous pass's candidates into their victim slots
+    for (int il = 0; il < moe.n_layer; il++) {
+        for (int e = 0; e < n_exp; e++) {
+            const int slot = moe.adapt_pend_e[(size_t) il * n_exp + e];
+            if (slot < 0) continue;
+            moe.adapt_pend_e[(size_t) il * n_exp + e] = -1;
+            const int base  = il * s_pl;                 // adapt_pend_e holds a
+            const int local = slot - base;                // GLOBAL slot index
+            if (local < 0 || local >= s_pl) continue;
+            const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) std::max(1, moe.n_slots);
+            const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) std::max(1, moe.n_slots);
+            const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) std::max(1, moe.n_slots);
+            if (!pager.commit(il, e,
+                    (char *) moe.pool_gate[il]->data + (size_t) local * g_slot, g_slot,
+                    (char *) moe.pool_up[il]->data   + (size_t) local * u_slot, u_slot,
+                    (char *) moe.pool_down[il]->data + (size_t) local * d_slot, d_slot)) {
+                moe.adapt_cold++;         // recompute next pass
+                continue;
+            }
+            moe.adapt_bytes += (long)(g_slot + u_slot + d_slot);
+            // drop any slot the demand path gave this expert in the meantime,
+            // so one expert never ends up mapped from two slots
+            const int stale = moe.slot_of[(size_t) il * n_exp + e];
+            if (stale >= 0 && stale != slot) moe.slot_key[(size_t) stale] = -1;
+            moe_publish(il, e, slot);
+        }
+    }
+
+    const int protect = every * 4;   // never evict what a recent batch may still want
+    const int n_swap  = 2;           // swaps per layer per pass
+    // The swap pass is opt-in: it measurably degrades the reply (repeated
+    // tokens), so the default path is the demand-paged pool with the offline
+    // hot profile. MOE_ADAPT_SWAP=1 re-enables it for experiments.
+    if (![] { const char * e = getenv("MOE_ADAPT_SWAP"); return e && atoi(e) != 0; }()) {
+        return;
+    }
+
+    for (int il = 0; il < moe.n_layer; il++) {
+        const size_t lb = (size_t) il * n_exp;
+        const int    base = il * s_pl;
+        // residents with their demand score
+        std::vector<std::pair<float, int>> res;   // (score, slot)
+        for (int s = 0; s < s_pl; s++) {
+            const int k = moe.slot_key[(size_t) il * s_pl + s];
+            if (k < 0) continue;
+            res.emplace_back(moe.adapt_decay[(size_t) k], s);
+        }
+        if (res.empty()) continue;
+        std::sort(res.begin(), res.end());        // coldest first
+        // hottest non-residents
+        std::vector<std::pair<float, int>> cand;  // (score, expert)
+        for (int e = 0; e < n_exp; e++) {
+            if (moe.slot_of[lb + e] >= 0) continue;
+            cand.emplace_back(moe.adapt_decay[lb + e], e);
+        }
+        if (cand.empty()) continue;
+        const size_t nc = std::min((size_t) n_swap, cand.size());
+        std::partial_sort(cand.begin(), cand.begin() + nc, cand.end(),
+                          std::greater<std::pair<float, int>>());
+
+        for (size_t i = 0; i < nc && i < (size_t) n_swap; i++) {
+            const int victim_slot = res[i].second;
+            const int victim_exp  = moe.slot_key[(size_t) il * s_pl + victim_slot] - (int) (lb);
+            const float v_score   = res[i].first;
+            const float c_score   = cand[i].first;
+            // only swap when the candidate is strictly hotter, and never evict
+            // an expert this or a very recent batch may still need
+            if (victim_exp >= 0 && moe.adapt_last[lb + victim_exp] > (int32_t)(moe.adapt_pass - protect)) continue;
+            if (c_score <= v_score) continue;
+            // reserve the victim slot until the swap lands: freeing it here would
+            // let the demand path reassign it before the commit DMA arrives
+            moe.adapt_pend_e[lb + cand[i].second] = base + victim_slot;   // global
+            if (pager.prefetch(il, cand[i].second)) moe.adapt_swaps++;
+        }
+    }
+}
+
 // Restore the hot profile once, right when decoding starts after a prefill
 // phase. Micro-chunk paging during a long prefill walks moe_rr through every
 // layer's slots, so decode token 0 would otherwise start cold. Re-seeding
@@ -4970,6 +5092,11 @@ void llama_context::moe_publish(int il, int e, int slot) {
     if (slot < base || slot >= base + s_pl) return;
     const int old = moe.slot_key[slot];
     if (old >= 0 && old != key) moe.slot_of[old] = -1;
+    // an expert may never be reachable from two slots: the pool would keep
+    // stale weights for one of them and the swap pass would pick the same
+    // victim twice
+    const int prev = moe.slot_of[key];
+    if (prev >= 0 && prev != slot) moe.slot_key[(size_t) prev] = -1;
     moe.slot_key[slot] = key;
     moe.slot_of[key]   = slot;
     // remap the whole layer table: expert -> local slot, -1 when absent
@@ -5048,12 +5175,15 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         static int m2 = -1;
         if (m2 < 0) {
             if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) m2 = 3;
+            else if (getenv("MOE_ADAPT") && atoi(getenv("MOE_ADAPT"))) m2 = 4;
             else if (getenv("MOE_BOUNDARY") && atoi(getenv("MOE_BOUNDARY"))) m2 = 1;
             else if (getenv("MOE_NOSPLIT") && atoi(getenv("MOE_NOSPLIT"))) m2 = 2;
             else m2 = 0;
         }
         if (m2 == 3) return true;          // Direction 1: table is static on device
         if (m2 == 1) return true;          // boundary: paged from the boundary refresh
+        // mode 4 (adaptive) falls through: every selected expert is demand-paged,
+        // so no routing ever reads the zero sentinel slot.
     }
     const int64_t ntok = t->ne[1];
     const int64_t nw = t->ne[0];
@@ -5076,6 +5206,11 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     if (ntok == 1) {
         for (int64_t j = 0; j < ntok; j++) {
             ctx->moe_prefetch_ahead(il, ids.data() + (size_t) j * nw, (int) nw);
+        }
+        // adaptive swap tier: at the last layer every layer's routing for this
+        // step is collected, so the decay/swap pass has the full picture
+        if (ctx->moe_adapt_on() && il == ctx->moe.n_layer - 1) {
+            ctx->moe_adapt_run();
         }
         // optional routing trace (MOE_TRACE_DIR=file prefix): one u16 row
         // [n_used] per layer per decode step for offline profile building.
