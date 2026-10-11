@@ -593,6 +593,7 @@ struct common_params {
     int32_t moe_slots       = 4096;  // total VRAM slots shared across all MoE layers
     std::string moe_profile = "";    // hot-expert profile for slot seeding (empty = built-in table)
     std::string moe_pack_dir = "";   // iq_pack.py expert pack dir (experts.bin + native_experts.txt)
+    int32_t moe_chunk_max  = 8;       // widest batch routed through the MoE slot pool
 
     bool single_turn       = false; // single turn chat conversation
 

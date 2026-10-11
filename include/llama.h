@@ -404,6 +404,7 @@ extern "C" {
         const char * moe_gguf_path;
         // iq_pack.py expert pack dir (experts.bin + native_experts.txt); null = off
         const char * moe_pack_dir;
+        int32_t moe_chunk_max = 8;   // widest batch routed through the MoE pool
         // hot-expert profile for slot seeding; null = built-in table
         const char * moe_profile_path;
 
