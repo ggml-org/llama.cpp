@@ -697,12 +697,11 @@ static void test_compute_arena_abort(llama_model * model, llama_context * ctx,
         const std::vector<llama_token> & tokens, const std::vector<float> & expected) {
     if (!ctx->uses_memory_coordinator()) return;
     llama_memory_clear(llama_get_memory(ctx), true);
-    llama_batch batch = llama_batch_init(4, 0, 1);
-    for (int i = 0; i < 4; ++i) common_batch_add(batch, tokens[i], i, {0}, true);
+    common_batch batch(ctx);
+    for (int i = 0; i < 4; ++i) batch.add(tokens[i],i,0,true);
     llama_set_abort_callback(ctx, [](void *) { return true; }, nullptr);
-    const int result = llama_decode(ctx, batch);
+    const int result = llama_process(ctx,LLAMA_PROCESS_TYPE_DECODE,batch.get());
     llama_set_abort_callback(ctx, nullptr, nullptr);
-    llama_batch_free(batch);
     GGML_ASSERT(result != 0);
     llama_memory_clear(llama_get_memory(ctx), true);
     const auto actual = get_logits(model, ctx, tokens);
@@ -715,27 +714,23 @@ static std::vector<float> get_tg1_logits(
     constexpr uint32_t n_prefill = 16;
     GGML_ASSERT(tokens.size() > n_prefill);
 
-    llama_batch prefill = llama_batch_init(n_prefill, 0, 1);
+    common_batch prefill(lctx);
     for (uint32_t pos = 0; pos < n_prefill; ++pos) {
-        common_batch_add(prefill, tokens[pos], pos, {0}, pos + 1 == n_prefill);
+        prefill.add(tokens[pos],pos,0,pos+1 == n_prefill);
     }
-    if (llama_decode(lctx, prefill)) {
-        llama_batch_free(prefill);
+    if (llama_process(lctx,LLAMA_PROCESS_TYPE_DECODE,prefill.get())) {
         throw std::runtime_error("failed to decode short prefill");
     }
-    llama_batch_free(prefill);
 
-    llama_batch tg1 = llama_batch_init(1, 0, 1);
-    common_batch_add(tg1, tokens[n_prefill], n_prefill, {0}, true);
-    if (llama_decode(lctx, tg1)) {
-        llama_batch_free(tg1);
+    common_batch tg1(lctx);
+    tg1.add(tokens[n_prefill],n_prefill,0,true);
+    if (llama_process(lctx,LLAMA_PROCESS_TYPE_DECODE,tg1.get())) {
         throw std::runtime_error("failed to decode TG1 token");
     }
 
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const float * logits = llama_get_logits_ith(lctx, 0);
     std::vector<float> result(logits, logits + n_vocab);
-    llama_batch_free(tg1);
     return result;
 }
 
@@ -985,7 +980,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
     const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
 
-    if (target_arch == LLM_ARCH_UNKNOWN || target_arch == LLM_ARCH_LLAMA) {
+    if (arch_matches(arch_filter,LLM_ARCH_LLAMA)) {
         gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
         auto model_and_ctx = get_model_and_ctx(
             gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, false, nullptr, 0, true);

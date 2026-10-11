@@ -177,14 +177,10 @@ static ggml_backend_meta_split_state test_split_state(const ggml_tensor *, void 
 static test_device_context make_test_device(size_t alignment = 16) {
     test_device_context result;
     result.alignment = alignment;
-    result.buft.iface = {
-        /* .get_name       = */ test_buft_name,
-        /* .alloc_buffer   = */ test_buft_alloc,
-        /* .get_alignment  = */ test_buft_alignment,
-        /* .get_max_size   = */ nullptr,
-        /* .get_alloc_size = */ nullptr,
-        /* .is_host        = */ test_buft_is_host,
-    };
+    result.buft.iface.get_name = test_buft_name;
+    result.buft.iface.alloc_buffer = test_buft_alloc;
+    result.buft.iface.get_alignment = test_buft_alignment;
+    result.buft.iface.is_host = test_buft_is_host;
     result.device.iface = {
         /* .get_name             = */ test_device_name,
         /* .get_description      = */ test_device_description,
@@ -269,7 +265,7 @@ static void test_meta_tensor_initialization(test_device_context & device) {
     GGML_ASSERT(static_ctx);
     ggml_tensor * static_tensor = ggml_new_tensor_1d(static_ctx.get(), GGML_TYPE_F32, 4);
     ggml_backend_buffer_ptr static_buffer(
-        ggml_backend_meta_alloc_ctx_tensors_from_buft(static_ctx.get(), meta_buft));
+        ggml_backend_alloc_ctx_tensors_from_buft(static_ctx.get(), meta_buft));
     GGML_ASSERT(static_buffer);
     GGML_ASSERT(device.init_count == 4);
     ggml_backend_tensor_set(static_tensor, parent_data, 0, sizeof(parent_data));
