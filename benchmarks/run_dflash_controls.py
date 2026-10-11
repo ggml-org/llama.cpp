@@ -2,11 +2,13 @@
 """Run pinned ordinary DFlash2 controls. No streaming, UVM, fit retries or implicit offload."""
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
 import os
 import signal
+import struct
 import subprocess
 import sys
 import time
@@ -110,6 +112,129 @@ def validate_payloads(directory, rows):
     return len(files)
 
 
+def compare_control_rows(actual, control, artifacts_actual, artifacts_control, trace_actual, trace_control):
+    for row in (actual, control):
+        if row.get("status") != "ok" or row.get("mode") != "capture":
+            raise ValueError("matching control requires successful captured runs")
+    for field in ("context", "depth", "prompt_tokens", "decode_tokens", "uvm"):
+        if field not in actual or actual[field] != control.get(field):
+            raise ValueError(f"nonmatching control profile: {field}")
+    for option in ("--batch-size", "--ubatch-size", "--cache-type-k", "--cache-type-v",
+                   "--spec-draft-type-k", "--spec-draft-type-v", "--spec-draft-n-max",
+                   "--spec-draft-n-min", "--spec-draft-p-min", "--n-gpu-layers", "--spec-draft-ngl"):
+        values = []
+        for row in (actual, control):
+            command = row["command"]
+            if command.count(option) != 1 or command.index(option)+1 == len(command):
+                raise ValueError(f"missing/ambiguous control option: {option}")
+            values.append(command[command.index(option)+1])
+        if values[0] != values[1]:
+            raise ValueError(f"nonmatching control option: {option}")
+    if not artifacts_actual.get("sha256") or artifacts_actual["sha256"] != artifacts_control.get("sha256"):
+        raise ValueError("nonmatching control artifacts")
+    if actual["result"]["tokens"] != control["result"]["tokens"]:
+        raise ValueError("matching control generated different token IDs")
+    def signature(value):
+        if isinstance(value, dict):
+            excluded = {"file", "mask_file"}
+            if value.get("name") == "lattice" and value.get("canonical_sha256"):
+                excluded.add("sha256")
+            return {key: signature(child) for key, child in value.items() if key not in excluded}
+        if isinstance(value, list):
+            return [signature(child) for child in value]
+        return value
+    # Device free-memory readings are observations, not arithmetic outputs.
+    expected = [signature(row) for row in trace_control if row.get("event") != "memory"]
+    measured = [signature(row) for row in trace_actual if row.get("event") != "memory"]
+    if not expected or len(expected) != len(measured):
+        raise ValueError("matching control trace record count differs")
+    for index, (left, right) in enumerate(zip(expected, measured)):
+        if left != right:
+            raise ValueError(f"matching control first differs at trace record {index}: {left.get('event')}")
+    return {"token_ids_equal": True, "trace_records_equal": len(expected)}
+
+
+def canonical_lattice(data, rows, width, top_k=16, vocab=248320):
+    if (not 2 <= rows <= 8 or not 1 <= top_k <= 16 or not top_k+top_k*top_k <= width <= 5120
+            or len(data) != rows*width*4):
+        raise ValueError("invalid selector lattice geometry")
+    if any(data[:width*4]):
+        raise ValueError("selector anchor row is not zero")
+    result = []
+    previous = []
+    for index in range(1, rows):
+        raw = data[index*width*4:(index+1)*width*4]
+        if any(raw[(top_k+top_k*top_k)*4:]):
+            raise ValueError("selector padding is not zero")
+        values = struct.unpack("<"+"f"*width, raw)
+        ids = list(values[:top_k])
+        if any(not math.isfinite(v) or int(v) != v or not 0 <= v < vocab for v in ids) or len(set(ids)) != top_k:
+            raise ValueError("invalid or duplicate selector candidate ID")
+        scores = values[top_k:top_k+top_k*top_k]
+        if any(not math.isfinite(value) for value in scores):
+            raise ValueError("invalid selector score")
+        if index == 1:
+            if any(raw[top_k*4:(top_k+top_k)*4] != raw[(top_k+k*top_k)*4:(top_k+(k+1)*top_k)*4]
+                   for k in range(1, top_k)):
+                raise ValueError("anchor scores are not repeated")
+            entries = [(int(ids[j]), struct.pack("<f", scores[j]).hex()) for j in range(top_k)]
+        else:
+            entries = [(int(previous[k]), int(ids[j]), struct.pack("<f", scores[k*top_k+j]).hex())
+                       for k in range(top_k) for j in range(top_k)]
+        result.append(sorted(entries))
+        previous = ids
+    return hashlib.sha256(json.dumps([rows, width, top_k, result], separators=(",", ":")).encode()).hexdigest()
+
+
+def load_control_trace(directory):
+    rows = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
+    validate_payloads(directory, rows)
+    for row in rows:
+        if row.get("event") == "tensor" and row.get("name") == "lattice":
+            data = (directory / row["file"]).read_bytes()
+            if hashlib.sha256(data).hexdigest() != row["sha256"]:
+                raise ValueError("lattice payload changed after verification")
+            row["canonical_sha256"] = canonical_lattice(data, row["rows"], row["width"])
+    return rows
+
+
+def fit_ledger(row, trace, native_context=262144):
+    context, depth = row["context"], row["depth"]
+    if context < 2304 or context % 256 or native_context < context or native_context % 256:
+        raise ValueError("fit ledger requires padded context beyond the bounded draft window")
+    snapshots = {}
+    for event in trace:
+        if event.get("event") == "memory":
+            snapshots[event["role"]] = event
+    target, draft = snapshots["target"], snapshots["draft"]
+    if len(target["devices"]) != 1:
+        raise ValueError("fit ledger requires the single-device control profile")
+    device = target["devices"][0]
+    name, total = device["name"], device["total"]
+    def buffer_bytes(snapshot, field):
+        return sum(entry[field] for entry in snapshot["buffers"] if entry["buffer"] == name)
+    def component_bytes(component):
+        return sum(entry["bytes"] for entry in target["components"]
+                   if entry["buffer"] == name and entry["name"] == component)
+    weights = buffer_bytes(target, "model")+buffer_bytes(draft, "model")
+    kv = component_bytes("target_kv")
+    recurrent = component_bytes("target_recurrent")
+    draft_kv = buffer_bytes(draft, "context")
+    if (not kv or kv % context or not recurrent or recurrent % (depth+1)
+            or not draft_kv or not weights or not total):
+        raise ValueError("invalid measured cache/weight ledger")
+    full_kv = (kv//context)*native_context
+    lower = weights+full_kv+recurrent+draft_kv
+    current_recurrent = recurrent//(depth+1)
+    return {"native_context": native_context, "device_total_bytes": total,
+            "ordinary_lower_bound_bytes": lower, "target_full_history_kv_bytes": full_kv,
+            "ordinary_full_context_fits": False if lower > total else None,
+            "streamed_parent_upper_bound_before_scratch_bytes": max(0, total-weights-current_recurrent),
+            "target_elastic_upper_bound_before_scratch_bytes": max(0, total-weights-current_recurrent-draft_kv),
+            "streamed_fit_qualified": False,
+            "excluded": ["compute", "output/features", "rollback staging", "native/library resources"]}
+
+
 def stop_process(process):
     # Nsight owns a child server; stop the entire session and let the profiler flush.
     try:
@@ -174,6 +299,8 @@ def run_point(args, context, depth, token_cache, mode):
             trace = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
             row["trace"] = summarize_trace(trace, depth)
             row["trace"]["verified_payloads"] = validate_payloads(directory, trace)
+            if context >= 2304:
+                row["fit_ledger"] = fit_ledger(row, trace)
         except Exception as error:
             row.update(status="failed", error=str(error))
     return row
@@ -192,6 +319,8 @@ def main():
     parser.add_argument("--prefill-text", type=Path, default=ROOT/"benchmarks/data/online-articles-262144-words.txt")
     parser.add_argument("--trace-library", type=Path)
     parser.add_argument("--nsys", type=Path)
+    parser.add_argument("--compare-to", type=Path,
+                        help="require byte-exact captured data against matching independent native controls")
     parser.add_argument("--port", type=int, default=12351)
     args = parser.parse_args()
     contexts = [int(value) for value in args.contexts.split(",")]
@@ -209,6 +338,8 @@ def main():
             setattr(args, name, value.resolve())
     if args.nsys and not args.trace_library:
         parser.error("Nsight phase attribution requires --trace-library")
+    if args.compare_to and not args.trace_library:
+        parser.error("matching controls require --trace-library")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     path = args.output / "results.jsonl"
@@ -219,12 +350,28 @@ def main():
     (args.output / "artifacts.json").write_text(json.dumps(report, indent=2)+"\n")
     modes = ["timing"] + (["capture"] if args.trace_library else []) + (["nsight"] if args.nsys else [])
     token_cache = {}
+    controls = []
+    control_artifacts = {}
+    if args.compare_to:
+        controls = [json.loads(line) for line in (args.compare_to/"results.jsonl").read_text().splitlines()]
+        control_artifacts = read_json(args.compare_to/"artifacts.json")
     with path.open("x") as output:
         for context in contexts:
             for depth in depths:
                 for mode in modes:
                     started = time.monotonic()
                     row = run_point(args, context, depth, token_cache, mode)
+                    if args.compare_to and row["status"] == "ok" and mode == "capture":
+                        try:
+                            matches = [r for r in controls if r.get("context") == context and r.get("depth") == depth
+                                       and r.get("mode") == "capture"]
+                            if len(matches) != 1:
+                                raise ValueError("missing or ambiguous independent control")
+                            control = matches[0]
+                            row["comparison"] = compare_control_rows(row, control, report, control_artifacts,
+                                load_control_trace(Path(row["directory"])), load_control_trace(Path(control["directory"])))
+                        except Exception as error:
+                            row.update(status="failed", error=str(error))
                     row["wall_seconds"] = time.monotonic()-started
                     output.write(json.dumps(row)+"\n")
                     output.flush()

@@ -295,7 +295,7 @@ Add failing tests first and retain the red result; implement the minimum coheren
 
 | Milestone | Status | Completion gate |
 | --- | --- | --- |
-| D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b complete; D1c next | Pinned metadata, controls and physical-fit ledger |
+| D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b at `1cd9036ce`; D1c complete | Pinned metadata, controls and physical-fit ledger |
 | D2 Common contracts | Planned | Neutral workload/cache roles and unchanged current paths |
 | D3 Target TG1-TG8 | D3a committed at `0f9c78645`; D3b/D3c planned | Stock-order span/resume and bounded workspace |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
@@ -394,6 +394,22 @@ python benchmarks/run_dflash_controls.py \
 ```
 
 TDD evidence: 27 Python tests (artifact integrity, ordinary commands, complete responses, workload coverage, warmup exclusion, payload integrity and failure classification), nine CPU trace-helper assertions (masks, bounds, NaN and empty output), the native feature-workspace regression, five focused host CTests, and the existing 32 sweep / 18 qualification tests pass. The pinned ty check passes with the existing server-ab import directory. Full native controls, raw payloads and Nsight reports are under `benchmarks/results/dflash2-d1b-qualified-f16`, `dflash2-d1b-native-ledger` and `dflash2-d1b-native-quantized-draft`. Initial red evidence is in `/tmp/dflash2-d1b-red-tests.log` and `/tmp/dflash2-d1b-red-native.log`; green/regression logs use the same prefix. Production is restored and healthy with its existing configuration.
+
+### D1c matched native fixtures and physical-fit ledger
+
+Completed on 2026-10-11. The control harness now supports `--compare-to /path/to/independent/control`. It rejects different artifact hashes, quants, batch/microbatch settings, draft limits, context/prompt/decode lengths and UVM mode. It verifies payload files before comparing trace records, returns the first mismatching record and keeps failed results rather than retrying them. Device free-memory observations and payload filenames are not arithmetic outputs and are excluded from equality.
+
+Stock CUDA top-k is intentionally unordered (`ggml/src/ggml-cuda/top-k.cu` uses CUB's unsorted output and an atomic radix gather). Independent ordinary runs therefore produce permutations of the same selector lattice, even when raw logits and final token IDs are identical. The fixture compares each candidate's F32 score by its successor/predecessor token IDs, keeping the exact score bits. It checks unique valid candidate IDs, zero anchor/padding, repeated anchor-score blocks and every transition score. This is not a numerical tolerance or a change to the stock selector. Different candidate sets, changed scores, proposals, masks, positions or tensor data fail qualification; raw lattice hashes remain available for integrity checks. Ties can still change upstream argmax behavior, so generated/proposed token IDs must also match.
+
+Independent F16/F16 controls at capacity 4096 with a 2304-token prefix and 64 generated tokens match 212/157/127 non-memory trace records for D=1/3/7. Independent Q8_0/Q4_0 controls pass both the 64-token fixture and a 256-token fixture. The latter matches all 256 output token IDs and 705/452/357 records for D=1/3/7, including the complete recorded process/token/position/cell-map sequence and the bounded captured tensors. This proves native-fixture repeatability within that scope; it does not qualify streamed attention or claim that every tensor in all 256 rounds was captured.
+
+The fit ledger uses measured model/cache components rather than file sizes. At 262144 positions, the target's ordinary Q8_0/Q4_0 full-history KV alone requires 6656 MiB. With Q8_0/Q4_0 draft KV, the ordinary device-allocation lower bounds are 20779.494 / 21078.744 / 21677.244 MiB for D=1/3/7, before compute, outputs/features and native resources, against 15880.625 MiB CUDA-usable memory. Ordinary full-context execution cannot fit without paging/offload. Thus short resident native controls are necessary; an eventual full-context numerical control will need the separately labeled UVM path described under D6.
+
+After keeping weights and one current recurrent state outside the future shared parent, its optimistic upper bound is 1925.037 MiB. Reserving the bounded 18.281 MiB draft KV leaves at most 1906.756 MiB for target elastic KV and shared scratch/staging, before output buffers and native/library resources. Neither value is an admitted arena size. The ledger explicitly returns `streamed_fit_qualified: false`; D2/D4/D5 must measure actual workloads, depth-seven staging and retained native resources before selecting a deployable budget. Sharing serial workspace and spilling rollback are required budget changes, not optional assumptions hidden in a benchmark.
+
+Reproduce matching controls with the D1b command, adding `--compare-to /path/to/previous/results --decode-tokens 256`. Both runs must use 256 decode tokens; draft quant settings must match. Evidence is under `benchmarks/results/dflash2-d1c-256-control`, `dflash2-d1c-256-match` and `dflash2-d1c-matched-q8-q4`. Initial negative-test logs are `/tmp/dflash2-d1c-red-tests.log`, `-red-lattice-tests.log` and `-red-fit-tests.log`; all 30 artifact/control tests and the pinned ty check pass. Negative cases cover altered blocks/positions, mask columns, artifacts, numerical scores, candidate IDs, padding and incompatible workload settings. Production is restored and healthy.
+
+Next: D2a's backend-neutral workload/cache contracts. D3a remains the existing independent planning checkpoint; do not skip D2 admission or treat TG5-TG8 as executable merely because their geometry can be described.
 
 ### D3a checked launch planning
 

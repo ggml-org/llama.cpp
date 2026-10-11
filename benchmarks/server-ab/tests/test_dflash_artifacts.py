@@ -3,9 +3,11 @@ import hashlib
 import importlib.util
 import json
 import math
+import struct
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 
@@ -404,6 +406,72 @@ class OrdinaryControls(unittest.TestCase):
             (root/"payload.bin").write_bytes(b"x"*len(content))
             with self.assertRaises(ValueError):
                 self.controls.validate_payloads(root, [row])
+
+    def test_matching_control_rejects_changed_block_and_workload(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
+                               port=12351, draft_k="f16", draft_v="f16")
+        row = {"status": "ok", "mode": "capture", "context": 4096, "depth": 3,
+               "prompt_tokens": 2304, "decode_tokens": 64, "uvm": False,
+               "command": self.controls.server_command(args, 4096, 3),
+               "result": {"tokens": [42]*64}}
+        artifacts = {"sha256": {"target": "1"*64, "draft": "2"*64, "draft_config": "3"*64}}
+        trace: list[dict[str, Any]] = [{"event": "process", "role": "target", "tokens": [42, 43, 44, 45], "positions": [100, 101, 102, 103]},
+                 {"event": "attention", "visible_columns": [[0, 1, 3]], "mask": {"sha256": "a"*64}},
+                 {"event": "memory", "devices": [{"free": 100}]}]
+        self.controls.compare_control_rows(row, row, artifacts, artifacts, trace, trace)
+        changed = copy.deepcopy(trace)
+        changed[-1]["devices"][0]["free"] = 99
+        self.controls.compare_control_rows(row, row, artifacts, artifacts, trace, changed)
+        for index, field, value in ((0, "tokens", [42, 43, 46, 45]),
+                                    (0, "positions", [100, 101, 103, 102]),
+                                    (1, "visible_columns", [[0, 2, 3]]),
+                                    (1, "mask", {"sha256": "b"*64})):
+            changed = copy.deepcopy(trace)
+            changed[index][field] = value
+            with self.assertRaises(ValueError):
+                self.controls.compare_control_rows(row, row, artifacts, artifacts, trace, changed)
+        for field, value in (("context", 8192), ("depth", 7), ("prompt_tokens", 2303), ("uvm", True)):
+            with self.assertRaises(ValueError):
+                self.controls.compare_control_rows(row, dict(row, **{field: value}), artifacts, artifacts, trace, trace)
+        with self.assertRaises(ValueError):
+            self.controls.compare_control_rows(row, row, artifacts, {"sha256": {}}, trace, trace)
+
+    def test_lattice_comparison_preserves_scores_across_unsorted_top_k(self):
+        rows: list[list[float]] = [[0]*8, [4, 6, 10, 20, 10, 20, 0, 0], [8, 10, 1, 2, 3, 4, 0, 0]]
+        reordered: list[list[float]] = [[0]*8, [6, 4, 20, 10, 20, 10, 0, 0], [10, 8, 4, 3, 2, 1, 0, 0]]
+        def encode(value):
+            return struct.pack("<24f", *(v for row in value for v in row))
+        expected = self.controls.canonical_lattice(encode(rows), 3, 8, 2, 32)
+        self.assertEqual(expected, self.controls.canonical_lattice(encode(reordered), 3, 8, 2, 32))
+        changed = copy.deepcopy(reordered)
+        changed[2][2] += 0.000001
+        self.assertNotEqual(expected, self.controls.canonical_lattice(encode(changed), 3, 8, 2, 32))
+        for index, value in ((1, 10), (6, 1), (0, float("nan")), (0, 99)):
+            changed = copy.deepcopy(rows)
+            changed[2][index] = value
+            if index == 1:  # Duplicate candidate ID.
+                changed[2][0] = 10
+            with self.assertRaises(ValueError):
+                self.controls.canonical_lattice(encode(changed), 3, 8, 2, 32)
+
+    def test_fit_ledger_is_a_lower_bound_not_an_arena_guarantee(self):
+        row = {"context": 4096, "depth": 3}
+        trace = [
+            {"event": "memory", "role": "target", "buffers": [
+                {"buffer": "CUDA0", "model": 1000}], "devices": [{"name": "CUDA0", "total": 10000}],
+                "components": [{"name": "target_kv", "buffer": "CUDA0", "bytes": 8192},
+                               {"name": "target_recurrent", "buffer": "CUDA0", "bytes": 400}]},
+            {"event": "memory", "role": "draft", "buffers": [
+                {"buffer": "CUDA0", "model": 100, "context": 20}]}]
+        ledger = self.controls.fit_ledger(row, trace, 262144)
+        self.assertFalse(ledger["ordinary_full_context_fits"])
+        self.assertEqual(ledger["ordinary_lower_bound_bytes"], 1000+100+524288+400+20)
+        self.assertEqual(ledger["streamed_parent_upper_bound_before_scratch_bytes"], 10000-1000-100-100)
+        self.assertEqual(ledger["target_elastic_upper_bound_before_scratch_bytes"], 10000-1000-100-100-20)
+        self.assertFalse(ledger["streamed_fit_qualified"])
+        with self.assertRaises(ValueError):
+            self.controls.fit_ledger(dict(row, context=1000), trace, 262144)
 
 
 if __name__ == "__main__":
