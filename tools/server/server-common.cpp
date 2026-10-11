@@ -987,7 +987,15 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     return prompt_tokens;
 }
 
-bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) {
+static bool repair_generated_utf8_impl(std::string & text, std::vector<llama_token> * tokens, size_t first_unsent, bool final) {
+    if (tokens && tokens->size() != text.size()) return false;
+    const auto replace = [&](size_t begin, size_t end) {
+        text.replace(begin,end-begin,"\xEF\xBF\xBD");
+        if (tokens) {
+            tokens->erase(tokens->begin()+begin,tokens->begin()+end);
+            tokens->insert(tokens->begin()+begin,3,LLAMA_TOKEN_NULL);
+        }
+    };
     size_t pos = std::min(first_unsent, text.size());
     while (pos < text.size()) {
         const auto parsed = common_parse_utf8_codepoint(text, pos);
@@ -997,7 +1005,7 @@ bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) 
         }
         if (parsed.status == utf8_parse_result::INCOMPLETE) {
             if (!final) return false;
-            text.replace(pos, text.size() - pos, "\xEF\xBF\xBD");
+            replace(pos,text.size());
             return true;
         }
 
@@ -1006,10 +1014,18 @@ bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) 
         while (end < text.size() && end - pos < expected && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) {
             ++end;
         }
-        text.replace(pos, end - pos, "\xEF\xBF\xBD");
+        replace(pos,end);
         pos += 3;
     }
     return true;
+}
+
+bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) {
+    return repair_generated_utf8_impl(text,nullptr,first_unsent,final);
+}
+
+bool repair_generated_utf8(common_chat_input & input, size_t first_unsent, bool final) {
+    return repair_generated_utf8_impl(input.text,&input.tokens,first_unsent,final);
 }
 
 size_t validate_utf8(const std::string& text) {

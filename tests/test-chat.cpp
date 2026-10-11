@@ -7957,6 +7957,30 @@ static void test_generated_utf8_repair() {
     std::string terminal = "x\xE2\x81";
     GGML_ASSERT(repair_generated_utf8(terminal, 0, true));
     GGML_ASSERT(terminal == "x\xEF\xBF\xBD");
+
+    common_chat_input input;
+    input.append("ok",11);
+    input.append("\xE2\x81",12);
+    input.append("\n<think>",13);
+    GGML_ASSERT(repair_generated_utf8(input,2));
+    GGML_ASSERT(input.text == "ok\xEF\xBF\xBD\n<think>");
+    GGML_ASSERT(input.tokens.size() == input.text.size());
+    GGML_ASSERT(input.tokens[0] == 11 && input.tokens[1] == LLAMA_TOKEN_NULL);
+    GGML_ASSERT(input.tokens[2] == LLAMA_TOKEN_NULL && input.tokens[4] == LLAMA_TOKEN_NULL);
+    GGML_ASSERT(input.tokens[5] == 13 && input.substr(5).text == "\n<think>");
+    input.truncate(6);
+    GGML_ASSERT(input.text == "ok\xEF\xBF\xBD\n" && input.tokens.size() == 6);
+    input.append("\xE2\x81",14);
+    const auto before = input;
+    GGML_ASSERT(!repair_generated_utf8(input,6));
+    GGML_ASSERT(input.text == before.text && input.tokens == before.tokens);
+    GGML_ASSERT(repair_generated_utf8(input,6,true));
+    GGML_ASSERT(input.tokens.size() == input.text.size() && input.tokens[5] == 13);
+    const auto final = input;
+    GGML_ASSERT(repair_generated_utf8(input,6,true));
+    GGML_ASSERT(input.text == final.text && input.tokens == final.tokens);
+    input.tokens.pop_back();
+    GGML_ASSERT(!repair_generated_utf8(input,0,true));
 }
 
 static void test_msg_diffs_compute() {

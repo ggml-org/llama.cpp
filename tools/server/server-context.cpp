@@ -795,7 +795,6 @@ static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch,
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
     const auto & chunk = input_tokens.find_chunk(idx);
-    if (slot.vision_arena && mtmd_input_chunk_get_type(chunk.get()) != MTMD_INPUT_CHUNK_TYPE_IMAGE) return -1;
 
     mbatch.reset(mtmd_batch_init(mctx));
     int32_t res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
@@ -838,6 +837,7 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
     const auto & chunk = input_tokens.find_chunk(idx);
+    if (slot.vision_arena && mtmd_input_chunk_get_type(chunk.get()) != MTMD_INPUT_CHUNK_TYPE_IMAGE) return -1;
     int32_t res = 0;
 
     auto try_decode = [&]() -> int32_t {
@@ -865,6 +865,7 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                 };
 
                 llama_pos new_n_past; // unused for now
+                if (slot.vision_arena) llama_set_kv_stream_decode(slot.ctx_tgt,false);
                 res = mtmd_helper_decode_image_chunk(
                     mctx,
                     slot.ctx_tgt,
@@ -2036,7 +2037,7 @@ private:
         slot.has_next_token = true;
 
         // check if there is incomplete UTF-8 character at the end
-        bool incomplete = !repair_generated_utf8(slot.generated.text, slot.n_sent_text);
+        bool incomplete = !repair_generated_utf8(slot.generated, slot.n_sent_text);
 
         // search stop word and delete it
         if (!incomplete) {
@@ -2149,9 +2150,9 @@ private:
         }
 
         if (incomplete && !slot.has_next_token) {
-            repair_generated_utf8(slot.generated_text, slot.n_sent_text, true);
-            result.text_to_send = slot.generated_text.substr(std::min(slot.n_sent_text, slot.generated_text.size()));
-            slot.n_sent_text = slot.generated_text.size();
+            repair_generated_utf8(slot.generated, slot.n_sent_text, true);
+            result.text_to_send = slot.generated.text.substr(std::min(slot.n_sent_text, slot.generated.text.size()));
+            slot.n_sent_text = slot.generated.text.size();
             slot.add_token(result);
             if (slot.task->params.stream) {
                 send_partial_response(slot, result, false);
@@ -4543,7 +4544,6 @@ private:
                         SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
                         GGML_ASSERT(llama_kv_stream_mtp_release(slot.ctx_tgt));
-
                         GGML_ASSERT(ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
 
                         if (slot.ctx_dft) {
