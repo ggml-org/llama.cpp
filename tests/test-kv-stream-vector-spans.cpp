@@ -345,6 +345,49 @@ int main(int argc, char ** argv) {
     }
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+    if (argc > 1 && (!std::strcmp(argv[1], "--cuda-wide-spans") || !std::strcmp(argv[1], "--cuda")))
+        t.test("wide_mma_dispatch_matches_stock_for_resident_and_wrapped_spans", [](testing & t) {
+            ggml_backend_load_all();
+            auto * dev = ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+            auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+            const auto * ops = get ? get() : nullptr;
+            if (!t.assert_true(ops && ops->spans_workspace && ops->spans)) return;
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8192,false,2,4,80);
+            if (!t.assert_true(f.attach())) return;
+            auto pin = f.binding->acquire();
+            for (size_t active : {size_t(513),size_t(8191)}) for (uint32_t queries : {5u,6u,7u,8u})
+                    for (uint32_t ratio : {2u,6u,8u}) {
+                block_inputs input(f, active, queries, false, ratio*4);
+                const auto expected = stock_attention(f, input, 0);
+                for (bool wrapped : {false,true}) {
+                    auto storage = span_storage::create(f,0,active,queries,
+                        wrapped ? std::vector<size_t>{0,256,512,active} : std::vector<size_t>{0,active},wrapped);
+                    if (!t.assert_true(storage && storage->plan)) return;
+                    ggml_context_ptr context(ggml_init({65536,nullptr,true}));
+                    auto * ks = ggml_new_tensor_2d(context.get(),GGML_TYPE_Q8_0,256*4,input.padded);
+                    auto * vs = ggml_new_tensor_2d(context.get(),GGML_TYPE_Q4_0,256*4,input.padded);
+                    auto * k = ggml_view_3d(context.get(),ks,256,input.padded,4,
+                        ggml_row_size(ks->type,256*4),ggml_row_size(ks->type,256),0);
+                    auto * v = ggml_view_3d(context.get(),vs,256,input.padded,4,
+                        ggml_row_size(vs->type,256*4),ggml_row_size(vs->type,256),0);
+                    auto * op = ggml_flash_attn_ext(context.get(),input.q,k,v,input.mask,1.0f/16,0,0);
+                    op->buffer = input.output->buffer;
+                    op->data = input.output->data;
+                    size_t bytes = 0;
+                    if (!t.assert_true(ops->spans_workspace(backend.get(),op,storage->plan,bytes))) return;
+                    block_workspace exact(f,bytes,601), short_grant(f,bytes-1,602);
+                    const auto sentinel = input.read();
+                    t.assert_true(!ops->spans(backend.get(),op,storage->plan,ggml_backend_memory_lease_buffer(short_grant.lease.get())));
+                    t.assert_true(same_float_bits(sentinel,input.read()));
+                    if (!t.assert_true(ops->spans(backend.get(),op,storage->plan,ggml_backend_memory_lease_buffer(exact.lease.get())))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+            }
+        });
     if (argc > 1 && (!std::strcmp(argv[1], "--cuda-wide-plan") || !std::strcmp(argv[1], "--cuda")))
         t.test("wide_query_plans_distinguish_missing_kernels_from_invalid_geometry", [](testing & t) {
             using status = ggml_cuda_kv_stream_plan_status;
@@ -378,20 +421,24 @@ int main(int argc, char ** argv) {
                 t.assert_true(native.family == family::mma);
                 t.assert_equal(int64_t(width), native.metadata.queries);
                 auto unchanged = native;
-                const auto expected = width <= 8 ? status::missing_streamed_implementation : status::unsupported_geometry;
+                const auto expected = width > 8 ? status::unsupported_geometry :
+                    pair.first == GGML_TYPE_Q8_0 ? status::success : status::missing_streamed_implementation;
                 t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == expected);
-                t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
-                t.assert_true(query(backend.get(), op, &view, style::resumable, unchanged) == expected);
+                if (expected != status::success) t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
+                const auto saved = unchanged;
+                t.assert_true(query(backend.get(), op, &view, style::resumable, unchanged) ==
+                    (width > 8 ? status::unsupported_geometry : status::missing_streamed_implementation));
                 size_t bytes = 77;
-                t.assert_true(!get()->decode_workspace(backend.get(), pair.first, pair.second, 24, 4, width, 768, bytes));
-                t.assert_equal(size_t(77), bytes);
+                const bool available = pair.first == GGML_TYPE_Q8_0 && width <= 8;
+                t.assert_true(get()->decode_workspace(backend.get(), pair.first, pair.second, 24, 4, width, 768, bytes) == available);
+                if (!available) t.assert_equal(size_t(77), bytes);
                 ++q->nb[1];
                 t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == status::unsupported_geometry);
                 --q->nb[1];
                 auto stale = view;
                 ++stale.query_tokens;
                 t.assert_true(query(backend.get(), op, &stale, style::spanned, unchanged) == status::invalid_metadata);
-                t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
+                t.assert_equal(saved.output_allocation_bytes, unchanged.output_allocation_bytes);
             }
         });
 #ifdef KV_STREAM_PASCAL_CUDA_TEST

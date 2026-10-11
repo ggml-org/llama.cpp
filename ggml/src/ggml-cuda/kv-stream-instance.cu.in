@@ -5,7 +5,7 @@
 template<ggml_type V>
 static ggml_kv_mma_span_kernel_t mma_kernel(uint32_t c1, uint32_t c2) {
 #define MMA(C1, C2) if (c1 == C1 && c2 == C2) return flash_attn_ext_f16_spans<256,256,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V>;
-    MMA(1,8) MMA(2,8) MMA(4,8) MMA(4,2)
+    MMA(1,8) MMA(2,8) MMA(4,8) MMA(4,2) MMA(8,8) MMA(8,2)
 #undef MMA
     return nullptr;
 }

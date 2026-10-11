@@ -16,9 +16,9 @@ static fattn_kernel_t encoded_kernel(ggml_type key, ggml_type value, uint32_t c1
 
 static fattn_kernel_t native_kernel(uint32_t c1, uint32_t c2) {
 #define TILE(C1, C2) if (c1 == C1 && c2 == C2) return flash_attn_tile<256,256,C1,C2,false>;
-    TILE(2,1) TILE(4,1)
-    TILE(1,2) TILE(2,2) TILE(4,2)
-    TILE(1,4) TILE(2,4) TILE(4,4)
+    TILE(2,1) TILE(4,1) TILE(8,1)
+    TILE(1,2) TILE(2,2) TILE(4,2) TILE(8,2)
+    TILE(1,4) TILE(2,4) TILE(4,4) TILE(8,4)
     TILE(1,8) TILE(2,8) TILE(4,8)
 #undef TILE
     return nullptr;
@@ -27,7 +27,7 @@ static fattn_kernel_t native_kernel(uint32_t c1, uint32_t c2) {
 // Follow stock's serial, masked head-256 column selection, including its padded GQA requirement.
 static bool geometry(ggml_backend_cuda_context & ctx, uint32_t heads, uint32_t kv_heads,
         uint32_t queries, size_t tokens, ggml_cuda_fattn_tile_resume_geometry & g) {
-    if (!heads || heads > 65535 || !kv_heads || heads%kv_heads || !queries || queries > 4 ||
+    if (!heads || heads > 65535 || !kv_heads || heads%kv_heads || !queries || queries > 8 ||
             tokens < queries || tokens > INT32_MAX) return false;
     const int cc=ggml_cuda_info().devices[ctx.device].cc;
     const int compiled=ggml_cuda_highest_compiled_arch(cc);
@@ -38,7 +38,7 @@ static bool geometry(ggml_backend_cuda_context & ctx, uint32_t heads, uint32_t k
         if (ratio%candidate == 0) {c2=candidate; break;}
     uint32_t columns=2;
     while (columns < queries*c2) columns*=2;
-    if (columns > 32) return false;
+    columns = std::min(columns,32u);
     const uint32_t c1=columns/c2;
     g={256,heads,kv_heads,queries,c1,c2,
         uint32_t(ggml_cuda_fattn_tile_get_nthreads(256,256,columns,cc)),

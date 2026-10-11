@@ -297,7 +297,7 @@ Add failing tests first and retain the red result; implement the minimum coheren
 | --- | --- | --- |
 | D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b at `1cd9036ce`; D1c complete | Pinned metadata, controls and physical-fit ledger |
 | D2 Common contracts | D2a at `4db05567e`; D2b contracts complete | Neutral workload/cache roles and unchanged current paths |
-| D3 Target TG1-TG8 | D3a committed at `0f9c78645`; D3b/D3c planned | Stock-order span/resume and bounded workspace |
+| D3 Target TG1-TG8 | D3a at `0f9c78645`; D3b wide-span/SIMT checkpoint qualified, MMA resume pending; D3c planned | Stock-order span/resume and bounded workspace |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
 | D5 Draft KV and phase arena | Planned | Reusable bounded resident KV consumer, synthetic Qwen/Gemma coverage and one participating parent |
 | D6 Live DFlash2 integration | Planned | D=1/3/7 numerical and server controls |
@@ -444,10 +444,22 @@ Implemented on 2026-10-11 and committed at `0f9c78645`:
 - Workspace probes use the requested query width and checked tensor strides. A wide request cannot publish a narrower TG4 grant when its own compiled plan is missing.
 - Valid TG5-TG8 requests distinguish missing streamed implementations from malformed geometry. TG9 remains outside this streamed profile; native metadata queries retain stock behavior.
 
-No wide typed MMA/tile instances or new attention arithmetic are added in D3a. The current RTX 5070 Ti provider therefore reports missing streamed implementations for TG5-TG8, not successful execution. D3b adds and numerically qualifies those kernels and progressive execution; D3c connects them to the model/session. Existing model/session TG4 limits and the server's DFlash2 rejection remain intact.
+No wide typed MMA/tile instances or new attention arithmetic were added in D3a. At that checkpoint the RTX 5070 Ti provider reported missing streamed implementations for TG5-TG8, not successful execution. D3b adds and numerically qualifies those kernels and progressive execution; D3c connects them to the model/session. Existing model/session TG4 limits and the server's DFlash2 rejection remain intact.
 
 TDD evidence: the initial host run failed 50 assertions; the initial CUDA metadata run failed eight. The query-tile-count tests also failed to build before their checked helper was added. The host planning suite now passes 17 tests / 910 assertions, including odd widths, invalid inputs, resource/overflow failure preservation, Turing geometry and query-tile counts. ASan/UBSan passes the same suite. Nine focused host CTests pass. The CUDA planning fixture passes 129 assertions for configured and absent pairs, malformed strides, stale query metadata and unchanged failed output. Its first attempted green fixture used legal native head-major KV but invalid streaming-owner strides; correcting it to production token-major storage preserved the validator rather than weakening it.
 
 All 70 ordinary attention cases remain bit-identical to the immutable stock CUDA snapshot. Existing span, resume and dispatch suites pass 1463, 328 and 10 assertions respectively, without skips or widened tolerances. This is TG1-TG4 regression evidence, not TG5-TG8 numerical qualification. No speed or older-hardware execution claim is added.
 
 Logs: `/tmp/dflash2-d3a-red-host-tests.log`, `/tmp/dflash2-d3a-red-cuda-tests.log`, `/tmp/dflash2-d3a-green-host-tests.log`, `/tmp/dflash2-d3a-sanitize-tests.log`, `/tmp/dflash2-d3a-host-regressions.log`, `/tmp/dflash2-d3a-final-cuda-tests.log`, `/tmp/dflash2-d3a-native-snapshot.log` and the `vector-spans`/`resume`/`dispatch` regression logs with the same prefix. Production is restored with its existing configuration and a healthy `/health` response.
+
+### D3b checkpoint: wide spans and resumed SIMT
+
+Qualified on 2026-10-11, without completing D3b. Selected-pair MMA registries now instantiate the native eight-column variants and the launcher dispatches those exact variants rather than a four-column case. The existing stock arithmetic, shared-memory pipeline, occupancy-based Stream-K selection and final fixup are retained. Wide queries are not split into smaller forwards and no context-sized gather is introduced.
+
+The SIMT tile path accepts queries through eight, adds the required eight-row variants and retains stock's head-256 32-column ceiling. With grouped heads, it can therefore use more than one query tile instead of rejecting the request. Resume-state sizing accounts for those query tiles; for example, the synthetic two-tile host case needs twice the per-tile accumulator storage. Existing narrow budgets stay unchanged.
+
+Tests first failed on missing wide dispatch/planning and on rejected wide resume metadata. The actual backend dispatcher now matches stock output bits for TG5/TG6/TG7/TG8, GQA ratios 2/6/8, resident or wrapped three-span input, and padded history tails. A short workspace is rejected without touching output. Missing selected pairs, TG9 and malformed/stale metadata still fail. The model/session admission ceiling remains four until D3c.
+
+Full CUDA qualification passes: 1746 dispatcher assertions, 672 encoded-conversion cases, 80640 staging cases, 3360 encoded-MMA cases, 11520 tile-load probes, 1152 FP16 span-MMA cases, 2432 bit-exact resumed-SIMT cases and 130 resumed-vector cases. The 70 ordinary cases still match the immutable pre-port stock snapshot. Wide-dispatch memory and synchronization sanitizers report zero errors; the 104-assertion tile layout/cursor suite passes ASan/UBSan. Logs use `/tmp/dflash2-d3b-*`. Production is restored and healthy.
+
+Remaining D3b work is substantial: the re-ported stock MMA family does not have progressive resume, including existing TG3/TG4. Its `resumable` query deliberately still reports `missing_streamed_implementation`; the tests retain that rejection rather than claiming wide spans qualify progressive operation. Implement raw native accumulator checkpoints across complete K-tile boundaries, preserve Stream-K destination/split order, suppress premature finalization and qualify delayed copies, histories larger than the ring and one final reduction. Measure the added scratch before integrating it into the common budget. Kernel routing-overhead measurement and older-device execution remain pending; no throughput or older-hardware claim is made from the numerical suite alone.

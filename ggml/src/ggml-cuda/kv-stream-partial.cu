@@ -578,7 +578,6 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
             return plan_status::missing_streamed_implementation;
         requirements.scratch_bytes = next.resume.bytes;
     } else if (family == kernel_family::tile) {
-        if (metadata.queries > 4) return plan_status::missing_streamed_implementation;
         if (!ggml_cuda_kv_stream_tile_plan(ctx,ggml_type(metadata.type_k),ggml_type(metadata.type_v),
                 uint32_t(metadata.query_heads),uint32_t(metadata.kv_heads),uint32_t(metadata.queries),
                 size_t(metadata.padded_tokens),next.resume)) return plan_status::unsupported_launch_resources;

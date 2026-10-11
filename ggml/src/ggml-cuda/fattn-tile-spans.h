@@ -14,7 +14,7 @@ struct ggml_cuda_fattn_tile_span_workspace {
 // Only the span table and stock split outputs use global scratch; conversion stays inside the shared tile.
 static inline bool ggml_cuda_fattn_tile_span_workspace_make(
         size_t heads, size_t queries, size_t width, size_t splits, ggml_cuda_fattn_tile_span_workspace & output) {
-    if (!heads || !queries || queries > 4 || !width || !splits) return false;
+    if (!heads || !queries || queries > 8 || !width || !splits) return false;
     size_t rows = heads;
     for (size_t extent : {queries,splits}) {
         if (extent > SIZE_MAX/rows) return false;

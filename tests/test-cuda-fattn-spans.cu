@@ -240,13 +240,14 @@ static void check_attention(int queries, int active, int count, bool interleaved
 
 static size_t check_attention_matrix(bool quick) {
     size_t cases = 0;
-    for (int queries : {1,2,3,4}) for (int active : {31,257,1023,8192}) for (int count : {1,2,3}) {
+    for (int queries : {1,2,3,4,5,6,7,8}) for (int active : {31,257,1023,8192}) for (int count : {1,2,3}) {
         for (bool interleaved : {false,true}) for (int split : {0,1,2}) for (float gain : {1.0f,16.0f}) {
             if (quick && (active != 257 || count != 3 || interleaved || gain != 1.0f)) continue;
             try {
                 if (queries == 1) check_attention<1>(queries,active,count,interleaved,split,gain);
                 else if (queries == 2) check_attention<2>(queries,active,count,interleaved,split,gain);
-                else check_attention<4>(queries,active,count,interleaved,split,gain);
+                else if (queries <= 4) check_attention<4>(queries,active,count,interleaved,split,gain);
+                else check_attention<8>(queries,active,count,interleaved,split,gain);
             } catch (...) {
                 std::fprintf(stderr,"MMA case: TG%d active=%d spans=%d interleaved=%d split=%d gain=%g\n",
                     queries,active,count,int(interleaved),split,double(gain));
@@ -261,14 +262,15 @@ static size_t check_attention_matrix(bool quick) {
 template<ggml_type key, ggml_type value>
 static size_t check_encoded_attention_pair(ggml_backend_t backend, bool quick, bool deep) {
     size_t cases = 0;
-    for (int queries : {2,3,4}) for (int active : {31,257,1023,8192}) for (int count : {1,2,3}) {
+    for (int queries : {2,3,4,5,6,7,8}) for (int active : {31,257,1023,8192}) for (int count : {1,2,3}) {
         for (bool interleaved : {false,true}) for (int split : {0,1,2}) for (uint32_t flags : {0u,1u,2u,3u}) {
             if (!deep && (active != 257 || count != 3 || split || interleaved)) continue;
             if (quick && (active != 257 || count != 3 || interleaved || split)) continue;
             quant_span_fixture fixture(backend,key,value,active,(active+255)/256*256,count,interleaved,flags);
             try {
                 if (queries == 2) check_attention<2,key,value>(queries,active,count,interleaved,split,1.0f,&fixture);
-                else check_attention<4,key,value>(queries,active,count,interleaved,split,1.0f,&fixture);
+                else if (queries <= 4) check_attention<4,key,value>(queries,active,count,interleaved,split,1.0f,&fixture);
+                else check_attention<8,key,value>(queries,active,count,interleaved,split,1.0f,&fixture);
             } catch (...) {
                 std::fprintf(stderr,"encoded MMA case: K=%s V=%s TG%d active=%d spans=%d interleaved=%d split=%d flags=%u\n",
                     ggml_type_name(key),ggml_type_name(value),queries,active,count,int(interleaved),split,flags);

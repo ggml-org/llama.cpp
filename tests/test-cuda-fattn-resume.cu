@@ -271,6 +271,13 @@ int main(int argc, char ** argv) {
             return 0;
         }
         size_t tile_cases = 0;
+        for (int active : {257,1025,8193}) for (int queries : {5,6,7,8}) for (int splits : {1,3,17})
+                for (int wave : {1,4}) for (int spans : {1,2,3}) for (bool interleaved : {false,true}) {
+            if (quick && (active != 257 || splits != 3 || wave != 1 || spans != 3 || !interleaved)) continue;
+            check_tile<256,8,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0>(backend.get(),active,queries,splits,wave,spans,interleaved,3);
+            check_tile<256,4,8,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,16>(backend.get(),active,queries,splits,wave,spans,interleaved,3);
+            tile_cases += 2;
+        }
         for (int active : {257,1025,8193}) for (int queries : {1,2,3,4}) for (int splits : {1,3,17})
                 for (int wave : {1,4}) for (int spans : {1,2,3}) for (bool interleaved : {false,true}) for (uint32_t flags : {0u,3u}) {
             if (quick && (active != 257 || splits != 3 || wave != 1 || spans != 3 || !interleaved)) continue;

@@ -806,6 +806,9 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
             ggml_row_size(k->type,k->ne[0]),ggml_row_size(v->type,v->ne[0]))) return false;
     if (plan.ncols1 == 1) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<1,8>(ctx,dst,spans,count,workspace,plan);
     if (plan.ncols1 == 2) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<2,8>(ctx,dst,spans,count,workspace,plan);
+    if (plan.ncols1 == 8) return plan.ncols2 == 8 ?
+        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8,8>(ctx,dst,spans,count,workspace,plan) :
+        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8,2>(ctx,dst,spans,count,workspace,plan);
     return plan.ncols2 == 8 ?
         ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,8>(ctx,dst,spans,count,workspace,plan) :
         ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,2>(ctx,dst,spans,count,workspace,plan);

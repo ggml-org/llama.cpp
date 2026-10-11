@@ -27,7 +27,7 @@ int main() {
             if (kind == 2) bad.acc_bytes = 2;
             if (kind == 3) bad.query_heads = 3;
             if (kind == 4) bad.nbatch_fa = 31;
-            if (kind == 5) bad.queries = 5;
+            if (kind == 5) bad.queries = 9;
             if (kind == 6) bad.splits = UINT32_MAX;
             t.assert_true(!ggml_cuda_fattn_tile_resume_layout_make(bad,529,plan));
             t.assert_true(std::memcmp(&saved,&plan,sizeof(plan)) == 0);
@@ -36,6 +36,24 @@ int main() {
         t.assert_true(!ggml_cuda_fattn_tile_resume_layout_make(geometry,size_t(INT32_MAX)+1,plan));
         auto grouped = geometry; grouped.ncols2 = 2;
         t.assert_true(!ggml_cuda_fattn_tile_resume_layout_make(grouped,529,plan));
+    });
+    t.test("wide_tile_resume_keeps_stock_query_tiles_and_checked_state",[&](testing & t) {
+        for (uint32_t queries : {5u,6u,7u,8u}) {
+            auto wide = geometry;
+            wide.kv_heads = 2;
+            wide.queries = queries;
+            wide.ncols1 = 8;
+            wide.ncols2 = 2;
+            ggml_cuda_fattn_tile_resume_layout plan;
+            t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(wide,768,plan));
+            t.assert_equal(size_t(122880),plan.state_bytes);
+            wide.query_heads = 32;
+            wide.kv_heads = 4;
+            wide.ncols1 = 4;
+            wide.ncols2 = 8;
+            t.assert_true(ggml_cuda_fattn_tile_resume_layout_make(wide,768,plan));
+            t.assert_equal(size_t(983040),plan.state_bytes);
+        }
     });
     t.test("wave_admission_is_transactional_and_preserves_logical_coordinates",[&](testing & t) {
         ggml_cuda_fattn_tile_resume_layout plan;
