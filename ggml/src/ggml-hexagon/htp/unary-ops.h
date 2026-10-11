@@ -11,6 +11,7 @@ struct htp_unary_kernel_params {
     uint32_t  vtcm_row_per_thread;
     uint32_t  block;
     uint32_t  broadcast_weight;
+    uint32_t  flatten;
 
     uint32_t  vtcm_src0_size_per_thread;
     uint32_t  vtcm_src1_size_per_thread;
@@ -62,6 +63,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_LOG:
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
+        case HTP_OP_UNARY_SGN:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
             return true;

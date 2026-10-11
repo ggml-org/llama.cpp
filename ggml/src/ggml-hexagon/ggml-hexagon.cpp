@@ -6018,15 +6018,20 @@ static void ggml_hexagon_precompute_unary_params(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const uint32_t n_threads  = (std::min)((uint32_t)sess->n_threads, src0_nrows);
+    // 32 F32 values fill one HVX vector. Flatten shorter rows to reduce per-row DMA; full vectors keep row parallelism.
+    const bool flatten = op == HTP_OP_UNARY_SGN && src0->ne[0] < 32 && ggml_is_contiguous(src0) && ggml_nelements(src0) <= UINT32_MAX;
+    const uint32_t src0_ne0 = flatten ? (uint32_t) ggml_nelements(src0) : src0->ne[0];
+    const uint32_t dst_ne0  = flatten ? (uint32_t) ggml_nelements(dst)  : dst->ne[0];
+    const uint32_t src0_nrows = flatten ? 1 : (uint32_t) ggml_nrows(src0);
+    const uint32_t n_threads  = (std::min)((uint32_t) sess->n_threads, src0_nrows);
 
     kparams->n_threads = n_threads;
+    kparams->flatten   = flatten;
 
     const size_t elem_size = ggml_type_size(src0->type);
 
-    const size_t src0_data_row_size = src0->ne[0] * elem_size;
-    const size_t dst_data_row_size  = dst->ne[0]  * ggml_type_size(dst->type);
+    const size_t src0_data_row_size = src0_ne0 * elem_size;
+    const size_t dst_data_row_size  = dst_ne0  * ggml_type_size(dst->type);
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
@@ -6052,7 +6057,7 @@ static void ggml_hexagon_precompute_unary_params(
     uint32_t col_tile = 0;
     uint32_t vtcm_row_per_thread = 0;
 
-    htp_unary_vtcm_layout_build(&L, op, src0->ne[0], dst->ne[0],
+    htp_unary_vtcm_layout_build(&L, op, src0_ne0, dst_ne0,
                                 op == HTP_OP_RMS_NORM_MUL ? src1->ne[0] : 0,
                                 broadcast_weight, n_threads, sess->vtcm_size, elem_size,
                                 &col_tile, &vtcm_row_per_thread);
@@ -6071,7 +6076,7 @@ static void ggml_hexagon_precompute_unary_params(
 
     kparams->block = col_tile ? 0 : ((L.src0_bytes / 2) / src0_row_size_aligned);
 
-    const uint32_t tiles_per_row = col_tile > 0 ? (src0->ne[0] + col_tile - 1) / col_tile : 1;
+    const uint32_t tiles_per_row = col_tile > 0 ? (src0_ne0 + col_tile - 1) / col_tile : 1;
     kparams->div_ne01  = init_fastdiv_values(src0->ne[1]);
     kparams->div_ne02  = init_fastdiv_values(src0->ne[2]);
     kparams->div_ne012 = init_fastdiv_values(src0->ne[1] * src0->ne[2]);
@@ -7116,6 +7121,9 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     if (!ggml_is_contiguous_rows(src0)) {
         return false;
     }
+    if (ggml_nrows(src0) > UINT32_MAX) {
+        return false;
+    }
 
     // F16 device kernels only cover this explicit whitelist (must stay in sync with
     // the is_f16 whitelist in execute_op_unary(), unary-ops.c).
@@ -7891,6 +7899,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
                 case GGML_UNARY_OP_ABS:        return HTP_OP_UNARY_ABS;
                 case GGML_UNARY_OP_RELU:       return HTP_OP_UNARY_RELU;
                 case GGML_UNARY_OP_STEP:       return HTP_OP_UNARY_STEP;
+                case GGML_UNARY_OP_SGN:        return HTP_OP_UNARY_SGN;
             default:
                 break;
             }
@@ -8949,6 +8958,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
                 case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_SGN:
                     supp = ggml_hexagon_supported_unary(sess, op);
                     break;
                 default:

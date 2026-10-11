@@ -781,6 +781,32 @@ static void step_f32(const void * restrict src,
     }
 }
 
+static void sgn_f32(const void * restrict src,
+                    void * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_sgn_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+// Direct scalar access wins through 256 elements; HVX wins from 320 elements.
+#define HTP_SGN_SCALAR_MAX_ELEMS 256
+
+static void sgn_f32_scalar_direct(const uint32_t * src, uint32_t * dst, uint32_t n) {
+    _Pragma("clang loop vectorize(disable)")
+    for (uint32_t i = 0; i < n; i++) {
+        const uint32_t bits = src[i];
+        const uint32_t mag  = bits & 0x7fffffff;
+        dst[i] = mag == 0 || mag > 0x7f800000 ? 0 : (bits & 0x80000000) | 0x3f800000;
+    }
+}
+
 static void log_f32(const void * restrict src,
                     void * restrict dst,
                     const uint32_t num_rows,
@@ -897,6 +923,11 @@ static void tile_relu_f32(void * restrict dst, const void * restrict src, uint32
 static void tile_step_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
     (void) uctx;
     hvx_step_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
+}
+
+static void tile_sgn_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    (void) uctx;
+    hvx_sgn_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
 }
 
 static void tri_apply_tile_f32(const void * restrict src, void * restrict dst,
@@ -1621,6 +1652,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_LOG:       op_type = is_f16 ? "log-f16"      : "log-f32";          break;
         case HTP_OP_UNARY_RELU:      op_type = "relu-f32";                                   break;
         case HTP_OP_UNARY_STEP:      op_type = is_f16 ? "step-f16"     : "step-f32";         break;
+        case HTP_OP_UNARY_SGN:       op_type = "sgn-f32";                                    break;
         case HTP_OP_L2_NORM:         op_type = is_f16 ? "l2norm-f16"   : "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";                                    break;
         default:
@@ -1651,14 +1683,29 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
     const struct htp_unary_kernel_params * kparams = (const struct htp_unary_kernel_params *) octx->kernel_params;
 
+    // A single-device session leaves mdev.count at 0. Direct pointers cannot address extended buffers.
+    if (octx->op == HTP_OP_UNARY_SGN && octx->ctx->mdev.count <= 1 && src0->size == dst->size && src0->size / sizeof(float) <= HTP_SGN_SCALAR_MAX_ELEMS &&
+        !htp_tensor_is_extended(src0) && !htp_tensor_is_extended(dst) &&
+        htp_tensor_is_contiguous(src0, sizeof(float)) && htp_tensor_is_contiguous(dst, sizeof(float))) {
+        sgn_f32_scalar_direct((const uint32_t *) (uintptr_t) src0->data, (uint32_t *) (uintptr_t) dst->data, src0->size / sizeof(float));
+        return HTP_STATUS_OK;
+    }
+
     if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const bool flatten = kparams->flatten;
+    const uint32_t src0_ne0 = flatten ? src0->size / sizeof(float) : src0->ne[0];
+    const uint32_t dst_ne0  = flatten ? dst->size  / sizeof(float) : dst->ne[0];
+    const uint64_t src0_nrows64 = (uint64_t) src0->ne[1] * src0->ne[2] * src0->ne[3];
+    if (!flatten && src0_nrows64 > UINT32_MAX) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+    const uint32_t src0_nrows = flatten ? 1 : (uint32_t) src0_nrows64;
     const size_t elem_size = is_f16 ? sizeof(_Float16) : sizeof(float);
-    const size_t src0_data_row_size = src0->ne[0] * elem_size;
-    const size_t dst_data_row_size  = dst->ne[0]  * elem_size;
+    const size_t src0_data_row_size = src0_ne0 * elem_size;
+    const size_t dst_data_row_size  = dst_ne0  * elem_size;
 
     uint32_t row_start = 0;
     uint32_t nrows     = src0_nrows;
@@ -1734,7 +1781,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         .dst_vtcm_half_size    = kparams->vtcm_dst_size_per_thread / 2,
 
         .block                 = kparams->block,
-        .nc                    = src0->ne[0],
+        .nc                    = src0_ne0,
         .col_tile              = col_tile,
         .broadcast_weight      = broadcast_weight,
 
@@ -1773,6 +1820,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_LOG:       compute_func = (void *) tile_log_f32;            break;
             case HTP_OP_UNARY_RELU:      compute_func = (void *) tile_relu_f32;           break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) tile_step_f32;           break;
+            case HTP_OP_UNARY_SGN:       compute_func = (void *) tile_sgn_f32;            break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tiled_tri_f32;
                 compute_func = (void *) tri_apply_tile_f32;
@@ -1821,6 +1869,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f32;                 break;
             case HTP_OP_UNARY_RELU:      compute_func = (void *) relu_f32;                break;
             case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f32;                break;
+            case HTP_OP_UNARY_SGN:       compute_func = (void *) sgn_f32;                 break;
             case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f32;             break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tri_f32;
