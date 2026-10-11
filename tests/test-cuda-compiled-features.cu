@@ -16,7 +16,9 @@ int ggml_cuda_get_device() { std::abort(); }
 static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,2,false) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep stock generation-specific staging");
 static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,2,8,false) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG2 stock staging");
 static_assert(ggml_cuda_fattn_mma_get_nstages(256,256,4,8,false) == (__CUDA_ARCH__ == 750 ? 0 : 2),"keep TG3/TG4 stock staging");
-static_assert(ggml_cuda_fattn_mma_get_nthreads(256,256,8) == (__CUDA_ARCH__ == 750 ? 128 : 64),"keep stock thread geometry");
+static_assert(ggml_cuda_fattn_mma_get_nthreads(256,256,8) == 128,"keep upstream head-256 eight-column thread geometry");
+static_assert(ggml_cuda_fattn_mma_get_nthreads(256,256,16) == (__CUDA_ARCH__ == 750 ? 128 : 256),"keep upstream head-256 sixteen-column thread geometry");
+static_assert(ggml_cuda_fattn_mma_get_nthreads(256,256,32) == 128,"keep upstream head-256 thirty-two-column thread geometry");
 #endif
 #if __CUDA_ARCH__ < 750 && defined(TURING_MMA_AVAILABLE)
 #error "Turing MMA is not available on this target"
@@ -103,7 +105,7 @@ int main() {
                 const int c2=columns == 8 ? 2 : 8, c1=columns/c2;
                 const int stages=ggml_cuda_fattn_mma_get_nstages(256,256,c1,c2,device);
                 if (stages != (expected >= 800 ? 2 : 0) ||
-                        config.nthreads != (expected >= 800 && columns <= 16 ? 64 : 128)) return 1;
+                        config.nthreads != (expected >= 800 && columns == 16 ? 256 : 128)) return 1;
                 printf("  head-256 columns=%d threads=%d stages=%d\n",columns,config.nthreads,stages);
             }
         }
