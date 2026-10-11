@@ -296,7 +296,7 @@ Add failing tests first and retain the red result; implement the minimum coheren
 | Milestone | Status | Completion gate |
 | --- | --- | --- |
 | D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b at `1cd9036ce`; D1c complete | Pinned metadata, controls and physical-fit ledger |
-| D2 Common contracts | Planned | Neutral workload/cache roles and unchanged current paths |
+| D2 Common contracts | D2a complete; D2b next | Neutral workload/cache roles and unchanged current paths |
 | D3 Target TG1-TG8 | D3a committed at `0f9c78645`; D3b/D3c planned | Stock-order span/resume and bounded workspace |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
 | D5 Draft KV and phase arena | Planned | Reusable bounded resident KV consumer, synthetic Qwen/Gemma coverage and one participating parent |
@@ -410,6 +410,16 @@ After keeping weights and one current recurrent state outside the future shared 
 Reproduce matching controls with the D1b command, adding `--compare-to /path/to/previous/results --decode-tokens 256`. Both runs must use 256 decode tokens; draft quant settings must match. Evidence is under `benchmarks/results/dflash2-d1c-256-control`, `dflash2-d1c-256-match` and `dflash2-d1c-matched-q8-q4`. Initial negative-test logs are `/tmp/dflash2-d1c-red-tests.log`, `-red-lattice-tests.log` and `-red-fit-tests.log`; all 30 artifact/control tests and the pinned ty check pass. Negative cases cover altered blocks/positions, mask columns, artifacts, numerical scores, candidate IDs, padding and incompatible workload settings. Production is restored and healthy.
 
 Next: D2a's backend-neutral workload/cache contracts. D3a remains the existing independent planning checkpoint; do not skip D2 admission or treat TG5-TG8 as executable merely because their geometry can be described.
+
+### D2a common workload and cache-role contracts
+
+Implemented on 2026-10-11. Existing phase infrastructure now distinguishes feature injection and block prediction without a DFlash architecture check or an auxiliary-MTP-layer count. `llama_memory_workload_requirement` carries physical input/query/output rows, a microbatch limit, independent rollback depth, causal intent, cache generation and reader/writer intent. A one-row prefill is not inferred to be decode; describing TG16 does not imply backend/kernel availability. D2b owns measured capability and budget admission.
+
+`llama_memory_cache_requirement` describes full-history storage, bounded resident windows and read-only source aliases. The encoded K+V bytes per row are supplied by the geometry adapter; common code does not assume a quant pair or head dimension. Bounded capacity is the padded minimum of configured history and window plus producer headroom. Qwen and Gemma window groups have independent identities, generations and bounds. Read-only aliases validate the owning source generation, layer range and layout, contribute zero new storage and cannot publish writes. This is a metadata contract, not a new source-lease owner: D5 must retain actual source storage through the existing lease infrastructure.
+
+The existing phase cache-identity type is reused, and current MTP/target enum values and paths remain unchanged. No server admission, runtime allocation, CUDA kernel, target ring policy or current MTP budgeting changes in this stage. Overflow/padding/type/range failures preserve the output descriptor.
+
+TDD: the initial build failed because the new contracts did not exist. The phase suite now passes 224 assertions across ten tests, including independent synthetic Qwen/Gemma groups, short/long window bounds, source aliases, stale generations, layer/geometry mismatches, zero sizes, padding and multiplication overflow, invalid enums, writer rejection, distinct injection/block/verification widths, metadata TG16 and microbatch limits. ASan/UBSan passes this suite and the 88-assertion owner suite. Five focused host CTests and four CUDA-build CTests pass; a full CUDA server rebuild and the 43-assertion real-model native regression also pass. Logs use `/tmp/dflash2-d2a-*`. Production is restored and healthy.
 
 ### D3a checked launch planning
 

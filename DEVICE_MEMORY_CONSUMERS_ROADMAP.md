@@ -2,7 +2,7 @@
 
 Gemma 4 31B target and shared-KV assistant extension: [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). Its G1-G6 stages are independent of the milestone identifiers below; the extension is planned, not implemented or qualified.
 
-Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its D1-D7 stages preserve bounded resident draft SWA and extend target streamed verification through TG8. D1 artifact/native controls and fit-ledger work are complete; D3a planning is committed. D2 common workload/cache contracts are next. Live DFlash2 streaming remains unimplemented and unqualified.
+Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its D1-D7 stages preserve bounded resident draft SWA and extend target streamed verification through TG8. D1 artifact/native controls and fit-ledger work are complete; D2a common workload/cache metadata is implemented and D2b measured admission is next. D3a planning is committed. Live DFlash2 streaming remains unimplemented and unqualified.
 
 Saved: 2026-09-10
 

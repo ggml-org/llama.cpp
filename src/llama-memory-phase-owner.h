@@ -7,11 +7,6 @@
 #include <array>
 #include <vector>
 
-struct llama_memory_phase_cache_identity {
-    uint64_t id = 0;
-    uint64_t generation = 0;
-};
-
 struct llama_memory_phase_target {
     llama_memory_work_phase phase = llama_memory_work_phase::none;
     llama_memory_transition_target target;
