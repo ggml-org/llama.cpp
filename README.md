@@ -1,25 +1,3 @@
-# Adaptive KV Streaming V2: upstream attention integration
-
-This branch replays V2's memory ownership, bounded KV streaming, phase arena, MTP and vision consumers onto upstream revision `10a60cf30`. The attention port preserves stock logical traversal, quant conversion and reduction order while reading resident/ring/wrap spans. It does not add streamed Gemma or DFlash2 support.
-
-The qualified RTX 5070 Ti profile uses Unsloth Qwen3.8-27B `UD-IQ4_XS`, Q8_0 K / Q4_0 V, one serial slot, 256/256 batch sizes and UVM off. With a fixed 2240 MiB arena, MTP=3 measured 69.96, 54.06 and 28.51 tokens/s at 96, 128 and 192 Ki context. These are representative single-run results, not general speed guarantees. See the [port roadmap](UPSTREAM_ATTENTION_PORT_ROADMAP.md) for numerical checks, matching budgets, reference versions and qualification limits.
-
-```sh
-cmake -S . -B build-v2 -DGGML_CUDA=ON \
-  -DGGML_CUDA_FA_QUANTS="f16-f16;q8_0-q4_0" -DCMAKE_BUILD_TYPE=Release
-cmake --build build-v2 --target llama-server --parallel
-
-./build-v2/bin/llama-server --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
-  --ctx-size 262144 --parallel 1 --batch-size 256 --ubatch-size 256 \
-  --n-gpu-layers all --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
-  --kv-stream-arena-mib 2240 --spec-type draft-mtp --spec-draft-n-max 3 \
-  --fit off --no-mmproj
-```
-
-Choose an arena that fits your GPU; it includes phase workspaces and the KV working set, not model weights. Attached MTP inherits the target KV types. Optional `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` makes ordinary weight allocations managed while the streaming arena stays device-local. OpenCL/SYCL/Vulkan memory-view tests do not qualify streaming kernels on those backends.
-
-The following V2 design overview and graphs are preserved from the published pre-port implementation. Their timings are historical baselines, not measurements of this upstream integration.
-
 # Adaptive KV Streaming for llama.cpp V2
 
 V2 runs full-context Qwen3.8-27B on a bounded GPU KV working set. The complete KV history stays in pinned system RAM; resident GPU pages and one shared ring supply attention without dropping old tokens. V1 (`feature/kv-stream-phase-arena`) already had streaming, cross-layer prefetch, and a CUDA phase arena. V2 rebuilds those ideas on explicit memory ownership, stays closer to stock attention arithmetic, and adds long-context MTP without a second full GPU KV allocation.
@@ -345,6 +323,18 @@ bool adopt_truncated_prefix(llama_kv_stream_complete_layer_lease_t previous,
 Memory views exist for CPU, CUDA/HIP, OpenCL, SYCL, and Vulkan, but the current pinned-host registration and complete streamed-attention adapter are CUDA-specific. A backend port must advertise only real K/V pair support, preserve its own stock attention order, and pass view/lease, cancellation, graph-lifetime, numerical, and long-context tests. The [CUDA copy](ggml/src/ggml-cuda/kv-stream-copy.cu) and [attention](ggml/src/ggml-cuda/fattn.cu) code are examples, not portable kernels. The broader [consumer roadmap](DEVICE_MEMORY_CONSUMERS_ROADMAP.md) explains how phase grants and these hooks fit together.
 
 Current limits: one serial target/MTP pair on one CUDA GPU; Qwen3.8-style 256-token page geometry; Flash Attention and KV offload enabled; no parallel slots, multi-GPU split or automatic VRAM-pressure eviction. The matching F16 image projector is qualified only through the shared-arena path above. The example's Q8_0/Q4_0 and 256/256 settings are qualified; general layout code handling more types is not a promise that every model or quant combination is ready.
+
+## Rebase changelog
+
+### 2026-10-11: upstream attention integration
+
+V2's memory ownership, adaptive KV streaming, phase arena, MTP and vision consumers have been replayed onto upstream revision `10a60cf30`, retaining their development history. The streamed attention kernels now follow the updated stock logical traversal, quant conversion and reduction order while reading resident/ring/wrap spans. This rebase does not add streamed Gemma or DFlash2 support.
+
+Qualification on the RTX 5070 Ti uses Unsloth Qwen3.8-27B `UD-IQ4_XS`, Q8_0 K / Q4_0 V, one serial slot, 256/256 batches and UVM off. Stock attention snapshots and the span/resume tests pass; real-model TG1-TG4 checkpoint replay retains zero final-logit and recurrent-state differences in the tested cases. A new strict MTP fixture also compares streamed and non-streamed pipelines for draft lengths 1-3 at approximately 16K and 32K prefixes, including logits, hidden states, KV rows and rejection/replay state, with zero byte differences. These are tested configurations, not a universal bit-identity claim.
+
+With a fixed 2240 MiB arena, the qualified port's MTP=3 measurements are 69.96, 54.06 and 28.51 tokens/s at 96, 128 and 192 Ki context. The graphs and earlier timings above remain historical pre-rebase V2 results, not measurements of this integration. These representative single-run results are not general speed guarantees; see the [port roadmap](UPSTREAM_ATTENTION_PORT_ROADMAP.md) for qualification details and the [history replay record](UPSTREAM_HISTORY_REPLAY.md) for commit provenance.
+
+The launch example above still applies. For this rebased version, selected-pair compilation is also supported: `-DGGML_CUDA_FA_QUANTS="f16-f16;q8_0-q4_0"` builds the pairs needed by that example instead of enabling every quant combination. Choose an arena that fits your GPU; model weights remain outside it, attached MTP inherits the target's KV types, and optional UVM does not make the streaming arena pageable. OpenCL/SYCL/Vulkan memory-view tests do not qualify streamed attention on those backends.
 
 ---
 
