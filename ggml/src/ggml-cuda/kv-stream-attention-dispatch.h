@@ -25,8 +25,18 @@ static inline ggml_cuda_kv_stream_attention_path ggml_cuda_kv_stream_attention_s
     return ggml_cuda_kv_stream_attention_path::none;
 }
 
-static inline int ggml_cuda_kv_stream_mma_ncols1(uint32_t queries, int gqa_ratio) {
-    return queries == 2 && gqa_ratio > 4 ? 2 : 4;
+// Match stock columns for admitted head-256 groups; Turing-only builds cap tiles at 32 columns.
+static inline int ggml_cuda_kv_stream_mma_ncols1(uint32_t queries, int gqa_ratio, bool turing_only = false) {
+    if (!queries || queries > 8 || (gqa_ratio != 2 && gqa_ratio != 6 && gqa_ratio != 8)) return 0;
+    const int ncols2 = gqa_ratio > 4 ? 8 : 2;
+    if (queries <= uint32_t(8/ncols2)) return 8/ncols2;
+    if (queries <= uint32_t(16/ncols2)) return 16/ncols2;
+    return queries <= uint32_t(32/ncols2) || turing_only ? 32/ncols2 : 64/ncols2;
+}
+
+static inline int ggml_cuda_kv_stream_mma_query_tiles(uint32_t queries, int gqa_ratio, bool turing_only = false) {
+    const int columns = ggml_cuda_kv_stream_mma_ncols1(queries, gqa_ratio, turing_only);
+    return columns ? int((queries+uint32_t(columns)-1)/uint32_t(columns)) : 0;
 }
 
 // Match the head-256 vector body's compiled copy width, not a newer GPU's physical capability.

@@ -545,7 +545,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     if (family == kernel_family::none) return plan_status::stock_unavailable;
     if (!op->src[3] || op->src[4] || ggml_get_op_params_i32(op,4) != 0 ||
             metadata.head_dim_k != 256 || metadata.head_dim_v != 256 ||
-            metadata.queries > 4) return plan_status::unsupported_geometry;
+            metadata.queries > 8) return plan_status::unsupported_geometry;
     if (op->src[3]->nb[1] < size_t(op->src[1]->ne[1])*sizeof(half) || op->src[3]->nb[1]%sizeof(half))
         return plan_status::unsupported_geometry;
     float params[3]; std::memcpy(params, op->op_params, sizeof(params));
@@ -578,6 +578,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
             return plan_status::missing_streamed_implementation;
         requirements.scratch_bytes = next.resume.bytes;
     } else if (family == kernel_family::tile) {
+        if (metadata.queries > 4) return plan_status::missing_streamed_implementation;
         if (!ggml_cuda_kv_stream_tile_plan(ctx,ggml_type(metadata.type_k),ggml_type(metadata.type_v),
                 uint32_t(metadata.query_heads),uint32_t(metadata.kv_heads),uint32_t(metadata.queries),
                 size_t(metadata.padded_tokens),next.resume)) return plan_status::unsupported_launch_resources;
@@ -631,37 +632,54 @@ static bool convert_mma_rows(
         source->nb[1] == ggml_row_size(source->type,source->ne[0]));
 }
 
-static bool mma_workspace(ggml_backend_t backend, int32_t key, int32_t value,
-        uint32_t heads, uint32_t kv_heads, size_t tokens, size_t spans, size_t & bytes) {
+static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32_t value,
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, size_t spans, size_t & bytes) {
     if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) ||
             key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
             !heads || heads > 65535 || !kv_heads || kv_heads > heads || heads%kv_heads ||
-            !tokens || tokens > INT32_MAX ||
-            !spans || spans > 3) return false;
+            !queries || queries > 8 || !tokens || tokens > INT32_MAX ||
+            !spans || spans > 3 || !ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value))) return false;
     ggml_tensor q={},k={},v={},mask={},op={};
     q.type=GGML_TYPE_F32;
-    q.ne[0]=256; q.ne[1]=4; q.ne[2]=heads; q.ne[3]=1;
+    q.ne[0]=256; q.ne[1]=queries; q.ne[2]=heads; q.ne[3]=1;
     k.type=ggml_type(key); v.type=ggml_type(value);
     for (auto * tensor : {&k,&v}) {
         tensor->ne[0]=256; tensor->ne[1]=int64_t(tokens);
         tensor->ne[2]=kv_heads; tensor->ne[3]=1;
     }
     mask.type=GGML_TYPE_F16;
-    mask.ne[0]=int64_t(tokens); mask.ne[1]=4;
+    mask.ne[0]=int64_t(tokens); mask.ne[1]=queries;
     mask.ne[2]=mask.ne[3]=1;
     op.op=GGML_OP_FLASH_ATTN_EXT; op.type=GGML_TYPE_F32;
     op.src[0]=&q; op.src[1]=&k; op.src[2]=&v; op.src[3]=&mask;
+    op.ne[0]=256; op.ne[1]=heads; op.ne[2]=queries; op.ne[3]=1;
+    for (auto * tensor : {&q,&k,&v,&mask,&op}) {
+        tensor->nb[0]=ggml_type_size(tensor->type);
+        tensor->nb[1]=ggml_row_size(tensor->type,tensor->ne[0]);
+        for (int i=2;i<4;++i) {
+            if (size_t(tensor->ne[i-1]) > SIZE_MAX/tensor->nb[i-1]) return false;
+            tensor->nb[i]=size_t(tensor->ne[i-1])*tensor->nb[i-1];
+        }
+    }
     const float scale=1.0f/16;
     std::memcpy(op.op_params,&scale,sizeof(scale));
     auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
-    size_t required=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
+    const size_t required=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
     if (!required) return false;
+    bytes=required;
+    return true;
+}
+
+static bool mma_workspace(ggml_backend_t backend, int32_t key, int32_t value,
+        uint32_t heads, uint32_t kv_heads, size_t tokens, size_t spans, size_t & bytes) {
+    size_t required=0;
+    if (!mma_workspace_for_queries(backend,key,value,heads,kv_heads,4,tokens,spans,required)) return false;
+    const auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
     if (ggml_cuda_kv_stream_attention_select(ggml_cuda_info().devices[ctx.device].cc,
             2,ggml_type(key),ggml_type(value)) == ggml_cuda_kv_stream_attention_path::mma) {
-        q.ne[1]=mask.ne[1]=2;
-        const size_t tg2=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
-        if (!tg2) return false;
+        size_t tg2=0;
+        if (!mma_workspace_for_queries(backend,key,value,heads,kv_heads,2,tokens,spans,tg2)) return false;
         required=std::max(required,tg2);
     }
     bytes=required;
@@ -982,7 +1000,7 @@ const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
     static const ggml_kv_stream_partial_ops ops{10,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t max_queries,size_t tokens,size_t & bytes) {
-            if (!max_queries || max_queries > 4) return false;
+            if (!max_queries || max_queries > 8) return false;
             size_t required=0;
             for (uint32_t queries=1;queries<=max_queries;++queries) {
                 ggml_kv_stream_resume_plan plan;
@@ -1002,6 +1020,12 @@ const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
             if (max_queries >= 2) {
                 size_t mma=0;
                 if (mma_workspace(backend,key,value,heads,kv_heads,tokens,3,mma)) required=std::max(required,mma);
+            }
+            // Wide widths must each have a compiled plan; a narrower grant is not a valid fallback.
+            for (uint32_t queries=5;queries<=max_queries;++queries) {
+                size_t mma=0;
+                if (!mma_workspace_for_queries(backend,key,value,heads,kv_heads,queries,tokens,3,mma)) return false;
+                required=std::max(required,mma);
             }
             if (!required) return false;
             bytes=required; return true;

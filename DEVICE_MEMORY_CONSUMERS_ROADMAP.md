@@ -1,5 +1,9 @@
 # Device memory consumers: implementation roadmap
 
+Gemma 4 31B target and shared-KV assistant extension: [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). Its G1-G6 stages are independent of the milestone identifiers below; the extension is planned, not implemented or qualified.
+
+Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its D1-D7 stages preserve bounded resident draft SWA and extend target streamed verification through TG8. Isolated D3a launch planning is ready for review; live DFlash2 remains unimplemented and unqualified.
+
 Saved: 2026-09-10
 
 Last source review: 2026-10-06 for C5b qualification after the shared-workspace hardening rebase; earlier checkpoint evidence is unchanged.

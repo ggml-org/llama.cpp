@@ -345,6 +345,55 @@ int main(int argc, char ** argv) {
     }
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+    if (argc > 1 && (!std::strcmp(argv[1], "--cuda-wide-plan") || !std::strcmp(argv[1], "--cuda")))
+        t.test("wide_query_plans_distinguish_missing_kernels_from_invalid_geometry", [](testing & t) {
+            using status = ggml_cuda_kv_stream_plan_status;
+            using family = ggml_cuda_kv_stream_kernel_family;
+            using style = ggml_cuda_kv_stream_execution_style;
+            using query_t = status (*)(ggml_backend_t, const ggml_tensor *, const ggml_kv_stream_span_plan_view *, style, ggml_cuda_kv_stream_attention_plan &);
+            ggml_backend_load_all();
+            auto * dev = ggml_backend_dev_by_name("CUDA0");
+            if (!t.assert_true(dev != nullptr)) return;
+            auto * reg = ggml_backend_dev_backend_reg(dev);
+            auto query = reinterpret_cast<query_t>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kv_stream_attention_plan"));
+            auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_kv_stream_partial_ops"));
+            ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+            if (!t.assert_true(backend && query && get && get() && get()->decode_workspace)) return;
+            for (auto pair : {std::pair{GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}, std::pair{GGML_TYPE_Q5_0, GGML_TYPE_Q4_0}}) for (uint32_t width = 5; width <= 9; ++width) {
+                ggml_context_ptr ctx(ggml_init({65536, nullptr, true}));
+                auto * q = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, 256, width, 24);
+                auto * ks = ggml_new_tensor_2d(ctx.get(), pair.first, 256*4, 768);
+                auto * vs = ggml_new_tensor_2d(ctx.get(), pair.second, 256*4, 768);
+                auto * k = ggml_view_3d(ctx.get(), ks, 256, 768, 4,
+                    ggml_row_size(pair.first, 256*4), ggml_row_size(pair.first, 256), 0);
+                auto * v = ggml_view_3d(ctx.get(), vs, 256, 768, 4,
+                    ggml_row_size(pair.second, 256*4), ggml_row_size(pair.second, 256), 0);
+                auto * mask = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, 768, width);
+                auto * op = ggml_flash_attn_ext(ctx.get(), q, k, v, mask, 1.0f/16, 0, 0);
+                ggml_kv_stream_span span{};
+                span.tokens = 513;
+                ggml_kv_stream_span_plan_view view{{pair.first, pair.second, 256, 256, 4, 256, 128}, &span, 1, 513, width};
+                ggml_cuda_kv_stream_attention_plan native;
+                t.assert_true(query(backend.get(), op, nullptr, style::native, native) == status::success);
+                t.assert_true(native.family == family::mma);
+                t.assert_equal(int64_t(width), native.metadata.queries);
+                auto unchanged = native;
+                const auto expected = width <= 8 ? status::missing_streamed_implementation : status::unsupported_geometry;
+                t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == expected);
+                t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
+                t.assert_true(query(backend.get(), op, &view, style::resumable, unchanged) == expected);
+                size_t bytes = 77;
+                t.assert_true(!get()->decode_workspace(backend.get(), pair.first, pair.second, 24, 4, width, 768, bytes));
+                t.assert_equal(size_t(77), bytes);
+                ++q->nb[1];
+                t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == status::unsupported_geometry);
+                --q->nb[1];
+                auto stale = view;
+                ++stale.query_tokens;
+                t.assert_true(query(backend.get(), op, &stale, style::spanned, unchanged) == status::invalid_metadata);
+                t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
+            }
+        });
 #ifdef KV_STREAM_PASCAL_CUDA_TEST
     if (consumer || (argc > 1 && !std::strcmp(argv[1],"--cuda-resource-probe"))) t.test(
             "mma_span_resources_are_rejected_before_launch_and_requirements_are_preserved",[&](testing & t) {

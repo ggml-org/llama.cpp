@@ -1,5 +1,9 @@
 # Adaptive KV Streaming and MTP Integration Roadmap
 
+Gemma's read-only assistant cache sharing follows a separate extension plan in [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). It does not add four Qwen-style auxiliary KV layers; the existing Qwen milestone identifiers and qualification remain unchanged.
+
+The separate Qwen3.8-27B DFlash2 drafter follows [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its window-bounded draft caches stay resident rather than adding full-history auxiliary layers to the target ring.
+
 ## Background
 
 This branch already provides a backend-neutral device-memory infrastructure, adaptive KV streaming for a single serial target context, phase-aware sharing between prefill compute workspace and decode KV storage, asynchronous target and attached-MTP K/V publication, cross-token prefetch, and sparse deadline feedback.

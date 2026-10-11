@@ -32,6 +32,64 @@ struct fixture {
 
 int main() {
     testing t;
+    t.test("wide_mma_queries_use_stock_column_groups", [](testing & t) {
+        for (uint32_t queries = 1; queries <= 8; ++queries) {
+            for (int ratio : {2, 6, 8}) {
+                const int columns = ratio > 4 ? 8 : 2;
+                const int expected = queries <= uint32_t(8/columns) ? 8/columns :
+                    queries <= uint32_t(16/columns) ? 16/columns :
+                    queries <= uint32_t(32/columns) ? 32/columns : 64/columns;
+                t.assert_equal(expected, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
+                t.assert_equal(1, ggml_cuda_kv_stream_mma_query_tiles(queries, ratio));
+            }
+        }
+    });
+    t.test("invalid_mma_widths_and_groups_do_not_select_a_tile", [](testing & t) {
+        for (uint32_t queries : {0u, 9u, 16u, std::numeric_limits<uint32_t>::max()})
+            for (int ratio : {2, 6, 8})
+                t.assert_equal(0, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
+        for (int ratio : {-1, 0, 1, 3, 4, std::numeric_limits<int>::max()})
+            for (uint32_t queries : {1u, 4u, 5u, 8u})
+                t.assert_equal(0, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
+        t.assert_equal(0, ggml_cuda_kv_stream_mma_query_tiles(0, 6));
+        t.assert_equal(0, ggml_cuda_kv_stream_mma_query_tiles(std::numeric_limits<uint32_t>::max(), 6));
+        t.assert_equal(0, ggml_cuda_kv_stream_mma_query_tiles(8, std::numeric_limits<int>::max()));
+    });
+    t.test("turing_only_mma_keeps_stock_multiple_query_tiles", [](testing & t) {
+        for (uint32_t queries = 1; queries <= 8; ++queries) {
+            for (int ratio : {2, 6, 8}) {
+                const int columns = ratio > 4 ? 8 : 2;
+                const int expected = queries <= uint32_t(8/columns) ? 8/columns :
+                    queries <= uint32_t(16/columns) ? 16/columns : 32/columns;
+                t.assert_equal(expected, ggml_cuda_kv_stream_mma_ncols1(queries, ratio, true));
+                t.assert_equal(int((queries+uint32_t(expected)-1)/uint32_t(expected)),
+                    ggml_cuda_kv_stream_mma_query_tiles(queries, ratio, true));
+            }
+        }
+    });
+    t.test("wide_query_requirements_preserve_checked_failure_contracts", [](testing & t) {
+        for (int64_t queries : {5, 6, 7, 8}) {
+            fixture f;
+            f.metadata.queries = queries;
+            f.metadata.active_tokens = 122879;
+            f.metadata.padded_tokens = 122880;
+            ggml_cuda_kv_stream_attention_plan output;
+            t.assert_true(ggml_cuda_kv_stream_attention_plan_make(f.metadata, family::mma,
+                style::spanned, f.support, f.requirements, output) == status::success);
+            t.assert_equal(size_t(256*24*queries*sizeof(float)), output.output_allocation_bytes);
+            f.support.streamed_compiled = false;
+            f.reject(t, status::missing_streamed_implementation, family::mma, style::spanned);
+            f.support.streamed_compiled = true;
+            f.support.launch_resources = false;
+            f.reject(t, status::unsupported_launch_resources, family::mma, style::spanned);
+            f.support.launch_resources = true;
+            f.requirements.scratch_bytes = SIZE_MAX;
+            f.reject(t, status::overflow, family::mma, style::spanned);
+            f.requirements.scratch_bytes = 4096;
+            f.metadata.active_tokens = queries-1;
+            f.reject(t, status::invalid_metadata, family::mma, style::spanned);
+        }
+    });
     t.test("vector_bulk_leaves_only_the_incomplete_native_tile_guarded", [](testing & t) {
         for (size_t first : {size_t(0),size_t(128),size_t(256),size_t(131072)}) {
             for (size_t tokens : {size_t(0),size_t(1),size_t(127),size_t(128),size_t(129),size_t(255),

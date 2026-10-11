@@ -550,8 +550,8 @@ static bool mma_span_launch_make(
             q->type != GGML_TYPE_F32 ||
             !ggml_cuda_kv_stream_kernel(k->type,v->type) ||
             dst->type != GGML_TYPE_F32 || q->ne[0] != 256 || v->ne[0] != 256 ||
-            k->ne[0] != 256 || q->ne[1] < 1 || q->ne[1] > 4 ||
-            k->ne[2] <= 0 || v->ne[2] != k->ne[2] || q->ne[2] <= 0 ||
+            k->ne[0] != 256 || q->ne[1] < 1 || q->ne[1] > 8 ||
+            k->ne[2] <= 0 || v->ne[2] != k->ne[2] || q->ne[2] <= 0 || q->ne[2] > 65535 ||
             q->ne[2]%k->ne[2] ||
             (q->ne[2]/k->ne[2] != 2 && q->ne[2]/k->ne[2] != 6 && q->ne[2]/k->ne[2] != 8) ||
             q->ne[3] != 1 || k->ne[3] != 1 || v->ne[3] != 1 ||
@@ -573,13 +573,15 @@ static bool mma_span_launch_make(
     const int gqa_ratio = int(q->ne[2]/k->ne[2]);
     // Stock Blackwell uses eight columns for ratio six and masks the two padded heads.
     const int ncols2 = gqa_ratio > 4 ? 8 : 2;
-    const int ncols1 = q->ne[1] <= 8/ncols2 ? 8/ncols2 : q->ne[1] <= 16/ncols2 ? 16/ncols2 : 32/ncols2;
-    const int ncols = ncols1*ncols2;
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     if (!turing_mma_available(cc)) {
         if (failure) *failure = status::unsupported_device_features;
         return false;
     }
+    const bool turing_only = ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_TURING;
+    const int ncols1 = ggml_cuda_kv_stream_mma_ncols1(uint32_t(q->ne[1]), gqa_ratio, turing_only);
+    if (!ncols1) return false;
+    const int ncols = ncols1*ncols2;
     const int nthreads = ggml_cuda_fattn_mma_get_nthreads(DKQ,DV,ncols,cc);
     const int nbatch_fa = ggml_cuda_fattn_mma_get_nbatch_fa(DKQ,DV,ncols,cc);
     const int nbatch_K2 = ggml_cuda_fattn_mma_get_nbatch_K2(DKQ,DV,ncols,cc);
@@ -609,18 +611,28 @@ static bool mma_span_launch_make(
         next.span_shared_offset = (next.shared_bytes+15)/16*16;
         next.shared_bytes = next.span_shared_offset+3*sizeof(ggml_cuda_kv_span);
     }
-    next.ntiles_x = 1;
+    next.ntiles_x = ggml_cuda_kv_stream_mma_query_tiles(uint32_t(q->ne[1]), gqa_ratio, turing_only);
     next.gqa_ratio = int(q->ne[2]/k->ne[2]);
     next.ntiles_z_gqa = (next.gqa_ratio+ncols2-1)/ncols2;
-    next.ntiles_dst = next.ntiles_x*next.ntiles_z_gqa*int(k->ne[2])*int(q->ne[3]);
+    const int64_t ntiles_dst = int64_t(next.ntiles_x)*next.ntiles_z_gqa*k->ne[2];
+    if (ntiles_dst > INT_MAX) {
+        if (failure) *failure = status::overflow;
+        return false;
+    }
+    next.ntiles_dst = int(ntiles_dst);
     next.ntiles_kv = int((int64_t(k->ne[1])+nbatch_fa-1)/nbatch_fa);
-    if (int64_t(next.ntiles_kv)*next.ntiles_dst > INT_MAX) return false;
+    if (int64_t(next.ntiles_kv)*next.ntiles_dst > INT_MAX) {
+        if (failure) *failure = status::overflow;
+        return false;
+    }
 
     fattn_kernel_t ordinary = ncols1 == 1 ?
         flash_attn_ext_f16<DKQ,DV,1,8,false,false,false> : ncols1 == 2 ?
         flash_attn_ext_f16<DKQ,DV,2,8,false,false,false> :
-        ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,4,8,false,false,false> :
-        flash_attn_ext_f16<DKQ,DV,4,2,false,false,false>;
+        ncols1 == 4 ? (ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,4,8,false,false,false> :
+            flash_attn_ext_f16<DKQ,DV,4,2,false,false,false>) :
+        ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,8,8,false,false,false> :
+            flash_attn_ext_f16<DKQ,DV,8,2,false,false,false>;
     auto spanned = ggml_cuda_kv_stream_mma_kernel(k->type,v->type,uint32_t(ncols1),uint32_t(ncols2));
     if (!spanned) {
         if (failure) *failure=status::missing_streamed_implementation;
@@ -669,8 +681,18 @@ static bool mma_span_launch_make(
     if (span_count > (SIZE_MAX-127)/sizeof(ggml_cuda_kv_span)) return false;
     next.descriptor_bytes = (span_count*sizeof(ggml_cuda_kv_span)+127)/128*128;
     if (next.ntiles_dst%blocks != 0) {
-        const size_t entries = size_t(blocks)*ncols*(2+DV/2);
-        if (entries > (SIZE_MAX-next.descriptor_bytes)/sizeof(float2)) return false;
+        size_t entries = size_t(blocks);
+        for (size_t factor : {size_t(ncols),size_t(2+DV/2)}) {
+            if (entries > SIZE_MAX/factor) {
+                if (failure) *failure = status::overflow;
+                return false;
+            }
+            entries *= factor;
+        }
+        if (entries > (SIZE_MAX-next.descriptor_bytes)/sizeof(float2)) {
+            if (failure) *failure = status::overflow;
+            return false;
+        }
         next.fixup_bytes = entries*sizeof(float2);
     }
     next.bytes = next.descriptor_bytes+next.fixup_bytes;
