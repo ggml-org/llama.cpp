@@ -7,6 +7,7 @@
 #include "../src/llama-io.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
+#include "kv-stream-bit-exact-test.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -35,6 +36,7 @@ static bool target_drift_control = false, target_drift_rs_control = false;
 static bool rollback_probe = false;
 static bool vision_mtp_handoff = false;
 static bool serial_workspace_growth = false;
+static bool mtp_bit_exact_control = false;
 
 // Fail one candidate view after the draft's initial view, then permit parent recovery.
 struct serial_parent_view_failure {
@@ -349,6 +351,16 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
 
 int main(int argc,char ** argv) {
     int baseline=0;
+    bool exact_options = false;
+    for (int i = 1; i < argc; ++i) {
+        mtp_bit_exact_control |= !std::strcmp(argv[i], "--mtp-bit-exact");
+        exact_options |= !std::strncmp(argv[i], "--exact-", 8);
+    }
+    if ((mtp_bit_exact_control && (argc < 3 || std::strcmp(argv[1], "--model"))) ||
+            (exact_options && !mtp_bit_exact_control)) {
+        std::fprintf(stderr, "strict MTP usage: %s --model GGUF --mtp-bit-exact [--exact-prefill N --exact-rounds N --exact-pool-mib N --exact-prefill-file FILE]\n", argv[0]);
+        return 1;
+    }
     for (int i=3;i<argc;++i) {
         if (!std::strcmp(argv[i],"--pascal")) baseline=610;
         if (!std::strcmp(argv[i],"--sm75")) baseline=750;
@@ -362,6 +374,7 @@ int main(int argc,char ** argv) {
     if (baseline) return 77;
 #endif
     testing t;
+    test_kv_stream_bit_exact_comparator(t);
     t.test("streaming_is_disabled_by_default", [&](testing & t) {
         const auto defaults = llama_context_default_params();
         t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
@@ -413,9 +426,15 @@ int main(int argc,char ** argv) {
     } restore_cc{baseline_backend.get(),previous};
 #endif
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
-    mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth;
+    mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
     if (!t.assert_true(bool(model))) return t.summary();
+    if (mtp_bit_exact_control) {
+        t.test("streamed_and_native_mtp_bit_exact", [&](testing & t) {
+            test_kv_stream_mtp_bit_exact(t, model.get(), kv_stream_exact_arguments(argc, argv));
+        });
+        return t.summary();
+    }
     if (serial_workspace_growth) {
         t.test("serial_draft_growth_rebuilds_target_and_preserves_long_gather", [&](testing & t) {
             auto p = llama_context_default_params();

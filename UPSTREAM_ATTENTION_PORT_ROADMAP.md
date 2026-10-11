@@ -330,3 +330,45 @@ The reconstructed CUDA server and selected test targets now build together. The 
 Real IQ4_XS TG1-TG4 checks each complete 32512 prefill tokens and 256 forced tokens with periodic checkpoint replay, zero final-logit/recurrent-state error and no skips. The freshly rebuilt server then completes all four 8-Ki MTP modes with all 256 token IDs, effective KV grants and draft accepted/generated counts identical to the qualified reference. Decode rates are 46.87/65.88/79.10/89.90 tokens/s; these small timing differences are not new optimization claims. Results are in `benchmarks/results/upstream-history-replay-20261010/server-8k/results.jsonl`; model logs are `/tmp/upstream-history-model-tg{1,2,3,4}.log`, and other qualification logs use `/tmp/upstream-history-cuda-*.log`.
 
 The original failed metadata build is retained at `/tmp/upstream-history-cuda-build.log`; the corrected complete build is `/tmp/upstream-history-cuda-build-corrected.log`. No runtime kernel changes were needed for that test correction. Production is restored with its existing container configuration, and `/health` returns `{"status":"ok"}`. Runtime tree equality, the original commit map and title-only commit messages are checked before handoff; no published branch or remote ref is moved.
+
+### Strict streaming versus non-streaming MTP test
+
+`test-kv-stream-context --mtp-bit-exact` is an opt-in, real-model comparison of two independently constructed target/draft pipelines from the same model. One runs without KV streaming; the other uses the existing streaming owner. Both use one serial slot, Q8_0 K / Q4_0 V, 256/256 batches, the same context capacity and recurrent rollback depth, and the same production `common_speculative_*` catch-up/prediction/acceptance calls. The draft consumes real target hidden states, not zero-filled surrogate embeddings.
+
+The test uses greedy CPU-side draft sampling so raw logits remain observable. It deliberately forces acceptance counts from zero through the full draft length: this is lifecycle/numerical qualification, not an acceptance-rate or speed benchmark. Draft lengths 1-3 exercise target TG2-TG4 verification, sequential TG1 prediction and TG1-TG3 rejection replay. A prefix ending three tokens before a page boundary exercises partial tails and page crossings.
+
+Byte comparisons cover:
+
+- Target and draft output tensors, including logits and hidden-state handoff.
+- Predicted IDs, correction decisions and serialized speculative carry state.
+- Encoded logical K/V rows changed or retained at each transition, and the complete valid target/draft KV prefix before and after the run. Allocation padding, addresses and unused cache capacity are not numerical state and are not compared.
+- Canonically serialized current recurrent state before/after verification, acceptance truncation and checkpoint restoration/replay. Host-spilled and device-resident serialization may use different write chunks; their resulting bytes must match.
+
+There is no floating-point tolerance in this fixture. It checks IEEE value bytes, so one-ULP changes and positive/negative zero differences fail. Nonfinite observed output tensors fail separately. The default host-only test invocation exercises negative comparator cases, record order/length/missing-output checks, chunk boundaries, serialization chunk independence and bounded argument parsing without loading a model.
+
+The control is recorded to an automatically removed temporary file, then the streaming pipeline reads it in bounded chunks. This avoids retaining two full model pipelines or every recurrent snapshot in RAM. Each comparison case limits its control archive to 32 GiB; reduce rounds if that bound is reached. The archive can occupy several GiB of temporary disk space. Exact reads add synchronization and IO, so test timings are not inference performance measurements.
+
+Both target streaming and retained multi-span MTP attention must actually occur. An all-resident run is a failing qualification, even if every byte agrees. The initial 4093-token probe reproduced this negative case: phase-arena reclamation grew the decode pool enough to make it resident. Increasing the prefix, rather than weakening the coverage check, forces the intended path. The configured small KV pool is not the final decode grant after phase reclamation.
+
+```sh
+cmake -S . -B build-v2 -DGGML_CUDA=ON -DLLAMA_BUILD_TESTS=ON \
+  -DGGML_CUDA_FA_QUANTS="f16-f16;q8_0-q4_0" -DCMAKE_BUILD_TYPE=Release
+cmake --build build-v2 --target test-kv-stream-context --parallel
+
+# Model-free negative checks.
+./build-v2/bin/test-kv-stream-context
+
+# Defaults: 16381 prefill tokens, eight rounds per MTP length, 16 MiB initial KV pool.
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY ./build-v2/bin/test-kv-stream-context \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --mtp-bit-exact
+
+# Longer prefix; use the committed corpus or specify another text file.
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY ./build-v2/bin/test-kv-stream-context \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --mtp-bit-exact \
+  --exact-prefill 32509 --exact-rounds 8 --exact-pool-mib 16 \
+  --exact-prefill-file benchmarks/data/online-articles-262144-words.txt
+```
+
+The committed corpus is the default. Options are bounded to 512-32768 prefill tokens, 4-32 rounds and 1-1024 MiB initial KV pool; corpus input is bounded to 64 MiB before allocation. An insufficient arena or a pool that never streams is reported as failure, not a skip. Current real-model scope is single-head Qwen35 on CUDA. This does not qualify image/audio inputs, probabilistic rejection sampling, backend-offloaded sampling, other KV quants/models, or every context/GPU combination.
+
+Qualification on the RTX 5070 Ti uses the local Unsloth IQ4_XS GGUF, Q8_0/Q4_0 KV and UVM disabled. Draft lengths 1-3 pass strict comparisons at 16381 tokens/eight rounds and 32509 tokens/eight rounds, with no byte mismatches or skips. The 4093-token resident-only probe correctly fails coverage. Model-free checks pass under ASan/UBSan, including injected one-ULP and signed-zero differences, incorrect record framing, serialization chunk boundaries and invalid input bounds. No runtime kernel, numerical threshold or allocator is changed by this test addition.
