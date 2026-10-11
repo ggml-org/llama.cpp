@@ -326,12 +326,49 @@ static inline void dsv4_hc_dma_push_gated(
     dma_queue_push(dma_q, dma_make_data(g_spad, g_src), dctx->dma_row_stride, g->nb[1], row_size, 4);
 }
 
+static __attribute__((noinline)) void dsv4_hc_pre_gated_dma_block_f32(
+        const struct dsv4_hc_pre_context * dctx,
+        const struct dsv4_hc_dma_block * block,
+        const uint8_t * x_spad,
+        const uint8_t * g_spad) {
+    const struct htp_tensor * dst = dctx->octx->dst;
+    uint8_t * dst_data = (uint8_t *) dst->data;
+
+    const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
+    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
+    const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
+
+    for (uint32_t c = 0; c < block->count; ++c) {
+        const uint32_t i0 = (block->chunk + c) * VLEN_FP32;
+        const uint8_t * xb = x_spad + c*VLEN;
+        const uint8_t * gb = g_spad + c*VLEN;
+        uint8_t * db = dst_data + i0*dst->nb[0] + block->it*dst->nb[1];
+
+        HVX_Vector xv = *(const HVX_Vector *) xb;
+        HVX_Vector gv = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) gb, one, max_exp, min_exp);
+        HVX_Vector acc = hvx_vec_mul_f32_f32(xv, gv);
+
+        xv = *(const HVX_Vector *) (xb + dctx->dma_row_stride);
+        gv = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + dctx->dma_row_stride), one, max_exp, min_exp);
+        acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, gv));
+
+        xv = *(const HVX_Vector *) (xb + 2*dctx->dma_row_stride);
+        gv = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 2*dctx->dma_row_stride), one, max_exp, min_exp);
+        acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, gv));
+
+        xv = *(const HVX_Vector *) (xb + 3*dctx->dma_row_stride);
+        gv = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 3*dctx->dma_row_stride), one, max_exp, min_exp);
+        acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, gv));
+
+        acc = hvx_vec_mul_f32_f32(acc, scale_v);
+        hvx_vec_store_u(db, VLEN, acc);
+    }
+}
+
 static void dsv4_hc_pre_thread_gated_dma_f32(unsigned int nth, unsigned int ith, void * data) {
     struct dsv4_hc_pre_context * dctx = (struct dsv4_hc_pre_context *) data;
     struct htp_ops_context *     octx = dctx->octx;
-
-    const struct htp_tensor * dst = octx->dst;
-    uint8_t * dst_data = (uint8_t *) dst->data;
 
     const uint32_t start = dctx->jobs_per_thread * ith;
     const uint32_t end   = MIN(start + dctx->jobs_per_thread, dctx->total_jobs);
@@ -357,11 +394,6 @@ static void dsv4_hc_pre_thread_gated_dma_f32(unsigned int nth, unsigned int ith,
         prefetch_job += block.count;
     }
 
-    const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
-    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
-    const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
-    const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
-
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
 
@@ -372,29 +404,7 @@ static void dsv4_hc_pre_thread_gated_dma_f32(unsigned int nth, unsigned int ith,
         dma_queue_pop(dma_q);
         dma_queue_pop(dma_q);
 
-        for (uint32_t c = 0; c < block.count; ++c) {
-            const uint32_t i0 = (block.chunk + c) * VLEN_FP32;
-            const uint8_t * xb = x_spad[curr] + c*VLEN;
-            const uint8_t * gb = g_spad[curr] + c*VLEN;
-            uint8_t * db = dst_data + i0*dst->nb[0] + block.it*dst->nb[1];
-
-            const HVX_Vector x0 = *(const HVX_Vector *) xb;
-            const HVX_Vector x1 = *(const HVX_Vector *) (xb + dctx->dma_row_stride);
-            const HVX_Vector x2 = *(const HVX_Vector *) (xb + 2*dctx->dma_row_stride);
-            const HVX_Vector x3 = *(const HVX_Vector *) (xb + 3*dctx->dma_row_stride);
-
-            const HVX_Vector g0 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) gb, one, max_exp, min_exp);
-            const HVX_Vector g1 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + dctx->dma_row_stride), one, max_exp, min_exp);
-            const HVX_Vector g2 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 2*dctx->dma_row_stride), one, max_exp, min_exp);
-            const HVX_Vector g3 = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_Vector *) (gb + 3*dctx->dma_row_stride), one, max_exp, min_exp);
-
-            HVX_Vector acc = hvx_vec_mul_f32_f32(x0, g0);
-            acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x1, g1));
-            acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x2, g2));
-            acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(x3, g3));
-            acc = hvx_vec_mul_f32_f32(acc, scale_v);
-            hvx_vec_store_u(db, VLEN, acc);
-        }
+        dsv4_hc_pre_gated_dma_block_f32(dctx, &block, x_spad[curr], g_spad[curr]);
 
         if (prefetch_job < end) {
             const struct dsv4_hc_dma_block next = dsv4_hc_dma_block_make(dctx, prefetch_job, end);
