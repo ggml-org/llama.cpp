@@ -550,13 +550,17 @@ int main(int argc,char ** argv) {
             std::ifstream input(argv[4]);
             if (!t.assert_true(bool(input))) return;
             const std::string article((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+            const size_t prefill_tokens = std::getenv("LLAMA_DIAG_PREFILL_TOKENS") ? size_t(std::atoi(std::getenv("LLAMA_DIAG_PREFILL_TOKENS"))) : 7932;
+            const size_t decode_tokens = std::getenv("LLAMA_DIAG_DECODE_TOKENS") ? size_t(std::atoi(std::getenv("LLAMA_DIAG_DECODE_TOKENS"))) : 16;
+            if (!t.assert_true(prefill_tokens >= 256 && prefill_tokens <= 261888 &&
+                    decode_tokens >= 16 && decode_tokens <= 256 && prefill_tokens+decode_tokens <= 262144)) return;
             const auto * vocab = llama_model_get_vocab(model.get());
             const int needed = -llama_tokenize(vocab, article.data(), int(article.size()), nullptr, 0, false, false);
             std::vector<llama_token> tokens(needed);
             if (!t.assert_true(llama_tokenize(vocab, article.data(), int(article.size()),
-                    tokens.data(), needed, false, false) >= 7932)) return;
+                    tokens.data(), needed, false, false) >= int32_t(prefill_tokens))) return;
             auto p = llama_context_default_params();
-            p.n_ctx = 8192; p.n_batch = p.n_ubatch = 256;
+            p.n_ctx = uint32_t((prefill_tokens+decode_tokens+255)/256*256); p.n_batch = p.n_ubatch = 256;
             p.n_rs_seq = target_drift_rs_control ? 3 : 0;
             p.n_threads = p.n_threads_batch = 8;
             p.n_outputs_max = p.n_outputs_max_per_seq = 4;
@@ -598,7 +602,9 @@ int main(int argc,char ** argv) {
                 return true;
             };
             context_ptr stock(llama_init_from_model(model.get(), p), llama_free);
-            p.shared_device_memory_bytes = 512*1048576;
+            const size_t arena_mib = std::getenv("LLAMA_DIAG_ARENA_MIB") ? size_t(std::atoi(std::getenv("LLAMA_DIAG_ARENA_MIB"))) : 512;
+            if (!t.assert_true(arena_mib >= 128 && arena_mib <= 4096)) return;
+            p.shared_device_memory_bytes = arena_mib*1048576;
             p.kv_stream_auxiliary_layers = 1;
             p.cb_eval_user_data = &trace_streamed;
             context_ptr streamed(llama_init_from_model(model.get(), p), llama_free);
@@ -623,6 +629,8 @@ int main(int argc,char ** argv) {
             };
             const size_t vocabulary = llama_vocab_n_tokens(vocab);
             const auto compare = [&](const char * label, size_t first, size_t rows) {
+                if (!t.assert_equal(trace_stock.values.size(),trace_streamed.values.size()) ||
+                        !t.assert_equal(trace_stock.caches.size(),trace_streamed.caches.size())) return;
                 for (size_t i = 0; i < std::min(trace_stock.values.size(),trace_streamed.values.size()); ++i) {
                     const auto & a = trace_stock.values[i]; const auto & b = trace_streamed.values[i];
                     if (!t.assert_equal(a.first,b.first) || !t.assert_equal(a.second.size(),b.second.size())) return;
@@ -672,13 +680,15 @@ int main(int argc,char ** argv) {
                 t.out << label << " different_state_parts=" << different << " state_max=" << worst << '\n';
                 t.assert_equal(size_t(0), different);
             };
-            for (size_t first = 0; first < 7932; first += 256) {
-                const size_t n = std::min<size_t>(256,7932-first);
+            for (size_t first = 0; first < prefill_tokens; first += 256) {
+                const size_t n = std::min<size_t>(256,prefill_tokens-first);
                 const std::vector<llama_token> rows(tokens.begin()+first,tokens.begin()+first+n);
                 if (!submit(stock.get(),rows,first,false) || !submit(streamed.get(),rows,first,false)) return;
             }
-            compare("prefill", 7931, 1);
-            const std::vector<llama_token> continuation{264,4927,5253,383,2919,4802,11,4927,5253,383,4128,958,11,4927,5253,383};
+            compare("prefill", prefill_tokens-1, 1);
+            const std::vector<llama_token> pattern{264,4927,5253,383,2919,4802,11,4927,5253,383,4128,958,11,4927,5253,383};
+            std::vector<llama_token> continuation(decode_tokens);
+            for (size_t i = 0; i < decode_tokens; ++i) continuation[i] = pattern[i%pattern.size()];
             const size_t width = std::getenv("LLAMA_DIAG_QUERY_WIDTH") ? size_t(std::atoi(std::getenv("LLAMA_DIAG_QUERY_WIDTH"))) : 2;
             if (!t.assert_true(width >= 1 && width <= 4)) return;
             for (size_t first = 0; first < continuation.size(); first += width) {
@@ -690,16 +700,16 @@ int main(int argc,char ** argv) {
                 };
                 auto a = save(stock.get()), b = save(streamed.get());
                 const std::vector<llama_token> rows(continuation.begin()+first,continuation.begin()+first+count);
-                if (!submit(stock.get(),rows,7932+first,true) || !submit(streamed.get(),rows,7932+first,true)) return;
-                compare("verify",7932+first,count);
-                if (first == 4 || first == 12) {
+                if (!submit(stock.get(),rows,prefill_tokens+first,true) || !submit(streamed.get(),rows,prefill_tokens+first,true)) return;
+                compare("verify",prefill_tokens+first,count);
+                if (first%32 == 4 || first%32 == 12) {
                     const auto restore = [&](llama_context * ctx, const std::vector<uint8_t> & state) {
                         return t.assert_equal(state.size(),llama_state_seq_set_data_ext(ctx,state.data(),state.size(),0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)) &&
-                            t.assert_true(llama_memory_seq_rm(llama_get_memory(ctx),0,llama_pos(7932+first),-1));
+                            t.assert_true(llama_memory_seq_rm(llama_get_memory(ctx),0,llama_pos(prefill_tokens+first),-1));
                     };
                     if (!restore(stock.get(),a) || !restore(streamed.get(),b)) return;
-                    if (!submit(stock.get(),rows,7932+first,true) || !submit(streamed.get(),rows,7932+first,true)) return;
-                    compare("replay",7932+first,count);
+                    if (!submit(stock.get(),rows,prefill_tokens+first,true) || !submit(streamed.get(),rows,prefill_tokens+first,true)) return;
+                    compare("replay",prefill_tokens+first,count);
                 }
             }
         });
@@ -719,6 +729,7 @@ int main(int argc,char ** argv) {
             p.shared_device_memory_bytes = size_t(1800)*1048576;
             context_ptr target(llama_init_from_model(model.get(), p), llama_free);
             if (!t.assert_true(bool(target) && target->get_compute_memory())) return;
+            t.assert_true(target->get_cparams().embeddings_nextn && !target->get_cparams().embeddings_nextn_masked);
             auto d = p;
             d.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             d.ctx_other = target.get();
@@ -726,6 +737,7 @@ int main(int argc,char ** argv) {
             d.shared_device_memory_bytes = 0;
             context_ptr draft(llama_init_from_model(model.get(), d), llama_free);
             if (!t.assert_true(bool(draft) && draft->get_compute_memory())) return;
+            t.assert_true(draft->get_cparams().embeddings_nextn && draft->get_cparams().embeddings_nextn_masked);
             auto * draft_kv = static_cast<llama_kv_cache *>(llama_get_memory(draft.get()));
             const int mtp_layer = llama_model_n_layer(model.get());
             t.assert_true(ggml_backend_buffer_is_host(draft_kv->get_k_storage(mtp_layer)->buffer));
