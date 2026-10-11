@@ -2,7 +2,7 @@
 
 Enable the separate Qwen3.8-27B DFlash2 drafter alongside the existing target KV streaming and shared phase arena. Preserve upstream block drafting, attention masks and acceptance semantics. Keep bounded draft sliding-window KV resident; extend target streamed verification from TG4 through TG8.
 
-Status: implementation started with isolated D3a launch planning; live DFlash2 integration remains unimplemented and unqualified. Saved: 2026-10-11. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`. Development branch: `feature/adaptive-kv-dflash2`. DFlash2 stages D1-D7 do not renumber existing consumer, MTP, Gemma or attention-port stages.
+Status: D1a artifact audit is ready for review; D3a launch planning is committed. Ordinary DFlash2 controls and live streaming integration remain unqualified. Saved: 2026-10-11. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`. Development branch: `feature/adaptive-kv-dflash2`. DFlash2 stages D1-D7 do not renumber existing consumer, MTP, Gemma or attention-port stages.
 
 Saving this plan does not start implementation, download models, change branches, stop production or authorize commits. Each lettered stage below is a reviewable implementation/test unit. Stage completed work and its progress entry for user review.
 
@@ -295,19 +295,51 @@ Add failing tests first and retain the red result; implement the minimum coheren
 
 | Milestone | Status | Completion gate |
 | --- | --- | --- |
-| D1 Artifacts and ordinary controls | Planned | Pinned metadata, controls and physical-fit ledger |
+| D1 Artifacts and ordinary controls | D1a ready for review; D1b/D1c planned | Pinned metadata, controls and physical-fit ledger |
 | D2 Common contracts | Planned | Neutral workload/cache roles and unchanged current paths |
-| D3 Target TG1-TG8 | D3a ready for review; D3b/D3c planned | Stock-order span/resume and bounded workspace |
+| D3 Target TG1-TG8 | D3a committed at `0f9c78645`; D3b/D3c planned | Stock-order span/resume and bounded workspace |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
 | D5 Draft KV and phase arena | Planned | Reusable bounded resident KV consumer, synthetic Qwen/Gemma coverage and one participating parent |
 | D6 Live DFlash2 integration | Planned | D=1/3/7 numerical and server controls |
 | D7 Lifecycle and performance | Planned | Native-context recovery and comparison matrix |
 
-No stage completes merely because startup succeeds or output looks plausible. At the user's request, D3a starts independently with existing kernel/metadata fixtures; D1/D2 controls and contracts remain prerequisites for later live integration and are not marked complete.
+No stage completes merely because startup succeeds or output looks plausible. D3a was implemented independently at the user's request. Work now resumes in dependency order at D1; ordinary controls and D2 contracts remain prerequisites for later live integration.
+
+### D1a pinned artifacts and offline metadata audit
+
+Implemented on 2026-10-11 for user review. The [artifact manifest](benchmarks/data/dflash2-qwen27b-artifacts.json) pins immutable repository revisions, filenames, byte lengths and SHA-256 hashes for the existing Unsloth IQ4_XS target, the Inco Q4_K_M DFlash2 sidecar and its publisher configuration. The sidecar and configuration are cached in `llama-cache`; no model binary is added to Git.
+
+| Input | Revision | Verified file bytes |
+| --- | --- | ---: |
+| Unsloth Qwen3.8-27B UD-IQ4_XS | `4ca720788d1e01f1bff70c033e0d0028fd02e502` | 14252845984 |
+| Inco Qwen3.8-27B DFlash2 Q4_K_M | `51962825493a48b846b40126d35c799ac4093ad0` | 1143006816 |
+| Inco DFlash2 publisher configuration | `015e795645c74b1a0eeef3b570031fb62e769bc5` | 1239 |
+
+[inspect_dflash_artifacts.py](benchmarks/inspect_dflash_artifacts.py) reuses the repository's GGUFReader, not a new binary parser. It verifies all input hashes before metadata inspection, validates required field/array types, bounds and checked products, and rejects replaced/changed inputs before publishing a report. CLI paths are configurable; no host path is embedded in the manifest. Dependencies are already declared by `gguf-py`; the audit loads neither model weights into an inference context nor any accelerator.
+
+The real inputs pass: target trunk 64, draft layers five, block size eight, window 2048, K/V head dimension 128, eight KV heads, 32 query heads and encoded feature width 25600. Publisher outputs `[5,19,33,47,61]` map in order to GGUF input layers `[6,20,34,48,62]`. Required projections, convolution bases and selector shapes match. The sidecar has no token-embedding or output-projection tensor, so it borrows those target weights; its KV remains independent rather than aliasing the target cache.
+
+Both files have the same 248320 ordered tokens/types and tokenizer model. Their fingerprint is `b9878640053a6c13f1a46e2982a770d86b41f56aae027b0d6f9f0601fe69793b`. One conversion difference is retained explicitly: publisher EOS 248044 names `<|endoftext|>`, while both GGUF EOS flags use 248046, `<|im_end|>`. The audit warns on this recognized end-marker alias, requires target/draft converted EOS flags to agree, and still rejects arbitrary EOS or mask mismatches. Mask ID 248070 matches the trained configuration; its token spelling is not used to invent a different mask.
+
+The sidecar tensor payload totals 1132057600 bytes (1079.614 MiB). This is artifact accounting, not a measured GPU allocation or a fit guarantee. The report deliberately retains `runtime_qualified: false`. D1b/D1c must still establish ordinary execution, kernel/mask behavior, stopping/rejection and physical memory requirements.
+
+```sh
+# Install the existing GGUF tools' dependencies in your Python environment.
+python -m pip install -e ./gguf-py
+python benchmarks/inspect_dflash_artifacts.py \
+  --target /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --draft /path/to/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \
+  --draft-config /path/to/pinned/config.json
+python -m unittest discover -s benchmarks/server-ab/tests -p test_dflash_artifacts.py
+```
+
+The initial profile stub failed 89 assertions. Follow-up tests failed before end-marker handling, manifest validation and stable-input orchestration existed. All 22 tests now pass, including a real small GGUF round trip, feature-order conversion, wrong target/sidecar, missing or malformed fields/tensors, integer/type/size bounds, vocabulary identity, checksums, duplicate/oversized JSON and replacement after hashing. The project's pinned ty check passes for both new Python files. Existing sweep and qualification suites pass 32 and 18 tests.
+
+Evidence: `/tmp/dflash2-d1a-red-profile-tests.log`, `/tmp/dflash2-d1a-red-integrity-tests.log`, `/tmp/dflash2-d1a-red-stable-input-tests.log`, `/tmp/dflash2-d1a-final-tests.log`, `/tmp/dflash2-d1a-typecheck.log` and `/tmp/dflash2-d1a-real-artifact-audit.json`. Production was not stopped or reconfigured for this stage. No runtime admission, loader, kernel or arena behavior changed.
 
 ### D3a checked launch planning
 
-Implemented on 2026-10-11, staged for user review:
+Implemented on 2026-10-11 and committed at `0f9c78645`:
 
 - Head-256 MMA query-column selection follows stock through eight rows for the existing admitted grouped-head ratios. Turing-only builds retain 32-column tiles and can require multiple query tiles. Invalid widths/groups select no tile.
 - Span launch planning derives query-tile count rather than assuming one, checks destination/work and fixup-size arithmetic, and looks up the actual selected-pair kernel before reporting resources.
