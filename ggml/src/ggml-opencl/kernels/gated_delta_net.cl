@@ -33,6 +33,15 @@
 #ifndef USE_QCOM_SUBGROUP_SHUFFLE
 #define USE_QCOM_SUBGROUP_SHUFFLE 0
 #endif
+// GDN_FUSED_IO=1 builds the variant the host uses when it fuses neighbouring
+// graph nodes into this op: the state snapshots go to snap_buf (the recurrent
+// cache, replacing the cpy that would copy them there), and with a non-zero
+// state_row_stride the input state of seq s is read from cache row
+// state_rows[s] (replacing the get_rows that gathered it). The default build
+// is unchanged.
+#ifndef GDN_FUSED_IO
+#define GDN_FUSED_IO 0
+#endif
 
 #define WG_SIZE             (SUBGROUP_SIZE * SUBGROUPS_PER_WG)
 #define LANE_GROUPS_PER_SG  (SUBGROUP_SIZE / LANES_PER_COLUMN)
@@ -101,7 +110,15 @@ kernel void kernel_gated_delta_net(
         // First token to process. The chunked prefill path (gated_delta_net_chunk.cl) takes the
         // leading whole chunks and hands the state over through state_buf. It is scalar-gate only,
         // so the multi-token KDA build never sees t0 != 0 and compiles it out (register budget).
-        uint t0_arg) {
+        uint t0_arg
+#if GDN_FUSED_IO
+        ,
+        global       char * snap_buf,  ulong off_snap,
+        uint  snap_slot_stride,
+        global const char * rows_buf,  ulong off_rows,
+        ulong state_row_stride
+#endif
+        ) {
 #if KDA && COLS_PER_LANE_GROUP > 1
     const uint t0 = 0;
 #else
@@ -140,6 +157,25 @@ kernel void kernel_gated_delta_net(
     const uint state_out_base      = (seq_id * H_v + head_id) * state_size;
     const uint state_size_per_snap = state_size * H_v * n_seqs;
 
+#if GDN_FUSED_IO
+    global float * data_snap = (global float *)(snap_buf + off_snap);
+    uint state_in_base = state_base;
+    if (state_row_stride != 0) {
+        global const int * state_rows = (global const int *)(rows_buf + off_rows);
+        data_state   += (ulong)state_rows[seq_id] * state_row_stride;
+        state_in_base = head_id * state_size;
+    }
+#define STATE_IN_BASE   state_in_base
+#define SNAP_DST        data_snap
+#define SNAP_SLOT(slot) ((slot) * snap_slot_stride + state_out_base)
+#define FINAL_BASE      state_base
+#else
+#define STATE_IN_BASE   state_base
+#define SNAP_DST        data_dst
+#define SNAP_SLOT(slot) (s_off + (slot) * state_size_per_snap + state_out_base)
+#define FINAL_BASE      (s_off + state_base)
+#endif
+
     __local float reduce_temp[WG_SIZE];
     __local float * temp_ptr = reduce_temp + sg_id * SUBGROUP_SIZE;
 
@@ -149,7 +185,7 @@ kernel void kernel_gated_delta_net(
         const uint col = sg_col_base + cg * LANE_GROUPS_PER_SG + lane_group;
         #pragma unroll
         for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            s_shard[cg][r] = data_state[state_base + col * S_V + r * LANES_PER_COLUMN + lane];
+            s_shard[cg][r] = data_state[STATE_IN_BASE + col * S_V + r * LANES_PER_COLUMN + lane];
         }
     }
 
@@ -235,10 +271,10 @@ kernel void kernel_gated_delta_net(
                 #pragma unroll
                 for (uint cg = 0; cg < COLS_PER_LANE_GROUP; cg++) {
                     const uint col = sg_col_base + cg * LANE_GROUPS_PER_SG + lane_group;
-                    const uint slot_base = s_off + (uint)target_slot * state_size_per_snap + state_out_base;
+                    const uint slot_base = SNAP_SLOT((uint)target_slot);
                     #pragma unroll
                     for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                        data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
+                        SNAP_DST[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
                     }
                 }
             }
@@ -251,7 +287,7 @@ kernel void kernel_gated_delta_net(
             const uint col = sg_col_base + cg * LANE_GROUPS_PER_SG + lane_group;
             #pragma unroll
             for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                data_dst[s_off + state_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
+                SNAP_DST[FINAL_BASE + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
             }
         }
     }

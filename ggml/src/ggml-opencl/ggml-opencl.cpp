@@ -672,6 +672,7 @@ struct ggml_backend_opencl_context {
     bool disable_fusion;
     bool fuse_mm_glu = true;                     // opt-out GGML_OPENCL_FUSE_MM_GLU=0 (byte-identical gate+up GEMV + GLU, q4_K FFN)
     bool fuse_rms_add = true;                    // opt-out GGML_OPENCL_FUSE_RMS_ADD=0 (fused rms_norm*w + residual)
+    bool fuse_gdn_cache = true;                  // opt-out GGML_OPENCL_FUSE_GDN_CACHE=0 (gated_delta_net writes its snapshots into the cache)
     bool f16_mrow = true;                        // opt-out GGML_OPENCL_F16_MROW=0 (multi-row-per-WG f16 decode GEMV for attn proj + lm_head)
     int  f16_mrow_rpt = 1;                       // GGML_OPENCL_F16_MROW_RPT={1,2,4,8,16} rows-per-subgroup register blocking
 
@@ -1146,6 +1147,9 @@ struct ggml_backend_opencl_context {
     // [size_idx][kda][tgpp] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
     // tgpp 0 = TG variant (COLS_PER_LANE_GROUP=1), tgpp 1 = prefill variant (COLS_PER_LANE_GROUP=4).
     cl_kernel kernel_gated_delta_net_f32[4][2][2] = {};
+    // GDN_FUSED_IO=1 variants, built on first use from the same options
+    cl_kernel kernel_gated_delta_net_f32_fused[4][2][2] = {};
+    std::string gated_delta_net_opts[4][2][2];
     cl_kernel kernel_ssm_scan_f32 = nullptr;
     // Chunkwise (WY) gated_delta_net prefill, S_V=128 scalar gate only; see
     // kernels/gated_delta_net_chunk.cl. Default on for X2-class Adreno; GGML_OPENCL_GDN_CHUNK=0/1
@@ -4873,6 +4877,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
                     // Please remember to implement code to handle it.
                     opts += " -DSUBGROUPS_PER_WG=" + std::to_string(spw);
 
+                    backend_ctx->gated_delta_net_opts[si][kda][tgpp] = opts;
                     cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
 
                     CL_CHECK((backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp] =
@@ -9317,6 +9322,9 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     if (const char * env = getenv("GGML_OPENCL_FUSE_RMS_ADD")) {
         backend_ctx->fuse_rms_add = atoi(env) != 0;
     }
+    if (const char * env = getenv("GGML_OPENCL_FUSE_GDN_CACHE")) {
+        backend_ctx->fuse_gdn_cache = atoi(env) != 0;
+    }
     if (const char * env = getenv("GGML_OPENCL_F16_MROW")) {
         backend_ctx->f16_mrow = atoi(env) != 0;
     }
@@ -11074,6 +11082,16 @@ static void ggml_opencl_op_rms_norm_mul_add_fused(ggml_backend_t backend, ggml_t
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+// gated_delta_net fused with its neighbouring graph nodes; matchers and dispatch are defined with the op.
+struct ggml_opencl_gdn_fused {
+    const ggml_tensor * snap_view   = nullptr; // [D, n_seqs, n_written] cache view the snapshots go to
+    cl_ulong            slot_stride = 0;       // floats between rollback groups
+};
+static int  ggml_opencl_try_gdn_cache_fusion(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph, int node_idx,
+                                             ggml_opencl_gdn_fused & fused);
+static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tensor * dst, const ggml_opencl_gdn_fused * fused,
+                                              cl_uint t0, cl_mem tail_state, cl_ulong off_tail_state);
+
 static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
@@ -11168,6 +11186,17 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
             continue;
         }
 #endif
+        // gated_delta_net + the cpy that scatters its state snapshots into the recurrent cache:
+        // the kernel writes them there itself and the cpy is skipped.
+        if (!backend_ctx->disable_fusion && backend_ctx->fuse_gdn_cache && node->op == GGML_OP_GATED_DELTA_NET) {
+            ggml_opencl_gdn_fused fused;
+            const int skip = ggml_opencl_try_gdn_cache_fusion(backend_ctx, cgraph, i, fused);
+            if (skip > 0) {
+                ggml_cl_gated_delta_net_recurrent(backend, node, &fused, 0, nullptr, 0);
+                i += skip;
+                continue;
+            }
+        }
 
         bool ok = ggml_cl_compute_forward(backend, node);
         if (!ok) {
@@ -38472,9 +38501,119 @@ static void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+// The GDN_FUSED_IO=1 build of a gated_delta_net kernel, compiled the first time a fusion needs it.
+static cl_kernel ggml_cl_gated_delta_net_fused_kernel(ggml_backend_opencl_context * backend_ctx, int si, int kda, int tgpp) {
+    cl_kernel & kernel = backend_ctx->kernel_gated_delta_net_f32_fused[si][kda][tgpp];
+    if (kernel == nullptr) {
+    #ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gated_delta_net.cl.h"
+        };
+    #else
+        const std::string kernel_src = read_file("gated_delta_net.cl");
+    #endif
+        cl_int err;
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(),
+                                                    backend_ctx->gated_delta_net_opts[si][kda][tgpp] + " -DGDN_FUSED_IO=1");
+        CL_CHECK((kernel = clCreateKernel(prog, "kernel_gated_delta_net", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+    }
+    return kernel;
+}
+
+// Tokens the chunked prefill takes (whole 64-token chunks before the reserved tail), 0 when
+// the op runs on the recurrent kernel alone. At least two chunks: a single chunk does not
+// amortise the prep. The fusions below are wired into the recurrent kernel only, so they
+// decline any op this returns non-zero for.
+static int64_t ggml_cl_gdn_chunk_tokens(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * dst) {
+    const ggml_tensor * src_v = dst->src[2];
+    const int64_t S_v      = src_v->ne[0];
+    const int64_t n_tokens = src_v->ne[2];
+    const int64_t K        = ggml_get_op_params_i32(dst, 0);
+    const bool    kda      = dst->src[3]->ne[0] == S_v;
+    const int64_t CH       = 64;
+    if (!backend_ctx->gdn_chunk || backend_ctx->kernel_gdn_chunk_scan == nullptr || S_v != 128 || kda) {
+        return 0;
+    }
+    const int64_t reserve = K > 1 ? K : 0;
+    return n_tokens - reserve >= 2 * CH ? ((n_tokens - reserve) / CH) * CH : 0;
+}
+
+// gated_delta_net -> cpy(snapshot tail -> recurrent cache): the kernel writes its K state
+// snapshots straight into the cache (slot s -> rollback group s, slot 0 newest) and the cpy
+// is skipped. Mirrors ggml_cuda_try_gdn_cache_fusion. Returns the number of nodes to skip
+// after the gdn (0 = no fusion).
+static int ggml_opencl_try_gdn_cache_fusion(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph, int node_idx,
+                                            ggml_opencl_gdn_fused & fused) {
+    const ggml_tensor * gdn = cgraph->nodes[node_idx];
+    // the kernel leaves the snapshot tail unwritten, so the gdn output must not be a graph output
+    if (gdn->op != GGML_OP_GATED_DELTA_NET || gdn->type != GGML_TYPE_F32 ||
+        (gdn->flags & GGML_TENSOR_FLAG_OUTPUT) || ggml_cl_gdn_chunk_tokens(backend_ctx, gdn) > 0) {
+        return 0;
+    }
+
+    const ggml_tensor * src_v     = gdn->src[2];
+    const int64_t       S_v       = src_v->ne[0];
+    const int64_t       H         = src_v->ne[1];
+    const int64_t       n_tokens  = src_v->ne[2];
+    const int64_t       n_seqs    = src_v->ne[3];
+    const int64_t       D         = S_v * S_v * H;
+    const int64_t       K         = ggml_get_op_params_i32(gdn, 0);
+    const int64_t       n_written = std::min<int64_t>(n_tokens, K);
+
+    // the snapshot tail starts right after the attention scores
+    const size_t tail_off = ggml_row_size(GGML_TYPE_F32, S_v * H * n_tokens * n_seqs);
+
+    // the snapshot cpy is the first real node after the gdn (skip views/no-ops)
+    const ggml_tensor * cpy  = nullptr;
+    int                 skip = 0;
+    for (int j = node_idx + 1; j < cgraph->n_nodes && cpy == nullptr; ++j) {
+        const ggml_tensor * n = cgraph->nodes[j];
+        if (ggml_is_empty(n) || n->op == GGML_OP_RESHAPE || n->op == GGML_OP_TRANSPOSE ||
+            n->op == GGML_OP_VIEW || n->op == GGML_OP_PERMUTE || n->op == GGML_OP_NONE) {
+            continue;
+        }
+        if (n->op != GGML_OP_CPY || (n->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+            return 0;
+        }
+        cpy  = n;
+        skip = j - node_idx;
+    }
+    if (cpy == nullptr) {
+        return 0;
+    }
+
+    const ggml_tensor * src = cpy->src[0]; // view of the gdn snapshot tail
+    const ggml_tensor * dst = cpy->src[1]; // cache view the kernel writes to
+
+    if (src->op != GGML_OP_VIEW || src->view_src != gdn || src->view_offs != tail_off ||
+        !ggml_is_contiguous(src)) {
+        return 0;
+    }
+
+    // dst is the [D, n_seqs, n_written] cache view with the per-seq stride the kernel assumes
+    if (dst->op != GGML_OP_VIEW || dst->type != GGML_TYPE_F32 || dst->extra == nullptr ||
+        dst->ne[0] != D || dst->ne[1] != n_seqs || dst->ne[2] != n_written || dst->ne[3] != 1 ||
+        dst->nb[0] != ggml_type_size(GGML_TYPE_F32) || dst->nb[1] != (size_t) ggml_row_size(GGML_TYPE_F32, D)) {
+        return 0;
+    }
+
+    const cl_ulong slot_stride = K > 1 ? (cl_ulong) (dst->nb[2] / sizeof(float)) : 0;
+    // the kernel forms slot*stride + D*n_seqs as a uint
+    if (slot_stride * (cl_ulong) K + (cl_ulong) D * n_seqs > (cl_ulong) UINT32_MAX) {
+        return 0;
+    }
+
+    fused.snap_view   = dst;
+    fused.slot_stride = slot_stride;
+    return skip;
+}
+
 // The recurrent kernel over tokens t0..n_tokens-1. tail_state (when set) replaces the
 // op's input state: the chunked path leaves the state after its whole chunks there.
-static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tensor * dst,
+// fused (when set) is a fusion the graph loop matched, only ever for an op that does not
+// take the chunked path.
+static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tensor * dst, const ggml_opencl_gdn_fused * fused,
                                               cl_uint t0, cl_mem tail_state, cl_ulong off_tail_state) {
     GGML_ASSERT(dst);
     GGML_ASSERT(dst->extra);
@@ -38533,7 +38672,8 @@ static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tenso
     // spw needs adjustment when S_v != 128
     const int spw  = (tgpp == 0) ? 1 : 1;
 
-    cl_kernel kernel = backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp];
+    cl_kernel kernel = fused ? ggml_cl_gated_delta_net_fused_kernel(backend_ctx, si, kda, tgpp)
+                             : backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp];
     GGML_ASSERT(kernel != nullptr);
 
     const cl_uint s_off = S_v * H_v * n_tokens * n_seqs;
@@ -38605,6 +38745,30 @@ static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tenso
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),    &K));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),    &t0));
 
+    if (fused) {
+        // snapshots: the cache view the skipped cpy would have filled, or the dst tail
+        cl_mem   snap_mem         = extra_dst->data_device;
+        cl_ulong off_snap         = off_dst + (cl_ulong) s_off * sizeof(float);
+        cl_uint  snap_slot_stride = S_v * S_v * H_v * n_seqs;
+        if (fused->snap_view != nullptr) {
+            ggml_tensor_extra_cl * extra_cache = (ggml_tensor_extra_cl *) fused->snap_view->extra;
+            GGML_ASSERT(extra_cache);
+            snap_mem         = extra_cache->data_device;
+            off_snap         = extra_cache->offset + fused->snap_view->view_offs;
+            snap_slot_stride = (cl_uint) fused->slot_stride;
+        }
+        // input state: src_state as passed above (row stride 0)
+        cl_mem   rows_mem         = extra_state->data_device;
+        cl_ulong off_rows         = 0;
+        cl_ulong state_row_stride = 0;
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &snap_mem));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_snap));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &snap_slot_stride));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &rows_mem));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_rows));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &state_row_stride));
+    }
+
     // Subgroup size is 64 for Adreno and 32 for Intel
     const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : -1;
     if (sg_size < 0) {
@@ -38675,18 +38839,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const int64_t H_v      = src_v->ne[1];
     const int64_t n_tokens = src_v->ne[2];
     const int64_t n_seqs   = src_v->ne[3];
-    const int64_t K        = ggml_get_op_params_i32(dst, 0);
-    const bool    kda      = src_g->ne[0] == S_v;
 
-    // At least two chunks: a single chunk does not amortise the prep.
-    const int64_t CH = 64;
-    int64_t n_full = 0;
-    if (backend_ctx->gdn_chunk && backend_ctx->kernel_gdn_chunk_scan != nullptr && S_v == 128 && !kda) {
-        const int64_t reserve = K > 1 ? K : 0;
-        if (n_tokens - reserve >= 2 * CH) {
-            n_full = ((n_tokens - reserve) / CH) * CH;
-        }
-    }
+    const int64_t CH     = 64;
+    const int64_t n_full = ggml_cl_gdn_chunk_tokens(backend_ctx, dst);
 
     const int64_t n_chunks = n_full / CH;
     const int64_t n_tail   = n_tokens - n_full;
@@ -38705,7 +38860,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     // the whole op stays on the recurrent kernel.
     if (n_full == 0 || scr_bytes > backend_ctx->max_alloc_size ||
         (n_tail > 0 && state_bytes > backend_ctx->max_alloc_size)) {
-        ggml_cl_gated_delta_net_recurrent(backend, dst, 0, nullptr, 0);
+        ggml_cl_gated_delta_net_recurrent(backend, dst, nullptr, 0, nullptr, 0);
         return;
     }
 
@@ -38828,7 +38983,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     }
 
     if (n_tail > 0) {
-        ggml_cl_gated_delta_net_recurrent(backend, dst, (cl_uint) n_full, backend_ctx->prealloc_gdn_state.buffer, 0);
+        ggml_cl_gated_delta_net_recurrent(backend, dst, nullptr, (cl_uint) n_full, backend_ctx->prealloc_gdn_state.buffer, 0);
     }
 }
 
