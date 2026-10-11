@@ -2200,6 +2200,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
     }
     if (moe_use_pool) {
+        // one-shot proof that the batched path is engaged for this layer width
+        {
+            static int moe_logged = 0;
+            if (++moe_logged <= 3) {
+                LLAMA_LOG_INFO("%s: MoE pool ACTIVE l=%d n_tok=%lld gate_up=%p\n",
+                               __func__, il, (long long) n_tokens, (const void *) gate_up_exps);
+            }
+        }
         gate_up_exps = nullptr; // separate gate/up path; fused tensor is absent or virtual
         gate_exps = (ggml_tensor *) moe_gate[il];
         up_exps   = (ggml_tensor *) moe_up[il];
