@@ -15,6 +15,35 @@ set(LLAMA_CORE_SOURCES
     llama-batch.cpp
     llama-chat.cpp
     llama-context.cpp
+    llama-context-workspace.cpp
+    llama-context-memory.cpp
+    llama-kv-stream-binding.cpp
+    llama-kv-stream-capture.cpp
+    llama-kv-stream-config.cpp
+    llama-kv-stream-content.cpp
+    llama-kv-stream-host.cpp
+    llama-kv-stream-layer-lease.cpp
+    llama-kv-stream-logical-cache.cpp
+    llama-kv-stream-model.cpp
+    llama-kv-stream-mtp-proxy.cpp
+    llama-kv-stream-policy.cpp
+    llama-kv-stream-positions.cpp
+    llama-kv-stream-publication.cpp
+    llama-kv-stream-resident.cpp
+    llama-kv-stream-session.cpp
+    llama-kv-stream-writer.cpp
+    llama-memory-budget.cpp
+    llama-memory-completion.cpp
+    llama-memory-executor-cuda.cpp
+    llama-memory-executor.cpp
+    llama-memory-layout.cpp
+    llama-memory-phase-owner.cpp
+    llama-memory-phase.cpp
+    llama-memory-plan.cpp
+    llama-memory-recurrent-spill.cpp
+    llama-memory-requirements.cpp
+    llama-memory-transition.cpp
+    llama-memory-workspace.cpp
     llama-cparams.cpp
     llama-grammar.cpp
     llama-graph.cpp
@@ -47,65 +76,6 @@ set(LLAMA_CORE_SOURCES
 add_library(llama
             ../include/llama.h
             ${LLAMA_CORE_SOURCES}
-            llama-context-memory.cpp
-            llama-context-memory.h
-            llama-context-workspace.cpp
-            llama-context-workspace.h
-            llama-kv-stream-config.cpp
-            llama-kv-stream-config.h
-            llama-kv-stream-policy.cpp
-            llama-kv-stream-policy.h
-            llama-kv-stream-layer-lease.cpp
-            llama-kv-stream-layer-lease.h
-            llama-kv-stream-binding.cpp
-            llama-kv-stream-binding.h
-            llama-kv-stream-host.cpp
-            llama-kv-stream-host.h
-            llama-kv-stream-content.cpp
-            llama-kv-stream-content.h
-            llama-kv-stream-logical-cache.cpp
-            llama-kv-stream-logical-cache.h
-            llama-kv-stream-resident.cpp
-            llama-kv-stream-mtp-proxy.cpp
-            llama-kv-stream-mtp-proxy.h
-            llama-kv-stream-publication.cpp
-            llama-kv-stream-publication.h
-            llama-kv-stream-resident.h
-            llama-kv-stream-capture.cpp
-            llama-kv-stream-capture.h
-            llama-kv-stream-session.cpp
-            llama-kv-stream-session.h
-            llama-kv-stream-model.cpp
-            llama-kv-stream-model.h
-            llama-kv-stream-positions.cpp
-            llama-kv-stream-positions.h
-            llama-kv-stream-prefetch.h
-            llama-memory-completion.cpp
-            llama-memory-completion.h
-            llama-kv-stream-writer.cpp
-            llama-kv-stream-writer.h
-            llama-memory-executor.cpp
-            llama-memory-executor.h
-            llama-memory-executor-cuda.cpp
-            llama-memory-executor-cuda.h
-            llama-memory-workspace.cpp
-            llama-memory-workspace.h
-            llama-memory-transition.cpp
-            llama-memory-transition.h
-            llama-memory-layout.cpp
-            llama-memory-layout.h
-            llama-memory-budget.cpp
-            llama-memory-budget.h
-            llama-memory-phase.cpp
-            llama-memory-phase.h
-            llama-memory-phase-owner.cpp
-            llama-memory-phase-owner.h
-            llama-memory-plan.cpp
-            llama-memory-plan.h
-            llama-memory-requirements.cpp
-            llama-memory-requirements.h
-            llama-memory-recurrent-spill.cpp
-            llama-memory-recurrent-spill.h
             unicode.h
             ${LLAMA_MODELS_SOURCES}
             )
@@ -120,9 +90,6 @@ set_target_properties(llama PROPERTIES
 
 # exclude non-model sources from unity build
 set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
-    llama-context-memory.cpp llama-context-workspace.cpp llama-memory-executor.cpp
-    llama-memory-executor-cuda.cpp llama-memory-workspace.cpp llama-memory-transition.cpp
-    llama-memory-layout.cpp llama-memory-plan.cpp llama-memory-requirements.cpp
     PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)

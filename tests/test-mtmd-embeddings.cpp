@@ -149,11 +149,11 @@ int main() {
         if (!t.assert_equal(0, mtmd_input_chunk_save(f.first, nullptr, 0, &bytes))) return;
         std::vector<char> encoded(bytes);
         if (!t.assert_equal(0, mtmd_input_chunk_save(f.first, encoded.data(), bytes, nullptr))) return;
-        // Version 1 image payload follows version, type, empty text count, and image-present byte.
+        // Version 2 image payload follows version, type, empty text count, and image-present byte.
         uint64_t version = 0, text_count = 1;
         std::memcpy(&version, encoded.data(), sizeof(version));
         std::memcpy(&text_count, encoded.data() + sizeof(version) + sizeof(uint32_t), sizeof(text_count));
-        if (!t.assert_equal(uint64_t(1), version) || !t.assert_equal(uint64_t(0), text_count)) return;
+        if (!t.assert_equal(uint64_t(2), version) || !t.assert_equal(uint64_t(0), text_count)) return;
         const size_t nx_offset = sizeof(version) + sizeof(uint32_t) + sizeof(text_count) + sizeof(uint8_t);
         const uint32_t nx = 8;
         std::memcpy(encoded.data() + nx_offset, &nx, sizeof(nx));

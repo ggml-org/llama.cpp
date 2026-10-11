@@ -893,7 +893,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if (params.mmproj_use_gpu && params.mmproj_device == nullptr && !params.devices.empty()) {
         params.mmproj_device = params.devices.front();
         params.mmproj_use_gpu = params.mmproj_device != nullptr;
-}
+    }
 
     if (params.kv_stream_pool_bytes && params.shared_device_memory_bytes) {
         throw std::invalid_argument("error: --kv-stream-pool-mib and --shared-device-memory-mib are mutually exclusive\n");

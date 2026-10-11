@@ -953,7 +953,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
         }
         if (arch == LLM_ARCH_QWEN35) {
             gguf_context_ptr gguf_ctx=get_gguf_ctx(arch,false,true);
-            auto model_and_ctx=get_model_and_ctx(gguf_ctx.get(),nullptr,seed,{});
+            auto model_and_ctx=get_model_and_ctx(gguf_ctx.get(),nullptr,seed,stdev,{});
             const std::string path=dir+"/qwen35-multi-recurrent.gguf";
             llama_model_save_to_file(model_and_ctx.first.get(),path.c_str());
         }

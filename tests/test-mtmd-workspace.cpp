@@ -163,7 +163,7 @@ int main(int argc,char ** argv) {
         workspace_fixture f;
         workspace_graph g(16);
         const auto before=*g.output;
-        f.first->iface.graph_optimize=[](ggml_backend_t,ggml_cgraph * graph) {
+        f.first->iface.graph_optimize=[](ggml_backend_t,ggml_cgraph * graph,ggml_backend_graph_optimize_params *) {
             ggml_graph_node(graph,ggml_graph_n_nodes(graph)-1)->op_params[0]=0;
         };
         std::vector<ggml_backend_memory_workspace_group> groups;

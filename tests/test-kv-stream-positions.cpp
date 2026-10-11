@@ -1,4 +1,5 @@
 #include "../src/llama-kv-stream-positions.h"
+#include "../src/llama-batch.h"
 #include "testing.h"
 
 #include <limits>
@@ -28,6 +29,37 @@ static llama_kv_cells cells_with(std::initializer_list<llama_pos> positions) {
 
 int main() {
     testing t;
+    t.test("native_mixed_rows_preserve_serial_positions_and_payload_bounds", [](testing & t) {
+        llama_batch_ext batch(8,2,2,1,nullptr,64,4);
+        auto text = [&](llama_pos position) {
+            const int index = batch.add_token(0);
+            t.assert_true(batch.set_token_id(index,1));
+            t.assert_true(batch.set_token_pos(index,&position));
+        };
+        text(10);
+        const float values[2] = {1,2};
+        for (int i = 0; i < 3; ++i) {
+            const int index = batch.add_token(0);
+            const llama_pos position[4] = {11+i/2,i,0,0};
+            t.assert_true(batch.set_token_embd(index,{values,1,2}));
+            t.assert_true(batch.set_token_pos(index,position));
+        }
+        text(13);
+        const llama_kv_stream_append_coordinates coordinates{100,256,9,4,false,false};
+        t.assert_true(llama_kv_stream_validate_append(batch,coordinates));
+        auto decode = coordinates; decode.decode = true;
+        t.assert_true(!llama_kv_stream_validate_append(batch,decode));
+        auto short_range = coordinates; short_range.capacity = 104;
+        t.assert_true(!llama_kv_stream_validate_append(batch,short_range));
+        batch.tokens[1].embd_off = SIZE_MAX;
+        t.assert_true(!llama_kv_stream_validate_append(batch,coordinates));
+        batch.tokens[1].embd_off = 0;
+        batch.tokens[1].seq_ids.insert(1);
+        t.assert_true(!llama_kv_stream_validate_append(batch,coordinates));
+        batch.tokens[1].seq_ids.erase(1);
+        batch.tokens[2].pos[0] = 9;
+        t.assert_true(!llama_kv_stream_validate_append(batch,coordinates));
+    });
     t.test("image_rows_append_physically_despite_overlapping_model_positions", [](testing & t) {
         coordinate_fixture f;
         t.assert_true(llama_kv_stream_validate_append(f.batch, f.coordinates));

@@ -21,7 +21,6 @@
 struct llama_model;
 class llama_batch_allocr;
 class llama_moe_cache;
-class llama_kv_stream_writer;
 
 class llama_io_read_i;
 class llama_io_write_i;
@@ -326,7 +325,6 @@ private:
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     llama_moe_cache_ptr moe_cache;
-
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};

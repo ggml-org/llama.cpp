@@ -1,7 +1,37 @@
 #include "llama-kv-stream-positions.h"
+#include "llama-batch.h"
 
 #include <algorithm>
 #include <limits>
+
+bool llama_kv_stream_validate_append(const llama_batch_ext & batch,
+        const llama_kv_stream_append_coordinates & c) noexcept {
+    if (batch.tokens.empty() || batch.tokens.size() > INT32_MAX || c.previous_position < -1 ||
+            (c.position_channels != 1 && c.position_channels != 4) ||
+            c.first_cell > c.capacity || batch.tokens.size() > c.capacity-c.first_cell) return false;
+    int64_t previous = c.previous_position;
+    for (size_t i = 0; i < batch.tokens.size(); ++i) {
+        const auto & token = batch.tokens[i];
+        const bool image = token.has_embd;
+        if ((token.id != LLAMA_TOKEN_NULL) == image || token.seq_ids.size() != 1 || !token.seq_ids.count(0)) return false;
+        if (image) {
+            if (c.decode || c.linear_required || !batch.n_embd || token.embd_off > batch.embd.size() ||
+                    batch.n_embd > batch.embd.size()-token.embd_off) return false;
+        } else if (token.id < 0 || token.id >= batch.n_vocab) return false;
+        int64_t position = token.pos[0];
+        if (position == -1 && !image) {
+            if (previous >= std::numeric_limits<llama_pos>::max()-1) return false;
+            position = previous+1;
+        }
+        if (position < 0 || (image && c.position_channels > 1 ? position < previous : position <= previous) ||
+                (c.linear_required && position != int64_t(c.first_cell)+int64_t(i)) ||
+                (c.position_channels == 1 && position != previous+1)) return false;
+        if (image) for (uint32_t channel = 1; channel < c.position_channels; ++channel)
+            if (token.pos[channel] < 0) return false;
+        previous = position;
+    }
+    return true;
+}
 
 bool llama_kv_stream_validate_append(const llama_batch & batch, const llama_kv_stream_append_coordinates & c) noexcept {
     if (batch.n_tokens <= 0 || bool(batch.token) == bool(batch.embd) || c.previous_position < -1 ||

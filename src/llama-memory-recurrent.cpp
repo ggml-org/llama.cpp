@@ -60,6 +60,7 @@ llama_memory_recurrent::llama_memory_recurrent(
     rs_idx.assign(n_seq_max, 0);
     const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
     const bool want_spill = n_rs_seq && (stream_host_spill || (spill_flag && std::strcmp(spill_flag,"1") == 0));
+    if (want_spill && hparams.ple_conv_state() > 0) throw std::runtime_error("recurrent host spill does not support PLE history");
     if (want_spill && n_seq_max != 1) throw std::runtime_error("recurrent host spill requires one serial sequence");
 
 
@@ -153,9 +154,11 @@ llama_memory_recurrent::llama_memory_recurrent(
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
-    if (is_empty() && n_rs_seq > 0) {
-        this->n_rs_seq = 0;
-        LLAMA_LOG_INFO("%s: disabling rollback snapshots because the memory module is empty\n", __func__);
+    if (is_empty()) {
+        if (n_rs_seq > 0) {
+            this->n_rs_seq = 0;
+            LLAMA_LOG_INFO("%s: disabling rollback snapshots because the memory module is empty\n", __func__);
+        }
     }
 
     if (want_spill && !is_empty()) {
@@ -192,7 +195,6 @@ llama_memory_recurrent::llama_memory_recurrent(
             }
             LLAMA_LOG_INFO("%s: %s RS publication stage size = %.2f MiB\n",__func__,
                 ggml_backend_buft_name(stage_type),double(spill->staged_device_bytes())/(1024.0*1024.0));
-
         }
     }
 
@@ -245,6 +247,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
+
     if (seq_id >= 0 && (uint32_t) seq_id >= this->n_seq_max) {
         LLAMA_LOG_ERROR("%s: invalid seq_id (%d) - larger than n_seq_max (%d)\n", __func__, seq_id, this->n_seq_max);
         return false;
@@ -287,10 +290,11 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                     return true;
                 }
                 const llama_pos rollback = cell.pos - (p0 - 1);
+                // pending rollback is single-use
                 const bool pending = rs_idx[seq_id] != 0;
                 if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
                     if (spill && !spill_slot_valid(uint32_t(rollback))) return false;
-                    set_rs_idx(seq_id,uint32_t(rollback));
+                    set_rs_idx(seq_id, (uint32_t) rollback);
                     cell.pos = p0 - 1;
                     return true;
                 }

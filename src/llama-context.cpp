@@ -19,6 +19,7 @@
 #include "llama.h"
 
 #include <cinttypes>
+#include <algorithm>
 #include <cmath>
 #include <atomic>
 #include <cstring>
@@ -327,6 +328,12 @@ llama_context::llama_context(
     }
     cparams.mtp_publish_host = bool(mtp_attached);
 
+    if (cparams.kv_stream_auxiliary_layers || cparams.mtp_publish_host) {
+        // MTP consumes these outputs; measure their graph shape before borrowing the shared arena.
+        cparams.embeddings_nextn = true;
+        cparams.embeddings_nextn_masked = cparams.mtp_publish_host;
+    }
+
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
@@ -599,6 +606,7 @@ llama_context::~llama_context() {
     if (!model.hparams.no_alloc && !opt_ctx) {
         llama_context_memory_diagnostics shared;
         const bool shared_grant = compute_memory && compute_memory->diagnostics(shared);
+
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
@@ -1092,7 +1100,8 @@ bool llama_context::resume_kv_device(llama_memory_text_phase phase) {
     if (!cparams.kv_streaming() || !compute_memory || !compute_memory->kv_device_suspended()) return false;
     const bool previous_decode = cparams.kv_stream_decode;
     const bool resumed = compute_memory->resume_kv(phase,[&] {
-        gf_res_prev->reset();
+        for (auto & previous : gf_res_prev) if (previous) previous->reset();
+        gf_res_prev_active = nullptr;
         gf_res_reserve->reset();
         cparams.kv_stream_decode = phase == llama_memory_text_phase::decode;
         auto reserved = memory->init_full();
@@ -1566,8 +1575,7 @@ void llama_context::set_causal_attn(bool value) {
 
     cparams.causal_attn = value;
 
-    // no scheduler reserve needed because graph shapes must not depend on causal_attn, a flip only rebuilds the graph
-    //sched_need_reserve = true;
+    sched_reserve_state.invalidate();
 }
 
 bool llama_context::get_causal_attn() const {
@@ -2193,11 +2201,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     if (cparams.kv_streaming()) {
         auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
-        if (!stream || !stream->complete() || batch_inp.n_tokens < 0) {
+        if (!stream || !stream->complete()) {
             LLAMA_LOG_ERROR("%s: KV streaming requires an idle target append\n",__func__); return -1;
         }
         const size_t first = stream->tokens();
-        if (first > cparams.n_ctx_seq || size_t(batch_inp.n_tokens) > cparams.n_ctx_seq-first) {
+        if (first > cparams.n_ctx_seq || batch_inp.tokens.size() > cparams.n_ctx_seq-first) {
             LLAMA_LOG_ERROR("%s: KV streaming context capacity exceeded\n",__func__); return 1;
         }
         const auto previous_position = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_max(0);
@@ -2287,6 +2295,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     output_swaps.clear();
     embd_batch_idxs.clear();
+
     const bool reservation_was_pending = sched_reserve_state.begin();
     const uint64_t serial_transitions = compute_memory ? compute_memory->phase_transition_count() : 0;
     // Drain the other scheduler before reservation can discard or rewrite shared scratch.
@@ -4134,7 +4143,6 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 }
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    GGML_UNUSED(seq_id);
 
     if (memory) {
         memory->state_read(io, seq_id, flags);
