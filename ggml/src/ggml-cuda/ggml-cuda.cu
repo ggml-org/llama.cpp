@@ -4452,12 +4452,30 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #endif  // NDEBUG
 
                 bool ok = false;
-                // diagnostic (GGML_CUDA_OP_DIAG=1): host-side per-op timing so the
-                // decode token's device cost can be attributed without a profiler.
-                // Only active on the direct (non-captured) path, which is what the
-                // warmup steps execute.
+                // diagnostics (GGML_CUDA_OP_DIAG=1):
+                //  * node census: op-type histogram of every node the graph
+                //    computes, accumulated across warmup calls so the per-token
+                //    distribution of the 6930-node decode graph is visible.
+                //  * per-op host time: only meaningful on the direct (capture)
+                //    path, reported alongside the census.
                 static const bool op_diag = (getenv("GGML_CUDA_OP_DIAG") != nullptr);
                 if (op_diag) {
+                    {
+                        static std::map<std::string, int> census;
+                        static int census_n = 0;
+                        if (census_n == 0) census.clear();
+                        census[ggml_op_name(node->op)]++;
+                        census_n++;
+                        static int cen_done = -1;
+                        if (cen_done != census_n && census_n % 1000 == 0) {
+                            cen_done = census_n;
+                            if (census_n <= 7000) {
+                                std::string line;
+                                for (auto & kv : census) line += " " + kv.first + "=" + std::to_string(kv.second);
+                                GGML_LOG_INFO("%s: NODES after %d ops:%s\n", __func__, census_n, line.c_str());
+                            }
+                        }
+                    }
                     const auto o0 = ggml_time_us();
                     ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                     const double oms = (ggml_time_us() - o0) / 1000.0;
