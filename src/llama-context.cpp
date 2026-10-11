@@ -867,6 +867,15 @@ void llama_context::sched_reserve() {
             n_seqs, n_seqs, n_seqs, mctx.get(), true,
             measurements.data() + backend_ptrs.size());
         if (!gf_pp || !gf_tg) return false;
+        if (model.arch == LLM_ARCH_DFLASH && model.hparams.n_embd_inp_enc() > 0) {
+            // Injection and block prediction use different graph inputs but the same workspace.
+            std::vector<size_t> injection(backend_ptrs.size());
+            if (!graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), true, injection.data(), true)) return false;
+            for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+                measurements[i] = std::max(measurements[i], injection[i]);
+                measurements[backend_ptrs.size()+i] = std::max(measurements[backend_ptrs.size()+i], injection[i]);
+            }
+        }
         const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
         if (cparams.n_rs_seq && spill_flag && std::strcmp(spill_flag,"1") == 0 && n_seqs == 1) {
             const uint32_t width=std::min(n_tokens,cparams.n_rs_seq+1);
@@ -3101,7 +3110,7 @@ static void ubatch_prepare_reserve(
 }
 
 ggml_cgraph * llama_context::graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes, bool feature_input) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -3128,6 +3137,13 @@ ggml_cgraph * llama_context::graph_reserve(
 
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+
+    // Reservation builds topology only; it does not read the dummy embedding value.
+    float dummy_feature = 0;
+    if (feature_input) {
+        ubatch.token = nullptr;
+        ubatch.embd = &dummy_feature;
+    }
 
     ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
 

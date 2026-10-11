@@ -37,6 +37,55 @@ static bool rollback_probe = false;
 static bool vision_mtp_handoff = false;
 static bool serial_workspace_growth = false;
 static bool mtp_bit_exact_control = false;
+static const char * dflash_native_model = nullptr;
+
+// Qualify ordinary feature injection without a stream pool or a shared phase arena.
+static void test_dflash_native(testing & t, llama_model * model) {
+    auto cp = llama_context_default_params();
+    cp.n_ctx = 4096;
+    cp.n_batch = cp.n_ubatch = 256;
+    cp.n_seq_max = 1;
+    cp.n_rs_seq = 1;
+    cp.type_k = GGML_TYPE_Q8_0;
+    cp.type_v = GGML_TYPE_Q4_0;
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    context_ptr target(llama_init_from_model(model, cp), llama_free);
+    if (!t.assert_true(bool(target))) return;
+    common_params params;
+    params.n_ctx = 4096;
+    params.n_batch = params.n_ubatch = 256;
+    params.n_parallel = 1;
+    params.n_gpu_layers = 999;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    params.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+    params.speculative.draft.n_max = 1;
+    params.speculative.draft.n_min = 0;
+    params.speculative.draft.p_min = 0;
+    params.speculative.draft.n_gpu_layers = 999;
+    params.speculative.draft.mparams.path = dflash_native_model;
+    auto draft = common_speculative_init_from_params(params, model, target.get());
+    if (!t.assert_true(bool(draft) && draft->context())) return;
+    params.speculative.draft.ctx_tgt = target.get();
+    params.speculative.draft.ctx_dft = draft->context();
+    common_speculative_ptr spec(common_speculative_init(params.speculative, 1));
+    if (!t.assert_true(bool(spec))) return;
+    const auto tokens = common_tokenize(target.get(), "An ordinary DFlash2 feature injection control. ", true);
+    common_batch batch(target.get());
+    for (int i = 0; i < 256; ++i) batch.add(tokens[size_t(i)%tokens.size()], i, 0, i == 255);
+    if (!t.assert_equal(0, llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()))) return;
+    if (!t.assert_true(common_speculative_process(spec.get(), batch))) return;
+    t.assert_equal(llama_pos(255), llama_memory_seq_pos_max(llama_get_memory(draft->context()), 0));
+    llama_tokens proposals;
+    auto & dp = common_speculative_get_draft_params(spec.get(), 0);
+    dp.drafting = true;
+    dp.n_max = 1;
+    dp.pos0 = 256;
+    dp.id_last = tokens[0];
+    dp.prompt = &tokens;
+    dp.result = &proposals;
+    common_speculative_draft(spec.get());
+    t.assert_equal(size_t(1), proposals.size());
+}
 
 // Fail one candidate view after the draft's initial view, then permit parent recovery.
 struct serial_parent_view_failure {
@@ -383,6 +432,7 @@ int main(int argc,char ** argv) {
     });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--dflash-native") && i+1 < argc) dflash_native_model = argv[++i];
         f16_control = f16_control || !std::strcmp(argv[i],"--f16");
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
@@ -428,6 +478,11 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
+    if (dflash_native_model) {
+        if (!t.assert_true(bool(model))) return t.summary();
+        t.test("ordinary_dflash_feature_workspace", [&](testing & t) { test_dflash_native(t, model.get()); });
+        return t.summary();
+    }
     if (!t.assert_true(bool(model))) return t.summary();
     if (mtp_bit_exact_control) {
         t.test("streamed_and_native_mtp_bit_exact", [&](testing & t) {
