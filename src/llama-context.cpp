@@ -15,6 +15,8 @@
 
 #include <cinttypes>
 #include <chrono>
+#include <map>
+#include <string>
 
 static thread_local double moe_diag_publish_ms = 0.0;
 #include <cmath>

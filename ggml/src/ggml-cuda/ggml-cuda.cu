@@ -4451,7 +4451,38 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 GGML_UNUSED(integrated);
 #endif  // NDEBUG
 
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+                bool ok = false;
+                // diagnostic (GGML_CUDA_OP_DIAG=1): host-side per-op timing so the
+                // decode token's device cost can be attributed without a profiler.
+                // Only active on the direct (non-captured) path, which is what the
+                // warmup steps execute.
+                static const bool op_diag = (getenv("GGML_CUDA_OP_DIAG") != nullptr);
+                if (op_diag) {
+                    const auto o0 = ggml_time_us();
+                    ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+                    const double oms = (ggml_time_us() - o0) / 1000.0;
+                    if (oms > 0.02) {
+                        static std::map<std::string, std::pair<double, int>> op_time;
+                        auto & e = op_time[ggml_op_name(node->op)];
+                        e.first += oms; e.second++;
+                        static int op_n = 0;
+                        static bool reported_once = false;
+                        if (++op_n == 700 || !reported_once) {
+                            op_n = 0;
+                            reported_once = true;
+                            GGML_LOG_INFO("%s: op attribution (ms per layer, count per layer):\n", __func__);
+                            for (auto & kv : op_time) {
+                                if (kv.second.second >= 4) {
+                                    GGML_LOG_INFO("  %-16s %10.2f ms  x%4d\n", kv.first.c_str(),
+                                                   kv.second.first / 48.0, kv.second.second / 48);
+                                }
+                            }
+                            op_time.clear();
+                        }
+                    }
+                } else {
+                    ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+                }
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
