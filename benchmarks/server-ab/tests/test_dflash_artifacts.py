@@ -328,5 +328,83 @@ class IntegrityTests(unittest.TestCase):
             self.assertEqual(results[0]["tensors"]["toy.weight"], tensor(32, 2))
 
 
+class OrdinaryControls(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("dflash_controls", SCRIPT.parent / "run_dflash_controls.py")
+        assert spec is not None and spec.loader is not None
+        self.controls = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.controls)
+
+    def test_native_command_preserves_profile_without_streaming(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
+                               port=12351, draft_k="f16", draft_v="f16")
+        for depth in (1, 3, 7):
+            command = self.controls.server_command(args, 4096, depth)
+            for option, value in (("--spec-type", "draft-dflash"), ("--spec-draft-n-max", str(depth)),
+                                  ("--cache-type-k", "q8_0"), ("--cache-type-v", "q4_0"),
+                                  ("--spec-draft-type-k", "f16"), ("--spec-draft-type-v", "f16"),
+                                  ("--batch-size", "256"), ("--ubatch-size", "256"), ("--fit", "off"),
+                                  ("--n-gpu-layers", "999"), ("--spec-draft-ngl", "999")):
+                self.assertEqual(command[command.index(option)+1], value)
+            self.assertNotIn("--kv-stream-arena-mib", command)
+            self.assertNotIn("--kv-stream-auxiliary-layers", command)
+        with self.assertRaises(ValueError):
+            self.controls.server_command(args, 4096, 8)
+
+    def test_incomplete_or_nonfinite_results_are_not_successful(self):
+        result = {"tokens": [4]*32, "timings": {"prompt_n": 2304, "predicted_n": 32,
+                  "prompt_per_second": 500.0, "predicted_per_second": 50.0}}
+        self.controls.validate_result(result, 2304, 32)
+        for field in ("prompt_n", "predicted_n", "prompt_per_second", "predicted_per_second"):
+            broken = {"tokens": result["tokens"], "timings": dict(result["timings"])}
+            broken["timings"][field] = float("nan")
+            with self.assertRaises(ValueError):
+                self.controls.validate_result(broken, 2304, 32)
+        with self.assertRaises(ValueError):
+            self.controls.validate_result(dict(result, tokens=[4]), 2304, 32)
+
+    def test_capacity_failure_does_not_hide_kernel_or_other_failure(self):
+        for text in ("CUDA error: out of memory", "cudaMalloc failed: out of memory"):
+            self.assertEqual(self.controls.failure_kind(text), "capacity_failure")
+        for text in ("missing flash attention kernel", "invalid resource handle", "segmentation fault"):
+            self.assertEqual(self.controls.failure_kind(text), "failed")
+
+    def test_trace_requires_all_three_workloads(self):
+        rows = [{"event": "process", "role": "target", "kind": "tokens", "rows": 4, "ret": 0},
+                {"event": "process", "role": "draft", "kind": "features", "rows": 256, "ret": 0,
+                 "feature_width": 25600},
+                {"event": "process", "role": "draft", "kind": "tokens", "rows": 4, "ret": 0},
+                {"event": "tensor", "role": "draft", "name": "lattice", "file": "lattice.bin"},
+                {"event": "attention", "role": "draft", "query_rows": 4,
+                 "visible_rows": [2048, 2048, 2048, 2048], "mask_file": "mask.bin"}]
+        summary = self.controls.summarize_trace(rows, 3)
+        self.assertEqual(summary["injection_rows"], [256])
+        self.assertEqual(summary["draft_widths"], [4])
+        self.assertEqual(summary["target_widths"], [4])
+        for index in range(len(rows)):
+            with self.assertRaises(ValueError):
+                self.controls.summarize_trace(rows[:index]+rows[index+1:], 3)
+        with self.assertRaises(ValueError):
+            self.controls.summarize_trace(rows, 7)
+        warm = {"event": "process", "role": "draft", "kind": "tokens", "rows": 2,
+                "ret": 0, "warmup": True}
+        self.assertEqual(self.controls.summarize_trace([warm]+rows, 3)["draft_widths"], [4])
+
+    def test_trace_payload_checksums_and_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            content = b"a native control payload"
+            (root/"payload.bin").write_bytes(content)
+            row = {"file": "payload.bin", "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+            self.assertEqual(self.controls.validate_payloads(root, [row, {"nested": row}]), 1)
+            for changed in (dict(row, file="../payload.bin"), dict(row, bytes=0), dict(row, sha256="0"*64)):
+                with self.assertRaises(ValueError):
+                    self.controls.validate_payloads(root, [changed])
+            (root/"payload.bin").write_bytes(b"x"*len(content))
+            with self.assertRaises(ValueError):
+                self.controls.validate_payloads(root, [row])
+
+
 if __name__ == "__main__":
     unittest.main()

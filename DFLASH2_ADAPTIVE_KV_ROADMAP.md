@@ -295,7 +295,7 @@ Add failing tests first and retain the red result; implement the minimum coheren
 
 | Milestone | Status | Completion gate |
 | --- | --- | --- |
-| D1 Artifacts and ordinary controls | D1a ready for review; D1b/D1c planned | Pinned metadata, controls and physical-fit ledger |
+| D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b complete; D1c next | Pinned metadata, controls and physical-fit ledger |
 | D2 Common contracts | Planned | Neutral workload/cache roles and unchanged current paths |
 | D3 Target TG1-TG8 | D3a committed at `0f9c78645`; D3b/D3c planned | Stock-order span/resume and bounded workspace |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
@@ -336,6 +336,64 @@ python -m unittest discover -s benchmarks/server-ab/tests -p test_dflash_artifac
 The initial profile stub failed 89 assertions. Follow-up tests failed before end-marker handling, manifest validation and stable-input orchestration existed. All 22 tests now pass, including a real small GGUF round trip, feature-order conversion, wrong target/sidecar, missing or malformed fields/tensors, integer/type/size bounds, vocabulary identity, checksums, duplicate/oversized JSON and replacement after hashing. The project's pinned ty check passes for both new Python files. Existing sweep and qualification suites pass 32 and 18 tests.
 
 Evidence: `/tmp/dflash2-d1a-red-profile-tests.log`, `/tmp/dflash2-d1a-red-integrity-tests.log`, `/tmp/dflash2-d1a-red-stable-input-tests.log`, `/tmp/dflash2-d1a-final-tests.log`, `/tmp/dflash2-d1a-typecheck.log` and `/tmp/dflash2-d1a-real-artifact-audit.json`. Production was not stopped or reconfigured for this stage. No runtime admission, loader, kernel or arena behavior changed.
+
+### D1b ordinary controls and workload tracing
+
+Completed on 2026-10-11. Ordinary DFlash2 runs initially failed on the first 256-row feature injection: the borrowed CPU workspace had been measured using token graphs only. Its feature graph needs a wider input. The native regression failed before the fix and passes afterward (43 assertions including existing exact-fixture checks). Commit `cca0dd3c6` measures the injection graph before creating the workspace; it does not enable streaming, change attention arithmetic, or add a fallback allocation.
+
+[run_dflash_controls.py](benchmarks/run_dflash_controls.py) reuses the existing corpus, artifact auditor, server environment and SSE collector. It runs only the ordinary DFlash2 path: one slot, 256/256, target Q8_0/Q4_0, explicit draft quants, all-layer offload requested, fit disabled, no mmproj, no stream pool, no UVM and no host-spill override. It saves complete successful results and explicitly records capacity failures. It never changes quants/offload to make a point fit. Timing, captured tensors and Nsight run in separate server processes; captured/profiler timing is not the performance control. The script does not stop production itself.
+
+[dflash-control-trace.cpp](benchmarks/dflash-control-trace.cpp) is an optional Linux-only, test-side interposer, not a runtime API or backend adapter. It labels ordinary `llama_process` calls, distinguishes startup warmup from real blocks, records actual tokens/positions and memory breakdowns, and captures bounded feature, logits, selector-lattice, K/V and mask payloads. It retains physical visible-column indices and the stock SWA cell-to-position map. SHA-256 and byte-length checks detect changed/truncated payloads. Captures are limited to two occurrences per selected tensor and 512 MiB per process; this is attribution evidence, not exhaustive long-run numerical qualification. D1c/D6 add matched controls and lifecycle coverage.
+
+All requested D=1/3/7 controls complete without UVM at capacities 1024 and 4096 using F16/F16 draft KV. Independent Q8_0/Q4_0 draft KV also completes at 4096. The latter is not compared numerically with F16; matching controls must use the same encoding. The 4096-capacity controls use the same 2304-token Wikipedia prefix and generate 64 tokens. These are ordinary-path smoke/measurement controls, not the later 256-token streaming sweep.
+
+| Ordinary draft KV | D=1 decode tok/s | D=3 decode tok/s | D=7 decode tok/s |
+| --- | ---: | ---: | ---: |
+| F16/F16 | 75.34 | 92.18 | 100.60 |
+| Q8_0/Q4_0 | 72.89 | 91.33 | 100.73 |
+
+Actual injected batches range from one to 256 rows, each with feature width 25600. Prediction widths are exactly 2/4/8; verification/replay also visits smaller widths. The independent draft cache has five SWA layers, zero full-history layers and capacity 2304 beyond the window. Non-causal blocks expose 2048 through 2048+D visible positions, not just 2048 for every query: earlier block queries can also see their future block positions. Both cache cells and mask columns are recorded instead of assuming a contiguous logical window.
+
+Nsight confirms native head-256 target attention and native head-128 draft attention, with the stock split-fixup kernels. Its NVTX ranges separate target tokens, feature injection and draft blocks. Successful 1024-capacity profiles cover all three draft depths. F16 D=7 at capacity 4096 completes unprofiled and under tensor capture, but Nsight adds enough footprint to hit genuine OOM after one generated token. That failed point is retained, not retried or substituted with a smaller/offloaded profile.
+
+Measured device allocations at capacity 4096:
+
+| Component | F16/F16 draft | Q8_0/Q4_0 draft |
+| --- | ---: | ---: |
+| Target GPU weights, excluding unused embedded MTP | 12726.348 MiB | same |
+| Target CPU-mapped weights (stock input embedding placement) | 520.996 MiB | same |
+| Separate draft GPU weights | 1079.615 MiB | same |
+| Target full-history KV | 104 MiB | same |
+| Draft bounded SWA KV | 45 MiB | 18.281 MiB |
+| Draft maximum reserved GPU compute | 274.902 MiB | 278.731 MiB |
+| Draft CPU workspace for injection | 25.008 MiB | 25.086 MiB |
+| Target recurrent state including ordinary GPU rollback, D=1/3/7 | 299.25 / 598.50 / 1197 MiB | same |
+
+Target GPU compute is about 93.276 MiB for D=1/3 and 97.510 MiB for D=7 in these captured controls. Feature payloads reach 25 MiB per 256-row injection; that does not count all host vector capacity/output allocations. Native resources are separate from the allocator totals: the successful 1024/D=7 Nsight run observes 18 event creations, two stream creations and three graph instantiations. Its CUDA allocation timeline reports peaks of 15482.001 MiB device allocations and 84.311 MiB pinned host allocations; CUDA-internal/library overhead is not all represented in those tracked allocations. Do not add the context/model totals twice, assume graph-resource bytes from event counts, or treat a sampled free-memory reading as a guaranteed deployment margin.
+
+The captured 4096/D=7 run ends with only 17.375 MiB CUDA-reported free memory (39.375 MiB with quantized draft KV). Ordinary GPU rollback costs roughly 149.625 MiB per additional depth; D4 must qualify host spill rather than carry this growing GPU history into the intended long-context budget. D5 must also measure actual injection/block workloads rather than blindly reserve a 256-row prediction graph. A full-context fit claim remains pending.
+
+Reproduction, after stopping any conflicting GPU workload and building the full server target:
+
+```sh
+build=build-upstream-attention-port
+cmake --build "$build" --target llama-server test-kv-stream-context --parallel
+g++ -std=c++17 -O2 -fPIC -shared benchmarks/dflash-control-trace.cpp \
+  -Iinclude -Iggml/include -I/usr/local/cuda/include \
+  -L"$build/bin" -Wl,-rpath,"$PWD/$build/bin" -lllama -lggml-base -lggml \
+  "$build/vendor/hash/libvendor-hash.a" -ldl -o /tmp/dflash-control-trace.so
+python benchmarks/run_dflash_controls.py \
+  --target /path/to/pinned/UD-IQ4_XS.gguf \
+  --draft /path/to/pinned/DFlash2-Q4_K_M.gguf \
+  --draft-config /path/to/pinned/config.json \
+  --server "$build/bin/llama-server" --output /path/to/new/results \
+  --contexts 1024,4096 --depths 1,3,7 \
+  --trace-library /tmp/dflash-control-trace.so
+# Optional separate profiling pass: add --nsys /path/to/nsys.
+# Independent quantized-draft control: add --draft-k q8_0 --draft-v q4_0.
+```
+
+TDD evidence: 27 Python tests (artifact integrity, ordinary commands, complete responses, workload coverage, warmup exclusion, payload integrity and failure classification), nine CPU trace-helper assertions (masks, bounds, NaN and empty output), the native feature-workspace regression, five focused host CTests, and the existing 32 sweep / 18 qualification tests pass. The pinned ty check passes with the existing server-ab import directory. Full native controls, raw payloads and Nsight reports are under `benchmarks/results/dflash2-d1b-qualified-f16`, `dflash2-d1b-native-ledger` and `dflash2-d1b-native-quantized-draft`. Initial red evidence is in `/tmp/dflash2-d1b-red-tests.log` and `/tmp/dflash2-d1b-red-native.log`; green/regression logs use the same prefix. Production is restored and healthy with its existing configuration.
 
 ### D3a checked launch planning
 
