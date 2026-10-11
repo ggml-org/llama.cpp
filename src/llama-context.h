@@ -274,6 +274,8 @@ public:
         std::vector<int32_t> step_sel;
         // last ubatch width seen; used to detect the prefill->decode edge
         uint32_t last_ntok = 0;
+        // Direction 1: one extra all-zero slot per layer absorbing cold misses
+        bool     sentinel_slot = false;
     };
     moe_pool moe;
     moe_pager pager;

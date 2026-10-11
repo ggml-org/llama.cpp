@@ -428,6 +428,31 @@ llama_context::llama_context(
                     // get_rows needs table->ne[0] == idx->ne[0], so the table is
                     // laid out [1, n_expert] and looked up by [1, n_used] ids.
                     moe.slot_table[il] = ggml_new_tensor_2d(moe.ctx, GGML_TYPE_I32, 1, n_exp);
+                    // Direction 1 (MOE_STATIC_HOT=1): reallocate the three weight
+                    // pools one slot larger and keep the last slot zeroed as a
+                    // sentinel, so cold experts map to it (zero contribution)
+                    // instead of requiring a mid-graph host page.
+                    static int s_hot = -1;
+                    if (s_hot < 0) s_hot = getenv("MOE_STATIC_HOT") ? atoi(getenv("MOE_STATIC_HOT")) : 0;
+                    if (s_hot) {
+                        moe.pool_gate[il] = ggml_new_tensor_3d(moe.ctx, gl->type,
+                                (int64_t) gl->ne[0], (int64_t) gl->ne[1], s_pl + 1);
+                        moe.pool_up[il]   = ggml_new_tensor_3d(moe.ctx, ul->type,
+                                (int64_t) ul->ne[0], (int64_t) ul->ne[1], s_pl + 1);
+                        moe.pool_down[il] = ggml_new_tensor_3d(moe.ctx, dl->type,
+                                (int64_t) dl->ne[0], (int64_t) dl->ne[1], s_pl + 1);
+                        // zero the sentinel slot of each pool
+                        const size_t gb = ggml_nbytes(moe.pool_gate[il]) / (s_pl + 1);
+                        const size_t ub = ggml_nbytes(moe.pool_up[il])   / (s_pl + 1);
+                        const size_t db = ggml_nbytes(moe.pool_down[il]) / (s_pl + 1);
+                        // the pool is on the device buffer and this runs before
+                        // alloc_ctx_tensors: just record the intent, the actual
+                        // zero-fill happens after the buffer exists (below).
+                        (void) gb; (void) ub; (void) db;
+                        // sentinel index stored in slot_key; the table maps the
+                        // cold experts to it in the seed step below
+                        moe.sentinel_slot = true;
+                    }
                     expect += ggml_nbytes(moe.pool_gate[il]) + ggml_nbytes(moe.pool_up[il])
                             + ggml_nbytes(moe.pool_down[il]) + ggml_nbytes(moe.slot_table[il]);
                 }
@@ -470,6 +495,24 @@ llama_context::llama_context(
                             for (int il = 0; il < n_layer; il++)
                                 ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
                                                         n_exp*sizeof(int32_t));
+                            // Direction 1: zero the sentinel slot now that the device
+                            // buffer exists. Cold experts then contribute zero
+                            // weights instead of reading unmapped memory.
+                            if (moe.sentinel_slot) {
+                                const int s_pl_now = moe.s_per_layer;
+                                for (int il = 0; il < moe.n_layer; il++) {
+                                    const size_t gb = ggml_nbytes(moe.pool_gate[il]) / (s_pl_now + 1);
+                                    const size_t ub = ggml_nbytes(moe.pool_up[il])   / (s_pl_now + 1);
+                                    const size_t db = ggml_nbytes(moe.pool_down[il]) / (s_pl_now + 1);
+                                    const size_t sent = std::max(std::max(gb, ub), db);
+                                    std::vector<uint8_t> zero(sent, 0);
+                                    ggml_backend_tensor_set(moe.pool_gate[il], zero.data(), (size_t) s_pl_now * gb, gb);
+                                    ggml_backend_tensor_set(moe.pool_up[il],   zero.data(), (size_t) s_pl_now * ub, ub);
+                                    ggml_backend_tensor_set(moe.pool_down[il], zero.data(), (size_t) s_pl_now * db, db);
+                                }
+                                LLAMA_LOG_INFO("%s: sentinel slot armed (slot %d, zeroed)\n",
+                                               __func__, moe.s_per_layer);
+                            }
                             moe_ready = true;
                             LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers x %d slots\n",
                                            __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
@@ -1535,7 +1578,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // restore the hot profile once before decode token 0 begins. pure
     // decode streams (ubatch 1 -> 1) skip this entirely.
     if (moe_ready && moe.last_ntok > 1 && ubatch.n_tokens == 1) {
-        moe_reseed_decode();
+        // Direction 1's table is static by design: never refresh it mid-run
+        static int keep_static = -1;
+        if (keep_static < 0) keep_static = getenv("MOE_STATIC_HOT") ? atoi(getenv("MOE_STATIC_HOT")) : 0;
+        if (!keep_static) moe_reseed_decode();
     }
     if (moe_ready) moe.last_ntok = ubatch.n_tokens;
     auto * res = get_gf_res_prev();
@@ -4757,7 +4803,14 @@ void llama_context::moe_seed_hot() {
     const int64_t t0 = ggml_time_us();
     const int64_t budget_us = [] {
         const char * e = getenv("MOE_SEED_BUDGET_MS");
-        return (int64_t)(e && e[0] ? atoi(e) : 4000) * 1000;
+        int64_t ms = e && e[0] ? atoi(e) : 4000;
+        // Direction 1 needs the full profile: a partial seed leaves cold
+        // experts permanently mapped to the (zero) sentinel, which silently
+        // degrades every token. Give it the 15s full-seed budget.
+        if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) {
+            if (!(e && e[0]) || ms < 8000) ms = 15000;
+        }
+        return ms * 1000;
     }();
     const int per_layer = file_nt > 0 ? file_nt : MOE_HOT_PER_LAYER;
     const int total = moe.n_layer * per_layer;
@@ -4772,8 +4825,34 @@ void llama_context::moe_seed_hot() {
             const int32_t e = file_nt > 0 ? file_hot[(size_t) il * file_nt + k]
                                           : moe_hot_experts[il][k];
             if (e < 0 || e >= moe.n_expert) continue;
+            // Direction 1: pin the hot experts in place. moe_page() uses the
+            // round-robin victim cursor, which is fine for the demand path but
+            // not for a static map; force slot k so hot expert k always maps to
+            // slot k (0..71) exactly as expected by the sentinel table.
+            const int base = il * moe.s_per_layer;
+            const int slot = base + k;
+            const int key  = il * moe.n_expert + e;
+            if (moe.slot_of[key] >= 0) { seeded++; continue; }
             if (moe_page(il, e) >= 0) seeded++;
+            moe_publish(il, e, slot);
+            seeded++;
         }
+    }
+    if (moe.sentinel_slot) {
+        // Direction 1 static map: hot -> its pinned slot, cold -> sentinel.
+        // This is the ONLY table the device ever reads at decode time, so no
+        // host update (and therefore no split) is needed per step.
+        for (int il = 0; il < moe.n_layer; il++) {
+            std::vector<int32_t> tab((size_t) moe.n_expert, moe.s_per_layer);
+            for (int s = 0; s < moe.s_per_layer; s++) {
+                const int k = moe.slot_key[(size_t) il * moe.s_per_layer + s];
+                if (k >= 0) tab[(size_t) (k - il * moe.n_expert)] = s;
+            }
+            ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
+                                    moe.n_expert * (int) sizeof(int32_t));
+        }
+        LLAMA_LOG_INFO("%s: Direction 1 static table published: %d hot + sentinel %d (of %d experts)\n",
+                       __func__, seeded, moe.s_per_layer, moe.n_expert);
     }
     LLAMA_LOG_INFO("%s: loaded %d layers x %d hot experts from %s, seeded %d/%d in %.2fs\n",
                    __func__, moe.n_layer, per_layer,
@@ -4902,19 +4981,36 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         return false;
     }
     if (ask) {
-        // MOE_NOSPLIT=1 retires the per-layer split (host sync + readback per
-        // MoE layer, ~8ms/layer at decode). The pool tables then stay frozen
-        // at whatever the last reseed/paging left, which is correct because
-        // decoding reuses the computed graph and tables stay coherent for a
-        // stable routing set. Diagnostic only; do not ship enabled.
-        static int no_split = -1;
-        if (no_split < 0) no_split = getenv("MOE_NOSPLIT") ? atoi(getenv("MOE_NOSPLIT")) : 0;
-        return no_split ? false : true;   // split the graph here and sync afterwards
+        // MOE_STATIC_HOT=1 (Direction 1): no split at all. slot_table was
+        // published once at init with the hot set mapped and every cold expert
+        // mapped to the zero sentinel, so the remap is pure device data and the
+        // 48 MoE layers execute as one unbroken graph.
+        // MOE_BOUNDARY=1: split retired, tables refreshed once per step.
+        // MOE_NOSPLIT=1: split retired, tables never refreshed (diagnostic).
+        static int mode = -1;
+        if (mode < 0) {
+            mode = 0;
+            if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) mode = 3;
+            else if (getenv("MOE_BOUNDARY") && atoi(getenv("MOE_BOUNDARY"))) mode = 1;
+            else if (getenv("MOE_NOSPLIT") && atoi(getenv("MOE_NOSPLIT"))) mode = 2;
+        }
+        return mode != 0 ? false : true;   // split the graph here and sync afterwards
     }
     // data phase: page the selected experts (I32 [n_used, n_tokens]).
     // the graph only reads the pool when the slot_ids remap node exists;
     // detect it by name so full-tensor prefill never pays paging stalls.
     // (slot remap engages for decode and for micro-chunks <= 8 tokens.)
+    {
+        static int m2 = -1;
+        if (m2 < 0) {
+            if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) m2 = 3;
+            else if (getenv("MOE_BOUNDARY") && atoi(getenv("MOE_BOUNDARY"))) m2 = 1;
+            else if (getenv("MOE_NOSPLIT") && atoi(getenv("MOE_NOSPLIT"))) m2 = 2;
+            else m2 = 0;
+        }
+        if (m2 == 3) return true;          // Direction 1: table is static on device
+        if (m2 == 1) return true;          // boundary: paged from the boundary refresh
+    }
     const int64_t ntok = t->ne[1];
     const int64_t nw = t->ne[0];
     std::vector<int32_t> ids((size_t) nw * ntok);
