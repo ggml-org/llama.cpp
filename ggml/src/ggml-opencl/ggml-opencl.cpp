@@ -49,6 +49,7 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <regex>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 
 #undef MIN
@@ -673,6 +674,7 @@ struct ggml_backend_opencl_context {
     bool fuse_mm_glu = true;                     // opt-out GGML_OPENCL_FUSE_MM_GLU=0 (byte-identical gate+up GEMV + GLU, q4_K FFN)
     bool fuse_rms_add = true;                    // opt-out GGML_OPENCL_FUSE_RMS_ADD=0 (fused rms_norm*w + residual)
     bool fuse_gdn_cache = true;                  // opt-out GGML_OPENCL_FUSE_GDN_CACHE=0 (gated_delta_net writes its snapshots into the cache)
+    bool fuse_gdn_state = true;                  // opt-out GGML_OPENCL_FUSE_GDN_STATE=0 (gated_delta_net reads its input state from the cache)
     bool f16_mrow = true;                        // opt-out GGML_OPENCL_F16_MROW=0 (multi-row-per-WG f16 decode GEMV for attn proj + lm_head)
     int  f16_mrow_rpt = 1;                       // GGML_OPENCL_F16_MROW_RPT={1,2,4,8,16} rows-per-subgroup register blocking
 
@@ -9325,6 +9327,9 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     if (const char * env = getenv("GGML_OPENCL_FUSE_GDN_CACHE")) {
         backend_ctx->fuse_gdn_cache = atoi(env) != 0;
     }
+    if (const char * env = getenv("GGML_OPENCL_FUSE_GDN_STATE")) {
+        backend_ctx->fuse_gdn_state = atoi(env) != 0;
+    }
     if (const char * env = getenv("GGML_OPENCL_F16_MROW")) {
         backend_ctx->f16_mrow = atoi(env) != 0;
     }
@@ -11086,14 +11091,29 @@ static void ggml_opencl_op_rms_norm_mul_add_fused(ggml_backend_t backend, ggml_t
 struct ggml_opencl_gdn_fused {
     const ggml_tensor * snap_view   = nullptr; // [D, n_seqs, n_written] cache view the snapshots go to
     cl_ulong            slot_stride = 0;       // floats between rollback groups
+    // input side: the kernel reads cache row ids[0] itself and the get_rows that gathered it is skipped
+    const ggml_tensor * state_rows       = nullptr; // [D, mem_size] view of the cache
+    const ggml_tensor * state_ids        = nullptr; // I32 ids, element 0 is the row
+    cl_ulong            state_row_stride = 0;       // floats between cache rows
 };
 static int  ggml_opencl_try_gdn_cache_fusion(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph, int node_idx,
                                              ggml_opencl_gdn_fused & fused);
+static int  ggml_opencl_try_gdn_state_fusion(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph, int node_idx,
+                                             ggml_opencl_gdn_fused & fused);
+static void ggml_opencl_mark_gdn_state_fusions(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph,
+                                               std::vector<char> & skip_node);
 static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tensor * dst, const ggml_opencl_gdn_fused * fused,
                                               cl_uint t0, cl_mem tail_state, cl_ulong off_tail_state);
 
 static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    // nodes folded into a later node's dispatch: the get_rows that gathers a
+    // gated_delta_net input state runs before the gdn, so it is marked up front
+    std::vector<char> skip_node(cgraph->n_nodes, 0);
+    if (!backend_ctx->disable_fusion && backend_ctx->fuse_gdn_state) {
+        ggml_opencl_mark_gdn_state_fusions(backend_ctx, cgraph, skip_node);
+    }
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -11108,6 +11128,10 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
         }
 
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
+        if (skip_node[i]) {
             continue;
         }
 
@@ -11187,11 +11211,23 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
         }
 #endif
         // gated_delta_net + the cpy that scatters its state snapshots into the recurrent cache:
-        // the kernel writes them there itself and the cpy is skipped.
-        if (!backend_ctx->disable_fusion && backend_ctx->fuse_gdn_cache && node->op == GGML_OP_GATED_DELTA_NET) {
+        // the kernel writes them there itself and the cpy is skipped. Input side: the kernel
+        // reads the state from the cache and the get_rows marked above is skipped.
+        if (!backend_ctx->disable_fusion && node->op == GGML_OP_GATED_DELTA_NET &&
+            (backend_ctx->fuse_gdn_cache || backend_ctx->fuse_gdn_state)) {
             ggml_opencl_gdn_fused fused;
-            const int skip = ggml_opencl_try_gdn_cache_fusion(backend_ctx, cgraph, i, fused);
-            if (skip > 0) {
+            const int skip = backend_ctx->fuse_gdn_cache ? ggml_opencl_try_gdn_cache_fusion(backend_ctx, cgraph, i, fused) : 0;
+            bool state_fused = false;
+            if (backend_ctx->fuse_gdn_state) {
+                const int gr_idx = ggml_opencl_try_gdn_state_fusion(backend_ctx, cgraph, i, fused);
+                state_fused = gr_idx >= 0 && skip_node[gr_idx];
+            }
+            if (!state_fused) {
+                fused.state_rows       = nullptr;
+                fused.state_ids        = nullptr;
+                fused.state_row_stride = 0;
+            }
+            if (skip > 0 || state_fused) {
                 ggml_cl_gated_delta_net_recurrent(backend, node, &fused, 0, nullptr, 0);
                 i += skip;
                 continue;
@@ -38609,6 +38645,165 @@ static int ggml_opencl_try_gdn_cache_fusion(ggml_backend_opencl_context * backen
     return skip;
 }
 
+// gated_delta_net whose input state is reshape([view](get_rows(cache, ids))), as build_rs
+// produces it: the kernel can read cache row ids[0] in place. Single sequence only, where each
+// lane reads exactly what it later writes; with several sequences the recurrent memory swaps
+// cells through ids, and only the unfused gather-before-write order is safe.
+// Returns the get_rows node index with fused.state_* filled in, or -1; the caller checks the
+// other consumers and writers (ggml_opencl_mark_gdn_state_fusions).
+static int ggml_opencl_try_gdn_state_fusion(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph, int node_idx,
+                                            ggml_opencl_gdn_fused & fused) {
+    const ggml_tensor * gdn = cgraph->nodes[node_idx];
+    if (gdn->op != GGML_OP_GATED_DELTA_NET || ggml_cl_gdn_chunk_tokens(backend_ctx, gdn) > 0) {
+        return -1;
+    }
+    const ggml_tensor * src_v  = gdn->src[2];
+    const ggml_tensor * st     = gdn->src[5];
+    const int64_t       D      = src_v->ne[0] * src_v->ne[0] * src_v->ne[1];
+    const int64_t       n_seqs = src_v->ne[3];
+    if (n_seqs != 1) {
+        return -1;
+    }
+
+    // st is a reshape of the get_rows result at offset 0, possibly through one view of it
+    if (st == nullptr || st->op != GGML_OP_RESHAPE || st->view_src == nullptr || st->view_offs != 0 ||
+        (st->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return -1;
+    }
+    const ggml_tensor * gr  = st->view_src;
+    const ggml_tensor * mid = st->src[0];
+    if (mid != gr && (mid == nullptr || mid->op != GGML_OP_VIEW || mid->src[0] != gr || mid->view_offs != 0 ||
+                      (mid->flags & GGML_TENSOR_FLAG_OUTPUT))) {
+        return -1;
+    }
+    if (gr->op != GGML_OP_GET_ROWS || gr->type != GGML_TYPE_F32 || (gr->flags & GGML_TENSOR_FLAG_OUTPUT) ||
+        gr->ne[0] != D || gr->ne[1] != n_seqs || gr->ne[2] != 1 || gr->ne[3] != 1) {
+        return -1;
+    }
+    const ggml_tensor * rows = gr->src[0];
+    const ggml_tensor * ids  = gr->src[1];
+    if (rows == nullptr || ids == nullptr || rows->extra == nullptr || ids->extra == nullptr ||
+        rows->type != GGML_TYPE_F32 || ids->type != GGML_TYPE_I32 ||
+        rows->ne[0] != D || rows->ne[2] != 1 || rows->ne[3] != 1 ||
+        rows->nb[0] != sizeof(float) || rows->nb[1] % sizeof(float) != 0 ||
+        ids->ne[0] != n_seqs || ids->ne[1] != 1 || ids->ne[2] != 1 || ids->ne[3] != 1 ||
+        ids->nb[0] != sizeof(int32_t)) {
+        return -1;
+    }
+    // the get_rows node precedes the gdn by a handful of nodes
+    int gr_idx = -1;
+    for (int j = node_idx - 1; j >= 0 && j >= node_idx - 64; --j) {
+        if (cgraph->nodes[j] == gr) {
+            gr_idx = j;
+            break;
+        }
+    }
+    if (gr_idx < 0) {
+        return -1;
+    }
+    fused.state_rows       = rows;
+    fused.state_ids        = ids;
+    fused.state_row_stride = (cl_ulong) (rows->nb[1] / sizeof(float));
+    return gr_idx;
+}
+
+// Mark the get_rows nodes that ggml_opencl_try_gdn_state_fusion folds into a gdn, provided
+// (a) the gathered state has no other consumer (the gdn, the reshape and the view between
+// them are the only allowed users; zero-element nodes such as build_rs's empty view of the
+// extra states and its cpy read and write nothing), (b) nothing writes the cache between the
+// get_rows and the gdn, and (c) the ids stay allocated until the gdn reads them.
+static void ggml_opencl_mark_gdn_state_fusions(ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * cgraph,
+                                               std::vector<char> & skip_node) {
+    struct cand { int gr_idx; int gdn_idx; const ggml_tensor * gdn; const ggml_tensor * st; const ggml_tensor * ids; bool ok; };
+    std::vector<cand> cands;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_GATED_DELTA_NET) {
+            continue;
+        }
+        ggml_opencl_gdn_fused fused;
+        const int gr_idx = ggml_opencl_try_gdn_state_fusion(backend_ctx, cgraph, i, fused);
+        if (gr_idx < 0) {
+            continue;
+        }
+        // (b): a non-empty node between the two that is a view into the cache
+        // (cpy, set_rows and in-place ops all are) writes it
+        const ggml_tensor * rows       = fused.state_rows;
+        const ggml_tensor * cache_base = rows->view_src ? rows->view_src : rows;
+        bool cache_written = false;
+        for (int j = gr_idx + 1; j < i && !cache_written; ++j) {
+            const ggml_tensor * n = cgraph->nodes[j];
+            if (n->op == GGML_OP_VIEW || n->op == GGML_OP_RESHAPE || n->op == GGML_OP_PERMUTE ||
+                n->op == GGML_OP_TRANSPOSE || n->op == GGML_OP_NONE || ggml_is_empty(n)) {
+                continue;
+            }
+            cache_written = n->view_src == cache_base;
+        }
+        if (!cache_written) {
+            cands.push_back({ gr_idx, i, node, node->src[5], fused.state_ids, true });
+        }
+    }
+    if (cands.empty()) {
+        return;
+    }
+    // (c): the allocator frees a tensor after its last consumer in the graph, and with the
+    // get_rows skipped that consumer can be the get_rows itself; the ids slot may then be
+    // reused before the gdn reads it. Keep the fusion only when a later node reads the ids too.
+    std::unordered_map<const ggml_tensor *, int> ids_last_use;
+    for (const cand & cd : cands) {
+        ids_last_use[cd.ids] = -1;
+    }
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        for (int k = 0; k < GGML_MAX_SRC && node->src[k] != nullptr; ++k) {
+            const ggml_tensor * s = node->src[k];
+            auto it = ids_last_use.find(s->view_src ? s->view_src : s);
+            if (it != ids_last_use.end()) {
+                it->second = i;
+            }
+        }
+    }
+    for (cand & cd : cands) {
+        if (ids_last_use[cd.ids] <= cd.gdn_idx) {
+            cd.ok = false;
+        }
+    }
+    // (a): the get_rows result, the view between it and the reshape, and the reshape -> cand
+    std::unordered_map<const ggml_tensor *, size_t> owner;
+    for (size_t c = 0; c < cands.size(); ++c) {
+        owner[cgraph->nodes[cands[c].gr_idx]] = c;
+        owner[cands[c].st] = c;
+        owner[cands[c].st->src[0]] = c;
+    }
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (ggml_is_empty(node)) {
+            continue;
+        }
+        if (node->view_src != nullptr) {
+            auto it = owner.find(node->view_src);
+            if (it != owner.end() && node != cands[it->second].st && node != cands[it->second].st->src[0]) {
+                cands[it->second].ok = false;
+            }
+        }
+        for (int k = 0; k < GGML_MAX_SRC && node->src[k] != nullptr; ++k) {
+            auto it = owner.find(node->src[k]);
+            if (it == owner.end()) {
+                continue;
+            }
+            const cand & cd = cands[it->second];
+            if (!(node == cd.gdn && k == 5) && !(node == cd.st) && !(node == cd.st->src[0])) {
+                cands[it->second].ok = false;
+            }
+        }
+    }
+    for (const cand & cd : cands) {
+        if (cd.ok) {
+            skip_node[cd.gr_idx] = 1;
+        }
+    }
+}
+
 // The recurrent kernel over tokens t0..n_tokens-1. tail_state (when set) replaces the
 // op's input state: the chunked path leaves the state after its whole chunks there.
 // fused (when set) is a fusion the graph loop matched, only ever for an op that does not
@@ -38720,8 +38915,15 @@ static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tenso
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_g));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &extra_beta->data_device));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_beta));
-    const cl_mem   state_mem    = tail_state != nullptr ? tail_state : extra_state->data_device;
-    const cl_ulong off_state_in = tail_state != nullptr ? off_tail_state : off_state;
+    // input state: src_state, the chunked path's tail state, or the cache rows when the get_rows was fused
+    cl_mem   state_mem    = tail_state != nullptr ? tail_state : extra_state->data_device;
+    cl_ulong off_state_in = tail_state != nullptr ? off_tail_state : off_state;
+    if (fused != nullptr && fused->state_ids != nullptr) {
+        ggml_tensor_extra_cl * extra_rows = (ggml_tensor_extra_cl *) fused->state_rows->extra;
+        GGML_ASSERT(extra_rows && tail_state == nullptr);
+        state_mem    = extra_rows->data_device;
+        off_state_in = extra_rows->offset + fused->state_rows->view_offs;
+    }
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &state_mem));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_state_in));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &extra_dst->data_device));
@@ -38757,10 +38959,17 @@ static void ggml_cl_gated_delta_net_recurrent(ggml_backend_t backend, ggml_tenso
             off_snap         = extra_cache->offset + fused->snap_view->view_offs;
             snap_slot_stride = (cl_uint) fused->slot_stride;
         }
-        // input state: src_state as passed above (row stride 0)
+        // input state: row stride 0 = the state argument above is the [S_v, S_v, H_v, n_seqs] tensor
         cl_mem   rows_mem         = extra_state->data_device;
         cl_ulong off_rows         = 0;
         cl_ulong state_row_stride = 0;
+        if (fused->state_ids != nullptr) {
+            ggml_tensor_extra_cl * extra_ids = (ggml_tensor_extra_cl *) fused->state_ids->extra;
+            GGML_ASSERT(extra_ids);
+            rows_mem         = extra_ids->data_device;
+            off_rows         = extra_ids->offset + fused->state_ids->view_offs;
+            state_row_stride = fused->state_row_stride;
+        }
         CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &snap_mem));
         CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_snap));
         CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &snap_slot_stride));
