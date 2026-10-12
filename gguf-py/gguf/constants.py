@@ -6137,6 +6137,7 @@ class DecisionType:
     CLEF    = "clef"     # joint head over all questions, one score per option
     PPLX_DECIDER = "pplx-decider"  # same as openjev, label codes of 1 or 2 letters
     VLLM_DECISION2 = "vllm-decision2"  # head over the end token of each option and the last token, one score per option
+    VLLM_D3 = "vllm-d3"  # same as pplx-decider, non-causal attention
     LFM2_D1 = "lfm2-d1"  # same as openjev, the labels depend on the question type
     LFM2_D1_OMNI = "lfm2-d1-omni"  # same head as laya on a bidirectional LFM2 trunk, other prompt layout
 

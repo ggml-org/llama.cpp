@@ -446,6 +446,10 @@ struct server_slot {
 
     bool can_split() const {
         GGML_ASSERT(task);
+        // a decision over a non-causal context reads the whole prompt in one batch
+        if (task->type == SERVER_TASK_TYPE_DECISION && !llama_get_causal_attn(ctx_tgt)) {
+            return false;
+        }
         // MTP supports splitting - uses task->need_embd() not need_embd()
         if (!task->need_embd()) {
             return true;

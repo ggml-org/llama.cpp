@@ -1171,6 +1171,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_CLEF,           "clef"          },
     { COMMON_DECISION_TYPE_PPLX_DECIDER,   "pplx-decider"  },
     { COMMON_DECISION_TYPE_VLLM_DECISION2, "vllm-decision2" },
+    { COMMON_DECISION_TYPE_VLLM_D3,        "vllm-d3"        },
     { COMMON_DECISION_TYPE_LFM2_D1,        "lfm2-d1"       },
     { COMMON_DECISION_TYPE_LFM2_D1_OMNI,   "lfm2-d1-omni"  },
     // for future models, ALWAYS add org name prefix to avoid name collisions, e.g. "orgname-modelname"
