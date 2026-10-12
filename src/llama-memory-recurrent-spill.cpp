@@ -10,7 +10,7 @@
 bool llama_recurrent_rollback_plan_make(uint32_t depth, bool embedded_mtp, uint32_t microbatch_rows,
         llama_recurrent_rollback_plan & output) noexcept {
     if (depth > 7 || (embedded_mtp && depth > 3) || microbatch_rows < depth+1) return false;
-    output={depth,depth+1,std::max(4u,depth+1),depth != 0};
+    output={depth,depth+1,std::max(4u,depth+1),depth != 0,depth ? 2u : 0u};
     return true;
 }
 
@@ -286,6 +286,7 @@ struct llama_recurrent_spill_bank::implementation {
     uint32_t selected_slot = 0;
     size_t submitted = 0, active_planes = 0;
     bool poisoned = false;
+    bool submission_failed = false;
 
     ~implementation() {
         if (state != spill_transfer_state::idle && publication && publication->producer)
@@ -327,7 +328,7 @@ struct llama_recurrent_spill_bank::implementation {
 
 bool llama_recurrent_spill_bank::implementation::publish_node(
         ggml_backend_t producer, ggml_tensor * op) {
-    if (!publication || !publication->active || state != spill_transfer_state::capturing ||
+    if (!publication || !publication->active || submission_failed || state != spill_transfer_state::capturing ||
             !producer || !op || op->op != GGML_OP_CPY || !op->src[0] || !op->src[1]) return false;
     auto & p=*publication;
     const auto found=std::find(p.destinations.begin(),p.destinations.end(),op->src[1]);
@@ -370,9 +371,11 @@ bool llama_recurrent_spill_bank::implementation::publish_node(
         ggml_backend_synchronize(producer);
     }
     auto * host_base=static_cast<uint8_t *>(ggml_backend_buffer_get_base(host));
-    ggml_backend_tensor_get_async(p.copy_backend,op->src[0],host_base+host_offset,0,bytes);
+    // Submission may fail after the destination was modified; cancellation must invalidate it.
     touched[index(layer,value,snapshot)]=1;
     ++submitted;
+    try { ggml_backend_tensor_get_async(p.copy_backend,op->src[0],host_base+host_offset,0,bytes); }
+    catch (...) { submission_failed=true; return false; }
     if (--p.remaining == 0) {
         auto * consumed=p.slot_events[p.current_slot];
         if (consumed) ggml_backend_event_record(consumed,p.copy_backend);
@@ -434,7 +437,7 @@ bool llama_recurrent_spill_bank::enable_publication(
         ggml_backend_dev_t device, ggml_backend_buffer_type_t stage_type, uint32_t slots) {
     auto & s=*impl;
     if (s.publication || s.state != spill_transfer_state::idle || !device || !stage_type ||
-            !ggml_backend_dev_supports_buft(device,stage_type)) return false;
+            (s.device && s.device != device) || !ggml_backend_dev_supports_buft(device,stage_type)) return false;
     try {
         auto next=std::make_unique<spill_publication_state>();
         next->stage=llama_recurrent_stage_buffer::create(s.layout,slots,stage_type);
@@ -502,11 +505,25 @@ bool llama_recurrent_spill_bank::enable_publication(
 
 
         next->stage_event=ggml_backend_event_new(device);
+        std::unique_ptr<ggml_backend_event,decltype(&ggml_backend_event_free)> completion(
+            s.event ? nullptr : ggml_backend_event_new(device),ggml_backend_event_free);
+        // Prepare lazy stream/event resources before the phase arena occupies the remaining device memory.
+        for (auto * event : next->slot_events) if (event) ggml_backend_event_record(event,next->copy_backend);
+        for (auto * event : next->ready_events) if (event) ggml_backend_event_record(event,next->copy_backend);
+        if (next->stage_event) ggml_backend_event_record(next->stage_event,next->copy_backend);
+        auto * complete=s.event ? s.event : completion.get();
+        if (complete) ggml_backend_event_record(complete,next->copy_backend);
+        ggml_backend_synchronize(next->copy_backend);
+        if (!s.event) s.event=completion.release();
+        s.device=device;
+        s.backend=next->copy_backend;
         s.publication=std::move(next);
         return true;
     } catch (const std::bad_alloc &) {
         return false;
     } catch (const std::length_error &) {
+        return false;
+    } catch (...) {
         return false;
     }
 }
@@ -542,6 +559,7 @@ bool llama_recurrent_spill_bank::begin_capture(llama_recurrent_spill_identity id
     if (s.poisoned || s.state != spill_transfer_state::idle || !s.identity(identity) ||
             identity.generation <= s.last_generation) return false;
     s.active=identity; s.state=spill_transfer_state::capturing;
+    s.submission_failed=false;
     s.submitted=0; std::fill(s.touched.begin(),s.touched.end(),0);
     return true;
 }
@@ -576,21 +594,22 @@ bool llama_recurrent_spill_bank::capture(ggml_backend_t backend, size_t layer, b
         const ggml_tensor * source, size_t source_offset) {
     auto & s=*impl;
     size_t offset=0,bytes=0;
-    if (s.state != spill_transfer_state::capturing || !s.region(layer,value,slot,offset,bytes) ||
+    if (s.state != spill_transfer_state::capturing || s.submission_failed || !s.region(layer,value,slot,offset,bytes) ||
             !source || !source->buffer || source->type !=
                 (value ? s.layout.layers[layer].type_s : s.layout.layers[layer].type_r) ||
             source_offset > ggml_nbytes(source) || bytes > ggml_nbytes(source)-source_offset ||
             s.touched[s.index(layer,value,slot)] || !s.bind(backend)) return false;
     auto * host=static_cast<uint8_t *>(ggml_backend_buffer_get_base(s.host));
-    ggml_backend_tensor_get_async(backend,source,host+offset,source_offset,bytes);
     s.touched[s.index(layer,value,slot)]=1;
     ++s.submitted;
+    try { ggml_backend_tensor_get_async(backend,source,host+offset,source_offset,bytes); }
+    catch (...) { s.submission_failed=true; return false; }
     return true;
 }
 
 bool llama_recurrent_spill_bank::publish_capture() {
     auto & s=*impl;
-    if (s.state != spill_transfer_state::capturing || !s.submitted || !s.backend) return false;
+    if (s.state != spill_transfer_state::capturing || s.submission_failed || !s.submitted || !s.backend) return false;
     if (s.publication && s.publication->active) {
         auto & p=*s.publication;
         if (p.remaining || p.completed_layers != s.active_planes/2 || !p.producer) return false;
@@ -630,6 +649,7 @@ bool llama_recurrent_spill_bank::begin_restore(llama_recurrent_spill_identity id
         }
     }
     s.active=identity; s.selected_slot=slot; s.submitted=0;
+    s.submission_failed=false;
     std::fill(s.touched.begin(),s.touched.end(),0);
     s.state=spill_transfer_state::restoring;
     return true;
@@ -639,7 +659,7 @@ bool llama_recurrent_spill_bank::restore(ggml_backend_t backend, size_t layer, b
         ggml_tensor * destination, size_t destination_offset) {
     auto & s=*impl;
     size_t offset=0,bytes=0;
-    if (s.state != spill_transfer_state::restoring ||
+    if (s.state != spill_transfer_state::restoring || s.submission_failed ||
             !s.region(layer,value,s.selected_slot,offset,bytes) ||
             !destination || !destination->buffer || destination->type !=
                 (value ? s.layout.layers[layer].type_s : s.layout.layers[layer].type_r) ||
@@ -647,15 +667,17 @@ bool llama_recurrent_spill_bank::restore(ggml_backend_t backend, size_t layer, b
             bytes > ggml_nbytes(destination)-destination_offset ||
             s.touched[s.index(layer,value,s.selected_slot)] || !s.bind(backend)) return false;
     const auto * host=static_cast<const uint8_t *>(ggml_backend_buffer_get_base(s.host));
-    ggml_backend_tensor_set_async(backend,destination,host+offset,destination_offset,bytes);
     s.touched[s.index(layer,value,s.selected_slot)]=1;
     ++s.submitted;
+    // A queued partial restore poisons current state even when the backend reports failure afterwards.
+    try { ggml_backend_tensor_set_async(backend,destination,host+offset,destination_offset,bytes); }
+    catch (...) { s.submission_failed=true; return false; }
     return true;
 }
 
 bool llama_recurrent_spill_bank::publish_restore() {
     auto & s=*impl;
-    if (s.state != spill_transfer_state::restoring || s.submitted != s.active_planes || !s.backend) return false;
+    if (s.state != spill_transfer_state::restoring || s.submission_failed || s.submitted != s.active_planes || !s.backend) return false;
     if (s.event) ggml_backend_event_record(s.event,s.backend);
     s.state=spill_transfer_state::restore_pending;
     return true;
@@ -686,6 +708,7 @@ void llama_recurrent_spill_bank::cancel() noexcept {
     }
     s.state=spill_transfer_state::idle;
     s.submitted=0;
+    s.submission_failed=false;
     if (s.publication) {
         s.publication->active=false;
         std::fill(s.publication->slot_busy.begin(),s.publication->slot_busy.end(),0);
@@ -701,6 +724,7 @@ void llama_recurrent_spill_bank::reset(bool pristine) noexcept {
     s.state=spill_transfer_state::idle;
     s.submitted=0;
     s.poisoned=false;
+    s.submission_failed=false;
     std::fill(s.generations.begin(),s.generations.end(),0);
     std::fill(s.invalidated.begin(),s.invalidated.end(),pristine ? 0 : 1);
     std::fill(s.touched.begin(),s.touched.end(),0);

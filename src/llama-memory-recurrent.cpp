@@ -60,6 +60,13 @@ llama_memory_recurrent::llama_memory_recurrent(
     rs_idx.assign(n_seq_max, 0);
     const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
     const bool want_spill = n_rs_seq && (stream_host_spill || (spill_flag && std::strcmp(spill_flag,"1") == 0));
+    uint32_t publication_slots=2;
+    if (stream_host_spill) {
+        llama_recurrent_rollback_plan plan;
+        if (!llama_recurrent_rollback_plan_make(n_rs_seq,false,n_rs_seq < 8 ? n_rs_seq+1 : 0,plan))
+            throw std::runtime_error("invalid streamed recurrent rollback plan");
+        publication_slots=plan.stage_slots;
+    }
     if (want_spill && hparams.ple_conv_state() > 0) throw std::runtime_error("recurrent host spill does not support PLE history");
     if (want_spill && n_seq_max != 1) throw std::runtime_error("recurrent host spill requires one serial sequence");
 
@@ -190,7 +197,7 @@ llama_memory_recurrent::llama_memory_recurrent(
         if (stream_host_spill || (staged && std::strcmp(staged,"1") == 0)) {
             auto * stage_device=device ? device : ggml_backend_dev_by_name("CPU");
             auto * stage_type=recurrent_stage_type(stage_device);
-            if (!stage_type || !spill->enable_publication(stage_device,stage_type,2)) {
+            if (!stage_type || !spill->enable_publication(stage_device,stage_type,publication_slots)) {
                 throw std::runtime_error("failed to create recurrent publication stage");
             }
             LLAMA_LOG_INFO("%s: %s RS publication stage size = %.2f MiB\n",__func__,

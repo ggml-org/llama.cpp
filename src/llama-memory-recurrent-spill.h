@@ -13,6 +13,7 @@ struct llama_recurrent_rollback_plan {
     uint32_t verification_rows = 1;
     uint32_t workspace_rows = 4;
     bool host_spill = false;
+    uint32_t stage_slots = 0;
 };
 
 // Plan target rollback independently of draft cache ownership; keep the embedded-MTP depth limit.
