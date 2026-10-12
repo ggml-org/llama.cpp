@@ -57,8 +57,20 @@ const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * nu
 const uint vsh_stride = v_cols;
 shared FLOAT_TYPEV4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride)];
 
+// PV result is staged through sfsh, which is idle between the softmax and the next S store.
 const uint32_t osh_stride = row_split * MatBr / 4;
-shared O_TYPEV4 pvsh[Br * osh_stride];
+#if defined(FLOAT16) && !defined(ACC_TYPE_MAX)
+const uint32_t pv_per_acc = 2;
+O_TYPEV4 pvsh_load(const uint32_t i) {
+    const uvec2 u = floatBitsToUint(vec2(sfsh[i / 2][(i % 2) * 2], sfsh[i / 2][(i % 2) * 2 + 1]));
+    return O_TYPEV4(unpackFloat2x16(u.x), unpackFloat2x16(u.y));
+}
+#else
+const uint32_t pv_per_acc = 1;
+O_TYPEV4 pvsh_load(const uint32_t i) {
+    return O_TYPEV4(sfsh[i]);
+}
+#endif
 
 shared ACC_TYPE slope[Br];
 
@@ -560,9 +572,9 @@ void main() {
                     }
                 }
 
-                // Store PVMat to pvsh and load into Of
+                // Store PVMat to sfsh and load into Of
                 [[unroll]] for (uint32_t q = 0; q < q_tiles; ++q) {
-                    coopMatStore(PVMat[q], pvsh, o_offset + q * MatBc * osh_stride, osh_stride, gl_CooperativeMatrixLayoutRowMajor);
+                    coopMatStore(PVMat[q], sfsh, (o_offset + q * MatBc * osh_stride) / pv_per_acc, osh_stride / pv_per_acc, gl_CooperativeMatrixLayoutRowMajor);
                 }
             }
 
@@ -584,7 +596,7 @@ void main() {
 
                     if (hsv_col >= hsv_base && hsv_col < hsv_base + hsv_per_tile && hsv_col < HSV) {
                         const uint local_hsv = (hsv_col - hsv_base) / 4;
-                        Of[r][d_local] += pvsh[row * osh_stride + local_hsv];
+                        Of[r][d_local] += pvsh_load(row * osh_stride + local_hsv);
                     }
                 }
             }
