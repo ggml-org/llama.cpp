@@ -81,9 +81,8 @@ struct llama_context {
 
     enum llama_pooling_type pooling_type() const;
 
-    // The caller must synchronize before reading outputs. Export the sampling getters for common in shared builds.
     float * get_logits();
-    LLAMA_API float * get_logits_ith(int32_t i);
+    float * get_logits_ith(int32_t i);
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -97,15 +96,15 @@ struct llama_context {
     ggml_tensor * get_layer_inp_dev() const { return layer_inp_dev; }
 
     llama_token * get_sampled_tokens() const;
-    LLAMA_API llama_token get_sampled_token_ith(int32_t idx);
+    llama_token   get_sampled_token_ith(int32_t idx);
 
-    LLAMA_API float * get_sampled_logits_ith(int32_t idx);
-    LLAMA_API size_t  get_sampled_logits_count(int32_t idx);
+    float * get_sampled_logits_ith(int32_t idx);
+    size_t  get_sampled_logits_count(int32_t idx);
 
-    LLAMA_API float * get_sampled_probs_ith(int32_t idx);
-    LLAMA_API size_t  get_sampled_probs_count(int32_t idx);
+    float * get_sampled_probs_ith(int32_t idx);
+    size_t  get_sampled_probs_count(int32_t idx);
 
-    LLAMA_API const llama_token * get_sampled_candidates_ith(int32_t idx);
+    const llama_token * get_sampled_candidates_ith(int32_t idx);
     size_t get_sampled_candidates_count(int32_t idx);
 
     bool get_causal_attn() const;
