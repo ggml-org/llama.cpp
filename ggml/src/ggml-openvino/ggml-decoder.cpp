@@ -1210,7 +1210,13 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
         // index list has a static length; on CPU/GPU it may change across compiles (defrag).
         input_shape = m_is_static ? ov::PartialShape{get_shape(input)} : ov::PartialShape{1, 1, 1, -1};
 
-    } else {
+    } else if (input != nullptr && op != nullptr && is_inp_emb(input, op)) {
+        input_shape = ov::PartialShape{get_shape(input)};
+        if (!m_is_static) {
+            input_shape[2] = -1;
+        }
+    }
+    else {
         input_shape = ov::PartialShape{get_shape(input)};
     }
     if (dynamic_dim_index != -1 && m_model_is_splitted) {
