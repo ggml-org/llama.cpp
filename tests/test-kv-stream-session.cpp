@@ -23,7 +23,8 @@ int main(int argc, char ** argv) {
     const bool guard_only = argc > 1 && !std::strcmp(argv[1],"--cuda-guard-handoff");
     const bool page_boundary_only = argc > 1 && !std::strcmp(argv[1],"--cuda-mtp-page-boundary");
     const bool short_prefill_only = argc > 1 && !std::strcmp(argv[1],"--cuda-short-prefill");
-    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool wide_resume_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wide-resume");
+    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || wide_resume_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -32,6 +33,43 @@ int main(int argc, char ** argv) {
     if (physical_map_only) t.set_filter("shared_physical_pool_publishes_only_target_pairs");
     if (page_boundary_only) t.set_filter("speculative_page_boundary_reconstruction_reopens_mtp_admission");
     if (short_prefill_only) t.set_filter("short_prefill_uses_its_gather_grant_and_matches_stock");
+    if (wide_resume_only) t.set_filter("wide_target_decode_reuses_small_ring_and_matches_stock");
+    if (cuda) t.test("wide_target_decode_reuses_small_ring_and_matches_stock",[&](testing & t) {
+        for (uint32_t queries : {3u,4u,5u,6u,7u,8u}) for (size_t active : {257u,1067u,4097u})
+                for (uint32_t query_heads : {8u,24u,32u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8192,false,2,4,4);
+            f.policy.initial_ring_slots=2;
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+            size_t measured=0;
+            if (!t.assert_true(get && get() && get()->decode_workspace && get()->decode_workspace(backend.get(),
+                    GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,query_heads,4,8,f.host->layout().tokens,measured))) return;
+            block_workspace writer(f,131072,19), attention(f,std::max(measured,f.host->layout().bytes),29);
+            llama_kv_stream_session_config config{f.policy,8,query_heads,false,true,true};
+            config.max_decode_rows=8;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+                f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(active-queries))) return;
+            session_inputs kv(backend.get(),queries,1024);
+            block_inputs input(f,active,queries,false,query_heads);
+            if (!t.assert_true("TG"+std::to_string(queries),session->begin(active,queries,true))) return;
+            std::vector<std::vector<float>> actual;
+            for (uint32_t layer=0;layer<2;++layer) {
+                if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                        session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+                ggml_backend_synchronize(backend.get());
+                actual.push_back(input.read());
+            }
+            for (uint32_t layer=0;layer<2;++layer)
+                t.assert_true(same_float_bits(stock_attention(f,input,layer),actual[layer]));
+            t.assert_equal(active,session->tokens());
+            t.assert_true(!session->active() && !session->failed());
+            t.assert_true(!session->begin(active+9,9,true));
+            session->abort();
+            t.assert_true(!session->begin(active+queries,queries,true));
+            t.assert_true(session->reconstruct(active));
+        }
+    });
     t.test("unsupported_and_missing_session_dependencies_are_rejected", [&](testing & t) {
         fixture f(backend.get(),cuda);
         t.assert_true(!llama_kv_stream_session::create(backend.get(),f.content,{f.policy,33,4,false},nullptr,nullptr,nullptr));

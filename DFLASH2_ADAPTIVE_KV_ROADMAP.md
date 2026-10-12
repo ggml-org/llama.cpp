@@ -2,7 +2,7 @@
 
 Enable the separate Qwen3.8-27B DFlash2 drafter alongside the existing target KV streaming and shared phase arena. Preserve upstream block drafting, attention masks and acceptance semantics. Keep bounded draft sliding-window KV resident; extend target streamed verification from TG4 through TG8.
 
-Status: D1 ordinary controls and physical-fit ledger, D2 admission contracts, and D3a-D3d span/resume kernels and qualification are implemented on RTX 5070 Ti. D3e owner integration is qualified in the working tree and is the next checkpoint. D3d records measured routing overhead; the 5-10 percent performance goal is not met at every sampled width and remains a tuning target. D4-D7 and older-device execution remain pending. Live DFlash2 streaming remains unimplemented and unqualified. Updated: 2026-10-11. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`. Development branch: `feature/adaptive-kv-dflash2`. DFlash2 stages D1-D7 do not renumber existing consumer, MTP, Gemma or attention-port stages.
+Status: D1 ordinary controls and physical-fit ledger, D2 admission contracts, and D3 target TG1-TG8 span/resume infrastructure are implemented and qualified on RTX 5070 Ti. D3d records measured routing overhead; the 5-10 percent performance goal is not met at every sampled width and remains a tuning target. D4-D7 and older-device execution remain pending. Live DFlash2 streaming remains unimplemented and unqualified. Updated: 2026-10-11. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`. Development branch: `feature/adaptive-kv-dflash2`. DFlash2 stages D1-D7 do not renumber existing consumer, MTP, Gemma or attention-port stages.
 
 Saving this plan does not start implementation, download models, change branches, stop production or authorize commits. Each lettered stage below is a reviewable implementation/test unit. Stage completed work and its progress entry for user review.
 
@@ -301,13 +301,13 @@ Add failing tests first and retain the red result; implement the minimum coheren
 | --- | --- | --- |
 | D1 Artifacts and ordinary controls | D1a committed at `e783f9d61`; D1b at `1cd9036ce`; D1c complete | Pinned metadata, controls and physical-fit ledger |
 | D2 Common contracts | D2a at `4db05567e`; D2b contracts complete | Neutral workload/cache roles and unchanged current paths |
-| D3 Target TG1-TG8 | D3a at `0f9c78645`; D3b at `89baa844f`; D3c at `dd6c33716`; D3d qualified; D3e working-tree qualification complete | Stock-order span/resume, bounded workspace and qualified target integration; routing goal and older-device execution still pending |
+| D3 Target TG1-TG8 | D3a at `0f9c78645`; D3b at `89baa844f`; D3c at `dd6c33716`; D3d at `80223bf7a`; D3e target integration qualified | Stock-order span/resume, bounded workspace and qualified target integration; routing goal and older-device execution still pending |
 | D4 Recurrent rollback | Planned | Depth-seven recovery independent of auxiliary MTP |
 | D5 Draft KV and phase arena | Planned | Reusable bounded resident KV consumer, synthetic Qwen/Gemma coverage and one participating parent |
 | D6 Live DFlash2 integration | Planned | D=1/3/7 numerical and server controls |
 | D7 Lifecycle and performance | Planned | Native-context recovery and comparison matrix |
 
-No stage completes merely because startup succeeds or output looks plausible. D3a was implemented independently at the user's request. D1-D3 infrastructure and controls are now qualified in the working tree; finish recording D3e before starting D4. These prerequisites do not qualify later live integration on their own, and D3 measurements must not be described as achieving every performance goal.
+No stage completes merely because startup succeeds or output looks plausible. D3a was implemented independently at the user's request. D1-D3 infrastructure and controls are now qualified; D4 is next. These prerequisites do not qualify later live integration on their own, and D3 measurements must not be described as achieving every performance goal.
 
 ### D1a pinned artifacts and offline metadata audit
 

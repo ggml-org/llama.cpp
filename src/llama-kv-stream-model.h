@@ -44,6 +44,8 @@ struct llama_kv_stream_model_config {
     size_t shared_device_memory_bytes = 0;
     // Opt-in one-layer MTP host cache in the same physical KV policy.
     uint32_t auxiliary_cache_layers = 0;
+    // Quote all target decode widths up to this limit before binding the phase arena.
+    uint32_t max_decode_rows = 4;
 };
 
 // Own the host-KV execution buffer and a serial session; proxy-buffer references retain the runtime state.

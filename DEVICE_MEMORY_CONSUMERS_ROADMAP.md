@@ -2,7 +2,7 @@
 
 Gemma 4 31B target and shared-KV assistant extension: [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). Its G1-G6 stages are independent of the milestone identifiers below; the extension is planned, not implemented or qualified.
 
-Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its D1-D7 stages preserve bounded resident draft SWA and extend target streamed verification through TG8. D1 controls/fit ledger, D2 workload/cache/admission contracts and D3a-D3d kernels/qualification are implemented on RTX 5070 Ti; D3e owner integration is qualified in the working tree and is the next checkpoint. The 5-10 percent routing-overhead goal is not met at every measured width; older-device execution and D4-D7 remain pending. Live DFlash2 streaming remains unimplemented and unqualified.
+Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). Its D1-D7 stages preserve bounded resident draft SWA and extend target streamed verification through TG8. D1 controls/fit ledger, D2 workload/cache/admission contracts and D3 target span/resume integration are implemented and qualified on RTX 5070 Ti. The 5-10 percent routing-overhead goal is not met at every measured width; older-device execution and D4-D7 remain pending. Live DFlash2 streaming remains unimplemented and unqualified.
 
 Saved: 2026-09-10
 

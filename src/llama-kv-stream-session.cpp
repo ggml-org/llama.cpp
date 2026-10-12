@@ -31,7 +31,7 @@ static bool decode_workspace_bytes(ggml_backend_t backend, const llama_kv_stream
     const auto * ops=get ? get() : nullptr;
     if (ops && ops->version >= 10 && ops->decode_workspace) return ops->decode_workspace(
         backend,config.policy.shape.type_k,config.policy.shape.type_v,config.query_heads,
-        config.policy.shape.heads,std::min(4u,config.max_batch_rows),tokens,bytes);
+        config.policy.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),tokens,bytes);
     ggml_kv_stream_resume_plan plan;
     if (!ops || ops->version < 5 || !ops->resume_plan) return false;
     const uint32_t queries = std::min(2u,config.max_batch_rows);
@@ -587,6 +587,8 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
                 config.attention_resource == config.pool_resource ||
                 config.writer_resource == config.attention_resource)))) return {};
     if (!backend || !content || !config.max_batch_rows || config.max_batch_rows > INT32_MAX || !config.query_heads ||
+            !config.max_decode_rows || config.max_decode_rows > 8 ||
+            (config.max_decode_rows > 4 && (!config.native_graph_attention || !config.resume_decode)) ||
             config.query_heads > SIZE_MAX/config.max_batch_rows || config.policy.shape.head_dim_k != 256 ||
             config.policy.shape.head_dim_v != 256 || config.policy.shape.heads <= 0 ||
             config.query_heads%config.policy.shape.heads) return {};
@@ -633,7 +635,7 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
 bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode) {
     auto & s = *impl;
     if (s.busy || s.transition_closed || s.running || s.poisoned || !s.publications || s.publications->failed() || s.publication.pending() || !s.leases[2] ||
-            !queries || queries > s.config.max_batch_rows || (decode && queries > 4) ||
+            !queries || queries > s.config.max_batch_rows || (decode && queries > s.config.max_decode_rows) ||
             active < s.committed || active-s.committed != queries || active > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
     if (s.content->generation() != s.expected_generation) { s.drain(); s.poisoned = true; return false; }
@@ -675,7 +677,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
                 if (planned) mma_bytes = s.config.span_workspace_bytes;
                 else if (capable && ops->version >= 10 && ops->decode_workspace) planned=ops->decode_workspace(s.backend,
                     s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,
-                    s.config.policy.shape.heads,std::min(4u,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
+                    s.config.policy.shape.heads,std::min(s.config.max_decode_rows,s.config.max_batch_rows),s.content->host()->layout().tokens,mma_bytes);
                 else if (capable) planned = ops->mma_workspace(s.backend,
                     s.config.policy.shape.type_k, s.config.policy.shape.type_v,
                     s.config.query_heads, s.config.policy.shape.heads,

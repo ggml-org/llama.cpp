@@ -248,8 +248,10 @@ int main(int argc,char ** argv) {
     const bool vision_suspend_only = argc > 1 && std::strcmp(argv[1], "--cuda-vision-suspend") == 0;
     const bool phase_loan_only = argc > 1 && std::strcmp(argv[1], "--cuda-phase-loan") == 0;
     const bool serial_scratch_only = argc > 1 && std::strcmp(argv[1], "--cuda-serial-scratch") == 0;
+    const bool wide_target_only = argc > 1 && std::strcmp(argv[1], "--cuda-wide-target") == 0;
     testing t;
     if (native_only) t.set_filter("native_attention_admission_.*");
+    if (wide_target_only) t.set_filter("ordinary_graph_dispatches_kv_producers_and_streamed_attention");
     if (native_reduced) t.set_filter("native_attention_reduced_.*");
     if (serial_scratch_only) t.set_filter("serial_draft_growth_.*");
     if (phase_loan_only) t.set_filter("suspended_parent_tracks_phase_loans_until_the_last_lease_returns");
@@ -262,7 +264,7 @@ int main(int argc,char ** argv) {
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
-    if (argc < 2 || (!native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !phase_admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!wide_target_only && !native_reduced && !native_only && !serial_scratch_only && !phase_loan_only && !vision_suspend_only && !resume_only && !suspend_only && !auxiliary_only && !lease_only && !cancel_only && !admission_only && !phase_admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return phase_admission_only ? 77 : 1;
@@ -1266,16 +1268,24 @@ int main(int argc,char ** argv) {
         t.assert_true(model->begin(257,1,true)); model->abort();
     });
     t.test("ordinary_graph_dispatches_kv_producers_and_streamed_attention", [&](testing & t) {
-        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,wide_target_only ? 6144 : 513,false,1);
         ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
-        auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        llama_kv_stream_model_config config{backend.get(),f.host->config(),page.bytes*4,256,4};
+        if (wide_target_only) config.max_decode_rows=8;
+        auto model = llama_kv_stream_model::create(config);
         if (!t.assert_true(bool(model))) return;
         const auto prefill_grants = model->granted_bytes();
         f.host = model->host();
         size_t active = 0;
         size_t step = 0;
-        for (uint32_t rows : {256u,256u,1u,1u}) {
-            const bool replay = step++ == 3;
+        std::vector<uint32_t> widths{256u,256u,1u,1u};
+        if (wide_target_only) {
+            widths.assign(16,256);
+            widths.insert(widths.end(),{5u,6u,7u,8u});
+        }
+        for (uint32_t rows : widths) {
+            const bool decode=rows <= config.max_decode_rows;
+            const bool replay = step++ == (wide_target_only ? 19 : 3);
             if (replay) {
                 t.assert_true(model->truncate(256));
                 active = 256;
@@ -1316,20 +1326,22 @@ int main(int argc,char ** argv) {
             // Validate before allocation can abort on an unsupported preallocated destination.
             if (!t.assert_true(ggml_backend_supports_op(backend.get(),k_write) && ggml_backend_supports_op(backend.get(),v_write))) return;
             if (!t.assert_true(ggml_backend_sched_alloc_graph(sched.get(),graph))) return;
-            if (!t.assert_true(model->begin(active,rows,rows == 1))) return;
-            if (rows == 1) {
+            if (!t.assert_true(model->begin(active,rows,decode))) return;
+            if (decode) {
                 llama_kv_stream_runtime_diagnostics onset;
                 t.assert_true(model->runtime_diagnostics(onset));
                 t.assert_true(onset.streaming_active);
                 t.assert_true(onset.active_pages > onset.resident_pages_per_layer);
                 t.assert_true(onset.ring_slots > 0);
             }
-            if (rows == 1) t.assert_true(model->granted_bytes() < prefill_grants);
+            if (decode) t.assert_true(model->granted_bytes() < prefill_grants);
             if (!t.assert_true(ggml_backend_sched_graph_compute(sched.get(),graph) == GGML_STATUS_SUCCESS)) return;
             t.assert_true(model->complete()); t.assert_equal(active,model->tokens());
             t.assert_true(!std::memcmp(static_cast<const char *>(planes.k)+first*f.host->layout().k_token_bytes,expected_k.data(),expected_k.size()));
             t.assert_true(!std::memcmp(static_cast<const char *>(planes.v)+first*f.host->layout().v_token_bytes,expected_v.data(),expected_v.size()));
             std::vector<float> actual(ggml_nelements(output)); ggml_backend_tensor_get(output,actual.data(),0,actual.size()*sizeof(float));
+            if (wide_target_only && decode)
+                t.assert_true(same_float_bits(stock_attention(f,attn,0),actual));
             close_values(t,oracle(f,0,active,rows,attn.qdata),actual,1e-3f);
         }
         auto * type=llama_kv_stream_device_buffer_type(dev);

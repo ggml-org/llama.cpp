@@ -121,6 +121,7 @@ struct llama_kv_stream_model::implementation {
         session_config.decode_stage = decode_id;
         session_config.suspend_stage = suspend_id;
         session_config.prepared_copies = prepared_copies;
+        session_config.max_decode_rows = config.max_decode_rows;
         auto next = llama_kv_stream_session::create(
             config.backend,content,session_config,grants[0].get(),grants[1].get(),grants[2].get());
         if (next && suspended_tokens && !next->restore(suspended_tokens)) return {};
@@ -394,6 +395,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         uint32_t * unavailable_queries) {
     if (unavailable_queries) *unavailable_queries = 0;
     if (!config.backend || !config.pool_bytes || !config.max_batch_rows || !config.query_heads ||
+            !config.max_decode_rows || config.max_decode_rows > 8 ||
             !config.host.context_tokens || config.host.context_tokens > size_t(INT32_MAX)-255 ||
             config.query_heads > SIZE_MAX/config.max_batch_rows ||
             config.auxiliary_cache_layers > 1 ||
@@ -452,11 +454,12 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         const uint32_t decode_rows = std::min(2u,config.max_batch_rows);
         s->config.resume_decode = resume_capable &&
             (plan_resume(decode_rows) || (decode_rows == 2 && plan_resume(1)));
+        if (config.max_decode_rows > 4 && !s->config.resume_decode) return {};
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
         if (s->config.resume_decode && partial_ops->version >= 10 && partial_ops->decode_workspace) {
             size_t bytes=0;
             if (!partial_ops->decode_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
-                    config.query_heads,config.host.shape.heads,std::min(4u,config.max_batch_rows),
+                    config.query_heads,config.host.shape.heads,std::min(config.max_decode_rows,config.max_batch_rows),
                     s->host->layout().tokens,bytes)) return {};
             s->span_bytes=bytes; s->decode_bytes=std::max(s->decode_bytes,bytes);
         } else if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
@@ -731,7 +734,7 @@ bool llama_kv_stream_model::set_ring_guard(std::shared_ptr<const llama_kv_stream
 bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
     auto & s = *impl;
     if (!s.session || s.session->device_suspended() || s.external_mutation || s.session->active() || s.session->failed() || !queries || queries > s.config.max_batch_rows ||
-            (decode && queries > 4) || active < s.session->tokens() || active-s.session->tokens() != queries ||
+            (decode && queries > s.config.max_decode_rows) || active < s.session->tokens() || active-s.session->tokens() != queries ||
             active > s.host->config().context_tokens) return false;
     // A new KV page can require physical repartition; retire the MTP guard
     // before admitting that page, never after an already submitted target copy.
