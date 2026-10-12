@@ -337,6 +337,16 @@ public:
 
     const ggml_tensor * get_tensor_used_op(const ggml_tensor * tensor) const;
 
+    // True if the KV cache is a model input of shape [1, ctx, n_heads_kv, head_size] instead of
+    // [1, 1, ctx, n_heads_kv * head_size]. Used for stateless GPU graphs when the cache holds one sequence, one token
+    // per row, and is only written by SET_ROWS and read through views that split the rows into heads. The GPU
+    // plugin can then fuse the cache write and read into StatelessKV: the new rows are written in place and attention
+    // reads the cache without a copy.
+    bool is_kvcache_4d(const ggml_tensor * cache) const;
+
+    // True if the KV cache is an input of this graph in the 4-D layout (see is_kvcache_4d)
+    bool is_kvcache_4d_input(const ggml_tensor * cache) const { return m_kvcache_4d.count(cache) != 0; }
+
     const ggml_tensor * get_tensor_from_name(const std::string & name) const;
 
     void clear_model_weights() { m_model_weights.clear(); }
@@ -503,6 +513,7 @@ private:
     std::set<std::string> m_model_output_names;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
+    std::set<const ggml_tensor *> m_kvcache_4d;
 
     ModelParams m_model_params;
     ComputeParams m_compute_params;

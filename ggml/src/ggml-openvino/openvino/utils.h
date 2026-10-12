@@ -66,6 +66,13 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
 
+// A stateless KV cache in the [1, ctx, n_heads_kv, head_size] layout (GgmlOvDecoder::is_kvcache_4d), as opposed to
+// [1, n_seq, ctx, n_heads_kv * head_size]
+inline bool is_kvcache_4d_shape(const ov::PartialShape & shape) {
+    return shape.rank().is_static() && shape.rank().get_length() == 4 && shape[1].is_dynamic() &&
+           shape[2].is_static() && shape[3].is_static();
+}
+
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {
     num_inputs_check(context, 2, 2);

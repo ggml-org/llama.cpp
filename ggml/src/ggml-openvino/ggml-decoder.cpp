@@ -1181,9 +1181,10 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
             // do not fix ctx size to make llama-bench work across test params
             input_shape[2] = -1;
         }
-        if (is_stateful() && !is_flat_kv) {
+        if ((is_stateful() && !is_flat_kv) || is_kvcache_4d(input)) {
             // Convert stateless KV cache layout [1, 1, seq, n_heads_kv * head_size]
-            // to stateful layout [1, seq, n_heads_kv, head_size].
+            // to stateful layout [1, seq, n_heads_kv, head_size]. Stateless GPU graphs use the same
+            // layout for the caches that qualify (see is_kvcache_4d), bound over the same memory.
             // NOTE: Gemma4 uses per-layer-type KV shapes, so no single scalar describes every
             // layer. E2B varies only the head size (sliding 256, full 512); 12B also varies the
             // head COUNT (sliding 8 x 256, full 1 x 512). Take the head count for this tensor's
@@ -1354,6 +1355,14 @@ bool GgmlOvDecoder::node_is_used_as_src(const int node_idx) {
 void GgmlOvDecoder::compute_model_inputs() {
     m_model_inputs.clear();
     m_inputs.clear();
+    m_kvcache_4d.clear();
+    // remember the KV caches that get_graph_input_shape gave the 4-D layout, so that they are bound with that shape
+    auto note_kvcache_4d = [this](const ggml_tensor * input, const ggml_tensor * op, const ov::PartialShape & shape) {
+        if (!m_is_stateful && is_kvcache(input, op) && shape.rank().is_static() && shape.rank().get_length() == 4 &&
+            shape[1].is_dynamic()) {
+            m_kvcache_4d.insert(input);
+        }
+    };
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         ggml_tensor * node = m_cgraph->nodes[i];
         // the node op is NONE means this node maybe as input of later nodes, we should add it to model inputs for this node.
@@ -1363,6 +1372,7 @@ void GgmlOvDecoder::compute_model_inputs() {
                 m_inputs[node_name] = node;
                 m_model_inputs[node_name] = {get_ov_type(node),
                                              get_graph_input_shape(node, nullptr, m_node_dynamic_dims[node])};
+                note_kvcache_4d(node, nullptr, m_model_inputs[node_name].shape);
             }
             continue;
         }
@@ -1416,6 +1426,7 @@ void GgmlOvDecoder::compute_model_inputs() {
             m_inputs[src_name] = src;
             m_model_inputs[src_name] = {get_ov_type(src),
                                         get_graph_input_shape(node, src, m_node_dynamic_dims[src])};
+            note_kvcache_4d(src, node, m_model_inputs[src_name].shape);
         }
     }
 }
@@ -1473,6 +1484,59 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_used_op(const ggml_tensor * tensor
         }
     }
     return nullptr;
+}
+
+bool GgmlOvDecoder::is_kvcache_4d(const ggml_tensor * cache) const {
+    static const bool disabled = ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_4D") != 0;
+    if (disabled || m_is_static || m_is_stateful || m_model_is_splitted || !ggml_openvino_is_gpu()) {
+        return false;
+    }
+    if (cache->op != GGML_OP_NONE || cache->view_src != nullptr || !is_kvcache(cache, nullptr)) {
+        return false;
+    }
+    // one sequence, [n_heads_kv * head_size, ctx, 1, 1]; whisper's flat KV buffer has ctx == 1
+    if (cache->ne[1] <= 1 || cache->ne[2] != 1 || cache->ne[3] != 1) {
+        return false;
+    }
+    const int n_heads_kv = get_n_heads_kv_for_tensor(cache);
+    if (n_heads_kv <= 0 || cache->ne[0] % n_heads_kv != 0) {
+        return false;
+    }
+    // check the nodes that take the cache itself as a source (views of those views, such as the PERMUTE of the read
+    // VIEW, are checked through them)
+    auto feeds_only_permutes = [this](const ggml_tensor * view) {
+        for (int i = 0; i < m_cgraph->n_nodes; i++) {
+            const auto * node = m_cgraph->nodes[i];
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                if (node->src[j] == view && node->op != GGML_OP_PERMUTE) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const auto * node = m_cgraph->nodes[i];
+        bool uses_cache = false;
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            uses_cache = uses_cache || node->src[j] == cache;
+        }
+        if (!uses_cache) {
+            continue;
+        }
+        // write: whole rows into the cache itself
+        if (node->op == GGML_OP_SET_ROWS && node->src[2] == cache && node->src[0]->ne[0] == cache->ne[0]) {
+            continue;
+        }
+        // read: the first rows of the cache, each row split into heads, permuted for attention
+        if (node->op == GGML_OP_VIEW && node->src[0] == cache && node->view_offs == 0 &&
+            node->ne[0] * node->ne[1] == cache->ne[0] && node->nb[2] == cache->nb[1] && node->ne[3] == 1 &&
+            feeds_only_permutes(node)) {
+            continue;
+        }
+        return false;
+    }
+    return true;
 }
 
 const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name) const {
