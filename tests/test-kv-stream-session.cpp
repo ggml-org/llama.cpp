@@ -293,28 +293,37 @@ int main(int argc, char ** argv) {
         }
     });
 
-    if (cuda) t.test("tg4_decode_rejects_incomplete_ring_without_mutation", [&](testing & t) {
+    if (cuda) t.test("tg4_decode_resumes_incomplete_layer_without_enlarging_fixed_ring", [&](testing & t) {
         constexpr size_t active=25601;
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,8,112);
         f.policy.initial_ring_slots=4; f.policy.fixed_ring=true;
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
-        ggml_kv_stream_resume_plan vector_plan;
-        size_t mma_bytes=0;
-        if (!t.assert_true(get && get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
-                64,8,2,f.host->layout().tokens,vector_plan) && get()->mma_workspace(backend.get(),
-                GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,64,8,f.host->layout().tokens,3,mma_bytes))) return;
-        block_workspace writer(f,1024*1024,19), attention(f,std::max(vector_plan.bytes,mma_bytes),29);
+        size_t measured=0;
+        if (!t.assert_true(get && get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                64,8,4,f.host->layout().tokens,measured))) return;
+        block_workspace writer(f,1024*1024,19), attention(f,measured,29);
         llama_kv_stream_session_config config{f.policy,4,64,false,true,true};
         config.initial_decode=true;
         auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
             f.lease.get(),writer.lease.get(),attention.lease.get());
         if (!t.assert_true(bool(session) && session->restore(active-4))) return;
         const auto revision=session->layout_revision();
-        t.assert_true(!session->begin(active,4,true));
+        if (!t.assert_true(session->begin(active,4,true))) return;
+        t.assert_equal(uint32_t(4),session->policy().ring_slots);
+        session_inputs kv(backend.get(),4,2048);
+        block_inputs input(f,active,4,false,64);
+        std::vector<std::vector<float>> actual;
+        for (uint32_t layer=0;layer<2;++layer) {
+            if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                    session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+            ggml_backend_synchronize(backend.get()); actual.push_back(input.read());
+        }
+        for (uint32_t layer=0;layer<2;++layer)
+            t.assert_true(same_float_bits(stock_attention(f,input,layer),actual[layer]));
         t.assert_true(!session->failed() && !session->active());
-        t.assert_equal(active-4,session->tokens());
-        t.assert_equal(revision,session->layout_revision());
+        t.assert_equal(active,session->tokens());
+        t.assert_true(session->layout_revision() >= revision);
     });
 
     if (cuda) t.test("failure_after_production_never_commits_the_token_frontier", [&](testing & t) {
@@ -338,7 +347,12 @@ int main(int argc, char ** argv) {
             fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
             ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
             f.policy.pool_bytes=8*page.bytes; f.policy.initial_ring_slots=4;
-            block_workspace writer(f,32768,19),partial(f,f.host->layout().bytes,29);
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+            size_t measured=0;
+            if (!t.assert_true(get && get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                    4,2,4,f.host->layout().tokens,measured))) return outputs;
+            block_workspace writer(f,32768,19),partial(f,std::max(measured,f.host->layout().bytes),29);
             llama_kv_stream_session_config config{f.policy,256,4,false,true,true};
             config.cross_token_prefetch=carry;
             auto session=llama_kv_stream_session::create(backend.get(),f.content,config,

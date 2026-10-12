@@ -3,8 +3,8 @@
 #include "ggml-cuda/fattn-mma-f16.cuh"
 
 template<ggml_type V>
-static ggml_kv_mma_span_kernel_t mma_kernel(uint32_t c1, uint32_t c2) {
-#define MMA(C1, C2) if (c1 == C1 && c2 == C2) return flash_attn_ext_f16_spans<256,256,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V>;
+static ggml_kv_mma_span_kernel_t mma_kernel(uint32_t c1, uint32_t c2, bool resume) {
+#define MMA(C1, C2) if (c1 == C1 && c2 == C2) return resume ? flash_attn_ext_f16_spans<256,256,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V,true> : flash_attn_ext_f16_spans<256,256,C1,C2,false,false,GGML_TYPE_@KV_STREAM_KEY@,V>;
     MMA(1,8) MMA(2,8) MMA(4,8) MMA(4,2) MMA(8,8) MMA(8,2)
 #undef MMA
     return nullptr;
@@ -12,30 +12,30 @@ static ggml_kv_mma_span_kernel_t mma_kernel(uint32_t c1, uint32_t c2) {
 
 // Compile only pairs selected in the upstream FlashAttention registry.
 ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel_@KV_STREAM_KEY@(
-        ggml_type value, uint32_t c1, uint32_t c2) {
-    GGML_UNUSED_VARS(value,c1,c2);
+        ggml_type value, uint32_t c1, uint32_t c2, bool resume) {
+    GGML_UNUSED_VARS(value,c1,c2,resume);
 #ifndef GGML_CUDA_NO_FA
     switch (value) {
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_F16
-        case GGML_TYPE_F16: return mma_kernel<GGML_TYPE_F16>(c1,c2);
+        case GGML_TYPE_F16: return mma_kernel<GGML_TYPE_F16>(c1,c2,resume);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_BF16
-        case GGML_TYPE_BF16: return mma_kernel<GGML_TYPE_BF16>(c1,c2);
+        case GGML_TYPE_BF16: return mma_kernel<GGML_TYPE_BF16>(c1,c2,resume);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_0
-        case GGML_TYPE_Q4_0: return mma_kernel<GGML_TYPE_Q4_0>(c1,c2);
+        case GGML_TYPE_Q4_0: return mma_kernel<GGML_TYPE_Q4_0>(c1,c2,resume);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_1
-        case GGML_TYPE_Q4_1: return mma_kernel<GGML_TYPE_Q4_1>(c1,c2);
+        case GGML_TYPE_Q4_1: return mma_kernel<GGML_TYPE_Q4_1>(c1,c2,resume);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_0
-        case GGML_TYPE_Q5_0: return mma_kernel<GGML_TYPE_Q5_0>(c1,c2);
+        case GGML_TYPE_Q5_0: return mma_kernel<GGML_TYPE_Q5_0>(c1,c2,resume);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_1
-        case GGML_TYPE_Q5_1: return mma_kernel<GGML_TYPE_Q5_1>(c1,c2);
+        case GGML_TYPE_Q5_1: return mma_kernel<GGML_TYPE_Q5_1>(c1,c2,resume);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q8_0
-        case GGML_TYPE_Q8_0: return mma_kernel<GGML_TYPE_Q8_0>(c1,c2);
+        case GGML_TYPE_Q8_0: return mma_kernel<GGML_TYPE_Q8_0>(c1,c2,resume);
 #endif
         default: break;
     }

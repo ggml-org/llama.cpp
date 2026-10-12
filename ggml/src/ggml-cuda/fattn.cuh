@@ -19,6 +19,16 @@ size_t ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(
 bool ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(
         ggml_backend_cuda_context & ctx, const ggml_tensor * dst, size_t spans,
         ggml_cuda_kv_stream_workspace_requirements & output, ggml_cuda_kv_stream_plan_status * failure = nullptr);
+bool ggml_cuda_flash_attn_ext_mma_f16_resume_requirements(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * dst,
+        ggml_cuda_kv_stream_workspace_requirements & output, ggml_cuda_kv_stream_plan_status * failure = nullptr);
+struct ggml_kv_stream_resume_plan;
+bool ggml_cuda_flash_attn_ext_mma_f16_resume_plan(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * dst, ggml_kv_stream_resume_plan & output);
+bool ggml_cuda_flash_attn_ext_mma_f16_resume(
+        ggml_backend_cuda_context & ctx, ggml_tensor * dst,
+        const ggml_cuda_kv_span * spans, size_t count, void * workspace, size_t workspace_bytes,
+        size_t first, size_t end, size_t active);
 // Execute the stock F16 MMA topology over an ordered logical K/V span table.
 bool ggml_cuda_flash_attn_ext_mma_f16_spans(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst,

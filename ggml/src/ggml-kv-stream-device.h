@@ -42,7 +42,7 @@ struct ggml_kv_stream_partial_ops {
     bool (*convert)(ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination);
     // Version 4: ordinary attention, requiring the caller's native FA output allocation including backend extras.
     bool (*direct)(ggml_backend_t backend, const ggml_tensor * attention) = nullptr;
-    // Version 6: native TG1/TG2 vector resume. Version 10 also admits the stock tile family through TG4.
+    // Version 6: native TG1/TG2 vector resume. Version 10 also quotes stock tile/MMA resume through TG8.
     bool (*resume_plan)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads, uint32_t kv_heads,
             uint32_t queries, size_t tokens, ggml_kv_stream_resume_plan & output) = nullptr;
     // No allocation; scratch is caller-owned and retains per-thread state until the final span publishes output.

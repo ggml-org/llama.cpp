@@ -13,7 +13,7 @@ struct quant_span_fixture {
     std::vector<ggml_fp16_t> reference[2];
     device_allocation packed, descriptors, dense_key, dense_value;
     quant_span_fixture(ggml_backend_t backend, ggml_type key, ggml_type value, int active, int padded,
-            int count, bool interleaved, uint32_t flags, bool stress = false) : tokens(active), capacity(padded), key_type(key), value_type(value), conversion_flags(flags),
+            int count, bool interleaved, uint32_t flags, bool stress = false, bool aligned = false) : tokens(active), capacity(padded), key_type(key), value_type(value), conversion_flags(flags),
         packed(size_t(active)*heads*(ggml_row_size(key,dimension)+ggml_row_size(value,dimension))+12*guard),
         descriptors(3*sizeof(ggml_cuda_kv_span)),dense_key(size_t(padded)*heads*dimension*2),dense_value(size_t(padded)*heads*dimension*2) {
         const ggml_type types[2] = {key,value};
@@ -53,7 +53,8 @@ struct quant_span_fixture {
         check_cuda(cudaMemcpy(dense_value.data,reference[1].data(),reference[1].size()*2,cudaMemcpyHostToDevice));
         original.resize(size_t(active)*heads*(row_bytes[0]+row_bytes[1])+12*guard,char(0x5a));
         const std::vector<int> cuts = count == 1 ? std::vector<int>{0,active} : count == 2 ?
-            std::vector<int>{0,17,active} : std::vector<int>{0,17,std::min(127,active-1),active};
+            std::vector<int>{0,17,active} : aligned && active >= 768 ?
+            std::vector<int>{0,256,512,active} : std::vector<int>{0,17,std::min(127,active-1),active};
         spans.resize(count);
         size_t cursor = 0;
         for (int physical = 0; physical < count; ++physical) {

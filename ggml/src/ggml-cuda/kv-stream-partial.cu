@@ -292,7 +292,7 @@ static bool resume_plan(
     if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) ||
             key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
             !heads || !kv_heads || heads%kv_heads || heads > 65535 ||
-            !queries || queries > 4 || !tokens || tokens > INT32_MAX ||
+            !queries || queries > 8 || !tokens || tokens > size_t(INT32_MAX)-255 ||
             !ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value))) return false;
     auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
@@ -312,10 +312,17 @@ static bool resume_plan(
         tensor->nb[1] = ggml_row_size(tensor->type, tensor->ne[0]);
         for (int i = 2; i < 4; ++i) tensor->nb[i] = tensor->nb[i-1]*size_t(tensor->ne[i-1]);
     }
-    op.op = GGML_OP_FLASH_ATTN_EXT; op.src[0] = &q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &mask;
+    op.op = GGML_OP_FLASH_ATTN_EXT; op.type=GGML_TYPE_F32;
+    op.ne[0]=256; op.ne[1]=heads; op.ne[2]=queries; op.ne[3]=1;
+    op.nb[0]=sizeof(float); op.nb[1]=256*sizeof(float);
+    op.nb[2]=op.nb[1]*heads; op.nb[3]=op.nb[2]*queries;
+    const float scale=1.0f/16;
+    std::memcpy(op.op_params,&scale,sizeof(scale));
+    op.src[0] = &q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &mask;
     const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
     if (family == kernel_family::tile) return ggml_cuda_kv_stream_tile_plan(
         ctx,ggml_type(key),ggml_type(value),heads,kv_heads,queries,tokens,output);
+    if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_f16_resume_plan(ctx,&op,output);
     auto native=ggml_cuda_kv_stream_vector_kernel(ggml_type(key),ggml_type(value),queries);
     auto resumed=ggml_cuda_kv_stream_resume_kernel(ggml_type(key),ggml_type(value),queries);
     if (!native || !resumed ||
@@ -470,6 +477,42 @@ static bool resume(
         ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t workspace,
         const ggml_kv_stream_resume_plan & plan, size_t tokens, size_t first, bool last) {
     if (!op || plan.tokens != tokens || first >= tokens) return false;
+    if (plan.kernel_config[0] == 2) {
+        if (capture_active(backend) || !supports(backend,op) || !workspace ||
+                ggml_backend_buffer_is_host(workspace) ||
+                !ggml_backend_supports_buft(backend,ggml_backend_buffer_get_type(workspace))) return false;
+        const auto * q=op->src[0], * k=op->src[1], * v=op->src[2];
+        if (q->ne[1] != plan.queries || q->ne[2] != plan.heads || k->ne[2] != plan.kernel_config[1] ||
+                size_t(k->ne[1]) > tokens-first || last != (first+size_t(k->ne[1]) == tokens)) return false;
+        ggml_kv_stream_resume_plan checked;
+        if (!resume_plan(backend,k->type,v->type,plan.heads,plan.kernel_config[1],plan.queries,tokens,checked) ||
+                checked.bytes != plan.bytes || checked.state_bytes != plan.state_bytes ||
+                checked.partial_offset != plan.partial_offset || checked.meta_offset != plan.meta_offset ||
+                checked.splits != plan.splits || checked.values_per_thread != plan.values_per_thread ||
+                !plan.resume_resident) return false;
+        for (size_t i=0;i<5;++i) if (checked.kernel_config[i] != plan.kernel_config[i]) return false;
+        const uintptr_t base=uintptr_t(ggml_backend_buffer_get_base(workspace));
+        const size_t capacity=ggml_backend_buffer_get_size(workspace);
+        if (!base || base%128 || capacity < plan.bytes || base > UINTPTR_MAX-capacity) return false;
+        const span scratch{base,base+capacity};
+        span range;
+        if (!tensor_span(backend,op,range) || overlap(scratch,range)) return false;
+        for (int i=0;i<4;++i)
+            if (!tensor_span(backend,op->src[i],range) || overlap(scratch,range)) return false;
+        ggml_tensor mask=*op->src[3];
+        const uintptr_t mb=uintptr_t(ggml_backend_buffer_get_base(mask.buffer)), md=uintptr_t(mask.data);
+        if (md < mb || md-mb < first*sizeof(half)) return false;
+        mask.data=reinterpret_cast<void *>(md-first*sizeof(half)); mask.ne[0]=int64_t(tokens);
+        if (!tensor_span(backend,&mask,range) || overlap(scratch,range)) return false;
+        ggml_tensor global_k=*k, global_v=*v, logical=*op;
+        global_k.ne[1]=global_v.ne[1]=int64_t(tokens);
+        logical.src[1]=&global_k; logical.src[2]=&global_v; logical.src[3]=&mask;
+        const ggml_cuda_kv_span source{static_cast<const char *>(k->data),static_cast<const char *>(v->data),
+            int32_t(first),int32_t(k->ne[1]),int64_t(k->nb[1]),int64_t(v->nb[1]),int64_t(k->nb[2]),int64_t(v->nb[2])};
+        auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+        return ggml_cuda_flash_attn_ext_mma_f16_resume(ctx,&logical,&source,1,reinterpret_cast<void *>(base),capacity,
+            first,first+size_t(k->ne[1]),tokens);
+    }
     if (plan.kernel_config[0] == 1) {
         if (capture_active(backend) || !supports(backend,op) || !workspace) return false;
         auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
@@ -586,10 +629,10 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
                 next.resume,layout,&requirements.shared_bytes)) return plan_status::unsupported_launch_resources;
         requirements.scratch_bytes=next.resume.bytes;
     } else if (family == kernel_family::mma) {
-        if (style == execution_style::resumable)
-            return plan_status::missing_streamed_implementation;
         plan_status failure;
-        if (!ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(ctx, op, view.count, requirements, &failure)) return failure;
+        if (style == execution_style::resumable) {
+            if (!ggml_cuda_flash_attn_ext_mma_f16_resume_requirements(ctx,op,requirements,&failure)) return failure;
+        } else if (!ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(ctx, op, view.count, requirements, &failure)) return failure;
     } else return plan_status::missing_streamed_implementation;
     const ggml_cuda_kv_stream_plan_support support{true, true, true, true, true};
     const auto result = ggml_cuda_kv_stream_attention_plan_make(metadata, family, style, support, requirements, next.description);

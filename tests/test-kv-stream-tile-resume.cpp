@@ -1,11 +1,69 @@
 #include "../ggml/src/ggml-cuda/fattn-tile-spans.h"
+#include "../ggml/src/ggml-cuda/fattn-mma-resume.h"
 #include "ggml-cpp.h"
 #include "testing.h"
 
 #include <cstring>
+#include <vector>
 
 int main() {
     testing t;
+    t.test("mma_resume_layout_keeps_stream_k_slices_distinct_and_bounded",[&](testing & t) {
+        ggml_cuda_fattn_mma_resume_layout layout;
+        t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(12,17,128,8,8,layout));
+        t.assert_equal(size_t(272),layout.thread_bytes);
+        t.assert_equal(size_t(28),layout.slots);
+        t.assert_equal(size_t(974848),layout.bytes);
+        ggml_cuda_fattn_mma_resume_layout singleton;
+        t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(2,4,128,4,8,singleton,2));
+        t.assert_equal(size_t(0),singleton.bytes);
+        t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(2,4,128,4,8,singleton,3));
+        t.assert_true(singleton.bytes > 0);
+        const auto saved=layout;
+        for (int kind=0;kind<7;++kind) {
+            t.assert_true(!ggml_cuda_fattn_mma_resume_layout_make(
+                kind == 0 ? 0 : kind == 1 ? SIZE_MAX : 12,
+                kind == 2 ? 0 : 17, kind == 3 ? 33 : 128,
+                kind == 4 ? 3 : 8, kind == 5 ? 4 : kind == 6 ? 0 : 8,layout));
+            t.assert_true(std::memcmp(&saved,&layout,sizeof(layout)) == 0);
+        }
+        for (size_t destinations : {1u,3u,12u}) for (size_t blocks : {1u,7u,17u}) {
+            constexpr size_t tiles=41;
+            if (blocks > destinations*tiles) continue;
+            t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(destinations,blocks,128,4,2,layout));
+            std::vector<bool> used(layout.slots,false);
+            for (size_t block=0;block<blocks;++block) {
+                const size_t first=block*destinations*tiles/blocks;
+                const size_t end=(block+1)*destinations*tiles/blocks;
+                for (size_t tile=first/tiles;tile<=(end-1)/tiles;++tile) {
+                    const size_t slot=tile+block;
+                    t.assert_true(slot < layout.slots && !used[slot]);
+                    used[slot]=true;
+                }
+            }
+        }
+    });
+    t.test("mma_resume_waves_validate_logical_tiles_without_reading_padding",[&](testing & t) {
+        ggml_cuda_kv_span sources[3]={{reinterpret_cast<const char *>(uintptr_t(4096)),reinterpret_cast<const char *>(uintptr_t(8192)),
+            256,17,128,64,64,32},
+            {reinterpret_cast<const char *>(uintptr_t(12288)),reinterpret_cast<const char *>(uintptr_t(16384)),
+            273,47,128,64,64,32}};
+        const auto valid=[&](size_t first,size_t end,size_t active,size_t capacity) {
+            return ggml_cuda_fattn_mma_resume_wave_validate(sources,2,active,capacity,64,first,end,2,64,32);
+        };
+        t.assert_true(valid(256,320,529,768));
+        t.assert_true(!valid(255,320,529,768));
+        t.assert_true(!valid(256,319,529,768));
+        t.assert_true(!valid(256,256,529,768));
+        t.assert_true(!valid(256,320,529,1024));
+        sources[0].first=512; sources[1].first=529;
+        sources[1].tokens=0;
+        t.assert_true(ggml_cuda_fattn_mma_resume_wave_validate(sources,1,529,768,64,512,768,2,64,32));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_wave_validate(sources,1,529,768,64,512,704,2,64,32));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_wave_validate(sources,1,SIZE_MAX,SIZE_MAX,64,512,768,2,64,32));
+        sources[0].tokens=16;
+        t.assert_true(!ggml_cuda_fattn_mma_resume_wave_validate(sources,1,529,768,64,512,768,2,64,32));
+    });
     const ggml_cuda_fattn_tile_resume_geometry geometry{256,4,4,2,2,1,128,64,3,8};
     t.test("tile_resume_layout_preserves_accumulator_width_and_bounds",[&](testing & t) {
         ggml_cuda_fattn_tile_resume_layout plan;

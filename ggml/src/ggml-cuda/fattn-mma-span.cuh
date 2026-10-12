@@ -2,6 +2,17 @@
 
 #include "kv-stream-span.h"
 #include "fattn-mma-quant.cuh"
+#include "fattn-mma-resume.h"
+
+// Copy register fragments as integer words, without floating-point conversion or arithmetic.
+template<size_t bytes>
+static __device__ __forceinline__ void ggml_cuda_fattn_mma_checkpoint_copy(void * destination, const void * source) {
+    static_assert(bytes%4 == 0, "checkpoint must contain complete words");
+    auto * dst=static_cast<uint32_t *>(destination);
+    const auto * src=static_cast<const uint32_t *>(source);
+#pragma unroll
+    for (size_t i=0;i<bytes/4;++i) dst[i]=src[i];
+}
 
 // Resolve an ordered logical token without using physical span order.
 static __device__ __forceinline__ int flash_attn_ext_f16_span_index(
@@ -175,7 +186,9 @@ static __device__ __forceinline__ void ggml_cuda_fattn_finish_encoded_tile(
 struct ggml_cuda_fattn_mma_contiguous_kv {
     static constexpr bool spanned = false;
     static constexpr bool staged = false;
+    static constexpr bool resumable = false;
     __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_head(int) const { return {}; }
+    __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_slice(int) const { return {}; }
     __device__ __forceinline__ const half2 * offset(const half2 * source, int feature) const { return source+feature; }
     template<int stride, int warps, int rows, bool asynchronous, bool bounds, bool sparse>
     __device__ __forceinline__ void load(bool, const half2 * source, half2 * tile, int width, int row_stride,
@@ -186,16 +199,24 @@ struct ggml_cuda_fattn_mma_contiguous_kv {
 };
 
 // Change source addresses only; sparse attention is not implemented over spans.
-template<ggml_type key = GGML_TYPE_F16, ggml_type value_type = GGML_TYPE_F16>
+template<ggml_type key = GGML_TYPE_F16, ggml_type value_type = GGML_TYPE_F16, bool resume = false>
 struct ggml_cuda_fattn_mma_typed_span_kv {
     static constexpr bool spanned = true;
     static constexpr bool staged = key != GGML_TYPE_F16 || value_type != GGML_TYPE_F16;
+    static constexpr bool resumable = resume;
     static constexpr ggml_type key_type = key, v_type = value_type;
     const ggml_cuda_kv_span * spans;
     int count;
     int head;
     uint32_t conversion_flags = 3;
-    __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_head(int next) const { return {spans,count,next,conversion_flags}; }
+    ggml_cuda_fattn_mma_resume_control control;
+    int slice = 0;
+    __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_head(int next) const {
+        auto result=*this; result.head=next; return result;
+    }
+    __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_slice(int next) const {
+        auto result=*this; result.slice=next; return result;
+    }
     __device__ __forceinline__ const half2 * offset(const half2 *, int) const { return nullptr; }
     template<int stride, int warps, int rows, bool asynchronous, bool bounds, bool sparse>
     __device__ __forceinline__ void load(bool value, const half2 *, half2 * tile, int width, int,

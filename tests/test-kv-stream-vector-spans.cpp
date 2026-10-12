@@ -426,8 +426,9 @@ int main(int argc, char ** argv) {
                 t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == expected);
                 if (expected != status::success) t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
                 const auto saved = unchanged;
-                t.assert_true(query(backend.get(), op, &view, style::resumable, unchanged) ==
-                    (width > 8 ? status::unsupported_geometry : status::missing_streamed_implementation));
+                t.assert_true(query(backend.get(), op, &view, style::resumable, unchanged) == expected);
+                if (expected == status::success)
+                    t.assert_true(unchanged.requirements.scratch_bytes >= saved.requirements.scratch_bytes);
                 size_t bytes = 77;
                 const bool available = pair.first == GGML_TYPE_Q8_0 && width <= 8;
                 t.assert_true(get()->decode_workspace(backend.get(), pair.first, pair.second, 24, 4, width, 768, bytes) == available);
