@@ -2062,7 +2062,7 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
 }
 
 // Snapshot the first read after decode before scalar getters can hide a missing wait.
-static void test_sampling_view_first_read(const test_params & params) {
+static void test_common_sampler_first_read(const test_params & params) {
     for (int mode = 0; mode < 5; ++mode) {
         llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
         if (mode == 1) {
@@ -2082,6 +2082,14 @@ static void test_sampling_view_first_read(const test_params & params) {
             }
         }
         test_context t(params, configs, 2, 4, 4, 2);
+        common_params_sampling sp;
+        common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+        // Keep the candidates unchanged for comparison with the context outputs.
+        auto * cpu_chain = common_sampler_get(sampler.get());
+        while (llama_sampler_chain_n(cpu_chain) > 0) {
+            llama_sampler_free(llama_sampler_chain_remove(cpu_chain, 0));
+        }
+        llama_sampler_chain_add(cpu_chain, llama_sampler_init_greedy());
         int32_t pos = 0;
         for (int idx : {3, 2, 1, 0, -1}) {
             common_batch batch(t.ctx.get());
@@ -2092,26 +2100,33 @@ static void test_sampling_view_first_read(const test_params & params) {
             }
             pos += 2;
             GGML_ASSERT(llama_process(t.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
-            const auto out = llama_get_sampling_output_ith(t.ctx.get(), idx);
-            const uint32_t n = out.probs ? out.n_probs : out.sampled_logits ? out.n_logits : t.n_vocab;
-            const float * values = out.sampled_logits ? out.sampled_logits : out.logits;
-            GGML_ASSERT(values && n > 0);
-            const std::vector<float> logits(values, values + n);
-            std::vector<float> probs;
-            std::vector<llama_token> ids;
-            if (out.probs) { probs.assign(out.probs, out.probs + out.n_probs); }
-            if (out.sampled_logits) { ids.assign(out.candidates, out.candidates + n); }
-            GGML_ASSERT(out.token == llama_get_sampled_token_ith(t.ctx.get(), idx));
-            GGML_ASSERT(out.n_probs == llama_get_sampled_probs_count_ith(t.ctx.get(), idx));
-            GGML_ASSERT(out.n_logits == llama_get_sampled_logits_count_ith(t.ctx.get(), idx));
-            const float * expected = llama_get_logits_ith(t.ctx.get(), idx);
-            GGML_ASSERT(std::all_of(logits.begin(), logits.end(), [](float v) { return std::isfinite(v); }));
-            GGML_ASSERT(std::equal(logits.begin(), logits.end(), expected));
-            if (!probs.empty()) { GGML_ASSERT(std::equal(probs.begin(), probs.end(), llama_get_sampled_probs_ith(t.ctx.get(), idx))); }
-            if (!ids.empty()) { GGML_ASSERT(std::equal(ids.begin(), ids.end(), llama_get_sampled_candidates_ith(t.ctx.get(), idx))); }
+            const llama_token token = common_sampler_sample(sampler.get(), t.ctx.get(), idx);
+            const auto * cur = common_sampler_get_candidates(sampler.get(), false);
+            GGML_ASSERT(cur->selected >= 0 && size_t(cur->selected) < cur->size);
+            GGML_ASSERT(cur->data[cur->selected].id == token);
+            const std::vector<llama_token_data> snapshot(cur->data, cur->data + cur->size);
+
+            const llama_token expected_token = llama_get_sampled_token_ith(t.ctx.get(), idx);
+            const float * probs = llama_get_sampled_probs_ith(t.ctx.get(), idx);
+            const float * logits = llama_get_sampled_logits_ith(t.ctx.get(), idx);
+            const llama_token * ids = llama_get_sampled_candidates_ith(t.ctx.get(), idx);
+            const size_t n = probs ? llama_get_sampled_probs_count_ith(t.ctx.get(), idx)
+                                  : logits ? llama_get_sampled_logits_count_ith(t.ctx.get(), idx) : t.n_vocab;
+            if (!logits) {
+                logits = llama_get_logits_ith(t.ctx.get(), idx);
+            }
+            GGML_ASSERT(logits && n > 0 && snapshot.size() == n);
+            if (expected_token != LLAMA_TOKEN_NULL) {
+                GGML_ASSERT(token == expected_token);
+            }
+            for (size_t i = 0; i < n; ++i) {
+                GGML_ASSERT(snapshot[i].id == (ids ? ids[i] : llama_token(i)));
+                GGML_ASSERT(std::isfinite(snapshot[i].logit) && snapshot[i].logit == logits[i]);
+                GGML_ASSERT(snapshot[i].p == (probs ? probs[i] : 0.0f));
+            }
         }
     }
-    printf("sampling view first-read test PASSED\n");
+    printf("common sampler first-read test PASSED\n");
 }
 
 struct backend_test_case {
@@ -2122,7 +2137,7 @@ struct backend_test_case {
 
 // note: test names are "test_<suffix>" and match the function implementing them
 static const backend_test_case BACKEND_TESTS[] = {
-    { "test_sampling_view_first_read", test_sampling_view_first_read, true },
+    { "test_common_sampler_first_read", test_common_sampler_first_read, true },
     // single sampler
     { "test_greedy",                 test_greedy,                 true },
     { "test_greedy_filtered",        test_greedy_filtered,        true },
