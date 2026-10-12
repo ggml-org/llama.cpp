@@ -493,6 +493,7 @@ llama_context::llama_context(
                         moe.slot_of.assign((size_t) n_layer*n_exp, -1);
                         moe.slot_key.assign((size_t) s_pl*n_layer, -1);
                         moe.step_sel.assign((size_t) n_layer * n_used, -1);
+                        moe.step_topk.assign((size_t) n_layer, nullptr);
                         // staging for demand plus lookahead: 2 layers of layer-ahead
                         // plus token-ahead, all potentially unclaimed (65% predictor
                         // miss), plus margin so demand never starves
@@ -1670,6 +1671,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status = %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    // decode only: the graph is done and nothing reads the pool, so refresh the
+    // whole table here instead of splitting the graph at all 48 MoE layers
+    if (moe_ready && ubatch.n_tokens == 1) {
+        moe_post_refresh();
     }
 
     if (diag) {
@@ -4752,14 +4759,21 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
     }
     const int s_pl = moe.s_per_layer;
     const int base = il * s_pl;
-    // round-robin within the layer's slot range, skipping pinned slots.
-    // strictly FIFO, so any future policy change stays bit-exact by construction.
-    // a batch needs at most n_used slots while pinned holds its residents, so a
-    // free victim always exists; the bounded scan is a backstop.
+    // Victim choice. MOE_EVICT=lru keeps the least recently used slot; the
+    // default stays round-robin, which measured better here: the per-layer
+    // working set (8 experts x 48 layers demanded per step against 104 slots)
+    // does not fit, so LRU thrashes a small hot set while round-robin spreads
+    // the re-reads evenly.
+    // round-robin within the layer's slot range, skipping pinned slots. LRU was
+    // measured and is worse here: 8 experts x 48 layers are demanded per step
+    // against 104 slots per layer, so the working set does not fit and LRU
+    // thrashes a small hot set while round-robin spreads the re-reads evenly.
     int slot = -1;
-    for (int t = 0; t < s_pl; t++) {
-        const int cand = base + ((moe_rr + t) % s_pl);
-        if (!pinned || !pinned[cand - base]) { slot = cand; moe_rr += t + 1; break; }
+    {
+        for (int t = 0; t < s_pl; t++) {
+            const int cand = base + ((moe_rr + t) % s_pl);
+            if (!pinned || !pinned[cand - base]) { slot = cand; moe_rr += t + 1; break; }
+        }
     }
     if (slot < 0) {
         moe.n_page_fail++;
@@ -4858,7 +4872,10 @@ void llama_context::moe_seed_hot() {
         }
         return ms * 1000;
     }();
-    const int per_layer = file_nt > 0 ? file_nt : MOE_HOT_PER_LAYER;
+    // the profile carries 72 hot experts per layer, but the pool may hold fewer
+    // slots: clamp to what exists, or slot base+k runs past the layer and the
+    // DMA below writes outside the tensor.
+    const int per_layer = std::min(file_nt > 0 ? file_nt : MOE_HOT_PER_LAYER, moe.s_per_layer);
     const int total = moe.n_layer * per_layer;
     int seeded = 0;
     for (int k = 0; k < per_layer; k++) {
@@ -4943,6 +4960,47 @@ void llama_context::moe_adapt_note(int il, int e) {
 //
 // Reads are issued through the pager's async prefetch path and only DMA'd into
 // the victim slot on the next pass, so the GPU stream never waits on the SSD.
+// Page every layer's experts for the step that just finished and republish the
+// tables, entirely between graph launches. The split-per-layer path exists only
+// so the host can rewrite a table mid-graph; doing it after the graph lets the
+// whole decode run as one unbroken CUDA graph, which is worth ~30 tok/s.
+void llama_context::moe_post_refresh() {
+    static int on = -1;
+    if (on < 0) on = getenv("MOE_POST_REFRESH") ? atoi(getenv("MOE_POST_REFRESH")) : 0;
+    if (!on || !moe_ready) return;
+
+    const int n_exp  = moe.n_expert;
+    const int n_used = moe.n_used;
+
+    for (int il = 0; il < moe.n_layer; il++) {
+        ggml_tensor * t = moe.step_topk[(size_t) il];
+        if (!t) continue;
+        std::vector<int32_t> ids((size_t) n_used);
+        ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
+        moe_page_batch(il, ids.data(), n_used);
+        // remember this step's routing: the next one is prefetched from it, so a
+        // miss costs a concurrent read instead of a stall in front of the graph
+        for (int k = 0; k < n_used; k++) {
+            moe.step_sel[(size_t) il * n_used + k] = ids[k];
+        }
+    }
+
+    // Queue reads for what the previous step routed to. routing is independent
+    // across layers, so only a layer's own previous ids predict it, and the
+    // staging arena is far smaller than 48 layers x n_used: without a budget
+    // these reads occupy every stage and the next step's demand fetch cannot
+    // get one at all.
+    int budget = std::max(0, pager.n_free_staging() - 2 * n_used);
+    for (int il = 0; il < moe.n_layer && budget > 0; il++) {
+        for (int k = 0; k < n_used && budget > 0; k++) {
+            const int32_t e = moe.step_sel[(size_t) il * n_used + k];
+            if (e < 0 || e >= n_exp) continue;
+            if (moe.slot_of[(size_t) il * n_exp + e] >= 0) continue;
+            if (pager.prefetch(il, e)) budget--;
+        }
+    }
+}
+
 void llama_context::moe_adapt_run() {
     if (!moe_adapt_on()) return;
     const int n_exp = moe.n_expert;
@@ -5181,14 +5239,31 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         // 48 MoE layers execute as one unbroken graph.
         // MOE_BOUNDARY=1: split retired, tables refreshed once per step.
         // MOE_NOSPLIT=1: split retired, tables never refreshed (diagnostic).
+        // MOE_SPLIT_LAYER=N: split only at layer N (default 0), so the other
+        // MoE layers run inside one unbroken graph. A split costs a host sync
+        // plus a graph relaunch (~4 ms), and doing it at all 48 layers is the
+        // whole decode latency; one split keeps the routing table fresh for the
+        // layer that is actually about to run.
         static int mode = -1;
+        static int split_layer = 0;
         if (mode < 0) {
             mode = 0;
+            if (getenv("MOE_SPLIT_LAYER")) split_layer = atoi(getenv("MOE_SPLIT_LAYER"));
             if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) mode = 3;
             else if (getenv("MOE_BOUNDARY") && atoi(getenv("MOE_BOUNDARY"))) mode = 1;
             else if (getenv("MOE_NOSPLIT") && atoi(getenv("MOE_NOSPLIT"))) mode = 2;
+            else if (getenv("MOE_SPLIT_LAYER")) mode = 4;
         }
-        return mode != 0 ? false : true;   // split the graph here and sync afterwards
+        if (mode != 0 && mode != 4) return false;   // no split
+        if (mode == 4) {
+            // decode only: the table is refreshed between graph launches instead.
+            // a prefill row batch still pages inside the graph, so it needs the split.
+            static int post = -1;
+            if (post < 0) post = getenv("MOE_POST_REFRESH") ? atoi(getenv("MOE_POST_REFRESH")) : 0;
+            if (t->ne[1] == 1 && post) return false;   // decode: refresh between graphs
+            return true;                              // prefill: split where it pages
+        }
+        return true;                                // mode 0: split at every layer
     }
     // data phase: page the selected experts (I32 [n_used, n_tokens]).
     // the graph only reads the pool when the slot_ids remap node exists;
@@ -5205,6 +5280,8 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         }
         if (m2 == 3) return true;          // Direction 1: table is static on device
         if (m2 == 1) return true;          // boundary: paged from the boundary refresh
+        // mode 4 (MOE_SPLIT_LAYER): the split only exists at one layer, so only
+        // that layer can refresh the table; the rest read what is resident.
         // mode 4 (adaptive) falls through: every selected expert is demand-paged,
         // so no routing ever reads the zero sentinel slot.
     }
@@ -5227,6 +5304,7 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     // decode-only: prefill rows predict the wrong step and would pollute
     // staging with useless reads. admission-controlled inside, never blocks.
     if (ntok == 1) {
+        ctx->moe.step_topk[(size_t) il] = t;   // for moe_post_refresh()
         for (int64_t j = 0; j < ntok; j++) {
             ctx->moe_prefetch_ahead(il, ids.data() + (size_t) j * nw, (int) nw);
         }

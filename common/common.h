@@ -396,12 +396,22 @@ struct common_params_speculative {
         return synth_len != -1.0 || !synth_rates.empty();
     }
 
-    uint32_t need_n_rs_seq() const {
-        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
-        });
+    // Bounded recurrent rollback is what lets a rejected draft be undone on a
+    // GDN model without a full-context checkpoint. Any drafter can reject, so
+    // the snapshots are reserved for every enabled drafter, not only the
+    // draft-model ones (n-gram drafting rejects constantly).
+    uint32_t rs_seq_override = 0;   // --rs-seq: 0 = derive from the drafter
 
-        return needs_rs_seq ? draft.n_max : 0u;
+    uint32_t need_n_rs_seq() const {
+        // --spec-type APPENDS to the default {NONE}, so NONE can sit at index 0
+        // while a real drafter follows; look at the whole list.
+        const bool enabled = std::any_of(types.begin(), types.end(),
+                [](auto t) { return t != COMMON_SPECULATIVE_TYPE_NONE; });
+        if (!enabled) {
+            return 0u;
+        }
+        const uint32_t auto_n = draft.n_max > 0 ? draft.n_max : (ngram_simple.size_m > 1 ? ngram_simple.size_m : 0u);
+        return rs_seq_override > 0 ? rs_seq_override : auto_n;
     }
 };
 

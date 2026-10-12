@@ -273,6 +273,9 @@ public:
         // previous decode step's top-k per layer, for the recency predictor
         // (moe_step_sel[il*n_used+k]); empty until the first decode step
         std::vector<int32_t> step_sel;
+        // ffn_moe_topk-<il> node of the graph in flight, kept so the
+        // between-launches refresh can read the routing it just produced
+        std::vector<ggml_tensor *> step_topk;
         // last ubatch width seen; used to detect the prefill->decode edge
         uint32_t last_ntok = 0;
         // Direction 1: one extra all-zero slot per layer absorbing cold misses
@@ -301,6 +304,10 @@ public:
     bool moe_adapt_on() const;
     void moe_adapt_note(int il, int e);
     void moe_adapt_run();
+    // page every layer's experts the step just selected and republish the tables
+    // between graph launches (MOE_POST_REFRESH=1): the decode graph then runs
+    // with no split at all, which is where the per-token latency was going.
+    void moe_post_refresh();
     const ggml_tensor * moe_pool_tensor(const char * which, int il) const;
     // pre-populate every layer's slots with the offline hot profile so the
     // first decode step starts warm; pages synchronously, failures are
