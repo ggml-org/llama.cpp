@@ -701,20 +701,29 @@ static void dequantize_tiled_weight_to_fp16_task_q3_k(
     }
 }
 
-// Q2_K stores 2-bit weights and one fp16 scale and offset per 16 k, see HTP_MM_WEIGHT_TILE_SIZE_Q2_K.
+// Q2_K stores 2-bit weights, the ggml scale bytes and d / -dmin per super-block, see HTP_MM_WEIGHT_TILE_SIZE_Q2_K.
 static void dequantize_tiled_weight_to_fp16_task_q2_k(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
     const HVX_Vector mask_03 = Q6_Vb_vsplat_R(0x03);
 
+    HVX_Vector v_d = Q6_V_vzero();
+    HVX_Vector v_dm = Q6_V_vzero();
+
     for (uint32_t t = start_tile; t < end_tile; t++) {
-        const HVX_Vector * vptr = (const HVX_Vector *) (state->src + t * state->aligned_tile_size);
+        const uint8_t * tile = state->src + t * state->aligned_tile_size;
+        const HVX_Vector * vptr = (const HVX_Vector *) tile;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
 
-        HVX_Vector v_sc       = vptr[2];
+        // rows hold all k tiles and n_k_tiles is a multiple of 8, so t % 8 is the tile within its super-block
+        if (t == start_tile || (t & 7) == 0) {
+            q2_k_load_dmin(tile - (t & 7) * state->aligned_tile_size, &v_d, &v_dm);
+        }
+
+        HVX_Vector v_sc, v_m;
+        q2_k_unpack_scales(tile, v_d, v_dm, &v_sc, &v_m);
         HVX_Vector v_sc_k16   = Q6_V_vror_VR(v_sc, 64);
-        HVX_Vector v_m        = vptr[3];
         HVX_Vector v_m_k16    = Q6_V_vror_VR(v_m, 64);
         HVX_Vector v_scale_k0   = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
         HVX_Vector v_scale_k16  = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc_k16, v_sc_k16, -2));
