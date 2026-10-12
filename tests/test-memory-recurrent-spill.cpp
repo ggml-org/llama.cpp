@@ -4,9 +4,37 @@
 #include "ggml-cpu.h"
 #include <cstring>
 #include <array>
+#include <algorithm>
 
 int main(int argc, char ** argv) {
     testing t;
+    t.test("streamed_rollback_plan_follows_verification_not_auxiliary_kv", [](testing & t) {
+        for (uint32_t depth=0;depth<=7;++depth) {
+            llama_recurrent_rollback_plan plan;
+            if (!t.assert_true(llama_recurrent_rollback_plan_make(depth,false,256,plan))) return;
+            t.assert_equal(depth,plan.depth);
+            t.assert_equal(depth+1,plan.verification_rows);
+            t.assert_equal(std::max(4u,depth+1),plan.workspace_rows);
+            t.assert_equal(depth != 0,plan.host_spill);
+            for (bool mtp : {false,true}) {
+                auto saved=plan;
+                const bool valid=llama_recurrent_rollback_plan_make(depth,mtp,depth+1,plan);
+                t.assert_equal(!mtp || depth <= 3,valid);
+                if (!valid) {
+                    t.assert_equal(saved.depth,plan.depth);
+                    t.assert_equal(saved.verification_rows,plan.verification_rows);
+                }
+            }
+        }
+        llama_recurrent_rollback_plan sentinel;
+        sentinel.depth=123; sentinel.verification_rows=456; sentinel.workspace_rows=789;
+        for (auto bad : {std::pair{8u,256u},std::pair{UINT32_MAX,256u},std::pair{7u,7u},std::pair{0u,0u}}) {
+            t.assert_true(!llama_recurrent_rollback_plan_make(bad.first,false,bad.second,sentinel));
+            t.assert_equal(123u,sentinel.depth);
+            t.assert_equal(456u,sentinel.verification_rows);
+            t.assert_equal(789u,sentinel.workspace_rows);
+        }
+    });
     t.test("layout_matches_stock_recurrent_rows_and_counts_exact_bytes", [](testing & t) {
         const std::vector<llama_recurrent_spill_layer> layers{
             {GGML_TYPE_F32,GGML_TYPE_F32,24576,786432,true},

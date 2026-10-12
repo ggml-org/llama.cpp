@@ -20,6 +20,10 @@ struct llama_cparams {
     bool kv_streaming() const noexcept {
         return kv_stream_pool_bytes || shared_device_memory_bytes;
     }
+    // Embedded MTP retains its four-row graph catalog; independent target rollback admits depth+1 rows.
+    uint32_t kv_stream_decode_rows() const noexcept {
+        return kv_stream_auxiliary_layers ? 4 : n_rs_seq ? n_rs_seq+1 : n_seq_max;
+    }
     bool kv_stream_decode = false;
     bool mtp_publish_host = false;
     bool mtp_span_attention = false;

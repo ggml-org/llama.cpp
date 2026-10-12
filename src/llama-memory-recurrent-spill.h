@@ -8,6 +8,17 @@
 #include <cstdint>
 #include <vector>
 
+struct llama_recurrent_rollback_plan {
+    uint32_t depth = 0;
+    uint32_t verification_rows = 1;
+    uint32_t workspace_rows = 4;
+    bool host_spill = false;
+};
+
+// Plan target rollback independently of draft cache ownership; keep the embedded-MTP depth limit.
+bool llama_recurrent_rollback_plan_make(uint32_t depth, bool embedded_mtp, uint32_t microbatch_rows,
+        llama_recurrent_rollback_plan & output) noexcept;
+
 struct llama_recurrent_spill_layer {
     ggml_type type_r = GGML_TYPE_F32;
     ggml_type type_s = GGML_TYPE_F32;

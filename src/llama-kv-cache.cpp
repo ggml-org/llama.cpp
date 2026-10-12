@@ -203,6 +203,7 @@ llama_kv_cache::llama_kv_cache(
         config.shared_device_memory_bytes = stream->shared_device_memory_bytes;
         config.auxiliary_cache_layers = stream->kv_stream_auxiliary_layers;
         config.max_batch_rows = stream->kv_stream_max_rows; config.query_heads = hparams.n_head(first);
+        config.max_decode_rows = stream->kv_stream_max_decode_rows;
         config.measure = true;
         config.host = {0,{type_k,type_v,256,256,hparams.n_head_kv(first),256,128},
             get()->capabilities(config.backend,type_k,type_v),requested_kv_size,uint32_t(ids.size())};

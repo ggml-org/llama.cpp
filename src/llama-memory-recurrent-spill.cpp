@@ -7,6 +7,13 @@
 #include <stdexcept>
 #include <utility>
 
+bool llama_recurrent_rollback_plan_make(uint32_t depth, bool embedded_mtp, uint32_t microbatch_rows,
+        llama_recurrent_rollback_plan & output) noexcept {
+    if (depth > 7 || (embedded_mtp && depth > 3) || microbatch_rows < depth+1) return false;
+    output={depth,depth+1,std::max(4u,depth+1),depth != 0};
+    return true;
+}
+
 static bool multiply(size_t a, size_t b, size_t & value) {
     if (b && a > std::numeric_limits<size_t>::max()/b) return false;
     value=a*b;

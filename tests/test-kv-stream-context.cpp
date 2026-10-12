@@ -584,7 +584,7 @@ int main(int argc,char ** argv) {
             p.kv_stream_auxiliary_layers=1;
             p.n_rs_seq=3;
             auto invalid=p;
-            invalid.kv_stream_auxiliary_layers=0;
+            invalid.n_rs_seq=8;
             context_ptr unsafe(llama_init_from_model(model.get(),invalid),llama_free);
             t.assert_true(!unsafe);
             invalid=p;
@@ -615,6 +615,44 @@ int main(int argc,char ** argv) {
             llama_set_kv_stream_decode(ctx.get(),true);
             t.assert_equal(0,llama_decode(ctx.get(),batch));
             llama_batch_free(batch);
+        });
+        t.test("independent_target_rollback_needs_no_auxiliary_kv_layer", [&](testing & t) {
+            auto p=llama_context_default_params();
+            p.n_ctx=1024; p.n_batch=p.n_ubatch=256; p.n_seq_max=1;
+            p.n_threads=p.n_threads_batch=8;
+            p.n_rs_seq=3;
+            p.n_outputs_max=p.n_outputs_max_per_seq=4;
+            p.type_k=GGML_TYPE_Q8_0; p.type_v=GGML_TYPE_Q4_0;
+            p.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            p.kv_stream_pool_bytes=16*1048576;
+            context_ptr ctx(llama_init_from_model(model.get(),p),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            if (!t.assert_true(hybrid && hybrid->get_mem_recr()->spill_enabled())) return;
+            auto * target=hybrid->get_mem_attn()->get_kv_stream();
+            if (!t.assert_true(target && !target->auxiliary_cache())) return;
+            t.assert_equal(uint32_t(4),ctx->get_cparams().kv_stream_decode_rows());
+            auto batch=llama_batch_init(256,0,1);
+            struct release { llama_batch & batch; ~release() { llama_batch_free(batch); } } guard{batch};
+            const auto submit=[&](uint32_t width,llama_pos first,bool decode) {
+                batch.n_tokens=int32_t(width);
+                for (uint32_t i=0;i<width;++i) {
+                    batch.token[i]=1; batch.pos[i]=first+llama_pos(i);
+                    batch.n_seq_id[i]=1; batch.seq_id[i][0]=0; batch.logits[i]=decode || i+1==width;
+                }
+                llama_set_kv_stream_decode(ctx.get(),decode);
+                return llama_decode(ctx.get(),batch);
+            };
+            if (!t.assert_equal(0,submit(256,0,false))) return;
+            llama_pos position=256;
+            for (uint32_t width : {1u,2u,3u,4u}) {
+                if (!t.assert_equal(0,submit(width,position,true))) return;
+                position+=llama_pos(width);
+                t.assert_equal(size_t(position),target->tokens());
+            }
+            t.assert_true(llama_memory_seq_rm(llama_get_memory(ctx.get()),0,position-3,-1));
+            t.assert_equal(size_t(position-3),target->tokens());
+            t.assert_equal(0,submit(1,position-3,true));
         });
         return t.summary();
     }

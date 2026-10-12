@@ -4,6 +4,8 @@ Gemma 4 31B target and shared-KV assistant extension: [GEMMA4_ADAPTIVE_KV_ROADMA
 
 Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). D1-D3 are qualified on RTX 5070 Ti, including wrapped-wave batching, inactive-block exclusion, address resolution and checkpoint compaction, with matched measurements and unchanged numerical gates. The 5-10 percent routing-overhead goal is met in the sampled 128K FP16 cases, not every short-history path. Older-device execution and D4-D7 remain pending; live DFlash2 streaming remains unimplemented and unqualified.
 
+D4a has an implementation checkpoint for target rollback independent of auxiliary KV ownership. Depths 0-7 are planned with checked verification/workspace widths; real IQ4_XS depth-three execution and embedded-MTP regression pass. Depth-seven staging choice and D4b/D4c lifecycle/long-prefix qualification remain pending; see the DFlash2 roadmap checkpoint for footprint and evidence.
+
 Saved: 2026-09-10
 
 Last source review: 2026-10-06 for C5b qualification after the shared-workspace hardening rebase; earlier checkpoint evidence is unchanged.

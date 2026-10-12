@@ -271,11 +271,6 @@ llama_context::llama_context(
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
     cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
     cparams.kv_stream_auxiliary_layers = params.kv_stream_auxiliary_layers;
-    const bool streamed_rs_rollback = cparams.kv_stream_auxiliary_layers == 1 &&
-        cparams.n_rs_seq > 0 && cparams.n_rs_seq <= 3;
-    if (cparams.kv_stream_auxiliary_layers && cparams.n_rs_seq > 3) {
-        throw std::runtime_error("KV-stream recurrent rollback supports depth 1-3");
-    }
     if (cparams.kv_stream_auxiliary_layers > 1) {
         throw std::runtime_error("model requests " + std::to_string(cparams.kv_stream_auxiliary_layers) +
             " MTP KV layers; adaptive KV currently supports only a single Qwen MTP layer");
@@ -283,6 +278,12 @@ llama_context::llama_context(
     if (cparams.kv_stream_auxiliary_layers && !cparams.kv_streaming()) {
         throw std::runtime_error("auxiliary KV cache requires an enabled KV streaming pool or arena");
     }
+    llama_recurrent_rollback_plan rollback_plan;
+    if (cparams.kv_streaming() && !llama_recurrent_rollback_plan_make(
+            cparams.n_rs_seq,cparams.kv_stream_auxiliary_layers != 0,cparams.n_ubatch,rollback_plan)) {
+        throw std::runtime_error("KV-stream target rollback requires depth 0-7 (embedded MTP: 0-3) and ubatch >= depth+1");
+    }
+    const bool streamed_rs_rollback=cparams.kv_streaming() && rollback_plan.host_spill;
     if (cparams.kv_stream_pool_bytes && cparams.shared_device_memory_bytes) {
         throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");
     }
@@ -489,6 +490,7 @@ llama_context::llama_context(
             params_mem.kv_stream_auxiliary_layers = cparams.kv_stream_auxiliary_layers;
             params_mem.kv_stream_rs_rollback = streamed_rs_rollback;
             params_mem.kv_stream_max_rows = cparams.n_ubatch;
+            params_mem.kv_stream_max_decode_rows = rollback_plan.workspace_rows;
             for (auto & backend : backends) if (ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 params_mem.kv_stream_backend = backend.get(); break;
             }
@@ -877,9 +879,9 @@ void llama_context::sched_reserve() {
             }
         }
         const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
-        if (cparams.n_rs_seq && spill_flag && std::strcmp(spill_flag,"1") == 0 && n_seqs == 1) {
-            const uint32_t width=std::min(n_tokens,cparams.n_rs_seq+1);
-            if (width > 1) {
+        if (cparams.n_rs_seq && (cparams.kv_streaming() || (spill_flag && std::strcmp(spill_flag,"1") == 0)) && n_seqs == 1) {
+            const uint32_t maximum=std::min(n_tokens,cparams.n_rs_seq+1);
+            for (uint32_t width=2;width<=maximum;++width) {
                 std::vector<size_t> verify(backend_ptrs.size());
                 std::vector<size_t> verify_all(backend_ptrs.size());
                 if (!graph_reserve(width,1,1,mctx.get(),true,verify.data()) ||
@@ -1114,8 +1116,7 @@ bool llama_context::resume_kv_device(llama_memory_text_phase phase) {
         gf_res_reserve->reset();
         cparams.kv_stream_decode = phase == llama_memory_text_phase::decode;
         auto reserved = memory->init_full();
-        const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
-            std::min(4u,std::min(cparams.n_ctx,cparams.n_ubatch)) : cparams.n_seq_max;
+        const uint32_t decode_width = std::min(cparams.kv_stream_decode_rows(),std::min(cparams.n_ctx,cparams.n_ubatch));
         const uint32_t width = phase == llama_memory_text_phase::decode ?
             decode_width : std::min(cparams.n_ctx,cparams.n_ubatch);
         return reserved && graph_reserve(width,cparams.n_seq_max,std::min(width,cparams.n_outputs_max),reserved.get());
@@ -2368,16 +2369,16 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 return -2;
             }
         }
-        const bool supported_verify = cparams.kv_stream_auxiliary_layers == 1 &&
+        const bool supported_verify = (cparams.kv_stream_auxiliary_layers == 1 || cparams.n_rs_seq != 0) &&
             text_phase == llama_memory_text_phase::decode &&
-            n_tokens_all >= 2 && n_tokens_all <= 4;
+            n_tokens_all >= 2 && n_tokens_all <= cparams.kv_stream_decode_rows();
         const auto transitions = compute_memory->phase_transition_count();
         const auto phase_result = compute_memory->signal_text_phase({
             text_phase,
             n_tokens_all,
             cparams.n_seq_max == 1,
             cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT,
-            cparams.ctx_other != nullptr || (cparams.n_rs_seq != 0 && cparams.kv_stream_auxiliary_layers != 1) ||
+            cparams.ctx_other != nullptr ||
                 (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1 && !supported_verify),
         });
         if (phase_result.status != llama_memory_text_phase_status::changed &&
@@ -2387,8 +2388,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
         if (compute_memory->phase_transition_count() != transitions || shared_workspace_replanned) {
             auto reserve_context = memory->init_full();
-            const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
-                std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) : cparams.n_seq_max;
+            const uint32_t decode_width = std::min(cparams.kv_stream_decode_rows(),std::min(cparams.n_ctx,cparams.n_ubatch));
             const uint32_t reserve_tokens = text_phase == llama_memory_text_phase::decode ?
                 decode_width : std::min(cparams.n_ctx,cparams.n_ubatch);
             const uint32_t reserve_outputs = text_phase == llama_memory_text_phase::decode ?
