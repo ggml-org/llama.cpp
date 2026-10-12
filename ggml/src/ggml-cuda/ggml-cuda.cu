@@ -2735,6 +2735,11 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             continue;
         }
 
+        // paged attention split by page runs reads the runs on the host when it is launched
+        if (node->op == GGML_OP_FLASH_ATTN_EXT && ggml_flash_attn_ext_get_page_runs(node)) {
+            use_cuda_graph = false;
+        }
+
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;

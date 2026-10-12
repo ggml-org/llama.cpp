@@ -8717,9 +8717,10 @@ struct test_flash_attn_ext_paged : public test_case {
     const ggml_type type_K;
     const ggml_type type_V;
     const int ring_every;
+    const bool shuffle; // pool pages in random order, else in logical order (the layout of a recency window)
 
     std::string vars() override {
-        return VARS_TO_STR8(hs, nh, nr, kv, nb, type_K, type_V, ring_every);
+        return VARS_TO_STR9(hs, nh, nr, kv, nb, type_K, type_V, ring_every, shuffle);
     }
 
     double max_nmse_err() override {
@@ -8732,12 +8733,29 @@ struct test_flash_attn_ext_paged : public test_case {
     }
 
     test_flash_attn_ext_paged(int64_t hs = 256, int64_t nh = 4, int64_t nr = 6, int64_t kv = 1024, int64_t nb = 1,
-            ggml_type type_K = GGML_TYPE_Q8_0, ggml_type type_V = GGML_TYPE_Q4_0, int ring_every = 0)
-        : hs(hs), nh(nh), nr(nr), kv(kv), nb(nb), type_K(type_K), type_V(type_V), ring_every(ring_every) {}
+            ggml_type type_K = GGML_TYPE_Q8_0, ggml_type type_V = GGML_TYPE_Q4_0, int ring_every = 0, bool shuffle = true)
+        : hs(hs), nh(nh), nr(nr), kv(kv), nb(nb), type_K(type_K), type_V(type_V), ring_every(ring_every), shuffle(shuffle) {}
 
     int64_t n_pages() const { return kv / page; }
     int64_t pool_rows() const { return (n_pages() + 3) * page; }
     int64_t n_ring() const { return ring_every ? (n_pages() + ring_every - 1) / ring_every : 0; }
+
+    // the page table, and its runs for prefill (more than 4 query tokens)
+    std::vector<int32_t> table() const {
+        std::vector<int32_t> slots(pool_rows() / page);
+        std::iota(slots.begin(), slots.end(), 0);
+        if (shuffle) {
+            std::shuffle(slots.begin(), slots.end(), std::mt19937(1234));
+        }
+        std::vector<int32_t> res(n_pages());
+        for (int64_t i = 0; i < n_pages(); ++i) {
+            res[i] = ring_every && i % ring_every == 0 ? -1 - (int32_t) (n_ring() - i / ring_every) : slots[i];
+        }
+        return res;
+    }
+
+    std::vector<ggml_fa_page_run> run_list;
+    ggml_fa_page_runs             runs = {};
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         GGML_ASSERT(kv % page == 0);
@@ -8765,6 +8783,21 @@ struct test_flash_attn_ext_paged : public test_case {
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(hs), 0.0f, 0.0f);
         ggml_flash_attn_ext_set_pages(out, pages, 1, page, rk, rv);
+        if (nb > 4) {
+            const std::vector<int32_t> tab = table();
+            run_list.clear();
+            for (int32_t p = 0; p < (int32_t) n_pages(); ++p) {
+                const int32_t pool = tab[p] >= 0;
+                const int32_t pos  = pool ? tab[p] : -1 - tab[p];
+                if (!run_list.empty() && run_list.back().pool == pool && run_list.back().pos + run_list.back().n == pos) {
+                    run_list.back().n++;
+                } else {
+                    run_list.push_back({ p, pos, 1, pool });
+                }
+            }
+            runs = { (int32_t) run_list.size(), run_list.data() };
+            ggml_flash_attn_ext_set_page_runs(out, &runs);
+        }
         ggml_prec_set_acc(out, GGML_PREC_F32);
         ggml_set_name(out, "out");
 
@@ -8774,14 +8807,10 @@ struct test_flash_attn_ext_paged : public test_case {
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "pages") == 0) {
-                std::vector<int32_t> slots(pool_rows() / page);
-                std::iota(slots.begin(), slots.end(), 0);
-                std::shuffle(slots.begin(), slots.end(), std::mt19937(1234));
-                std::vector<int32_t> table(2*n_pages(), INT32_MAX);
-                for (int64_t i = 0; i < n_pages(); ++i) {
-                    table[n_pages() + i] = ring_every && i % ring_every == 0 ? -1 - (int32_t) (n_ring() - i / ring_every) : slots[i];
-                }
-                ggml_backend_tensor_set(t, table.data(), 0, ggml_nbytes(t));
+                std::vector<int32_t> data(2*n_pages(), INT32_MAX);
+                const std::vector<int32_t> tab = table();
+                std::copy(tab.begin(), tab.end(), data.begin() + n_pages());
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
             } else if (strcmp(t->name, "m") == 0) {
                 init_tensor_kq_mask(t);
             } else {
@@ -10044,6 +10073,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int kv : { 256, 1000, 8192, 32768, }) {
         for (int nb : { 1, 2, 3, 4, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+        }
+    }
+    // prefill shapes (GGML_CUDA_PAGED_PREFILL prototype on CUDA): row tiles, tiles spanning several query tokens
+    for (int kv : { 1024, 8192, }) {
+        for (int nb : { 7, 33, 512, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+            test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 3));
         }
     }
     for (int kv : { 256, 1024, 8192, 32768, }) {
@@ -12827,6 +12863,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 65536, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 131072, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 131072, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+
+    // Prefill shapes (512-token ubatch) over Q8_0/Q4_0 K/V, short to long contexts: the KV streaming gather path
+    for (int kv : { 8192, 16384, 32768, 65536, 71680, 139264, 210176, 262144, }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+        test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, 512, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 0, false));
+    }
 
     // Decode shapes of the RDNA4 Q8_0/Q4_0 paged decode kernel, short to long contexts.
     for (int kv : { 512, 2048, 8192, 32768, 131072, 262144, }) {

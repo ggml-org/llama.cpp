@@ -116,7 +116,8 @@ static __device__ __forceinline__ half2 pd_u4x2(const uint32_t n0, const uint32_
 }
 
 // PAGED selects table addressing at compile time, so contiguous K/V carries no table logic.
-template <int M_TILES, bool PAGED>
+// Rows are split into tiles of R along grid z (prefill: many query tokens); MT bounds the query tokens one tile spans.
+template <int M_TILES, bool PAGED, int MT = 4>
 #ifndef PD_MIN_WAVES_PER_SIMD
 #define PD_MIN_WAVES_PER_SIMD 6 // keeps every variant at <= 240 VGPRs: 3 blocks of 8 waves per WGP (P-3: the ring variant
                                  // otherwise reached 256 VGPRs, occupancy 5, and lost about 10%)
@@ -139,7 +140,7 @@ static __global__ void pd_partial(
     __shared__ __align__(16) float     Ss[R * PD_CHUNK];
     __shared__ __align__(16) _Float16  Ps[R * PD_CHUNK];
     __shared__                float    alpha_s[R];
-    __shared__ __align__(16) half      Ms[4 * PD_CHUNK]; // mask rows of the chunk, one per query token
+    __shared__ __align__(16) half      Ms[MT * PD_CHUNK]; // mask rows of the chunk, one per query token of the tile
 
     const int tid  = threadIdx.x;
     const int lane = tid % 32;
@@ -148,7 +149,9 @@ static __global__ void pd_partial(
     const int split = blockIdx.x;
     const int c0 = split * chunks_per_split;
     const int c1 = min(n_chunks, c0 + chunks_per_split);
-    const int n_rows = nb * PD_GQA;
+    const int row0 = blockIdx.z * R;                    // first row of the tile
+    const int tok0 = row0 / PD_GQA;                     // its query token
+    const int n_rows = min(R, nb * PD_GQA - row0);      // valid rows of the tile
 
     // S phase: wave -> (m-tile, 16-token n-tile). Q fragments stay in registers.
     const int s_mt = warp / 4;
@@ -158,7 +161,8 @@ static __global__ void pd_partial(
     {
         const int r = s_mt * 16 + lane % 16;
         const bool valid = s_active && r < n_rows;
-        const float4 * q = valid ? (const float4 *) (Q + (r / PD_GQA) * q_nb1 + (head * PD_GQA + r % PD_GQA) * q_nb2) : nullptr;
+        const int g = row0 + r;
+        const float4 * q = valid ? (const float4 *) (Q + (g / PD_GQA) * q_nb1 + (head * PD_GQA + g % PD_GQA) * q_nb2) : nullptr;
 #pragma unroll
         for (int ks = 0; ks < PD_D / 16; ++ks) {
             const int d0 = ks * 16 + 8 * (lane / 16);
@@ -189,7 +193,7 @@ static __global__ void pd_partial(
     uint4 vreg[PD_V_LOADS];
     // Mask values travel with K/V: a separate global read in the S phase would wait for the whole prefetch
     // (vmcnt waits are in order).
-    constexpr int M_LOADS = 4 * PD_CHUNK / (PD_NWARPS * 32);
+    constexpr int M_LOADS = MT * PD_CHUNK / (PD_NWARPS * 32);
     half mreg[M_LOADS];
     // Blocks that read data from another queue wait once, before any load: with a table only those whose chunks reach
     // a ring page. (Waiting inside the chunk loop put a conditional barrier and a system-scope fence between the
@@ -229,7 +233,7 @@ static __global__ void pd_partial(
 #pragma unroll
         for (int j = 0; j < M_LOADS; ++j) {
             const int i = tid + j * PD_NWARPS * 32;
-            const int q = i / PD_CHUNK, t = c * PD_CHUNK + i % PD_CHUNK;
+            const int q = tok0 + i / PD_CHUNK, t = c * PD_CHUNK + i % PD_CHUNK;
             mreg[j] = mask && q < nb && t < n_kv ? ((const half *) (mask + q * mask_nb1))[t] : __float2half(0.0f);
         }
     };
@@ -283,7 +287,7 @@ static __global__ void pd_partial(
 #pragma unroll
             for (int l = 0; l < 8; ++l) {
                 const int r = s_mt * 16 + 8 * (lane / 16) + l;
-                Ss[r * PD_CHUNK + n] = r < n_rows && t_kv < n_kv ? acc[l] + __half2float(Ms[(r / PD_GQA) * PD_CHUNK + n]) : -INFINITY;
+                Ss[r * PD_CHUNK + n] = r < n_rows && t_kv < n_kv ? acc[l] + __half2float(Ms[((row0 + r) / PD_GQA - tok0) * PD_CHUNK + n]) : -INFINITY;
             }
         }
         __syncthreads();
@@ -367,7 +371,7 @@ static __global__ void pd_partial(
     }
 
     // Partial results for valid rows: unnormalized O plus (max, sum) per row.
-    const int64_t base = ((int64_t) split * gridDim.y + head) * R;
+    const int64_t base = (((int64_t) split * gridDim.y + head) * gridDim.z + blockIdx.z) * R;
 #pragma unroll
     for (int mt = 0; mt < M_TILES; ++mt) {
 #pragma unroll

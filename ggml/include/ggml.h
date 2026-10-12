@@ -2531,6 +2531,25 @@ extern "C" {
             struct ggml_tensor * ring_k,
             struct ggml_tensor * ring_v);
 
+    // A run of consecutive logical pages that are also consecutive in the pool (pool != 0) or in the ring
+    struct ggml_fa_page_run {
+        int32_t page; // first logical page
+        int32_t pos;  // its page in the pool or the ring
+        int32_t n;    // pages
+        int32_t pool;
+    };
+
+    struct ggml_fa_page_runs {
+        int32_t                   n;
+        struct ggml_fa_page_run * runs;
+    };
+
+    // Paged K/V: the page table as runs, in host memory that the caller keeps current until the graph is computed.
+    // Lets a backend split the attention into contiguous parts (and keeps the graph from being captured).
+    GGML_API void ggml_flash_attn_ext_set_page_runs(
+            struct ggml_tensor             * a,
+            const struct ggml_fa_page_runs * runs);
+
     // K/V written by another queue (e.g. a copy engine): the op waits until *ready >= tag[0] before it reads them (only
     // the ring when pages are set) and stores *consumed = tag[0] once it no longer needs them. ready and consumed must be
     // visible to the host and the backend (e.g. pinned host memory). tag: I32 [1].

@@ -5643,6 +5643,13 @@ void ggml_flash_attn_ext_set_pages(
     a->src[GGML_FA_SRC_RING_V] = ring_v;
 }
 
+void ggml_flash_attn_ext_set_page_runs(
+        struct ggml_tensor             * a,
+        const struct ggml_fa_page_runs * runs) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT && a->src[GGML_FA_SRC_PAGES]);
+    memcpy(a->op_params + GGML_FA_PARAM_RUNS, &runs, sizeof(runs));
+}
+
 void ggml_flash_attn_ext_set_sync(
         struct ggml_tensor * a,
         struct ggml_tensor * tag,
