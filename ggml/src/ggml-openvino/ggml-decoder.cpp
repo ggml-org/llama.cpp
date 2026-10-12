@@ -901,6 +901,11 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+        // `-fa off` stores the V cache transposed: SET_ROWS writes it through a [1, n] reshape, one element per row
+        if (node->op == GGML_OP_SET_ROWS && node->src[2] != nullptr && node->src[2]->op == GGML_OP_RESHAPE &&
+            node->src[2]->ne[0] == 1 && is_kvcache(node->src[2]->src[0], nullptr)) {
+            model_params.v_trans = true;
+        }
         const int attention_pattern_case = get_attention_pattern_case(node);
         if (attention_pattern_case != -1) {
             ggml_tensor * cache_k_permute = nullptr;
