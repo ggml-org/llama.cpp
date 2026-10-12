@@ -33,6 +33,7 @@ set(LLAMA_CORE_SOURCES
     llama-kv-stream-session.cpp
     llama-kv-stream-writer.cpp
     llama-memory-budget.cpp
+    llama-memory-bounded-kv.cpp
     llama-memory-completion.cpp
     llama-memory-executor-cuda.cpp
     llama-memory-executor.cpp

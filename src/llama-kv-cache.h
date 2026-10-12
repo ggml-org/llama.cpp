@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-memory-requirements.h"
 
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,8 @@ struct llama_context;
 class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
 class llama_kv_stream_mtp_proxy;
+struct llama_memory_bounded_kv_layout;
+class llama_memory_bounded_kv;
 
 //
 // llama_kv_cache
@@ -181,6 +184,12 @@ public:
     ggml_type type_v() const;
 
     std::vector<uint32_t> get_layer_ids() const;
+    // Describe one serial homogeneous SWA allocation without changing stock cells, tensors or masks.
+    bool describe_bounded_storage(uint64_t identity,uint64_t generation,uint32_t history_rows,
+            uint32_t headroom_rows,llama_memory_bounded_kv_layout & output) const;
+    // Retain existing SWA bytes without another device allocation. The caller gates writes and their completion.
+    std::unique_ptr<llama_memory_bounded_kv> retain_bounded_storage(uint64_t identity,uint64_t generation,
+            uint32_t history_rows,uint32_t headroom_rows,llama_memory_resource resource = {}) const;
     ggml_tensor * get_k_storage(int32_t il) const;
     ggml_tensor * get_v_storage(int32_t il) const;
 

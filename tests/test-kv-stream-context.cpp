@@ -4,6 +4,8 @@
 #include "../src/llama-kv-stream-model.h"
 #include "../src/llama-kv-stream-logical-cache.h"
 #include "../src/llama-memory-recurrent-spill.h"
+#include "../src/llama-memory-bounded-kv.h"
+#include "../src/llama-kv-cache-iswa.h"
 #include "../src/llama-io.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
@@ -66,6 +68,23 @@ static void test_dflash_native(testing & t, llama_model * model) {
     params.speculative.draft.mparams.path = dflash_native_model;
     auto draft = common_speculative_init_from_params(params, model, target.get());
     if (!t.assert_true(bool(draft) && draft->context())) return;
+    auto * stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(draft->context()));
+    if (!t.assert_true(stock && stock->get_base()->get_layer_ids().empty())) return;
+    llama_memory_bounded_kv_layout storage;
+    if (!t.assert_true(stock->get_swa()->describe_bounded_storage(903,1,4096,256,storage))) return;
+    t.assert_equal(uint32_t(2304),storage.allocation.capacity_rows);
+    t.assert_equal(size_t(5),storage.layers.size());
+    t.assert_equal(uint32_t(128),storage.cache.format.key_head_dim);
+    t.assert_equal(uint32_t(8),storage.cache.format.kv_heads);
+    t.assert_true(!stock->get_base()->describe_bounded_storage(904,1,4096,256,storage));
+    auto cache_owner=stock->get_swa()->retain_bounded_storage(903,1,4096,256,
+        {907,1,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,llama_memory_content::preserve});
+    if (!t.assert_true(bool(cache_owner))) return;
+    auto source=cache_owner->read({903,1});
+    if (!t.assert_true(bool(source))) return;
+    t.assert_equal(storage.allocation.bytes,ggml_backend_buffer_get_size(source.buffer()));
+    t.assert_equal(uint64_t(0),cache_owner->begin_write({903,1}));
+    source.reset();
     params.speculative.draft.ctx_tgt = target.get();
     params.speculative.draft.ctx_dft = draft->context();
     common_speculative_ptr spec(common_speculative_init(params.speculative, 1));
@@ -74,7 +93,12 @@ static void test_dflash_native(testing & t, llama_model * model) {
     common_batch batch(target.get());
     for (int i = 0; i < 256; ++i) batch.add(tokens[size_t(i)%tokens.size()], i, 0, i == 255);
     if (!t.assert_equal(0, llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()))) return;
-    if (!t.assert_true(common_speculative_process(spec.get(), batch))) return;
+    const auto injection=cache_owner->begin_write({903,1});
+    if (!t.assert_true(injection != 0)) return;
+    const auto injected=common_speculative_process(spec.get(), batch);
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(injection,injected));
+    if (!t.assert_true(injected)) return;
     t.assert_equal(llama_pos(255), llama_memory_seq_pos_max(llama_get_memory(draft->context()), 0));
     llama_tokens proposals;
     auto & dp = common_speculative_get_draft_params(spec.get(), 0);
@@ -84,8 +108,46 @@ static void test_dflash_native(testing & t, llama_model * model) {
     dp.id_last = tokens[0];
     dp.prompt = &tokens;
     dp.result = &proposals;
+    const auto prediction=cache_owner->begin_write(cache_owner->identity());
+    if (!t.assert_true(prediction != 0)) return;
     common_speculative_draft(spec.get());
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(prediction,proposals.size() == 1));
     t.assert_equal(size_t(1), proposals.size());
+    source=cache_owner->read(cache_owner->identity());
+    t.assert_true(bool(source));
+    source.reset();
+    const size_t state_bytes=llama_state_seq_get_size(draft->context(),0);
+    std::vector<uint8_t> saved(state_bytes);
+    if (!t.assert_true(state_bytes && llama_state_seq_get_data(draft->context(),saved.data(),saved.size(),0) == state_bytes)) return;
+    const auto restore=cache_owner->begin_write(cache_owner->identity());
+    if (!t.assert_true(restore != 0)) return;
+    const bool restored=llama_state_seq_set_data(draft->context(),saved.data(),saved.size(),0) == state_bytes;
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(restore,restored));
+    t.assert_true(restored);
+    std::vector<uint8_t> readback(state_bytes);
+    t.assert_equal(state_bytes,llama_state_seq_get_data(draft->context(),readback.data(),readback.size(),0));
+    t.assert_true(saved == readback);
+    const auto reset=cache_owner->begin_write(cache_owner->identity());
+    if (!t.assert_true(reset != 0)) return;
+    llama_memory_clear(llama_get_memory(draft->context()),true);
+    llama_synchronize(draft->context());
+    t.assert_true(cache_owner->finish_write(reset,true));
+    source=cache_owner->read(cache_owner->identity());
+    auto full_params=cp;
+    full_params.n_rs_seq=0;
+    full_params.swa_full=true;
+    full_params.ctx_other=target.get();
+    context_ptr full(llama_init_from_model(draft->model(),full_params),llama_free);
+    if (!t.assert_true(bool(full))) return;
+    auto * full_stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(full.get()));
+    if (!t.assert_true(full_stock != nullptr)) return;
+    t.assert_true(!full_stock->get_swa()->describe_bounded_storage(905,1,4096,256,storage));
+    t.assert_true(!full_stock->get_swa()->retain_bounded_storage(905,1,4096,256));
+    full.reset();
+    cache_owner.reset(); spec.reset(); draft.reset();
+    t.assert_true(bool(source) && source.layout()->allocation.bytes == storage.allocation.bytes);
 }
 
 // Fail one candidate view after the draft's initial view, then permit parent recovery.
