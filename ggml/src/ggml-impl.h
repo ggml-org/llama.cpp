@@ -184,11 +184,12 @@ static void ggml_set_op_params_f32(struct ggml_tensor * tensor, uint32_t i, floa
 
 // GGML_OP_FLASH_ATTN_EXT with paged K/V and cross-queue sync (ggml_flash_attn_ext_set_pages, ggml_flash_attn_ext_set_sync)
 //   op_params: 0 scale, 1 max_bias, 2 logit_softcap, 3 prec, 4 n_kv_max, 5 page size, 6-7 ready, 8-9 consumed,
-//              10 page table row
+//              10 page table row, 13-14 per-row log-sum-exp output (backend-internal)
 #define GGML_FA_PARAM_PAGE_SIZE 5
 #define GGML_FA_PARAM_READY     6
 #define GGML_FA_PARAM_CONSUMED  8
 #define GGML_FA_PARAM_PAGES_ROW 10
+#define GGML_FA_PARAM_LSE       13
 #define GGML_FA_SRC_PAGES       5
 #define GGML_FA_SRC_RING_K      6
 #define GGML_FA_SRC_RING_V      7

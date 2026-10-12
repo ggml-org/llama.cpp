@@ -1196,6 +1196,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         const float  * const __restrict__ sinks_f,
         float2       * const __restrict__ dstk,
         float2       * const __restrict__ dstk_fixup,
+        float        * const __restrict__ lsek,
         const float scale,
         const float slope,
         const float logit_softcap,
@@ -1507,6 +1508,16 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr int tile_stride = nbatch_combine + 4;
     static_assert((DV/2) % nbatch_combine == 0, "bad nbatch_combine");
 
+    // Per-row log-sum-exp of a whole tile (blocks that only cover part of a tile leave it to the fixup kernels).
+    auto write_lse = [&](const int jc, const float2 KQ_mr) {
+        const int j = jc / ncols2;
+        const int c = jc % ncols2;
+        if ((ncols1 > 1 && jt*ncols1 + j >= int(ne01.z)) || (ncols2 > 1 && zt_gqa*ncols2 + c >= gqa_ratio)) {
+            return;
+        }
+        lsek[(jt*ncols1 + j)*ne02 + c] = KQ_mr.x + logf(KQ_mr.y);
+    };
+
     if constexpr (cols_per_warp == 8) {
         const int jc_cwmo = (threadIdx.x % (2*T_C_VKQ::J)) / T_C_VKQ::J; // jc combine write meta offset
         const int jc_cwm = threadIdx.y*(2*T_C_VKQ::J) + 2*T_C_VKQ::get_j(-1) + jc_cwmo; // jc combine write meta
@@ -1525,6 +1536,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
         if (np == 1) {
             // No combination is needed, the meta data can be directly written from registers to VRAM.
+            if (!needs_fixup && !is_fixup && lsek && threadIdx.x < T_B_KQ::I) {
+                write_lse(jc_cwm, KQ_cmr);
+            }
             if (needs_fixup && threadIdx.x < T_B_KQ::I) {
                 float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
                 dstk_fixup_meta[jc_cwm] = KQ_cmr;
@@ -1564,6 +1578,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
         if (np == 1) {
             // No combination is needed, the meta data can be directly written from registers to VRAM.
+            if (!needs_fixup && !is_fixup && lsek && thread_should_write) {
+                write_lse(jc_cwm, KQ_cmr);
+            }
             if (needs_fixup && thread_should_write) {
                 float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
                 dstk_fixup_meta[jc_cwm] = KQ_cmr;
@@ -1637,6 +1654,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
             // Combined KQ max + rowsum.
             static_assert(cols_per_warp <= warp_size);
+            if (!needs_fixup && !is_fixup && lsek && (cols_per_warp == warp_size || threadIdx.x < cols_per_warp)) {
+                write_lse((threadIdx.y/np)*cols_per_warp + threadIdx.x, make_float2(KQ_cmn, KQ_crs));
+            }
             if (needs_fixup && (cols_per_warp == warp_size || threadIdx.x < cols_per_warp)) {
                 float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
                 dstk_fixup_meta[(threadIdx.y/np)*cols_per_warp + threadIdx.x] = make_float2(KQ_cmn, KQ_crs);
@@ -1777,7 +1797,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
     }
 #else
-    GGML_UNUSED_VARS(Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dstk_fixup,
+    GGML_UNUSED_VARS(Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dstk_fixup, lsek,
         scale, slope, logit_softcap, ne01, ne02, gqa_ratio,
         stride_Q1, stride_Q2, stride_K, stride_V, stride_mask,
         jt, kb0_start, kb0_stop);
@@ -1816,7 +1836,8 @@ static __global__ void flash_attn_ext_f16(
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t nb31, const int32_t nb32, const int64_t nb33) {
+                            const int32_t nb31, const int32_t nb32, const int64_t nb33,
+        float      * __restrict__ lse) {
     ggml_cuda_pdl_sync(); // TODO optimize placement
 #if defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE))
     const char * GGML_CUDA_RESTRICT Q              = Q_ptr;
@@ -1921,6 +1942,7 @@ static __global__ void flash_attn_ext_f16(
         const half   * mask_h = ncols2 == 1 && !mask ? nullptr :
             (const half *) (mask + nb33*(sequence % ne33));
         float2       * dstk   = ((float2 *) dst) + (sequence*ne01.z*ne02 + zt_Q) * (DV/2);
+        float        * lsek   = lse ? lse + (sequence*ne01.z*ne02 + zt_Q) : nullptr;
 
         const half2 * V_h2 = V_is_K_view ? K_h2 : (const half2 *) (V + nb23*sequence + nb22*z_KV);
         const float * sinks_f = sinks ? (const float *) sinks + zt_Q : nullptr;
@@ -1937,12 +1959,12 @@ static __global__ void flash_attn_ext_f16(
         if (kb0_start == 0) {
             constexpr bool needs_fixup = false; // CUDA block is working on an entire tile.
             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
-                (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
+                (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, lsek, scale, slope, logit_softcap,
                  ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
         } else {
             constexpr bool needs_fixup = true; // CUDA block is missing the beginning of a tile.
             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
-                (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
+                (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, lsek, scale, slope, logit_softcap,
                  ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
         }
 
@@ -1970,6 +1992,7 @@ static __global__ void flash_attn_ext_f16(
     const half   * mask_h = ncols2 == 1 && !mask ? nullptr :
         (const half *) (mask + nb33*(sequence % ne33));
     float2       * dstk   = ((float2 *) dst) + (sequence*ne01.z*ne02 + zt_Q) * (DV/2);
+    float        * lsek   = lse ? lse + (sequence*ne01.z*ne02 + zt_Q) : nullptr;
 
     const half2 * V_h2 = V_is_K_view ? K_h2 : (const half2 *) (V + nb23*sequence + nb22*z_KV);
     const float * sinks_f = sinks ? (const float *) sinks + zt_Q : nullptr;
@@ -1986,10 +2009,10 @@ static __global__ void flash_attn_ext_f16(
     constexpr bool is_fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     constexpr bool needs_fixup = false;
     flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
-        (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
+        (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, lsek, scale, slope, logit_softcap,
          ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
 #else
-    GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale,
+    GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, lse, scale,
         max_bias, m0, m1, n_head_log2, logit_softcap,
         ne00, ne01, ne02, ne03,
               nb01, nb02, nb03,
