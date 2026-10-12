@@ -9,6 +9,7 @@
 #include "llama-kv-stream-positions.h"
 #include "llama-kv-stream-mtp-proxy.h"
 #include "llama-memory-bounded-kv.h"
+#include "ggml-alloc.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 
 #include <algorithm>
@@ -65,6 +66,14 @@ std::unique_ptr<llama_memory_bounded_kv> llama_kv_cache::retain_bounded_storage(
         uint32_t history_rows,uint32_t headroom_rows,llama_memory_resource resource) const {
     llama_memory_bounded_kv_layout layout;
     if (!describe_bounded_storage(identity,generation,history_rows,headroom_rows,layout)) return nullptr;
+    if (bounded_lease) {
+        ggml_backend_memory_region region{};
+        if (!ggml_backend_memory_lease_get_region(bounded_lease.get(),&region) ||
+                (resource.id && resource.id != region.id)) return nullptr;
+        auto owner=std::make_unique<llama_memory_bounded_kv>(std::move(layout),resource);
+        if (!owner->bind(bounded_lease.get())) return nullptr;
+        return owner;
+    }
     if (resource.id && (!resource.domain || resource.content != llama_memory_content::preserve)) return nullptr;
     using arena_ptr=std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>;
     using lease_ptr=std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
@@ -161,7 +170,13 @@ llama_kv_cache::llama_kv_cache(
 
     const uint32_t requested_kv_size = kv_size;
     auto * mtp_host = stream ? stream->mtp_host_cache : nullptr;
-    if (stream && !mtp_host) {
+    if (stream && stream->bounded_cache_lease) {
+        if (!n_swa || n_seq_max != 1 || n_stream != 1 || other || reuse || share || !offload || hparams.no_alloc || mtp_host) {
+            throw std::runtime_error("bounded cache lease requires one allocated serial SWA group");
+        }
+        bounded_lease.reset(ggml_backend_memory_lease_retain(stream->bounded_cache_lease));
+    }
+    if (stream && !mtp_host && !bounded_lease) {
         if (model.arch != LLM_ARCH_QWEN35 || hparams.no_alloc || v_trans || !offload || n_seq_max != 1 ||
                 n_swa || other || reuse || share || !stream->kv_stream_backend || kv_size > UINT32_MAX-255) {
             throw std::runtime_error("KV streaming requires an allocated serial Qwen35 CUDA target context with Flash Attention and no shared/SWA cache");
@@ -240,7 +255,7 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
-    if (stream && !mtp_host) {
+    if (stream && !mtp_host && !bounded_lease) {
         auto * dev = ggml_backend_get_device(stream->kv_stream_backend);
         std::vector<uint32_t> ids;
         for (uint32_t il = 0; il < n_layer; ++il) if (hparams.has_kv(il) && (!filter || filter(il))) ids.push_back(il);
@@ -347,6 +362,7 @@ llama_kv_cache::llama_kv_cache(
             dev_name = ggml_backend_dev_name(dev);
         }
         if (kv_stream) buft = ggml_backend_buffer_get_type(kv_stream->buffer());
+        if (bounded_lease) buft=ggml_backend_buffer_get_type(ggml_backend_memory_lease_buffer(bounded_lease.get()));
         if (mtp_host) {
             if (il != hparams.n_layer() || !layers.empty()) throw std::runtime_error("invalid attached MTP layer");
             buft = ggml_backend_buffer_get_type(mtp_host->host()->buffer());
@@ -424,6 +440,18 @@ llama_kv_cache::llama_kv_cache(
             for (auto * tensor = ggml_get_first_tensor(ctx.get()); tensor; tensor = ggml_get_next_tensor(ctx.get(),tensor)) {
                 if (tensor->view_src && ggml_backend_view_init(tensor) != GGML_STATUS_SUCCESS) {
                     ggml_backend_buffer_free(buf); throw std::runtime_error("failed to bind host KV views");
+                }
+            }
+        } else if (bounded_lease) {
+            buf=ggml_backend_buffer_retain(ggml_backend_memory_lease_buffer(bounded_lease.get()));
+            ggml_tallocr allocator{};
+            if (ctx_map.size() != 1 || !ggml_tallocr_new_range(&allocator,buf,0,ggml_backend_buffer_get_size(buf))) {
+                ggml_backend_buffer_free(buf); throw std::runtime_error("invalid bounded SWA allocation range");
+            }
+            for (auto * tensor=ggml_get_first_tensor(ctx.get());tensor;tensor=ggml_get_next_tensor(ctx.get(),tensor)) {
+                const auto status=tensor->view_src ? ggml_backend_view_init(tensor) : ggml_tallocr_alloc(&allocator,tensor);
+                if (status != GGML_STATUS_SUCCESS) {
+                    ggml_backend_buffer_free(buf); throw std::runtime_error("bounded SWA cache exceeds its measured grant");
                 }
             }
         } else if (hparams.no_alloc) {

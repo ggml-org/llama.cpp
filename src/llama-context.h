@@ -383,6 +383,7 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+    std::unique_ptr<llama_context_memory_cache> serial_cache;
     // Memory consumers may drain backend work during teardown, including constructor-failure unwinding.
     llama_memory_ptr memory;
 

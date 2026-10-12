@@ -82,6 +82,14 @@ static void test_dflash_native(testing & t, llama_model * model) {
     }
     auto * stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(draft->context()));
     if (!t.assert_true(stock && stock->get_base()->get_layer_ids().empty())) return;
+    if (dflash_shared_workspace_control) {
+        auto * k=stock->get_swa()->get_k_storage(0);
+        auto * parent=llama_context_compute_memory(target.get())->shared_parent();
+        const auto base=uintptr_t(ggml_backend_buffer_get_base(parent));
+        const auto bytes=ggml_backend_buffer_get_size(parent);
+        if (!t.assert_true(ggml_backend_buffer_is_view(k->buffer) && uintptr_t(k->data) >= base &&
+                uintptr_t(k->data)-base < bytes && ggml_nbytes(k) <= bytes-(uintptr_t(k->data)-base))) return;
+    }
     llama_memory_bounded_kv_layout storage;
     if (!t.assert_true(stock->get_swa()->describe_bounded_storage(903,1,4096,256,storage))) return;
     t.assert_equal(uint32_t(2304),storage.allocation.capacity_rows);
@@ -89,8 +97,7 @@ static void test_dflash_native(testing & t, llama_model * model) {
     t.assert_equal(uint32_t(128),storage.cache.format.key_head_dim);
     t.assert_equal(uint32_t(8),storage.cache.format.kv_heads);
     t.assert_true(!stock->get_base()->describe_bounded_storage(904,1,4096,256,storage));
-    auto cache_owner=stock->get_swa()->retain_bounded_storage(903,1,4096,256,
-        {907,1,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,llama_memory_content::preserve});
+    auto cache_owner=stock->get_swa()->retain_bounded_storage(903,1,4096,256);
     if (!t.assert_true(bool(cache_owner))) return;
     auto source=cache_owner->read({903,1});
     if (!t.assert_true(bool(source))) return;
@@ -122,6 +129,8 @@ static void test_dflash_native(testing & t, llama_model * model) {
     dp.result = &proposals;
     const auto prediction=cache_owner->begin_write(cache_owner->identity());
     if (!t.assert_true(prediction != 0)) return;
+    auto * draft_workspace=llama_context_compute_memory(draft->context());
+    if (dflash_shared_workspace_control) t.assert_equal(int32_t(0),llama_set_adapter_cvec(draft->context(),nullptr,0,0,-1,-1));
     common_speculative_draft(spec.get());
     llama_synchronize(draft->context());
     t.assert_true(cache_owner->finish_write(prediction,proposals.size() == 1));
@@ -132,6 +141,25 @@ static void test_dflash_native(testing & t, llama_model * model) {
     const size_t state_bytes=llama_state_seq_get_size(draft->context(),0);
     std::vector<uint8_t> saved(state_bytes);
     if (!t.assert_true(state_bytes && llama_state_seq_get_data(draft->context(),saved.data(),saved.size(),0) == state_bytes)) return;
+    if (dflash_shared_workspace_control) {
+        t.assert_true(draft_workspace == llama_context_compute_memory(draft->context()));
+        auto * parent=llama_context_compute_memory(target.get());
+        auto * allocation=parent->shared_parent();
+        t.assert_equal(int32_t(0),llama_set_adapter_cvec(target.get(),nullptr,0,0,-1,-1));
+        batch.clear(); batch.add(tokens[0],256,0,true);
+        llama_set_kv_stream_decode(target.get(),true);
+        if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        batch.clear(); for (int i=0;i<256;++i) batch.add(tokens[0],257+i,0,i == 255);
+        llama_set_kv_stream_decode(target.get(),false);
+        if (!t.assert_equal(0,llama_process(target.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get()))) return;
+        t.assert_true(parent == llama_context_compute_memory(target.get()) && allocation == parent->shared_parent());
+        std::vector<uint8_t> retained(state_bytes);
+        t.assert_equal(state_bytes,llama_state_seq_get_data(draft->context(),retained.data(),retained.size(),0));
+        t.assert_true(retained == saved);
+        common_batch oversized(draft->context());
+        for (int i=0;i<9;++i) oversized.add(tokens[0],258+i,0,true);
+        t.assert_true(llama_process(draft->context(),LLAMA_PROCESS_TYPE_DECODE,oversized.get()) != 0);
+    }
     const auto restore=cache_owner->begin_write(cache_owner->identity());
     if (!t.assert_true(restore != 0)) return;
     const bool restored=llama_state_seq_set_data(draft->context(),saved.data(),saved.size(),0) == state_bytes;
