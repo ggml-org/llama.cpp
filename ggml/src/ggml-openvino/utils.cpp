@@ -44,8 +44,9 @@ namespace {
 // for that layer) instead of the fully-allocated ctx_per_seq. Pre-conditions:
 //   * non-static (CPU/GPU) backend, single sequence, seq_active_start == 0
 //   * ggml KV layout is a contiguous [1, 1, ctx_per_seq, n_heads_kv*head_size]
-//     so the first n_kv rows are the live prefix and shrinking the ctx axis
-//     gives a valid tensor over the same host storage
+//     with one token per row (not the transposed V cache of `-fa off`), so the
+//     first n_kv rows are the live prefix and shrinking the ctx axis gives a
+//     valid tensor over the same host storage
 //   * not an SWA layer (ring cache): once the window has wrapped the first
 //     n_kv rows no longer contain the live prefix
 // On any unmet pre-condition returns std::nullopt; the caller falls back to
@@ -64,7 +65,7 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
         return std::nullopt;
     }
     const auto * op = ggml_decoder->get_tensor_used_op(ggml_tensor);
-    if (!GgmlOvDecoder::is_kvcache(ggml_tensor, op)) {
+    if (!GgmlOvDecoder::is_kvcache(ggml_tensor, op) || !ggml_decoder->is_kvcache_token_rows(ggml_tensor)) {
         return std::nullopt;
     }
 

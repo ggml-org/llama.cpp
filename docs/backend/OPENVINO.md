@@ -790,6 +790,7 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 
 - `llama-bench`: requires `-fa 1` (flash-attention).
 - `llama-cli --context-shift`: stateless only (`GGML_OPENVINO_STATEFUL_EXECUTION=0`). In stateful mode the KV cache is owned by the OpenVINO model and cannot be shifted externally.
+- `-fa off`: stateless only. With `-fa off` the V cache is stored transposed, which the stateful KV cache does not support.
 - `llama-server`: only one chat session/thread when `GGML_OPENVINO_STATEFUL_EXECUTION=1`.
 
 **GPU-specific**

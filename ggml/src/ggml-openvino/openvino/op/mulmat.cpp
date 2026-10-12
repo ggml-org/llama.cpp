@@ -48,6 +48,27 @@ OutputVector translate_mulmat(const NodeContext & context) {
     Output<Node> Z = A_batch_larger ? B : A;
     auto Z_shape = A_batch_larger ? B_shape : A_shape;
     int64_t factor = batch_large / batch_small;
+    if (factor > 1 && batch_small > 1 && A_batch_larger && A_shape[0] == B_shape[0]) {
+        // B is shared by groups of factor consecutive A matrices (grouped-query attention with `-fa off`: K and V
+        // have fewer heads than Q and KQ). Stack each group along the rows of A instead of repeating B, which would
+        // copy the whole K or V cache factor times per layer and token:
+        //   A [n, batch_large, rows, k] -> [n, batch_small, factor * rows, k] (a pure reshape: the group is adjacent)
+        //   A x B^T [n, batch_small, factor * rows, cols] -> [n, batch_large, rows, cols]
+        // The zeros copy the input dimensions (special_zero), which may be dynamic.
+        auto A_grouped = std::make_shared<ov::op::v1::Reshape>(
+            A, ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, batch_small, -1, 0}), true);
+        ov::Output<Node> res = std::make_shared<ov::op::v0::MatMul>(A_grouped, B, false, true);
+        res = std::make_shared<ov::op::v1::Reshape>(
+            res, ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, batch_large, -1, 0}),
+            true);
+        // lets SOFT_MAX work on the grouped scores (see softmax)
+        res.get_node()->get_rt_info()[GGML_OV_GROUPED_ROWS] = factor;
+        const auto output_type = context.get_output_type();
+        if (res.get_element_type() != output_type) {
+            res = std::make_shared<ov::op::v0::Convert>(res, output_type);
+        }
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
     if (factor > 1 && batch_small > 1) {
         auto batch_large_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{batch_large});
         auto batch_small_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{batch_small});

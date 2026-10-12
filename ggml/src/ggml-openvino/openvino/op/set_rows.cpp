@@ -48,6 +48,11 @@ OutputVector translate_set_rows(const NodeContext & context) {
     Output<Node> res;
     if (context.is_stateful()) {
         int concat_axis = 1;
+        // the stateful cache appends whole tokens; with `-fa off` llama.cpp writes the V cache transposed,
+        // one element per row
+        FRONT_END_OP_CONVERSION_CHECK(dst.get_partial_shape()[2].is_static() && dst.get_partial_shape()[3].is_static(),
+                                      "Stateful execution needs flash attention (-fa on): with -fa off the V cache "
+                                      "is written transposed");
         int64_t dim2 = dst.get_partial_shape()[2].get_length();
         int64_t dim3 = dst.get_partial_shape()[3].get_length();
         data = std::make_shared<ov::op::v1::Reshape>(
