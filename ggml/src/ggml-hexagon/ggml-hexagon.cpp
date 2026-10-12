@@ -135,6 +135,7 @@ size_t opt_mbuf_total  = 0;                        // total buffer space limit (
 int    opt_mm_select     = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 int    opt_fa_select     = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 int    opt_fa_split      = 1; // 1 = head-split + team-split when n_kv_heads < N_cores (default), 0 = off
+int    opt_hmx_fp16      = -1; // -1 = probe the device, 0/1 = force (HMX without FP16 uses the integer HMX path for Q4_0)
 int    opt_li_select     = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 int    opt_gdn_select    = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 int    opt_ar_select     = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
@@ -327,6 +328,7 @@ struct ggml_hexagon_session {
     uint32_t n_threads   = 0;
     uint32_t n_hvx       = 0;
     uint32_t n_hmx       = 0;
+    bool     hmx_fp16    = true;   // false: HMX without FP16 (probed at session start)
     uint64_t vtcm_size   = 0;
     size_t   max_vmem    = 0;
     uint32_t fence_seq   = 0;
@@ -395,6 +397,7 @@ const char * htp_session_name(const struct ggml_hexagon_session * sess) { return
 size_t       htp_session_vtcm_size(const struct ggml_hexagon_session * sess) { return sess->vtcm_size; }
 uint32_t     htp_session_n_threads(const struct ggml_hexagon_session * sess) { return sess->n_threads; }
 uint32_t     htp_session_n_hmx(const struct ggml_hexagon_session * sess) { return sess->n_hmx; }
+bool         htp_session_hmx_fp16(const struct ggml_hexagon_session * sess) { return sess->hmx_fp16; }
 uint32_t     htp_session_mdev_count(const struct ggml_hexagon_session * sess) { return sess->mdev.count; }
 
 // ** backend buffers
@@ -2253,6 +2256,16 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
     this->valid_iface = true;
     GGML_LOG_INFO("ggml-hex: %s power mode: %s\n", this->c_name(), htp_power_mode_to_str(opt_power_mode));
 
+    if (this->n_hmx > 0) {
+        uint32_t fp16 = 1;
+        err = htp_iface_hmx_probe(this->handle, opt_hmx_fp16, &fp16);
+        if (err == 0) {
+            this->hmx_fp16 = opt_hmx_fp16 >= 0 ? (opt_hmx_fp16 != 0) : (fp16 != 0);
+            GGML_LOG_INFO("ggml-hex: %s HMX FP16: %s%s\n", this->c_name(), fp16 ? "yes" : "no",
+                          this->hmx_fp16 ? "" : " (integer HMX for Q4_0 matmul and attention)");
+        }
+    }
+
     if (opt_profile) {
         htp_iface_pmu_conf pmu_conf{};
         std::copy(opt_pmu_evt.begin(), opt_pmu_evt.end(), pmu_conf.events);
@@ -3412,6 +3425,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_fa_split  = getenv("GGML_HEXAGON_FA_SPLIT");
     const char * str_li_select = getenv("GGML_HEXAGON_LI_SELECT");
     const char * str_gdn_select = getenv("GGML_HEXAGON_GDN_SELECT");
+    const char * str_hmx_fp16 = getenv("GGML_HEXAGON_HMX_FP16");
     const char * str_ar_select = getenv("GGML_HEXAGON_AR_SELECT");
     const char * str_ar_scatter = getenv("GGML_HEXAGON_AR_SCATTER");
     const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
@@ -3479,6 +3493,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_fa_split  = str_fa_split  ? atoi(str_fa_split)                   : opt_fa_split;
     opt_li_select = str_li_select ? atoi(str_li_select)                   : opt_li_select;
     opt_gdn_select    = str_gdn_select    ? atoi(str_gdn_select)          : opt_gdn_select;
+    opt_hmx_fp16      = str_hmx_fp16      ? atoi(str_hmx_fp16)            : opt_hmx_fp16;
     opt_ar_select     = str_ar_select     ? atoi(str_ar_select)           : opt_ar_select;
     opt_ar_scatter    = str_ar_scatter    ? atoi(str_ar_scatter)          : opt_ar_scatter;
 
