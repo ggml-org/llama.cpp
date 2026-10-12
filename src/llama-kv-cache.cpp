@@ -1607,11 +1607,14 @@ llama_kv_stream_attn llama_kv_cache::get_kv_stream_attn(ggml_context * ctx, ggml
         res.consumed = stream->consumed(ikv);
     }
 
-    // the paged decode kernel takes up to 4 query tokens (decode and MTP verification)
-    if (n_tokens <= 4) {
+    // the paged decode kernel takes up to 4 query tokens (decode and MTP verification), and prefill if it can
+    if (n_tokens <= 4 || stream->paged_prefill()) {
         res.k = get_k(ctx, il, n_kv, sinfo);
         res.v = get_v(ctx, il, n_kv, sinfo);
         res.table = ikv;
+        if (n_tokens > 4) {
+            res.runs = stream->page_runs();
+        }
         if (stream->synced()) {
             // same layout as the pool views
             res.ring_k = ggml_view_4d(ctx, sk, hparams.n_embd_head_k(il), sk->ne[1], hparams.n_head_kv(il), 1,

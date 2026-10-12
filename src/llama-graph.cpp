@@ -571,7 +571,8 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
 // KV streaming: gathers are built for one page layout, and the attention waits only if pages stream
 static bool can_reuse_kv_stream(const llm_graph_input_attn_kv * inp, const llama_kv_cache_context * mctx) {
     const llama_kv_stream * stream = mctx->get_kv_stream();
-    return !stream || (inp->kv_synced == stream->synced() && (inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= 4));
+    return !stream || (inp->kv_synced == stream->synced() &&
+            (inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= 4 || stream->paged_prefill()));
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -3314,6 +3315,9 @@ ggml_tensor * llm_graph_context::build_attn(
         if (kv_attn.table >= 0) {
             ggml_flash_attn_ext_set_pages(fa.tensor, inp->self_kv_pages, kv_attn.table, llama_kv_stream::page_size, kv_attn.ring_k, kv_attn.ring_v);
             ggml_build_forward_expand(gf, inp->self_kv_pages);
+            if (kv_attn.runs) {
+                ggml_flash_attn_ext_set_page_runs(fa.tensor, kv_attn.runs);
+            }
             if (kv_attn.ring_k) {
                 ggml_build_forward_expand(gf, kv_attn.ring_k);
                 ggml_build_forward_expand(gf, kv_attn.ring_v);

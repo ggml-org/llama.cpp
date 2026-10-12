@@ -572,7 +572,7 @@ llama_context::llama_context(
         if (llama_kv_stream * kv_stream = memory ? memory->get_kv_stream() : nullptr) {
             for (auto & backend : backends) {
                 if (ggml_backend_get_device(backend.get()) == kv_stream->device()) {
-                    kv_stream->set_backend(backend.get());
+                    kv_stream->set_backend(backend.get(), model.hparams.n_head());
                 }
             }
         } else if (cparams.kv_resident_size > 0 && cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {

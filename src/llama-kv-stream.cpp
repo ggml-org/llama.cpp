@@ -141,8 +141,39 @@ uint32_t llama_kv_stream::slots_for(size_t bytes, size_t bytes_per_cell) {
     return (uint32_t) std::min<size_t>(bytes/(bytes_per_cell*page_size), UINT32_MAX);
 }
 
-void llama_kv_stream::set_backend(ggml_backend_t backend) {
+void llama_kv_stream::set_backend(ggml_backend_t backend, int64_t n_head) {
     this->backend = backend;
+
+    // does the backend's attention take paged K/V for a prefill ubatch too? then prefill needs no gathers
+    ggml_init_params params = {
+        /*.mem_size   =*/ 8*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx { ggml_init(params) };
+
+    const ggml_tensor * pk = layers[0].k;
+    const ggml_tensor * pv = layers[0].v;
+    const int64_t d    = 256;
+    const int64_t n_kv = pk->ne[0]/d;
+    const int64_t nb   = 512;
+
+    auto heads = [&](const ggml_tensor * pool) {
+        ggml_tensor * t = ggml_new_tensor_2d(ctx.get(), pool->type, pool->ne[0], pool->ne[1]);
+        return ggml_view_4d(ctx.get(), t, d, t->ne[1], n_kv, 1, t->nb[1], ggml_row_size(t->type, d), ggml_nbytes(t), 0);
+    };
+    ggml_tensor * q     = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, d, nb, n_head, 1);
+    ggml_tensor * mask  = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, page_size, nb, 1, 1);
+    ggml_tensor * pages = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, 1);
+    ggml_tensor * fa    = ggml_flash_attn_ext(ctx.get(), q, heads(pk), heads(pv), mask, 1.0f, 0.0f, 0.0f);
+    ggml_flash_attn_ext_set_pages(fa, pages, 0, page_size, nullptr, nullptr);
+    ggml_fa_page_run  probe_run  = { 0, 0, 1, 1 };
+    ggml_fa_page_runs probe_runs = { 1, &probe_run };
+    ggml_flash_attn_ext_set_page_runs(fa, &probe_runs);
+    ggml_prec_set_acc(fa, GGML_PREC_F32);
+
+    prefill_paged = ggml_backend_supports_op(backend, fa);
+    LLAMA_LOG_INFO("%s: prefill attends %s\n", __func__, prefill_paged ? "the pages directly" : "gathers of the pages");
 }
 
 size_t llama_kv_stream::row_size(int32_t ikv, bool is_v) const {
@@ -278,7 +309,7 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
     }
 
     // the attended pages that are not resident stream: packed for the decode kernel, in place for a gather
-    const bool decode = cells.size() <= 4;
+    const bool decode = cells.size() <= 4 || prefill_paged;
 
     std::fill(page_ring.begin(), page_ring.end(), -1);
     n_streamed = 0;
@@ -299,6 +330,18 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
             copies.push_back({ p, dst, 1 });
         }
     }
+
+    run_list.clear();
+    for (uint32_t p = 0; p < n_att; ++p) {
+        const int32_t pool = page_slot[p] >= 0;
+        const int32_t pos  = pool ? page_slot[p] : page_ring[p];
+        if (!run_list.empty() && run_list.back().pool == pool && run_list.back().pos + run_list.back().n == pos) {
+            run_list.back().n++;
+        } else {
+            run_list.push_back({ (int32_t) p, pos, 1, pool });
+        }
+    }
+    runs_desc = { (int32_t) run_list.size(), run_list.data() };
 
     if (n_streamed == 0) {
         return;

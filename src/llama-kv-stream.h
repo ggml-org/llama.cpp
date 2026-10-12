@@ -27,9 +27,10 @@
 // ready flag when they have landed; the attention waits for the flag and releases the slot (ggml_flash_attn_ext_set_sync).
 //
 // Decode ubatches (up to 4 tokens, the paged decode kernel) read resident pages from the pool and streamed pages from the
-// slot through a page table (ggml_flash_attn_ext_set_pages); streamed pages are packed at the start of the slot. Larger
-// ubatches attend the slot as a contiguous copy of the whole layer for the stock kernels: streamed pages are copied to
-// their logical place by the copy engine, resident pages by the graph.
+// slot through a page table (ggml_flash_attn_ext_set_pages); streamed pages are packed at the start of the slot. So do
+// larger ubatches if the backend's attention takes paged K/V for them (paged_prefill()); otherwise they attend the slot
+// as a contiguous copy of the whole layer for the stock kernels: streamed pages are copied to their logical place by the
+// copy engine, resident pages by the graph.
 //
 // Debug: LLAMA_KV_STREAM_DEBUG=rotate (when the pool holds the whole context) moves every resident page through host
 // memory into a rotated slot before every ubatch; LLAMA_KV_STREAM_DEBUG=trace logs the copy queue;
@@ -43,6 +44,9 @@ struct llama_kv_stream_attn {
     ggml_tensor * v = nullptr;
 
     int32_t table = -1; // row of the page table input, -1 when attending a gather
+
+    // prefill: the page table as runs (ggml_flash_attn_ext_set_page_runs)
+    const ggml_fa_page_runs * runs = nullptr;
 
     // when pages stream: views of the layer's device slot for the page table, and the sync flags
     ggml_tensor *    ring_k   = nullptr;
@@ -78,7 +82,14 @@ public:
     ggml_backend_dev_t device() const { return dev; }
 
     // the backend whose stream runs the graphs: page moves are queued on it
-    void set_backend(ggml_backend_t backend);
+    // n_head: query heads, to check whether the backend's attention takes paged K/V for prefill ubatches too
+    void set_backend(ggml_backend_t backend, int64_t n_head);
+
+    // prefill ubatches read the pages through the page table like decode, instead of attending a gather
+    bool paged_prefill() const { return prefill_paged; }
+
+    // the attended pages of the current ubatch as runs of consecutive pool or ring pages
+    const ggml_fa_page_runs * page_runs() const { return &runs_desc; }
 
     // before a ubatch writes `cells`, with [0, n_kv) attended: place the pages, and queue the copies of the streamed ones
     void prepare(const std::vector<uint32_t> & cells, uint32_t n_kv);
@@ -162,6 +173,9 @@ private:
     std::vector<uint8_t> dirty;     // resident page written since it was loaded
     std::vector<uint8_t> saved;     // the host store holds the page
 
+    std::vector<ggml_fa_page_run> run_list;
+    ggml_fa_page_runs             runs_desc = {};
+
     uint64_t layout_id  = 0;
     uint32_t n_streamed = 0; // pages streamed in the current ubatch
     uint32_t tag        = 0; // tag of the current ubatch, counts the ubatches that streamed
@@ -188,6 +202,8 @@ private:
     uint64_t                n_jobs = 0;      // jobs queued (main thread)
     std::atomic<uint64_t>   n_jobs_done{0};  // jobs fully queued on the copy engine
     std::atomic<bool>       stop{false};
+
+    bool     prefill_paged = false;
 
     bool     debug_rotate = false;
     bool     debug_trace  = false;
