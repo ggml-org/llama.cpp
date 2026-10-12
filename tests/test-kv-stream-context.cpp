@@ -34,6 +34,7 @@ static bool resident_control = false, trace_control = false;
 static bool mtp_memory_probe = false, mtp_sustained_control = false, mtp_sustained_rs_control = false;
 static bool target_drift_control = false, target_drift_rs_control = false;
 static bool rollback_probe = false;
+static bool wide_rollback_control = false;
 static bool vision_mtp_handoff = false;
 static bool serial_workspace_growth = false;
 static bool mtp_bit_exact_control = false;
@@ -126,6 +127,116 @@ struct run_result {
     recurrent_snapshot recurrent;
     std::vector<std::pair<std::string,std::vector<float>>> trace;
 };
+
+// Compare matching target forwards, selected rollback state and replay without allocating a draft context.
+static void test_wide_target_rollback(testing & t,llama_model * model) {
+    kv_stream_exact_config cfg;
+    std::ifstream input(cfg.corpus,std::ios::binary);
+    if (!t.assert_true(bool(input))) return;
+    const std::string article((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+    const auto * vocabulary=llama_model_get_vocab(model);
+    const int count=-llama_tokenize(vocabulary,article.data(),int(article.size()),nullptr,0,false,false);
+    if (!t.assert_true(count >= 16381)) return;
+    std::vector<llama_token> corpus(size_t(count),0);
+    if (!t.assert_equal(count,llama_tokenize(vocabulary,article.data(),int(article.size()),corpus.data(),count,false,false))) return;
+    const size_t vocab_size=llama_vocab_n_tokens(vocabulary);
+    for (uint32_t depth : {1u,3u,7u}) for (size_t prefix : {249u,505u,2041u,16381u}) {
+        kv_stream_bit_oracle oracle;
+        for (bool streamed : {false,true}) {
+            if (streamed) oracle.compare();
+            auto params=llama_context_default_params();
+            params.n_ctx=uint32_t((prefix+6*(depth+2)+255)/256*256);
+            params.n_batch=params.n_ubatch=256; params.n_seq_max=1; params.n_rs_seq=depth;
+            params.n_threads=params.n_threads_batch=8;
+            params.n_outputs_max=params.n_outputs_max_per_seq=depth+1;
+            params.type_k=GGML_TYPE_Q8_0; params.type_v=GGML_TYPE_Q4_0;
+            params.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            // Include a real phase-arena handoff while other streamed cases force a small physical ring.
+            if (streamed && depth == 7 && prefix == 505) params.shared_device_memory_bytes=size_t(2240)*1048576;
+            else params.kv_stream_pool_bytes=streamed ? 16*1048576 : 0;
+            context_ptr ctx(llama_init_from_model(model,params),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            if (!t.assert_true(hybrid != nullptr)) return;
+            auto * recurrent=hybrid->get_mem_recr();
+            auto * kv=hybrid->get_mem_attn();
+            auto * stream=kv->get_kv_stream();
+            t.assert_equal(streamed,recurrent->spill_enabled());
+            if (streamed) {
+                if (!t.assert_true(stream && !stream->auxiliary_cache())) return;
+                t.out << "rollback D=" << depth << " prefix=" << prefix << " stage MiB=" <<
+                    double(recurrent->spill_bank()->staged_device_bytes())/1048576 << '\n';
+            }
+            const auto drain=[&] {
+                llama_synchronize(ctx.get());
+                if (!recurrent->complete_spill() || !recurrent->complete_restore_spill())
+                    throw std::runtime_error("failed to drain rollback test");
+            };
+            const auto state=[&](const std::string & name) {
+                drain();
+                kv_stream_exact_state snapshot;
+                recurrent->state_write(snapshot,0,0);
+                snapshot.compare_with(oracle,name+"/state");
+            };
+            const auto submit=[&](size_t first,size_t tokens,bool decode,bool proposals=false) {
+                common_batch batch(ctx.get());
+                for (size_t i=0;i<tokens;++i) {
+                    // A rejected proposal differs from its correction, exercising actual KV overwrite.
+                    const auto token=proposals && i ? llama_token((size_t(corpus[first+i])+1+i)%vocab_size) : corpus[first+i];
+                    batch.add(token,llama_pos(first+i),0,decode || i+1==tokens);
+                }
+                llama_set_kv_stream_decode(ctx.get(),decode);
+                return llama_process(ctx.get(),LLAMA_PROCESS_TYPE_DECODE,batch.get());
+            };
+            for (size_t first=0;first<prefix;first+=256)
+                if (!t.assert_equal(0,submit(first,std::min(size_t(256),prefix-first),false))) return;
+            state("prefill");
+            kv_stream_exact_kv(oracle,"prefill/KV",kv,0,prefix);
+            size_t position=prefix;
+            const uint32_t short_widths[6]={8,5,7,6,2,4};
+            for (uint32_t round=0;round<6;++round) {
+                const auto name="round/"+std::to_string(round);
+                const size_t width=depth == 7 && prefix == 2041 ? short_widths[round] : depth+1;
+                if (!t.assert_equal(0,submit(position,width,true,true))) return;
+                drain();
+                for (size_t q=0;q<width;++q) {
+                    const auto * logits=llama_get_logits_ith(ctx.get(),int32_t(q));
+                    if (!t.assert_true(logits != nullptr)) return;
+                    oracle.bytes(name+"/logits/"+std::to_string(q),logits,vocab_size*sizeof(float));
+                }
+                state(name+"/verify");
+                const size_t proposals=width-1;
+                const size_t accepted=round == 0 || round == 3 ? 0 : round == 1 ? proposals/2 : round == 4 ? proposals-1 : proposals;
+                const size_t kept=accepted+1;
+                if (kept < width && !t.assert_true(llama_memory_seq_rm(llama_get_memory(ctx.get()),0,llama_pos(position+kept),-1))) return;
+                t.assert_equal(llama_pos(position+kept-1),llama_memory_seq_pos_max(llama_get_memory(ctx.get()),0));
+                state(name+"/selected");
+                kv_stream_exact_kv(oracle,name+"/retained_KV",kv,position,kept);
+                position+=kept;
+                if (!t.assert_equal(0,submit(position,1,true))) return;
+                drain();
+                oracle.bytes(name+"/correction_logits",llama_get_logits_ith(ctx.get(),0),vocab_size*sizeof(float));
+                state(name+"/correction");
+                kv_stream_exact_kv(oracle,name+"/corrected_KV",kv,position,1);
+                ++position;
+                if (streamed) t.assert_equal(position,stream->tokens());
+            }
+            const size_t capacity=llama_n_ctx(ctx.get());
+            for (;position<capacity;) {
+                const size_t rows=std::min(size_t(256),capacity-position);
+                if (!t.assert_equal(0,submit(position,rows,false))) return;
+                position+=rows;
+            }
+            state("context_end");
+            if (!t.assert_true(submit(position,depth+1,true) != 0)) return;
+            t.assert_equal(llama_pos(capacity-1),llama_memory_seq_pos_max(llama_get_memory(ctx.get()),0));
+            state("rejected_context_end");
+            if (streamed) oracle.finish();
+        }
+        t.out << "D=" << depth << " prefix=" << prefix << " native/spilled rollback bits match (" <<
+            oracle.records() << " records, " << oracle.byte_count() << " bytes)\n";
+    }
+}
 
 static run_result evaluate(testing & t,llama_model * model,const std::vector<llama_token> & prompt,
         uint32_t ubatch,size_t pool,const std::vector<llama_token> & forced) {
@@ -456,6 +567,7 @@ int main(int argc,char ** argv) {
         target_drift_rs_control = target_drift_rs_control || !std::strcmp(argv[i],"--mtp-target-drift-rs");
         target_drift_control = target_drift_control || target_drift_rs_control;
         rollback_probe = rollback_probe || !std::strcmp(argv[i],"--mtp-rs-rollback-probe");
+        wide_rollback_control = wide_rollback_control || !std::strcmp(argv[i],"--target-rs-rollback");
         vision_mtp_handoff = vision_mtp_handoff || !std::strcmp(argv[i],"--vision-mtp-handoff");
         serial_workspace_growth = serial_workspace_growth || !std::strcmp(argv[i],"--serial-workspace-growth");
     }
@@ -484,6 +596,12 @@ int main(int argc,char ** argv) {
         return t.summary();
     }
     if (!t.assert_true(bool(model))) return t.summary();
+    if (wide_rollback_control) {
+        t.test("target_TG1_TG8_rollback_matches_native_without_draft_KV", [&](testing & t) {
+            test_wide_target_rollback(t,model.get());
+        });
+        return t.summary();
+    }
     if (mtp_bit_exact_control) {
         t.test("streamed_and_native_mtp_bit_exact", [&](testing & t) {
             test_kv_stream_mtp_bit_exact(t, model.get(), kv_stream_exact_arguments(argc, argv));

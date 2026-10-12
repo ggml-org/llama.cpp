@@ -2,9 +2,9 @@
 
 Gemma 4 31B target and shared-KV assistant extension: [GEMMA4_ADAPTIVE_KV_ROADMAP.md](GEMMA4_ADAPTIVE_KV_ROADMAP.md). Its G1-G6 stages are independent of the milestone identifiers below; the extension is planned, not implemented or qualified.
 
-Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). D1-D3 are qualified on RTX 5070 Ti, including wrapped-wave batching, inactive-block exclusion, address resolution and checkpoint compaction, with matched measurements and unchanged numerical gates. The 5-10 percent routing-overhead goal is met in the sampled 128K FP16 cases, not every short-history path. Older-device execution and D4-D7 remain pending; live DFlash2 streaming remains unimplemented and unqualified.
+Qwen3.8-27B DFlash2 extension: [DFLASH2_ADAPTIVE_KV_ROADMAP.md](DFLASH2_ADAPTIVE_KV_ROADMAP.md). D1-D4 are qualified on RTX 5070 Ti, including wrapped-wave batching, inactive-block exclusion, address resolution, checkpoint compaction and two-slot target rollback through depth seven. The 5-10 percent routing-overhead goal is met in the sampled 128K FP16 cases, not every short-history path. Older-device execution and D5-D7 remain pending; live DFlash2 streaming remains unimplemented and unqualified.
 
-D4a has an implementation checkpoint for target rollback independent of auxiliary KV ownership. Depths 0-7 are planned with checked verification/workspace widths; real IQ4_XS depth-three execution and embedded-MTP regression pass. Depth-seven staging choice and D4b/D4c lifecycle/long-prefix qualification remain pending; see the DFlash2 roadmap checkpoint for footprint and evidence.
+D4a-D4c qualify target rollback independent of auxiliary KV ownership. The approved two-slot layout uses 43.640625 MiB device staging at depth seven, with unchanged current-state storage. CPU/CUDA lifecycle/failure tests, sanitizers and twelve matching-stock IQ4_XS cases through a 16381-token prefix pass, including TG1-TG8, changed corrections, repeated rejection, context-end checks and shared-arena handoff. These are target-component gates, not live DFlash2 or full-native-context qualification; see the DFlash2 roadmap for exact scope and evidence.
 
 Saved: 2026-09-10
 
