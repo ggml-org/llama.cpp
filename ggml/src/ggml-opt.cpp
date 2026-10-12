@@ -18,12 +18,13 @@ struct ggml_opt_dataset {
     ggml_backend_buffer_t   buf    = nullptr;
     struct ggml_tensor    * data   = nullptr;
     struct ggml_tensor    * labels = nullptr;
+    struct ggml_tensor    * masks  = nullptr;
 
     int64_t ndata       = -1;
     int64_t ndata_shard = -1;
     size_t  nbs_data    = -1;
     size_t  nbs_labels  = -1;
-
+    size_t  nbs_masks   = -1;
     std::vector<int64_t> permutation;
 };
 
@@ -45,10 +46,12 @@ struct ggml_opt_context {
     struct ggml_tensor * inputs  = nullptr;
     struct ggml_tensor * outputs = nullptr;
     struct ggml_tensor * labels  = nullptr;
+    struct ggml_tensor * masks   = nullptr;
 
     struct ggml_tensor * loss     = nullptr;
     struct ggml_tensor * pred     = nullptr;
     struct ggml_tensor * ncorrect = nullptr;
+    struct ggml_tensor * nmasked  = nullptr;
 
     struct ggml_cgraph * gf      = nullptr;
     struct ggml_cgraph * gb_grad = nullptr;
@@ -76,6 +79,7 @@ struct ggml_opt_result {
     std::vector<float>   loss;
     std::vector<int32_t> pred;
     int64_t              ncorrect = 0;
+    int64_t              nmasked  = 0;
 
     int64_t opt_period         = -1;
     bool    loss_per_datapoint = false;
@@ -90,8 +94,21 @@ ggml_opt_dataset_t ggml_opt_dataset_init(
         int64_t        ne_label,
         int64_t        ndata,
         int64_t        ndata_shard) {
+    return ggml_opt_dataset_init_with_masks(type_data, type_label, type_label, ne_datapoint, ne_label, /*ne_mask =*/ 0, ndata, ndata_shard);
+}
+
+ggml_opt_dataset_t ggml_opt_dataset_init_with_masks(
+        enum ggml_type type_data,
+        enum ggml_type type_label,
+        enum ggml_type type_mask,
+        int64_t        ne_datapoint,
+        int64_t        ne_label,
+        int64_t        ne_mask,
+        int64_t        ndata,
+        int64_t        ndata_shard) {
     GGML_ASSERT(ne_datapoint >  0);
     GGML_ASSERT(ne_label     >= 0);
+    GGML_ASSERT(ne_mask      >= 0);
     GGML_ASSERT(ndata        >  0);
     GGML_ASSERT(ndata_shard  >  0);
 
@@ -101,7 +118,7 @@ ggml_opt_dataset_t ggml_opt_dataset_init(
 
     {
         struct ggml_init_params params = {
-            /*.mem_size   =*/ 2*ggml_tensor_overhead(),
+            /*.mem_size   =*/ 3*ggml_tensor_overhead(),
             /*.mem_buffer =*/ nullptr,
             /*.no_alloc   =*/ true,
         };
@@ -117,6 +134,14 @@ ggml_opt_dataset_t ggml_opt_dataset_init(
     } else {
         result->labels = nullptr;
         result->nbs_labels = 0;
+    }
+
+    if (ne_mask > 0) {
+        result->masks = ggml_new_tensor_2d(result->ctx, type_mask, ne_mask, ndata);
+        result->nbs_masks = ggml_nbytes(result->masks) * ndata_shard/ndata;
+    } else {
+        result->masks = nullptr;
+        result->nbs_masks = 0;
     }
 
     result->buf = ggml_backend_alloc_ctx_tensors_from_buft(result->ctx, ggml_backend_cpu_buffer_type());
@@ -145,6 +170,10 @@ struct ggml_tensor * ggml_opt_dataset_data(ggml_opt_dataset_t dataset) {
 
 struct ggml_tensor * ggml_opt_dataset_labels(ggml_opt_dataset_t dataset) {
     return dataset->labels;
+}
+
+struct ggml_tensor * ggml_opt_dataset_masks(ggml_opt_dataset_t dataset) {
+    return dataset->masks;
 }
 
 void ggml_opt_dataset_shuffle(ggml_opt_context_t opt_ctx, ggml_opt_dataset_t dataset, int64_t idata) {
@@ -194,7 +223,12 @@ void ggml_opt_dataset_get_batch(ggml_opt_dataset_t dataset, struct ggml_tensor *
 }
 
 void ggml_opt_dataset_get_batch_host(ggml_opt_dataset_t dataset, void * data_batch, size_t nb_data_batch, void * labels_batch, int64_t ibatch) {
+    ggml_opt_dataset_get_batch_host_with_masks(dataset, data_batch, nb_data_batch, labels_batch, nullptr, ibatch);
+}
+
+void ggml_opt_dataset_get_batch_host_with_masks(ggml_opt_dataset_t dataset, void * data_batch, size_t nb_data_batch, void * labels_batch, void * masks_batch, int64_t ibatch) {
     GGML_ASSERT((labels_batch == nullptr) == (dataset->labels == nullptr));
+    GGML_ASSERT(masks_batch == nullptr || dataset->masks != nullptr);
     GGML_ASSERT(nb_data_batch % dataset->nbs_data == 0);
 
     const int64_t shards_per_batch = nb_data_batch / dataset->nbs_data;
@@ -204,17 +238,17 @@ void ggml_opt_dataset_get_batch_host(ggml_opt_dataset_t dataset, void * data_bat
     for (int64_t ishard_batch = 0; ishard_batch < shards_per_batch; ++ishard_batch) {
         const int64_t ishard = dataset->permutation[ibatch*shards_per_batch + ishard_batch];
 
-        const char * ptr_data       = (const char *) dataset->data->data + ishard      *dataset->nbs_data;
-        char       * ptr_data_batch = (char       *) data_batch          + ishard_batch*dataset->nbs_data;
-        memcpy(ptr_data_batch, ptr_data, dataset->nbs_data);
+        auto copy_shard = [ishard, ishard_batch](const struct ggml_tensor * tensor, void * batch_dst, size_t nbs) {
+            if (batch_dst && tensor) {
+                const char * ptr_tensor = (const char *) tensor->data + ishard       * nbs;
+                char       * ptr_batch  = (char       *) batch_dst    + ishard_batch * nbs;
+                memcpy(ptr_batch, ptr_tensor, nbs);
+            }
+        };
 
-        if (!labels_batch) {
-            continue;
-        }
-
-        const char * ptr_labels       = (const char *) dataset->labels->data + ishard      *dataset->nbs_labels;
-        char       * ptr_labels_batch = (char       *) labels_batch          + ishard_batch*dataset->nbs_labels;
-        memcpy(ptr_labels_batch, ptr_labels, dataset->nbs_labels);
+        copy_shard(dataset->data,   data_batch,   dataset->nbs_data);
+        copy_shard(dataset->labels, labels_batch, dataset->nbs_labels);
+        copy_shard(dataset->masks,  masks_batch,  dataset->nbs_masks);
     }
 }
 
@@ -412,6 +446,23 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             opt_ctx->loss_per_datapoint = true;
             break;
         }
+        case GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED: {
+            opt_ctx->labels = ggml_dup_tensor(ctx_results, opt_ctx->outputs);
+            ggml_set_input(opt_ctx->labels);
+            ggml_set_name(opt_ctx->labels, "labels");
+            opt_ctx->masks = ggml_new_tensor(ctx_results, GGML_TYPE_F32, GGML_MAX_DIMS, opt_ctx->outputs->ne);
+            ggml_set_input(opt_ctx->masks);
+            ggml_set_output(opt_ctx->masks);
+            ggml_set_name(opt_ctx->masks, "masks");
+            opt_ctx->loss = ggml_cross_entropy_loss_masked(ctx_results, opt_ctx->outputs, opt_ctx->labels, opt_ctx->masks);
+            ggml_set_name(opt_ctx->loss, "loss_cross_entropy_masked");
+            if (opt_ctx->opt_period > 1) {
+                opt_ctx->loss = ggml_scale(ctx_results, opt_ctx->loss, 1.0f / opt_ctx->opt_period);
+                ggml_set_name(opt_ctx->loss, "loss_cross_entropy_masked_scaled");
+            }
+            opt_ctx->loss_per_datapoint = true;
+            break;
+        }
         case GGML_OPT_LOSS_TYPE_MEAN_SQUARED_ERROR: {
             opt_ctx->labels = ggml_dup_tensor(ctx_results, opt_ctx->outputs);
             ggml_set_input(opt_ctx->labels);
@@ -433,16 +484,25 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     ggml_set_loss(opt_ctx->loss);
     ggml_build_forward_expand(opt_ctx->gf, opt_ctx->loss);
 
-    if (opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY) {
+    if (opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY || opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED) {
         opt_ctx->pred = ggml_argmax(ctx_results, opt_ctx->outputs);
         ggml_set_name(opt_ctx->pred, "pred");
         ggml_set_output(opt_ctx->pred);
         ggml_build_forward_expand(opt_ctx->gf, opt_ctx->pred);
 
-        opt_ctx->ncorrect = ggml_count_equal(ctx_results, opt_ctx->pred, ggml_argmax(ctx_results, opt_ctx->labels));
-        ggml_set_name(opt_ctx->ncorrect, "ncorrect");
-        ggml_set_output(opt_ctx->ncorrect);
-        ggml_build_forward_expand(opt_ctx->gf, opt_ctx->ncorrect);
+        if (opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED && opt_ctx->masks != nullptr) {
+            // For instruction fine-tuning with masks, use masked accuracy calculation
+            struct ggml_tensor * labels_argmax = ggml_argmax(ctx_results, opt_ctx->labels);
+            opt_ctx->ncorrect = ggml_count_equal_masked(ctx_results, opt_ctx->pred, labels_argmax, opt_ctx->masks);
+            ggml_set_name(opt_ctx->ncorrect, "ncorrect_masked");
+            ggml_set_output(opt_ctx->ncorrect);
+            ggml_build_forward_expand(opt_ctx->gf, opt_ctx->ncorrect);
+        } else {
+            opt_ctx->ncorrect = ggml_count_equal(ctx_results, opt_ctx->pred, ggml_argmax(ctx_results, opt_ctx->labels));
+            ggml_set_name(opt_ctx->ncorrect, "ncorrect");
+            ggml_set_output(opt_ctx->ncorrect);
+            ggml_build_forward_expand(opt_ctx->gf, opt_ctx->ncorrect);
+        }
     }
 
     if (opt_ctx->buf_static) {
@@ -618,6 +678,10 @@ struct ggml_tensor * ggml_opt_labels(ggml_opt_context_t opt_ctx) {
     return opt_ctx->labels;
 }
 
+struct ggml_tensor * ggml_opt_masks(ggml_opt_context_t opt_ctx) {
+    return opt_ctx->masks;
+}
+
 struct ggml_tensor * ggml_opt_loss(ggml_opt_context_t opt_ctx) {
     return opt_ctx->loss;
 }
@@ -678,6 +742,7 @@ void ggml_opt_result_reset(ggml_opt_result_t result) {
     result->loss.clear();
     result->pred.clear();
     result->ncorrect = 0;
+    result->nmasked = 0;
 }
 
 void ggml_opt_result_ndata(ggml_opt_result_t result, int64_t * ndata) {
@@ -726,14 +791,15 @@ void ggml_opt_result_pred(ggml_opt_result_t result, int32_t * pred) {
 }
 
 void ggml_opt_result_accuracy(ggml_opt_result_t result, double * accuracy, double * unc) {
-    *accuracy = result->ncorrect >= 0 ? double(result->ncorrect) / double(result->ndata) : NAN;
+    int64_t denominator = (result->nmasked > 0) ? result->nmasked : result->ndata;
+    *accuracy = result->ncorrect >= 0 ? double(result->ncorrect) / double(denominator) : NAN;
 
     if (!unc) {
         return;
     }
 
-    *unc = result->ncorrect >= 0 && result->ndata >= 2 ?
-        sqrt((*accuracy) * (1.0 - (*accuracy)) / double(result->ndata - 1)) : NAN;
+    *unc = result->ncorrect >= 0 && denominator >= 2 ?
+        sqrt((*accuracy) * (1.0 - (*accuracy)) / double(denominator - 1)) : NAN;
 }
 
 // ====== Computation ======
@@ -903,6 +969,24 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     int64_t ncorrect;
     ggml_backend_tensor_get(opt_ctx->ncorrect, &ncorrect, 0, ggml_nbytes(opt_ctx->ncorrect));
     result->ncorrect += ncorrect;
+
+    if (opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED && opt_ctx->masks) {
+        int64_t total_valid = 0;
+        const int64_t nr = opt_ctx->masks->ne[1];
+
+        const size_t mask_size = ggml_nbytes(opt_ctx->masks);
+        std::vector<float> mask_data(mask_size / sizeof(float));
+        ggml_backend_tensor_get(opt_ctx->masks, mask_data.data(), 0, mask_size);
+
+        for (int64_t i1 = 0; i1 < nr; i1++) {
+            const size_t idx = i1 * (opt_ctx->masks->ne[0]);
+            const float mask_value = mask_data[idx];
+            if (mask_value > 0.5f) {
+                total_valid++;
+            }
+        }
+        result->nmasked += total_valid;
+    }
 }
 
 // ====== High-Level Functions ======
