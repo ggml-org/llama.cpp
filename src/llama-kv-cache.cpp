@@ -188,10 +188,10 @@ llama_kv_cache::llama_kv_cache(
 
         const uint32_t n_pages = (kv_size + llama_kv_stream::page_size - 1)/llama_kv_stream::page_size;
 
+        // the pages a ubatch writes have to be resident (8 pages hold any ubatch up to 1536 tokens)
         n_slots = std::min(n_pages, llama_kv_stream::slots_for(stream_resident_size, bytes_per_cell));
-        if (n_slots < n_pages) {
-            throw std::runtime_error(format("KV streaming: %u of %u pages fit in the resident budget; streaming the rest "
-                                            "is not implemented yet", n_slots, n_pages));
+        if (n_slots < std::min(n_pages, 8u)) {
+            throw std::runtime_error(format("KV streaming: the resident budget holds %u pages, at least 8 are needed", n_slots));
         }
         n_rows = n_slots*llama_kv_stream::page_size;
     }
@@ -1255,7 +1255,9 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
         head = sinfo.idxs[s].back() + 1;
     }
+}
 
+void llama_kv_cache::prepare_stream(const slot_info & sinfo) {
     if (stream) {
         stream->prepare(sinfo.idxs[0], get_n_kv(sinfo));
     }
@@ -1570,26 +1572,59 @@ ggml_tensor * llama_kv_cache::build_input_kv_pages(ggml_context * ctx, uint32_t 
     return res;
 }
 
+ggml_tensor * llama_kv_cache::build_input_kv_tag(ggml_context * ctx) const {
+    if (!stream) {
+        return nullptr;
+    }
+
+    ggml_tensor * res = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_set_input(res);
+    ggml_set_name(res, "attn_inp_kv_tag");
+
+    return res;
+}
+
 void llama_kv_cache::set_input_kv_pages(ggml_tensor * dst) const {
     stream->set_input_pages(dst);
 }
 
-void llama_kv_cache::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_kv, uint32_t n_tokens,
-        const slot_info & sinfo, ggml_tensor ** k, ggml_tensor ** v, int32_t * table) const {
+void llama_kv_cache::set_input_kv_tag(ggml_tensor * dst) const {
+    stream->set_input_tag(dst);
+}
+
+llama_kv_stream_attn llama_kv_cache::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_kv,
+        uint32_t n_tokens, const slot_info & sinfo) const {
     const int32_t ikv = map_layer_ids.at(il);
+
+    llama_kv_stream_attn res;
+
+    ggml_tensor * sk = stream->slot_k(ikv);
+    ggml_tensor * sv = stream->slot_v(ikv);
+
+    // pages that stream are copied into the layer's device slot, beside the graph
+    if (stream->synced()) {
+        res.ready    = stream->ready(ikv);
+        res.consumed = stream->consumed(ikv);
+    }
 
     // the paged decode kernel takes up to 4 query tokens (decode and MTP verification)
     if (n_tokens <= 4) {
-        *k = get_k(ctx, il, n_kv, sinfo);
-        *v = get_v(ctx, il, n_kv, sinfo);
-        *table = ikv;
-        return;
+        res.k = get_k(ctx, il, n_kv, sinfo);
+        res.v = get_v(ctx, il, n_kv, sinfo);
+        res.table = ikv;
+        if (stream->synced()) {
+            // same layout as the pool views
+            res.ring_k = ggml_view_4d(ctx, sk, hparams.n_embd_head_k(il), sk->ne[1], hparams.n_head_kv(il), 1,
+                    sk->nb[1], ggml_row_size(sk->type, hparams.n_embd_head_k(il)), ggml_nbytes(sk), 0);
+            res.ring_v = ggml_view_4d(ctx, sv, hparams.n_embd_head_v(il), sv->ne[1], hparams.n_head_kv(il), 1,
+                    sv->nb[1], ggml_row_size(sv->type, hparams.n_embd_head_v(il)), ggml_nbytes(sv), 0);
+        }
+        return res;
     }
 
-    // gather the attended pages into the layer's scratch slot, after this ubatch's K/V were stored
+    // a contiguous copy of the attended pages in the layer's device slot: the graph copies the resident pages, after
+    // this ubatch's K/V were stored
     const auto & layer = layers[ikv];
-    ggml_tensor * sk = stream->scratch_k(ikv);
-    ggml_tensor * sv = stream->scratch_v(ikv);
     for (const auto & r : stream->runs(n_kv)) {
         const int64_t rows = (int64_t) r.n*llama_kv_stream::page_size;
         const int64_t src0 = (int64_t) r.slot*llama_kv_stream::page_size;
@@ -1602,13 +1637,14 @@ void llama_kv_cache::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, in
             ggml_view_2d(ctx, sv,      layer.v->ne[0], rows, sv->nb[1],      dst0*sv->nb[1])));
     }
 
-    *k = ggml_view_4d(ctx, sk,
+    res.k = ggml_view_4d(ctx, sk,
             hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, 1,
             ggml_row_size(sk->type, hparams.n_embd_head_k(il)), sk->nb[1], ggml_nbytes(sk), 0);
-    *v = ggml_view_4d(ctx, sv,
+    res.v = ggml_view_4d(ctx, sv,
             hparams.n_embd_head_v(il), hparams.n_head_kv(il), n_kv, 1,
             ggml_row_size(sv->type, hparams.n_embd_head_v(il)), sv->nb[1], ggml_nbytes(sv), 0);
-    *table = -1;
+
+    return res;
 }
 
 void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const {
@@ -3028,6 +3064,9 @@ bool llama_kv_cache_context::apply() {
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
+    // not in apply_ubatch: prepare() applies every ubatch of a batch to find their slots, then undoes them
+    kv->prepare_stream(sinfos[i_cur]);
+
     return true;
 }
 
@@ -3061,17 +3100,24 @@ const llama_kv_stream * llama_kv_cache_context::get_kv_stream() const {
     return kv->get_kv_stream();
 }
 
-void llama_kv_cache_context::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_tokens,
-        ggml_tensor ** k, ggml_tensor ** v, int32_t * table) const {
-    kv->get_kv_stream_attn(ctx, gf, il, n_kv, n_tokens, sinfos[i_cur], k, v, table);
+llama_kv_stream_attn llama_kv_cache_context::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_tokens) const {
+    return kv->get_kv_stream_attn(ctx, gf, il, n_kv, n_tokens, sinfos[i_cur]);
 }
 
 ggml_tensor * llama_kv_cache_context::build_input_kv_pages(ggml_context * ctx) const {
     return kv->build_input_kv_pages(ctx, n_kv);
 }
 
+ggml_tensor * llama_kv_cache_context::build_input_kv_tag(ggml_context * ctx) const {
+    return kv->build_input_kv_tag(ctx);
+}
+
 void llama_kv_cache_context::set_input_kv_pages(ggml_tensor * dst) const {
     kv->set_input_kv_pages(dst);
+}
+
+void llama_kv_cache_context::set_input_kv_tag(ggml_tensor * dst) const {
+    kv->set_input_kv_tag(dst);
 }
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {

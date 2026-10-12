@@ -559,16 +559,19 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
         mctx->set_input_v_rot(self_v_rot);
     }
 
-    // unallocated when every layer attends a gather
+    // unallocated when unused (gathers, nothing streams)
     if (self_kv_pages && self_kv_pages->buffer) {
         mctx->set_input_kv_pages(self_kv_pages);
     }
+    if (self_kv_tag && self_kv_tag->buffer) {
+        mctx->set_input_kv_tag(self_kv_tag);
+    }
 }
 
-// KV streaming: gathers are built for one page layout
+// KV streaming: gathers are built for one page layout, and the attention waits only if pages stream
 static bool can_reuse_kv_stream(const llm_graph_input_attn_kv * inp, const llama_kv_cache_context * mctx) {
     const llama_kv_stream * stream = mctx->get_kv_stream();
-    return !stream || inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= 4;
+    return !stream || (inp->kv_synced == stream->synced() && (inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= 4));
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -1189,6 +1192,9 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 
     if (inp_attn->self_kv_pages && inp_attn->self_kv_pages->buffer) {
         mctx->get_attn()->set_input_kv_pages(inp_attn->self_kv_pages);
+    }
+    if (inp_attn->self_kv_tag && inp_attn->self_kv_tag->buffer) {
+        mctx->get_attn()->set_input_kv_tag(inp_attn->self_kv_tag);
     }
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
@@ -3216,8 +3222,10 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     inp->self_v_rot = mctx_cur->build_input_v_rot(ctx0);
 
     inp->self_kv_pages = mctx_cur->build_input_kv_pages(ctx0);
+    inp->self_kv_tag   = mctx_cur->build_input_kv_tag(ctx0);
     if (const llama_kv_stream * stream = mctx_cur->get_kv_stream()) {
         inp->kv_layout = stream->layout();
+        inp->kv_synced = stream->synced();
     }
 
     return inp;
@@ -3267,7 +3275,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k;
     ggml_tensor * v;
-    int32_t       kv_table = -1;
+    llama_kv_stream_attn kv_attn;
 
     if (cparams.training) {
         GGML_ASSERT(mctx_cur->get_n_kv() == n_tokens);
@@ -3284,7 +3292,9 @@ ggml_tensor * llm_graph_context::build_attn(
         }
 
         if (inp->self_kv_pages) {
-            mctx_cur->get_kv_stream_attn(ctx0, gf, il, n_tokens, &k, &v, &kv_table);
+            kv_attn = mctx_cur->get_kv_stream_attn(ctx0, gf, il, n_tokens);
+            k = kv_attn.k;
+            v = kv_attn.v;
         } else {
             k = mctx_cur->get_k(ctx0, il);
             v = mctx_cur->get_v(ctx0, il);
@@ -3296,13 +3306,23 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
-    // KV streaming: the attention reads the pool through the layer's page table
-    if (kv_table >= 0) {
+    // KV streaming: the attention reads the pool through the layer's page table, and waits for the streamed pages
+    // note: build_attn_mha already expanded the node, so new sources have to be added to the graph explicitly
+    if (inp->self_kv_pages) {
         const auto & fa = res->get_fused_nodes().back();
         GGML_ASSERT(fa.op == LLM_FUSED_OP_FLASH_ATTN && fa.il == il);
-        ggml_flash_attn_ext_set_pages(fa.tensor, inp->self_kv_pages, kv_table, llama_kv_stream::page_size, nullptr, nullptr);
-        // build_attn_mha already expanded the node, so the new source has to be added to the graph explicitly
-        ggml_build_forward_expand(gf, inp->self_kv_pages);
+        if (kv_attn.table >= 0) {
+            ggml_flash_attn_ext_set_pages(fa.tensor, inp->self_kv_pages, kv_attn.table, llama_kv_stream::page_size, kv_attn.ring_k, kv_attn.ring_v);
+            ggml_build_forward_expand(gf, inp->self_kv_pages);
+            if (kv_attn.ring_k) {
+                ggml_build_forward_expand(gf, kv_attn.ring_k);
+                ggml_build_forward_expand(gf, kv_attn.ring_v);
+            }
+        }
+        if (kv_attn.ready) {
+            ggml_flash_attn_ext_set_sync(fa.tensor, inp->self_kv_tag, kv_attn.ready, kv_attn.consumed);
+            ggml_build_forward_expand(gf, inp->self_kv_tag);
+        }
     }
 
     if (inp->self_v_rot) {

@@ -368,9 +368,12 @@ public:
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
 
-    // KV streaming: page tables, I32 [n_kv/page_size, n_layer], and the page layout the graph's gathers were built for
+    // KV streaming: page tables, I32 [n_kv/page_size, n_layer], the step tag, I32 [1], and what the graph was built for:
+    // the page layout (gathers) and whether the attention waits for streamed pages
     ggml_tensor * self_kv_pages = nullptr;
+    ggml_tensor * self_kv_tag   = nullptr;
     uint64_t      kv_layout     = 0;
+    bool          kv_synced     = false;
 
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed

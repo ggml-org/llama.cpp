@@ -201,10 +201,10 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
-    // KV streaming: the K/V that layer il attends, and the row of pages_inp that is its page table (see llama_kv_stream)
-    // ubatches the paged decode kernel takes read the pool through the table, larger ones a gather of the pages (-1)
-    void get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_kv, uint32_t n_tokens,
-            const slot_info & sinfo, ggml_tensor ** k, ggml_tensor ** v, int32_t * table) const;
+    // KV streaming: what layer il attends (see llama_kv_stream)
+    // ubatches the paged decode kernel takes read the pool through a page table, larger ones a gather of the pages
+    llama_kv_stream_attn get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_kv, uint32_t n_tokens,
+            const slot_info & sinfo) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
@@ -228,6 +228,9 @@ public:
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
+    // KV streaming: place the pages of an applied ubatch that is about to be computed
+    void prepare_stream(const slot_info & sinfo);
+
     //
     // input API
     //
@@ -238,9 +241,12 @@ public:
     ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
     ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
 
-    // KV streaming: page tables of all layers, I32 [n_kv/page_size, n_layer]; nullptr without streaming
+    // KV streaming: page tables of all layers, I32 [n_kv/page_size, n_layer], and the step tag, I32 [1]
+    // nullptr without streaming
     ggml_tensor * build_input_kv_pages(ggml_context * ctx, uint32_t n_kv) const;
+    ggml_tensor * build_input_kv_tag  (ggml_context * ctx) const;
     void          set_input_kv_pages(ggml_tensor * dst) const;
+    void          set_input_kv_tag  (ggml_tensor * dst) const;
 
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
@@ -426,8 +432,7 @@ public:
 
     // KV streaming (see llama_kv_cache::get_kv_stream_attn)
     const llama_kv_stream * get_kv_stream() const;
-    void get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_tokens,
-            ggml_tensor ** k, ggml_tensor ** v, int32_t * table) const;
+    llama_kv_stream_attn get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_tokens) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
@@ -448,7 +453,9 @@ public:
     ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
 
     ggml_tensor * build_input_kv_pages(ggml_context * ctx) const;
+    ggml_tensor * build_input_kv_tag  (ggml_context * ctx) const;
     void          set_input_kv_pages(ggml_tensor * dst) const;
+    void          set_input_kv_tag  (ggml_tensor * dst) const;
 
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
