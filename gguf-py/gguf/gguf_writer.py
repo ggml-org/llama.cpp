@@ -1365,6 +1365,10 @@ class GGUFWriter:
     def add_decision_temperature(self, name: str, value: float) -> None:
         self.add_float32(Keys.Decision.TEMPERATURE.format(arch=self.arch, name=name), value)
 
+    def add_decision_score_bias(self, values: Sequence[float]) -> None:
+        for i, value in enumerate(values):
+            self.add_float32(Keys.Decision.SCORE_BIAS.format(arch=self.arch, n=len(values), i=i), value)
+
     # for vision models
 
     def add_clip_has_vision_encoder(self, value: bool) -> None:

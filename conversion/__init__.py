@@ -291,6 +291,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "UltravoxModel": "ultravox",
     "UnlimitedOCRForCausalLM": "deepseek",
     "VLlama3ForCausalLM": "llama",
+    "VllmDecision2Model": "vllm_decision2",
     "VoxtralForConditionalGeneration": "llama",
     "WavTokenizerDec": "wavtokenizer",
     "XLMRobertaForSequenceClassification": "bert",

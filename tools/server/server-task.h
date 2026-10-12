@@ -191,6 +191,11 @@ struct server_task {
             for (const int32_t marker : markers) {
                 pos = pos < 0 ? marker : std::min(pos, marker);
             }
+            for (size_t i = 0; i < order.size(); i++) {
+                if (order[i] != 0) {
+                    return pos < 0 ? (int32_t) i : std::min(pos, (int32_t) i);
+                }
+            }
             return pos;
         }
 

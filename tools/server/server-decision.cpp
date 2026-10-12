@@ -66,6 +66,28 @@ void server_decision_context::init(const llama_model * model) {
         temperatures[key + prefix_temp.size()] = temp;
     }
 
+    // "<n_levels>.<level>" -> offset
+    const std::string prefix_bias = prefix + "score_bias.";
+    for (int32_t i = 0; i < llama_model_meta_count(model); i++) {
+        char key[256];
+        char val[64];
+        if (llama_model_meta_key_by_index(model, i, key, sizeof(key)) < 0 || !string_starts_with(key, prefix_bias)) {
+            continue;
+        }
+        if (llama_model_meta_val_str_by_index(model, i, val, sizeof(val)) < 0) {
+            continue;
+        }
+        const auto parts = string_split<std::string>(key + prefix_bias.size(), '.');
+        const size_t n     = parts.size() == 2 ? std::strtoul(parts[0].c_str(), nullptr, 10) : 0;
+        const size_t level = parts.size() == 2 ? std::strtoul(parts[1].c_str(), nullptr, 10) : 0;
+        if (n < 2 || n > 255 || level >= n) {
+            throw std::runtime_error(string_format("invalid decision score bias: %s", key));
+        }
+        auto & bias = score_bias[n];
+        bias.resize(n, 0.0f);
+        bias[level] = std::strtof(val, nullptr);
+    }
+
     if (model_type == COMMON_DECISION_TYPE_OPENJEV) {
         // one letter per option, each must be a single token
         const std::string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -123,6 +145,10 @@ void server_decision_context::init(const llama_model * model) {
         n_options_max   = 255;
         noul_true_first = true;
         choice_sorted   = true;
+    } else if (model_type == COMMON_DECISION_TYPE_VLLM_DECISION2) {
+        n_options_max       = 255;
+        noul_criteria_order = true;
+        strict_payload      = true;
     } else if (model_type == COMMON_DECISION_TYPE_LFM2_D1) {
         n_options_max   = 255;
         noul_true_first = true;
@@ -144,10 +170,17 @@ void server_decision_context::init(const llama_model * model) {
 // request parsing
 //
 
+static bool decision_is_payload(const json & val) {
+    return val.is_string() || val.is_object() || val.is_array();
+}
+
 std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
     // lfm2-d1 and lfm2-d1-omni accept a null state, for example to ask about images only
     if (!body.contains("state") || (body.at("state").is_null() && type != COMMON_DECISION_TYPE_LFM2_D1 && type != COMMON_DECISION_TYPE_LFM2_D1_OMNI)) {
         throw std::invalid_argument("\"state\" must be provided");
+    }
+    if (strict_payload && !decision_is_payload(body.at("state"))) {
+        throw std::invalid_argument("\"state\" must be text, an object or an array");
     }
     if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
         throw std::invalid_argument("\"questions\" must be a non-empty object");
@@ -164,6 +197,9 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
         if (!q.contains("instructions") || q.at("instructions").is_null()) {
             throw err("\"instructions\" must be provided");
         }
+        if (strict_payload && (!decision_is_payload(q.at("instructions")) || q.at("instructions") == "")) {
+            throw err("\"instructions\" must be non-empty text, an object or an array");
+        }
 
         server_decision_question question;
         question.id           = id;
@@ -178,7 +214,13 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
                 throw err("\"criteria\" must be a non-empty object");
             }
             for (const auto & [key, description] : criteria.items()) {
+                if (strict_payload && (key.empty() || !(description.is_null() || decision_is_payload(description)))) {
+                    throw err("option keys must be non-empty, descriptions must be null, text, an object or an array");
+                }
                 question.options.push_back({key, description});
+            }
+            if (strict_payload && question.options.size() < 2) {
+                throw err("\"criteria\" must have at least 2 options");
             }
             if (choice_sorted) {
                 std::sort(question.options.begin(), question.options.end(), [](const auto & a, const auto & b) {
@@ -191,12 +233,22 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
                 throw err("\"criteria\" must be an array of 2 to 10 levels");
             }
             for (size_t i = 0; i < criteria.size(); i++) {
+                if (strict_payload && !decision_is_payload(criteria.at(i))) {
+                    throw err("level descriptions must be text, an object or an array");
+                }
                 question.options.push_back({std::to_string(i), criteria.at(i)});
             }
         } else if (type_name == "noul") {
             question.type = SERVER_DECISION_QUESTION_NOUL;
             if (!criteria.is_null() && !criteria.is_object()) {
                 throw err("\"criteria\" must be an object");
+            }
+            if (strict_payload && criteria.is_object()) {
+                for (const auto & [key, description] : criteria.items()) {
+                    if ((key != "false" && key != "true") || !decision_is_payload(description)) {
+                        throw err("\"criteria\" may only describe \"false\" and \"true\" with text, an object or an array");
+                    }
+                }
             }
             for (const char * key : {"false", "true"}) {
                 json description;
@@ -209,7 +261,7 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
                 }
                 question.options.push_back({key, description});
             }
-            if (noul_true_first) {
+            if (noul_true_first || (noul_criteria_order && criteria.is_object() && criteria.size() == 2 && criteria.begin().key() == "true")) {
                 std::swap(question.options[0], question.options[1]);
             }
         } else {
@@ -658,6 +710,11 @@ void server_decision_context::fill_task(
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
         server_task & task) const {
+    // each question has its own prompt, with the spans that the head reads
+    if (type == COMMON_DECISION_TYPE_VLLM_DECISION2) {
+        fill_task_joint(state, { question }, files, mctx, init_opt, task);
+        return;
+    }
     if (type == COMMON_DECISION_TYPE_LFM2_D1_OMNI) {
         fill_task_d1omni(state, questions, question, variant, files, mctx, init_opt, task);
         return;
@@ -1056,6 +1113,32 @@ static double decision_confidence_score(const std::vector<double> & probs) {
     return std::max(0.0, 1.0 - dist / dist_uniform);
 }
 
+// VLLM_DECISION2: normalized entropy, as in the reference implementation
+static double decision_confidence_entropy(const std::vector<double> & probs) {
+    if (probs.size() < 2) {
+        return 1.0;
+    }
+    double entropy = 0.0;
+    for (const double p : probs) {
+        if (p > 0.0) {
+            entropy -= p * std::log(p);
+        }
+    }
+    return std::max(0.0, std::min(1.0, 1.0 - entropy / std::log((double) probs.size())));
+}
+
+double server_decision_context::get_decision_confidence(server_decision_question_type question_type, const std::vector<double> & probs) const {
+    if (type == COMMON_DECISION_TYPE_VLLM_DECISION2) {
+        return decision_confidence_entropy(probs);
+    }
+    switch (question_type) {
+        case SERVER_DECISION_QUESTION_CHOICE: return decision_confidence_choice(probs);
+        case SERVER_DECISION_QUESTION_SCORE:  return decision_confidence_score(probs);
+        case SERVER_DECISION_QUESTION_NOUL:   break;
+    }
+    throw std::runtime_error("no confidence for this question type");
+}
+
 json server_decision_context::format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores, bool has_media) const {
     const size_t n = n_outputs(question);
     if (scores.size() != n_variants(question)) {
@@ -1075,11 +1158,17 @@ json server_decision_context::format_answer(const server_decision_question & que
         if (std::any_of(s.begin(), s.end(), [](float v) { return std::isnan(v); })) {
             throw std::runtime_error("the model could not evaluate the decision");
         }
-        const float score_max = *std::max_element(s.begin(), s.end());
+        std::vector<double> logits(s.begin(), s.end());
+        if (question.type == SERVER_DECISION_QUESTION_SCORE && score_bias.count(n) > 0) {
+            for (size_t i = 0; i < n; i++) {
+                logits[i] += score_bias.at(n)[i];
+            }
+        }
+        const double logit_max = *std::max_element(logits.begin(), logits.end());
         std::vector<double> p(n);
         double sum = 0.0;
         for (size_t i = 0; i < n; i++) {
-            p[i] = std::exp((double) (s[i] - score_max) / temperature);
+            p[i] = std::exp((logits[i] - logit_max) / temperature);
             sum += p[i];
         }
         for (size_t i = 0; i < n; i++) {
@@ -1116,18 +1205,20 @@ json server_decision_context::format_answer(const server_decision_question & que
         const size_t best = std::max_element(probs.begin(), probs.end()) - probs.begin();
         answer["choice"]        = question.options[best].key;
         answer["probabilities"] = probabilities;
-        answer["confidence"]    = decision_confidence_choice(probs);
+        answer["confidence"]    = get_decision_confidence(question.type, probs);
     } else {
         double expected = 0.0;
         json legend = json::object();
         for (size_t i = 0; i < n; i++) {
             expected += i * probs[i];
-            legend[question.options[i].key] = question.options[i].description;
+            const json & description = question.options[i].description;
+            // vllm-decision2 returns structured descriptions as canonical JSON text
+            legend[question.options[i].key] = strict_payload && !description.is_string() ? json(decision_sort_keys(description).dump()) : description;
         }
         answer["score"]         = expected;
         answer["legend"]        = legend;
         answer["probabilities"] = probabilities;
-        answer["confidence"]    = decision_confidence_score(probs);
+        answer["confidence"]    = get_decision_confidence(question.type, probs);
     }
     return answer;
 }

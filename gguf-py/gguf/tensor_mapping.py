@@ -1328,7 +1328,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.DECISION_OPTION_NORM: (
-            "joint_head.option_norm",  # clef
+            "joint_head.option_norm",        # clef
+            "decision_head.candidate_norm",  # vllm-decision2
         ),
 
         MODEL_TENSOR.DECISION_SCORER: (
@@ -1337,6 +1338,27 @@ class TensorNameMap:
 
         MODEL_TENSOR.DECISION_SCORER_OUT: (
             "joint_head.residual_scorer.3",  # clef
+            "decision_head.scalar",          # vllm-decision2
+        ),
+
+        MODEL_TENSOR.DECISION_QUERY_NORM: (
+            "decision_head.query_norm",  # vllm-decision2
+        ),
+
+        MODEL_TENSOR.DECISION_KEY: (
+            "decision_head.key",  # vllm-decision2
+        ),
+
+        MODEL_TENSOR.DECISION_QUERY: (
+            "decision_head.query",  # vllm-decision2
+        ),
+
+        MODEL_TENSOR.DECISION_OPTION_MLP: (
+            "decision_head.candidate_mlp",  # vllm-decision2
+        ),
+
+        MODEL_TENSOR.DECISION_QUERY_MLP: (
+            "decision_head.query_mlp",  # vllm-decision2
         ),
 
         MODEL_TENSOR.ENC_ATTN_NORM: (
