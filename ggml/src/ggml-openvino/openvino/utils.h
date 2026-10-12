@@ -73,6 +73,10 @@ inline bool is_kvcache_4d_shape(const ov::PartialShape & shape) {
            shape[2].is_static() && shape[3].is_static();
 }
 
+// rt_info key on the Reshape that restores the heads after a grouped-query MUL_MAT (mulmat): the number of A rows
+// stacked per B matrix
+constexpr const char * GGML_OV_GROUPED_ROWS = "ggml_ov_grouped_rows";
+
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {
     num_inputs_check(context, 2, 2);

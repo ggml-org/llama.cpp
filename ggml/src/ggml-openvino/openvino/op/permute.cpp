@@ -182,8 +182,18 @@ OutputVector translate_permute(const NodeContext & context) {
             res = std::make_shared<ov::op::v1::Transpose>(restated, perm);
         } else {
             auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+            // the transposed V cache holds one row per value element, [n_seq, rows, ctx]. A model whose layers have
+            // different V sizes allocates the rows for the widest layer (gemma-4: 512, sliding-window layers use the
+            // first 256), so keep this layer's n_heads * head_size rows before splitting them into heads
+            const int64_t cache_rows = cache_shape[3].get_length();
+            ov::Output<ov::Node> v_rows = std::make_shared<ov::op::v1::Reshape>(
+                src, ov::op::v0::Constant::create(ov::element::i64, {3}, {n_seq, cache_rows, ctx_per_seq}), false);
+            if (cache_rows != n_heads * head_size) {
+                v_rows = std::make_shared<ov::op::v8::Slice>(
+                    v_rows, zero, ov::op::v0::Constant::create(ov::element::i64, {1}, {n_heads * head_size}), one, one);
+            }
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
-                src, ov::op::v0::Constant::create(ov::element::i64, {4}, {n_seq, n_heads, head_size, ctx_per_seq}),
+                v_rows, ov::op::v0::Constant::create(ov::element::i64, {4}, {n_seq, n_heads, head_size, ctx_per_seq}),
                 false);
             ov::Output<ov::Node> after_seq_slice;
             if (n_seq == 1) {

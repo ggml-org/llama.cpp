@@ -1545,6 +1545,21 @@ bool GgmlOvDecoder::is_kvcache_4d(const ggml_tensor * cache) const {
     return true;
 }
 
+bool GgmlOvDecoder::is_kvcache_token_rows(const ggml_tensor * cache) const {
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const auto * node = m_cgraph->nodes[i];
+        if (node->op != GGML_OP_SET_ROWS) {
+            continue;
+        }
+        // SET_ROWS writes whole rows of src[2], which is the cache or a view of it
+        const auto * dst = node->src[2];
+        if (dst != nullptr && (dst == cache || dst->view_src == cache) && dst->ne[0] != cache->ne[0]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name) const {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         const auto * node = m_cgraph->nodes[i];

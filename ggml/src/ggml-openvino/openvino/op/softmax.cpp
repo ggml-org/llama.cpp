@@ -1,22 +1,25 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <openvino/op/broadcast.hpp>
 #include <openvino/frontend/exception.hpp>
 #include <openvino/op/add.hpp>
+#include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
+#include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/softmax.hpp>
+#include <openvino/op/tile.hpp>
 #include <vector>
 
 namespace ov {
@@ -61,6 +64,45 @@ OutputVector translate_soft_max(const NodeContext & context) {
     const bool has_mask = context.get_input_size() > 1 && !second_input_is_sinks;
     const bool has_sinks = second_input_is_sinks || context.get_input_size() > 2;
     const size_t sinks_input_idx = second_input_is_sinks ? 1 : 2;
+
+    // Scores of a grouped-query MUL_MAT (mulmat) come as [n, n_heads_kv, factor * rows, cols], reshaped to
+    // [n, n_heads, rows, cols]. Apply the scale, the mask (repeated factor times along the rows) and the softmax to the
+    // grouped scores and reshape after the softmax: the GPU plugin then fuses them with the MatMuls, while a reshape
+    // in between leaves a separate pass over the scores per layer, which is large in prefill.
+    const auto grouped_reshape = ov::as_type_ptr<ov::op::v1::Reshape>(logits.get_node_shared_ptr());
+    if (has_mask && !has_sinks && max_bias <= 0.0f && grouped_reshape &&
+        grouped_reshape->get_rt_info().count(GGML_OV_GROUPED_ROWS) != 0) {
+        const int64_t factor = grouped_reshape->get_rt_info().at(GGML_OV_GROUPED_ROWS).as<int64_t>();
+        ov::Output<ov::Node> grouped = grouped_reshape->input_value(0);
+        if (scale != 1.0f) {
+            grouped = std::make_shared<ov::op::v1::Multiply>(
+                grouped, std::make_shared<ov::op::v0::Constant>(grouped.get_element_type(), ov::Shape{},
+                                                                std::vector<float>{scale}));
+        }
+        ov::Output<ov::Node> mask = context.get_input(1);
+        std::string mask_name = "KQ_mask_sliced";
+        if (context.get_input_names()[1].find("swa") != std::string::npos) {
+            mask_name = "KQ_mask_swa_sliced";
+        }
+        if (context.has_input(mask_name)) {
+            mask = context.get_input(mask_name);
+        }
+        if (mask.get_element_type() != grouped.get_element_type()) {
+            mask = std::make_shared<ov::op::v0::Convert>(mask, grouped.get_element_type());
+        }
+        if (ggml_openvino_is_gpu()) {
+            // the GPU plugin can fuse this attention into its SDPA kernel, which works on blocks of keys: a block fully
+            // masked with -inf for a row gives NaN, so use a large finite value (as flash_attn_ext does)
+            mask = std::make_shared<ov::op::v1::Maximum>(
+                mask, std::make_shared<ov::op::v0::Constant>(mask.get_element_type(), ov::Shape{},
+                                                             std::vector<float>{-30000.0f}));
+        }
+        auto mask_tiled = std::make_shared<ov::op::v0::Tile>(
+            mask, ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, factor, 1}));
+        auto probs = std::make_shared<ov::op::v8::Softmax>(std::make_shared<ov::op::v1::Add>(grouped, mask_tiled), -1);
+        auto res = std::make_shared<ov::op::v1::Reshape>(probs, grouped_reshape->input_value(1), true);
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
 
     // Apply scale first: logits = src0 * scale
     if (scale != 1.0f) {
