@@ -135,7 +135,7 @@ kernel void kernel_mul_mm(
 
     // Store result tile to output matrix (with batch offset)
     // cT.store handles bounds checking via tD's extents (M, N)
-    device float * dstBatch = (device float *)dst + im * N * M;
+    device float * dstBatch = (device float *)dst + (uint64_t) im*N*M;
 
     auto tD = tensor(dstBatch, dextents<int32_t, 2>(M, N), array<int, 2>({1, M}));
     cT.store(tD.slice(ra, rb));
@@ -319,10 +319,10 @@ kernel void kernel_mul_mm(
         // if no bounds checks on the output are needed, we can directly write to device memory
         device float * C = (device float *) dst +
             (r0 + 32*(sgitg &  1)) + \
-            (r1 + 16*(sgitg >> 1)) * args.ne0 + im*args.ne1*args.ne0;
+            (uint64_t) (r1 + 16*(sgitg >> 1))*args.ne0 + (uint64_t) im*args.ne1*args.ne0;
 
         for (short i = 0; i < 8; i++) {
-            simdgroup_store(mc[i], C + 8*(i%4) + 8*args.ne0*(i/4), args.ne0, 0, false);
+            simdgroup_store(mc[i], C + 8*(i%4) + (uint64_t) 8*args.ne0*(i/4), args.ne0, 0, false);
         }
     } else {
         // block is smaller than 64x32, we should avoid writing data outside of the matrix
@@ -338,7 +338,7 @@ kernel void kernel_mul_mm(
 
         if (sgitg == 0) {
             for (int j = tiitg; j < nr1; j += NR1) {
-                device float  * D  = (device float  *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
+                device float  * D  = (device float  *) dst + r0 + (uint64_t) (r1 + j)*args.ne0 + (uint64_t) im*args.ne1*args.ne0;
                 device float4 * D4 = (device float4 *) D;
 
                 threadgroup float  * C  = temp_str + (j*NR0);
@@ -561,7 +561,7 @@ kernel void kernel_mul_mm_id(
     const int id = ids_i32[im*args.ne21 + r1 + lr1];
 
     const short i11 = (id % args.ne20) % args.ne11;
-    const short i12 = (id / args.ne20);
+    const int   i12 = (id / args.ne20);
     const short i13 = 0;
 
     const uint64_t offset0 = im*args.nb02 + i13*args.nb03;
@@ -822,9 +822,9 @@ kernel void kernel_mul_mm_id(
         const int id = ids_i32[im*args.ne21 + r1 + j];
 
         const short ide = id % args.ne20;
-        const short idt = id / args.ne20;
+        const int   idt = id / args.ne20;
 
-        device float  * D  = (device float  *) dst + r0 + ide*args.ne0 + idt*args.ne1*args.ne0;
+        device float  * D  = (device float  *) dst + r0 + (uint64_t) ide*args.ne0 + (uint64_t) idt*args.ne1*args.ne0;
         device float4 * D4 = (device float4 *) D;
 
         threadgroup float  * C  = (threadgroup float  *) shmem + j*NR0;
