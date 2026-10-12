@@ -35,6 +35,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <random>
 #include <regex>
 #include <set>
@@ -8701,6 +8702,95 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+// GGML_OP_FLASH_ATTN_EXT over paged K/V (ggml_flash_attn_ext_set_pages): a pool laid out like the KV cache (all heads
+// of a token in one row) holds the logical pages in shuffled order next to unused pages; with ring_every > 0, every
+// ring_every-th logical page (starting with page 0) is in a ring instead, in reverse order behind an unused page. The
+// table is row 1 of two, row 0 is garbage.
+struct test_flash_attn_ext_paged : public test_case {
+    static constexpr int64_t page = 256;
+
+    const int64_t hs;
+    const int64_t nh;
+    const int64_t nr;
+    const int64_t kv;
+    const int64_t nb;
+    const ggml_type type_K;
+    const ggml_type type_V;
+    const int ring_every;
+
+    std::string vars() override {
+        return VARS_TO_STR8(hs, nh, nr, kv, nb, type_K, type_V, ring_every);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * nh*nr * nb * (2*hs) * kv;
+    }
+
+    test_flash_attn_ext_paged(int64_t hs = 256, int64_t nh = 4, int64_t nr = 6, int64_t kv = 1024, int64_t nb = 1,
+            ggml_type type_K = GGML_TYPE_Q8_0, ggml_type type_V = GGML_TYPE_Q4_0, int ring_every = 0)
+        : hs(hs), nh(nh), nr(nr), kv(kv), nb(nb), type_K(type_K), type_V(type_V), ring_every(ring_every) {}
+
+    int64_t n_pages() const { return kv / page; }
+    int64_t pool_rows() const { return (n_pages() + 3) * page; }
+    int64_t n_ring() const { return ring_every ? (n_pages() + ring_every - 1) / ring_every : 0; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(kv % page == 0);
+
+        auto heads = [&](ggml_type type, int64_t rows, const char * name) {
+            ggml_tensor * t = ggml_new_tensor_2d(ctx, type, hs*nh, rows);
+            ggml_set_name(t, name);
+            return ggml_view_4d(ctx, t, hs, rows, nh, 1, t->nb[1], ggml_row_size(type, hs), ggml_nbytes(t), 0);
+        };
+
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*nr, 1);
+        ggml_set_name(q, "q");
+
+        ggml_tensor * k = heads(type_K, pool_rows(), "k_pool");
+        ggml_tensor * v = heads(type_V, pool_rows(), "v_pool");
+
+        ggml_tensor * rk = ring_every ? heads(type_K, (n_ring() + 1) * page, "k_ring") : nullptr;
+        ggml_tensor * rv = ring_every ? heads(type_V, (n_ring() + 1) * page, "v_ring") : nullptr;
+
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, 1);
+        ggml_set_name(m, "m");
+
+        ggml_tensor * pages = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_pages(), 2);
+        ggml_set_name(pages, "pages");
+
+        ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_pages(out, pages, 1, page, rk, rv);
+        ggml_prec_set_acc(out, GGML_PREC_F32);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "pages") == 0) {
+                std::vector<int32_t> slots(pool_rows() / page);
+                std::iota(slots.begin(), slots.end(), 0);
+                std::shuffle(slots.begin(), slots.end(), std::mt19937(1234));
+                std::vector<int32_t> table(2*n_pages(), INT32_MAX);
+                for (int64_t i = 0; i < n_pages(); ++i) {
+                    table[n_pages() + i] = ring_every && i % ring_every == 0 ? -1 - (int32_t) (n_ring() - i / ring_every) : slots[i];
+                }
+                ggml_backend_tensor_set(t, table.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask(t);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -9954,6 +10044,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int kv : { 256, 1000, 8192, 32768, }) {
         for (int nb : { 1, 2, 3, 4, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+        }
+    }
+    for (int kv : { 256, 1024, 8192, 32768, }) {
+        for (int nb : { 1, 2, 3, 4, }) {
+            for (int ring_every : { 0, 1, 3, }) {
+                test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, ring_every));
+            }
         }
     }
     std::default_random_engine rng(0);
@@ -12735,6 +12832,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (int kv : { 512, 2048, 8192, 32768, 131072, 262144, }) {
         for (int nb : { 1, 2, 3, 4, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+            test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 0));
+            test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 2));
         }
     }
 

@@ -5607,6 +5607,57 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_set_pages(
+        struct ggml_tensor * a,
+        struct ggml_tensor * pages,
+        int32_t              table,
+        int32_t              page_size,
+        struct ggml_tensor * ring_k,
+        struct ggml_tensor * ring_v) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(pages->type == GGML_TYPE_I32 && ggml_is_contiguous(pages) && pages->ne[2] == 1 && pages->ne[3] == 1);
+    GGML_ASSERT(table >= 0 && table < pages->ne[1]);
+    GGML_ASSERT(page_size > 0);
+    GGML_ASSERT((ring_k == NULL) == (ring_v == NULL));
+
+    const struct ggml_tensor * k    = a->src[1];
+    const struct ggml_tensor * v    = a->src[2];
+    const struct ggml_tensor * mask = a->src[3];
+
+    GGML_ASSERT(k->ne[3] == 1 && v->ne[3] == 1);
+    GGML_ASSERT(k->ne[1] % page_size == 0 && v->ne[1] == k->ne[1]);
+    if (mask) {
+        GGML_ASSERT(mask->ne[0] == pages->ne[0]*page_size);
+    }
+    if (ring_k) {
+        GGML_ASSERT(ring_k->type == k->type && ring_k->ne[0] == k->ne[0] && ring_k->ne[2] == k->ne[2]);
+        GGML_ASSERT(ring_v->type == v->type && ring_v->ne[0] == v->ne[0] && ring_v->ne[2] == v->ne[2]);
+        GGML_ASSERT(ring_k->ne[1] % page_size == 0 && ring_v->ne[1] == ring_k->ne[1]);
+    }
+
+    ggml_set_op_params_i32(a, GGML_FA_PARAM_PAGE_SIZE, page_size);
+    ggml_set_op_params_i32(a, GGML_FA_PARAM_PAGES_ROW, table);
+
+    a->src[GGML_FA_SRC_PAGES]  = pages;
+    a->src[GGML_FA_SRC_RING_K] = ring_k;
+    a->src[GGML_FA_SRC_RING_V] = ring_v;
+}
+
+void ggml_flash_attn_ext_set_sync(
+        struct ggml_tensor * a,
+        struct ggml_tensor * tag,
+        const uint32_t     * ready,
+        uint32_t           * consumed) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(tag->type == GGML_TYPE_I32 && ggml_nelements(tag) == 1);
+    GGML_ASSERT(ready && consumed);
+
+    memcpy(a->op_params + GGML_FA_PARAM_READY,    &ready,    sizeof(ready));
+    memcpy(a->op_params + GGML_FA_PARAM_CONSUMED, &consumed, sizeof(consumed));
+
+    a->src[GGML_FA_SRC_TAG] = tag;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(

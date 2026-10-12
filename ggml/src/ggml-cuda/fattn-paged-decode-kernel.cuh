@@ -1,8 +1,7 @@
 #pragma once
 
-// proto/paged-decode: decode attention over a page table for Q8_0 K / Q4_0 V, head size 256, GQA 6, 1-4 query tokens,
-// RDNA4 WMMA. Plain HIP (no ggml dependencies) so the P-3 step harness can include it; ggml's dispatch lives in
-// fattn-paged-decode.cu.
+// Decode attention over contiguous or paged K/V for Q8_0 K / Q4_0 V, head size 256, GQA 6, 1-4 query tokens, RDNA4
+// WMMA. Plain HIP (no ggml dependencies); ggml's dispatch lives in fattn-paged-decode.cu.
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
@@ -41,61 +40,52 @@ static constexpr int PD_V_LOADS = (PD_CHUNK * PD_V_VEC + PD_NWARPS * 32 - 1) / (
 
 static_assert(PD_K_ROW % 16 == 0 && PD_V_ROW % 16 == 0, "rows must allow 16 B loads");
 
-// Rows of one KV head. Pages [0, n_res) are resident: with `pages`, token t lives at pages[t / 256] + (t % 256) * nb1
-// + head * nb2 (page-local strides); without, at base + t * nb1 + head * nb2 (tensor strides, an implicit identity
-// table). Pages from n_res on (with a ring) are streamed: they sit contiguously in the ring slot the kernel selected
-// (`slot`), with page-local strides.
+// Rows of one KV head. Without a table, token t lives at base + t * nb1 + head * nb2. With one, entry e = table[t / 256]
+// is either a pool page (e >= 0: row e * 256 + t % 256 of base) or a ring page (e < 0: row (-1 - e) * 256 + t % 256 of
+// ring). Pool and ring share the row layout (nb1, nb2).
 struct pd_kv {
-    const char *         base;
-    const char * const * pages;
-    int64_t              nb1;
-    int64_t              nb2;
-    int                  n_res      = 1 << 30;
-    const char *         ring       = nullptr;
-    int64_t              slot_bytes = 0;
+    const char *    base;
+    const int32_t * table = nullptr;
+    const char *    ring  = nullptr;
+    int64_t         nb1;
+    int64_t         nb2;
 
-    // Address of token t0's row for `head`, where t0 starts a chunk: a chunk never straddles a page, so the page (and
-    // whether it is resident or in the ring slot) is resolved once per chunk; rows within it are t0's row + r * nb1.
-    template <bool RING>
-    __device__ __forceinline__ const char * chunk(const int t0, const int head, const char * slot) const {
-        const int p = t0 / PD_PAGE;
-        if (RING && p >= n_res) {
-            return slot + (int64_t) (p - n_res) * PD_PAGE * nb1 + (t0 % PD_PAGE) * nb1 + head * nb2;
-        }
-        return pages ? pages[p] + (t0 % PD_PAGE) * nb1 + head * nb2 : base + (int64_t) t0 * nb1 + head * nb2;
+    // Address of token t0's row for `head`, where t0 starts a chunk: a chunk never straddles a page, so the page is
+    // resolved once per chunk (a uniform load); rows within it are t0's row + r * nb1.
+    __device__ __forceinline__ const char * chunk(const int t0, const int head) const {
+        const int e = table[t0 / PD_PAGE];
+        const char * src = e >= 0 ? base : ring;
+        const int64_t page = e >= 0 ? e : -1 - e;
+        return src + (page * PD_PAGE + t0 % PD_PAGE) * nb1 + head * nb2;
     }
 
-    // Per-row form for resident-only launches. Equivalent to chunk(), but this is the form the nb = 3-4 variant
-    // compiled best with (it runs at the VGPR limit, and the per-chunk form cost about 10% there).
+    // Per-row form for contiguous K/V (the form the nb = 3-4 variant compiled best with at the VGPR limit).
     __device__ __forceinline__ const char * row(const int t, const int head) const {
-        return pages ? pages[t / PD_PAGE] + (t % PD_PAGE) * nb1 + head * nb2 : base + t * nb1 + head * nb2;
+        return base + (int64_t) t * nb1 + head * nb2;
     }
 };
 
-// Streamed pages of one layer arrive as one span per step in a ring of n_slots slots: slot (step * n_layers + layer)
-// % n_slots. The copy queue publishes ready[layer] = step + 1 after the span lands; the combine kernel publishes
-// consumed[layer] = step + 1 once every block has read it. Waiters compare with >=, so the flags are monotonic and a
-// copy queue running ahead can never alias a later step's value onto an earlier one. `step` is a device counter advanced
-// at the end of each step graph, so one captured graph serves every step. Disabled when `ready` is null.
-struct pd_ring {
-    const uint32_t * step     = nullptr;
+// K/V written by another queue (ggml_flash_attn_ext_set_sync): the copy queue publishes *ready >= tag once the data has
+// landed; the combine kernel publishes *consumed = tag once every block has read it. Flags are monotonic and compared
+// with >=, so a producer running ahead never aliases a later step's value onto an earlier one. The tag is a graph input
+// in device memory, so one captured graph serves every step. Disabled when `ready` is null.
+struct pd_sync {
+    const int32_t *  tag      = nullptr;
     const uint32_t * ready    = nullptr;
     uint32_t *       consumed = nullptr;
-    int              layer    = 0;
-    int              n_layers = 1;
-    int              n_slots  = 1;
-    // Alternative transport (HSA signals, e.g. ROCR SDMA copies with dependency signals): a pool of n_sig signals per
-    // direction, indexed by global sequence (step * n_layers + layer) % n_sig. ready_sig reaches 0 when the span has
-    // landed (the copies decrement it); the combine kernel stores 0 to clear_sig, which the copy engine polls before
-    // overwriting the slot. The host re-arms both before the step's graph is launched.
-    const int64_t * const * ready_sig = nullptr;
-    int64_t * const *       clear_sig = nullptr;
-    int                     n_sig     = 0;
 
-    __device__ __forceinline__ uint32_t tag() const { return *step + 1; }
-    __device__ __forceinline__ int slot() const { return (int) (((uint64_t) *step * n_layers + layer) % n_slots); }
-    __device__ __forceinline__ int sig() const { return (int) (((uint64_t) *step * n_layers + layer) % n_sig); }
-    __device__ __forceinline__ bool enabled() const { return ready != nullptr || ready_sig != nullptr; }
+    __host__ __device__ __forceinline__ bool enabled() const { return ready != nullptr; }
+
+    __device__ __forceinline__ void wait() const {
+        const uint32_t t = (uint32_t) *tag;
+        while (__hip_atomic_load(ready, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) < t) {
+            __builtin_amdgcn_s_sleep(2);
+        }
+    }
+
+    __device__ __forceinline__ void release() const {
+        __hip_atomic_store(consumed, (uint32_t) *tag, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
+    }
 };
 
 #if PD_RDNA4
@@ -117,8 +107,8 @@ static __device__ __forceinline__ half2 pd_u4x2(const uint32_t n0, const uint32_
     return __hsub2(*(const half2 *) &u, __halves2half2(__float2half(1032.0f), __float2half(1032.0f)));
 }
 
-// RING selects the streamed variant at compile time, so resident-only layers carry no ring logic.
-template <int M_TILES, bool RING>
+// PAGED selects table addressing at compile time, so contiguous K/V carries no table logic.
+template <int M_TILES, bool PAGED>
 #ifndef PD_MIN_WAVES_PER_SIMD
 #define PD_MIN_WAVES_PER_SIMD 6 // keeps every variant at <= 240 VGPRs: 3 blocks of 8 waves per WGP (P-3: the ring variant
                                  // otherwise reached 256 VGPRs, occupancy 5, and lost about 10%)
@@ -127,7 +117,7 @@ template <int M_TILES, bool RING>
 __launch_bounds__(PD_NWARPS * 32, PD_MIN_WAVES_PER_SIMD)
 static __global__ void pd_partial(
         const char * __restrict__ Q, const int64_t q_nb1, const int64_t q_nb2,
-        const pd_kv K, const pd_kv V, const pd_ring ring,
+        const pd_kv K, const pd_kv V, const pd_sync sync,
         const char * __restrict__ mask, const int64_t mask_nb1,
         const float scale, const int n_kv, const int nb, const int n_chunks, const int chunks_per_split,
         float * __restrict__ O_part, float2 * __restrict__ ML_part, const int ablate) {
@@ -193,47 +183,40 @@ static __global__ void pd_partial(
     // (vmcnt waits are in order).
     constexpr int M_LOADS = 4 * PD_CHUNK / (PD_NWARPS * 32);
     half mreg[M_LOADS];
-    constexpr bool streamed = RING;
-    const int  slot = streamed ? ring.slot() : 0;
-    const char * k_slot = streamed ? K.ring + slot * K.slot_bytes : nullptr;
-    const char * v_slot = streamed ? V.ring + slot * V.slot_bytes : nullptr;
-    const int  first_ring_chunk = streamed ? K.n_res * (PD_PAGE / PD_CHUNK) : 1 << 30;
-    // Blocks whose chunk range reaches the streamed pages wait once, before any load, until this step's span has
-    // landed. (Waiting inside the chunk loop put a conditional barrier and a system-scope fence between the prefetch
-    // and its use, which cost about 6% on every layer even when nothing was streamed.)
-    if (RING && c1 > first_ring_chunk) {
-        if (tid == 0) {
-            if (ring.ready_sig) {
-                const int64_t * v = ring.ready_sig[ring.sig()];
-                while (__hip_atomic_load(v, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) != 0) {
-                    __builtin_amdgcn_s_sleep(2);
-                }
-            } else {
-                const uint32_t tag = ring.tag();
-                while (__hip_atomic_load(ring.ready + ring.layer, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) < tag) {
-                    __builtin_amdgcn_s_sleep(2);
-                }
+    // Blocks that read data from another queue wait once, before any load: with a table only those whose chunks reach
+    // a ring page. (Waiting inside the chunk loop put a conditional barrier and a system-scope fence between the
+    // prefetch and its use, which cost about 6% on every layer even when nothing was streamed.)
+    if (sync.enabled()) {
+        bool need = !PAGED;
+        if (PAGED) {
+            for (int p = c0 * PD_CHUNK / PD_PAGE; c0 < c1 && p <= ((c1 - 1) * PD_CHUNK) / PD_PAGE; ++p) {
+                need |= K.table[p] < 0;
             }
         }
-        __syncthreads();
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (need) {
+            if (tid == 0) {
+                sync.wait();
+            }
+            __syncthreads();
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        }
     }
     auto fetch = [&](const int c) {
-        const char * kc = RING ? K.template chunk<RING>(c * PD_CHUNK, head, k_slot) : nullptr;
-        const char * vc = RING ? V.template chunk<RING>(c * PD_CHUNK, head, v_slot) : nullptr;
+        const char * kc = PAGED ? K.chunk(c * PD_CHUNK, head) : nullptr;
+        const char * vc = PAGED ? V.chunk(c * PD_CHUNK, head) : nullptr;
 #pragma unroll
         for (int j = 0; j < PD_K_LOADS; ++j) {
             const int i = tid + j * PD_NWARPS * 32;
             const int r = i / PD_K_VEC, col = i % PD_K_VEC;
             const int t = c * PD_CHUNK + r;
-            kreg[j] = i < PD_CHUNK * PD_K_VEC && t < n_kv ? ((const uint4 *) (RING ? kc + r * K.nb1 : K.row(t, head)))[col] : make_uint4(0, 0, 0, 0);
+            kreg[j] = i < PD_CHUNK * PD_K_VEC && t < n_kv ? ((const uint4 *) (PAGED ? kc + r * K.nb1 : K.row(t, head)))[col] : make_uint4(0, 0, 0, 0);
         }
 #pragma unroll
         for (int j = 0; j < PD_V_LOADS; ++j) {
             const int i = tid + j * PD_NWARPS * 32;
             const int r = i / PD_V_VEC, col = i % PD_V_VEC;
             const int t = c * PD_CHUNK + r;
-            vreg[j] = i < PD_CHUNK * PD_V_VEC && t < n_kv ? ((const uint4 *) (RING ? vc + r * V.nb1 : V.row(t, head)))[col] : make_uint4(0, 0, 0, 0);
+            vreg[j] = i < PD_CHUNK * PD_V_VEC && t < n_kv ? ((const uint4 *) (PAGED ? vc + r * V.nb1 : V.row(t, head)))[col] : make_uint4(0, 0, 0, 0);
         }
 #pragma unroll
         for (int j = 0; j < M_LOADS; ++j) {
@@ -400,17 +383,10 @@ static __global__ void pd_partial(
 // One block per (row, KV head), one thread per output dim.
 static __global__ void pd_combine(
         const float * __restrict__ O_part, const float2 * __restrict__ ML_part, const int n_splits, const int R,
-        char * __restrict__ dst, const int64_t dst_nb1, const int64_t dst_nb2, const pd_ring ring) {
-    // Every partial block has finished (stream order), so the layer's ring slot is free again.
-    if (ring.enabled() && blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0) {
-        if (ring.clear_sig) {
-            __hip_atomic_store(ring.clear_sig[ring.sig()], (int64_t) 0, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
-            // The release store orders earlier writes but can leave the flag's own line in L2; a copy engine polling
-            // memory then sees it only on eviction. Write it back now.
-            __atomic_thread_fence(__ATOMIC_RELEASE);
-        } else {
-            __hip_atomic_store(ring.consumed + ring.layer, ring.tag(), __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
-        }
+        char * __restrict__ dst, const int64_t dst_nb1, const int64_t dst_nb2, const pd_sync sync) {
+    // Every partial block has finished (stream order), so the data they read is free again.
+    if (sync.consumed && blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0) {
+        sync.release();
     }
     const int r = blockIdx.x;
     const int head = blockIdx.y;
@@ -430,22 +406,3 @@ static __global__ void pd_combine(
     float * out = (float *) (dst + (r / PD_GQA) * dst_nb2 + (head * PD_GQA + r % PD_GQA) * dst_nb1);
     out[threadIdx.x] = num / den;
 }
-
-// Debug: copy every page into one of two pools in scrambled order, with page-local layout (token-major, then head).
-static __global__ void pd_scatter_pages(
-        const char * __restrict__ src, const int64_t nb1, const int64_t nb2, const int row_bytes, const int n_heads,
-        const int n_kv, char * __restrict__ pool0, char * __restrict__ pool1, const int slots, const char ** pages) {
-    const int p = blockIdx.x;
-    const int page_bytes = PD_PAGE * n_heads * row_bytes;
-    // Even pages fill pool 0 back to front, odd pages pool 1 front to back.
-    char * page = p % 2 == 0 ? pool0 + (int64_t) (slots - 1 - p / 2) * page_bytes : pool1 + (int64_t) (p / 2) * page_bytes;
-    if (threadIdx.x == 0) {
-        pages[p] = page;
-    }
-    for (int i = threadIdx.x; i < PD_PAGE * n_heads * row_bytes; i += blockDim.x) {
-        const int t = i / (n_heads * row_bytes), h = (i / row_bytes) % n_heads, b = i % row_bytes;
-        const int tg = p * PD_PAGE + t;
-        page[i] = tg < n_kv ? src[tg * nb1 + h * nb2 + b] : 0;
-    }
-}
-

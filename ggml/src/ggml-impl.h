@@ -182,6 +182,36 @@ static void ggml_set_op_params_f32(struct ggml_tensor * tensor, uint32_t i, floa
     ((float *)(tensor->op_params))[i] = value;
 }
 
+// GGML_OP_FLASH_ATTN_EXT with paged K/V and cross-queue sync (ggml_flash_attn_ext_set_pages, ggml_flash_attn_ext_set_sync)
+//   op_params: 0 scale, 1 max_bias, 2 logit_softcap, 3 prec, 4 n_kv_max, 5 page size, 6-7 ready, 8-9 consumed,
+//              10 page table row
+#define GGML_FA_PARAM_PAGE_SIZE 5
+#define GGML_FA_PARAM_READY     6
+#define GGML_FA_PARAM_CONSUMED  8
+#define GGML_FA_PARAM_PAGES_ROW 10
+#define GGML_FA_SRC_PAGES       5
+#define GGML_FA_SRC_RING_K      6
+#define GGML_FA_SRC_RING_V      7
+#define GGML_FA_SRC_TAG         8
+
+static inline const uint32_t * ggml_flash_attn_ext_get_ready(const struct ggml_tensor * t) {
+    const uint32_t * p;
+    memcpy(&p, t->op_params + GGML_FA_PARAM_READY, sizeof(p));
+    return p;
+}
+
+static inline uint32_t * ggml_flash_attn_ext_get_consumed(const struct ggml_tensor * t) {
+    uint32_t * p;
+    memcpy(&p, t->op_params + GGML_FA_PARAM_CONSUMED, sizeof(p));
+    return p;
+}
+
+// the page table of a paged GGML_OP_FLASH_ATTN_EXT, in pages->data
+static inline const int32_t * ggml_flash_attn_ext_get_pages(const struct ggml_tensor * t) {
+    const struct ggml_tensor * pages = t->src[GGML_FA_SRC_PAGES];
+    return (const int32_t *) ((const char *) pages->data + t->op_params[GGML_FA_PARAM_PAGES_ROW]*pages->nb[1]);
+}
+
 struct ggml_map_custom1_op_params {
     ggml_custom1_op_t  fun;
     int                n_tasks;

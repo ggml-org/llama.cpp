@@ -9,6 +9,7 @@
 #include "vec.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 
@@ -9664,7 +9665,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     }
 }
 
-void ggml_compute_forward_flash_attn_ext(
+static void ggml_compute_forward_flash_attn_ext_prec(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     switch (dst->op_params[3]) {
@@ -9679,6 +9680,106 @@ void ggml_compute_forward_flash_attn_ext(
                 GGML_ABORT("fatal error");
             }
     }
+}
+
+// Paged K/V and cross-queue sync (ggml_flash_attn_ext_set_pages, ggml_flash_attn_ext_set_sync): wait for the producer,
+// gather the logical rows into the end of the work buffer, run the contiguous path on them, then release.
+static void ggml_compute_forward_flash_attn_ext_paged(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * k     = dst->src[1];
+    const ggml_tensor * v     = dst->src[2];
+    const ggml_tensor * pages = dst->src[GGML_FA_SRC_PAGES];
+    const ggml_tensor * tag   = dst->src[GGML_FA_SRC_TAG];
+
+    const uint32_t t = tag ? (uint32_t) *(const int32_t *) tag->data : 0;
+    if (tag && params->ith == 0) {
+        const volatile uint32_t * ready = ggml_flash_attn_ext_get_ready(dst);
+        while (*ready < t) {
+        }
+        std::atomic_thread_fence(std::memory_order_acquire);
+    }
+
+    ggml_tensor d = *dst;
+    for (int i = GGML_FA_SRC_PAGES; i <= GGML_FA_SRC_TAG; ++i) {
+        d.src[i] = nullptr;
+    }
+
+    ggml_tensor kg;
+    ggml_tensor vg;
+    if (pages) {
+        const ggml_tensor * ring_k = dst->src[GGML_FA_SRC_RING_K];
+        const ggml_tensor * ring_v = dst->src[GGML_FA_SRC_RING_V];
+        const int64_t page_size = ggml_get_op_params_i32(dst, GGML_FA_PARAM_PAGE_SIZE);
+        const int64_t n_kv = pages->ne[0]*page_size;
+        const int32_t * table = ggml_flash_attn_ext_get_pages(dst);
+
+        // contiguous [D, n_kv, H, 1] copies at the end of the work buffer (ggml_graph_plan reserves the space)
+        const size_t row_k = ggml_row_size(k->type, k->ne[0]);
+        const size_t row_v = ggml_row_size(v->type, v->ne[0]);
+        const size_t size_k = n_kv*row_k*k->ne[2];
+        const size_t size_v = n_kv*row_v*v->ne[2];
+        char * base = (char *) (((uintptr_t) params->wdata + params->wsize - size_k - size_v) & ~(uintptr_t) (CACHE_LINE_SIZE - 1));
+
+        kg = *k;
+        vg = *v;
+        kg.view_src = vg.view_src = nullptr;
+        kg.ne[1] = vg.ne[1] = n_kv;
+        kg.nb[1] = row_k; kg.nb[2] = n_kv*row_k; kg.nb[3] = size_k;
+        vg.nb[1] = row_v; vg.nb[2] = n_kv*row_v; vg.nb[3] = size_v;
+        kg.data = base;
+        vg.data = base + size_k;
+
+        auto gather = [&](const ggml_tensor * pool, const ggml_tensor * ring, ggml_tensor & out, size_t row, int64_t r) {
+            const int64_t h = r / n_kv;
+            const int64_t i = r % n_kv;
+            const int64_t e = table[i / page_size];
+            const ggml_tensor * src_t = e >= 0 ? pool : ring;
+            const int64_t src_row = (e >= 0 ? e : -1 - e)*page_size + i % page_size;
+            GGML_ASSERT(src_t && src_row < src_t->ne[1]);
+            const char * src = (const char *) src_t->data + src_row*src_t->nb[1] + h*src_t->nb[2];
+            memcpy((char *) out.data + i*out.nb[1] + h*out.nb[2], src, row);
+        };
+
+        if (tag) {
+            ggml_barrier(params->threadpool);
+        }
+        const int64_t n_rows_k = n_kv*k->ne[2];
+        const int64_t n_rows   = n_rows_k + n_kv*v->ne[2];
+        for (int64_t r = params->ith; r < n_rows; r += params->nth) {
+            if (r < n_rows_k) {
+                gather(k, ring_k, kg, row_k, r);
+            } else {
+                gather(v, ring_v, vg, row_v, r - n_rows_k);
+            }
+        }
+        ggml_barrier(params->threadpool);
+
+        d.src[1] = &kg;
+        d.src[2] = &vg;
+    } else if (tag) {
+        ggml_barrier(params->threadpool);
+    }
+
+    ggml_compute_forward_flash_attn_ext_prec(params, &d);
+
+    if (tag) {
+        ggml_barrier(params->threadpool);
+        if (params->ith == 0) {
+            std::atomic_thread_fence(std::memory_order_release);
+            *(volatile uint32_t *) ggml_flash_attn_ext_get_consumed(dst) = t;
+        }
+    }
+}
+
+void ggml_compute_forward_flash_attn_ext(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    if (dst->src[GGML_FA_SRC_PAGES] || dst->src[GGML_FA_SRC_TAG]) {
+        ggml_compute_forward_flash_attn_ext_paged(params, dst);
+        return;
+    }
+    ggml_compute_forward_flash_attn_ext_prec(params, dst);
 }
 
 // ggml_compute_forward_flash_attn_back

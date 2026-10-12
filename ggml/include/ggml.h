@@ -2518,6 +2518,28 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Paged K/V: k and v hold a pool of pages of page_size rows ([n_embd, n_pool_rows, n_head_kv, 1]), and the attended
+    // sequence is pages->ne[0]*page_size rows long (the mask's ne[0]). pages (I32 [n_pages, n_tables]) holds page tables,
+    // of which row `table` is used (e.g. one table per layer in one input). In it, entry i >= 0 is the pool page that
+    // holds logical page i, and entry i < 0 means logical page i is page -1 - entry of ring_k/ring_v (same row layout as
+    // k/v). ring_k and ring_v may be NULL if no entry is negative.
+    GGML_API void ggml_flash_attn_ext_set_pages(
+            struct ggml_tensor * a,
+            struct ggml_tensor * pages,
+            int32_t              table,
+            int32_t              page_size,
+            struct ggml_tensor * ring_k,
+            struct ggml_tensor * ring_v);
+
+    // K/V written by another queue (e.g. a copy engine): the op waits until *ready >= tag[0] before it reads them (only
+    // the ring when pages are set) and stores *consumed = tag[0] once it no longer needs them. ready and consumed must be
+    // visible to the host and the backend (e.g. pinned host memory). tag: I32 [1].
+    GGML_API void ggml_flash_attn_ext_set_sync(
+            struct ggml_tensor * a,
+            struct ggml_tensor * tag,
+            const uint32_t     * ready,
+            uint32_t           * consumed);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,

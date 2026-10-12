@@ -3005,6 +3005,16 @@ struct ggml_cplan ggml_graph_plan(
                         size_t decode   = sizeof(float)*(neq2*n_chunks*(2+DV) + n_tasks*(DK + 2*DV));
 
                         cur += MAX(prefill, decode);
+
+                        // paged K/V are gathered into contiguous copies at the end of the work buffer
+                        const struct ggml_tensor * pages = node->src[GGML_FA_SRC_PAGES];
+                        if (pages) {
+                            const struct ggml_tensor * k = node->src[1];
+                            const struct ggml_tensor * v = node->src[2];
+                            const int64_t n_kv = pages->ne[0]*ggml_get_op_params_i32(node, GGML_FA_PARAM_PAGE_SIZE);
+                            cur += n_kv*(ggml_row_size(k->type, k->ne[0])*k->ne[2] + ggml_row_size(v->type, v->ne[0])*v->ne[2]);
+                            cur += 2*CACHE_LINE_SIZE;
+                        }
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {

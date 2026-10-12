@@ -729,6 +729,11 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     GGML_ASSERT(K != nullptr);
     GGML_ASSERT(V != nullptr);
 
+    // no f16 copies of K/V
+    if (ggml_cuda_fattn_paged_decode_enabled(device, dst)) {
+        return ggml_nbytes(dst);
+    }
+
     const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(device, dst);
 
     bool need_f16_K = false;
@@ -757,10 +762,11 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-    if (ggml_cuda_fattn_paged_decode_enabled(dst)) {
+    if (ggml_cuda_fattn_paged_decode_enabled(ctx.device, dst)) {
         ggml_cuda_flash_attn_ext_paged_decode(ctx, dst);
         return;
     }
+    ggml_cuda_fattn_sync_wait(ctx, dst);
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
@@ -774,8 +780,13 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
             break;
     }
+    ggml_cuda_fattn_sync_release(ctx, dst);
 }
 
 bool ggml_cuda_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
-    return ggml_cuda_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
+    if (dst->src[GGML_FA_SRC_PAGES]) {
+        return ggml_cuda_fattn_paged_decode_enabled(device, dst);
+    }
+    return ggml_cuda_fattn_paged_decode_enabled(device, dst) ||
+        ggml_cuda_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
 }
