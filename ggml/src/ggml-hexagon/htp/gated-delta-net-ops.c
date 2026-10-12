@@ -2269,6 +2269,197 @@ static int gated_delta_net_f32_hmx_chunked(
     return HTP_STATUS_OK;
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------
+// Chunked GDN prefill on HVX (f32), scalar gate, S_v = 128. Same math as gdn_step_scalar_f32, but C tokens per pass
+// over the state: the state is kept transposed (ST[i][j] = S[j][i], i = key, j = value) so every product is a
+// vector AXPY (no horizontal sums), and the state is read once and written once per chunk instead of twice per token.
+//   Gam_t = prod_{s<=t} g_s (g = exp(gate)),  P_t = ST^T k_t,  R_t = ST^T q_t   (ST = state at chunk start)
+//   d_t = beta_t (v_t - Gam_t P_t - sum_{s<t} Gam_t/Gam_s (k_s.k_t) d_s)
+//   o_t = scale (Gam_t R_t + sum_{s<=t} Gam_t/Gam_s (k_s.q_t) d_s)
+//   ST' = Gam_C ST + sum_t Gam_C/Gam_t k_t d_t^T
+#ifndef HTP_GDN_CHUNKED_HVX
+#define HTP_GDN_CHUNKED_HVX 1
+#endif
+#define GDNC_C  8
+#define GDNC_SV 128
+
+struct gdnc_scratch {                        // in cacheable DDR (scalar reads from VTCM are slow); only the state lives in VTCM
+    float K[GDNC_C][GDNC_SV], Q[GDNC_C][GDNC_SV], V[GDNC_C][GDNC_SV], WK[GDNC_C][GDNC_SV];
+    float P[GDNC_C][GDNC_SV], R[GDNC_C][GDNC_SV], D[GDNC_C][GDNC_SV];
+    HVX_Vector m[32], tmp[32];
+};
+static struct gdnc_scratch gdnc_scr[HTP_MAX_NTHREADS] __attribute__((aligned(128)));
+
+static inline HVX_Vector gdnc_fma(HVX_Vector acc_qf, HVX_Vector a_sf, HVX_Vector b_sf) {
+    return Q6_Vqf32_vadd_Vqf32Vqf32(acc_qf, Q6_Vqf32_vmpy_VsfVsf(a_sf, b_sf));
+}
+
+static inline float gdnc_dot128(const float * restrict a, const float * restrict b) {
+    HVX_Vector acc = Q6_V_vzero();
+    for (int v = 0; v < 4; v++) acc = gdnc_fma(acc, ((const HVX_Vector *) a)[v], ((const HVX_Vector *) b)[v]);
+    return hvx_vec_get_f32(hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(acc)));
+}
+
+static void gdnc_transpose128(float * restrict dst, const float * restrict src, struct gdnc_scratch * sc) {
+    for (int bi = 0; bi < 4; bi++) {
+        for (int bj = 0; bj < 4; bj++) {
+            for (int r = 0; r < 32; r++) sc->m[r] = *(const HVX_Vector *) (src + (bj * 32 + r) * GDNC_SV + bi * 32);
+            hvx_transpose_32x32_words(sc->m, sc->tmp);
+            for (int r = 0; r < 32; r++) *(HVX_Vector *) (dst + (bi * 32 + r) * GDNC_SV + bj * 32) = sc->m[r];
+        }
+    }
+}
+
+// One chunk of nc <= GDNC_C tokens; inputs in sc->K/Q/V (rows t >= nc zeroed), log-gates lg[] (<= 0), betas b[].
+// Decay ratios are exp of log-gate differences: products of gates underflow (0/0) for fast-decaying heads.
+static void gdnc_chunk(float * restrict ST, struct gdnc_scratch * restrict sc, int nc, const float * lg, const float * b,
+                       float scale, float * restrict attn, size_t attn_stride) {
+    float cl[GDNC_C], gam[GDNC_C];               // cumulative log decay, and its exp
+    float acc = 0.0f;
+    for (int t = 0; t < GDNC_C; t++) { if (t < nc) acc += lg[t]; cl[t] = acc; gam[t] = expf(acc); }
+
+    // pass 1: P_t = ST^T k_t, R_t = ST^T q_t (fixed C, padded rows are zero)
+    for (int jv = 0; jv < 4; jv++) {
+        HVX_Vector ak0 = Q6_V_vzero(), ak1 = ak0, ak2 = ak0, ak3 = ak0, ak4 = ak0, ak5 = ak0, ak6 = ak0, ak7 = ak0;
+        HVX_Vector aq0 = ak0, aq1 = ak0, aq2 = ak0, aq3 = ak0, aq4 = ak0, aq5 = ak0, aq6 = ak0, aq7 = ak0;
+        const float * restrict k0 = sc->K[0], * restrict q0 = sc->Q[0];
+        for (int i = 0; i < GDNC_SV; i++) {
+            const HVX_Vector sv = *(const HVX_Vector *) (ST + i * GDNC_SV + jv * 32);
+#define GDNC_P(t) ak##t = gdnc_fma(ak##t, hvx_vec_splat_f32(k0[(t) * GDNC_SV + i]), sv); \
+                  aq##t = gdnc_fma(aq##t, hvx_vec_splat_f32(q0[(t) * GDNC_SV + i]), sv);
+            GDNC_P(0) GDNC_P(1) GDNC_P(2) GDNC_P(3) GDNC_P(4) GDNC_P(5) GDNC_P(6) GDNC_P(7)
+#undef GDNC_P
+        }
+#define GDNC_ST(t) *(HVX_Vector *) &sc->P[t][jv * 32] = Q6_Vsf_equals_Vqf32(ak##t); *(HVX_Vector *) &sc->R[t][jv * 32] = Q6_Vsf_equals_Vqf32(aq##t);
+        GDNC_ST(0) GDNC_ST(1) GDNC_ST(2) GDNC_ST(3) GDNC_ST(4) GDNC_ST(5) GDNC_ST(6) GDNC_ST(7)
+#undef GDNC_ST
+    }
+
+    // intra-chunk: deltas and outputs, token by token
+    const HVX_Vector vscale = hvx_vec_splat_f32(scale);
+    for (int t = 0; t < nc; t++) {
+        float ckk[GDNC_C], ckq[GDNC_C];
+        for (int s2 = 0; s2 < t; s2++)  ckk[s2] = expf(cl[t] - cl[s2]) * gdnc_dot128(sc->K[s2], sc->K[t]);
+        for (int s2 = 0; s2 <= t; s2++) ckq[s2] = expf(cl[t] - cl[s2]) * gdnc_dot128(sc->K[s2], sc->Q[t]);
+        const HVX_Vector vgam = hvx_vec_splat_f32(gam[t]), vbeta = hvx_vec_splat_f32(b[t]);
+        for (int jv = 0; jv < 4; jv++) {
+            HVX_Vector vp = Q6_Vqf32_vmpy_VsfVsf(vgam, *(const HVX_Vector *) &sc->P[t][jv * 32]);
+            for (int s2 = 0; s2 < t; s2++) vp = gdnc_fma(vp, hvx_vec_splat_f32(ckk[s2]), *(const HVX_Vector *) &sc->D[s2][jv * 32]);
+            HVX_Vector diff = Q6_Vqf32_vsub_VsfVsf(*(const HVX_Vector *) &sc->V[t][jv * 32], Q6_Vsf_equals_Vqf32(vp));
+            *(HVX_Vector *) &sc->D[t][jv * 32] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(diff), vbeta));
+        }
+        for (int jv = 0; jv < 4; jv++) {
+            HVX_Vector o = Q6_Vqf32_vmpy_VsfVsf(vgam, *(const HVX_Vector *) &sc->R[t][jv * 32]);
+            for (int s2 = 0; s2 <= t; s2++) o = gdnc_fma(o, hvx_vec_splat_f32(ckq[s2]), *(const HVX_Vector *) &sc->D[s2][jv * 32]);
+            hvx_vmemu(attn + (size_t) t * attn_stride + jv * 32) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(o), vscale));
+        }
+    }
+    for (int t = nc; t < GDNC_C; t++) for (int jv = 0; jv < 4; jv++) *(HVX_Vector *) &sc->D[t][jv * 32] = Q6_V_vzero();
+
+    // pass 3: ST' = Gam_C ST + sum_t Gam_C/Gam_t k_t d_t^T  (WK[t][i] = Gam_C/Gam_t * k_t[i])
+    const float gc = gam[GDNC_C - 1];
+    for (int t = 0; t < GDNC_C; t++) {
+        const HVX_Vector vw = hvx_vec_splat_f32(expf(cl[GDNC_C - 1] - cl[t]));
+        for (int jv = 0; jv < 4; jv++)
+            *(HVX_Vector *) &sc->WK[t][jv * 32] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(vw, *(const HVX_Vector *) &sc->K[t][jv * 32]));
+    }
+    const HVX_Vector vgc = hvx_vec_splat_f32(gc);
+    const float * restrict wk = sc->WK[0];
+    for (int jv = 0; jv < 4; jv++) {
+        const HVX_Vector d0 = *(const HVX_Vector *) &sc->D[0][jv * 32], d1 = *(const HVX_Vector *) &sc->D[1][jv * 32];
+        const HVX_Vector d2 = *(const HVX_Vector *) &sc->D[2][jv * 32], d3 = *(const HVX_Vector *) &sc->D[3][jv * 32];
+        const HVX_Vector d4 = *(const HVX_Vector *) &sc->D[4][jv * 32], d5 = *(const HVX_Vector *) &sc->D[5][jv * 32];
+        const HVX_Vector d6 = *(const HVX_Vector *) &sc->D[6][jv * 32], d7 = *(const HVX_Vector *) &sc->D[7][jv * 32];
+        for (int i = 0; i < GDNC_SV; i++) {
+            HVX_Vector * sp = (HVX_Vector *) (ST + i * GDNC_SV + jv * 32);
+            HVX_Vector a = Q6_Vqf32_vmpy_VsfVsf(vgc, *sp);
+#define GDNC_U(t) a = gdnc_fma(a, hvx_vec_splat_f32(wk[(t) * GDNC_SV + i]), d##t);
+            GDNC_U(0) GDNC_U(1) GDNC_U(2) GDNC_U(3) GDNC_U(4) GDNC_U(5) GDNC_U(6) GDNC_U(7)
+#undef GDNC_U
+            *sp = Q6_Vsf_equals_Vqf32(a);
+        }
+    }
+}
+
+static void gated_delta_net_f32_pp_chunked_thread(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_gdn_context * gctx = (struct htp_gdn_context *) data;
+    struct htp_ops_context * octx = gctx->octx;
+    const struct htp_gdn_kernel_params * kparams = gctx->kparams;
+
+    const struct htp_tensor * q     = octx->src[0];
+    const struct htp_tensor * k     = octx->src[1];
+    const struct htp_tensor * v     = octx->src[2];
+    const struct htp_tensor * g     = octx->src[3];
+    const struct htp_tensor * beta  = octx->src[4];
+    const struct htp_tensor * state = octx->src[5];
+    const struct htp_tensor * dst   = octx->dst;
+
+    const uint32_t S_v      = kparams->S_v;
+    const uint32_t H        = kparams->H;
+    const uint32_t n_tokens = kparams->n_tokens;
+    const uint32_t n_seqs   = kparams->n_seqs;
+    const uint32_t row_end  = gctx->row_start + gctx->nrows;
+    if (ith >= gctx->nrows) return;
+
+    const struct htp_tensor * dst_cache = octx->dsts[1];
+    float * dst_base = (float *) (uintptr_t) dst->data;
+    const dma_addr_t state_out_dma_base = dst_cache ? dst_cache->data : (dst->data + S_v * H * n_tokens * n_seqs * sizeof(float));
+
+    dma_queue * dma_q = octx->ctx->dma[ith];
+    const struct htp_gdn_vtcm_layout * layout = &gctx->layout;
+    float * S  = (float *) (gctx->vtcm_base + layout->bytes_per_thread * ith);
+    float * ST = S + layout->state_aligned / sizeof(float);
+    struct gdnc_scratch * sc = &gdnc_scr[ith];
+
+    for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
+        const uint32_t iv1 = fastmodulo(ir, H, &kparams->div_H);
+        const uint32_t iv3 = fastdiv(ir, &kparams->div_H);
+        const uint32_t iq1 = fastmodulo(iv1, q->ne[1], &kparams->div_q1);
+        const uint32_t ik1 = fastmodulo(iv1, k->ne[1], &kparams->div_k1);
+        const uint32_t iq3 = fastdiv(iv3, &kparams->div_rq3);
+        const uint32_t ik3 = fastdiv(iv3, &kparams->div_rk3);
+
+        const dma_addr_t s_in  = state->data + ((uint64_t) iv3 * kparams->state_seq_stride + (uint64_t) iv1 * S_v * S_v) * sizeof(float);
+        const dma_addr_t s_out = state_out_dma_base + ((uint64_t) iv3 * H + iv1) * S_v * S_v * sizeof(float);
+        dma_queue_push(dma_q, dma_make_data(S, s_in), S_v * sizeof(float), S_v * sizeof(float), S_v * sizeof(float), S_v);
+        dma_queue_pop(dma_q);
+        gdnc_transpose128(ST, S, sc);
+
+        float * attn = dst_base + ((uint64_t) iv3 * n_tokens * H + iv1) * S_v;
+        for (uint32_t t0 = 0; t0 < n_tokens; t0 += GDNC_C) {
+            const int nc = (int) (n_tokens - t0 < GDNC_C ? n_tokens - t0 : GDNC_C);
+            float gg[GDNC_C], bb[GDNC_C];
+            for (int t = nc; t < GDNC_C; t++) {
+                for (int jv = 0; jv < 4; jv++) {
+                    *(HVX_Vector *) &sc->K[t][jv * 32] = Q6_V_vzero();
+                    *(HVX_Vector *) &sc->Q[t][jv * 32] = Q6_V_vzero();
+                }
+            }
+            for (int t = 0; t < nc; t++) {
+                const uint32_t tt = t0 + t;
+                const float * q_t = (const float *) ((const uint8_t *) (uintptr_t) q->data + (uint64_t) iq3 * q->nb[3] + (uint64_t) tt * q->nb[2] + (uint64_t) iq1 * q->nb[1]);
+                const float * k_t = (const float *) ((const uint8_t *) (uintptr_t) k->data + (uint64_t) ik3 * k->nb[3] + (uint64_t) tt * k->nb[2] + (uint64_t) ik1 * k->nb[1]);
+                const float * v_t = (const float *) ((const uint8_t *) (uintptr_t) v->data + (uint64_t) iv3 * v->nb[3] + (uint64_t) tt * v->nb[2] + (uint64_t) iv1 * v->nb[1]);
+                const float * g_t = (const float *) ((const uint8_t *) (uintptr_t) g->data + (uint64_t) iv3 * g->nb[3] + (uint64_t) tt * g->nb[2] + (uint64_t) iv1 * g->nb[1]);
+                const float * b_t = (const float *) ((const uint8_t *) (uintptr_t) beta->data + (uint64_t) iv3 * beta->nb[3] + (uint64_t) tt * beta->nb[2] + (uint64_t) iv1 * beta->nb[1]);
+                for (int jv = 0; jv < 4; jv++) {
+                    *(HVX_Vector *) &sc->K[t][jv * 32] = hvx_vmemu(k_t + jv * 32);
+                    *(HVX_Vector *) &sc->Q[t][jv * 32] = hvx_vmemu(q_t + jv * 32);
+                    *(HVX_Vector *) &sc->V[t][jv * 32] = hvx_vmemu(v_t + jv * 32);
+                }
+                gg[t] = g_t[0];
+                bb[t] = b_t[0];
+            }
+            gdnc_chunk(ST, sc, nc, gg, bb, kparams->scale, attn + (size_t) t0 * S_v * H, (size_t) S_v * H);
+        }
+
+        gdnc_transpose128(S, ST, sc);
+        dma_queue_push(dma_q, dma_make_data(s_out, S), S_v * sizeof(float), S_v * sizeof(float), S_v * sizeof(float), S_v);
+        dma_queue_pop(dma_q);
+    }
+}
+
 int op_gated_delta_net(struct htp_ops_context * octx) {
     const struct htp_tensor * q     = octx->src[0];
     const struct htp_tensor * k     = octx->src[1];
@@ -2440,7 +2631,9 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
          gctx.layout.total_bytes, n_threads);
 
-    if (n_tokens == 1) {
+    if (HTP_GDN_CHUNKED_HVX && n_tokens > 1 && !kparams->kda && kparams->K <= 1 && S_v == GDNC_SV && n_threads <= HTP_MAX_NTHREADS) {
+        work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_pp_chunked_thread, &gctx, n_threads);
+    } else if (n_tokens == 1) {
         work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_tg_thread, &gctx, n_threads);
     } else {
         work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_pp_thread, &gctx, n_threads);

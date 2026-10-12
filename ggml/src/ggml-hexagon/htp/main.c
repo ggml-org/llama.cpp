@@ -35,6 +35,7 @@
 #include "hex-profile.h"
 #include "allreduce-ops.h"
 #include "htp-fence.h"
+#include "hmx-utils.h"
 
 #define HMX_QUEUE_CAPACITY     128
 #define HMX_QUEUE_STACK_SIZE   16384
@@ -567,6 +568,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 #endif
 
     ctx->hmx_enabled = n_hmx;
+    ctx->hmx_fp16    = true;
     ctx->hmx_queue   = NULL;
     if (n_hmx) {
         void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
@@ -665,6 +667,57 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     free(ctx);
     h->ctx = NULL;
 
+    return AEE_SUCCESS;
+}
+
+// HMX FP16 probe: one FP16 tile of ones times one tile of ones must give 32.0.
+// Some v73 parts (SM7750) report HMX but have no FP16 mode: the result is 0.
+// Runs on the HMX thread (no HVX context there), so the tiles are filled with scalar stores.
+struct htp_hmx_probe {
+    uint8_t * vtcm;
+    int       ok;
+};
+
+static void htp_hmx_fp16_probe_fn(void * data) {
+    struct htp_hmx_probe * p = (struct htp_hmx_probe *) data;
+    volatile uint16_t * act = (volatile uint16_t *) (p->vtcm);
+    volatile uint16_t * wt  = (volatile uint16_t *) (p->vtcm + 2048);
+    volatile uint16_t * out = (volatile uint16_t *) (p->vtcm + 4096);
+    volatile uint32_t * sc  = (volatile uint32_t *) (p->vtcm + 6144);
+
+    #pragma clang loop vectorize(disable) unroll(disable)
+    for (int i = 0; i < 1024; i++) { act[i] = 0x3c00; wt[i] = 0x3c00; out[i] = 0x5555; }
+    #pragma clang loop vectorize(disable) unroll(disable)
+    for (int i = 0; i < 64; i++) { sc[i] = i < 32 ? 0x3c00 : 0; }   // scale 1.0, bias 0
+
+    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int) sc));
+    asm volatile(HMX_CLRACC_F16());
+    asm volatile(HMX_LOAD_MPY_F16("%1", "%2", "%0") :: "r"(2047), "r"(act), "r"(wt) : "memory");
+    asm volatile(HMX_STORE_AFTER_F16("%0", "%1") :: "r"(out), "r"(0) : "memory");
+
+    p->ok = out[0] == 0x5000 && out[511] == 0x5000 && out[1023] == 0x5000;   // 32.0
+}
+
+AEEResult htp_iface_hmx_probe(remote_handle64 handle, int32_t force, uint32_t * fp16) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h || !h->ctx || !fp16) {
+        return AEE_EBADPARM;
+    }
+    struct htp_context * ctx = h->ctx;
+
+    int ok = 1;
+    if (ctx->hmx_enabled && ctx->hmx_queue) {
+        struct htp_hmx_probe p = { ctx->vtcm_base, 0 };
+        vtcm_acquire(ctx);
+        hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(htp_hmx_fp16_probe_fn, &p));
+        hmx_queue_pop(ctx->hmx_queue);
+        vtcm_release(ctx);
+        ok = p.ok;
+    }
+    FARF(HIGH, "ggml-hex: HMX FP16 probe: %s (force %d)", ok ? "ok" : "not supported", (int) force);
+
+    ctx->hmx_fp16 = force >= 0 ? (force != 0) : (ok != 0);
+    *fp16 = ok;
     return AEE_SUCCESS;
 }
 
