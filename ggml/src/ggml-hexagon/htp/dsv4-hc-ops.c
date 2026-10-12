@@ -77,11 +77,11 @@ static inline HVX_Vector dsv4_hc_fast_sigmoid_f32_guard_2it(
     return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
 }
 
-static inline void dsv4_hc_l2fetch_4rows(const uint8_t * p, size_t row_stride, uint32_t i0, uint32_t n_cols) {
+static inline void dsv4_hc_l2fetch_rows(const uint8_t * p, size_t row_stride, uint32_t i0, uint32_t n_cols, uint32_t n_rows) {
     if (row_stride > 0xFFFF) {
         return;
     }
-    hex_l2fetch(p + i0*sizeof(float), n_cols*sizeof(float), row_stride, 4);
+    hex_l2fetch(p + i0*sizeof(float), n_cols*sizeof(float), row_stride, n_rows);
 }
 
 #define DSV4_HC_PF_CHUNKS 16
@@ -92,7 +92,8 @@ static inline void dsv4_hc_prefetch_gated(
         const struct htp_tensor * g,
         uint32_t it,
         uint32_t c,
-        uint32_t n_chunks) {
+        uint32_t n_chunks,
+        uint32_t n_hc) {
     uint32_t c0 = (c / DSV4_HC_PF_CHUNKS + 1) * DSV4_HC_PF_CHUNKS;
     if (c0 >= n_chunks) {
         c0 = 0;
@@ -100,8 +101,8 @@ static inline void dsv4_hc_prefetch_gated(
     }
     const uint32_t i0     = c0 * VLEN_FP32;
     const uint32_t n_cols = MIN(DSV4_HC_PF_CHUNKS * VLEN_FP32, x->ne[0] - i0);
-    dsv4_hc_l2fetch_4rows((const uint8_t *) x->data + it*x->nb[2], x->nb[1], i0, n_cols);
-    dsv4_hc_l2fetch_4rows((const uint8_t *) g->data + it*g->nb[2], g->nb[1], i0, n_cols);
+    dsv4_hc_l2fetch_rows((const uint8_t *) x->data + it*x->nb[2], x->nb[1], i0, n_cols, n_hc);
+    dsv4_hc_l2fetch_rows((const uint8_t *) g->data + it*g->nb[2], g->nb[1], i0, n_cols, n_hc);
 }
 
 static inline void dsv4_hc_pre_tail_f32(
@@ -114,11 +115,12 @@ static inline void dsv4_hc_pre_tail_f32(
         uint32_t i0,
         uint32_t it,
         uint32_t n,
+        uint32_t n_hc,
         float scale,
         int gated) {
     for (uint32_t c = 0; c < n; ++c) {
         float sum = 0.0f;
-        for (uint32_t ih = 0; ih < 4; ++ih) {
+        for (uint32_t ih = 0; ih < n_hc; ++ih) {
             const float xv = *(const float *) (x_data + (i0 + c)*x->nb[0] + ih*x->nb[1] + it*x->nb[2]);
             float wv;
             if (gated) {
@@ -169,7 +171,7 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
 
         // plain path is cheap per chunk, so fetch the whole next token
         if (job < end) {
-            dsv4_hc_l2fetch_4rows(x_data + (it + 1)*x->nb[2], x->nb[1], 0, MIN(n_embd, (end - job)*VLEN_FP32));
+            dsv4_hc_l2fetch_rows(x_data + (it + 1)*x->nb[2], x->nb[1], 0, MIN(n_embd, (end - job)*VLEN_FP32), 4);
         }
 
         const uint8_t * wb = weights_data + it*weights->nb[1];
@@ -184,7 +186,7 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
             const uint32_t n  = MIN(VLEN_FP32, n_embd - i0);
 
             if (n != VLEN_FP32) {
-                dsv4_hc_pre_tail_f32(x, weights, dst, x_data, weights_data, dst_data, i0, it, n, dctx->scale, 0);
+                dsv4_hc_pre_tail_f32(x, weights, dst, x_data, weights_data, dst_data, i0, it, n, 4, dctx->scale, 0);
                 continue;
             }
 
@@ -250,14 +252,14 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
         for (; chunk < chunk_end; ++chunk, ++job) {
             const uint32_t c_pf = chunk % DSV4_HC_PF_CHUNKS;
             if ((c_pf == 0 || job == start) && job + MIN(DSV4_HC_PF_CHUNKS - c_pf, n_chunks - chunk) < end) {
-                dsv4_hc_prefetch_gated(x, weights, it, chunk, n_chunks);
+                dsv4_hc_prefetch_gated(x, weights, it, chunk, n_chunks, 4);
             }
 
             const uint32_t i0 = chunk * VLEN_FP32;
             const uint32_t n  = MIN(VLEN_FP32, n_embd - i0);
 
             if (n != VLEN_FP32) {
-                dsv4_hc_pre_tail_f32(x, weights, dst, x_data, weights_data, dst_data, i0, it, n, dctx->scale, 1);
+                dsv4_hc_pre_tail_f32(x, weights, dst, x_data, weights_data, dst_data, i0, it, n, 4, dctx->scale, 1);
                 continue;
             }
 
@@ -282,6 +284,160 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
 
             acc = hvx_vec_mul_f32_f32(acc, scale_v);
             hvx_vec_store_u(db, n * sizeof(float), acc);
+        }
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    (void) nth;
+}
+
+static void dsv4_hc_pre_thread_plain_generic_f32(unsigned int nth, unsigned int ith, void * data) {
+    struct dsv4_hc_pre_context * dctx = (struct dsv4_hc_pre_context *) data;
+    struct htp_ops_context *     octx = dctx->octx;
+
+    const struct htp_tensor * x       = octx->src[0];
+    const struct htp_tensor * weights = octx->src[1];
+    const struct htp_tensor * dst     = octx->dst;
+
+    const uint8_t * x_data       = (const uint8_t *) x->data;
+    const uint8_t * weights_data = (const uint8_t *) weights->data;
+    uint8_t *       dst_data     = (uint8_t *) dst->data;
+
+    const uint32_t n_embd = x->ne[0];
+    const uint32_t n_hc   = x->ne[1];
+    const uint32_t start  = dctx->jobs_per_thread * ith;
+    const uint32_t end    = MIN(start + dctx->jobs_per_thread, dctx->total_jobs);
+
+    if (start >= end) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    const HVX_Vector scale_v = hvx_vec_splat_f32(dctx->scale);
+
+    const uint32_t n_chunks = dctx->n_chunks;
+    uint32_t       it       = fastdiv(start, &dctx->kparams->div_n_chunks);
+    uint32_t       chunk    = start - it*n_chunks;
+    it += dctx->token_start;
+
+    for (uint32_t job = start; job < end; ++it, chunk = 0) {
+        const uint32_t chunk_end = MIN(n_chunks, chunk + (end - job));
+        job += chunk_end - chunk;
+
+        if (job < end) {
+            dsv4_hc_l2fetch_rows(x_data + (it + 1)*x->nb[2], x->nb[1], 0, MIN(n_embd, (end - job)*VLEN_FP32), n_hc);
+        }
+
+        const uint8_t * wb = weights_data + it*weights->nb[1];
+
+        for (; chunk < chunk_end; ++chunk) {
+            const uint32_t i0 = chunk * VLEN_FP32;
+            const uint32_t n  = MIN(VLEN_FP32, n_embd - i0);
+
+            if (n != VLEN_FP32) {
+                dsv4_hc_pre_tail_f32(x, weights, dst, x_data, weights_data, dst_data, i0, it, n, n_hc, dctx->scale, 0);
+                continue;
+            }
+
+            const uint8_t * xb = x_data + i0*x->nb[0] + it*x->nb[2];
+            uint8_t *       db = dst_data + i0*dst->nb[0] + it*dst->nb[1];
+
+            HVX_Vector acc = hvx_vec_mul_f32_f32(*(const HVX_UVector *) xb, hvx_vec_splat_f32(*(const float *) wb));
+            for (uint32_t ih = 1; ih < n_hc; ++ih) {
+                const HVX_Vector xv = *(const HVX_UVector *) (xb + ih*x->nb[1]);
+                const HVX_Vector wv = hvx_vec_splat_f32(*(const float *) (wb + ih*weights->nb[0]));
+                acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(xv, wv));
+            }
+
+            acc = hvx_vec_mul_f32_f32(acc, scale_v);
+            hvx_vec_store_u(db, n * sizeof(float), acc);
+        }
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    (void) nth;
+}
+
+static __attribute__((noinline)) void dsv4_hc_pre_gated_generic_chunk_f32(
+        const uint8_t * xb,
+        const uint8_t * gb,
+        uint8_t * db,
+        size_t x_nb1,
+        size_t g_nb1,
+        uint32_t n_hc,
+        float scale) {
+    const HVX_Vector one     = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector max_exp = hvx_vec_splat_f32(87.0f);
+    const HVX_Vector min_exp = hvx_vec_splat_f32(-87.0f);
+
+    HVX_Vector gv  = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) gb, one, max_exp, min_exp);
+    HVX_Vector acc = hvx_vec_mul_f32_f32(*(const HVX_UVector *) xb, gv);
+    // pipelined loop spills a sigmoid constant on v81
+    #pragma clang loop pipeline(disable)
+    for (uint32_t ih = 1; ih < n_hc; ++ih) {
+        gv  = dsv4_hc_fast_sigmoid_f32_guard_2it(*(const HVX_UVector *) (gb + ih*g_nb1), one, max_exp, min_exp);
+        acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(*(const HVX_UVector *) (xb + ih*x_nb1), gv));
+    }
+
+    acc = hvx_vec_mul_f32_f32(acc, hvx_vec_splat_f32(scale));
+    hvx_vec_store_u(db, VLEN, acc);
+}
+
+static void dsv4_hc_pre_thread_gated_generic_f32(unsigned int nth, unsigned int ith, void * data) {
+    struct dsv4_hc_pre_context * dctx = (struct dsv4_hc_pre_context *) data;
+    struct htp_ops_context *     octx = dctx->octx;
+
+    const struct htp_tensor * x       = octx->src[0];
+    const struct htp_tensor * weights = octx->src[1];
+    const struct htp_tensor * dst     = octx->dst;
+
+    const uint8_t * x_data       = (const uint8_t *) x->data;
+    const uint8_t * weights_data = (const uint8_t *) weights->data;
+    uint8_t *       dst_data     = (uint8_t *) dst->data;
+
+    const uint32_t n_embd = x->ne[0];
+    const uint32_t n_hc   = x->ne[1];
+    const uint32_t start  = dctx->jobs_per_thread * ith;
+    const uint32_t end    = MIN(start + dctx->jobs_per_thread, dctx->total_jobs);
+
+    if (start >= end) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    const uint32_t n_chunks = dctx->n_chunks;
+    uint32_t       it       = fastdiv(start, &dctx->kparams->div_n_chunks);
+    uint32_t       chunk    = start - it*n_chunks;
+    it += dctx->token_start;
+
+    for (uint32_t job = start; job < end; ++it, chunk = 0) {
+        const uint32_t chunk_end = MIN(n_chunks, chunk + (end - job));
+
+        for (; chunk < chunk_end; ++chunk, ++job) {
+            const uint32_t c_pf = chunk % DSV4_HC_PF_CHUNKS;
+            if ((c_pf == 0 || job == start) && job + MIN(DSV4_HC_PF_CHUNKS - c_pf, n_chunks - chunk) < end) {
+                dsv4_hc_prefetch_gated(x, weights, it, chunk, n_chunks, n_hc);
+            }
+
+            const uint32_t i0 = chunk * VLEN_FP32;
+            const uint32_t n  = MIN(VLEN_FP32, n_embd - i0);
+
+            if (n != VLEN_FP32) {
+                dsv4_hc_pre_tail_f32(x, weights, dst, x_data, weights_data, dst_data, i0, it, n, n_hc, dctx->scale, 1);
+                continue;
+            }
+
+            const uint8_t * xb = x_data + i0*x->nb[0] + it*x->nb[2];
+            const uint8_t * gb = weights_data + i0*weights->nb[0] + it*weights->nb[2];
+            uint8_t *       db = dst_data + i0*dst->nb[0] + it*dst->nb[1];
+
+            dsv4_hc_pre_gated_generic_chunk_f32(xb, gb, db, x->nb[1], weights->nb[1], n_hc, dctx->scale);
         }
     }
 
@@ -433,7 +589,8 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     if (htp_tensor_is_extended(x) || htp_tensor_is_extended(weights) || htp_tensor_is_extended(dst)) {
         return HTP_STATUS_NO_SUPPORT;
     }
-    if (x->ne[1] != 4 || x->ne[3] != 1 || dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2]) {
+    const uint32_t n_hc = x->ne[1];
+    if (n_hc == 0 || x->ne[3] != 1 || dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2]) {
         return HTP_STATUS_NO_SUPPORT;
     }
     if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
@@ -448,11 +605,11 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     const int gated = octx->op_params[1] != 0;
 
     if (gated) {
-        if (weights->ne[0] != x->ne[0] || weights->ne[1] != 4 || weights->ne[2] != x->ne[2] || weights->ne[3] != 1) {
+        if (weights->ne[0] != x->ne[0] || weights->ne[1] != n_hc || weights->ne[2] != x->ne[2] || weights->ne[3] != 1) {
             return HTP_STATUS_NO_SUPPORT;
         }
     } else {
-        if (weights->ne[0] != 4 || weights->ne[1] != x->ne[2] || weights->ne[2] != 1 || weights->ne[3] != 1) {
+        if (weights->ne[0] != n_hc || weights->ne[1] != x->ne[2] || weights->ne[2] != 1 || weights->ne[3] != 1) {
             return HTP_STATUS_NO_SUPPORT;
         }
     }
@@ -493,6 +650,7 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     uint8_t *      vtcm_base        = (uint8_t *) octx->ctx->vtcm_base;
     const bool     use_dma          = kparams->dma_eligible &&
                                      gated &&
+                                     n_hc == 4 &&
                                      n_tokens > 1 &&
                                      jobs_per_thread >= 2*dma_block_chunks &&
                                      vtcm_base != NULL &&
@@ -521,6 +679,8 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
 
     if (use_dma) {
         work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_gated_dma_f32, &dctx, n_threads);
+    } else if (n_hc != 4) {
+        work_queue_run(octx->ctx->work_queue, gated ? dsv4_hc_pre_thread_gated_generic_f32 : dsv4_hc_pre_thread_plain_generic_f32, &dctx, n_threads);
     } else if (gated) {
         work_queue_run(octx->ctx->work_queue, dsv4_hc_pre_thread_gated_f32, &dctx, n_threads);
     } else {

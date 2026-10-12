@@ -4156,7 +4156,7 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (x->ne[1] != 4 || x->ne[3] != 1) {
+    if (x->ne[1] == 0 || x->ne[3] != 1) {
         return false;
     }
     if (dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2] || dst->ne[2] != 1 || dst->ne[3] != 1) {
@@ -4197,6 +4197,7 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     kparams->dma_vtcm_size    = 2*kparams->dma_input_size;
 
     kparams->dma_eligible = gated &&
+                            x->ne[1] == 4 &&
                             n_tokens > 1 &&
                             x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
                             kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
