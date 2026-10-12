@@ -21,25 +21,29 @@ struct device_allocation {
 };
 
 static bool benchmark_mma = false;
+static int benchmark_tokens = 8192;
 
 // Hold the first upload without a clock-based delay, then fence every physical-ring reuse.
 struct mma_wave_queue {
     cudaStream_t copy = nullptr, compute = nullptr;
     cudaEvent_t ready = nullptr, consumed = nullptr;
     ggml_cuda_kv_span * host = nullptr;
+    uint32_t * ids = nullptr;
     std::atomic<bool> released{false};
-    mma_wave_queue() {
+    explicit mma_wave_queue(size_t blocks) {
         check_cuda(cudaStreamCreateWithFlags(&copy,cudaStreamNonBlocking));
         check_cuda(cudaStreamCreateWithFlags(&compute,cudaStreamNonBlocking));
         check_cuda(cudaEventCreateWithFlags(&ready,cudaEventDisableTiming));
         check_cuda(cudaEventCreateWithFlags(&consumed,cudaEventDisableTiming));
         check_cuda(cudaMallocHost(&host,3*sizeof(*host)));
+        check_cuda(cudaMallocHost(&ids,blocks*sizeof(*ids)));
     }
     ~mma_wave_queue() {
         released.store(true,std::memory_order_release);
         if (copy) (void) cudaStreamSynchronize(copy);
         if (compute) (void) cudaStreamSynchronize(compute);
         if (host) (void) cudaFreeHost(host);
+        if (ids) (void) cudaFreeHost(ids);
         if (ready) (void) cudaEventDestroy(ready);
         if (consumed) (void) cudaEventDestroy(consumed);
         if (copy) (void) cudaStreamDestroy(copy);
@@ -221,12 +225,30 @@ static void check_attention(int queries, int active, int count, bool interleaved
         throw std::runtime_error("invalid MMA resume layout");
     device_allocation state(resume_layout.bytes+2*guard);
     check_cuda(cudaMemset(state.data,0x5a,resume_layout.bytes+2*guard));
+    ggml_cuda_fattn_mma_resume_layout compact_layout;
+    if (!ggml_cuda_fattn_mma_resume_layout_make(dst_tiles,blocks,threads,columns,8,compact_layout,tiles,true))
+        throw std::runtime_error("invalid compact MMA resume layout");
+    device_allocation compact_state(compact_layout.bytes+2*guard);
+    check_cuda(cudaMemset(compact_state.data,0x5a,compact_layout.bytes+2*guard));
+    // The lookup table is immutable across waves, separate from the reusable active-block table.
+    device_allocation state_map(std::max(size_t(1),compact_layout.map_entries)*sizeof(uint32_t));
+    if (compact_layout.map_entries) {
+        std::vector<uint32_t> ids(compact_layout.map_entries);
+        if (!ggml_cuda_fattn_mma_resume_state_map(dst_tiles,blocks,tiles,ids.data(),ids.size()))
+            throw std::runtime_error("invalid compact checkpoint IDs");
+        check_cuda(cudaMemcpy(state_map.data,ids.data(),ids.size()*sizeof(uint32_t),cudaMemcpyHostToDevice));
+    }
     const size_t key_row=ggml_row_size(key_type,dim), value_row=ggml_row_size(value_type,dim);
-    device_allocation ring(size_t(rows)*span_fixture::heads*(key_row+value_row)+12*guard);
-    device_allocation outputs[4] = {device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard)};
-    device_allocation fixups[4] = {device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard)};
-    std::vector<char> output_bytes[4], metadata[4];
-    for (int implementation = 0; implementation < 4; ++implementation) {
+    const int wave_rows=benchmark_mma && benchmark_tokens > 8192 ? 8192 : rows;
+    device_allocation ring(size_t(wave_rows)*span_fixture::heads*(key_row+value_row)+12*guard);
+    device_allocation block_map(size_t(blocks)*sizeof(uint32_t));
+    device_allocation outputs[6] = {device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard),device_allocation(out_bytes+2*guard)};
+    device_allocation fixups[6] = {device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard),device_allocation(fixup_bytes+2*guard)};
+    std::vector<char> output_bytes[6], metadata[6];
+    size_t wave_blocks[2]={0,0};
+    // Sum only GPU kernel intervals; this is not end-to-end throughput and excludes ring copies/host submission.
+    double wave_us[3]={0,0,0};
+    for (int implementation = 0; implementation < 6; ++implementation) {
         check_cuda(cudaMemset(outputs[implementation].data,0x5a,out_bytes+2*guard));
         check_cuda(cudaMemset(outputs[implementation].data+guard,0,out_bytes));
         check_cuda(cudaMemset(fixups[implementation].data,0x5a,fixup_bytes+2*guard));
@@ -253,13 +275,13 @@ static void check_attention(int queries, int active, int count, bool interleaved
                 count,int(span_offset),encoded ? encoded->conversion_flags : 3u,{state.data+guard,0,capacity});
         } else {
             check_cuda(cudaStreamSynchronize(nullptr));
-            mma_wave_queue queue;
+            mma_wave_queue queue(blocks);
             const auto & sources=encoded ? encoded->spans : key.spans;
-            for (int first=0;first<active;first+=rows) {
-                const int end=first+rows >= active ? capacity : first+rows, live=std::min(end,active)-first;
+            for (int first=0;first<active;first+=wave_rows) {
+                const int end=first+wave_rows >= active ? capacity : first+wave_rows, live=std::min(end,active)-first;
                 if (live <= 0) throw std::runtime_error("MMA fixture has an empty physical wave");
                 // Reuse one small physical ring; neither the native extent nor the split assignment changes.
-                check_cuda(cudaMemsetAsync(ring.data,0x5a,size_t(rows)*span_fixture::heads*(key_row+value_row)+12*guard,queue.copy));
+                check_cuda(cudaMemsetAsync(ring.data,0x5a,size_t(wave_rows)*span_fixture::heads*(key_row+value_row)+12*guard,queue.copy));
                 if (!first) check_cuda(cudaLaunchHostFunc(queue.copy,mma_wave_queue::hold,&queue.released));
                 std::vector<ggml_cuda_kv_span> wave;
                 size_t offset=0;
@@ -283,12 +305,35 @@ static void check_attention(int queries, int active, int count, bool interleaved
                 }
                 std::memcpy(queue.host,wave.data(),wave.size()*sizeof(wave[0]));
                 check_cuda(cudaMemcpyAsync(key.descriptors.data,queue.host,wave.size()*sizeof(wave[0]),cudaMemcpyHostToDevice,queue.copy));
+                int launched=blocks;
+                ggml_cuda_fattn_mma_resume_control control{state.data+guard,first,end};
+                if (implementation >= 4) {
+                    launched=0;
+                    for (int b=0;b<blocks;++b)
+                        if (ggml_cuda_fattn_mma_resume_block_active(dst_tiles,tiles,blocks,b,first/rows,(end+rows-1)/rows))
+                            queue.ids[launched++]=uint32_t(b);
+                    if (!launched) throw std::runtime_error("empty compact MMA wave");
+                    check_cuda(cudaMemcpyAsync(block_map.data,queue.ids,size_t(launched)*sizeof(uint32_t),cudaMemcpyHostToDevice,queue.copy));
+                    control.block_ids=reinterpret_cast<const uint32_t *>(block_map.data); control.native_blocks=blocks;
+                }
+                if (implementation == 5) {
+                    control.state=compact_state.data+guard;
+                    control.state_ids=compact_layout.map_entries ? reinterpret_cast<const uint32_t *>(state_map.data) : nullptr;
+                    control.state_per_block=compact_layout.block_indexed;
+                }
                 check_cuda(cudaEventRecord(queue.ready,queue.copy));
                 check_cuda(cudaStreamWaitEvent(queue.compute,queue.ready,0));
-                resume_kernel<<<blocks,dim3(32,warps),span_shared,queue.compute>>>(ATTENTION_ARGS,
+                if (implementation != 5) wave_blocks[implementation == 4]+=launched;
+                cudaEvent_t start=nullptr, stop=nullptr;
+                if (benchmark_mma) {
+                    check_cuda(cudaEventCreate(&start)); check_cuda(cudaEventCreate(&stop));
+                    check_cuda(cudaEventRecord(start,queue.compute));
+                }
+                resume_kernel<<<launched,dim3(32,warps),span_shared,queue.compute>>>(ATTENTION_ARGS,
                     reinterpret_cast<const ggml_cuda_kv_span *>(key.descriptors.data),int(wave.size()),int(span_offset),
-                    encoded ? encoded->conversion_flags : 3u,{state.data+guard,first,end});
+                    encoded ? encoded->conversion_flags : 3u,control);
                 check_cuda(cudaGetLastError());
+                if (benchmark_mma) check_cuda(cudaEventRecord(stop,queue.compute));
                 check_cuda(cudaEventRecord(queue.consumed,queue.compute));
                 if (!first) {
                     if (cudaEventQuery(queue.ready) != cudaErrorNotReady)
@@ -296,6 +341,12 @@ static void check_attention(int queries, int active, int count, bool interleaved
                     queue.released.store(true,std::memory_order_release);
                 }
                 check_cuda(cudaEventSynchronize(queue.consumed));
+                if (benchmark_mma) {
+                    float elapsed=0;
+                    check_cuda(cudaEventElapsedTime(&elapsed,start,stop));
+                    wave_us[implementation == 2 ? 0 : implementation == 4 ? 1 : 2]+=double(elapsed)*1000;
+                    check_cuda(cudaEventDestroy(start)); check_cuda(cudaEventDestroy(stop));
+                }
                 if (end < capacity && blocks == dst_tiles*tiles) {
                     std::vector<char> unpublished(out_bytes);
                     check_cuda(cudaMemcpy(unpublished.data(),outputs[implementation].data+guard,out_bytes,cudaMemcpyDeviceToHost));
@@ -304,12 +355,15 @@ static void check_attention(int queries, int active, int count, bool interleaved
                 }
             }
         }
-        if (benchmark_mma && implementation < 2) {
+        if (benchmark_mma && (implementation < 2 || implementation == 3)) {
             const auto launch=[&] {
                 if (!implementation) control_kernel<<<blocks,dim3(32,warps),shared>>>(ATTENTION_ARGS);
-                else span_kernel<<<blocks,dim3(32,warps),span_shared>>>(ATTENTION_ARGS,
+                else if (implementation == 1) span_kernel<<<blocks,dim3(32,warps),span_shared>>>(ATTENTION_ARGS,
                     reinterpret_cast<const ggml_cuda_kv_span *>(encoded ? encoded->descriptors.data : key.descriptors.data),
                     count,int(span_offset),encoded ? encoded->conversion_flags : 3u,ggml_cuda_fattn_mma_resume_control{});
+                else resume_kernel<<<blocks,dim3(32,warps),span_shared>>>(ATTENTION_ARGS,
+                    reinterpret_cast<const ggml_cuda_kv_span *>(encoded ? encoded->descriptors.data : key.descriptors.data),
+                    count,int(span_offset),encoded ? encoded->conversion_flags : 3u,{state.data+guard,0,capacity});
             };
             for (int i=0;i<16;++i) launch();
             cudaEvent_t start=nullptr, stop=nullptr;
@@ -322,7 +376,15 @@ static void check_attention(int queries, int active, int count, bool interleaved
             check_cuda(cudaEventDestroy(start)); check_cuda(cudaEventDestroy(stop));
             std::printf("MMA timing K=%s V=%s TG%d tokens=%d spans=%d implementation=%s us=%.3f scratch=%zu\n",
                 ggml_type_name(key_type),ggml_type_name(value_type),queries,capacity,count,
-                implementation ? "spanned" : "stock",double(elapsed)*1000/128,resume_layout.bytes);
+                implementation == 0 ? "stock" : implementation == 1 ? "spanned" : "resumed-full",
+                double(elapsed)*1000/128,resume_layout.bytes);
+            cudaFuncAttributes attributes{};
+            if (implementation == 0) check_cuda(cudaFuncGetAttributes(&attributes,control_kernel));
+            else if (implementation == 1) check_cuda(cudaFuncGetAttributes(&attributes,span_kernel));
+            else check_cuda(cudaFuncGetAttributes(&attributes,resume_kernel));
+            std::printf("MMA resources K=%s V=%s TG%d implementation=%d registers=%d local=%zu shared=%zu\n",
+                ggml_type_name(key_type),ggml_type_name(value_type),queries,implementation,attributes.numRegs,
+                attributes.localSizeBytes,implementation == 0 ? shared : span_shared);
         }
 #undef ATTENTION_ARGS
         check_cuda(cudaGetLastError());
@@ -349,6 +411,22 @@ static void check_attention(int queries, int active, int count, bool interleaved
     if (output_bytes[0] != output_bytes[1]) throw std::runtime_error("MMA final output bits differ from stock");
     if (metadata[0] != metadata[3]) throw std::runtime_error("one-wave resumed MMA split metadata differs from stock");
     if (output_bytes[0] != output_bytes[3]) throw std::runtime_error("one-wave resumed MMA differs from stock before checkpointing");
+    if (metadata[0] != metadata[4]) {
+        for (size_t i=guard;i<metadata[0].size()-guard;i+=4) {
+            uint32_t a,b; std::memcpy(&a,metadata[0].data()+i,4); std::memcpy(&b,metadata[4].data()+i,4);
+            if (a != b) { std::fprintf(stderr,"compact metadata mismatch: byte=%zu stock=%08x compact=%08x blocks=%d tiles=%d\n",i-guard,a,b,blocks,tiles); break; }
+        }
+        throw std::runtime_error("compact-wave MMA changes native split metadata");
+    }
+    if (output_bytes[0] != output_bytes[4]) throw std::runtime_error("compact-wave MMA changes output");
+    if (metadata[0] != metadata[5] || output_bytes[0] != output_bytes[5])
+        throw std::runtime_error("compact checkpoint storage changes native arithmetic");
+    if (wave_blocks[1] > wave_blocks[0]) throw std::runtime_error("compact wave launches extra blocks");
+    if (benchmark_mma) std::printf("MMA wave blocks TG%d tokens=%d old=%zu compact=%zu\n",queries,capacity,wave_blocks[0],wave_blocks[1]);
+    if (benchmark_mma) std::printf("MMA wave kernel us TG%d tokens=%d full-grid=%.3f active-grid=%.3f compact-state=%.3f\n",
+        queries,capacity,wave_us[0],wave_us[1],wave_us[2]);
+    if (benchmark_mma) std::printf("MMA checkpoint bytes TG%d tokens=%d old=%zu compact=%zu map=%zu\n",
+        queries,capacity,resume_layout.bytes,compact_layout.bytes,compact_layout.map_entries*sizeof(uint32_t));
     if (metadata[0] != metadata[2]) throw std::runtime_error("resumed MMA split accumulator or softmax metadata drift");
     if (output_bytes[0] != output_bytes[2]) {
         for (size_t i=guard;i<guard+out_bytes;i+=sizeof(float)) {
@@ -367,6 +445,11 @@ static void check_attention(int queries, int active, int count, bool interleaved
     if (!std::all_of(checkpoint.begin(),checkpoint.begin()+guard,[](char x){return x == char(0x5a);}) ||
             !std::all_of(checkpoint.end()-guard,checkpoint.end(),[](char x){return x == char(0x5a);}))
         throw std::runtime_error("MMA checkpoint guard changed");
+    checkpoint.resize(compact_layout.bytes+2*guard);
+    check_cuda(cudaMemcpy(checkpoint.data(),compact_state.data,checkpoint.size(),cudaMemcpyDeviceToHost));
+    if (!std::all_of(checkpoint.begin(),checkpoint.begin()+guard,[](char x){return x == char(0x5a);}) ||
+            !std::all_of(checkpoint.end()-guard,checkpoint.end(),[](char x){return x == char(0x5a);}))
+        throw std::runtime_error("compact MMA checkpoint guard changed");
     bool nonzero = false;
     for (size_t i = 0; i < out_bytes; i += sizeof(float)) {
         float result;
@@ -381,10 +464,10 @@ static void check_attention(int queries, int active, int count, bool interleaved
 
 static size_t check_attention_matrix(bool quick) {
     size_t cases = 0;
-    for (int queries : {1,2,3,4,5,6,7,8}) for (int active : {31,257,1023,8192}) for (int count : {1,2,3}) {
+    for (int queries : {1,2,3,4,5,6,7,8}) for (int active : {31,257,1023,benchmark_tokens}) for (int count : {1,2,3}) {
         for (bool interleaved : {false,true}) for (int split : {0,1,2}) for (float gain : {1.0f,16.0f}) {
             if (benchmark_mma) {
-                if ((queries != 3 && queries != 4 && queries != 8) || active != 8192 || count == 2 || !interleaved || split || gain != 1.0f) continue;
+                if ((queries != 3 && queries != 4 && queries != 8) || active != benchmark_tokens || count == 2 || !interleaved || split || gain != 1.0f) continue;
             } else if (quick && (active != 257 || count != 3 || interleaved || gain != 1.0f)) continue;
             try {
                 if (queries == 1) check_attention<1>(queries,active,count,interleaved,split,gain);
@@ -405,10 +488,10 @@ static size_t check_attention_matrix(bool quick) {
 template<ggml_type key, ggml_type value>
 static size_t check_encoded_attention_pair(ggml_backend_t backend, bool quick, bool deep) {
     size_t cases = 0;
-    for (int queries : {2,3,4,5,6,7,8}) for (int active : {31,257,1023,8192}) for (int count : {1,2,3}) {
+    for (int queries : {2,3,4,5,6,7,8}) for (int active : {31,257,1023,benchmark_tokens}) for (int count : {1,2,3}) {
         for (bool interleaved : {false,true}) for (int split : {0,1,2}) for (uint32_t flags : {0u,1u,2u,3u}) {
             if (benchmark_mma) {
-                if ((queries != 3 && queries != 4 && queries != 8) || active != 8192 || count == 2 || !interleaved || split || flags != 0) continue;
+                if ((queries != 3 && queries != 4 && queries != 8) || active != benchmark_tokens || count == 2 || !interleaved || split || flags != 0) continue;
             } else {
                 if (!deep && (active != 257 || count != 3 || split || interleaved)) continue;
                 if (quick && (active != 257 || count != 3 || interleaved || split)) continue;
@@ -449,7 +532,9 @@ static size_t check_encoded_tile_type(ggml_backend_t backend, bool quick) {
 }
 
 int main(int argc, char ** argv) {
-    benchmark_mma=argc == 2 && !std::strcmp(argv[1],"--benchmark");
+    const bool long_benchmark=argc == 2 && !std::strcmp(argv[1],"--benchmark-long");
+    benchmark_mma=long_benchmark || (argc == 2 && !std::strcmp(argv[1],"--benchmark"));
+    if (long_benchmark) benchmark_tokens=131072;
     const bool quick = argc == 2 && !std::strcmp(argv[1],"--quick");
     int devices = 0;
     if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0) return 77;

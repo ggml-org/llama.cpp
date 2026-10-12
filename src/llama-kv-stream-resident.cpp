@@ -1064,6 +1064,10 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
          (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0)) &&
         (((prefix == padded || !resumed) && (!resumed || !resume_plan.resume_resident)) ||
          (resumed && resume_plan.kernel_config[0] == 2));
+    const bool span_resume=resumed && cross && !segmented && ops->version >= 11 &&
+        ops->resume_spans && resume_plan.span_resume && s.pool_lease && s.copy_ops &&
+        s.copy_ops->version >= 10 && s.copy_ops->acquire_span && s.copy_ops->release_span;
+    bool prefix_pending=span_resume && prefix && blocks;
     // Short prefills use the same encoded gather and stock kernel as longer prefills.
     const bool native = s.native_graph_attention && !resumed && (prefill || q->ne[1] != 2 || segmented || !s.resumed_decode);
     if (ggml_kv_stream_block_layout_make(size_t(q->ne[1])*size_t(q->ne[2]),size_t(output->ne[0]),work).status !=
@@ -1360,8 +1364,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
     };
     if (resumed) {
-        if (prefix && (!describe(0,prefix,0,true) || !ops->resume(s.backend,&op,wb,resume_plan,padded,0,prefix == padded))) return false;
-        s.attention_calls += prefix != 0;
+        if (prefix && !prefix_pending && (!describe(0,prefix,0,true) || !ops->resume(s.backend,&op,wb,resume_plan,padded,0,prefix == padded))) return false;
+        s.attention_calls += prefix != 0 && !prefix_pending;
         if (prefix == padded) {direct_result=true; return finish();}
     } else if (native) {
         if (prefix && !gather(s.roots[layer].first->data,s.roots[layer].second->data,0,prefix)) return false;
@@ -1379,6 +1383,62 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     }
     for (size_t block = 0; block < blocks;) {
         const size_t first = prefix+block*s.page.tokens;
+        if (span_resume) {
+            llama_kv_stream_prefetch_wave wave;
+            if (!s.sequence->plan.ready_wave(96,prefix_pending ? 2 : 3,wave)) return false;
+            std::vector<ggml_kv_stream_span> sources;
+            std::vector<llama_kv_stream_prefetch_request> requests;
+            sources.reserve(3); requests.reserve(wave.requests);
+            const auto append=[&](size_t token,size_t count,size_t ko,size_t vo) {
+                if (!count) return true;
+                if (!sources.empty()) {
+                    auto & previous=sources.back();
+                    if (previous.token_begin+previous.tokens == token &&
+                            previous.k_offset+previous.tokens*s.page.k_token_bytes == ko &&
+                            previous.v_offset+previous.tokens*s.page.v_token_bytes == vo) {
+                        previous.tokens+=count; return true;
+                    }
+                }
+                if (sources.size() == 3) return false;
+                sources.push_back({s.binding.buffer,s.binding.buffer,token,count,ko,vo}); return true;
+            };
+            const size_t wave_first=prefix_pending ? 0 : first;
+            if (prefix_pending) {
+                const auto & planes=s.placement(layer);
+                if (!append(0,prefix,planes.offset,planes.offset+planes.planes.v_offset)) return false;
+            }
+            size_t end=first;
+            for (size_t i=0;i<wave.requests;++i) {
+                const auto * request=s.sequence->plan.request(i);
+                if (!request || request->layer != s.sequence->next || request->first != end || !request->submitted ||
+                        request->tokens > padded-end || request->pages > slots || request->slot > slots-request->pages) return false;
+                if (!append(request->first,request->tokens,request->slot*s.page.k_bytes,
+                        s.layout.ring.v_offset+request->slot*s.page.v_bytes)) return false;
+                requests.push_back(*request); end+=request->tokens;
+            }
+            k=s.descriptor(layer,false,padded); v=s.descriptor(layer,true,padded);
+            k.buffer=v.buffer=s.binding.buffer;
+            if (!k.data) k.data=s.binding.base;
+            if (!v.data) v.data=s.binding.base;
+            op=*output; op.op=GGML_OP_FLASH_ATTN_EXT;
+            std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
+            std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+            ggml_backend_execution_set_external_workspace(&op,ggml_backend_execution_has_external_workspace(output));
+            op.src[0]=q; op.src[1]=&k; op.src[2]=&v; op.src[3]=mask;
+            for (const auto & request : requests)
+                if (!s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
+            const ggml_kv_stream_span_plan_view view{s.binding.config.shape,sources.data(),sources.size(),padded,size_t(q->ne[1])};
+            if (!ops->resume_spans(s.backend,&op,wb,resume_plan,view,wave_first,end)) return false;
+            ++s.attention_calls; prefix_pending=false;
+            for (const auto & request : requests)
+                if (!s.copy_ops->release_span(s.copies.get(),request.slot,request.pages)) return false;
+            for (const auto & request : requests)
+                if (!s.sequence->plan.consume(request.pages)) return false;
+            if (!s.fill_sequence()) return false;
+            block+=wave.pages;
+            if (end == padded) { direct_result=true; return finish(); }
+            continue;
+        }
         size_t pages = width(block), slot = block%slots;
         size_t grouped_requests = 0;
         if (cross) {

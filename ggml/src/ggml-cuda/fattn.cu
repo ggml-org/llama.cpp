@@ -533,6 +533,10 @@ struct mma_span_launch {
     size_t descriptor_bytes = 0;
     size_t fixup_bytes = 0;
     size_t state_offset = 0;
+    size_t block_map_offset = 0;
+    size_t state_map_offset = 0;
+    size_t state_map_entries = 0;
+    bool state_per_block = false;
     size_t output_offset = 0;
     bool resumable = false;
     size_t bytes = 0;
@@ -710,12 +714,20 @@ static bool mma_span_launch_make(
     next.bytes = next.descriptor_bytes+next.fixup_bytes;
     if (resumable) {
         ggml_cuda_fattn_mma_resume_layout state;
-        if (!ggml_cuda_fattn_mma_resume_layout_make(next.ntiles_dst,blocks,nthreads,ncols1,ncols2,state,next.ntiles_kv) ||
+        if (!ggml_cuda_fattn_mma_resume_layout_make(next.ntiles_dst,blocks,nthreads,ncols1,ncols2,state,next.ntiles_kv,true) ||
                 next.bytes > SIZE_MAX-127) {
             if (failure) *failure=status::overflow;
             return false;
         }
-        next.state_offset=(next.bytes+127)/128*128;
+        next.block_map_offset=(next.bytes+127)/128*128;
+        const size_t map_bytes=(size_t(blocks)*sizeof(uint32_t)+127)/128*128;
+        if (map_bytes > SIZE_MAX-next.block_map_offset) return false;
+        next.state_map_offset=next.block_map_offset+map_bytes;
+        next.state_map_entries=state.map_entries;
+        next.state_per_block=state.block_indexed;
+        const size_t state_map_bytes=(state.map_entries*sizeof(uint32_t)+127)/128*128;
+        if (state_map_bytes > SIZE_MAX-next.state_map_offset) return false;
+        next.state_offset=next.state_map_offset+state_map_bytes;
         if (state.bytes > SIZE_MAX-next.state_offset) {
             if (failure) *failure=status::overflow;
             return false;
@@ -759,7 +771,7 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst,
         const ggml_cuda_kv_span * spans, size_t count,
         void * workspace, const mma_span_launch & plan,
-        const ggml_cuda_fattn_mma_resume_control control = {}) {
+        ggml_cuda_fattn_mma_resume_control control = {}) {
     constexpr int DKQ = 256, DV = 256;
     auto kernel=ggml_cuda_kv_stream_mma_kernel(dst->src[1]->type,dst->src[2]->type,ncols1,ncols2,plan.resumable);
     if (!kernel) return false;
@@ -782,7 +794,42 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
     const ggml_cuda_kernel_launch_params launch(
         plan.blocks,{unsigned(warp_size),unsigned(nthreads/warp_size),1},
         plan.shared_bytes,ctx.stream());
-    ggml_cuda_kernel_launch(kernel,launch,
+    auto selected_launch=launch;
+    std::vector<uint32_t> active_blocks;
+    std::vector<uint32_t> state_ids;
+    if (plan.resumable) {
+        control.state_per_block=plan.state_per_block;
+        const int tile=ggml_cuda_fattn_mma_get_nbatch_fa(DKQ,DV,ncols1*ncols2,ggml_cuda_info().devices[ctx.device].cc);
+        try {
+            active_blocks.reserve(plan.blocks.x);
+            for (uint32_t b=0;b<plan.blocks.x;++b)
+                if (ggml_cuda_fattn_mma_resume_block_active(plan.ntiles_dst,plan.ntiles_kv,plan.blocks.x,b,
+                        control.first/tile,(control.end+tile-1)/tile)) active_blocks.push_back(b);
+        } catch (const std::bad_alloc &) { return false; }
+        if (active_blocks.empty()) return false;
+        if (plan.state_map_entries) {
+            auto * ids=reinterpret_cast<uint32_t *>(static_cast<char *>(workspace)+plan.state_map_offset);
+            // Like the checkpoints, this immutable table belongs to the ordered operation, not each wave.
+            // The first wave initializes it; later waves retain the same caller-owned scratch until fixup.
+            if (!control.first) {
+                try { state_ids.resize(plan.state_map_entries); }
+                catch (const std::bad_alloc &) { return false; }
+                if (!ggml_cuda_fattn_mma_resume_state_map(plan.ntiles_dst,plan.blocks.x,plan.ntiles_kv,
+                        state_ids.data(),state_ids.size())) return false;
+                CUDA_CHECK(cudaMemcpyAsync(ids,state_ids.data(),state_ids.size()*sizeof(uint32_t),cudaMemcpyHostToDevice,ctx.stream()));
+            }
+            control.state_ids=ids;
+        }
+        control.native_blocks=plan.blocks.x;
+        if (active_blocks.size() != plan.blocks.x) {
+            auto * ids=reinterpret_cast<uint32_t *>(static_cast<char *>(workspace)+plan.block_map_offset);
+            CUDA_CHECK(cudaMemcpyAsync(ids,active_blocks.data(),active_blocks.size()*sizeof(uint32_t),cudaMemcpyHostToDevice,ctx.stream()));
+            control.block_ids=ids;
+            selected_launch=ggml_cuda_kernel_launch_params(
+                {unsigned(active_blocks.size()),1,1},{unsigned(warp_size),unsigned(nthreads/warp_size),1},plan.shared_bytes,ctx.stream());
+        }
+    }
+    ggml_cuda_kernel_launch(kernel,selected_launch,
         static_cast<const char *>(q->data),spans[0].k,spans[0].v,
         static_cast<const char *>(mask->data),(const char *)nullptr,(const int *)nullptr,
         destination,meta,
@@ -858,6 +905,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_resume_plan(
         ggml_cuda_info().devices[ctx.device].cc));
     next.kernel_config[3]=uint32_t(plan.ncols1); next.kernel_config[4]=uint32_t(plan.ncols2);
     next.resume_resident=true;
+    next.span_resume=true;
     output=next;
     return true;
 }

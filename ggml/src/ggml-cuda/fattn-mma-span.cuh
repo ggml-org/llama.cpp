@@ -45,7 +45,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_span_tile(
     if (index >= 0 && live == nbatch_fa && nbatch_fa <= spans[index].tokens-(first-spans[index].first) &&
             (value ? spans[index].v_token_stride : spans[index].k_token_stride)/sizeof(half2) <= INT32_MAX) {
         const auto & span = spans[index];
-        const auto * source = flash_attn_ext_f16_span_row(spans, count, value, head, first, feature);
+        const half2 * source;
+        // Keep the wider-query/smaller-tile route lean; holding this cached address increased TG8 spills.
+        if constexpr (nbatch_fa >= 64) source=reinterpret_cast<const half2 *>((value ? span.v : span.k)+
+            int64_t(first-span.first)*(value ? span.v_token_stride : span.k_token_stride)+
+            int64_t(head)*(value ? span.v_head_stride : span.k_head_stride))+feature;
+        else source=flash_attn_ext_f16_span_row(spans,count,value,head,first,feature);
         flash_attn_ext_f16_load_tile<stride_tile,nwarps,nbatch_fa,use_cp_async,false,false>(
             source, tile, width, int((value ? span.v_token_stride : span.k_token_stride)/sizeof(half2)), 0, live, nullptr);
         return;
@@ -128,6 +133,16 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
     const int bytes = ggml_cuda_fattn_encoded_traits<type>::row_bytes(full_width), chunks = bytes/16;
     const unsigned int shared = ggml_cuda_cvta_generic_to_shared(staging);
     const int4 zero = {};
+    const int first_index=flash_attn_ext_f16_span_index(spans,count,first);
+    const bool interior=first_index >= 0 && live == rows && rows <= spans[first_index].tokens-(first-spans[first_index].first);
+    const char * base=nullptr;
+    int64_t pitch=0;
+    if (interior) {
+        const auto & span=spans[first_index];
+        pitch=value ? span.v_token_stride : span.k_token_stride;
+        base=(value ? span.v : span.k)+int64_t(first-span.first)*pitch+
+            int64_t(head)*(value ? span.v_head_stride : span.k_head_stride);
+    }
     auto load = [&] __device__ (const int n) {
         const int step = warp >> n, begin = step == warp ? 0 : chunks-chunks%(2*step), end = chunks-chunks%step;
         const int stride_i = warp/step;
@@ -136,9 +151,9 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
         for (int i0 = 0; i0 < rows; i0 += warps*stride_i) {
             const int row = i0+threadIdx.y*stride_i+(step == warp ? 0 : threadIdx.x/step);
             if (i0+warps*stride_i > rows && row >= rows) break;
-            const int index = row < live ? flash_attn_ext_f16_span_index(spans,count,first+row) : -1;
-            const char * source = nullptr;
-            if (index >= 0) {
+            const int index = row < live && !interior ? flash_attn_ext_f16_span_index(spans,count,first+row) : -1;
+            const char * source = interior ? base+int64_t(row)*pitch : nullptr;
+            if (!interior && index >= 0) {
                 const auto & span = spans[index];
                 source = (value ? span.v : span.k)+int64_t(first+row-span.first)*(value ? span.v_token_stride : span.k_token_stride)+
                     int64_t(head)*(value ? span.v_head_stride : span.k_head_stride);
@@ -187,6 +202,8 @@ struct ggml_cuda_fattn_mma_contiguous_kv {
     static constexpr bool spanned = false;
     static constexpr bool staged = false;
     static constexpr bool resumable = false;
+    __device__ __forceinline__ uint32_t block_index() const { return blockIdx.x; }
+    __device__ __forceinline__ uint32_t block_count() const { return gridDim.x; }
     __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_head(int) const { return {}; }
     __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_slice(int) const { return {}; }
     __device__ __forceinline__ const half2 * offset(const half2 * source, int feature) const { return source+feature; }
@@ -211,6 +228,14 @@ struct ggml_cuda_fattn_mma_typed_span_kv {
     uint32_t conversion_flags = 3;
     ggml_cuda_fattn_mma_resume_control control;
     int slice = 0;
+    __device__ __forceinline__ uint32_t block_index() const {
+        if constexpr (resume) return control.block_ids ? control.block_ids[blockIdx.x] : blockIdx.x;
+        return blockIdx.x;
+    }
+    __device__ __forceinline__ uint32_t block_count() const {
+        if constexpr (resume) return control.native_blocks ? control.native_blocks : gridDim.x;
+        return gridDim.x;
+    }
     __device__ __forceinline__ ggml_cuda_fattn_mma_typed_span_kv with_head(int next) const {
         auto result=*this; result.head=next; return result;
     }

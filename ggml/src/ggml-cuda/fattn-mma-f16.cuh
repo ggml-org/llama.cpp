@@ -1249,6 +1249,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr int  nbatch_combine  = ggml_cuda_fattn_mma_get_nbatch_combine(DKQ, DV, ncols);
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg      (DKQ, DV, ncols);
     constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages       (DKQ, DV, ncols1, ncols2, use_sparse);
+    const uint32_t native_block=kv.block_index(), native_blocks=kv.block_count();
 
     int kb0_start=native_start, kb0_stop=native_stop;
     if constexpr (KV::resumable) {
@@ -1306,10 +1307,16 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #if defined(TURING_MMA_AVAILABLE)
         static_assert(sizeof(VKQ_C)+sizeof(KQ_max)+sizeof(KQ_rowsum) == thread_bytes, "native checkpoint layout changed");
 #endif
-        const size_t thread=threadIdx.y*blockDim.x+threadIdx.x;
-        const uintptr_t checkpoint_address=uintptr_t(kv.control.state)+
-            ((size_t(kv.slice)+blockIdx.x)*blockDim.x*blockDim.y+thread)*thread_bytes;
-        checkpoint=reinterpret_cast<char *>(checkpoint_address);
+        // Singleton native slices cannot cross a tile-aligned wave; do not read their absent map/state.
+        if (kb0_start > native_start || kb0_stop < native_stop) {
+            const size_t thread=threadIdx.y*blockDim.x+threadIdx.x;
+            const size_t original_slot=size_t(kv.slice)+native_block;
+            const size_t slot=kv.control.state_per_block ? native_block :
+                kv.control.state_ids ? kv.control.state_ids[original_slot] : original_slot;
+            const uintptr_t checkpoint_address=uintptr_t(kv.control.state)+
+                (slot*blockDim.x*blockDim.y+thread)*thread_bytes;
+            checkpoint=reinterpret_cast<char *>(checkpoint_address);
+        }
         if (kb0_start > native_start) {
             ggml_cuda_fattn_mma_checkpoint_copy<sizeof(VKQ_C)>(VKQ_C,checkpoint);
             ggml_cuda_fattn_mma_checkpoint_copy<sizeof(KQ_max)>(KQ_max,checkpoint+sizeof(VKQ_C));
@@ -1580,11 +1587,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         if (np == 1) {
             // No combination is needed, the meta data can be directly written from registers to VRAM.
             if (needs_fixup && threadIdx.x < T_B_KQ::I) {
-                float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
+                float2 * dstk_fixup_meta = dstk_fixup + native_block*ncols;
                 dstk_fixup_meta[jc_cwm] = KQ_cmr;
             }
             if (is_fixup && threadIdx.x < T_B_KQ::I) {
-                float2 * dstk_fixup_meta = dstk_fixup + (gridDim.x + blockIdx.x)*ncols;
+                float2 * dstk_fixup_meta = dstk_fixup + (native_blocks + native_block)*ncols;
                 dstk_fixup_meta[jc_cwm] = KQ_cmr;
             }
         }
@@ -1619,11 +1626,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         if (np == 1) {
             // No combination is needed, the meta data can be directly written from registers to VRAM.
             if (needs_fixup && thread_should_write) {
-                float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
+                float2 * dstk_fixup_meta = dstk_fixup + native_block*ncols;
                 dstk_fixup_meta[jc_cwm] = KQ_cmr;
             }
             if (is_fixup && thread_should_write) {
-                float2 * dstk_fixup_meta = dstk_fixup + (gridDim.x + blockIdx.x)*ncols;
+                float2 * dstk_fixup_meta = dstk_fixup + (native_blocks + native_block)*ncols;
                 dstk_fixup_meta[jc_cwm] = KQ_cmr;
             }
         }
@@ -1692,11 +1699,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             // Combined KQ max + rowsum.
             static_assert(cols_per_warp <= warp_size);
             if (needs_fixup && (cols_per_warp == warp_size || threadIdx.x < cols_per_warp)) {
-                float2 * dstk_fixup_meta = dstk_fixup + blockIdx.x*ncols;
+                float2 * dstk_fixup_meta = dstk_fixup + native_block*ncols;
                 dstk_fixup_meta[(threadIdx.y/np)*cols_per_warp + threadIdx.x] = make_float2(KQ_cmn, KQ_crs);
             }
             if (is_fixup && (cols_per_warp == warp_size || threadIdx.x < cols_per_warp)) {
-                float2 * dstk_fixup_meta = dstk_fixup + (gridDim.x + blockIdx.x)*ncols;
+                float2 * dstk_fixup_meta = dstk_fixup + (native_blocks + native_block)*ncols;
                 dstk_fixup_meta[(threadIdx.y/np)*cols_per_warp + threadIdx.x] = make_float2(KQ_cmn, KQ_crs);
             }
         }
@@ -1768,7 +1775,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         if (np == 1 || threadIdx.y % np == 0) {
             // The first 2*2*gridDim.x*ncols floats in dstk_fixup are for storing max. values and row sums.
             // The values after that are for the partial results of the individual blocks.
-            float2 * dstk_fixup_data = dstk_fixup + gridDim.x*(2*ncols) + blockIdx.x*(ncols*(DV/2));
+            float2 * dstk_fixup_data = dstk_fixup + native_blocks*(2*ncols) + native_block*(ncols*(DV/2));
 
 #pragma unroll
             for (int stride_k : {warp_size, warp_size/2, warp_size/4, warp_size/8}) {
@@ -1949,8 +1956,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_impl(
     }
 
     // kbc == k block continuous, current index in continuous ijk space.
-    int       kbc      = int64_t(blockIdx.x + 0)*(iter_k*iter_j*iter_z_gqa*ne12*ne03) / gridDim.x;
-    const int kbc_stop = int64_t(blockIdx.x + 1)*(iter_k*iter_j*iter_z_gqa*ne12*ne03) / gridDim.x;
+    const uint32_t native_block=kv.block_index(), native_blocks=kv.block_count();
+    int       kbc      = int64_t(native_block + 0)*(iter_k*iter_j*iter_z_gqa*ne12*ne03) / native_blocks;
+    const int kbc_stop = int64_t(native_block + 1)*(iter_k*iter_j*iter_z_gqa*ne12*ne03) / native_blocks;
 
     // If the seams of 2 CUDA blocks fall within an output tile their results need to be combined.
     // For this we need to track both the block that starts the tile (needs_fixup) and the block that finishes the tile (is_fixup).

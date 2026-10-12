@@ -18,13 +18,70 @@ struct session_inputs {
     }
 };
 
+struct resume_wave_probe {
+    inline static resume_wave_probe * active = nullptr;
+    ggml_backend_reg_t reg;
+    decltype(ggml_backend_reg_i::get_proc_address) previous;
+    ggml_kv_stream_partial_ops ops;
+    decltype(ggml_kv_stream_partial_ops::resume) legacy;
+    decltype(ggml_kv_stream_partial_ops::resume_spans) wave;
+    size_t calls=0, wrapped=0, resident_combined=0;
+    testing * checks=nullptr;
+    bool checked=false;
+    resume_wave_probe(ggml_backend_t backend,bool enabled,testing * checks=nullptr) : reg(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend))),
+            previous(reg->iface.get_proc_address) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(previous(reg,"ggml_backend_kv_stream_partial_ops"));
+        GGML_ASSERT(get && get() && !active);
+        ops=*get(); legacy=ops.resume; wave=ops.resume_spans; active=this;
+        this->checks=checks;
+        ops.resume=[](ggml_backend_t b,const ggml_tensor * op,ggml_backend_buffer_t w,
+                const ggml_kv_stream_resume_plan & p,size_t n,size_t f,bool last) {
+            ++active->calls; return active->legacy(b,op,w,p,n,f,last);
+        };
+        ops.resume_spans=enabled ? +[](ggml_backend_t b,const ggml_tensor * op,ggml_backend_buffer_t w,
+                const ggml_kv_stream_resume_plan & p,const ggml_kv_stream_span_plan_view & v,size_t f,size_t e) {
+            ++active->calls;
+            active->wrapped+=v.count == 3;
+            active->resident_combined+=f == 0 && v.count > 1;
+            if (active->checks && !active->checked && v.count > 1) {
+                active->checked=true;
+                std::vector<uint8_t> before(ggml_nbytes(op)),after(before.size());
+                ggml_backend_tensor_get(op,before.data(),0,before.size());
+                std::vector<ggml_kv_stream_span> sources(v.spans,v.spans+v.count);
+                auto bad=v; bad.spans=sources.data(); ++sources[1].token_begin;
+                active->checks->assert_true(!active->wave(b,op,w,p,bad,f,e));
+                sources.assign(v.spans,v.spans+v.count); bad.spans=sources.data();
+                sources[0].k_offset=ggml_backend_buffer_get_size(sources[0].k_buffer)+1;
+                active->checks->assert_true(!active->wave(b,op,w,p,bad,f,e));
+                sources.assign(v.spans,v.spans+v.count); bad.spans=sources.data();
+                ++sources[0].k_offset;
+                active->checks->assert_true(!active->wave(b,op,w,p,bad,f,e));
+                auto forged=p; --forged.bytes;
+                active->checks->assert_true(!active->wave(b,op,w,forged,v,f,e));
+                ggml_backend_buffer_ptr short_view(ggml_backend_buffer_view(w,0,p.bytes-1));
+                active->checks->assert_true(bool(short_view) && !active->wave(b,op,short_view.get(),p,v,f,e));
+                ggml_backend_tensor_get(op,after.data(),0,after.size());
+                active->checks->assert_true(before == after);
+            }
+            return active->wave && active->wave(b,op,w,p,v,f,e);
+        } : nullptr;
+        reg->iface.get_proc_address=[](ggml_backend_reg_t r,const char * name)->void * {
+            if (!std::strcmp(name,"ggml_backend_kv_stream_partial_ops"))
+                return reinterpret_cast<void *>(+[]()->const ggml_kv_stream_partial_ops * { return &active->ops; });
+            return active->previous(r,name);
+        };
+    }
+    ~resume_wave_probe() { reg->iface.get_proc_address=previous; active=nullptr; }
+};
+
 int main(int argc, char ** argv) {
     const bool physical_map_only = argc > 1 && !std::strcmp(argv[1],"--cuda-physical-map");
     const bool guard_only = argc > 1 && !std::strcmp(argv[1],"--cuda-guard-handoff");
     const bool page_boundary_only = argc > 1 && !std::strcmp(argv[1],"--cuda-mtp-page-boundary");
     const bool short_prefill_only = argc > 1 && !std::strcmp(argv[1],"--cuda-short-prefill");
     const bool wide_resume_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wide-resume");
-    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || wide_resume_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool wave_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wave-batching");
+    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -34,6 +91,51 @@ int main(int argc, char ** argv) {
     if (page_boundary_only) t.set_filter("speculative_page_boundary_reconstruction_reopens_mtp_admission");
     if (short_prefill_only) t.set_filter("short_prefill_uses_its_gather_grant_and_matches_stock");
     if (wide_resume_only) t.set_filter("wide_target_decode_reuses_small_ring_and_matches_stock");
+    if (wave_only) t.set_filter("wrapped_resume_waves_reduce_launches_without_changing_tokens");
+    if (cuda) t.test("wrapped_resume_waves_reduce_launches_without_changing_tokens",[&](testing & t) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get() && get()->capabilities)) return;
+        for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q8_0},
+                std::pair{GGML_TYPE_Q4_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
+                std::pair{GGML_TYPE_Q4_0,GGML_TYPE_F16},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+                std::pair{GGML_TYPE_BF16,GGML_TYPE_BF16}}) for (uint32_t queries : {3u,4u,8u}) {
+            if (!get()->capabilities(backend.get(),pair.first,pair.second).direct_pair) {
+                t.out << "pair not compiled: " << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second) <<
+                    " TG" << queries << '\n';
+                continue;
+            }
+            std::vector<std::vector<float>> reference;
+            size_t previous_calls=0;
+            for (bool optimized : {false,true}) {
+                resume_wave_probe probe(backend.get(),optimized,optimized ? &t : nullptr);
+                fixture f(backend.get(),true,pair.first,pair.second,16384,false,3,4,8);
+                f.policy.initial_ring_slots=5; f.policy.fixed_ring=true;
+                size_t measured=0;
+                if (!t.assert_true(probe.ops.decode_workspace(backend.get(),pair.first,pair.second,24,4,8,16384,measured))) return;
+                block_workspace writer(f,131072,19), attention(f,std::max(measured,f.host->layout().bytes),29);
+                llama_kv_stream_session_config config{f.policy,8,24,false,true,true}; config.max_decode_rows=8;
+                auto session=llama_kv_stream_session::create(backend.get(),f.content,config,f.lease.get(),writer.lease.get(),attention.lease.get());
+                constexpr size_t active=8193;
+                if (!t.assert_true(bool(session) && session->restore(active-queries))) return;
+                session_inputs kv(backend.get(),queries,1024); block_inputs input(f,active,queries,false,24);
+                if (!t.assert_true(session->begin(active,queries,true))) return;
+                for (uint32_t layer=0;layer<3;++layer) {
+                    if (!t.assert_true(session->produce(layer,kv.k,kv.v) && session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+                    ggml_backend_synchronize(backend.get()); const auto result=input.read();
+                    t.assert_true(same_float_bits(stock_attention(f,input,layer),result));
+                    if (!optimized) reference.push_back(result); else t.assert_true(same_float_bits(reference[layer],result));
+                }
+                if (!optimized) previous_calls=probe.calls;
+                else {
+                    t.assert_true(probe.calls < previous_calls);
+                    t.assert_true(probe.wrapped > 0 && probe.resident_combined == 3);
+                    t.out << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second) << " TG" << queries <<
+                        " resume launches " << previous_calls << " -> " << probe.calls << '\n';
+                }
+            }
+        }
+    });
     if (cuda) t.test("wide_target_decode_reuses_small_ring_and_matches_stock",[&](testing & t) {
         for (uint32_t queries : {3u,4u,5u,6u,7u,8u}) for (size_t active : {257u,1067u,4097u})
                 for (uint32_t query_heads : {8u,24u,32u}) {

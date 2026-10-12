@@ -4,10 +4,63 @@
 #include "testing.h"
 
 #include <cstring>
+#include <algorithm>
 #include <vector>
 
 int main() {
     testing t;
+    t.test("mma_compact_checkpoints_only_store_multitile_native_slices",[&](testing & t) {
+        for (size_t destinations : {1u,2u,7u}) for (size_t tiles : {1u,2u,7u,41u})
+            for (size_t blocks : {1u,3u,17u,64u}) {
+                if (blocks > destinations*tiles) continue;
+                ggml_cuda_fattn_mma_resume_layout layout;
+                t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(destinations,blocks,128,4,8,layout,tiles,true));
+                std::vector<uint32_t> expected(destinations+blocks-1,UINT32_MAX);
+                size_t slots=0;
+                for (size_t block=0;block<blocks;++block) {
+                    const size_t begin=block*destinations*tiles/blocks, stop=(block+1)*destinations*tiles/blocks;
+                    for (size_t d=begin/tiles;d<=(stop-1)/tiles;++d) {
+                        const size_t first=std::max(begin,d*tiles), end=std::min(stop,(d+1)*tiles);
+                        if (end-first > 1) expected[d+block]=uint32_t(slots++);
+                    }
+                }
+                t.assert_equal(slots,layout.slots);
+                t.assert_equal(slots*128*272,layout.bytes);
+                const bool uniform=blocks%destinations == 0 && destinations*tiles/blocks >= 2;
+                t.assert_equal(uniform,layout.block_indexed);
+                t.assert_equal(slots && slots != expected.size() && !uniform ? expected.size() : size_t(0),layout.map_entries);
+                std::vector<uint32_t> actual(expected.size(),0xa5a5a5a5);
+                if (slots) {
+                    t.assert_true(!ggml_cuda_fattn_mma_resume_state_map(destinations,blocks,tiles,actual.data(),actual.size()-1));
+                    t.assert_true(std::all_of(actual.begin(),actual.end(),[](uint32_t x){return x == 0xa5a5a5a5;}));
+                    t.assert_true(ggml_cuda_fattn_mma_resume_state_map(destinations,blocks,tiles,actual.data(),actual.size()));
+                    t.assert_true(actual == expected);
+                }
+            }
+        ggml_cuda_fattn_mma_resume_layout invalid;
+        t.assert_true(!ggml_cuda_fattn_mma_resume_layout_make(INT32_MAX,3,128,4,8,invalid,2,true));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_layout_make(2,5,128,4,8,invalid,2,true));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_layout_make(2,3,128,4,8,invalid,0,true));
+        uint32_t sentinel=123;
+        t.assert_true(!ggml_cuda_fattn_mma_resume_state_map(SIZE_MAX,3,2,&sentinel,1));
+        t.assert_equal(uint32_t(123),sentinel);
+    });
+    t.test("mma_active_wave_blocks_preserve_original_stream_k_intersections",[&](testing & t) {
+        for (int destinations : {1,2,7}) for (int tiles : {1,7,41}) for (int blocks : {1,3,17}) {
+            if (blocks > destinations*tiles) continue;
+            for (int first=0;first<tiles;++first) for (int end=first+1;end<=tiles;++end)
+                for (int block=0;block<blocks;++block) {
+                    const int begin=block*destinations*tiles/blocks, stop=(block+1)*destinations*tiles/blocks;
+                    bool oracle=false;
+                    for (int tile=begin;tile<stop;++tile) oracle|=tile%tiles >= first && tile%tiles < end;
+                    t.assert_equal(oracle,ggml_cuda_fattn_mma_resume_block_active(destinations,tiles,blocks,block,first,end));
+                }
+        }
+        t.assert_true(!ggml_cuda_fattn_mma_resume_block_active(0,41,3,0,0,1));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_block_active(7,41,3,3,0,1));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_block_active(INT32_MAX,41,3,0,0,1));
+        t.assert_true(!ggml_cuda_fattn_mma_resume_block_active(7,41,3,0,4,4));
+    });
     t.test("mma_resume_layout_keeps_stream_k_slices_distinct_and_bounded",[&](testing & t) {
         ggml_cuda_fattn_mma_resume_layout layout;
         t.assert_true(ggml_cuda_fattn_mma_resume_layout_make(12,17,128,8,8,layout));

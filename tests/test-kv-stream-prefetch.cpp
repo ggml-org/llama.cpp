@@ -332,6 +332,33 @@ int main(int argc, char ** argv) {
             t.assert_equal(size_t(0),p.used());
         }
     });
+    t.test("ready_wave_groups_wrapped_runs_without_releasing_dma_fences",[](testing & t) {
+        llama_kv_stream_prefetch_plan p;
+        if (!t.assert_true(p.start({0},4096,4096,256,5,2,4096))) return;
+        llama_kv_stream_prefetch_request request;
+        for (size_t i=0;i<3;++i) {
+            t.assert_true(p.reserve(request)); t.assert_true(p.mark_submitted(i));
+        }
+        t.assert_true(p.consume(2));
+        t.assert_true(p.reserve(request));
+        llama_kv_stream_prefetch_wave wave;
+        t.assert_true(p.ready_wave(96,2,wave));
+        t.assert_equal(size_t(2),wave.requests); t.assert_equal(size_t(3),wave.pages);
+        t.assert_true(p.mark_submitted(2));
+        t.assert_true(p.ready_wave(96,2,wave));
+        t.assert_equal(size_t(3),wave.requests); t.assert_equal(size_t(5),wave.pages);
+        t.assert_equal(size_t(2),wave.spans); t.assert_equal(size_t(5*256),wave.tokens);
+        t.assert_equal(size_t(5),p.used()); t.assert_equal(size_t(3),p.pending());
+        t.assert_true(p.ready_wave(96,1,wave));
+        t.assert_equal(size_t(2),wave.requests); t.assert_equal(size_t(3),wave.pages);
+        t.assert_true(p.ready_wave(2,3,wave)); t.assert_equal(size_t(1),wave.requests);
+        const auto saved=wave;
+        t.assert_true(!p.ready_wave(0,2,wave)); t.assert_equal(saved.requests,wave.requests);
+        t.assert_true(!p.ready_wave(96,0,wave)); t.assert_equal(saved.pages,wave.pages);
+        for (size_t i=0;i<3;++i) { const auto pages=p.front()->pages; t.assert_true(p.consume(pages)); }
+        t.assert_equal(size_t(0),p.used());
+        t.assert_true(!p.ready_wave(96,3,wave));
+    });
     t.test("invalid_padding_does_not_create_a_wholly_empty_source_page", [](testing & t) {
         llama_kv_stream_prefetch_plan p;
         t.assert_true(!p.start({0},300,550,256,2,1,300));
