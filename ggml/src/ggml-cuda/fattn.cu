@@ -729,9 +729,12 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     GGML_ASSERT(K != nullptr);
     GGML_ASSERT(V != nullptr);
 
-    // no f16 copies of K/V (the paged prefill takes its own per part)
-    if (ggml_cuda_fattn_paged_prefill_enabled(device, dst) || ggml_cuda_fattn_paged_decode_enabled(device, dst)) {
-        return ggml_nbytes(dst);
+    // the chunked prefill reserves the f16 copies of one part; the decode kernel needs none
+    if (ggml_cuda_fattn_paged_prefill_enabled(device, dst)) {
+        return ggml_cuda_fattn_paged_prefill_alloc_size(device, dst);
+    }
+    if (ggml_cuda_fattn_paged_decode_enabled(device, dst)) {
+        return ggml_cuda_fattn_paged_decode_alloc_size(device, dst);
     }
 
     const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(device, dst);

@@ -137,6 +137,67 @@ bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) 
     return ggml_cuda_flash_attn_ext_writes_lse(device, &part.dst);
 }
 
+// Scratch of the chunked prefill, after dst in its allocation (so that the graph reserves it): a part's output with its
+// f16 copies of K/V, the part's log-sum-exp, and the merged log-sum-exp.
+struct pd_prefill_scratch {
+    size_t dst_size;
+    size_t part_size;
+    size_t lse_size;
+
+    pd_prefill_scratch(int device, const ggml_tensor * dst) {
+        const ggml_tensor * K = dst->src[1];
+        const int64_t chunk = (int64_t) pd_prefill_chunk_pages()*PD_PAGE;
+        // parts of paged K/V can be as long as a chunk whatever the pool size, parts of contiguous K/V as long as K/V
+        const int64_t n_tok = dst->src[GGML_FA_SRC_PAGES] ? chunk : std::min(chunk, K->ne[1]);
+        pd_part part(dst, nullptr, nullptr, 0, 0, n_tok, nullptr, nullptr);
+        dst_size  = GGML_PAD(ggml_nbytes(dst), 256);
+        // the f16 copies inside a part are aligned to 128 B from the start of the buffer
+        part_size = GGML_PAD(ggml_cuda_flash_attn_ext_get_alloc_size(device, &part.dst) + 256, 256);
+        lse_size  = GGML_PAD(dst->src[0]->ne[1]*dst->src[0]->ne[2]*sizeof(float), 256);
+    }
+
+    size_t total() const { return dst_size + part_size + 2*lse_size; }
+};
+
+size_t ggml_cuda_fattn_paged_prefill_alloc_size(int device, const ggml_tensor * dst) {
+    return pd_prefill_scratch(device, dst).total();
+}
+
+// Launch shape of the decode kernel, and its split partials after dst in dst's allocation.
+struct pd_decode_shape {
+    int n_kv, nb, n_heads, M_TILES, R, n_tiles, n_chunks, n_splits, chunks_per_split;
+    size_t dst_size, o_size, ml_size;
+
+    pd_decode_shape(int device, const ggml_tensor * dst) {
+        const ggml_tensor * Q     = dst->src[0];
+        const ggml_tensor * K     = dst->src[1];
+        const ggml_tensor * pages = dst->src[GGML_FA_SRC_PAGES];
+        n_kv     = pages ? (int) pages->ne[0] * PD_PAGE : (int) K->ne[1];
+        nb       = (int) Q->ne[1];
+        n_heads  = (int) K->ne[2];
+        M_TILES  = nb * PD_GQA <= 16 ? 1 : 2;
+        R        = M_TILES * 16;
+        n_tiles  = (nb * PD_GQA + R - 1) / R; // more than one only for prefill
+        n_chunks = (n_kv + PD_CHUNK - 1) / PD_CHUNK;
+
+        // One resident wave of blocks: three 8-wave blocks per WGP (nsm counts WGPs on RDNA4). More splits add partial
+        // traffic, fewer leave WGPs idle; this was fastest from 8k to 262k tokens.
+        const int want = 3 * ggml_cuda_info().devices[device].nsm;
+        n_splits = std::max(1, std::min(n_chunks, (want + n_heads * n_tiles - 1) / (n_heads * n_tiles)));
+        chunks_per_split = (n_chunks + n_splits - 1) / n_splits;
+        n_splits = (n_chunks + chunks_per_split - 1) / chunks_per_split;
+
+        dst_size = GGML_PAD(ggml_nbytes(dst), 256);
+        o_size   = GGML_PAD((size_t) n_splits * n_heads * n_tiles * R * PD_D * sizeof(float), 256);
+        ml_size  = GGML_PAD((size_t) n_splits * n_heads * n_tiles * R * sizeof(float2), 256);
+    }
+};
+
+size_t ggml_cuda_fattn_paged_decode_alloc_size(int device, const ggml_tensor * dst) {
+    const pd_decode_shape sh(device, dst);
+    return sh.dst_size + sh.o_size + sh.ml_size;
+}
+
 void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
@@ -148,20 +209,9 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
     float scale;
     memcpy(&scale, dst->op_params, sizeof(float));
 
-    const int n_kv = pages ? (int) pages->ne[0] * PD_PAGE : (int) K->ne[1];
-    const int nb = (int) Q->ne[1];
-    const int n_heads = (int) K->ne[2];
-    const int M_TILES = nb * PD_GQA <= 16 ? 1 : 2;
-    const int R = M_TILES * 16;
-    const int n_tiles = (nb * PD_GQA + R - 1) / R; // more than one only for prefill
-    const int n_chunks = (n_kv + PD_CHUNK - 1) / PD_CHUNK;
-
-    // One resident wave of blocks: three 8-wave blocks per WGP (nsm counts WGPs on RDNA4). More splits add partial
-    // traffic, fewer leave WGPs idle; this was fastest from 8k to 262k tokens.
-    const int want = 3 * ggml_cuda_info().devices[ctx.device].nsm;
-    int n_splits = std::max(1, std::min(n_chunks, (want + n_heads * n_tiles - 1) / (n_heads * n_tiles)));
-    const int chunks_per_split = (n_chunks + n_splits - 1) / n_splits;
-    n_splits = (n_chunks + chunks_per_split - 1) / chunks_per_split;
+    const pd_decode_shape sh(ctx.device, dst);
+    const int n_kv = sh.n_kv, nb = sh.nb, n_heads = sh.n_heads, M_TILES = sh.M_TILES, R = sh.R, n_tiles = sh.n_tiles;
+    const int n_chunks = sh.n_chunks, n_splits = sh.n_splits, chunks_per_split = sh.chunks_per_split;
 
     const ggml_tensor * ring_k = dst->src[GGML_FA_SRC_RING_K];
     const ggml_tensor * ring_v = dst->src[GGML_FA_SRC_RING_V];
@@ -170,15 +220,16 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
     const pd_kv kv_v = { (const char *) V->data, table, ring_v ? (const char *) ring_v->data : nullptr, (int64_t) V->nb[1], (int64_t) V->nb[2] };
     const pd_sync sync = pd_get_sync(dst);
 
-    ggml_cuda_pool_alloc<float>  O_part(ctx.pool(), (size_t) n_splits * n_heads * n_tiles * R * PD_D);
-    ggml_cuda_pool_alloc<float2> ML_part(ctx.pool(), (size_t) n_splits * n_heads * n_tiles * R);
+    // reserved after dst by ggml_cuda_fattn_paged_decode_alloc_size()
+    float  * O_part  = (float *)  ((char *) dst->data + sh.dst_size);
+    float2 * ML_part = (float2 *) ((char *) O_part + sh.o_size);
 
     const dim3 grid(n_splits, n_heads, n_tiles);
     const char * mask_data = mask ? (const char *) mask->data : nullptr;
     const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
 #define PD_LAUNCH(M, P, MT) \
     pd_partial<M, P, MT><<<grid, PD_NWARPS * 32, 0, stream>>>((const char *) Q->data, Q->nb[1], Q->nb[2], kv_k, kv_v, sync, \
-        mask_data, mask_nb1, scale, n_kv, nb, n_chunks, chunks_per_split, O_part.get(), ML_part.get(), 0)
+        mask_data, mask_nb1, scale, n_kv, nb, n_chunks, chunks_per_split, O_part, ML_part, 0)
     if (n_tiles > 1) {
         // a 32-row tile spans at most 7 query tokens
         if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }
@@ -189,7 +240,7 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
     }
 #undef PD_LAUNCH
     CUDA_CHECK(cudaGetLastError());
-    pd_combine<<<dim3(nb * PD_GQA, n_heads), PD_D, 0, stream>>>(O_part.get(), ML_part.get(), n_splits, n_tiles * R,
+    pd_combine<<<dim3(nb * PD_GQA, n_heads), PD_D, 0, stream>>>(O_part, ML_part, n_splits, n_tiles * R,
         (char *) dst->data, dst->nb[1], dst->nb[2], sync);
     CUDA_CHECK(cudaGetLastError());
 }
@@ -232,19 +283,19 @@ void ggml_cuda_flash_attn_ext_paged_prefill(ggml_backend_cuda_context & ctx, ggm
     const int64_t n_rows = Q->ne[1]*Q->ne[2];
     const int chunk = pd_prefill_chunk_pages();
 
-    ggml_cuda_pool_alloc<float> acc_lse(ctx.pool(), n_rows);
-    ggml_cuda_pool_alloc<float> part_lse(ctx.pool(), n_rows);
+    const pd_prefill_scratch scratch(ctx.device, dst);
+    char  * part_out = (char *) dst->data + scratch.dst_size;
+    float * part_lse = (float *) (part_out + scratch.part_size);
+    float * acc_lse  = (float *) ((char *) part_lse + scratch.lse_size);
 
     ggml_cuda_fattn_sync_wait(ctx, dst);
 
     bool first = true;
     auto attend = [&](const char * k_base, const char * v_base, int64_t row0, int64_t col0, int64_t n_tok) {
-        pd_part part(dst, k_base, v_base, row0, col0, n_tok, nullptr, part_lse.get());
-        // the f16 copies inside are aligned to 128 B from the start of the buffer
-        ggml_cuda_pool_alloc<char> out(ctx.pool(), ggml_cuda_flash_attn_ext_get_alloc_size(ctx.device, &part.dst) + 256);
-        part.dst.data = out.get();
+        pd_part part(dst, k_base, v_base, row0, col0, n_tok, (float *) part_out, part_lse);
+        GGML_ASSERT(ggml_cuda_flash_attn_ext_get_alloc_size(ctx.device, &part.dst) + 128 <= scratch.part_size);
         ggml_cuda_flash_attn_ext(ctx, &part.dst);
-        pd_merge<<<n_rows, PD_D, 0, stream>>>((float *) dst->data, acc_lse.get(), (const float *) out.get(), part_lse.get(), first);
+        pd_merge<<<n_rows, PD_D, 0, stream>>>((float *) dst->data, acc_lse, (const float *) part_out, part_lse, first);
         CUDA_CHECK(cudaGetLastError());
         first = false;
     };
@@ -319,6 +370,16 @@ bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) 
 void ggml_cuda_flash_attn_ext_paged_prefill(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_UNUSED_VARS(ctx, dst);
     GGML_ABORT("paged prefill attention is only built for HIP");
+}
+
+size_t ggml_cuda_fattn_paged_prefill_alloc_size(int device, const ggml_tensor * dst) {
+    GGML_UNUSED(device);
+    return ggml_nbytes(dst);
+}
+
+size_t ggml_cuda_fattn_paged_decode_alloc_size(int device, const ggml_tensor * dst) {
+    GGML_UNUSED(device);
+    return ggml_nbytes(dst);
 }
 
 void ggml_cuda_fattn_sync_wait(ggml_backend_cuda_context & ctx, const ggml_tensor * dst) {
