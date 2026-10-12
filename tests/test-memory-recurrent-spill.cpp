@@ -1,4 +1,5 @@
 #include "../src/llama-memory-recurrent-spill.h"
+#include "../ggml/src/ggml-backend-memory.h"
 #include "testing.h"
 #include "ggml-cpp.h"
 #include "ggml-cpu.h"
@@ -135,6 +136,42 @@ int main(int argc, char ** argv) {
             t.assert_equal(456u,sentinel.verification_rows);
             t.assert_equal(789u,sentinel.workspace_rows);
         }
+    });
+    t.test("publication_stage_can_borrow_exact_persistent_storage_but_not_during_capture", [](testing & t) {
+        auto * type=ggml_backend_cpu_buffer_type();
+        ggml_backend_ptr backend(ggml_backend_cpu_init());
+        auto * device=ggml_backend_get_device(backend.get());
+        llama_recurrent_spill_layout snapshots;
+        if (!t.assert_true(llama_recurrent_spill_layout_make({{GGML_TYPE_F32,GGML_TYPE_F32,4,8,true}},1,3,snapshots))) return;
+        auto bank=llama_recurrent_spill_bank::create(snapshots,type,77,0);
+        if (!t.assert_true(bank && bank->enable_publication(device,type,2))) return;
+        const size_t bytes=bank->staged_device_bytes(), a=ggml_backend_buft_get_alignment(type);
+        auto * arena=ggml_backend_memory_arena_new(type,bytes+2*a);
+        if (!t.assert_true(arena && ggml_backend_memory_arena_begin(arena,0) &&
+                ggml_backend_memory_arena_reserve_at(arena,9,a,bytes,a,GGML_BACKEND_MEMORY_REGION_PERSISTENT,nullptr) &&
+                ggml_backend_memory_arena_commit(arena))) return;
+        auto * lease=ggml_backend_memory_arena_acquire(arena,9);
+        if (!t.assert_true(lease && bank->bind_publication_stage(lease))) return;
+        const auto base=uintptr_t(ggml_backend_buffer_get_base(ggml_backend_memory_lease_buffer(lease)));
+        auto * tensor=bank->staging_tensor(0,true,3);
+        t.assert_true(uintptr_t(tensor->data) >= base && uintptr_t(tensor->data)+ggml_nbytes(tensor) <= base+bytes);
+        for (bool persistent : {false,true}) {
+            const size_t size=persistent ? bytes-1 : bytes;
+            std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)> bad(
+                ggml_backend_memory_arena_new(type,bytes+2*a),ggml_backend_memory_arena_free);
+            if (!t.assert_true(bad && ggml_backend_memory_arena_begin(bad.get(),0) &&
+                    ggml_backend_memory_arena_reserve_at(bad.get(),9,a,size,a,persistent ? GGML_BACKEND_MEMORY_REGION_PERSISTENT : 0,nullptr) &&
+                    ggml_backend_memory_arena_commit(bad.get()))) return;
+            auto * short_grant=ggml_backend_memory_arena_acquire(bad.get(),9);
+            t.assert_true(!bank->bind_publication_stage(short_grant) && bank->staging_tensor(0,true,3) == tensor);
+            ggml_backend_memory_lease_free(short_grant);
+        }
+        t.assert_true(bank->begin_staged_capture({77,0,1},4));
+        t.assert_true(!bank->bind_publication_stage(lease));
+        bank->cancel();
+        t.assert_true(bank->staged_publication_enabled());
+        ggml_backend_memory_lease_free(lease); ggml_backend_memory_arena_free(arena);
+        t.assert_true(bank->staging_tensor(0,true,3) == tensor);
     });
     t.test("queued_recurrent_transfer_failure_invalidates_or_poison_restores", [](testing & t) {
         ggml_backend_ptr backend(ggml_backend_cpu_init());

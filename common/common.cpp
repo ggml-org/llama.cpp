@@ -1240,6 +1240,32 @@ bool common_params_uses_streamed_mtp(const common_params & params) {
             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 }
 
+bool common_params_uses_streamed_dflash(const common_params & params) {
+    return (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) &&
+        std::find(params.speculative.types.begin(),params.speculative.types.end(),COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
+}
+
+const char * common_streamed_dflash_config_error(const common_params & params) {
+    if (!common_params_uses_streamed_dflash(params)) return nullptr;
+    if (!params.shared_device_memory_bytes || params.kv_stream_pool_bytes || params.fit_params)
+        return "adaptive DFlash2 requires a declared --kv-stream-arena-mib budget and --fit off";
+    if (params.n_parallel != 1 || params.kv_stream_auxiliary_layers ||
+            std::any_of(params.speculative.types.begin(),params.speculative.types.end(),[](auto type) {
+                return type != COMMON_SPECULATIVE_TYPE_NONE && type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            })) return "adaptive DFlash2 requires one serial slot, no auxiliary MTP layers and no other speculative mode";
+    if (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 7)
+        return "adaptive DFlash2 supports 1-7 draft tokens";
+    if (!params.mmproj.path.empty()) return "adaptive DFlash2 currently supports text only, without mmproj";
+    if (params.n_batch != 256 || params.n_ubatch != 256 || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
+            params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0)
+        return "adaptive DFlash2 currently requires 256/256 batching, -fa on, and target Q8_0 K/Q4_0 V";
+    const auto & draft=params.speculative.draft;
+    if (!((draft.cache_type_k == GGML_TYPE_F16 && draft.cache_type_v == GGML_TYPE_F16) ||
+            (draft.cache_type_k == GGML_TYPE_Q8_0 && draft.cache_type_v == GGML_TYPE_Q4_0)))
+        return "adaptive DFlash2 currently qualifies independent draft F16/F16 or Q8_0/Q4_0 KV";
+    return nullptr;
+}
+
 uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers) {
     if (!common_params_uses_streamed_mtp(params)) {
         if (params.kv_stream_auxiliary_layers) {

@@ -1006,6 +1006,9 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
 // Detect intent before model metadata is available; this does not establish backend support.
 bool common_params_uses_streamed_mtp(const common_params & params);
+bool common_params_uses_streamed_dflash(const common_params & params);
+// Configuration checks precede model-specific geometry and compiled-path qualification.
+const char * common_streamed_dflash_config_error(const common_params & params);
 // Resolve the count before context allocation; reject missing metadata and conflicting legacy values.
 uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers);
 

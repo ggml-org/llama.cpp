@@ -199,6 +199,8 @@ int main(int argc, char ** argv) {
         cache.format={GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,32,32,1,false}; cache.row_bytes=52;
         llama_memory_bounded_kv_layout layout;
         if (!t.assert_true(llama_memory_bounded_kv_layout_make(cache,{9},f.groups[0].buft,layout))) return;
+        auto stage=parent->reserve_staging(1024);
+        if (!t.assert_true(bool(stage))) return;
         auto grant=parent->reserve_bounded_cache(layout);
         if (!t.assert_true(bool(grant))) return;
         t.assert_true(parent->has_bounded_cache() && parent->covers_workspace(plan));
@@ -226,6 +228,7 @@ int main(int argc, char ** argv) {
         parent.reset();
         t.assert_true(ggml_backend_memory_lease_buffer(grant->lease()) != nullptr);
         grant.reset();
+        stage.reset();
     });
 
     t.test("repeated_graph_rebuild_and_workspace_recreation", [&](testing & t) {

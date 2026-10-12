@@ -665,6 +665,9 @@ bool llama_memory_recurrent::capture_spill(ggml_backend_sched_t sched,
 }
 
 const llama_recurrent_spill_bank * llama_memory_recurrent::spill_bank() const noexcept { return spill.get(); }
+bool llama_memory_recurrent::bind_spill_stage(ggml_backend_memory_lease_t lease) {
+    return spill && spill->bind_publication_stage(lease);
+}
 uint64_t llama_memory_recurrent::spill_generation() const noexcept { return spill_epoch; }
 
 bool llama_memory_recurrent_context::spill_enabled() const { return mem && mem->spill_enabled(); }

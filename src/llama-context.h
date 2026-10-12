@@ -74,6 +74,7 @@ struct llama_context {
     bool uses_memory_coordinator() const;
     // Internal diagnostics; the context retains ownership of this scheduler coordinator.
     const llama_context_memory * get_compute_memory() const noexcept;
+    bool serial_features_match(const llama_batch_ext & batch,const int32_t * layers,uint32_t count) const;
     // Resume bounded device grants and discard graph metadata from the previous binding.
     bool resume_kv_device(llama_memory_text_phase phase);
 
@@ -383,7 +384,8 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
-    std::unique_ptr<llama_context_memory_cache> serial_cache;
+    std::unique_ptr<llama_context_memory_loan> serial_cache;
+    std::unique_ptr<llama_context_memory_loan> publication_stage;
     // Memory consumers may drain backend work during teardown, including constructor-failure unwinding.
     llama_memory_ptr memory;
 
@@ -397,6 +399,9 @@ private:
     // Validated source context outlives this MTP context; no cross-context ownership cycle.
     llama_context * mtp_target_ctx = nullptr;
     llama_context * serial_target_ctx = nullptr;
+    bool serial_feature_producer = false;
+    std::vector<int32_t> serial_feature_layers;
+    std::vector<std::pair<llama_token,llama_pos>> serial_feature_rows;
 
     llama_compute_reserve_state sched_reserve_state;
 

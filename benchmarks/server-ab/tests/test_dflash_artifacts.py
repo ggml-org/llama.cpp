@@ -366,6 +366,15 @@ class OrdinaryControls(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.controls.validate_result(dict(result, tokens=[4]), 2304, 32)
 
+    def test_streamed_command_declares_one_arena_without_auxiliary_layers(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(server=Path("server"),target=Path("target"),draft=Path("draft"),
+                               port=12351,draft_k="f16",draft_v="f16",arena_mib=1536)
+        command=self.controls.server_command(args,16384,7)
+        self.assertEqual(command[command.index("--kv-stream-arena-mib")+1],"1536")
+        self.assertNotIn("--kv-stream-pool-mib",command)
+        self.assertNotIn("--kv-stream-auxiliary-layers",command)
+
     def test_capacity_failure_does_not_hide_kernel_or_other_failure(self):
         for text in ("CUDA error: out of memory", "cudaMalloc failed: out of memory"):
             self.assertEqual(self.controls.failure_kind(text), "capacity_failure")

@@ -2,6 +2,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "../ggml/src/ggml-backend-memory.h"
 
 #include <cstddef>
 #include <memory>
@@ -77,7 +78,7 @@ class llama_recurrent_stage_buffer {
 public:
     static std::unique_ptr<llama_recurrent_stage_buffer> create(
             const llama_recurrent_spill_layout & snapshots, uint32_t slots,
-            ggml_backend_buffer_type_t device_type);
+            ggml_backend_buffer_type_t device_type, ggml_backend_memory_lease_t borrowed = nullptr);
     ~llama_recurrent_stage_buffer();
     llama_recurrent_stage_buffer(const llama_recurrent_stage_buffer &) = delete;
     llama_recurrent_stage_buffer & operator=(const llama_recurrent_stage_buffer &) = delete;
@@ -111,6 +112,8 @@ public:
     bool enable_publication(ggml_backend_dev_t device, ggml_backend_buffer_type_t stage_type, uint32_t slots);
     bool staged_publication_enabled() const noexcept;
     size_t staged_device_bytes() const noexcept;
+    // Retire graph users first; only idle publication can replace its ephemeral staging addresses.
+    bool bind_publication_stage(ggml_backend_memory_lease_t lease);
     ggml_tensor * publication_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
     ggml_tensor * staging_tensor(size_t layer, bool value, uint32_t snapshot) const noexcept;
     bool begin_staged_capture(llama_recurrent_spill_identity identity, uint32_t tokens);

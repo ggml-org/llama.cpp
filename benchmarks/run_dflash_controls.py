@@ -29,7 +29,7 @@ SPEC.loader.exec_module(SWEEP)
 def server_command(args, context, depth):
     if depth not in (1, 3, 7) or not 512 <= context <= 262144:
         raise ValueError("ordinary control requires D=1,3,7 and a valid context")
-    return [str(args.server), "--model", str(args.target), "--model-draft", str(args.draft),
+    command = [str(args.server), "--model", str(args.target), "--model-draft", str(args.draft),
             "--spec-type", "draft-dflash", "--spec-draft-n-max", str(depth),
             "--spec-draft-n-min", "0", "--spec-draft-p-min", "0",
             "--ctx-size", str(context), "--batch-size", "256", "--ubatch-size", "256",
@@ -38,6 +38,12 @@ def server_command(args, context, depth):
             "--spec-draft-type-k", args.draft_k, "--spec-draft-type-v", args.draft_v,
             "--fit", "off", "--no-mmproj", "--host", "127.0.0.1", "--port", str(args.port),
             "--threads", "8", "--threads-batch", "8", "-lv", "3"]
+    arena = getattr(args, "arena_mib", 0)
+    if arena < 0:
+        raise ValueError("negative arena size")
+    if arena:
+        command += ["--kv-stream-arena-mib", str(arena)]
+    return command
 
 
 def validate_result(result, prompt_tokens, decode_tokens):
@@ -259,6 +265,10 @@ def run_point(args, context, depth, token_cache, mode):
     env.pop("DFLASH_CONTROL_TRACE", None)
     env.pop("DFLASH_CONTROL_CAPTURE", None)
     env.pop("LLAMA_RS_HOST_SPILL", None)
+    env.pop("LLAMA_RS_STAGED_PUBLICATION", None)
+    if getattr(args, "rs_host_spill", False):
+        env["LLAMA_RS_HOST_SPILL"] = "1"
+        env["LLAMA_RS_STAGED_PUBLICATION"] = "1"
     if mode != "timing":
         env["LD_PRELOAD"] = str(args.trace_library)
         env["DFLASH_CONTROL_TRACE"] = str(directory)
@@ -284,7 +294,7 @@ def run_point(args, context, depth, token_cache, mode):
                 raise ValueError("insufficient context/corpus for ordinary control")
             result = stream_completion(url+"/completion", {"prompt": token_cache["tokens"][:count],
                 "n_predict": args.decode_tokens, "temperature": 0, "seed": 123, "ignore_eos": True,
-                "cache_prompt": False, "stream": True, "return_tokens": True}, timeout=600)
+                "cache_prompt": False, "stream": True, "return_tokens": True}, timeout=args.request_timeout)
             validate_result(result, count, args.decode_tokens)
             row.update(status="ok", prompt_tokens=count, decode_tokens=args.decode_tokens, result=result)
         except Exception as error:
@@ -299,8 +309,10 @@ def run_point(args, context, depth, token_cache, mode):
             trace = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
             row["trace"] = summarize_trace(trace, depth)
             row["trace"]["verified_payloads"] = validate_payloads(directory, trace)
-            if context >= 2304:
+            if context >= 2304 and not args.arena_mib and not args.rs_host_spill:
                 row["fit_ledger"] = fit_ledger(row, trace)
+            if args.arena_mib:
+                row["declared_arena_bytes"] = args.arena_mib*1024*1024
         except Exception as error:
             row.update(status="failed", error=str(error))
     return row
@@ -322,10 +334,17 @@ def main():
     parser.add_argument("--compare-to", type=Path,
                         help="require byte-exact captured data against matching independent native controls")
     parser.add_argument("--port", type=int, default=12351)
+    parser.add_argument("--arena-mib", type=int, default=0,
+                        help="qualify streamed execution in this declared arena; zero uses native storage")
+    parser.add_argument("--rs-host-spill", action="store_true",
+                        help="use the same two-slot staged rollback in the native control to keep it physically fitting")
+    parser.add_argument("--request-timeout", type=float, default=1800,
+                        help="completion timeout in seconds, including long-context prefill")
     args = parser.parse_args()
     contexts = [int(value) for value in args.contexts.split(",")]
     depths = [int(value) for value in args.depths.split(",")]
-    if args.decode_tokens < 8 or args.prompt_tokens < 256 or not 1 <= args.port <= 65535:
+    if (args.arena_mib < 0 or args.decode_tokens < 8 or args.prompt_tokens < 256 or not 1 <= args.port <= 65535
+            or not math.isfinite(args.request_timeout) or not 1 <= args.request_timeout <= 43200):
         parser.error("invalid token or port bounds")
     for context in contexts:
         for depth in depths:

@@ -9,6 +9,10 @@
 #include <cstdint>
 #include <map>
 
+// Serial text consumers may read only outputs from the matching successful target invocation.
+LLAMA_API bool llama_serial_features_match(llama_context * ctx,const llama_batch_ext * batch,
+        const int32_t * layers = nullptr,uint32_t count = 0);
+
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
         struct llama_context * ctx,

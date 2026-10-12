@@ -26,6 +26,7 @@ bool kv_stream_test_native_graphs_enabled();
 
 using context_ptr = std::unique_ptr<llama_context,decltype(&llama_free)>;
 using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
+#include "kv-stream-dflash-test.h"
 static bool auxiliary_control = false, embedded_mtp_control = false, target_tg3_control = false, target_stream_tg4_control = false;
 static bool suspend_control = false;
 static bool suspend_resident_only = false;
@@ -42,6 +43,7 @@ static bool serial_workspace_growth = false;
 static bool mtp_bit_exact_control = false;
 static const char * dflash_native_model = nullptr;
 static bool dflash_shared_workspace_control = false;
+static bool dflash_exact_control = false;
 
 // Qualify ordinary feature injection without a stream pool or a shared phase arena.
 static void test_dflash_native(testing & t, llama_model * model) {
@@ -89,6 +91,11 @@ static void test_dflash_native(testing & t, llama_model * model) {
         const auto bytes=ggml_backend_buffer_get_size(parent);
         if (!t.assert_true(ggml_backend_buffer_is_view(k->buffer) && uintptr_t(k->data) >= base &&
                 uintptr_t(k->data)-base < bytes && ggml_nbytes(k) <= bytes-(uintptr_t(k->data)-base))) return;
+        auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
+        const auto * bank=hybrid->get_mem_recr()->spill_bank();
+        auto * stage=bank ? bank->staging_tensor(0,true,1) : nullptr;
+        if (!t.assert_true(stage && ggml_backend_buffer_is_view(stage->buffer) && uintptr_t(stage->data) >= base &&
+                uintptr_t(stage->data)-base < bytes && ggml_nbytes(stage) <= bytes-(uintptr_t(stage->data)-base))) return;
     }
     llama_memory_bounded_kv_layout storage;
     if (!t.assert_true(stock->get_swa()->describe_bounded_storage(903,1,4096,256,storage))) return;
@@ -111,7 +118,14 @@ static void test_dflash_native(testing & t, llama_model * model) {
     const auto tokens = common_tokenize(target.get(), "An ordinary DFlash2 feature injection control. ", true);
     common_batch batch(target.get());
     for (int i = 0; i < 256; ++i) batch.add(tokens[size_t(i)%tokens.size()], i, 0, i == 255);
+    if (dflash_shared_workspace_control) t.assert_true(!llama_serial_features_match(target.get(),batch.get()));
     if (!t.assert_equal(0, llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()))) return;
+    if (dflash_shared_workspace_control) {
+        t.assert_true(llama_serial_features_match(target.get(),batch.get()));
+        common_batch wrong_position(target.get());
+        for (int i=0;i<256;++i) wrong_position.add(tokens[size_t(i)%tokens.size()],i+1,0,i == 255);
+        t.assert_true(!llama_serial_features_match(target.get(),wrong_position.get()));
+    }
     const auto injection=cache_owner->begin_write({903,1});
     if (!t.assert_true(injection != 0)) return;
     const auto injected=common_speculative_process(spec.get(), batch);
@@ -644,6 +658,19 @@ int main(int argc,char ** argv) {
 #endif
     testing t;
     test_kv_stream_bit_exact_comparator(t);
+    t.test("selector_lattice_permutations_preserve_scores_but_one_bit_changes_do_not",[](testing & t) {
+        std::vector<float> a{0,0,0,0,0,0,4,2,0.2f,0.4f,0.2f,0.4f};
+        auto b=a;
+        b[6]=2; b[7]=4; b[8]=b[10]=0.4f; b[9]=b[11]=0.2f;
+        const auto canonical=dflash_exact_lattice(a.data(),2,6,2,16);
+        t.assert_true(canonical == dflash_exact_lattice(b.data(),2,6,2,16));
+        uint32_t bits; std::memcpy(&bits,&b[8],sizeof(bits)); bits^=1;
+        std::memcpy(&b[8],&bits,sizeof(bits)); b[10]=b[8];
+        t.assert_true(canonical != dflash_exact_lattice(b.data(),2,6,2,16));
+        a.insert(a.end(),{3,5,0.1f,0.2f,0.3f,0.4f});
+        b={0,0,0,0,0,0,2,4,0.4f,0.2f,0.4f,0.2f,5,3,0.4f,0.3f,0.2f,0.1f};
+        t.assert_true(dflash_exact_lattice(a.data(),3,6,2,16) == dflash_exact_lattice(b.data(),3,6,2,16));
+    });
     t.test("streaming_is_disabled_by_default", [&](testing & t) {
         const auto defaults = llama_context_default_params();
         t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
@@ -654,6 +681,7 @@ int main(int argc,char ** argv) {
     for (int i = 3; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--dflash-native") && i+1 < argc) dflash_native_model = argv[++i];
         if (!std::strcmp(argv[i], "--dflash-shared-workspace")) dflash_shared_workspace_control = true;
+        if (!std::strcmp(argv[i], "--dflash-bit-exact")) dflash_exact_control = true;
         f16_control = f16_control || !std::strcmp(argv[i],"--f16");
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
@@ -700,12 +728,17 @@ int main(int argc,char ** argv) {
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe || serial_workspace_growth || mtp_bit_exact_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
-    if (dflash_native_model) {
+    if (dflash_native_model && !dflash_exact_control) {
         if (!t.assert_true(bool(model))) return t.summary();
         t.test("ordinary_dflash_feature_workspace", [&](testing & t) { test_dflash_native(t, model.get()); });
         return t.summary();
     }
     if (!t.assert_true(bool(model))) return t.summary();
+    if (dflash_exact_control) {
+        if (!t.assert_true(dflash_native_model != nullptr)) return t.summary();
+        t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) { test_kv_stream_dflash_exact(t,model.get(),dflash_native_model); });
+        return t.summary();
+    }
     if (wide_rollback_control) {
         t.test("target_TG1_TG8_rollback_matches_native_without_draft_KV", [&](testing & t) {
             test_wide_target_rollback(t,model.get());

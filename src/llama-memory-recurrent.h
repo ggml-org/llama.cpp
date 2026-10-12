@@ -82,6 +82,7 @@ public:
     bool capture_spill(ggml_backend_sched_t sched,
             const std::vector<llm_graph_recurrent_snapshot> & outputs);
     const llama_recurrent_spill_bank * spill_bank() const noexcept;
+    bool bind_spill_stage(ggml_backend_memory_lease_t lease);
     uint64_t spill_generation() const noexcept;
     // number of recurrent-state snapshots per seq for rollback; tensors are widened to (1 + n_rs_seq) groups
     uint32_t n_rs_seq = 0;

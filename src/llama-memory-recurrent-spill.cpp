@@ -145,6 +145,7 @@ struct llama_recurrent_stage_buffer::implementation {
     ggml_context * ctx = nullptr;
     ggml_backend_buffer_t backing = nullptr;
     std::vector<ggml_tensor *> tensors;
+    std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> lease{nullptr,ggml_backend_memory_lease_free};
 
     ~implementation() {
         if (backing) ggml_backend_buffer_free(backing);
@@ -161,7 +162,7 @@ llama_recurrent_stage_buffer::~llama_recurrent_stage_buffer() = default;
 
 std::unique_ptr<llama_recurrent_stage_buffer> llama_recurrent_stage_buffer::create(
         const llama_recurrent_spill_layout & snapshots, uint32_t slots,
-        ggml_backend_buffer_type_t device_type) {
+        ggml_backend_buffer_type_t device_type, ggml_backend_memory_lease_t borrowed) {
     if (!device_type) return {};
     try {
         auto state=std::make_unique<implementation>();
@@ -194,7 +195,16 @@ std::unique_ptr<llama_recurrent_stage_buffer> llama_recurrent_stage_buffer::crea
                 }
             }
         }
-        state->backing=ggml_backend_buft_alloc_buffer(device_type,state->planned.total_bytes);
+        if (borrowed) {
+            ggml_backend_memory_region region{};
+            auto * buffer=ggml_backend_memory_lease_buffer(borrowed);
+            if (!ggml_backend_memory_lease_get_region(borrowed,&region) ||
+                    !(region.flags&GGML_BACKEND_MEMORY_REGION_PERSISTENT) ||
+                    !buffer || ggml_backend_buffer_get_type(buffer) != device_type ||
+                    region.size < state->planned.total_bytes || region.alignment < state->planned.alignment) return {};
+            state->lease.reset(ggml_backend_memory_lease_retain(borrowed));
+            state->backing=ggml_backend_buffer_retain(buffer);
+        } else state->backing=ggml_backend_buft_alloc_buffer(device_type,state->planned.total_bytes);
         if (!state->backing || ggml_backend_buffer_get_size(state->backing) < state->planned.total_bytes ||
                 !ggml_backend_buffer_get_base(state->backing)) return {};
         auto * base=static_cast<uint8_t *>(ggml_backend_buffer_get_base(state->backing));
@@ -533,6 +543,22 @@ bool llama_recurrent_spill_bank::staged_publication_enabled() const noexcept {
 }
 size_t llama_recurrent_spill_bank::staged_device_bytes() const noexcept {
     return impl->publication ? impl->publication->stage->bytes() : 0;
+}
+
+bool llama_recurrent_spill_bank::bind_publication_stage(ggml_backend_memory_lease_t lease) {
+    auto & s=*impl;
+    if (!lease || !s.publication || s.state != spill_transfer_state::idle || s.publication->active) return false;
+    auto * buffer=ggml_backend_memory_lease_buffer(lease);
+    auto * type=buffer ? ggml_backend_buffer_get_type(buffer) : nullptr;
+    if (!type || !ggml_backend_dev_supports_buft(s.device,type)) return false;
+    auto next=llama_recurrent_stage_buffer::create(s.layout,s.publication->stage->layout().slots,type,lease);
+    if (!next) return false;
+    if (s.publication->producer) ggml_backend_synchronize(s.publication->producer);
+    ggml_backend_synchronize(s.publication->copy_backend);
+    s.publication->stage=std::move(next);
+    std::fill(s.publication->slot_busy.begin(),s.publication->slot_busy.end(),0);
+    s.publication->producer=nullptr;
+    return true;
 }
 
 

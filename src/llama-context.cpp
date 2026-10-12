@@ -37,9 +37,9 @@ static void llama_log_memory_phase(const llama_context_memory * memory) {
     llama_context_memory_diagnostics d;
     if (!memory || !memory->diagnostics(d)) return;
     const char * phase = d.kv_device_suspended ? "suspended" : d.phase == llama_memory_text_phase::decode ? "decode" : "prefill";
-    LLAMA_LOG_WARN("memory_phase: phase=%s parent=%zu compute=%zu kv_pool=%zu writer=%zu attention=%zu unused=%zu reclaimed_compute=%zu capture=external transition_us=%" PRIu64 " arena_gen=%" PRIu64 " kv_revision=%" PRIu64 " resident_pages=%u ring_slots=%u active_pages=%u streaming=%d last_h2d_bytes=%zu last_h2d_calls=%zu copy_ms=%.3f elapsed_ms=%.3f\n",
+    LLAMA_LOG_WARN("memory_phase: phase=%s parent=%zu compute=%zu kv_pool=%zu writer=%zu attention=%zu persistent_kv=%zu publication_stage=%zu unused=%zu reclaimed_compute=%zu capture=external transition_us=%" PRIu64 " arena_gen=%" PRIu64 " kv_revision=%" PRIu64 " resident_pages=%u ring_slots=%u active_pages=%u streaming=%d last_h2d_bytes=%zu last_h2d_calls=%zu copy_ms=%.3f elapsed_ms=%.3f\n",
         phase,d.parent_bytes,d.workspace_bytes,d.kv_pool_bytes,d.kv_writer_bytes,
-        d.kv_attention_bytes,d.unused_bytes,d.reclaimed_workspace_bytes,
+        d.kv_attention_bytes,d.persistent_cache_bytes,d.publication_stage_bytes,d.unused_bytes,d.reclaimed_workspace_bytes,
         d.last_transition_us,d.arena_generation,d.layout_revision,
         d.resident_pages_per_layer,d.ring_slots,d.active_pages,
         int(d.streaming_active),d.last_copy_bytes,d.last_copy_calls,
@@ -351,6 +351,8 @@ llama_context::llama_context(
             }
         }
         // Configure every retained feature before a child can capture the target's arena addresses.
+        target->serial_feature_producer=true;
+        target->serial_feature_layers=model.target_layer_ids;
         for (auto id : model.target_layer_ids) target->set_embeddings_layer_inp(uint32_t(id),true);
         target->sched_reserve();
         serial_target_ctx=target;
@@ -545,8 +547,21 @@ llama_context::llama_context(
             auto * parent=serial_target_ctx->compute_memory.get();
             auto * buft=ggml_backend_buffer_get_type(parent->shared_parent());
             llama_memory_bounded_kv_layout layout;
-            if (!llama_memory_bounded_kv_layout_make(cache,ids,buft,layout) ||
-                    !(serial_cache=parent->reserve_bounded_cache(layout))) {
+            if (!llama_memory_bounded_kv_layout_make(cache,ids,buft,layout)) {
+                throw std::runtime_error("invalid bounded draft allocation quote");
+            }
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(serial_target_ctx->memory.get());
+            auto * recurrent=hybrid ? hybrid->get_mem_recr() : nullptr;
+            const auto * bank=recurrent ? recurrent->spill_bank() : nullptr;
+            if (bank && bank->staged_device_bytes() && !serial_target_ctx->publication_stage) {
+                auto stage=parent->reserve_staging(bank->staged_device_bytes());
+                if (!stage || !recurrent->bind_spill_stage(stage->lease()))
+                    throw std::runtime_error("rollback publication staging does not fit the declared serial arena");
+                serial_target_ctx->publication_stage=std::move(stage);
+                serial_target_ctx->sched_reserve_state.invalidate();
+                serial_target_ctx->sched_reserve();
+            }
+            if (!(serial_cache=parent->reserve_bounded_cache(layout))) {
                 throw std::runtime_error("bounded draft KV does not fit the declared serial arena");
             }
             params_mem.bounded_cache_lease=serial_cache->lease();
@@ -700,7 +715,7 @@ llama_context::~llama_context() {
     // Release scheduler leases while the backend objects are still alive.
     release_kv_workspaces(true);
     compute_memory.reset();
-    if (serial_cache) { memory.reset(); serial_cache.reset(); }
+    if (serial_cache || publication_stage) { memory.reset(); serial_cache.reset(); publication_stage.reset(); }
     sched.reset();
     compute_arenas.clear();
 }
@@ -820,7 +835,7 @@ bool llama_context::prepare_compute_arenas(
     if (!llama_compute_workspace_plan_make(backend_buft, measurements, n_phases, plan)) {
         return false;
     }
-    if (compute_memory && (serial_cache || compute_memory->has_bounded_cache())) {
+    if (compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache())) {
         return compute_memory->covers_workspace(plan);
     }
 
@@ -870,7 +885,7 @@ void llama_context::sched_reserve() {
 
     synchronize();
     release_kv_workspaces(false);
-    const bool keep_parent=compute_memory && (serial_cache || compute_memory->has_bounded_cache());
+    const bool keep_parent=compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache());
     if (keep_parent) {
         if (!compute_memory->retire_graph()) throw std::runtime_error("failed to retire serial arena graph");
         if (serial_cache) {
@@ -973,7 +988,16 @@ void llama_context::sched_reserve() {
         if (cparams.serial_block_rows) {
             for (uint32_t width=1;width<=cparams.serial_block_rows;++width) {
                 std::vector<size_t> block(backend_ptrs.size());
-                if (!graph_reserve(width,1,std::min(width,cparams.n_outputs_max),mctx.get(),true,block.data())) return false;
+                auto * graph=graph_reserve(width,1,std::min(width,cparams.n_outputs_max),mctx.get(),true,block.data());
+                if (!graph) return false;
+                for (int node=0;node<ggml_graph_n_nodes(graph);++node) {
+                    auto * op=ggml_graph_node(graph,node);
+                    if (op->op != GGML_OP_FLASH_ATTN_EXT) continue;
+                    bool supported=false;
+                    for (auto * backend : backend_ptrs) if (ggml_backend_get_device(backend) == model.devices.front().dev)
+                        supported=ggml_backend_supports_op(backend,op);
+                    if (!supported) throw std::runtime_error("no compiled device-valid native attention for serial draft block");
+                }
                 for (size_t i=0;i<backend_ptrs.size();++i) {
                     measurements[i]=std::max(measurements[i],block[i]);
                     measurements[backend_ptrs.size()+i]=std::max(measurements[backend_ptrs.size()+i],block[i]);
@@ -1185,6 +1209,24 @@ const llama_context_memory * llama_context::get_compute_memory() const noexcept 
 
 llama_context_memory * llama_context_compute_memory(llama_context * ctx) noexcept {
     return ctx ? const_cast<llama_context_memory *>(ctx->get_compute_memory()) : nullptr;
+}
+
+bool llama_context::serial_features_match(const llama_batch_ext & batch,const int32_t * ids,uint32_t count) const {
+    if (!serial_feature_producer || serial_feature_rows.empty() || serial_feature_rows.size() != batch.tokens.size() ||
+            !memory || memory->seq_pos_max(0) != serial_feature_rows.back().second) return false;
+    if ((ids || count) && (!ids || count != serial_feature_layers.size() ||
+            !std::equal(serial_feature_layers.begin(),serial_feature_layers.end(),ids))) return false;
+    for (auto id : serial_feature_layers) if (!cparams.embeddings_layer_inp[uint32_t(id)]) return false;
+    for (size_t i=0;i<batch.tokens.size();++i) {
+        const auto & token=batch.tokens[i];
+        if (token.has_embd || token.seq_ids.size() != 1 || !token.seq_ids.count(0) ||
+                token.id != serial_feature_rows[i].first || token.pos[0] != serial_feature_rows[i].second) return false;
+    }
+    return true;
+}
+
+bool llama_serial_features_match(llama_context * ctx,const llama_batch_ext * batch,const int32_t * ids,uint32_t count) {
+    return ctx && batch && ctx->serial_features_match(*batch,ids,count);
 }
 bool llama_context_suspend_kv_device(llama_context * ctx) noexcept {
     if (!ctx || !ctx->get_cparams().kv_streaming()) return false;
@@ -2293,6 +2335,7 @@ int llama_decode_mtp_embeddings(llama_context * ctx, const llama_batch_ext & bat
 }
 
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    if (serial_feature_producer) serial_feature_rows.clear();
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model.arch == LLM_ARCH_QWEN35 && !mtp_visual_hidden &&
             std::any_of(batch_inp.tokens.begin(), batch_inp.tokens.end(), [](const auto & token) {
                 return token.id == LLAMA_TOKEN_NULL && token.has_embd;
@@ -2817,6 +2860,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (serial_feature_producer) {
+        serial_feature_rows.reserve(batch_inp.tokens.size());
+        for (const auto & token : batch_inp.tokens) serial_feature_rows.emplace_back(token.id,token.pos[0]);
+    }
 
     return 0;
 }
@@ -4235,6 +4283,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
 }
 
 size_t llama_context::state_read_data(llama_io_read_i & io) {
+    serial_feature_rows.clear();
     LLAMA_LOG_DEBUG("%s: reading state\n", __func__);
 
     // read model info
@@ -4269,6 +4318,7 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 }
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    serial_feature_rows.clear();
 
     if (memory) {
         memory->state_read(io, seq_id, flags);
