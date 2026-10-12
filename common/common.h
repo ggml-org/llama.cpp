@@ -597,6 +597,9 @@ struct common_params {
 
     size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
 
+    bool   kv_stream        = false; // KV streaming [EXPERIMENTAL]: keep the context in host memory, kv_resident_size of it on the GPU
+    size_t kv_resident_size = 0;     // device bytes for resident K/V pages
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

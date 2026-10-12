@@ -899,6 +899,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    if (params.kv_stream && params.kv_resident_size == 0) {
+        throw std::invalid_argument("error: --kv-stream requires --kv-resident-mib\n");
+    }
+
     const bool skip_model_download =
         // server will call common_params_handle_models() later, so we skip it here
         ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
@@ -2787,6 +2791,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_cache_size = (size_t) value*1024*1024;
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
+    add_opt(common_arg(
+        {"--kv-stream"},
+        "[EXPERIMENTAL] keep the KV cache in host memory and only --kv-resident-mib of it on the GPU (requires -fa on, "
+        "a q8_0 K cache and a q4_0 V cache)",
+        [](common_params & params) {
+            params.kv_stream = true;
+        }
+    ).set_env("LLAMA_ARG_KV_STREAM"));
+    add_opt(common_arg(
+        {"--kv-resident-mib"}, "N",
+        "with --kv-stream: GPU memory in MiB for the resident KV pages",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.kv_resident_size = (size_t) value*1024*1024;
+        }
+    ).set_env("LLAMA_ARG_KV_RESIDENT_MIB"));
     add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
