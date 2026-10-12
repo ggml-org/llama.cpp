@@ -74,6 +74,7 @@
 #include "htp/argsort-ops.h"
 #include "htp/concat-ops.h"
 #include "htp/cpy-ops.h"
+#include "htp/im2col-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 
@@ -416,6 +417,18 @@ static bool ggml_hexagon_precompute_cpy_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
     struct htp_copy_kernel_params * kparams
+);
+
+static bool ggml_hexagon_precompute_im2col_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_im2col_kernel_params * kparams
+);
+
+static bool ggml_hexagon_precompute_im2col_3d_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_im2col_kernel_params * kparams
 );
 
 static void ggml_hexagon_precompute_fused_mmnx_params(
@@ -7696,21 +7709,397 @@ static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * 
     return true;
 }
 
-static bool ggml_hexagon_supported_im2col(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+static bool im2col_3d_calc_output_size(uint32_t input, uint32_t kernel, int32_t stride, int32_t padding,
+                                       int32_t dilation, uint32_t * output) {
+    if (stride <= 0 || padding < 0 || dilation <= 0 || kernel == 0) {
+        return false;
+    }
+
+    const int64_t numerator = (int64_t) input + 2LL * padding - (int64_t) dilation * (kernel - 1) - 1;
+    if (numerator < 0) {
+        return false;
+    }
+
+    const uint64_t size = (uint64_t) (numerator / stride) + 1;
+    if (size == 0 || size > UINT32_MAX) {
+        return false;
+    }
+
+    *output = (uint32_t) size;
+    return true;
+}
+
+static bool ggml_hexagon_precompute_im2col_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_im2col_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+    kparams->kernel_type = HTP_IM2COL_KERNEL_UNSUPPORTED;
+
+    const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    // For now support F32->F32 and F32->F16 only.
+    if (!src0 || !src1 || !dst) {
+        return false;
+    }
+
     if (src1->type != GGML_TYPE_F32 || (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_F32)) {
         return false;
     }
 
-    if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+    if (src1->nb[0] != sizeof(float) || !ggml_is_contiguous(dst)) {
         return false;
     }
 
-    GGML_UNUSED(sess);
-    return true;
+    const int32_t * op_params = (const int32_t *) op->op_params;
+    const int32_t s0 = op_params[0];
+    const int32_t s1 = op_params[1];
+    const int32_t p0 = op_params[2];
+    const int32_t p1 = op_params[3];
+    const int32_t d0 = op_params[4];
+    const int32_t d1 = op_params[5];
+    const bool is_2D = (op_params[6] == 1);
+
+    if (s0 <= 0 || d0 <= 0 || p0 < 0) {
+        return false;
+    }
+    if (is_2D && (s1 <= 0 || d1 <= 0 || p1 < 0)) {
+        return false;
+    }
+
+    const uint32_t N  = is_2D ? (uint32_t) src1->ne[3] : (uint32_t) src1->ne[2];
+    const uint32_t IC = is_2D ? (uint32_t) src1->ne[2] : (uint32_t) src1->ne[1];
+    const uint32_t IH = is_2D ? (uint32_t) src1->ne[1] : 1;
+    const uint32_t IW = (uint32_t) src1->ne[0];
+    const uint32_t KH = is_2D ? (uint32_t) src0->ne[1] : 1;
+    const uint32_t KW = (uint32_t) src0->ne[0];
+    const uint32_t OH = is_2D ? (uint32_t) dst->ne[2] : 1;
+    const uint32_t OW = (uint32_t) dst->ne[1];
+
+    if (KW == 0 || KH == 0 || IW == 0 || IH == 0 || IC == 0 || OW == 0 || OH == 0 || N == 0) {
+        return false;
+    }
+
+    const uint64_t patch_stride_64 = (uint64_t) IC * KH * KW;
+    const uint64_t total_rows_64   = (uint64_t) N * OH;
+    if (patch_stride_64 > UINT32_MAX || total_rows_64 > UINT32_MAX) {
+        return false;
+    }
+    const uint32_t patch_stride = (uint32_t) patch_stride_64;
+    const uint32_t total_rows   = (uint32_t) total_rows_64;
+
+    if (dst->ne[0] != patch_stride || dst->ne[1] != OW) {
+        return false;
+    }
+    if (is_2D && dst->ne[2] != OH) {
+        return false;
+    }
+
+    const uint32_t dst_elem = (dst->type == GGML_TYPE_F16) ? sizeof(ggml_fp16_t) : sizeof(float);
+
+    bool is_patchembed = ggml_is_contiguous(src1) && (s0 == (int32_t) KW && p0 == 0 && d0 == 1);
+    if (is_2D) {
+        is_patchembed = is_patchembed && (s1 == (int32_t) KH && p1 == 0 && d1 == 1);
+    }
+
+    const uint32_t max_threads = (sess && sess->n_threads > 0) ? (uint32_t) sess->n_threads : 8;
+    const uint32_t n_threads   = (total_rows < max_threads) ? total_rows : max_threads;
+    const uint32_t vtcm_size   = (sess && sess->vtcm_size > 0) ? sess->vtcm_size : 0;
+
+    if (is_patchembed) {
+        const uint64_t src_row_bytes_raw = (uint64_t) IC * KH * IW * sizeof(float);
+        const uint64_t dst_row_bytes_raw = (uint64_t) OW * patch_stride * dst_elem;
+        if (src_row_bytes_raw <= UINT32_MAX && dst_row_bytes_raw <= UINT32_MAX) {
+            const uint32_t src_row_bytes = hex_round_up((uint32_t) src_row_bytes_raw, 256);
+            const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
+
+            struct htp_im2col_vtcm_layout layout;
+            htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+
+            if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+                kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
+                kparams->is_2d                = is_2D ? 1 : 0;
+                kparams->is_3d                = 0;
+                kparams->n_threads            = (uint8_t) n_threads;
+                kparams->vtcm_size            = layout.total_bytes;
+                kparams->off_src              = layout.off_src;
+                kparams->off_dst              = layout.off_dst;
+                kparams->src_bytes_per_thread = layout.src_bytes_per_thread;
+                kparams->dst_bytes_per_thread = layout.dst_bytes_per_thread;
+                kparams->src_row_bytes        = src_row_bytes;
+                kparams->dst_row_bytes        = dst_row_bytes;
+                kparams->owb                  = OW;
+                kparams->wb                   = IW;
+                kparams->nbpr                 = 1;
+                kparams->N                    = N;
+                kparams->IC                   = IC;
+                kparams->ID                   = 1;
+                kparams->IH                   = IH;
+                kparams->IW                   = IW;
+                kparams->KD                   = 1;
+                kparams->KH                   = KH;
+                kparams->KW                   = KW;
+                kparams->OD                   = 1;
+                kparams->OH                   = OH;
+                kparams->OW                   = OW;
+                kparams->patch_stride         = patch_stride;
+                kparams->total_rows           = total_rows;
+                return true;
+            }
+        }
+    }
+
+    for (uint32_t owb = (OW < 256 ? OW : 256); owb >= 1; owb--) {
+        const uint64_t Wb = (uint64_t) (owb - 1) * s0 + (uint64_t) (KW - 1) * d0 + 1;
+        if (Wb > UINT32_MAX) {
+            if (owb == 1) break;
+            continue;
+        }
+
+        const uint64_t src_row_bytes_raw = (uint64_t) IC * KH * Wb * sizeof(float);
+        const uint64_t dst_row_bytes_raw = (uint64_t) owb * patch_stride * dst_elem;
+        if (src_row_bytes_raw > UINT32_MAX || dst_row_bytes_raw > UINT32_MAX) {
+            if (owb == 1) break;
+            continue;
+        }
+
+        const uint32_t src_row_bytes = hex_round_up((uint32_t) src_row_bytes_raw, 256);
+        const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
+
+        struct htp_im2col_vtcm_layout layout;
+        htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+
+        if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+            kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
+            kparams->is_2d                = is_2D ? 1 : 0;
+            kparams->is_3d                = 0;
+            kparams->n_threads            = (uint8_t) n_threads;
+            kparams->vtcm_size            = layout.total_bytes;
+            kparams->off_src              = layout.off_src;
+            kparams->off_dst              = layout.off_dst;
+            kparams->src_bytes_per_thread = layout.src_bytes_per_thread;
+            kparams->dst_bytes_per_thread = layout.dst_bytes_per_thread;
+            kparams->src_row_bytes        = src_row_bytes;
+            kparams->dst_row_bytes        = dst_row_bytes;
+            kparams->owb                  = owb;
+            kparams->wb                   = (uint32_t) Wb;
+            kparams->nbpr                 = (OW + owb - 1) / owb;
+            kparams->N                    = N;
+            kparams->IC                   = IC;
+            kparams->ID                   = 1;
+            kparams->IH                   = IH;
+            kparams->IW                   = IW;
+            kparams->KD                   = 1;
+            kparams->KH                   = KH;
+            kparams->KW                   = KW;
+            kparams->OD                   = 1;
+            kparams->OH                   = OH;
+            kparams->OW                   = OW;
+            kparams->patch_stride         = patch_stride;
+            kparams->total_rows           = total_rows;
+            return true;
+        }
+        if (owb == 1) break;
+    }
+
+    return false;
+}
+
+static bool ggml_hexagon_precompute_im2col_3d_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_im2col_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+    kparams->kernel_type = HTP_IM2COL_KERNEL_UNSUPPORTED;
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    if (!src0 || !src1 || !dst) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_F32 || (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_F32)) {
+        return false;
+    }
+
+    if (src1->nb[0] != sizeof(float) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const int32_t * params = (const int32_t *) op->op_params;
+    const int32_t s0 = params[0], s1 = params[1], s2 = params[2];
+    const int32_t p0 = params[3], p1 = params[4], p2 = params[5];
+    const int32_t d0 = params[6], d1 = params[7], d2 = params[8];
+    const int32_t ic = params[9];
+
+    if (s0 <= 0 || s1 <= 0 || s2 <= 0 ||
+        p0 < 0  || p1 < 0  || p2 < 0  ||
+        d0 <= 0 || d1 <= 0 || d2 <= 0 || ic <= 0) {
+        return false;
+    }
+
+    if (src1->ne[3] % ic != 0) {
+        return false;
+    }
+
+    const uint32_t IC = (uint32_t) ic;
+    const uint32_t N  = (uint32_t) (src1->ne[3] / IC);
+    if (N == 0) {
+        return false;
+    }
+
+    uint32_t OW, OH, OD;
+    if (!im2col_3d_calc_output_size(src1->ne[0], src0->ne[0], s0, p0, d0, &OW) ||
+        !im2col_3d_calc_output_size(src1->ne[1], src0->ne[1], s1, p1, d1, &OH) ||
+        !im2col_3d_calc_output_size(src1->ne[2], src0->ne[2], s2, p2, d2, &OD)) {
+        return false;
+    }
+
+    const uint32_t KD = (uint32_t) src0->ne[2];
+    const uint32_t KH = (uint32_t) src0->ne[1];
+    const uint32_t KW = (uint32_t) src0->ne[0];
+    const uint32_t ID = (uint32_t) src1->ne[2];
+    const uint32_t IH = (uint32_t) src1->ne[1];
+    const uint32_t IW = (uint32_t) src1->ne[0];
+
+    const uint64_t patch_stride_64 = (uint64_t) IC * KD * KH * KW;
+    const uint64_t total_rows_64   = (uint64_t) N * OD * OH;
+    const uint64_t dst_ne3_64      = (uint64_t) OD * N;
+
+    if (patch_stride_64 > UINT32_MAX || total_rows_64 > UINT32_MAX || dst_ne3_64 > UINT32_MAX) {
+        return false;
+    }
+    const uint32_t patch_stride = (uint32_t) patch_stride_64;
+    const uint32_t total_rows   = (uint32_t) total_rows_64;
+    const uint32_t dst_ne3      = (uint32_t) dst_ne3_64;
+
+    if (dst->ne[0] != patch_stride || dst->ne[1] != OW || dst->ne[2] != OH || dst->ne[3] != dst_ne3) {
+        return false;
+    }
+
+    const uint32_t dst_elem = (dst->type == GGML_TYPE_F16) ? sizeof(ggml_fp16_t) : sizeof(float);
+
+    const bool is_patchembed = ggml_is_contiguous(src1) &&
+                               (s0 == (int32_t) KW && s1 == (int32_t) KH && s2 == (int32_t) KD &&
+                                p0 == 0 && p1 == 0 && p2 == 0 &&
+                                d0 == 1 && d1 == 1 && d2 == 1);
+
+    const uint32_t max_threads = (sess && sess->n_threads > 0) ? (uint32_t) sess->n_threads : 8;
+    const uint32_t n_threads   = (total_rows < max_threads) ? total_rows : max_threads;
+    const uint32_t vtcm_size   = (sess && sess->vtcm_size > 0) ? sess->vtcm_size : 0;
+
+    if (is_patchembed) {
+        const uint64_t src_row_bytes_raw = (uint64_t) IC * KD * KH * IW * sizeof(float);
+        const uint64_t dst_row_bytes_raw = (uint64_t) OW * patch_stride * dst_elem;
+        if (src_row_bytes_raw <= UINT32_MAX && dst_row_bytes_raw <= UINT32_MAX) {
+            const uint32_t src_row_bytes = hex_round_up((uint32_t) src_row_bytes_raw, 256);
+            const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
+
+            struct htp_im2col_vtcm_layout layout;
+            htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+
+            if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+                kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
+                kparams->is_2d                = 0;
+                kparams->is_3d                = 1;
+                kparams->n_threads            = (uint8_t) n_threads;
+                kparams->vtcm_size            = layout.total_bytes;
+                kparams->off_src              = layout.off_src;
+                kparams->off_dst              = layout.off_dst;
+                kparams->src_bytes_per_thread = layout.src_bytes_per_thread;
+                kparams->dst_bytes_per_thread = layout.dst_bytes_per_thread;
+                kparams->src_row_bytes        = src_row_bytes;
+                kparams->dst_row_bytes        = dst_row_bytes;
+                kparams->owb                  = OW;
+                kparams->wb                   = IW;
+                kparams->nbpr                 = 1;
+                kparams->N                    = N;
+                kparams->IC                   = IC;
+                kparams->ID                   = ID;
+                kparams->IH                   = IH;
+                kparams->IW                   = IW;
+                kparams->KD                   = KD;
+                kparams->KH                   = KH;
+                kparams->KW                   = KW;
+                kparams->OD                   = OD;
+                kparams->OH                   = OH;
+                kparams->OW                   = OW;
+                kparams->patch_stride         = patch_stride;
+                kparams->total_rows           = total_rows;
+                return true;
+            }
+        }
+    }
+
+    for (uint32_t owb = (OW < 256 ? OW : 256); owb >= 1; owb--) {
+        const uint64_t Wb = (uint64_t) (owb - 1) * s0 + (uint64_t) (KW - 1) * d0 + 1;
+        if (Wb > UINT32_MAX) {
+            if (owb == 1) break;
+            continue;
+        }
+
+        const uint64_t src_row_bytes_raw = (uint64_t) IC * KD * KH * Wb * sizeof(float);
+        const uint64_t dst_row_bytes_raw = (uint64_t) owb * patch_stride * dst_elem;
+        if (src_row_bytes_raw > UINT32_MAX || dst_row_bytes_raw > UINT32_MAX) {
+            if (owb == 1) break;
+            continue;
+        }
+
+        const uint32_t src_row_bytes = hex_round_up((uint32_t) src_row_bytes_raw, 256);
+        const uint32_t dst_row_bytes = hex_round_up((uint32_t) dst_row_bytes_raw, 256);
+
+        struct htp_im2col_vtcm_layout layout;
+        htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_threads);
+
+        if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+            kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
+            kparams->is_2d                = 0;
+            kparams->is_3d                = 1;
+            kparams->n_threads            = (uint8_t) n_threads;
+            kparams->vtcm_size            = layout.total_bytes;
+            kparams->off_src              = layout.off_src;
+            kparams->off_dst              = layout.off_dst;
+            kparams->src_bytes_per_thread = layout.src_bytes_per_thread;
+            kparams->dst_bytes_per_thread = layout.dst_bytes_per_thread;
+            kparams->src_row_bytes        = src_row_bytes;
+            kparams->dst_row_bytes        = dst_row_bytes;
+            kparams->owb                  = owb;
+            kparams->wb                   = (uint32_t) Wb;
+            kparams->nbpr                 = (OW + owb - 1) / owb;
+            kparams->N                    = N;
+            kparams->IC                   = IC;
+            kparams->ID                   = ID;
+            kparams->IH                   = IH;
+            kparams->IW                   = IW;
+            kparams->KD                   = KD;
+            kparams->KH                   = KH;
+            kparams->KW                   = KW;
+            kparams->OD                   = OD;
+            kparams->OH                   = OH;
+            kparams->OW                   = OW;
+            kparams->patch_stride         = patch_stride;
+            kparams->total_rows           = total_rows;
+            return true;
+        }
+        if (owb == 1) break;
+    }
+
+    return false;
+}
+
+static bool ggml_hexagon_supported_im2col(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    struct htp_im2col_kernel_params kparams;
+    return ggml_hexagon_precompute_im2col_params(sess, op, &kparams);
+}
+
+static bool ggml_hexagon_supported_im2col_3d(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    struct htp_im2col_kernel_params kparams;
+    return ggml_hexagon_precompute_im2col_3d_params(sess, op, &kparams);
 }
 
 static bool ggml_hexagon_supported_pad(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -7875,6 +8264,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_TRI:             return HTP_OP_TRI;
         case GGML_OP_PAD:             return HTP_OP_PAD;
         case GGML_OP_IM2COL:          return HTP_OP_IM2COL;
+        case GGML_OP_IM2COL_3D:       return HTP_OP_IM2COL_3D;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
 
         case GGML_OP_UNARY:
@@ -8157,6 +8547,16 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 if (ok && node.opcode == HTP_OP_CPY && kparams->total_elems == 0) {
                     continue;
                 }
+            } else if (node.opcode == HTP_OP_IM2COL) {
+                ggml_hexagon_precompute_im2col_params(sess,
+                    node.node,
+                    (struct htp_im2col_kernel_params *) node.kernel_params
+                );
+            } else if (node.opcode == HTP_OP_IM2COL_3D) {
+                ggml_hexagon_precompute_im2col_3d_params(sess,
+                    node.node,
+                    (struct htp_im2col_kernel_params *) node.kernel_params
+                );
             }
             computed_nodes.push_back(std::move(node));
         }
@@ -9016,6 +9416,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_IM2COL:
             supp = ggml_hexagon_supported_im2col(sess, op);
+            break;
+
+        case GGML_OP_IM2COL_3D:
+            supp = ggml_hexagon_supported_im2col_3d(sess, op);
             break;
 
         case GGML_OP_GATED_DELTA_NET:
