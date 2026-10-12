@@ -41,6 +41,7 @@ static bool vision_mtp_handoff = false;
 static bool serial_workspace_growth = false;
 static bool mtp_bit_exact_control = false;
 static const char * dflash_native_model = nullptr;
+static bool dflash_shared_workspace_control = false;
 
 // Qualify ordinary feature injection without a stream pool or a shared phase arena.
 static void test_dflash_native(testing & t, llama_model * model) {
@@ -52,6 +53,10 @@ static void test_dflash_native(testing & t, llama_model * model) {
     cp.type_k = GGML_TYPE_Q8_0;
     cp.type_v = GGML_TYPE_Q4_0;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    if (dflash_shared_workspace_control) {
+        cp.shared_device_memory_bytes=512u*1024u*1024u;
+        cp.n_rs_seq=3;
+    }
     context_ptr target(llama_init_from_model(model, cp), llama_free);
     if (!t.assert_true(bool(target))) return;
     common_params params;
@@ -68,6 +73,13 @@ static void test_dflash_native(testing & t, llama_model * model) {
     params.speculative.draft.mparams.path = dflash_native_model;
     auto draft = common_speculative_init_from_params(params, model, target.get());
     if (!t.assert_true(bool(draft) && draft->context())) return;
+    if (dflash_shared_workspace_control) {
+        auto * target_owner=llama_context_compute_memory(target.get());
+        auto * draft_owner=llama_context_compute_memory(draft->context());
+        if (!t.assert_true(target_owner && draft_owner && draft_owner->borrows_serial_parent())) return;
+        t.assert_true(!draft->context()->get_cparams().mtp_publish_host);
+        t.assert_true(target_owner->shared_parent() == draft_owner->shared_parent());
+    }
     auto * stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(draft->context()));
     if (!t.assert_true(stock && stock->get_base()->get_layer_ids().empty())) return;
     llama_memory_bounded_kv_layout storage;
@@ -139,7 +151,14 @@ static void test_dflash_native(testing & t, llama_model * model) {
     full_params.n_rs_seq=0;
     full_params.swa_full=true;
     full_params.ctx_other=target.get();
+    full_params.shared_device_memory_bytes=0;
     context_ptr full(llama_init_from_model(draft->model(),full_params),llama_free);
+    if (dflash_shared_workspace_control) {
+        t.assert_true(!full);
+        cache_owner.reset(); spec.reset(); draft.reset();
+        t.assert_true(bool(source));
+        return;
+    }
     if (!t.assert_true(bool(full))) return;
     auto * full_stock=dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(full.get()));
     if (!t.assert_true(full_stock != nullptr)) return;
@@ -606,6 +625,7 @@ int main(int argc,char ** argv) {
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--dflash-native") && i+1 < argc) dflash_native_model = argv[++i];
+        if (!std::strcmp(argv[i], "--dflash-shared-workspace")) dflash_shared_workspace_control = true;
         f16_control = f16_control || !std::strcmp(argv[i],"--f16");
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");

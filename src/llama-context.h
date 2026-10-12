@@ -395,6 +395,7 @@ private:
     uint64_t compute_memory_graph_revision = 0;
     // Validated source context outlives this MTP context; no cross-context ownership cycle.
     llama_context * mtp_target_ctx = nullptr;
+    llama_context * serial_target_ctx = nullptr;
 
     llama_compute_reserve_state sched_reserve_state;
 

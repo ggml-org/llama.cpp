@@ -459,7 +459,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             target.budgets.push_back({id,allocation,capacity,group.alignment});
             supplied.push_back({id,allocation,arena.get()});
             state->arenas.push_back({group.buft,capacity,group.first_slot,std::move(arena)});
-            if (!stream && !serial_parent && !state->kv_parent) {
+            if (borrowed_group || (!stream && !serial_parent && !state->kv_parent)) {
                 state->kv_parent = ggml_backend_memory_arena_parent(state->arenas.back().arena.get());
                 state->kv_parent_capacity = capacity;
             }
@@ -795,6 +795,10 @@ bool llama_context_memory::prepare_serial_consumer(llama_memory_text_phase phase
         if (parent->shared_stream && phase == llama_memory_text_phase::prefill && parent->active_stage == parent->decode_stage) {
             if (parent->shared_stream->has_mtp_layer() && !parent->shared_stream->release_mtp_layer()) return false;
             if (!parent->activate_stage(parent->prefill_stage)) return false;
+        }
+        if (parent->shared_stream && phase == llama_memory_text_phase::decode && parent->active_stage != parent->decode_stage) {
+            if (parent->shared_stream->has_mtp_layer() && !parent->shared_stream->release_mtp_layer()) return false;
+            if (!parent->activate_stage(parent->decode_stage)) return false;
         }
         const auto stage = phase == llama_memory_text_phase::decode ? impl->decode_stage : impl->prefill_stage;
         if (!impl->activate_stage(stage)) return false;
