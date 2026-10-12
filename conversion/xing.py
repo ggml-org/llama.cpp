@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterable, TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -39,8 +37,6 @@ class Xing4_0Model(DeepseekV2Model):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # buffer for alpha tensors: {bid: {"attn": {}, "ffn": {}}}
-        self._xing4_0_alphas: dict[int, dict[str, dict[str, Tensor]]] = {}
 
         self.block_count = self.hparams["num_hidden_layers"]
         if not self.no_mtp:
@@ -122,80 +118,24 @@ class Xing4_0Model(DeepseekV2Model):
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # handle mHC tensors: new format is model.layers.{N}.{attn_hc|ffn_hc}.{hc_fn|hc_base|hc_scale}
-        #                      old format is model.layers.{N}.{attn_hc|ffn_hc}.{mapping_weight|bias|alpha_pre|alpha_post|alpha_res}
+        # handle mHC tensors: model.layers.{N}.{attn_hc|ffn_hc}.{hc_fn|hc_base|hc_scale}
         match = re.match(r"model\.layers\.(\d+)\.(attn_hc|ffn_hc)\.(.+)$", name)
         if match:
             layer_idx = int(match.group(1))
             hc_type = match.group(2)  # "attn_hc" or "ffn_hc"
-            param = match.group(3)    # "hc_fn", "hc_base", "hc_scale" (new) or "mapping_weight", "bias", "alpha_*" (old)
+            param = match.group(3)    # "hc_fn", "hc_base", "hc_scale"
 
             if bid is None:
                 bid = layer_idx
 
             prefix = "hc_attn" if hc_type == "attn_hc" else "hc_ffn"
 
-            # --- New format: hc_fn / hc_base / hc_scale (direct 1:1 mapping) ---
-            if param == "hc_fn":
-                tensor_enum = self._hc_tensor_map[(prefix, "fn")]
-                gguf_name = self.format_tensor_name(tensor_enum, bid)
-                yield (gguf_name, data_torch)
-                return
-
-            if param == "hc_base":
-                tensor_enum = self._hc_tensor_map[(prefix, "base")]
-                gguf_name = self.format_tensor_name(tensor_enum, bid)
-                yield (gguf_name, data_torch)
-                return
-
-            if param == "hc_scale":
-                tensor_enum = self._hc_tensor_map[(prefix, "scale")]
-                gguf_name = self.format_tensor_name(tensor_enum, bid)
-                yield (gguf_name, data_torch)
-                return
-
-            # --- Legacy format: mapping_weight / bias / alpha_pre+alpha_post+alpha_res (concatenated) ---
-            if param == "mapping_weight":
-                tensor_enum = self._hc_tensor_map[(prefix, "fn")]
-                gguf_name = self.format_tensor_name(tensor_enum, bid)
-                yield (gguf_name, data_torch)
-                return
-
-            if param == "bias":
-                tensor_enum = self._hc_tensor_map[(prefix, "base")]
-                gguf_name = self.format_tensor_name(tensor_enum, bid)
-                yield (gguf_name, data_torch)
-                return
-
-            if param in ("alpha_pre", "alpha_post", "alpha_res"):
-                # buffer and concatenate when all three are collected
-                if bid not in self._xing4_0_alphas:
-                    self._xing4_0_alphas[bid] = {}
-                if hc_type not in self._xing4_0_alphas[bid]:
-                    self._xing4_0_alphas[bid][hc_type] = {}
-                self._xing4_0_alphas[bid][hc_type][param] = data_torch
-
-                alphas = self._xing4_0_alphas[bid][hc_type]
-                if len(alphas) == 3:
-                    scale = torch.cat([
-                        alphas["alpha_pre"],
-                        alphas["alpha_post"],
-                        alphas["alpha_res"],
-                    ])
-                    tensor_enum = self._hc_tensor_map[(prefix, "scale")]
-                    gguf_name = self.format_tensor_name(tensor_enum, bid)
-                    del self._xing4_0_alphas[bid][hc_type]
-                    yield (gguf_name, scale)
-                return
+            kind = {"hc_fn": "fn", "hc_base": "base", "hc_scale": "scale"}.get(param)
+            if kind is None:
+                raise ValueError(f"unexpected mHC tensor: {name}")
+            tensor_enum = self._hc_tensor_map[(prefix, kind)]
+            gguf_name = self.format_tensor_name(tensor_enum, bid)
+            yield (gguf_name, data_torch)
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-        for bid, hc_dict in self._xing4_0_alphas.items():
-            for hc_type, alphas in hc_dict.items():
-                if alphas:
-                    raise ValueError(
-                        f"Unprocessed mHC alpha tensors for layer {bid}, "
-                        f"{hc_type}: {list(alphas.keys())}")
