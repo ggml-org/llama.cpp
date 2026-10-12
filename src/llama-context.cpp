@@ -7,6 +7,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-stream.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -369,6 +370,11 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
+    cparams.kv_resident_size = params.kv_resident_size;
+
+    if (cparams.kv_resident_size > 0 && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+        throw std::runtime_error("KV streaming requires Flash Attention to be enabled explicitly");
+    }
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -560,6 +566,17 @@ llama_context::llama_context(
 
         if (cparams.moe_cache_size > 0) {
             moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
+        }
+
+        // KV streaming: page moves are queued on the stream of the backend that computes the graphs
+        if (llama_kv_stream * kv_stream = memory ? memory->get_kv_stream() : nullptr) {
+            for (auto & backend : backends) {
+                if (ggml_backend_get_device(backend.get()) == kv_stream->device()) {
+                    kv_stream->set_backend(backend.get());
+                }
+            }
+        } else if (cparams.kv_resident_size > 0 && cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {
+            throw std::runtime_error("KV streaming is not supported by this model's memory");
         }
 
         sched_reserve();
@@ -4018,6 +4035,7 @@ llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.kv_resident_size            =*/ 0,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

@@ -398,6 +398,8 @@ extern "C" {
 
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
 
+        size_t kv_resident_size; // KV streaming: device bytes for resident K/V pages, the rest of the context is kept in host memory, 0 = disabled [EXPERIMENTAL]
+
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
         // currently works only with CPU execution

@@ -79,7 +79,8 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-             const char *   name_tag) :
+             const char *   name_tag,
+                 size_t   stream_resident_size) :
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
@@ -162,6 +163,39 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    // KV streaming: the K/V tensors become a pool of n_slots resident pages
+    uint32_t n_rows  = kv_size;
+    uint32_t n_slots = 0;
+    if (stream_resident_size > 0) {
+        if (n_stream != 1 || v_trans || other || reuse || share || swa_type != LLAMA_SWA_TYPE_NONE || is_mla) {
+            throw std::runtime_error("KV streaming requires Flash Attention, one sequence (or a unified cache) and a cache "
+                                     "with plain attention layers");
+        }
+        // the paged decode kernel (ggml-cuda/fattn-paged-decode) is the only fast path for paged K/V
+        if (type_k != GGML_TYPE_Q8_0 || type_v != GGML_TYPE_Q4_0) {
+            throw std::runtime_error("KV streaming requires a q8_0 K cache and a q4_0 V cache");
+        }
+
+        size_t bytes_per_cell = 0;
+        for (uint32_t il = 0; il < n_layer; il++) {
+            if (hparams.has_kv(il) && (!filter || filter(il))) {
+                if (hparams.n_embd_head_k(il) != 256 || hparams.n_embd_head_v(il) != 256) {
+                    throw std::runtime_error("KV streaming requires a head size of 256");
+                }
+                bytes_per_cell += ggml_row_size(type_k, hparams.n_embd_k_gqa(il)) + ggml_row_size(type_v, hparams.n_embd_v_gqa(il));
+            }
+        }
+
+        const uint32_t n_pages = (kv_size + llama_kv_stream::page_size - 1)/llama_kv_stream::page_size;
+
+        n_slots = std::min(n_pages, llama_kv_stream::slots_for(stream_resident_size, bytes_per_cell));
+        if (n_slots < n_pages) {
+            throw std::runtime_error(format("KV streaming: %u of %u pages fit in the resident budget; streaming the rest "
+                                            "is not implemented yet", n_slots, n_pages));
+        }
+        n_rows = n_slots*llama_kv_stream::page_size;
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -230,8 +264,8 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
-        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, n_rows, n_stream) : nullptr;
+        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, n_rows, n_stream) : nullptr;
 
         has_k && ggml_format_name(k, "cache_%sk_l%d", name_tag, il);
         has_v && ggml_format_name(v, "cache_%sv_l%d", name_tag, il);
@@ -240,8 +274,8 @@ llama_kv_cache::llama_kv_cache(
         std::vector<ggml_tensor *> v_stream;
 
         for (uint32_t s = 0; s < n_stream; ++s) {
-            k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
-            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
+            k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, n_rows, k->nb[1], s*k->nb[2]) : nullptr);
+            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, n_rows, v->nb[1], s*v->nb[2]) : nullptr);
         }
 
         map_layer_ids[il] = layers.size();
@@ -292,6 +326,15 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
+    }
+
+    if (n_slots > 0) {
+        std::vector<llama_kv_stream::layer> sl;
+        for (const auto & layer : layers) {
+            sl.push_back({ layer.k, layer.v });
+        }
+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(layers[0].k->buffer));
+        stream = std::make_unique<llama_kv_stream>(sl, n_slots, kv_size, dev, hparams.no_alloc);
     }
 
     {
@@ -392,6 +435,10 @@ void llama_kv_cache::clear(bool data) {
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
+    }
+
+    if (stream) {
+        stream->clear();
     }
 
     if (data) {
@@ -1208,9 +1255,17 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
         head = sinfo.idxs[s].back() + 1;
     }
+
+    if (stream) {
+        stream->prepare(sinfo.idxs[0], get_n_kv(sinfo));
+    }
 }
 
 bool llama_kv_cache::get_can_shift() const {
+    // K-shift rewrites the cache in place, which the pages in host memory would miss
+    if (stream) {
+        return false;
+    }
     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
     if (model.arch == LLM_ARCH_STEP35) {
         return false;
@@ -1310,6 +1365,11 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
+    // KV streaming: the whole pool, read through the page table
+    if (stream) {
+        n_kv = k->ne[1];
+    }
+
     return ggml_view_4d(ctx, k,
             hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k(il)),
@@ -1330,6 +1390,11 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il));
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
+
+    // KV streaming: the whole pool, read through the page table
+    if (stream) {
+        n_kv = v->ne[1];
+    }
 
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
@@ -1493,12 +1558,72 @@ ggml_tensor * llama_kv_cache::build_input_v_rot(ggml_context * ctx) const {
     return res;
 }
 
+ggml_tensor * llama_kv_cache::build_input_kv_pages(ggml_context * ctx, uint32_t n_kv) const {
+    if (!stream) {
+        return nullptr;
+    }
+
+    ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_kv/llama_kv_stream::page_size, layers.size());
+    ggml_set_input(res);
+    ggml_set_name(res, "attn_inp_kv_pages");
+
+    return res;
+}
+
+void llama_kv_cache::set_input_kv_pages(ggml_tensor * dst) const {
+    stream->set_input_pages(dst);
+}
+
+void llama_kv_cache::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_kv, uint32_t n_tokens,
+        const slot_info & sinfo, ggml_tensor ** k, ggml_tensor ** v, int32_t * table) const {
+    const int32_t ikv = map_layer_ids.at(il);
+
+    // the paged decode kernel takes up to 4 query tokens (decode and MTP verification)
+    if (n_tokens <= 4) {
+        *k = get_k(ctx, il, n_kv, sinfo);
+        *v = get_v(ctx, il, n_kv, sinfo);
+        *table = ikv;
+        return;
+    }
+
+    // gather the attended pages into the layer's scratch slot, after this ubatch's K/V were stored
+    const auto & layer = layers[ikv];
+    ggml_tensor * sk = stream->scratch_k(ikv);
+    ggml_tensor * sv = stream->scratch_v(ikv);
+    for (const auto & r : stream->runs(n_kv)) {
+        const int64_t rows = (int64_t) r.n*llama_kv_stream::page_size;
+        const int64_t src0 = (int64_t) r.slot*llama_kv_stream::page_size;
+        const int64_t dst0 = (int64_t) r.page*llama_kv_stream::page_size;
+        ggml_build_forward_expand(gf, ggml_cpy(ctx,
+            ggml_view_2d(ctx, layer.k, layer.k->ne[0], rows, layer.k->nb[1], src0*layer.k->nb[1]),
+            ggml_view_2d(ctx, sk,      layer.k->ne[0], rows, sk->nb[1],      dst0*sk->nb[1])));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx,
+            ggml_view_2d(ctx, layer.v, layer.v->ne[0], rows, layer.v->nb[1], src0*layer.v->nb[1]),
+            ggml_view_2d(ctx, sv,      layer.v->ne[0], rows, sv->nb[1],      dst0*sv->nb[1])));
+    }
+
+    *k = ggml_view_4d(ctx, sk,
+            hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, 1,
+            ggml_row_size(sk->type, hparams.n_embd_head_k(il)), sk->nb[1], ggml_nbytes(sk), 0);
+    *v = ggml_view_4d(ctx, sv,
+            hparams.n_embd_head_v(il), hparams.n_head_kv(il), n_kv, 1,
+            ggml_row_size(sv->type, hparams.n_embd_head_v(il)), sv->nb[1], ggml_nbytes(sv), 0);
+    *table = -1;
+}
+
 void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const {
     const uint32_t n_tokens = ubatch->n_tokens;
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     int64_t * data = (int64_t *) dst->data;
+
+    if (stream) {
+        for (uint32_t i = 0; i < sinfo.size(); ++i) {
+            data[i] = stream->row(sinfo.idxs[0][i]);
+        }
+        return;
+    }
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const int64_t offs = sinfo.strm[s]*get_size();
@@ -1516,7 +1641,11 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     int64_t * data = (int64_t *) dst->data;
 
-    if (!v_trans) {
+    if (stream) {
+        for (uint32_t i = 0; i < sinfo.size(); ++i) {
+            data[i] = stream->row(sinfo.idxs[0][i]);
+        }
+    } else if (!v_trans) {
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
             const int64_t offs = sinfo.strm[s]*get_size();
 
@@ -2288,7 +2417,13 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
         for (const auto & range : cr.data) {
             const size_t range_size = range.second - range.first;
             const size_t buf_size = range_size * k_size_row;
-            io.write_tensor(k, range.first * k_size_row, buf_size);
+            if (stream) {
+                std::vector<uint8_t> buf(buf_size);
+                stream->get_rows(&layer - layers.data(), false, range.first, range.second, buf.data());
+                io.write(buf.data(), buf_size);
+            } else {
+                io.write_tensor(k, range.first * k_size_row, buf_size);
+            }
         }
     }
 
@@ -2315,7 +2450,13 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
             for (const auto & range : cr.data) {
                 const size_t range_size = range.second - range.first;
                 const size_t buf_size = range_size * v_size_row;
-                io.write_tensor(v, range.first * v_size_row, buf_size);
+                if (stream) {
+                    std::vector<uint8_t> buf(buf_size);
+                    stream->get_rows(&layer - layers.data(), true, range.first, range.second, buf.data());
+                    io.write(buf.data(), buf_size);
+                } else {
+                    io.write_tensor(v, range.first * v_size_row, buf_size);
+                }
             }
         }
     } else {
@@ -2618,7 +2759,13 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         }
 
         for (const auto & r : runs) {
-            io.read_tensor(k, (size_t) r.from * k_size_row, (size_t) (r.to - r.from) * k_size_row);
+            if (stream) {
+                std::vector<uint8_t> buf((size_t) (r.to - r.from) * k_size_row);
+                io.read(buf.data(), buf.size());
+                stream->set_rows(&layer - layers.data(), false, r.from, r.to, buf.data());
+            } else {
+                io.read_tensor(k, (size_t) r.from * k_size_row, (size_t) (r.to - r.from) * k_size_row);
+            }
         }
     }
 
@@ -2652,7 +2799,13 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             }
 
             for (const auto & r : runs) {
-                io.read_tensor(v, (size_t) r.from * v_size_row, (size_t) (r.to - r.from) * v_size_row);
+                if (stream) {
+                    std::vector<uint8_t> buf((size_t) (r.to - r.from) * v_size_row);
+                    io.read(buf.data(), buf.size());
+                    stream->set_rows(&layer - layers.data(), true, r.from, r.to, buf.data());
+                } else {
+                    io.read_tensor(v, (size_t) r.from * v_size_row, (size_t) (r.to - r.from) * v_size_row);
+                }
             }
         }
     } else {
@@ -2902,6 +3055,23 @@ ggml_type llama_kv_cache_context::type_v() const {
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
     return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
+}
+
+const llama_kv_stream * llama_kv_cache_context::get_kv_stream() const {
+    return kv->get_kv_stream();
+}
+
+void llama_kv_cache_context::get_kv_stream_attn(ggml_context * ctx, ggml_cgraph * gf, int32_t il, uint32_t n_tokens,
+        ggml_tensor ** k, ggml_tensor ** v, int32_t * table) const {
+    kv->get_kv_stream_attn(ctx, gf, il, n_kv, n_tokens, sinfos[i_cur], k, v, table);
+}
+
+ggml_tensor * llama_kv_cache_context::build_input_kv_pages(ggml_context * ctx) const {
+    return kv->build_input_kv_pages(ctx, n_kv);
+}
+
+void llama_kv_cache_context::set_input_kv_pages(ggml_tensor * dst) const {
+    kv->set_input_kv_pages(dst);
 }
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {

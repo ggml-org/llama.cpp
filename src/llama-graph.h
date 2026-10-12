@@ -368,6 +368,10 @@ public:
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
 
+    // KV streaming: page tables, I32 [n_kv/page_size, n_layer], and the page layout the graph's gathers were built for
+    ggml_tensor * self_kv_pages = nullptr;
+    uint64_t      kv_layout     = 0;
+
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
     //       llm_graph_params from a previous batch, causing stack-use-after-return

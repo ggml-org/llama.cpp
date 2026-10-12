@@ -558,6 +558,17 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     if (self_v_rot && self_v_rot->buffer) {
         mctx->set_input_v_rot(self_v_rot);
     }
+
+    // unallocated when every layer attends a gather
+    if (self_kv_pages && self_kv_pages->buffer) {
+        mctx->set_input_kv_pages(self_kv_pages);
+    }
+}
+
+// KV streaming: gathers are built for one page layout
+static bool can_reuse_kv_stream(const llm_graph_input_attn_kv * inp, const llama_kv_cache_context * mctx) {
+    const llama_kv_stream * stream = mctx->get_kv_stream();
+    return !stream || inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= 4;
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -571,6 +582,8 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+
+    res &= can_reuse_kv_stream(this, mctx);
 
     return res;
 }
@@ -1174,6 +1187,10 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         mctx->get_attn()->set_input_v_rot(inp_attn->self_v_rot);
     }
 
+    if (inp_attn->self_kv_pages && inp_attn->self_kv_pages->buffer) {
+        mctx->get_attn()->set_input_kv_pages(inp_attn->self_kv_pages);
+    }
+
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
 
     if (inp_rs->s_copy) {
@@ -1198,6 +1215,8 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
   //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
+
+    res &= can_reuse_kv_stream(inp_attn.get(), mctx->get_attn());
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -3196,6 +3215,11 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
     inp->self_v_rot = mctx_cur->build_input_v_rot(ctx0);
 
+    inp->self_kv_pages = mctx_cur->build_input_kv_pages(ctx0);
+    if (const llama_kv_stream * stream = mctx_cur->get_kv_stream()) {
+        inp->kv_layout = stream->layout();
+    }
+
     return inp;
 }
 
@@ -3243,6 +3267,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k;
     ggml_tensor * v;
+    int32_t       kv_table = -1;
 
     if (cparams.training) {
         GGML_ASSERT(mctx_cur->get_n_kv() == n_tokens);
@@ -3258,14 +3283,27 @@ ggml_tensor * llm_graph_context::build_attn(
             ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
         }
 
-        k = mctx_cur->get_k(ctx0, il);
-        v = mctx_cur->get_v(ctx0, il);
+        if (inp->self_kv_pages) {
+            mctx_cur->get_kv_stream_attn(ctx0, gf, il, n_tokens, &k, &v, &kv_table);
+        } else {
+            k = mctx_cur->get_k(ctx0, il);
+            v = mctx_cur->get_v(ctx0, il);
+        }
     }
 
     ggml_tensor * kq_mask = inp->get_kq_mask();
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
+
+    // KV streaming: the attention reads the pool through the layer's page table
+    if (kv_table >= 0) {
+        const auto & fa = res->get_fused_nodes().back();
+        GGML_ASSERT(fa.op == LLM_FUSED_OP_FLASH_ATTN && fa.il == il);
+        ggml_flash_attn_ext_set_pages(fa.tensor, inp->self_kv_pages, kv_table, llama_kv_stream::page_size, nullptr, nullptr);
+        // build_attn_mha already expanded the node, so the new source has to be added to the graph explicitly
+        ggml_build_forward_expand(gf, inp->self_kv_pages);
+    }
 
     if (inp->self_v_rot) {
         cur = llama_mul_mat_hadamard(ctx0, cur, inp->self_v_rot);

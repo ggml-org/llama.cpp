@@ -39,7 +39,9 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                            /* KV streaming of the attention layers, see llama_kv_cache */
+                   size_t   attn_stream_resident_size = 0);
 
     ~llama_memory_hybrid() = default;
 
@@ -70,6 +72,8 @@ public:
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+
+    llama_kv_stream * get_kv_stream() override;
 
     // state write/load
 
