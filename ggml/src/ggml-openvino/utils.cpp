@@ -108,6 +108,25 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     return ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
 }
 
+// For a KV cache in the 4-D layout (GgmlOvDecoder::is_kvcache_4d), a [1, ctx, n_heads_kv, head_size] tensor over the
+// whole cache. Its shape stays the same from one inference to the next, so the GPU plugin keeps writing the cache in
+// place and reading it without a copy.
+std::optional<ov::Tensor> try_make_kv_4d_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder,
+                                                const ggml_tensor * ggml_tensor) {
+    if (!ggml_decoder->is_kvcache_4d_input(ggml_tensor)) {
+        return std::nullopt;
+    }
+    const size_t n_heads_kv = static_cast<size_t>(ggml_decoder->get_n_heads_kv_for_tensor(ggml_tensor));
+    const ov::Shape shape{1, static_cast<size_t>(ggml_tensor->ne[1]), n_heads_kv,
+                          static_cast<size_t>(ggml_tensor->ne[0]) / n_heads_kv};
+    if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
+        auto remote_context = ggml_openvino_get_remote_context();
+        auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+        return gpu_context.create_tensor(ggml_decoder->get_ov_type(ggml_tensor), shape, ggml_tensor->data);
+    }
+    return ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), shape, ggml_tensor->data);
+}
+
 static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurrent) {
     const char * manual_gqa_env = ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN");
     const bool manual_gqa_enabled = manual_gqa_env != nullptr ?
@@ -118,6 +137,7 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
     extra_cfg = extra_cfg * 131 + (stateful ? (recurrent ? 2u : 1u) : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_reduce_compile_mem_enabled() ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_SLICE") ? 1u : 0u);
+    extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_4D") ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (manual_gqa_enabled ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_shape_from_mask_enabled() ? 1u : 0u);
@@ -383,6 +403,9 @@ ov::Tensor create_ov_output_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_d
                                    const std::shared_ptr<ov::InferRequest> & infer_request,
                                    int output_index,
                                    const ggml_tensor * ggml_tensor) {
+    if (auto kv_4d = try_make_kv_4d_tensor(ggml_decoder, ggml_tensor)) {
+        return *kv_4d;
+    }
     if (auto sliced = try_make_kv_sliced_tensor(ggml_decoder, std::string(ggml_tensor->name), ggml_tensor)) {
         return *sliced;
     }
@@ -487,6 +510,9 @@ ov::Tensor make_contiguous_split_input_tensor(const struct ggml_tensor * ggml_te
 ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder, const std::string & name) {
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
 
+    if (auto kv_4d = try_make_kv_4d_tensor(ggml_decoder, ggml_tensor)) {
+        return *kv_4d;
+    }
     if (auto sliced = try_make_kv_sliced_tensor(ggml_decoder, name, ggml_tensor)) {
         return *sliced;
     }

@@ -53,6 +53,22 @@ OutputVector translate_set_rows(const NodeContext & context) {
         data = std::make_shared<ov::op::v1::Reshape>(
             data, ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, dim2, dim3}), false);
         res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, concat_axis);
+    } else if (is_kvcache_4d_shape(dst.get_partial_shape())) {
+        // cache [1, ctx, n_heads_kv, head_size]: write whole tokens on axis 1. This is the pattern of the GPU
+        // plugin's StatelessKVFusion (1-D axis, read with VariadicSplit, see permute), which writes the new rows in
+        // place instead of copying the whole cache first
+        FRONT_END_OP_CONVERSION_CHECK(!multidim_indices, "SET_ROWS into a 4-D KV cache needs one index per token");
+        const int64_t n_heads_kv = dst.get_partial_shape()[2].get_length();
+        const int64_t head_size = dst.get_partial_shape()[3].get_length();
+        auto data_tokens = std::make_shared<ov::op::v1::Reshape>(
+            data,
+            ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, n_heads_kv, head_size}),
+            false);
+        auto ind_squeezed = std::make_shared<ov::op::v0::Squeeze>(
+            indices, ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 1, 2}));
+        res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_tokens,
+                                                          ov::op::v0::Constant::create(ov::element::i64, {1}, {1}));
+        return rename_outputs_with_suffix({res}, context.get_name());
     } else if (multidim_indices) {
         auto updates_shape = std::make_shared<ov::op::v3::ShapeOf>(data, ov::element::i64);
 

@@ -12,6 +12,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/variadic_split.hpp>
 #include <vector>
 
 namespace ov {
@@ -78,6 +79,27 @@ OutputVector translate_permute(const NodeContext & context) {
 
         auto reshaped = std::make_shared<ov::op::v1::Reshape>(src, new_shape, true);
         res = std::make_shared<ov::op::v1::Transpose>(reshaped, perm);
+    } else if ((op_case == 3 || op_case == 4) && is_kvcache_4d_shape(src.get_partial_shape())) {
+        // cache [1, ctx, n_heads_kv, head_size] (see set_rows): take the first attention_size tokens with
+        // VariadicSplit, the read side of the GPU plugin's StatelessKVFusion. The fused StatelessKV then hands
+        // attention a view of those tokens, with no copy
+        FRONT_END_OP_CONVERSION_CHECK((perm_values == std::vector<int64_t>{0, 2, 1, 3}),
+                                      "Unsupported permutation of a 4-D KV cache");
+        Output<Node> attention_size;
+        if (!context.has_input("attention_size")) {
+            attention_size =
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {context.get_output_shape().to_shape()[2]});
+        } else if (op_case == 3) {
+            attention_size = context.get_input("attention_size");
+        } else {
+            attention_size = context.get_input("attention_size_swa");
+        }
+        auto split_lengths = std::make_shared<ov::op::v0::Concat>(
+            ov::OutputVector{attention_size, ov::op::v0::Constant::create(ov::element::i64, {1}, {-1})}, 0);
+        auto tokens = std::make_shared<ov::op::v1::VariadicSplit>(
+            src, ov::op::v0::Constant::create(ov::element::i64, {}, {1}), split_lengths);
+        res = std::make_shared<ov::op::v1::Transpose>(tokens->output(0),
+                                                      ov::op::v0::Constant::create(ov::element::i64, {4}, perm_values));
     } else {
         auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, perm_values);
         auto cache_shape = src.get_partial_shape();
