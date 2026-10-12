@@ -10,6 +10,7 @@ import subprocess
 import platform
 import shutil
 import logging
+import glob
 
 from sdk import validate_windows_sdks
 
@@ -51,6 +52,8 @@ def main():
     parser.add_argument("--no-docker", action="store_true", help="Build natively on the host instead of in a docker container")
     parser.add_argument("--preset", help="Override the CMake preset to use")
     parser.add_argument("--debug", action="store_true", help="Build in debug mode (uses -debug presets instead of -release)")
+    parser.add_argument("--hex-only", "--hexagon-only", action="store_true", help="Only build and push ggml-hexagon and libggml-htp libraries")
+    parser.add_argument("--hex-arch", choices=["v73", "v75", "v79", "v81", "73", "75", "79", "81"], help="Specific Hexagon DSP architecture to build with --hex-only (default: all)")
 
     # Push options
     parser.add_argument("--push", action="store_true", help="Push built package to the target device via ADB or SSH/SCP")
@@ -129,6 +132,16 @@ def main():
 
     jobs = args.jobs if args.jobs else os.cpu_count() or 4
 
+    hex_arch = None
+    if args.hex_arch:
+        hex_arch = args.hex_arch if args.hex_arch.startswith("v") else f"v{args.hex_arch}"
+
+    if args.hex_only:
+        if hex_arch:
+            hex_targets = ["ggml-hexagon", f"htp-{hex_arch}"]
+        else:
+            hex_targets = ["ggml-hexagon", "htp-v73", "htp-v75", "htp-v79", "htp-v81"]
+
     if args.no_docker:
         # Native/local host build
         logger.info("Running native/local CMake build...")
@@ -143,7 +156,10 @@ def main():
             sys.exit(res.returncode)
 
         # Build
-        build_cmd = ["cmake", "--build", build_dir, "-j", str(jobs)]
+        build_cmd = ["cmake", "--build", build_dir]
+        if args.hex_only:
+            build_cmd += ["--target"] + hex_targets
+        build_cmd += ["-j", str(jobs)]
         logger.info(f"+ {' '.join(build_cmd)}")
         res = subprocess.run(build_cmd, cwd=repo_root)
         if res.returncode != 0:
@@ -165,9 +181,10 @@ def main():
 
         install_prefix_container = f"/workspace/{install_dir}/llama.cpp"
 
+        target_args = f"--target {' '.join(hex_targets)} " if args.hex_only else ""
         build_sh_cmd = (
             f"cmake --preset {preset} -B /workspace/{build_dir} && "
-            f"cmake --build /workspace/{build_dir} -j {jobs} && "
+            f"cmake --build /workspace/{build_dir} {target_args}-j {jobs} && "
             f"cmake --install /workspace/{build_dir} --prefix {install_prefix_container}"
         )
 
@@ -206,58 +223,91 @@ def main():
 
         sub_items = [item for item in os.listdir(src_path) if not item.startswith(".")]
 
+        if args.hex_only:
+            lib_dir = os.path.join(src_path, "lib")
+            hex_libs = glob.glob(os.path.join(lib_dir, "libggml-hexagon*"))
+            if hex_arch:
+                hex_libs += glob.glob(os.path.join(lib_dir, f"libggml-htp-{hex_arch}*"))
+            else:
+                hex_libs += glob.glob(os.path.join(lib_dir, "libggml-htp*"))
+
+            if not hex_libs:
+                logger.error(f"Error: no hexagon libraries found in {lib_dir} to push.")
+                sys.exit(1)
+
         if target_type == "android":
-            logger.info("\nPushing built artifacts to Android device via ADB...")
             adb_cmd = ["adb"]
             if target_val: # serial
                 adb_cmd += ["-s", target_val]
 
-            # Clean stale package files on device
-            if sub_items:
-                clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
-                clean_cmd = adb_cmd + ["shell", f"rm -rf {clean_paths}"]
-                logger.info(f"+ {' '.join(clean_cmd)}")
-                subprocess.run(clean_cmd)
+            if args.hex_only:
+                logger.info("\nPushing Hexagon libraries to Android device via ADB...")
+                target_lib_dir = f"{target_dir}/lib"
+                for lib in hex_libs:
+                    push_cmd = adb_cmd + ["push", lib, f"{target_lib_dir}/"]
+                    logger.info(f"+ {' '.join(push_cmd)}")
+                    res = subprocess.run(push_cmd)
+                    if res.returncode != 0:
+                        logger.error("ADB push failed.")
+                        sys.exit(res.returncode)
+                logger.info("Hexagon libraries deployed successfully!")
+            else:
+                # Clean stale package files on device
+                if sub_items:
+                    clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
+                    clean_cmd = adb_cmd + ["shell", f"rm -rf {clean_paths}"]
+                    logger.info(f"+ {' '.join(clean_cmd)}")
+                    subprocess.run(clean_cmd)
 
-            # Android destination directory is target_dir
-            push_cmd = adb_cmd + ["push", os.path.join(src_path, "."), target_dir]
-            logger.info(f"+ {' '.join(push_cmd)}")
-            res = subprocess.run(push_cmd)
-            if res.returncode != 0:
-                logger.error("ADB push failed.")
-                sys.exit(res.returncode)
+                # Android destination directory is target_dir
+                push_cmd = adb_cmd + ["push", os.path.join(src_path, "."), target_dir]
+                logger.info(f"+ {' '.join(push_cmd)}")
+                res = subprocess.run(push_cmd)
+                if res.returncode != 0:
+                    logger.error("ADB push failed.")
+                    sys.exit(res.returncode)
 
-            chmod_cmd = adb_cmd + ["shell", f"chmod -R 755 {target_dir}/bin 2>/dev/null || true"]
-            logger.info(f"+ {' '.join(chmod_cmd)}")
-            subprocess.run(chmod_cmd)
-            logger.info("ADB push completed successfully!")
+                chmod_cmd = adb_cmd + ["shell", f"chmod -R 755 {target_dir}/bin 2>/dev/null || true"]
+                logger.info(f"+ {' '.join(chmod_cmd)}")
+                subprocess.run(chmod_cmd)
+                logger.info("ADB push completed successfully!")
 
         elif target_type == "linux":
             ssh_host = target_val
             if not ssh_host:
                 logger.error("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot deploy.")
                 sys.exit(1)
-            logger.info(f"\nDeploying built artifacts to Linux device {ssh_host} via SSH/SCP...")
 
-            # Clean stale package files on remote host
-            if sub_items:
-                clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
-                clean_cmd = ["ssh", ssh_host, f"rm -rf {clean_paths}"]
-                logger.info(f"+ {' '.join(clean_cmd)}")
-                subprocess.run(clean_cmd)
+            if args.hex_only:
+                logger.info(f"\nDeploying Hexagon libraries to Linux device {ssh_host} via SCP...")
+                target_lib_dir = f"{target_dir}/lib"
+                deploy_cmd = ["scp"] + hex_libs + [f"{ssh_host}:{target_lib_dir}/"]
+                logger.info(f"+ {' '.join(deploy_cmd)}")
+                res = subprocess.run(deploy_cmd)
+                if res.returncode != 0:
+                    logger.error("SCP deploy failed.")
+                    sys.exit(res.returncode)
+                logger.info("Hexagon libraries deployed successfully!")
+            else:
+                # Clean stale package files on remote host
+                if sub_items:
+                    clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
+                    clean_cmd = ["ssh", ssh_host, f"rm -rf {clean_paths}"]
+                    logger.info(f"+ {' '.join(clean_cmd)}")
+                    subprocess.run(clean_cmd)
 
-            # Deploy to target_dir
-            deploy_cmd = ["scp", "-r", os.path.join(src_path, "."), f"{ssh_host}:{target_dir}"]
-            logger.info(f"+ {' '.join(deploy_cmd)}")
-            res = subprocess.run(deploy_cmd)
-            if res.returncode != 0:
-                logger.error("SSH/SCP deploy failed.")
-                sys.exit(res.returncode)
+                # Deploy to target_dir
+                deploy_cmd = ["scp", "-r", os.path.join(src_path, "."), f"{ssh_host}:{target_dir}"]
+                logger.info(f"+ {' '.join(deploy_cmd)}")
+                res = subprocess.run(deploy_cmd)
+                if res.returncode != 0:
+                    logger.error("SSH/SCP deploy failed.")
+                    sys.exit(res.returncode)
 
-            chmod_cmd = ["ssh", ssh_host, f"chmod -R 755 {target_dir}/bin 2>/dev/null || true"]
-            logger.info(f"+ {' '.join(chmod_cmd)}")
-            subprocess.run(chmod_cmd)
-            logger.info("SSH/SCP deploy completed successfully!")
+                chmod_cmd = ["ssh", ssh_host, f"chmod -R 755 {target_dir}/bin 2>/dev/null || true"]
+                logger.info(f"+ {' '.join(chmod_cmd)}")
+                subprocess.run(chmod_cmd)
+                logger.info("SSH/SCP deploy completed successfully!")
 
         elif target_type == "windows":
             logger.info("\nPush for Windows on Snapdragon (windows) target is currently a stub.")

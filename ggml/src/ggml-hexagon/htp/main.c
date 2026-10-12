@@ -287,15 +287,15 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
 }
 
 static void vtcm_acquire(struct htp_context * ctx) {
-    if (!ctx->vtcm_valid) {
+    if (!atomic_load(&ctx->vtcm_valid)) {
         int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 10000000u);
         if (err != 0) {
             FARF(ERROR, "ggml-hex: failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
         }
 
-        ctx->vtcm_needs_release = false;
-        ctx->vtcm_valid = true;
+        atomic_store(&ctx->vtcm_needs_release, false);
+        atomic_store(&ctx->vtcm_valid, true);
 
         // Drop the priority to make sure we get the release callback from other GGML-HTP and QNN-HTP sessions
         HAP_compute_res_update_priority(ctx->vtcm_rctx, ctx->thread_prio + 10);
@@ -303,16 +303,16 @@ static void vtcm_acquire(struct htp_context * ctx) {
 }
 
 static void vtcm_release(struct htp_context * ctx) {
-    if (ctx->vtcm_valid) {
-        ctx->vtcm_valid         = false;
-        ctx->vtcm_needs_release = false;
+    if (atomic_load(&ctx->vtcm_valid)) {
+        atomic_store(&ctx->vtcm_valid, false);
+        atomic_store(&ctx->vtcm_needs_release, false);
         HAP_compute_res_release_cached(ctx->vtcm_rctx);
     }
 }
 
 static int vtcm_release_callback(unsigned int rctx, void * state) {
     struct htp_context * ctx = (struct htp_context *) state;
-    ctx->vtcm_needs_release = true;
+    atomic_store(&ctx->vtcm_needs_release, true);
     return 0;
 }
 
@@ -345,8 +345,8 @@ static int vtcm_alloc(struct htp_context * ctx) {
     ctx->vtcm_base          = (uint8_t *) vtcm_ptr;
     ctx->vtcm_size          = vtcm_size;
     ctx->vtcm_rctx          = rctx;
-    ctx->vtcm_valid         = false;
-    ctx->vtcm_needs_release = false;
+    atomic_store(&ctx->vtcm_valid, false);
+    atomic_store(&ctx->vtcm_needs_release, false);
 
     return 0;
 }
@@ -1309,7 +1309,7 @@ static void process_ops(struct htp_context * ctx) {
 
     vtcm_acquire(ctx);
 
-    while (!ctx->vtcm_needs_release && !atomic_load(&ctx->killed)) {
+    while (!atomic_load(&ctx->vtcm_needs_release) && !atomic_load(&ctx->killed)) {
         struct htp_opbatch_req req;
         uint32_t r_size = sizeof(req);
 

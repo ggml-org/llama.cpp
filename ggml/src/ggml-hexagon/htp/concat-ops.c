@@ -13,6 +13,7 @@
 #include "htp-vtcm.h"
 #include "hvx-utils.h"
 #include "hvx_hexagon_protos.h"
+#include "gather-rows.h"
 
 #include <string.h>
 
@@ -302,9 +303,9 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
     struct htp_concat_context cctx;
     cctx.octx                  = octx;
     cctx.spad0_base            = vtcm_base;
-    cctx.spad1_base            = vtcm_base + n_threads * kparams->spad0_size_per_thread;
-    cctx.spad0_size_per_thread = kparams->spad0_size_per_thread;
-    cctx.spad1_size_per_thread = kparams->spad1_size_per_thread;
+    cctx.spad1_base            = vtcm_base + n_threads * kparams->u.transposed.spad0_size_per_thread;
+    cctx.spad0_size_per_thread = kparams->u.transposed.spad0_size_per_thread;
+    cctx.spad1_size_per_thread = kparams->u.transposed.spad1_size_per_thread;
     cctx.row_start             = row_start;
     cctx.nrows                 = nrows;
     cctx.nplanes               = dst->ne[2] * dst->ne[3];
@@ -318,10 +319,13 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
 
 int op_concat(struct htp_ops_context * octx) {
     const struct htp_concat_kernel_params * kparams = (const struct htp_concat_kernel_params *) octx->kernel_params;
-    const struct htp_tensor * dst = octx->dst;
-    const uint32_t type_size = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
 
     int status = HTP_STATUS_OK;
+    const uint32_t type_size = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
+
     switch (kparams->kernel_type) {
         case HTP_CONCAT_KERNEL_REGULAR:
             status = concat_regular(octx, kparams->dim, type_size);
@@ -331,16 +335,16 @@ int op_concat(struct htp_ops_context * octx) {
             status = concat_transposed(octx, kparams, type_size);
             break;
 
+        case HTP_CONCAT_KERNEL_GATHER_ROWS:
+            status = htp_gather_rows(octx, src0, src1, &kparams->u.gather, kparams->n_threads);
+            break;
+
         default:
             status = HTP_STATUS_NO_SUPPORT;
             break;
     }
 
     htp_ops_context_set_status(octx, status);
-
-    if (octx->ctx->mdev.count > 1) {
-        htp_mdev_group_barrier(octx);
-    }
 
     return octx->status;
 }

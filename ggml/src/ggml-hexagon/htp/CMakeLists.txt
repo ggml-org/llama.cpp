@@ -33,6 +33,7 @@ add_library(${HTP_LIB} SHARED
     set-rows-ops.c
     get-rows-ops.c
     cpy-ops.c
+    gather-rows.c
     repeat-ops.c
     ssm-conv.c
     cumsum-ops.c

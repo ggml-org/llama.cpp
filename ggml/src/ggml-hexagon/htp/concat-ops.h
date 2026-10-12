@@ -2,12 +2,19 @@
 #define HTP_CONCAT_OPS_H
 
 #include "hex-common.h"
+#include "gather-rows.h"
 #include <stdint.h>
 
 enum htp_concat_kernel_type {
     HTP_CONCAT_KERNEL_UNSUPPORTED = 0,
     HTP_CONCAT_KERNEL_REGULAR     = 1,
     HTP_CONCAT_KERNEL_TRANSPOSED  = 2,
+    HTP_CONCAT_KERNEL_GATHER_ROWS = 3,
+};
+
+struct htp_concat_transposed_params {
+    uint32_t spad0_size_per_thread;
+    uint32_t spad1_size_per_thread;
 };
 
 struct htp_concat_kernel_params {
@@ -17,8 +24,11 @@ struct htp_concat_kernel_params {
     uint8_t  pad;
 
     uint32_t vtcm_size;
-    uint32_t spad0_size_per_thread;
-    uint32_t spad1_size_per_thread;
+
+    union {
+        struct htp_concat_transposed_params transposed;
+        struct htp_gather_rows_params       gather;
+    } u;
 };
 
 #if defined(__cplusplus)

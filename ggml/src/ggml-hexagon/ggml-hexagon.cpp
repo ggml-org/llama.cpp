@@ -6593,6 +6593,37 @@ static bool ggml_hexagon_precompute_concat_params(
         }
     }
 
+    const uint32_t max_gather_ne0 = 128 / type_size;
+    const uint32_t total_rows = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
+    const bool b_dense = (src1->nb[0] == type_size);
+    const bool gather_strides_ok =
+        src0->nb[1] >= (size_t) src0->ne[0] * type_size &&
+        (b_dense ? src1->nb[1] >= (size_t) src1->ne[0] * type_size
+                 : src1->nb[0] >= (size_t) src1->ne[1] * type_size);
+
+    if (dim == 0 &&
+        (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16) &&
+        dst->ne[0] <= max_gather_ne0 &&
+        dst->nb[0] == type_size && dst->nb[1] == (size_t) dst->ne[0] * type_size &&
+        src0->nb[0] == type_size &&
+        (src1->nb[0] == type_size || src1->nb[1] == type_size) &&
+        gather_strides_ok &&
+        htp_gather_rows_tensor_outer_contiguous(dst) &&
+        htp_gather_rows_tensor_outer_contiguous(src0) &&
+        htp_gather_rows_tensor_outer_contiguous(src1)) {
+
+        if (htp_gather_rows_solve_layout(&kparams->u.gather,
+                                         (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
+                                         (uint32_t) src1->ne[0], (uint32_t) src1->nb[1], b_dense,
+                                         type_size, total_rows,
+                                         sess->n_threads, sess->mdev.count, sess->vtcm_size)) {
+            kparams->kernel_type = HTP_CONCAT_KERNEL_GATHER_ROWS;
+            kparams->n_threads   = (uint8_t) sess->n_threads;
+            kparams->vtcm_size   = kparams->u.gather.slice * sess->n_threads;
+            return true;
+        }
+    }
+
     const bool dma_strides_ok = (src0->nb[0] == type_size && src1->nb[0] == type_size && dst->nb[0] == type_size);
 
     if (dma_strides_ok) {
@@ -6616,11 +6647,11 @@ static bool ggml_hexagon_precompute_concat_params(
             return false;
         }
 
-        kparams->kernel_type           = HTP_CONCAT_KERNEL_TRANSPOSED;
-        kparams->n_threads             = n_threads;
-        kparams->vtcm_size             = layout.total_bytes;
-        kparams->spad0_size_per_thread = layout.src0_spad_size_per_thread;
-        kparams->spad1_size_per_thread = layout.src1_spad_size_per_thread;
+        kparams->kernel_type                       = HTP_CONCAT_KERNEL_TRANSPOSED;
+        kparams->n_threads                         = n_threads;
+        kparams->vtcm_size                         = layout.total_bytes;
+        kparams->u.transposed.spad0_size_per_thread = layout.src0_spad_size_per_thread;
+        kparams->u.transposed.spad1_size_per_thread = layout.src1_spad_size_per_thread;
         return true;
     }
 
@@ -6706,6 +6737,27 @@ static bool ggml_hexagon_precompute_cpy_params(
             return true;
         }
 
+        const uint32_t max_gather_ne0 = 128 / src_type_size;
+        const uint32_t total_rows = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
+        if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
+            dst_is_contiguous && !src_is_contiguous &&
+            src0->nb[0] == src_type_size && src0->ne[0] <= max_gather_ne0 &&
+            src0->nb[1] >= (size_t) src0->ne[0] * src_type_size &&
+            total_rows > 1 &&
+            htp_gather_rows_tensor_outer_contiguous(src0)) {
+
+            if (htp_gather_rows_solve_layout(&kparams->u.gather,
+                                             (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
+                                             0, 0, false,
+                                             src_type_size, total_rows,
+                                             sess->n_threads, sess->mdev.count, sess->vtcm_size)) {
+                kparams->kernel_type = HTP_COPY_KERNEL_GATHER_ROWS;
+                kparams->n_threads   = (uint8_t) sess->n_threads;
+                kparams->vtcm_size   = kparams->u.gather.slice * sess->n_threads;
+                return true;
+            }
+        }
+
         if (sameshape) {
             kparams->kernel_type = HTP_COPY_KERNEL_SAMESHAPE_SAMETYPE;
             kparams->total_rows  = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
@@ -6737,7 +6789,7 @@ static bool ggml_hexagon_precompute_cpy_params(
 
     const uint32_t n_threads = sess->n_threads > 0 ? (uint32_t) sess->n_threads : 4;
     struct htp_copy_convert_vtcm_layout layout;
-    htp_copy_convert_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], src_type_size, dst_type_size, n_threads);
+    htp_copy_convert_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], src_type_size, dst_type_size, n_threads);
 
     if (sess->vtcm_size > 0 && layout.total_bytes > sess->vtcm_size) {
         return false;
@@ -6751,6 +6803,9 @@ static bool ggml_hexagon_precompute_cpy_params(
     kparams->u.convert.dst_buf_size  = layout.dst_buf_size;
     kparams->u.convert.spad0_size_per_thread = layout.spad0_size_per_thread;
     kparams->u.convert.spad1_size_per_thread = layout.spad1_size_per_thread;
+    kparams->u.convert.src0_row_stride = layout.src0_row_stride;
+    kparams->u.convert.dst_row_stride  = layout.dst_row_stride;
+    kparams->u.convert.blk_rows        = layout.blk_rows;
     kparams->u.convert.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
     kparams->u.convert.div_ne02_ne01 = init_fastdiv_values((uint32_t) (src0->ne[2] * src0->ne[1]));
 
