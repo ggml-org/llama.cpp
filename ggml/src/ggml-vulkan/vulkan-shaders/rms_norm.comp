@@ -93,7 +93,7 @@ void rms_norm(uint num_iters) {
                 sum += xi * xi;
             }
 
-            if USE_SUBGROUP_ADD
+            #if USE_SUBGROUP_ADD
                 sum = subgroupAdd(sum);
                 if (subgroupElect()) {
                     sumsh[gl_SubgroupID] = sum;
