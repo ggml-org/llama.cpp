@@ -66,6 +66,9 @@ static void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * 
 
     for (int i = 0; i < ncols; i += iter_stride) {
         const int col = i + vals_per_iter*tid;
+        if (col >= ncols) {
+            continue;
+        }
         const int ib = (row*ncols + col)/qk; // x block index
         const int iqs = (col%qk)/qr; // x quant index
         const int iybs = col - col%qk; // y block start index
