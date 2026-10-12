@@ -2,6 +2,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include "ggml-cuda/copy-engine.cuh"
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -5363,6 +5364,10 @@ struct ggml_backend_cuda_device_context {
     int op_offload_min_batch_size;
 };
 
+int ggml_cuda_dev_index(ggml_backend_dev_t dev) {
+    return ((ggml_backend_cuda_device_context *) dev->context)->device;
+}
+
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
     return ctx->name.c_str();
@@ -6189,6 +6194,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_copy_engine") == 0) {
+        return (void *)ggml_cuda_copy_engine_get_iface;
     }
     return nullptr;
 }

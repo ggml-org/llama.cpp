@@ -65,6 +65,8 @@ struct pd_kv {
     }
 };
 
+static constexpr uint64_t PD_SYNC_TIMEOUT = 60ull * 100000000ull; // 60 s of wall_clock64()
+
 // K/V written by another queue (ggml_flash_attn_ext_set_sync): the copy queue publishes *ready >= tag once the data has
 // landed; the combine kernel publishes *consumed = tag once every block has read it. Flags are monotonic and compared
 // with >=, so a producer running ahead never aliases a later step's value onto an earlier one. The tag is a graph input
@@ -76,10 +78,16 @@ struct pd_sync {
 
     __host__ __device__ __forceinline__ bool enabled() const { return ready != nullptr; }
 
+    // Bounded: a producer that never publishes is a bug, so trap (the process fails with a GPU exception) instead of
+    // blocking the queue forever. wall_clock64() counts at 100 MHz on RDNA.
     __device__ __forceinline__ void wait() const {
         const uint32_t t = (uint32_t) *tag;
+        const uint64_t t0 = wall_clock64();
         while (__hip_atomic_load(ready, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) < t) {
             __builtin_amdgcn_s_sleep(2);
+            if (wall_clock64() - t0 > PD_SYNC_TIMEOUT) {
+                __builtin_trap();
+            }
         }
     }
 
