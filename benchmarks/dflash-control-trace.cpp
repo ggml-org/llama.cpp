@@ -38,7 +38,12 @@ std::map<llama_context *, std::unique_ptr<trace_context>> contexts;
 std::mutex trace_mutex;
 size_t payload_bytes = 0;
 size_t payload_id = 0;
-const size_t payload_limit = 512*1024*1024;
+const size_t payload_limit = 1024*1024*1024;
+const size_t payload_file_limit = 128*1024*1024;
+
+bool payload_fits(size_t bytes) {
+    return bytes && bytes <= payload_file_limit && payload_bytes <= payload_limit && bytes <= payload_limit-payload_bytes;
+}
 
 bool capture_enabled() {
     const char * value = std::getenv("DFLASH_CONTROL_CAPTURE");
@@ -60,7 +65,7 @@ void record(json row) {
 }
 
 json payload(const void * data, size_t bytes) {
-    if (!data || !bytes || bytes > 64*1024*1024 || bytes > payload_limit-payload_bytes) {
+    if (!data || !payload_fits(bytes)) {
         throw std::runtime_error("invalid or exhausted trace payload budget: bytes="+std::to_string(bytes));
     }
     const std::string name = "payload-"+std::to_string(++payload_id)+".bin";
@@ -79,7 +84,7 @@ json shape(const ggml_tensor * tensor) {
 
 json save_tensor(ggml_tensor * tensor) {
     const size_t bytes = ggml_nbytes(tensor);
-    if (bytes > 64*1024*1024) throw std::runtime_error("trace tensor exceeds per-file bound");
+    if (!payload_fits(bytes)) throw std::runtime_error("trace tensor exceeds remaining payload bounds");
     std::vector<uint8_t> data(bytes);
     ggml_backend_tensor_get(tensor, data.data(), 0, bytes);
     json row = shape(tensor);
@@ -307,7 +312,9 @@ int main() {
         state.kind = "tokens";
         state.rows = 2;
         t.assert_true(!evaluate(empty, true, &state));
-        for (size_t bytes : {size_t(0), size_t(65*1024*1024)}) {
+        t.assert_true(payload_fits(100*1024*1024));
+        t.assert_true(payload_fits(payload_file_limit));
+        for (size_t bytes : {size_t(0), payload_file_limit+1}) {
             bool rejected = false;
             try { payload(values.data(), bytes); } catch (const std::runtime_error &) { rejected = true; }
             t.assert_true(rejected);

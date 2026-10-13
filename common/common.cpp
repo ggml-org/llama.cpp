@@ -1256,13 +1256,23 @@ const char * common_streamed_dflash_config_error(const common_params & params) {
     if (params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 7)
         return "adaptive DFlash2 supports 1-7 draft tokens";
     if (!params.mmproj.path.empty()) return "adaptive DFlash2 currently supports text only, without mmproj";
-    if (params.n_batch != 256 || params.n_ubatch != 256 || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
-            params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0)
-        return "adaptive DFlash2 currently requires 256/256 batching, -fa on, and target Q8_0 K/Q4_0 V";
+    if (params.n_batch <= 0 || params.n_ubatch < 0 || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED)
+        return "adaptive DFlash2 requires a positive batch, nonnegative microbatch limit and -fa on";
+    const int32_t microbatch=params.n_ubatch == 0 ? params.n_batch : std::min(params.n_batch,params.n_ubatch);
+    if (microbatch < params.speculative.draft.n_max+1)
+        return "adaptive DFlash2 verification block must fit the effective target microbatch";
     const auto & draft=params.speculative.draft;
-    if (!((draft.cache_type_k == GGML_TYPE_F16 && draft.cache_type_v == GGML_TYPE_F16) ||
-            (draft.cache_type_k == GGML_TYPE_Q8_0 && draft.cache_type_v == GGML_TYPE_Q4_0)))
-        return "adaptive DFlash2 currently qualifies independent draft F16/F16 or Q8_0/Q4_0 KV";
+    const auto cache_type=[](ggml_type type) {
+        switch (type) {
+            case GGML_TYPE_F32: case GGML_TYPE_F16: case GGML_TYPE_BF16: case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1: case GGML_TYPE_IQ4_NL:
+            case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1: return true;
+            default: return false;
+        }
+    };
+    if (!cache_type(params.cache_type_k) || !cache_type(params.cache_type_v) ||
+            !cache_type(draft.cache_type_k) || !cache_type(draft.cache_type_v))
+        return "adaptive DFlash2 requires upstream KV cache types; backend kernels are checked during context initialization";
     return nullptr;
 }
 

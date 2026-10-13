@@ -166,6 +166,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
             next.grant += bytes;
         }
         auto * buffer = ggml_backend_memory_lease_buffer(pool);
+        if (ggml_backend_buffer_get_size(ggml_backend_memory_lease_buffer(writer)) < config.writer_workspace_bytes) return false;
         next.binding = std::make_unique<llama_kv_stream_binding>(
             content->host()->cache_id(),ggml_backend_buffer_get_type(buffer),previous_revision);
         if (!next.binding->bind(pool,policy,[&](const auto & view) {
@@ -619,7 +620,8 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
     if (config.initial_decode && config.resume_decode) {
         if (!decode_workspace_bytes(backend,config,content->host()->layout().tokens,partial_bytes)) return {};
     }
-    if (regions[0].size < config.policy.pool_bytes || regions[2].size < partial_bytes) return {};
+    if (!config.writer_workspace_bytes || regions[0].size < config.policy.pool_bytes ||
+            regions[1].size < config.writer_workspace_bytes || regions[2].size < partial_bytes) return {};
     try {
         std::unique_ptr<llama_kv_stream_session> result(new llama_kv_stream_session);
         result->impl = std::make_unique<implementation>(); auto & s = *result->impl;
@@ -1119,7 +1121,7 @@ bool llama_kv_stream_session::prepare(
     size_t attention_needed = 0;
     if (!suspend && coordinated_scratch &&
             (!s.attention_bytes(decode,attention_needed) ||
-             desired[1].size < 32768 ||
+             desired[1].size < s.config.writer_workspace_bytes ||
              desired[2].size < attention_needed)) return false;
 
     llama_kv_stream_policy_rebind replacement;

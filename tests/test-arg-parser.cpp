@@ -30,6 +30,31 @@ static void test(void) {
         assert(common_params_uses_streamed_dflash(dflash));
         assert(!common_params_uses_streamed_mtp(dflash));
         assert(!common_streamed_dflash_config_error(dflash));
+        const ggml_type cache_types[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};
+        for (auto key : cache_types) for (auto value : cache_types) {
+            auto configured=dflash;
+            configured.cache_type_k=key; configured.cache_type_v=value;
+            configured.speculative.draft.cache_type_k=value; configured.speculative.draft.cache_type_v=key;
+            assert(!common_streamed_dflash_config_error(configured));
+        }
+        for (auto limits : {std::pair{128,64}, {256,128}, {256,256}, {512,128}, {512,256},
+                {512,512}, {1024,256}, {1024,512}, {1024,1024}, {513,129}, {128,256}, {256,0}}) {
+            auto configured=dflash;
+            configured.n_batch=limits.first; configured.n_ubatch=limits.second;
+            assert(!common_streamed_dflash_config_error(configured));
+        }
+        for (int change=0; change<5; ++change) {
+            auto invalid=dflash;
+            switch (change) {
+                case 0: invalid.n_batch=0; break;
+                case 1: invalid.n_ubatch=-1; break;
+                case 2: invalid.cache_type_k=GGML_TYPE_I32; break;
+                case 3: invalid.speculative.draft.cache_type_v=GGML_TYPE_Q2_K; break;
+                case 4: invalid.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_DISABLED; break;
+            }
+            assert(common_streamed_dflash_config_error(invalid));
+        }
         assert(common_context_params_to_llama(dflash).n_rs_seq == 7);
         assert(common_kv_stream_auxiliary_layers(dflash,1) == 0);
         const auto draft=common_base_params_to_speculative(dflash);

@@ -25,6 +25,8 @@ struct llama_kv_stream_session_config {
     // Admitted target verification width, independent of prefill microbatch and embedded-MTP plans.
     uint32_t max_decode_rows = 4;
     size_t prefill_span_bytes = 0;
+    // Direct-session callers may keep a smaller tiled writer; the model supplies its quoted requirement.
+    size_t writer_workspace_bytes = 32768;
 };
 
 // Serial append-only device consumer. The backend outlives the session; recurrent state belongs to the text model.

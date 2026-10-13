@@ -1,4 +1,5 @@
 #include "../src/llama-kv-stream-resident.h"
+#include "../src/llama-kv-stream-writer.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include "../src/llama-memory-executor-cuda.h"
 #include "ggml-alloc.h"
@@ -196,6 +197,31 @@ int main(int argc, char ** argv) {
         return 0;
     }
     testing t;
+    t.test("writer_quote_uses_independent_row_traits_and_bounded_tiles", [&](testing & t) {
+        const ggml_type types[]={GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};
+        auto * type=ggml_backend_get_default_buffer_type(backend.get());
+        for (auto key : types) for (auto value : types) for (size_t maximum : {64u,256u,512u,1024u}) {
+            const ggml_kv_stream_shape shape{key,value,256,256,4,256,128};
+            size_t bytes=17;
+            if (!t.assert_true(llama_kv_stream_writer::requirements(type,shape,maximum,bytes))) return;
+            const size_t rows=std::min(maximum,size_t(256));
+            const size_t encoded=std::max(ggml_row_size(key,1024),ggml_row_size(value,1024))*rows;
+            t.assert_equal((encoded+127)/128*128+rows*sizeof(int64_t),bytes);
+            if (maximum <= 256 && key == GGML_TYPE_Q8_0 && value == GGML_TYPE_Q4_0) {
+                ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(type,bytes));
+                auto writer=llama_kv_stream_writer::create(backend.get(),buffer.get(),bytes,shape,maximum);
+                if (!t.assert_true(bool(writer))) return;
+            }
+        }
+        size_t bytes=17;
+        ggml_kv_stream_shape shape{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,256,256,4,256,128};
+        t.assert_true(!llama_kv_stream_writer::requirements(type,shape,0,bytes));
+        t.assert_true(!llama_kv_stream_writer::requirements(type,shape,SIZE_MAX,bytes));
+        shape.heads=INT64_MAX;
+        t.assert_true(!llama_kv_stream_writer::requirements(type,shape,256,bytes));
+        t.assert_equal(size_t(17),bytes);
+    });
     t.test("ordinary_set_rows_baseline_populates_authoritative_cache", [&](testing & t) {
         writer_fixture f(backend.get(), cuda); encoder e(f, 33, GGML_TYPE_Q8_0);
         std::vector<uint8_t> bytes(e.rows*e.row_bytes);

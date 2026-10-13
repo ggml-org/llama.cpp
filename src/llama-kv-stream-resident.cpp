@@ -1075,13 +1075,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
             uint32_t(q->ne[2]),uint32_t(s.binding.config.shape.heads),uint32_t(q->ne[1]),padded,resume_plan);
     if (bounded_prefill && !resumed) return false;
-    const bool span_shape = q->ne[1] <= 2 ||
-        (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0) ||
-        (s.binding.config.shape.type_k == GGML_TYPE_F16 && s.binding.config.shape.type_v == GGML_TYPE_F16);
-    const bool segmented = span_shape && s.native_graph_attention && cross && !prefill && !s.fallback &&
+    const bool segmented = s.native_graph_attention && cross && !prefill && !s.fallback &&
         q->ne[1] <= 8 && blocks <= slots && ops->version >= 8 && ops->spans && ops->spans_workspace &&
-        (q->ne[1] != 2 || resumed ||
-         (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0)) &&
         (((prefix == padded || !resumed) && (!resumed || !resume_plan.resume_resident)) ||
          (resumed && resume_plan.kernel_config[0] == 2));
     const bool span_resume=resumed && cross && !segmented && ops->version >= 11 &&

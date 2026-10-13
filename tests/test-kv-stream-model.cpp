@@ -528,7 +528,9 @@ int main(int argc,char ** argv) {
         t.assert_equal(initial_pool-1048576,model->pool_grant_bytes());
     });
     t.test("serial_draft_growth_admits_exact_budget_and_rejects_one_byte_short", [&](testing & t) {
-        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}, {GGML_TYPE_F16,GGML_TYPE_F16},
+                {GGML_TYPE_Q4_0,GGML_TYPE_Q8_0}}) for (uint32_t rows : {64u,129u,256u,512u,1024u}) {
+        fixture f(backend.get(),true,pair.first,pair.second,2049,false,1,2,2);
         auto bootstrap = f.policy;
         bootstrap.pool_bytes = 0;
         size_t minimum = 0;
@@ -537,7 +539,7 @@ int main(int argc,char ** argv) {
         const size_t alignment = ggml_backend_buft_get_alignment(type);
         auto align = [&](size_t bytes) { return (bytes+alignment-1)/alignment*alignment; };
         llama_kv_stream_memory_requirements requirements;
-        auto probe = llama_kv_stream_model::create({backend.get(),f.host->config(),minimum,256,4});
+        auto probe = llama_kv_stream_model::create({backend.get(),f.host->config(),minimum,rows,12});
         if (!t.assert_true(probe && probe->memory_requirements(requirements))) return;
         probe.reset();
         for (const auto & sizes : {std::pair<size_t,size_t>{3,1},{2,3},{3,4},{4,2},{3,3}}) {
@@ -545,7 +547,7 @@ int main(int argc,char ** argv) {
                 align(std::max(requirements.attention_prefill_bytes,requirements.attention_decode_bytes))+
                 align(requirements.writer_bytes)+minimum;
             for (size_t budget : {exact-1,exact}) {
-                llama_kv_stream_model_config config{backend.get(),f.host->config(),minimum,256,4};
+                llama_kv_stream_model_config config{backend.get(),f.host->config(),minimum,rows,12};
                 config.shared_device_memory_bytes = budget;
                 auto model = llama_kv_stream_model::create(config);
                 if (!t.assert_true(bool(model))) return;
@@ -568,6 +570,7 @@ int main(int argc,char ** argv) {
                 t.assert_equal(budget,owner->shared_parent_capacity());
                 if (!draft) t.assert_equal(before,model->pool_grant_bytes());
             }
+        }
         }
     });
     t.test("suspended_parent_tracks_phase_loans_until_the_last_lease_returns", [&](testing & t) {
@@ -1656,7 +1659,15 @@ int main(int argc,char ** argv) {
         if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(policy,minimum).status == llama_kv_stream_policy_status::success)) return;
         llama_kv_stream_model_config config{backend.get(),f.host->config(),minimum,4,4};
         config.auxiliary_cache_layers = 1;
-        config.shared_device_memory_bytes = 48*1048576;
+        llama_kv_stream_memory_requirements requirements;
+        auto probe=llama_kv_stream_model::create(config);
+        if (!t.assert_true(probe && probe->memory_requirements(requirements))) return;
+        probe.reset();
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(config.host.shape,256,page).status == ggml_kv_stream_status::success)) return;
+        const auto align=[](size_t bytes) { return (bytes+127)/128*128; };
+        config.shared_device_memory_bytes=40*1048576+align(requirements.writer_bytes)+
+            align(requirements.attention_prefill_bytes)+20*page.bytes;
         auto model = llama_kv_stream_model::create(config);
         if (!t.assert_true(bool(model))) return;
         auto * type = llama_kv_stream_device_buffer_type(dev);

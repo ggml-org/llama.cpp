@@ -332,11 +332,13 @@ llama_context::llama_context(
 
     if (model.arch == LLM_ARCH_DFLASH && params.ctx_other && params.ctx_other->get_cparams().kv_streaming()) {
         auto * target=params.ctx_other;
+        const uint32_t block_rows=target->get_cparams().kv_stream_decode_rows();
         if (target->get_model().arch != LLM_ARCH_QWEN35 || target->get_cparams().kv_stream_auxiliary_layers ||
                 !target->get_model().hparams.n_embd ||
                 !target->compute_memory || params.swa_full || !hparams.n_swa || !hparams.dflash_selector_rank ||
                 hparams.dflash_block_size < 2 || hparams.dflash_block_size > 8 ||
-                hparams.dflash_block_size > cparams.n_ubatch || cparams.n_seq_max != 1 || cparams.n_rs_seq ||
+                block_rows < 2 || block_rows > hparams.dflash_block_size || block_rows > cparams.n_ubatch ||
+                cparams.n_seq_max != 1 || cparams.n_rs_seq ||
                 cparams.n_ctx != target->n_ctx() || !cparams.offload_kqv || !cparams.flash_attn ||
                 model.devices.size() != 1 || model.devices.front().dev != target->get_model().devices.front().dev ||
                 model.target_layer_ids.empty() || model.target_layer_ids.size() > INT32_MAX/target->get_model().hparams.n_embd ||
@@ -356,7 +358,7 @@ llama_context::llama_context(
         for (auto id : model.target_layer_ids) target->set_embeddings_layer_inp(uint32_t(id),true);
         target->sched_reserve();
         serial_target_ctx=target;
-        cparams.serial_block_rows=hparams.dflash_block_size;
+        cparams.serial_block_rows=block_rows;
         cparams.embeddings_nextn=true;
         cparams.embeddings_nextn_masked=false;
     }

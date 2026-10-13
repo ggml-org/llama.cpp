@@ -1,5 +1,6 @@
 #include "llama-kv-stream-model.h"
 #include "llama-kv-stream-logical-cache.h"
+#include "llama-kv-stream-writer.h"
 #include "../ggml/src/ggml-backend-execution.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include "ggml-cpp.h"
@@ -70,6 +71,7 @@ struct llama_kv_stream_model::implementation {
     size_t decode_bytes = 0;
     size_t span_bytes = 0;
     size_t prefill_span_bytes = 0, prefill_bytes = 0;
+    size_t writer_bytes = 0;
     bool compact_prefill_mask=false;
     std::array<model_lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::shared_ptr<void> prepared_copies;
@@ -125,6 +127,7 @@ struct llama_kv_stream_model::implementation {
         session_config.prepared_copies = prepared_copies;
         session_config.max_decode_rows = config.max_decode_rows;
         session_config.prefill_span_bytes=prefill_span_bytes;
+        session_config.writer_workspace_bytes=writer_bytes;
         auto next = llama_kv_stream_session::create(
             config.backend,content,session_config,grants[0].get(),grants[1].get(),grants[2].get());
         if (next && suspended_tokens && !next->restore(suspended_tokens)) return {};
@@ -206,7 +209,7 @@ struct llama_kv_stream_model::implementation {
         prefill_stage = decode_stage = suspend_stage = 0;
         shared_parent = nullptr;
         shared = false;
-        const std::array<size_t,2> sizes{config.pool_bytes,32768};
+        const std::array<size_t,2> sizes{config.pool_bytes,writer_bytes};
         std::array<size_t,2> offsets{};
         size_t total = 0;
         for (size_t i = 0; i < sizes.size(); ++i) {
@@ -420,6 +423,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
     if (ggml_kv_stream_block_layout_make(size_t(config.max_batch_rows)*config.query_heads,256,partial).status != ggml_kv_stream_partial_status::success) return {};
     try {
         auto s = std::make_shared<implementation>(); s->config = config;
+        if (!llama_kv_stream_writer::requirements(type,config.host.shape,config.max_batch_rows,s->writer_bytes)) return {};
         s->config.host.cache_id = model_cache_id.fetch_add(config.auxiliary_cache_layers ? 2 : 1, std::memory_order_relaxed);
         if (!s->config.host.cache_id ||
                 s->config.host.cache_id > (UINT64_MAX-3)/4 - config.auxiliary_cache_layers) return {};
@@ -815,7 +819,7 @@ bool llama_kv_stream_model::memory_requirements(
     output = {
         type,
         impl->config.pool_bytes,
-        32768,
+        impl->writer_bytes,
         impl->prefill_bytes,
         impl->decode_bytes,
         std::max(size_t(128),ggml_backend_buft_get_alignment(type)),

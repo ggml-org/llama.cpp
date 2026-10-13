@@ -357,6 +357,44 @@ class OrdinaryControls(unittest.TestCase):
             with self.subTest(field=field,value=value), self.assertRaises(ValueError):
                 self.controls.server_command(SimpleNamespace(**base,**{field:value}),4096,3)
 
+    def test_zero_microbatch_inherits_and_trace_limit_matches_stock(self):
+        from types import SimpleNamespace
+        args=SimpleNamespace(server=Path("server"),target=Path("target"),draft=Path("draft"),
+                             port=12351,draft_k="f16",draft_v="f16",batch_size=256,ubatch_size=0)
+        command=self.controls.server_command(args,4096,7)
+        self.assertEqual(command[command.index("--ubatch-size")+1],"0")
+        self.assertEqual(self.controls.effective_microbatch(args,4096),256)
+        args.batch_size=128; args.ubatch_size=256
+        self.assertEqual(self.controls.effective_microbatch(args,4096),128)
+        args.batch_size=1024; args.ubatch_size=1024
+        self.assertEqual(self.controls.effective_microbatch(args,512),512)
+
+    def test_auto_arena_qualifies_full_workload_and_does_not_retry_correctness_errors(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temp:
+            args=SimpleNamespace(output=Path(temp),arena_mib=128,auto_max_arena=True,
+                                 prompt_tokens=16000,decode_tokens=256)
+            calls=[]
+            def probe(config,context,depth,tokens,mode):
+                calls.append((config.arena_mib,config.prompt_tokens,config.decode_tokens))
+                full=config.prompt_tokens == args.prompt_tokens
+                return {"status":"ok" if config.arena_mib <= (147 if full else 150) else "capacity_failure",
+                        "result":{"full":full},"log":"unused"}
+            with patch.object(self.controls,"run_point",side_effect=probe):
+                size,result=self.controls.auto_arena_for_point(args,16384,7,{})
+            self.assertEqual(size,147)
+            self.assertTrue(result["result"]["full"])
+            self.assertIn((147,16000,256),calls)
+            args.auto_max_arena=False
+            with patch.object(self.controls,"run_point",side_effect=AssertionError("fixed must not probe")):
+                self.assertEqual(self.controls.auto_arena_for_point(args,16384,7,{}),(128,None))
+            args.auto_max_arena=True
+            args.output=Path(temp)/"correctness-error"
+            with patch.object(self.controls,"run_point",return_value={"status":"failed","error":"numerical mismatch"}) as run:
+                with self.assertRaisesRegex(RuntimeError,"numerical mismatch"):
+                    self.controls.auto_arena_for_point(args,16384,7,{})
+                self.assertEqual(run.call_count,1)
+
     def test_native_command_preserves_profile_without_streaming(self):
         from types import SimpleNamespace
         args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
@@ -455,6 +493,11 @@ class OrdinaryControls(unittest.TestCase):
                  {"event": "attention", "visible_columns": [[0, 1, 3]], "mask": {"sha256": "a"*64}},
                  {"event": "memory", "devices": [{"free": 100}]}]
         self.controls.compare_control_rows(row, row, artifacts, artifacts, trace, trace)
+        uvm_control=dict(row,uvm=True)
+        self.controls.compare_control_rows(row,uvm_control,artifacts,artifacts,trace,trace,allow_uvm_difference=True)
+        with self.assertRaises(ValueError):
+            self.controls.compare_control_rows(row,dict(uvm_control,context=8192),artifacts,artifacts,trace,trace,
+                                               allow_uvm_difference=True)
         changed = copy.deepcopy(trace)
         changed[-1]["devices"][0]["free"] = 99
         self.controls.compare_control_rows(row, row, artifacts, artifacts, trace, changed)

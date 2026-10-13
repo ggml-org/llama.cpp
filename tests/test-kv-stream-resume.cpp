@@ -106,8 +106,15 @@ int main(int argc, char ** argv) {
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
         if (!t.assert_true(get && get() && get()->version >= 13 && get()->prefill_workspace)) return;
-        for (auto pair : {std::pair{GGML_TYPE_F16,GGML_TYPE_F16},std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}})
+        for (auto pair : {std::pair{GGML_TYPE_F16,GGML_TYPE_F16}, {GGML_TYPE_BF16,GGML_TYPE_BF16},
+                {GGML_TYPE_Q8_0,GGML_TYPE_Q8_0}, {GGML_TYPE_Q8_0,GGML_TYPE_Q5_0}, {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},
+                {GGML_TYPE_Q5_0,GGML_TYPE_Q8_0}, {GGML_TYPE_Q5_0,GGML_TYPE_Q5_0}, {GGML_TYPE_Q5_0,GGML_TYPE_Q4_0},
+                {GGML_TYPE_Q4_0,GGML_TYPE_Q8_0}, {GGML_TYPE_Q4_0,GGML_TYPE_Q5_0}, {GGML_TYPE_Q4_0,GGML_TYPE_Q4_0},
+                {GGML_TYPE_Q5_1,GGML_TYPE_Q4_1}, {GGML_TYPE_Q4_1,GGML_TYPE_Q5_1},
+                {GGML_TYPE_Q4_0,GGML_TYPE_F16}, {GGML_TYPE_F16,GGML_TYPE_Q4_0}})
             for (size_t active : {size_t(2049),size_t(32769)}) {
+            if (active > 2049 && pair != std::pair{GGML_TYPE_F16,GGML_TYPE_F16} &&
+                    pair != std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}) continue;
             const size_t capacity=(active+255)/256*256;
             fixture f(backend.get(),true,pair.first,pair.second,capacity,false,2,2,12);
             size_t scratch=0;
@@ -169,6 +176,34 @@ int main(int argc, char ** argv) {
                             active,1.f/16,workspace.lease.get(),true,4))) return;
                     ggml_backend_synchronize(backend.get());
                     t.assert_true(same_float_bits(expected,input.read()));
+                }
+            }
+        }
+    });
+    if (argc>1 && !std::strcmp(argv[1],"--cuda")) t.test("compiled_decode_pairs_share_complete_span_routing", [&](testing & t) {
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        for (auto key : {GGML_TYPE_Q8_0,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0})
+            for (auto value : {GGML_TYPE_Q8_0,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0}) {
+            fixture f(backend.get(),true,key,value,2049,false,2,2,12);
+            if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            size_t bytes=0;
+            if (!t.assert_true(get()->decode_workspace(backend.get(),key,value,12,2,8,2304,bytes))) return;
+            block_workspace workspace(f,bytes);
+            for (uint32_t queries : {3u,4u,8u}) {
+                block_inputs input(f,2049,queries,false,12);
+                if (!t.assert_true(f.resident->begin_sequence({0,1},2049,4,SIZE_MAX,{queries,true}))) return;
+                for (uint32_t layer=0; layer<2; ++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
+                            2049,1.f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                    t.assert_equal(size_t(1),f.resident->last_attention_calls());
                 }
             }
         }

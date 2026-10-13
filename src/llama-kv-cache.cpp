@@ -294,7 +294,8 @@ llama_kv_cache::llama_kv_cache(
         if (!kv_stream && unavailable_queries) {
             throw std::runtime_error("KV streaming native attention is unavailable for K="+std::string(ggml_type_name(type_k))+
                 ", V="+ggml_type_name(type_v)+", query width="+std::to_string(unavailable_queries)+
-                "; check backend/device geometry and compiled flash-attention kernels (CUDA mixed KV quants require GGML_CUDA_FA_ALL_QUANTS=ON)");
+                "; check native cache types, backend/device geometry and compiled flash-attention pairs "
+                "(CUDA: GGML_CUDA_FA_ALL_QUANTS or selective GGML_CUDA_FA_QUANTS)");
         }
         if (!kv_stream) throw std::runtime_error("failed to allocate or bind the CUDA KV streaming grants");
         const auto auxiliary = kv_stream->auxiliary_cache();

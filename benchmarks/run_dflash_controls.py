@@ -2,6 +2,7 @@
 """Run pinned ordinary DFlash2 controls. No streaming, UVM, fit retries or implicit offload."""
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
@@ -27,6 +28,58 @@ SPEC.loader.exec_module(SWEEP)
 KV_TYPES = ("f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1")
 
 
+def effective_microbatch(args, context):
+    batch=getattr(args,"batch_size",256)
+    ubatch=getattr(args,"ubatch_size",256)
+    if type(batch) is not int or not 1 <= batch <= 2**32-1 or type(ubatch) is not int or not 0 <= ubatch <= 2**32-1:
+        raise ValueError("batch must be positive uint32; microbatch may be zero to inherit")
+    return min(batch,context,ubatch or batch)
+
+
+def auto_arena_for_point(args, context, depth, token_cache):
+    if not getattr(args,"auto_max_arena",False):
+        return args.arena_mib,None
+    cache={}
+    probe_root=args.output/"fit-probes"
+    probe_root.mkdir(parents=True,exist_ok=True)
+    def run(candidate,full):
+        config=copy.copy(args)
+        config.arena_mib=candidate
+        config.output=probe_root/f"context-{context}-d-{depth}-arena-{candidate}-{'full' if full else 'fast'}"
+        config.output.mkdir()
+        if not full:
+            config.prompt_tokens=min(args.prompt_tokens,2560)
+            config.decode_tokens=min(args.decode_tokens,32)
+        started=time.monotonic()
+        row=run_point(config,context,depth,token_cache,"timing")
+        row["wall_seconds"]=time.monotonic()-started
+        row["arena_mib"]=candidate
+        row["full_workload"]=full
+        with (probe_root/"results.jsonl").open("a") as output:
+            output.write(json.dumps(row)+"\n")
+        print(json.dumps({"arena_probe":candidate,"context":context,"depth":depth,"full":full,"status":row["status"]}),flush=True)
+        if row["status"] == "quota_failure":
+            minimum=SWEEP.arena_minimum_mib(Path(row["log"]).read_text(errors="replace"))
+            raise SWEEP.ArenaTooSmallError(minimum or 0)
+        if row["status"] not in ("ok","capacity_failure"):
+            raise RuntimeError(f"arena probe failed: {row.get('error',row)}")
+        return row
+    def probe(candidate):
+        if candidate not in cache:
+            cache[candidate]=run(candidate,False)
+        return cache[candidate]["status"] == "ok"
+    upper=1048576
+    start=args.arena_mib
+    while upper >= 1:
+        candidate=SWEEP.find_max_arena_mib(start,probe,upper_limit=upper)
+        row=run(candidate,True)
+        if row["status"] == "ok":
+            return candidate,row
+        upper=candidate-1
+        start=min(start,upper)
+    raise RuntimeError("no arena fits the full workload")
+
+
 def server_command(args, context, depth):
     if depth not in (1, 3, 7) or not 512 <= context <= 262144:
         raise ValueError("ordinary control requires D=1,3,7 and a valid context")
@@ -34,8 +87,7 @@ def server_command(args, context, depth):
     ubatch = getattr(args,"ubatch_size",256)
     key = getattr(args,"target_k","q8_0")
     value = getattr(args,"target_v","q4_0")
-    if any(type(n) is not int or not 1 <= n <= 2**32-1 for n in (batch,ubatch)):
-        raise ValueError("batch limits must be positive uint32 values")
+    effective_microbatch(args,context)
     if any(t not in KV_TYPES for t in (key,value,args.draft_k,args.draft_v)):
         raise ValueError("unknown KV type")
     command = [str(args.server), "--model", str(args.target), "--model-draft", str(args.draft),
@@ -110,7 +162,7 @@ def validate_payloads(directory, rows):
                 path = directory / name
                 if path.is_symlink() or not path.is_file():
                     raise ValueError("missing or redirected trace payload")
-                if not 0 < value.get("bytes", 0) <= 64*1024*1024:
+                if not 0 < value.get("bytes", 0) <= 128*1024*1024:
                     raise ValueError("invalid trace payload size")
                 pin = {"size": value["bytes"], "sha256": value["sha256"]}
                 if name in files and files[name] != pin:
@@ -122,20 +174,23 @@ def validate_payloads(directory, rows):
             for child in value:
                 visit(child)
     visit(rows)
-    if sum(pin["size"] for pin in files.values()) > 512*1024*1024:
+    if sum(pin["size"] for pin in files.values()) > 1024*1024*1024:
         raise ValueError("trace exceeds payload budget")
     for name, pin in files.items():
         verify_file(directory / name, pin)
     return len(files)
 
 
-def compare_control_rows(actual, control, artifacts_actual, artifacts_control, trace_actual, trace_control):
+def compare_control_rows(actual, control, artifacts_actual, artifacts_control, trace_actual, trace_control, *, allow_uvm_difference=False):
     for row in (actual, control):
         if row.get("status") != "ok" or row.get("mode") != "capture":
             raise ValueError("matching control requires successful captured runs")
-    for field in ("context", "depth", "prompt_tokens", "decode_tokens", "uvm"):
+    for field in ("context", "depth", "prompt_tokens", "decode_tokens"):
         if field not in actual or actual[field] != control.get(field):
             raise ValueError(f"nonmatching control profile: {field}")
+    if any(type(row.get("uvm")) is not bool for row in (actual,control)) or (
+            actual["uvm"] != control["uvm"] and not allow_uvm_difference):
+        raise ValueError("nonmatching control profile: uvm")
     for option in ("--batch-size", "--ubatch-size", "--cache-type-k", "--cache-type-v",
                    "--spec-draft-type-k", "--spec-draft-type-v", "--spec-draft-n-max",
                    "--spec-draft-n-min", "--spec-draft-p-min", "--n-gpu-layers", "--spec-draft-ngl"):
@@ -270,7 +325,7 @@ def run_point(args, context, depth, token_cache, mode):
     directory.mkdir()
     log_path = directory / "server.log"
     command = server_command(args, context, depth)
-    env = SWEEP.server_environment(False)
+    env = SWEEP.server_environment(getattr(args,"uvm",False))
     # An inherited profiler would invalidate the uninstrumented control.
     env.pop("LD_PRELOAD", None)
     env.pop("DFLASH_CONTROL_TRACE", None)
@@ -288,8 +343,9 @@ def run_point(args, context, depth, token_cache, mode):
         command = [str(args.nsys), "profile", "--trace=cuda,nvtx", "--sample=none", "--cpuctxsw=none",
                    "--cuda-graph-trace=node",
                    "--cuda-memory-usage=true", "--output", str(directory / "native"), *command]
-    row = {"status": "failed", "context": context, "depth": depth, "mode": mode,
-           "command": command, "uvm": False, "log": str(log_path), "directory": str(directory)}
+    row = {"status": "failed", "context": context, "depth": depth, "mode": mode,"arena_mib":args.arena_mib,
+           "command": command, "uvm": getattr(args,"uvm",False),
+           "numerical_control_only":getattr(args,"uvm",False),"log": str(log_path), "directory": str(directory)}
     process = None
     url = f"http://127.0.0.1:{args.port}"
     with log_path.open("x") as log:
@@ -300,7 +356,7 @@ def run_point(args, context, depth, token_cache, mode):
             if "tokens" not in token_cache:
                 token_cache["tokens"] = request_json(url+"/tokenize", {
                     "content": args.prefill_text.read_text(), "add_special": False}, timeout=180)["tokens"]
-            count = min(args.prompt_tokens, context-args.decode_tokens-depth-8)
+            count = min(args.prompt_tokens, context-args.decode_tokens-getattr(args,"max_depth",depth)-8)
             if count < 256 or len(token_cache["tokens"]) < count:
                 raise ValueError("insufficient context/corpus for ordinary control")
             result = stream_completion(url+"/completion", {"prompt": token_cache["tokens"][:count],
@@ -318,7 +374,7 @@ def run_point(args, context, depth, token_cache, mode):
     elif mode == "capture":
         try:
             trace = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
-            row["trace"] = summarize_trace(trace, depth,max_injection_rows=args.ubatch_size)
+            row["trace"] = summarize_trace(trace, depth,max_injection_rows=effective_microbatch(args,context))
             row["trace"]["verified_payloads"] = validate_payloads(directory, trace)
             if context >= 2304 and not args.arena_mib and not args.rs_host_spill:
                 row["fit_ledger"] = fit_ledger(row, trace)
@@ -350,9 +406,14 @@ def main():
     parser.add_argument("--nsys", type=Path)
     parser.add_argument("--compare-to", type=Path,
                         help="require byte-exact captured data against matching independent native controls")
+    parser.add_argument("--uvm",action="store_true",help="native numerical control only; not a physical-fit or speed control")
+    parser.add_argument("--compare-numerical-only",action="store_true",
+                        help="allow UVM to differ in a matching numerical comparison; keep all other profile checks")
     parser.add_argument("--port", type=int, default=12351)
     parser.add_argument("--arena-mib", type=int, default=0,
                         help="qualify streamed execution in this declared arena; zero uses native storage")
+    parser.add_argument("--auto-max-arena",action="store_true",
+                        help="find each context/depth's largest physically fitting arena, then qualify the full workload")
     parser.add_argument("--rs-host-spill", action="store_true",
                         help="use the same two-slot staged rollback in the native control to keep it physically fitting")
     parser.add_argument("--request-timeout", type=float, default=1800,
@@ -360,6 +421,13 @@ def main():
     args = parser.parse_args()
     contexts = [int(value) for value in args.contexts.split(",")]
     depths = [int(value) for value in args.depths.split(",")]
+    args.max_depth=max(depths)
+    if args.auto_max_arena and args.arena_mib < 1:
+        parser.error("--auto-max-arena needs a positive --arena-mib starting point")
+    if args.uvm and (args.arena_mib or args.auto_max_arena):
+        parser.error("UVM is only allowed for independent native numerical controls")
+    if args.compare_numerical_only and not args.compare_to:
+        parser.error("--compare-numerical-only needs --compare-to")
     if (args.arena_mib < 0 or args.decode_tokens < 8 or args.prompt_tokens < 256 or not 1 <= args.port <= 65535
             or not math.isfinite(args.request_timeout) or not 1 <= args.request_timeout <= 43200):
         parser.error("invalid token or port bounds")
@@ -394,9 +462,11 @@ def main():
     with path.open("x") as output:
         for context in contexts:
             for depth in depths:
+                arena,qualified=auto_arena_for_point(args,context,depth,token_cache)
+                args.arena_mib=arena
                 for mode in modes:
                     started = time.monotonic()
-                    row = run_point(args, context, depth, token_cache, mode)
+                    row = qualified if qualified is not None and mode == "timing" else run_point(args, context, depth, token_cache, mode)
                     if args.compare_to and row["status"] == "ok" and mode == "capture":
                         try:
                             matches = [r for r in controls if r.get("context") == context and r.get("depth") == depth
@@ -405,10 +475,12 @@ def main():
                                 raise ValueError("missing or ambiguous independent control")
                             control = matches[0]
                             row["comparison"] = compare_control_rows(row, control, report, control_artifacts,
-                                load_control_trace(Path(row["directory"])), load_control_trace(Path(control["directory"])))
+                                load_control_trace(Path(row["directory"])), load_control_trace(Path(control["directory"])),
+                                allow_uvm_difference=args.compare_numerical_only)
                         except Exception as error:
                             row.update(status="failed", error=str(error))
-                    row["wall_seconds"] = time.monotonic()-started
+                    if qualified is None or mode != "timing":
+                        row["wall_seconds"] = time.monotonic()-started
                     output.write(json.dumps(row)+"\n")
                     output.flush()
                     print(json.dumps({key: value for key, value in row.items() if key != "result"}), flush=True)
