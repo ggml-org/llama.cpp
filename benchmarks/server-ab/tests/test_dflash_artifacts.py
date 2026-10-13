@@ -558,6 +558,36 @@ class OrdinaryControls(unittest.TestCase):
             self.controls.fit_ledger(dict(row, context=1000), trace, 262144)
 
 
+class DflashPlotTests(unittest.TestCase):
+    def setUp(self):
+        spec=importlib.util.spec_from_file_location("dflash_plot",SCRIPT.parent/"plot_dflash_controls.py")
+        self.plot=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.plot)
+
+    def test_timing_only_and_decode_grant_not_arena_are_reported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            log=root/"server.log"
+            log.write_text("memory_phase: phase=prefill parent=1073741824 kv_pool=800000000\n"
+                           "memory_phase: phase=decode parent=1073741824 kv_pool=900000000\n")
+            row={"mode":"timing","status":"ok","context":8192,"depth":7,"arena_mib":1024,"log":str(log),
+                "result":{"timings":{"prompt_per_second":1000,"predicted_per_second":60,"draft_n":100,"draft_n_accepted":40}}}
+            (root/"results.jsonl").write_text(json.dumps(dict(row,mode="capture"))+"\n"+json.dumps(row)+"\n")
+            points=self.plot.load_series(root)
+            self.assertEqual(len(points),1)
+            self.assertEqual(points[0]["decode_kv_pool_mib"],900000000/1048576)
+            self.assertEqual(points[0]["acceptance_pct"],40)
+            (root/"results.jsonl").write_text(json.dumps(row)+"\n"+json.dumps(row)+"\n")
+            with self.assertRaises(ValueError):self.plot.load_series(root)
+
+    def test_failed_and_numerical_only_runs_are_not_performance_points(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for row in ({"mode":"timing","status":"failed"},
+                        {"mode":"timing","status":"ok","numerical_control_only":True}):
+                (root/"results.jsonl").write_text(json.dumps(row)+"\n")
+                with self.assertRaises(ValueError):self.plot.load_series(root)
+
+
 class ProfileAnalysisTests(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location("dflash_profile", SCRIPT.parent / "analyze_dflash_profile.py")

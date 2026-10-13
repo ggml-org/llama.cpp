@@ -2,7 +2,7 @@
 
 Enable the separate Qwen3.8-27B DFlash2 drafter alongside the existing target KV streaming and shared phase arena. Preserve upstream block drafting, attention masks and acceptance semantics. Keep bounded draft sliding-window KV resident; extend target streamed verification from TG4 through TG8.
 
-Status: D1-D5 ownership/integration and D6's initial live/matched-round checkpoints are qualified on RTX 5070 Ti. PF0-PF3 are complete for the qualified bounded target-prefill paths. A non-UVM 262144-capacity pairing completes a short request in a 1024 MiB arena; full-length D6 qualification remains open. PF4-PF6, D7 and older-device execution remain pending. The 5-10 percent routing-overhead goal is met in sampled 128K equal-residency FP16 cases, not at every short-history width/path. Updated: 2026-10-12. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`. Development branch: `feature/adaptive-kv-dflash2`. These stages do not renumber existing consumer, MTP, Gemma or attention-port stages.
+Status: PF0-PF6 are complete for the qualified RTX 5070 Ti/head-256 Qwen target configurations recorded below. D6's full-length non-UVM anchor gate is met, including prefill, verification and recovery. Both full sweeps pass; the native UVM numerical control matches the streamed full-context output. D7's broader product/cache lifecycle work and older-device execution remain separate follow-ups. This does not qualify every upstream KV pair, model geometry, backend or physical budget. Updated: 2026-10-13. Source baseline: `feature/adaptive-kv-stream-v2` at `1240f34c7744`, rebased onto upstream `10a60cf30`. Development branch: `feature/adaptive-kv-dflash2`. These stages do not renumber existing consumer, MTP, Gemma or attention-port stages.
 
 Saving this plan does not start implementation, download models, change branches, stop production or authorize commits. Each lettered stage below is a reviewable implementation/test unit. Stage completed work and its progress entry for user review.
 
@@ -826,3 +826,45 @@ PF5's sampled pipeline tuning is qualified on this hardware/configuration. PF6's
 ### PF6 fitting/control guard (2026-10-13)
 
 The small-ub failure demonstrated why a completed HTTP response alone is not a valid fitting probe: a failed draft can fall back to ordinary decoding. Both sweep harnesses now reject backend execution errors in the server log even when the response completes. DFlash controls also require generated drafts; MTP sweeps reject a sample with no recorded drafts. An explicitly handled CUDA graph-instantiation fallback to eager execution remains allowed because it keeps the admitted kernel, rather than disabling drafting or switching attention arithmetic. Failures remain classified as quota, capacity or other errors; correctness failures are not retried as OOM. New red/green controls pass with the existing fitting tests (33 sweep and 41 DFlash/profile tests). Full sweeps remain pending.
+
+### PF6 completed qualification (2026-10-13)
+
+Both non-UVM D=7 sweeps complete all 27 capacities: 8K through 192K in 8K steps, then 224K, 248K and 256K. Each point has 256 generated tokens, the same realistic corpus and seed, active drafting and no accepted execution failure. One sweep uses an equal 1024 MiB declared parent; the other independently fits the largest parent at each point and validates the winner with the full workload. Accepted maximum parents range from 1512 MiB at small capacities to 1500 MiB at 262144. Fast/capacity-failure probes remain in `fit-probes`; no safety reserve is subtracted.
+
+| Capacity | Maximum parent MiB | Maximum-fit prefill / decode tok/s | Fixed-1024 prefill / decode tok/s |
+| --- | --- | --- | --- |
+| 16K | 1512 | 1534.53 / 80.57 | 1539.32 / 81.53 |
+| 80K | 1508 | 1072.40 / 49.83 | 1032.69 / 43.75 |
+| 128K | 1506 | 832.06 / 45.39 | 799.77 / 39.92 |
+| 160K | 1504 | 731.63 / 28.10 | 693.13 / 25.36 |
+| 192K | 1502 | 643.83 / 26.69 | 611.65 / 24.46 |
+| 256K | 1500 | 515.41 / 21.26 | 494.46 / 20.01 |
+
+The 256 token IDs and generated/accepted draft counts match between the two physical budgets at every capacity. This tests different resident/ring partitions without changing the model, query mode or input. The full-context native control also completes 261873 prompt tokens plus 256 generated tokens, and its token IDs match both streamed budgets. That native control uses UVM solely because its full-history storage cannot fit physical VRAM; its timing is excluded from the performance plot. Smaller forced-decision/native controls compare logits, retained features, KV, recurrent state, proposals and selector scores exactly. This is measured equivalence for these inputs and modes, not an identical-output promise for all prompts.
+
+Long D=1 and D=3 controls each complete a 65024-token prefill and 4096 generated tokens at capacity 73728 in a 1024 MiB parent, crossing 16 layout revisions without errors. Their sampled decode rates are 29.70 and 68.34 tok/s respectively. These controls exercise sustained publication/restore and growing-context repartition, not just a 256-token startup sample.
+
+The fixed-parent prefill phase reports exactly the same component grants at 8K and 262144: compute 100153600 bytes, target KV 883470080, writer 280576, attention 24907776, bounded draft KV 19169280 and publication staging 45760512. They sum to the 1073741824-byte parent with no unused range. Decode reclaims the prefill-only portion: effective KV is 962593920 bytes at 8K and 959111552 at full context. The small difference is decode graph/mask workspace, not a return to context-sized prefill conversion/gathering. Weights, current recurrent state and native/library resources are outside this declared parent and remain part of physical fitting.
+
+Qualification coverage includes the previously recorded 12 normalized batch/microbatch settings, all nine Q8/Q5/Q4 target pairs, F16/BF16 and signed/asymmetric target samples, independent draft types, exact-fit/one-byte-short quotes, overflow and stale/lifetime/failure tests. Native/streamed widest-batch comparison uses a separately labeled UVM native oracle when the physical native control cannot fit. F32 draft support does not imply an F32 bounded target reader; IQ4_NL and other unqualified counterparts remain outside this acceptance claim. Only resource-valid compiled native families and their qualified bounded counterparts are admitted. New hardware/backends/geometries still need execution qualification; planner metadata alone is insufficient.
+
+Host/CUDA tests, ASan/UBSan, CUDA memcheck/synccheck, no-speculative rollback, embedded MTP exact controls and DFlash forced-decision controls pass as recorded above. Final Python suites pass 43 DFlash/profile/plot tests and 33 sweep tests. No numerical tolerance was relaxed. The latest plotter tests reject failed/duplicate/UVM-only performance points and use the effective decode grant rather than confusing it with the declared arena.
+
+Results:
+
+- `benchmarks/results/pf6-dflash7-auto-max-full/results.jsonl`
+- `benchmarks/results/pf6-dflash7-equal-1024-full/results.jsonl`
+- `benchmarks/results/pf6-native-uvm-full-numerical/results.jsonl` (numerical only)
+- `benchmarks/results/pf6-long-decode-depth1-depth3/results.jsonl`
+- `benchmarks/results/pf6-qualified-full-sweep/dflash7-budget-comparison.png` and matching CSV
+
+Recreate the four-panel throughput/KV-grant/acceptance plot:
+
+```bash
+python benchmarks/plot_dflash_controls.py \
+  --series maximum-fit benchmarks/results/pf6-dflash7-auto-max-full \
+  --series fixed-1024-MiB benchmarks/results/pf6-dflash7-equal-1024-full \
+  --output benchmarks/results/pf6-qualified-full-sweep/dflash7-budget-comparison.png
+```
+
+These curves are individual 256-token samples, not statistical speedup claims. Their non-monotonic decode shape follows varying draft acceptance as well as compute/transfer costs. The two budgets are distinct experiments; larger residency is not a faster-kernel proof. PCIe attribution comes from the separate Nsight profiles, not a fabricated rate from the last copy counter. PF6 is complete for this recorded configuration matrix; do not use it to mark D7 or other model pairings complete.
