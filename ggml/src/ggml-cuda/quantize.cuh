@@ -26,6 +26,12 @@ void quantize_mmq_q8_1_cuda(
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
+// Activations of a SWIGLU -> MUL_MAT (mmq) pair: quantizes silu(gate)*up, rows of ne00 values with row strides s_gate
+// and s_up, as quantize_mmq_q8_1_cuda would quantize the GLU output (same blocks, same values), without writing it.
+void quantize_mmq_q8_1_swiglu_cuda(
+        const float * gate, const float * up, int64_t s_gate, int64_t s_up, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t ne0, int64_t ne1, cudaStream_t stream);
+
 void quantize_mmq_fp4_cuda(const float *   x,
                              const int32_t * ids,
                              void *          vy,

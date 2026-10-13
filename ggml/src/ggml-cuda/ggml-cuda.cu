@@ -2031,6 +2031,64 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
 }
 
+// whether ggml_cuda_mul_mat(ctx, src0, src1, dst) takes the mmq path (the same checks, in the same order)
+static bool ggml_cuda_mul_mat_takes_mmq(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
+    if (ggml_cuda_op_mul_mat_use_fwht(dst)) {
+        return false;
+    }
+    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
+        && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
+    if (bad_padding_clear || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    const int     cc        = ggml_cuda_info().devices[ctx.device].cc;
+    const int     warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
+    const int64_t ne11      = src1->ne[1];
+    if (ggml_cuda_should_use_mmvf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11) || src0->ne[1] == 1) {
+        return false;
+    }
+    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
+        return false;
+    }
+    if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
+        return false;
+    }
+    return ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0);
+}
+
+// SWIGLU whose output only feeds the next node, a MUL_MAT that runs as mmq (the dense FFN down projection in prefill):
+// the matmul quantizes silu(gate)*up from the GLU's sources, so the GLU output is never written. Bit-identical.
+// Ported from stew675/llama-cpp-rdna-boosts (block 15, FUSE_SWIGLU_MMQ; MIT). GGML_CUDA_DISABLE_SWIGLU_MMQ=1 turns it off.
+static bool ggml_cuda_try_fuse_swiglu_mmq(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i) {
+    static const bool disabled = getenv("GGML_CUDA_DISABLE_SWIGLU_MMQ") != nullptr;
+    const ggml_tensor * glu = cgraph->nodes[i];
+    if (disabled || glu->op != GGML_OP_GLU || ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || i + 1 >= cgraph->n_nodes) {
+        return false;
+    }
+    ggml_tensor * mm = cgraph->nodes[i + 1];
+    if (mm->op != GGML_OP_MUL_MAT || mm->src[1] != glu || !(mm->flags & GGML_TENSOR_FLAG_COMPUTE) ||
+            (glu->flags & GGML_TENSOR_FLAG_OUTPUT) || !ggml_node_has_n_uses(cgraph, i, 1)) {
+        return false;
+    }
+    const ggml_tensor * g0 = glu->src[0];
+    const ggml_tensor * g1 = glu->src[1];
+    const auto rows_ok = [](const ggml_tensor * t) {
+        return t->type == GGML_TYPE_F32 && t->nb[0] == sizeof(float) && t->nb[1] % sizeof(float) == 0 && t->ne[2] == 1 && t->ne[3] == 1;
+    };
+    if (glu->type != GGML_TYPE_F32 || !ggml_is_contiguous(glu) || glu->ne[0] % 4 != 0 || glu->ne[2] != 1 || glu->ne[3] != 1 ||
+            !rows_ok(g0) || g0->ne[1] != glu->ne[1] || g0->ne[0] != (g1 ? glu->ne[0] : 2*glu->ne[0]) ||
+            (g1 && (!rows_ok(g1) || !ggml_are_same_shape(g1, glu)))) {
+        return false;
+    }
+    const ggml_type type = mm->src[0]->type;
+    if (!ggml_is_quantized(type) || type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4 ||
+            !ggml_cuda_mul_mat_takes_mmq(ctx, mm->src[0], glu, mm)) {
+        return false;
+    }
+    ggml_cuda_mul_mat_q(ctx, mm->src[0], glu, nullptr, mm, glu);
+    return true;
+}
+
 // returns true when ggml_cuda_mul_mat_id takes the fallback path that requires stream synchronization
 // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
 static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int cc) {
@@ -4533,6 +4591,10 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
+    }
+
+    if (node->op == GGML_OP_GLU && ggml_cuda_try_fuse_swiglu_mmq(*cuda_ctx, cgraph, i)) {
+        return 1;
     }
 
     // narrow rows (per-head norms): RMS_NORM -> MUL [-> silu-gated MUL] or RMS_NORM -> SCALE, one wave per row

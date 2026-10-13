@@ -132,7 +132,9 @@ static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_tensor * src0, const ggm
 }
 
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+        const ggml_tensor * swiglu) {
+    GGML_ASSERT(!swiglu || (!ids && src1->ne[2] == 1 && src1->ne[3] == 1));
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -183,6 +185,7 @@ void ggml_cuda_mul_mat_q(
     const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0, dst, cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
+    GGML_ASSERT(!swiglu || !use_native_fp4); // the fp4 quantize reads src1, which a fused SWIGLU never writes
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
@@ -249,6 +252,19 @@ void ggml_cuda_mul_mat_q(
                 quantize_mmq_fp4_cuda(src1_d, nullptr, src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10, s11, s12, s13, ne10_padded,
                                         ne11, ne12, ne13, stream);
 
+            } else if (swiglu) {
+                // the GLU's gate and up: its two sources, or the two halves of one (swapped picks the gate)
+                const ggml_tensor * g0 = swiglu->src[0];
+                const ggml_tensor * g1 = swiglu->src[1];
+                const int32_t swapped = ggml_get_op_params_i32(swiglu, 1);
+                const float * gate_d  = (const float *) g0->data;
+                const float * up_d    = g1 ? (const float *) g1->data : (const float *) g0->data;
+                if (!g1) {
+                    gate_d += swapped ? ne10 : 0;
+                    up_d   += swapped ? 0 : ne10;
+                }
+                quantize_mmq_q8_1_swiglu_cuda(gate_d, up_d, g0->nb[1] / sizeof(float), (g1 ? g1->nb[1] : g0->nb[1]) / sizeof(float),
+                                              src1_q8_1.get(), src0->type, ne10, ne10_padded, ne11, stream);
             } else {
                 quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
                                        ne11, ne12, ne13, stream);
