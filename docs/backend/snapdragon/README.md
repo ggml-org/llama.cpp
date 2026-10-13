@@ -330,6 +330,31 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 - `GGML_HEXAGON_DMA64=0` (default: enabled on v81+)
   Disables 64-bit DMA for model weights. Set to `1` to enable it explicitly on a supported architecture.
 
+- `GGML_HEXAGON_POWER_MODE=default`
+  Controls the DCVS/HMX power mode requested from the HTP DSP for the session. Modes are listed
+  from lowest to highest power. All modes except `burst` leave DCVS enabled and keep the HTP awake.
+
+  - `low_power_saver`
+  - `power_saver`
+  - `high_power_saver`
+  - `low_balanced`
+  - `balanced`
+  - `high_performance`
+  - `sustained_high_performance`
+  - `burst` (maximum clocks, disables DCVS; may thermal-throttle on sustained workloads)
+  - `default` (currently aliases to `burst`)
+
+  Unknown values are logged as a warning and fall back to `burst`.
+
+  This must be set in the environment before the process initializes the backend registry, so
+  there is no `llama-*` CLI flag for it. The `run.py` runner exposes it as `--hex-power-mode`.
+
+  Examples:
+
+      `GGML_HEXAGON_POWER_MODE=balanced llama-completion ...`
+      `./scripts/snapdragon/run.py --hex-power-mode sustained_high_performance ...`
+
+
 - `GGML_HEXAGON_VERBOSE=1`
   Enables verbose logging of Ops from the backend. Example output:
 

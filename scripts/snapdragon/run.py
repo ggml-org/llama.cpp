@@ -159,6 +159,7 @@ def main():
     parser.add_argument("--hex-profile", help="Enable NPU/Hexagon profiling and performance metrics print (GGML_HEXAGON_PROFILE)")
     parser.add_argument("--hex-nhvx", help="Number of HVX units to use (GGML_HEXAGON_NHVX)")
     parser.add_argument("--hex-nhmx", help="Number of HMX units to use. 0 disables HMX power-up (GGML_HEXAGON_NHMX)")
+    parser.add_argument("--hex-power-mode", help="HTP DCVS/HMX power mode: low_power_saver, power_saver, high_power_saver, low_balanced, balanced, high_performance, sustained_high_performance, burst (GGML_HEXAGON_POWER_MODE)")
     parser.add_argument("--hex-hostbuf", help="Enable host buffers (GGML_HEXAGON_HOSTBUF)")
     parser.add_argument("--hex-dma64", nargs="?", const="1", help="Enable (1) or disable (0) 64-bit DMA for model weights (GGML_HEXAGON_DMA64)")
     parser.add_argument("--hex-opbatch", help="Maximum number of operations to batch into a single HTP execution (GGML_HEXAGON_OPBATCH)")
@@ -302,6 +303,7 @@ def main():
     # Other Hexagon environment variables
     set_env("GGML_HEXAGON_NHVX", args.hex_nhvx)
     set_env("GGML_HEXAGON_NHMX", args.hex_nhmx)
+    set_env("GGML_HEXAGON_POWER_MODE", args.hex_power_mode)
     set_env("GGML_HEXAGON_HOSTBUF", args.hex_hostbuf)
     set_env("GGML_HEXAGON_DMA64", args.hex_dma64)
     set_env("GGML_HEXAGON_OPBATCH", args.hex_opbatch)

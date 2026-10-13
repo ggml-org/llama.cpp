@@ -363,11 +363,90 @@ static void htp_main_thread(void * context);
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem) {
+// Non-BURST modes leave DCVS enabled and keep the HTP awake.
+// BURST pins all corners to MAX and disables DCVS.
+// Corner constants are from HAP_power.h (HAP_dcvs_voltage_corner_t / HAP_dcvs_exp_vcorner_t).
+struct htp_power_profile {
+    boolean  dcvs_enable;
+    uint32_t bus_min_corner;
+    uint32_t bus_max_corner;
+    uint32_t bus_target_corner;
+    uint32_t core_min_corner;
+    uint32_t core_max_corner;
+    uint32_t core_target_corner;
+    boolean  sleep_disable;
+    uint32_t hmx_min_corner;    // only used when __HVX_ARCH__ >= 75
+    uint32_t hmx_max_corner;
+    uint32_t hmx_target_corner;
+    uint32_t hmx_perf_mode;
+};
+
+#define HTP_POWER_PROFILE_ENTRY(min_c, max_c, hmx_c) \
+    { \
+        .dcvs_enable        = TRUE, \
+        .bus_min_corner     = (min_c), \
+        .bus_max_corner     = (max_c), \
+        .bus_target_corner  = (max_c), \
+        .core_min_corner    = (min_c), \
+        .core_max_corner    = (max_c), \
+        .core_target_corner = (max_c), \
+        .sleep_disable      = TRUE, \
+        .hmx_min_corner     = (hmx_c), \
+        .hmx_max_corner     = (hmx_c), \
+        .hmx_target_corner  = (hmx_c), \
+        .hmx_perf_mode      = HAP_CLK_PERF_HIGH, \
+    }
+
+static const struct htp_power_profile htp_power_profiles[HTP_POWER_MODE_COUNT] = {
+    [HTP_POWER_MODE_LOW_POWER_SAVER] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS2, HAP_DCVS_VCORNER_SVS2, HAP_DCVS_EXP_VCORNER_MIN_SVS),
+    [HTP_POWER_MODE_POWER_SAVER] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS, HAP_DCVS_VCORNER_SVS_PLUS, HAP_DCVS_EXP_VCORNER_SVS),
+    [HTP_POWER_MODE_HIGH_POWER_SAVER] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS_PLUS, HAP_DCVS_VCORNER_NOM, HAP_DCVS_EXP_VCORNER_SVS_L2),
+    [HTP_POWER_MODE_LOW_BALANCED] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM, HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_EXP_VCORNER_NOM),
+    [HTP_POWER_MODE_BALANCED] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_EXP_VCORNER_NOM_L1),
+    [HTP_POWER_MODE_HIGH_PERFORMANCE] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO_PLUS, HAP_DCVS_EXP_VCORNER_TUR_L2),
+    [HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE] =
+        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_VCORNER_TURBO_PLUS, HAP_DCVS_EXP_VCORNER_TUR_L2),
+    [HTP_POWER_MODE_BURST] = {
+        .dcvs_enable        = FALSE,
+        .bus_min_corner     = HAP_DCVS_VCORNER_MAX,
+        .bus_max_corner     = HAP_DCVS_VCORNER_MAX,
+        .bus_target_corner  = HAP_DCVS_VCORNER_MAX,
+        .core_min_corner    = HAP_DCVS_VCORNER_MAX,
+        .core_max_corner    = HAP_DCVS_VCORNER_MAX,
+        .core_target_corner = HAP_DCVS_VCORNER_MAX,
+        .sleep_disable      = TRUE,
+        .hmx_min_corner     = HAP_DCVS_EXP_VCORNER_MAX,
+        .hmx_max_corner     = HAP_DCVS_EXP_VCORNER_MAX,
+        .hmx_target_corner  = HAP_DCVS_EXP_VCORNER_MAX,
+        .hmx_perf_mode      = HAP_CLK_PERF_HIGH,
+    },
+};
+
+#undef HTP_POWER_PROFILE_ENTRY
+
+AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem, uint32_t power_mode) {
     struct htp_handle * h = (struct htp_handle *) handle;
     if (!h) {
         return AEE_EBADPARM;
     }
+
+    if (power_mode >= HTP_POWER_MODE_COUNT) {
+        FARF(ERROR, "invalid power-mode %u, falling back to burst", (unsigned) power_mode);
+        power_mode = HTP_POWER_MODE_BURST;
+    }
+    const struct htp_power_profile * pwr = &htp_power_profiles[power_mode];
+    FARF(ALWAYS, "power-mode %u : dcvs-enable %d bus[%u,%u,%u] core[%u,%u,%u] sleep-disable %d hmx[%u,%u,%u]",
+         (unsigned) power_mode, (int) pwr->dcvs_enable,
+         (unsigned) pwr->bus_min_corner, (unsigned) pwr->bus_max_corner, (unsigned) pwr->bus_target_corner,
+         (unsigned) pwr->core_min_corner, (unsigned) pwr->core_max_corner, (unsigned) pwr->core_target_corner,
+         (int) pwr->sleep_disable,
+         (unsigned) pwr->hmx_min_corner, (unsigned) pwr->hmx_max_corner, (unsigned) pwr->hmx_target_corner);
 
     if (h->ctx) {
         FARF(ERROR, "Queue already open");
@@ -499,17 +578,17 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
         request.type                              = HAP_power_set_DCVS_v3;
         request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = FALSE;
+        request.dcvs_v3.dcvs_enable               = pwr->dcvs_enable;
         request.dcvs_v3.set_bus_params            = TRUE;
-        request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.bus_params.target_corner  = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.bus_params.min_corner     = pwr->bus_min_corner;
+        request.dcvs_v3.bus_params.max_corner     = pwr->bus_max_corner;
+        request.dcvs_v3.bus_params.target_corner  = pwr->bus_target_corner;
         request.dcvs_v3.set_core_params           = TRUE;
-        request.dcvs_v3.core_params.min_corner    = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.core_params.max_corner    = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.core_params.min_corner    = pwr->core_min_corner;
+        request.dcvs_v3.core_params.max_corner    = pwr->core_max_corner;
+        request.dcvs_v3.core_params.target_corner = pwr->core_target_corner;
         request.dcvs_v3.set_sleep_disable         = TRUE;
-        request.dcvs_v3.sleep_disable             = TRUE;
+        request.dcvs_v3.sleep_disable             = pwr->sleep_disable;
 
 #if (__HEXAGON_ARCH__ >= 79)
         HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
@@ -537,10 +616,10 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         request.hmx_v2.set_power     = TRUE;
         request.hmx_v2.power_up      = TRUE;
         request.hmx_v2.set_clock     = TRUE;
-        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
+        request.hmx_v2.target_corner = pwr->hmx_target_corner;
+        request.hmx_v2.min_corner    = pwr->hmx_min_corner;
+        request.hmx_v2.max_corner    = pwr->hmx_max_corner;
+        request.hmx_v2.perf_mode     = pwr->hmx_perf_mode;
         FARF(ALWAYS, "Setting HMX clock\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {

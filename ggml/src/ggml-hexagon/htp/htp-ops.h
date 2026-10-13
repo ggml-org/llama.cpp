@@ -197,6 +197,20 @@ enum htp_profiler_mode {
     HTP_PROF_TRACE    = 3,
 };
 
+// DCVS/HMX power profile requested for the session.
+enum htp_power_mode {
+    HTP_POWER_MODE_LOW_POWER_SAVER            = 0,
+    HTP_POWER_MODE_POWER_SAVER                = 1,
+    HTP_POWER_MODE_HIGH_POWER_SAVER           = 2,
+    HTP_POWER_MODE_LOW_BALANCED               = 3,
+    HTP_POWER_MODE_BALANCED                   = 4,
+    HTP_POWER_MODE_HIGH_PERFORMANCE           = 5,
+    HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE = 6,
+    HTP_POWER_MODE_BURST                      = 7,
+
+    HTP_POWER_MODE_COUNT
+};
+
 enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
     HTP_TRACE_EVT_L2FLUSH             = 1,
