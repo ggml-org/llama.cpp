@@ -117,6 +117,19 @@ def is_arena_capacity_failure(log_text: str) -> bool:
     return "invalid resource handle" in log_text and "copy_queue::~copy_queue" in log_text and "acquire_mtp_layer" in log_text
 
 
+def validate_execution_log(log_text: str) -> None:
+    """Reject recovered backend failures even when ordinary fallback finishes the response."""
+    for line in log_text.splitlines():
+        # Disabling graph capture preserves the admitted kernel and is not a draft failure.
+        if "CUDA graph instantiation" in line and "using eager execution" in line:
+            continue
+        if (is_arena_capacity_failure(line) or
+                re.search(r"^\s*\d+(?:\.\d+)+\s+E\s", line) or
+                "llama_process() failed" in line or "CUDA error:" in line or
+                re.search(r"failed to rebuild .*graph after shared scratch handoff", line)):
+            raise RuntimeError(f"benchmark execution failed: {line.strip()}")
+
+
 class ArenaTooSmallError(RuntimeError):
     """A quota rejection supplies a lower bound, not an OOM upper bound."""
     def __init__(self, minimum_mib: int = 0):
@@ -316,6 +329,11 @@ def probe_arena(args: argparse.Namespace, context: int, mtp_length: int, arena_m
         finally:
             stop_process(process)
     label = "full" if full_workload else "fast"
+    if failure is None:
+        try:
+            validate_execution_log(log_path.read_text(errors="replace"))
+        except RuntimeError as error:
+            failure = error
     if failure is not None:
         log_text = log_path.read_text(errors="replace")
         minimum = arena_minimum_mib(log_text)
@@ -573,9 +591,11 @@ def main() -> int:
                 wall_seconds = time.monotonic() - started
 
             pool, resident, ring, active, h2d_mib, h2d_calls = decode_layout(log_path)
-            draft_accepted, draft_generated = parse_draft_acceptance(log_path.read_text(errors="replace"))
+            log_text = log_path.read_text(errors="replace")
+            validate_execution_log(log_text)
+            draft_accepted, draft_generated = parse_draft_acceptance(log_text)
             if mtp_length and not draft_generated:
-                print(f"warning: no MTP drafts recorded for context {context}, length {mtp_length}; see {log_path}", file=sys.stderr)
+                raise RuntimeError(f"no MTP drafts recorded for context {context}, length {mtp_length}; see {log_path}")
             decode_tps = float(timing["predicted_per_second"])
             h2d_gbs = h2d_mib * 1048576 * decode_tps / 1e9 if mtp_length == 0 else None
             row = {

@@ -15,6 +15,14 @@ SPEC.loader.exec_module(SWEEP)
 
 
 class MtpSweepTests(unittest.TestCase):
+    def test_completed_response_does_not_hide_recovered_backend_failure(self):
+        for text in ("0.02.517.481 E graph_reserve: failed to allocate compute buffers",
+                     "decode: failed to rebuild MTP graph after shared scratch handoff",
+                     "common_context: llama_process() failed: -2", "CUDA error: out of memory"):
+            with self.assertRaises(RuntimeError):
+                SWEEP.validate_execution_log(text)
+        SWEEP.validate_execution_log("0.02.517.481 W model has unused tensor\n0.02.518.000 I decode completed")
+
     def test_mtp_command_uses_model_derived_layer_count(self):
         args = SimpleNamespace(server=Path("/build/llama-server"), model=Path("/models/model.gguf"),
                                batch_size=256, ubatch_size=256, arena_mib=2240, port=1246,

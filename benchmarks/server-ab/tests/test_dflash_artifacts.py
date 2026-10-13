@@ -414,7 +414,7 @@ class OrdinaryControls(unittest.TestCase):
 
     def test_incomplete_or_nonfinite_results_are_not_successful(self):
         result = {"tokens": [4]*32, "timings": {"prompt_n": 2304, "predicted_n": 32,
-                  "prompt_per_second": 500.0, "predicted_per_second": 50.0}}
+                  "prompt_per_second": 500.0, "predicted_per_second": 50.0, "draft_n": 16}}
         self.controls.validate_result(result, 2304, 32)
         for field in ("prompt_n", "predicted_n", "prompt_per_second", "predicted_per_second"):
             broken = {"tokens": result["tokens"], "timings": dict(result["timings"])}
@@ -439,6 +439,12 @@ class OrdinaryControls(unittest.TestCase):
             self.assertEqual(self.controls.failure_kind(text), "capacity_failure")
         for text in ("missing flash attention kernel", "invalid resource handle", "segmentation fault"):
             self.assertEqual(self.controls.failure_kind(text), "failed")
+
+    def test_successful_fallback_without_any_drafts_is_not_a_dflash_control(self):
+        result={"tokens":[4]*32,"timings":{"prompt_n":2304,"predicted_n":32,
+            "prompt_per_second":100,"predicted_per_second":50,"draft_n":0}}
+        with self.assertRaises(ValueError):
+            self.controls.validate_result(result,2304,32)
 
     def test_trace_requires_all_three_workloads(self):
         rows = [{"event": "process", "role": "target", "kind": "tokens", "rows": 4, "ret": 0},

@@ -822,3 +822,7 @@ python benchmarks/analyze_dflash_profile.py /path/to/profile.sqlite
 ```
 
 PF5's sampled pipeline tuning is qualified on this hardware/configuration. PF6's full sweep, maximum-fit comparisons, remaining crossed/unsupported cases and final production restoration are still open. Do not infer full-context native numerical equivalence from the successful physical-fit run alone.
+
+### PF6 fitting/control guard (2026-10-13)
+
+The small-ub failure demonstrated why a completed HTTP response alone is not a valid fitting probe: a failed draft can fall back to ordinary decoding. Both sweep harnesses now reject backend execution errors in the server log even when the response completes. DFlash controls also require generated drafts; MTP sweeps reject a sample with no recorded drafts. An explicitly handled CUDA graph-instantiation fallback to eager execution remains allowed because it keeps the admitted kernel, rather than disabling drafting or switching attention arithmetic. Failures remain classified as quota, capacity or other errors; correctness failures are not retried as OOM. New red/green controls pass with the existing fitting tests (33 sweep and 41 DFlash/profile tests). Full sweeps remain pending.

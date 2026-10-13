@@ -112,6 +112,8 @@ def validate_result(result, prompt_tokens, decode_tokens):
     if (timing.get("prompt_n") != prompt_tokens or timing.get("predicted_n") != decode_tokens
             or len(result.get("tokens", [])) != decode_tokens):
         raise ValueError("incomplete ordinary control response")
+    if type(timing.get("draft_n")) is not int or timing["draft_n"] <= 0:
+        raise ValueError("DFlash control completed without generating drafts")
     for name in ("prompt_per_second", "predicted_per_second"):
         value = timing.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
@@ -369,8 +371,14 @@ def run_point(args, context, depth, token_cache, mode):
         finally:
             if process is not None:
                 stop_process(process)
+    log_text=log_path.read_text(errors="replace")
+    if row["status"] == "ok":
+        try:
+            SWEEP.validate_execution_log(log_text)
+        except RuntimeError as error:
+            row.update(status="failed",error=str(error))
     if row["status"] != "ok":
-        row["status"] = failure_kind(log_path.read_text(errors="replace"))
+        row["status"] = failure_kind(log_text)
     elif mode == "capture":
         try:
             trace = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
