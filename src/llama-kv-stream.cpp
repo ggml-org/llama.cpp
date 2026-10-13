@@ -69,6 +69,7 @@ llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_s
     debug_rotate = debug && strcmp(debug, "rotate") == 0;
     debug_trace  = debug && strcmp(debug, "trace")  == 0;
     debug_nocopy = debug && strcmp(debug, "nocopy") == 0;
+    no_prefetch  = debug && strcmp(debug, "noprefetch") == 0;
 
     if (const char * timeout = getenv("LLAMA_KV_STREAM_TIMEOUT")) {
         timeout_us = (int64_t) (atof(timeout)*1e6);
@@ -372,7 +373,7 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
     }
     {
         std::lock_guard<std::mutex> lock(mtx);
-        jobs.push_back({ tag, std::move(copies), wb_pending });
+        jobs.push_back({ tag, std::move(copies), wb_pending, cells.size() <= 4 });
         n_jobs++;
     }
     wb_pending = nullptr;
@@ -418,6 +419,58 @@ void llama_kv_stream::copier_main() {
     // the last layer that read each device slot, and its tag
     span reader[2] = { { -1, 0 }, { -1, 0 } };
 
+    prefetch pf;
+
+    // queue the copies of layer ikv into its slot once the slot's previous reader released it; false if stopping
+    auto queue_layer = [&](int32_t ikv, uint32_t t, const std::vector<run> & copies, bool is_prefetch) {
+        const int s = ikv % 2;
+
+        if (reader[s].ikv >= 0) {
+            const span r = reader[s];
+            if (!wait_for([&]() { return __atomic_load_n(consumed(r.ikv), __ATOMIC_ACQUIRE) >= r.tag; },
+                          "the attention to release a slot", r.ikv, r.tag)) {
+                return false;
+            }
+        }
+        if (!wait_for([&]() { return g - n_published.load(std::memory_order_acquire) < (uint64_t) n_events; },
+                      "a free copy event", ikv, t)) {
+            return false;
+        }
+
+        for (const auto & r : debug_nocopy ? std::vector<run>() : copies) {
+            for (bool is_v : { false, true }) {
+                ggml_tensor * dst = is_v ? slots[s].v : slots[s].k;
+                const size_t bytes = (size_t) page_size*row_size(ikv, is_v);
+                ce_iface->copy_to_device(ce, (char *) dst->data + r.slot*bytes, host(ikv, is_v, r.page), r.n*bytes);
+            }
+        }
+        ce_iface->record(ce, g % n_events);
+        spans[g % n_events] = { ikv, t, is_prefetch };
+        {
+            // under the lock, so that a publisher about to sleep cannot miss it
+            std::lock_guard<std::mutex> lock(mtx);
+            n_enqueued.store(++g, std::memory_order_release);
+        }
+        cv.notify_all();
+        if (debug_trace) {
+            LLAMA_LOG_INFO("%s: tag %u layer %d queued (%zu runs)%s\n", __func__, t, ikv, copies.size(), is_prefetch ? " (prefetch)" : "");
+        }
+
+        // a prefetched slot has no reader until the next job claims it
+        if (!is_prefetch) {
+            reader[s] = { ikv, t };
+        }
+        return true;
+    };
+
+    auto same_copies = [](const std::vector<run> & a, const std::vector<run> & b) {
+        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const run & x, const run & y) {
+            return x.page == y.page && x.slot == y.slot && x.n == y.n;
+        });
+    };
+
+    const int32_t n_layer = (int32_t) layers.size();
+
     while (true) {
         job j;
         {
@@ -435,42 +488,44 @@ void llama_kv_stream::copier_main() {
             ggml_backend_event_free(j.wb);
         }
 
-        for (int32_t ikv = 0; ikv < (int32_t) layers.size(); ++ikv) {
-            const int s = ikv % 2;
+        // the prefetched layers hold this job's pages if it streams the same copies: publish them once they landed
+        int32_t first = 0;
+        if (pf.valid && pf.tag == j.tag && pf.epoch == epoch.load(std::memory_order_acquire) && same_copies(pf.copies, j.copies)) {
+            if (!wait_for([&]() { return n_published.load(std::memory_order_acquire) >= pf.g_end; },
+                          "the prefetched copies to land", 0, j.tag)) {
+                return;
+            }
+            first = std::min(n_prefetch, n_layer);
+            for (int32_t ikv = 0; ikv < first; ++ikv) {
+                __atomic_store_n(flags + ikv, j.tag, __ATOMIC_RELEASE);
+                reader[ikv % 2] = { ikv, j.tag };
+            }
+        }
+        pf.valid = false;
 
-            // the slot's previous reader has to release it, and the event has to be free
-            if (reader[s].ikv >= 0) {
-                const span r = reader[s];
-                if (!wait_for([&]() { return __atomic_load_n(consumed(r.ikv), __ATOMIC_ACQUIRE) >= r.tag; },
-                              "the attention to release a slot", r.ikv, r.tag)) {
+        for (int32_t ikv = first; ikv < n_layer; ++ikv) {
+            if (!queue_layer(ikv, j.tag, j.copies, false)) {
+                return;
+            }
+        }
+
+        // nothing queued behind a decode ubatch: copy the first layers of the next one while the host works
+        bool idle = false;
+        if (j.small && !no_prefetch) {
+            std::lock_guard<std::mutex> lock(mtx);
+            idle = jobs.empty() && !stop;
+        }
+        if (idle) {
+            pf.epoch = epoch.load(std::memory_order_acquire);
+            for (int32_t ikv = 0; ikv < std::min(n_prefetch, n_layer); ++ikv) {
+                if (!queue_layer(ikv, j.tag + 1, j.copies, true)) {
                     return;
                 }
             }
-            if (!wait_for([&]() { return g - n_published.load(std::memory_order_acquire) < (uint64_t) n_events; },
-                          "a free copy event", ikv, j.tag)) {
-                return;
-            }
-
-            for (const auto & r : debug_nocopy ? std::vector<run>() : j.copies) {
-                for (bool is_v : { false, true }) {
-                    ggml_tensor * t = is_v ? slots[s].v : slots[s].k;
-                    const size_t bytes = (size_t) page_size*row_size(ikv, is_v);
-                    ce_iface->copy_to_device(ce, (char *) t->data + r.slot*bytes, host(ikv, is_v, r.page), r.n*bytes);
-                }
-            }
-            ce_iface->record(ce, g % n_events);
-            spans[g % n_events] = { ikv, j.tag };
-            {
-                // under the lock, so that a publisher about to sleep cannot miss it
-                std::lock_guard<std::mutex> lock(mtx);
-                n_enqueued.store(++g, std::memory_order_release);
-            }
-            cv.notify_all();
-            if (debug_trace) {
-                LLAMA_LOG_INFO("%s: tag %u layer %d queued (%zu runs)\n", __func__, j.tag, ikv, j.copies.size());
-            }
-
-            reader[s] = { ikv, j.tag };
+            pf.valid  = true;
+            pf.tag    = j.tag + 1;
+            pf.g_end  = g;
+            pf.copies = std::move(j.copies);
         }
 
         n_jobs_done.fetch_add(1, std::memory_order_release);
@@ -498,7 +553,9 @@ void llama_kv_stream::publisher_main() {
             return;
         }
 
-        __atomic_store_n(flags + sp.ikv, sp.tag, __ATOMIC_RELEASE);
+        if (!sp.prefetch) {
+            __atomic_store_n(flags + sp.ikv, sp.tag, __ATOMIC_RELEASE);
+        }
         n_published.store(++g, std::memory_order_release);
         if (debug_trace) {
             LLAMA_LOG_INFO("%s: tag %u layer %d ready\n", __func__, sp.tag, sp.ikv);
@@ -514,6 +571,8 @@ void llama_kv_stream::drain() {
         return n_jobs_done.load(std::memory_order_acquire) == n_jobs &&
                n_published.load(std::memory_order_acquire) == n_enqueued.load(std::memory_order_acquire);
     }, "the copy queue to drain", -1, tag);
+    // after the wait: a job still running could take the new epoch for its prefetch
+    epoch.fetch_add(1, std::memory_order_acq_rel);
 }
 
 int64_t llama_kv_stream::row(uint32_t cell) const {

@@ -32,9 +32,15 @@
 // as a contiguous copy of the whole layer for the stock kernels: streamed pages are copied to their logical place by the
 // copy engine, resident pages by the graph.
 //
+// Between decode ubatches the host samples and drafts while the copy engine would idle, so after a decode ubatch the
+// copier prefetches the first two layers of the next one: the same streamed pages into the two slots, once their last
+// readers released them. They are published only when the next ubatch streams exactly the same copies (pages move
+// about once per page of tokens); otherwise they are copied again over the prefetched data.
+//
 // Debug: LLAMA_KV_STREAM_DEBUG=rotate (when the pool holds the whole context) moves every resident page through host
 // memory into a rotated slot before every ubatch; LLAMA_KV_STREAM_DEBUG=trace logs the copy queue;
-// LLAMA_KV_STREAM_DEBUG=nocopy runs the copy queue without copying (wrong results; for the cost of the copies).
+// LLAMA_KV_STREAM_DEBUG=nocopy runs the copy queue without copying (wrong results; for the cost of the copies);
+// LLAMA_KV_STREAM_DEBUG=noprefetch disables the prefetch.
 //
 // Stalls: every wait of the copy queue is bounded (LLAMA_KV_STREAM_TIMEOUT seconds, default 30) and aborts with the queue
 // state; the attention's waits trap after 60 s.
@@ -151,7 +157,18 @@ private:
         uint32_t tag;
         std::vector<run> copies; // page: host page, slot: page index in the device slot
         ggml_backend_event_t wb = nullptr; // write-backs the copies read, recorded on the compute stream
+        bool small = false;                // a decode-sized ubatch: prefetch the next one
     };
+
+    // copier: the layers copied ahead for the next job
+    struct prefetch {
+        bool             valid = false;
+        uint32_t         tag   = 0;
+        uint64_t         epoch = 0;
+        uint64_t         g_end = 0; // copy events up to the prefetched layers
+        std::vector<run> copies;
+    };
+    static constexpr int32_t n_prefetch = 2; // one layer per device slot
 
     void copier_main();
     void publisher_main();
@@ -206,19 +223,21 @@ private:
     std::mutex              mtx;
     std::condition_variable cv;
     std::deque<job>         jobs;            // queued by prepare, taken by the copier
-    struct span { int32_t ikv; uint32_t tag; };
+    struct span { int32_t ikv; uint32_t tag; bool prefetch = false; }; // a prefetch is published by the copier
     span                    spans[n_events]; // by event: the layer copy it marks
     std::atomic<uint64_t>   n_enqueued{0};   // layer copies queued on the copy engine
     std::atomic<uint64_t>   n_published{0};  // layer copies published
     uint64_t                n_jobs = 0;      // jobs queued (main thread)
     std::atomic<uint64_t>   n_jobs_done{0};  // jobs fully queued on the copy engine
     std::atomic<bool>       stop{false};
+    std::atomic<uint64_t>   epoch{0};        // bumped by drain: the host store or the slots may change, prefetches are stale
 
     bool     prefill_paged = false;
 
     bool     debug_rotate = false;
     bool     debug_trace  = false;
     bool     debug_nocopy = false;
+    bool     no_prefetch  = false;
 
     int64_t  timeout_us = 30*1000*1000; // LLAMA_KV_STREAM_TIMEOUT, seconds
     uint32_t rotation     = 0;
