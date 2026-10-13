@@ -1731,6 +1731,10 @@ extern "C" {
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
 
         enum ggml_opt_optimizer_type optimizer_type;
+
+        // Optional checkpoint loading
+        const char * checkpoint_path;        // path to checkpoint file to load optimizer state from (nullptr = don't load)
+        bool load_optimizer_state;          // whether to load optimizer state from checkpoint_path
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
@@ -1743,7 +1747,18 @@ extern "C" {
             int64_t                   idata_split,
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
-    
+
+    // same as llama_opt_epoch, but skips the first resume_from_batch training batches of the epoch
+    LLAMA_API void llama_opt_epoch_resume(
+            struct llama_context    * lctx,
+            ggml_opt_dataset_t        dataset,
+            ggml_opt_result_t         result_train,
+            ggml_opt_result_t         result_eval,
+            int64_t                   idata_split,
+            ggml_opt_epoch_callback   callback_train,
+            ggml_opt_epoch_callback   callback_eval,
+            int64_t                   resume_from_batch);
+
     // LoRA training
     enum llama_adapter_lora_target {
         LLAMA_ADAPTER_LORA_TARGET_ATTN_Q   = 1 << 0,
@@ -1775,10 +1790,19 @@ extern "C" {
     // llama_opt_params::param_filter that selects the LoRA tensors only
     LLAMA_API bool llama_opt_param_filter_lora(const struct ggml_tensor * tensor, void * userdata);
 
+    // next optimizer iteration, 1-based like ggml_opt: the number of completed steps is iter - 1
+    LLAMA_API int64_t llama_opt_get_iter(struct llama_context * ctx);
+
     // write the adapter as a GGUF adapter file that llama_adapter_lora_init can load
     LLAMA_API bool llama_adapter_lora_save(
             const struct llama_adapter_lora * adapter,
             const char * filename);
+
+    // write the adapter (model.gguf) and the optimizer state of the context (optimizer.gguf) to a directory
+    LLAMA_API bool llama_adapter_lora_save_checkpoint(
+            const struct llama_adapter_lora * adapter,
+            struct llama_context * ctx,
+            const char * path);
 
 #ifdef __cplusplus
 }

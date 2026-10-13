@@ -2,10 +2,8 @@
 
 #include <cstring>
 #include <map>
-#include <cmath>
 #include <random>
-#include <algorithm>
-#include <stdexcept>
+#include <filesystem>
 
 ggml_context * llama_lora_create_context(size_t mem_size) {
     ggml_init_params init_params = {
@@ -340,4 +338,43 @@ bool llama_adapter_lora_save(
 
     gguf_free(gguf_ctx);
     return success;
+}
+
+bool llama_adapter_lora_save_checkpoint(
+        const llama_adapter_lora * adapter,
+        llama_context * ctx,
+        const char * checkpoint_path) {
+    if (!adapter || !ctx || !checkpoint_path) {
+        LLAMA_LOG_ERROR("%s: invalid parameters\n", __func__);
+        return false;
+    }
+
+    std::filesystem::path checkpoint_dir = std::filesystem::path(checkpoint_path);
+    if (!checkpoint_dir.empty()) {
+        if (!std::filesystem::exists(checkpoint_dir)) {
+            if (!std::filesystem::create_directories(checkpoint_dir)) {
+                LLAMA_LOG_ERROR("%s: failed to create checkpoint directory: %s\n",
+                               __func__, checkpoint_dir.string().c_str());
+                return false;
+            }
+        }
+    }
+
+    std::filesystem::path model_path = checkpoint_dir / "model.gguf";
+    bool lora_saved = llama_adapter_lora_save(adapter, model_path.string().c_str());
+    if (!lora_saved) {
+        LLAMA_LOG_ERROR("%s: failed to save LoRA adapter weights to %s\n",
+                        __func__, model_path.string().c_str());
+        return false;
+    }
+
+    std::filesystem::path optimizer_path = checkpoint_dir / "optimizer.gguf";
+    bool optimizer_saved = ctx->opt_save_state(optimizer_path.string().c_str());
+    if (!optimizer_saved) {
+        LLAMA_LOG_ERROR("%s: failed to save optimizer state to %s\n",
+                        __func__, optimizer_path.string().c_str());
+        return false;
+    }
+
+    return true;
 }

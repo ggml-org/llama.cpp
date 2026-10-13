@@ -211,7 +211,15 @@ struct llama_context {
             ggml_opt_result_t       result_eval,
             int64_t                 idata_split,
             ggml_opt_epoch_callback callback_train,
-            ggml_opt_epoch_callback callback_eval);
+            ggml_opt_epoch_callback callback_eval,
+            int64_t                 resume_from_batch = 0);
+
+    // Optimizer state access for checkpointing (delegated to ggml_opt API)
+    int64_t opt_get_iter();
+
+    // Optimizer state persistence
+    bool opt_save_state(const char* filename);
+    bool opt_load_state(const char* filename);
 
     void opt_epoch_iter(
             ggml_opt_dataset_t               dataset,
@@ -397,6 +405,10 @@ private:
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;
+
+    // optimizer state loading (deferred until after ggml_opt_build)
+    std::string pending_optimizer_checkpoint_path;
+    bool should_load_optimizer_tensors = false;
 
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;

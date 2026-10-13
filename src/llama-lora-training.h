@@ -4,6 +4,7 @@
 #include "llama-model.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
+#include "llama-context.h"
 #include "ggml.h"
 
 #include <vector>
