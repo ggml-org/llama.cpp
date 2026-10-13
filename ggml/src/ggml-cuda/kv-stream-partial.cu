@@ -292,7 +292,7 @@ static bool resume_plan(
     if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) ||
             key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
             !heads || !kv_heads || heads%kv_heads || heads > 65535 ||
-            !queries || queries > 8 || !tokens || tokens > size_t(INT32_MAX)-255 ||
+            !queries || queries > INT32_MAX || !tokens || tokens > size_t(INT32_MAX)-255 ||
             !ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value))) return false;
     auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
@@ -776,9 +776,10 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
     if (prefill) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
-        if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_prefill_bound(ctx,&op,bytes);
-        if (ggml_cuda_flash_attn_ext_selected_alloc_size(family,&op) != ggml_nbytes(&op)) return false;
-        bytes=0; return family != kernel_family::none;
+        if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_prefill_bound(ctx,&op,bytes,true);
+        ggml_kv_stream_resume_plan plan;
+        if (!resume_plan(backend,key,value,heads,kv_heads,queries,tokens,plan)) return false;
+        bytes=plan.bytes; return true;
 #else
         return false;
 #endif
@@ -1116,7 +1117,7 @@ ggml_cuda_kv_stream_plan_status ggml_cuda_kv_stream_attention_plan_query(
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{12,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
+    static const ggml_kv_stream_partial_ops ops{13,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t max_queries,size_t tokens,size_t & bytes) {
             if (!max_queries || max_queries > 8) return false;
             size_t required=0;

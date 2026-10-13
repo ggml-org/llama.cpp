@@ -4,7 +4,7 @@
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 bool ggml_cuda_flash_attn_ext_mma_prefill_bound(ggml_backend_cuda_context & ctx,
-        const ggml_tensor * dst, size_t & bytes);
+        const ggml_tensor * dst, size_t & bytes, bool resumable=false);
 
 bool ggml_cuda_flash_attn_ext_supported(int device, const ggml_tensor * dst);
 

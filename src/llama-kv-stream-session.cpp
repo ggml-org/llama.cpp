@@ -141,7 +141,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         return true;
     }
     bool attention_bytes(bool decode, size_t & bytes) const {
-        bytes = content->host()->layout().bytes+config.prefill_span_bytes;
+        bytes = config.prefill_span_bytes ? config.prefill_span_bytes : content->host()->layout().bytes;
         if (!decode || !config.resume_decode) return true;
         return decode_workspace_bytes(backend,config,content->host()->layout().tokens,bytes);
     }
@@ -614,7 +614,8 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
                 (addresses[i] < addresses[j]+regions[j].size && addresses[j] < addresses[i]+regions[i].size)) return {};
     }
     if (config.prefill_span_bytes > SIZE_MAX-content->host()->layout().bytes) return {};
-    size_t partial_bytes = config.native_graph_attention ? content->host()->layout().bytes+config.prefill_span_bytes : work.bytes;
+    size_t partial_bytes = config.native_graph_attention ?
+        (config.prefill_span_bytes ? config.prefill_span_bytes : content->host()->layout().bytes) : work.bytes;
     if (config.initial_decode && config.resume_decode) {
         if (!decode_workspace_bytes(backend,config,content->host()->layout().tokens,partial_bytes)) return {};
     }
@@ -1201,7 +1202,7 @@ bool llama_kv_stream_session::set_attention_workspace(ggml_backend_memory_lease_
         const auto base = uintptr_t(ggml_backend_buffer_get_base(buffer));
         bytes = ggml_backend_buffer_get_size(buffer);
         if (!base || base%128 || bytes != region.size || base > UINTPTR_MAX-bytes) return false;
-        size_t needed = s.content->host()->layout().bytes+s.config.prefill_span_bytes;
+        size_t needed = s.config.prefill_span_bytes ? s.config.prefill_span_bytes : s.content->host()->layout().bytes;
         if (!s.config.native_graph_attention) {
             ggml_kv_stream_block_layout partial;
             if (ggml_kv_stream_block_layout_make(size_t(s.config.query_heads)*s.config.max_batch_rows,256,partial).status != ggml_kv_stream_partial_status::success) return false;

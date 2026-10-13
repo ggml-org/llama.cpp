@@ -756,16 +756,34 @@ static bool mma_span_launch_make(
 
 // Fixup blocks cannot exceed native residency; whole-tile launches need no fixup plane.
 bool ggml_cuda_flash_attn_ext_mma_prefill_bound(ggml_backend_cuda_context & ctx,
-        const ggml_tensor * dst,size_t & bytes) {
+        const ggml_tensor * dst,size_t & bytes,bool resumable) {
     mma_span_launch plan;
-    if (!mma_span_launch_make(ctx,dst,1,plan)) return false;
+    if (!mma_span_launch_make(ctx,dst,resumable ? 3 : 1,plan,nullptr,resumable)) return false;
     size_t size=size_t(plan.native_blocks_limit);
     for (size_t factor : {size_t(plan.ncols1*plan.ncols2),size_t(2+256/2),sizeof(float2)}) {
         if (size > SIZE_MAX/factor) return false;
         size*=factor;
     }
     if (size > SIZE_MAX-plan.descriptor_bytes) return false;
-    bytes=size+plan.descriptor_bytes; return true;
+    size+=plan.descriptor_bytes;
+    if (resumable) {
+        const size_t blocks=std::max(size_t(plan.native_blocks_limit),size_t(plan.ntiles_dst));
+        ggml_cuda_fattn_mma_resume_layout checkpoint;
+        const int threads=ggml_cuda_fattn_mma_get_nthreads(256,256,plan.ncols1*plan.ncols2,
+            ggml_cuda_info().devices[ctx.device].cc);
+        if (!ggml_cuda_fattn_mma_resume_layout_make(plan.ntiles_dst,blocks,threads,plan.ncols1,plan.ncols2,checkpoint)) return false;
+        for (size_t count : {blocks,checkpoint.slots}) {
+            if (count > (SIZE_MAX-127)/sizeof(uint32_t) || size > SIZE_MAX-127) return false;
+            size=(size+127)/128*128;
+            const size_t add=(count*sizeof(uint32_t)+127)/128*128;
+            if (add > SIZE_MAX-size) return false;
+            size+=add;
+        }
+        const size_t payload=ggml_nbytes(dst);
+        if (checkpoint.bytes > SIZE_MAX-size || payload > SIZE_MAX-size-checkpoint.bytes) return false;
+        size+=checkpoint.bytes+payload;
+    }
+    bytes=size; return true;
 }
 
 size_t ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(

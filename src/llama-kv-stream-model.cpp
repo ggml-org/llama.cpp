@@ -448,7 +448,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         ggml_kv_stream_resume_plan plan;
         const auto * partial_ops = get ? get() : nullptr;
         s->prefill_bytes=s->host->layout().bytes;
-        if (!std::getenv("LLAMA_KV_STREAM_PREFILL_GATHER") && partial_ops && partial_ops->version >= 12 && partial_ops->prefill_workspace) {
+        if (!std::getenv("LLAMA_KV_STREAM_PREFILL_GATHER") && partial_ops && partial_ops->version >= 13 && partial_ops->prefill_workspace) {
             size_t bytes=0;
             bool available=true;
             const uint32_t maximum=uint32_t(std::min(size_t(config.max_batch_rows),s->host->layout().tokens));
@@ -460,7 +460,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             }
             if (available) {
                 if (bytes > SIZE_MAX-s->prefill_bytes) return {};
-                s->prefill_span_bytes=bytes; s->prefill_bytes+=bytes;
+                s->prefill_span_bytes=bytes; s->prefill_bytes=bytes;
             }
         }
         const bool resume_capable = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") &&
