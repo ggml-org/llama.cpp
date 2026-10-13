@@ -59,45 +59,20 @@ fn main(
 
     let thread_id = local_id.x;
 
-    for (var i = thread_id;i < params.n_expert;i += WG_SIZE) {
-        gathered_count_ids[i] = 0;
-    }
-
-    workgroupBarrier();
-
-    // gather the selected experts for the target token.
-    for (var col = thread_id;col < params.n_expert_used;col += WG_SIZE) {
-        let expert = ids[params.offset_ids + col];
-        gathered_count_ids[expert] = 1;
-        gathered_expert_used[expert] = col;
-    }
-
-    workgroupBarrier();
-
-    let output_groups:u32 = (params.m + OUTPUTS_PER_WG - 1u) / OUTPUTS_PER_WG;
+    let output_groups: u32 = (params.m + OUTPUTS_PER_WG - 1u) / OUTPUTS_PER_WG;
     let wg_linear = wg_id.y * num_wg.x + wg_id.x;
 
-    var own_expert:u32 = 0;
-    var wg_in_batch:u32 = 0;
-    var wg_sum:u32 = 0;
-
-    for (var i = 0u;i < params.n_expert;i += 1) {
-        let wg_vec_count = gathered_count_ids[i]; // 1 or 0
-        let wg_per_matrix = output_groups * wg_vec_count;
-        if (wg_sum <= wg_linear && wg_linear < wg_sum + wg_per_matrix) {
-            own_expert = i;
-            wg_in_batch = wg_linear - wg_sum;
-            break;
-        }
-        wg_sum += wg_per_matrix;
+    if (wg_linear >= output_groups * params.n_expert_used) {
+        return;
     }
 
-    let row_base = (wg_linear % output_groups) * OUTPUTS_PER_WG;
-    let dst1_stride = params.m;
+    let slot       = wg_linear / output_groups;
+    let own_expert = ids[params.offset_ids + slot];
+    let row_base   = (wg_linear % output_groups) * OUTPUTS_PER_WG;
 
     let src0_batch_offset = params.offset_src0 + own_expert * params.stride_02;
-    let src1_idx_base = params.offset_src1 + (gathered_expert_used[own_expert] % params.b_ne1) * params.stride_11;
-    let dst_idx_base = params.offset_dst + gathered_expert_used[own_expert] * dst1_stride + row_base;
+    let src1_idx_base     = params.offset_src1 + (slot % params.b_ne1) * params.stride_11;
+    let dst_idx_base      = params.offset_dst + slot * params.m + row_base;
 
     let acc = accumulate_vec_dot(thread_id, row_base, src0_batch_offset, src1_idx_base);
 
