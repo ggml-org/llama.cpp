@@ -312,10 +312,14 @@ llama_kv_cache::llama_kv_cache(
         n_rot_k = other->n_rot_k;
         n_rot_v = other->n_rot_v;
     } else {
-        const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
-        const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? atoi(LLAMA_ATTN_ROT_DISABLE) : false;
+        // two knobs turn the same thing off: the environment variable, for the whole process, and
+        //   the model setting, for the contexts of one model - see llama_model_set_attn_rot
+        const char * env_rot_disable = getenv("LLAMA_ATTN_ROT_DISABLE");
+
+        const bool attn_rot_disable = !model.attn_rot || (env_rot_disable != nullptr && atoi(env_rot_disable) != 0);
         if (attn_rot_disable) {
-            LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
+            LLAMA_LOG_WARN("%s: attention rotation force disabled (%s)\n", __func__,
+                    model.attn_rot ? "LLAMA_ATTN_ROT_DISABLE" : "llama_model_set_attn_rot");
         }
 
         bool attn_rot_k =

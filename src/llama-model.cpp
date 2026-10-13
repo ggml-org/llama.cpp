@@ -3781,6 +3781,10 @@ ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int 
     return model->devices[i].dev;
 }
 
+void llama_model_set_attn_rot(struct llama_model * model, bool value) {
+    model->attn_rot = value;
+}
+
 //
 // llama_model_base
 //

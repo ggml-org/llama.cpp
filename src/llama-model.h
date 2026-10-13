@@ -690,6 +690,9 @@ struct llama_model {
 
     llama_hadamard hdmd;
 
+    // see llama_model_set_attn_rot
+    bool attn_rot = true;
+
     // for classifier models
     std::vector<std::string> classifier_labels;
 
