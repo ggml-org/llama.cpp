@@ -24,6 +24,7 @@ struct llama_kv_stream_session_config {
     std::shared_ptr<void> prepared_copies;
     // Admitted target verification width, independent of prefill microbatch and embedded-MTP plans.
     uint32_t max_decode_rows = 4;
+    size_t prefill_span_bytes = 0;
 };
 
 // Serial append-only device consumer. The backend outlives the session; recurrent state belongs to the text model.

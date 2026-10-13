@@ -215,6 +215,9 @@ int main(int argc, char ** argv) {
         }
         ggml_backend_execution_set_external_workspace(prefill_attention, true);
         t.assert_equal(stock_prefill, ggml_backend_buft_get_alloc_size(buft, prefill_attention));
+        ggml_backend_execution_set_verified_workspace(prefill_attention);
+        t.assert_true(ggml_backend_execution_has_verified_workspace(prefill_attention));
+        t.assert_equal(ggml_nbytes(prefill_attention),ggml_backend_buft_get_alloc_size(buft,prefill_attention));
         managed_ops.supports = [](void *, const ggml_tensor *) { return false; };
         ggml_backend_buffer_ptr unsupported(ggml_backend_execution_buffer_new(dev, backing.get(), managed_ops, &probe));
         if (!t.assert_true(bool(unsupported))) return;

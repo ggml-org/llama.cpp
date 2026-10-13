@@ -87,6 +87,8 @@ public:
     bool configure_feedback(bool enable, size_t bounded_span_pages = 32);
     // Graph callers reserve native FA extras for their output; low-level minimal-workspace callers leave this off.
     bool configure_native_graph_attention(bool enable);
+    // Idle-only admission of a disjoint, quoted prefill execution workspace.
+    bool configure_prefill_workspace(size_t bytes);
     // Only explicitly marked decode sequences may use the optional native resumable contract.
     bool configure_resumed_decode(bool enable);
     size_t suggested_span_pages() const noexcept;

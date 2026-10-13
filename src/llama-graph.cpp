@@ -2830,7 +2830,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         ggml_backend_execution_set_external_workspace(cur,
-            cparams.mtp_publish_host ? cparams.mtp_span_attention : cparams.kv_stream_decode);
+            cparams.mtp_publish_host ? cparams.mtp_span_attention : cparams.kv_stream_decode || cparams.kv_stream_prefill);
+        if (cparams.kv_stream_prefill && !cparams.mtp_publish_host) ggml_backend_execution_set_verified_workspace(cur);
         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);

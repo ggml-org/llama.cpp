@@ -1,6 +1,4 @@
 #include "fattn-mma-f16.cuh"
-#include "fattn.cuh"
-#include "../ggml/src/ggml-backend-impl.h"
 
 #include <algorithm>
 #include <atomic>
@@ -537,20 +535,13 @@ static size_t check_encoded_tile_type(ggml_backend_t backend, bool quick) {
 
 // Prefill keeps the complete query batch; the native column bucket covers several query tiles.
 static void check_prefill_requirements(ggml_backend_t backend,int queries,ggml_type key,ggml_type value) {
-    ggml_context_ptr ctx(ggml_init({16*ggml_tensor_overhead()+ggml_graph_overhead(),nullptr,true}));
-    auto * q=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_F32,256,queries,12,1);
-    auto * k=ggml_new_tensor_4d(ctx.get(),key,256,262144,2,1);
-    auto * v=ggml_new_tensor_4d(ctx.get(),value,256,262144,2,1);
-    auto * mask=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_F16,262144,queries,1,1);
-    auto * op=ggml_flash_attn_ext(ctx.get(),q,k,v,mask,1.0f/16,0,0);
-    ggml_prec_set_acc(op,GGML_PREC_F32);
-    auto & cuda=*static_cast<ggml_backend_cuda_context *>(backend->context);
-    ggml_cuda_kv_stream_workspace_requirements requirements;
-    ggml_cuda_kv_stream_plan_status failure;
-    if (!ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(cuda,op,1,requirements,&failure))
+    auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+        ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)),"ggml_backend_kv_stream_partial_ops"));
+    size_t bytes=0;
+    if (!get || !get() || get()->version < 12 || !get()->prefill_workspace ||
+            !get()->prefill_workspace(backend,key,value,12,2,uint32_t(queries),262144,bytes))
         throw std::runtime_error("prefill span requirements rejected: width="+std::to_string(queries));
-    if (!requirements.known || !requirements.backend_scratch_known || requirements.output_extra_bytes ||
-            !requirements.scratch_bytes || requirements.scratch_bytes > 32*1024*1024)
+    if (!bytes || bytes > 32*1024*1024)
         throw std::runtime_error("prefill span requirements contain unbounded conversion planes");
 }
 

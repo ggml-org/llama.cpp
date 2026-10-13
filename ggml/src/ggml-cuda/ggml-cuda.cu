@@ -960,7 +960,7 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
     if (tensor->op == GGML_OP_FLASH_ATTN_EXT) {
         ggml_backend_buffer_t owner = nullptr;
         // Query width alone cannot distinguish short prefill from bounded decode.
-        if (!tensor->src[0] || tensor->src[0]->ne[1] > 4 ||
+        if (!tensor->src[0] || (tensor->src[0]->ne[1] > 4 && !ggml_backend_execution_has_verified_workspace(tensor)) ||
                 !ggml_backend_execution_has_external_workspace(tensor) ||
                 !ggml_backend_execution_owner(tensor, owner) || !owner ||
                 !ggml_backend_execution_supports(owner, ggml_backend_buft_get_device(buft), tensor)) {

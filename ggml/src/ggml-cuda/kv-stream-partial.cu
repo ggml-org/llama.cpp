@@ -741,11 +741,11 @@ static bool convert_mma_rows(
 }
 
 static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32_t value,
-        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, size_t spans, size_t & bytes) {
+        uint32_t heads, uint32_t kv_heads, uint32_t queries, size_t tokens, size_t spans, size_t & bytes, bool prefill=false) {
     if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) ||
             key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
             !heads || heads > 65535 || !kv_heads || kv_heads > heads || heads%kv_heads ||
-            !queries || queries > 8 || !tokens || tokens > INT32_MAX ||
+            !queries || (queries > 8 && !prefill) || !tokens || tokens > INT32_MAX ||
             !spans || spans > 3 || !ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value))) return false;
     ggml_tensor q={},k={},v={},mask={},op={};
     q.type=GGML_TYPE_F32;
@@ -773,6 +773,16 @@ static bool mma_workspace_for_queries(ggml_backend_t backend, int32_t key, int32
     std::memcpy(op.op_params,&scale,sizeof(scale));
     auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
+    if (prefill) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+        const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,&op);
+        if (family == kernel_family::mma) return ggml_cuda_flash_attn_ext_mma_prefill_bound(ctx,&op,bytes);
+        if (ggml_cuda_flash_attn_ext_selected_alloc_size(family,&op) != ggml_nbytes(&op)) return false;
+        bytes=0; return family != kernel_family::none;
+#else
+        return false;
+#endif
+    }
     const size_t required=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
     if (!required) return false;
     bytes=required;
@@ -1106,7 +1116,7 @@ ggml_cuda_kv_stream_plan_status ggml_cuda_kv_stream_attention_plan_query(
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{11,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
+    static const ggml_kv_stream_partial_ops ops{12,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t max_queries,size_t tokens,size_t & bytes) {
             if (!max_queries || max_queries > 8) return false;
             size_t required=0;
@@ -1137,7 +1147,11 @@ const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
             }
             if (!required) return false;
             bytes=required; return true;
-        },resume_spans};
+        },resume_spans,
+        [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t rows,size_t tokens,size_t & bytes) {
+            if (!rows || rows > INT32_MAX || rows > tokens) return false;
+            return mma_workspace_for_queries(backend,key,value,heads,kv_heads,rows,tokens,1,bytes,true);
+        }};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);
     return nullptr;

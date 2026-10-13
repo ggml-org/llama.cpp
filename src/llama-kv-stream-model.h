@@ -97,6 +97,7 @@ public:
     bool truncate(size_t tokens);
     size_t tokens() const noexcept;
     uint32_t max_batch_rows() const noexcept;
+    bool bounded_prefill() const noexcept;
     size_t granted_bytes() const noexcept;
     bool set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases);
     void release_graphs();

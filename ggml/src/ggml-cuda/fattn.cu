@@ -7,6 +7,7 @@
 #include "kv-stream-attention-dispatch.h"
 #include "kv-stream-dispatch.cuh"
 #include "../ggml-kv-stream-device.h"
+#include "../ggml-backend-execution.h"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -528,6 +529,7 @@ struct mma_span_launch {
     int ntiles_dst = 0;
     int ntiles_kv = 0;
     int gqa_ratio = 0;
+    int native_blocks_limit = 0;
     size_t shared_bytes = 0;
     size_t span_shared_offset = 0;
     size_t descriptor_bytes = 0;
@@ -690,6 +692,7 @@ static bool mma_span_launch_make(
         return false;
     }
     const int max_blocks = max_blocks_per_sm*ggml_cuda_info().devices[ctx.device].nsm;
+    next.native_blocks_limit=max_blocks;
     ggml_cuda_fattn_stream_k_plan stock_plan;
     if (!ggml_cuda_fattn_stream_k_plan_make(next.ntiles_dst,next.ntiles_kv,max_blocks,
             cc >= GGML_CUDA_CC_ADA_LOVELACE,false,stock_plan)) return false;
@@ -750,6 +753,20 @@ static bool mma_span_launch_make(
     return true;
 }
 } // namespace
+
+// Fixup blocks cannot exceed native residency; whole-tile launches need no fixup plane.
+bool ggml_cuda_flash_attn_ext_mma_prefill_bound(ggml_backend_cuda_context & ctx,
+        const ggml_tensor * dst,size_t & bytes) {
+    mma_span_launch plan;
+    if (!mma_span_launch_make(ctx,dst,1,plan)) return false;
+    size_t size=size_t(plan.native_blocks_limit);
+    for (size_t factor : {size_t(plan.ncols1*plan.ncols2),size_t(2+256/2),sizeof(float2)}) {
+        if (size > SIZE_MAX/factor) return false;
+        size*=factor;
+    }
+    if (size > SIZE_MAX-plan.descriptor_bytes) return false;
+    bytes=size+plan.descriptor_bytes; return true;
+}
 
 size_t ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(
         ggml_backend_cuda_context & ctx, const ggml_tensor * dst, size_t spans) {
@@ -843,7 +860,9 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         int32_t(mask->ne[1]),int32_t(mask->ne[2]),int32_t(mask->ne[3]),
         int32_t(mask->nb[1]),int32_t(mask->nb[2]),int64_t(mask->nb[3]),
         device_spans,int(count),int(plan.span_shared_offset),
-        uint32_t((ggml_is_contiguous(k) ? 1 : 0)|(ggml_is_contiguous(v) ? 2 : 0)),control);
+        uint32_t(ggml_backend_execution_has_stock_conversion(dst) ?
+            ((ggml_is_contiguously_allocated(k) ? 1 : 0)|(ggml_is_contiguously_allocated(v) ? 2 : 0)) :
+            ((ggml_is_contiguous(k) ? 1 : 0)|(ggml_is_contiguous(v) ? 2 : 0))),control);
     CUDA_CHECK(cudaGetLastError());
 
     if (plan.resumable && control.end < k->ne[1]) return true;

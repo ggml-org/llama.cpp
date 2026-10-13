@@ -69,6 +69,7 @@ struct llama_kv_stream_model::implementation {
     model_arena_ptr attention_arena{nullptr,ggml_backend_memory_arena_free};
     size_t decode_bytes = 0;
     size_t span_bytes = 0;
+    size_t prefill_span_bytes = 0, prefill_bytes = 0;
     std::array<model_lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::shared_ptr<void> prepared_copies;
     size_t prepared_copy_capacity = 0;
@@ -122,6 +123,7 @@ struct llama_kv_stream_model::implementation {
         session_config.suspend_stage = suspend_id;
         session_config.prepared_copies = prepared_copies;
         session_config.max_decode_rows = config.max_decode_rows;
+        session_config.prefill_span_bytes=prefill_span_bytes;
         auto next = llama_kv_stream_session::create(
             config.backend,content,session_config,grants[0].get(),grants[1].get(),grants[2].get());
         if (next && suspended_tokens && !next->restore(suspended_tokens)) return {};
@@ -236,7 +238,7 @@ struct llama_kv_stream_model::implementation {
                 return false;
             }
         }
-        if (!resize_attention(host->layout().bytes,false) || !make_session()) {
+        if (!resize_attention(prefill_bytes,false) || !make_session()) {
             release_device_memory();
             return false;
         }
@@ -358,7 +360,7 @@ struct llama_kv_stream_model::implementation {
         suspended_tokens = 0;
         if (shared) return session && session->reconstruct(0);
         session.reset();
-        return resize_attention(host->layout().bytes,false) && make_session();
+        return resize_attention(prefill_bytes,false) && make_session();
     }
 
     bool restore(size_t tokens) {
@@ -370,7 +372,7 @@ struct llama_kv_stream_model::implementation {
             restored = session && session->reconstruct(tokens);
         } else {
             session.reset();
-            restored = resize_attention(host->layout().bytes,false) && make_session();
+            restored = resize_attention(prefill_bytes,false) && make_session();
         }
         if (!restored) return false;
         external_mutation = false;
@@ -445,6 +447,22 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
         ggml_kv_stream_resume_plan plan;
         const auto * partial_ops = get ? get() : nullptr;
+        s->prefill_bytes=s->host->layout().bytes;
+        if (!std::getenv("LLAMA_KV_STREAM_PREFILL_GATHER") && partial_ops && partial_ops->version >= 12 && partial_ops->prefill_workspace) {
+            size_t bytes=0;
+            bool available=true;
+            const uint32_t maximum=uint32_t(std::min(size_t(config.max_batch_rows),s->host->layout().tokens));
+            for (uint32_t rows=1;rows<=maximum;++rows) {
+                size_t bound=0;
+                if (!partial_ops->prefill_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
+                        config.query_heads,config.host.shape.heads,rows,s->host->layout().tokens,bound)) { available=false; break; }
+                bytes=std::max(bytes,bound);
+            }
+            if (available) {
+                if (bytes > SIZE_MAX-s->prefill_bytes) return {};
+                s->prefill_span_bytes=bytes; s->prefill_bytes+=bytes;
+            }
+        }
         const bool resume_capable = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") &&
             partial_ops && partial_ops->version >= 5 && partial_ops->resume_plan && partial_ops->resume;
         const auto plan_resume = [&](uint32_t queries) {
@@ -741,7 +759,7 @@ bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
     const size_t page = s.config.host.shape.page_tokens;
     if (s.mtp_owner && page && s.session->tokens() &&
             (active - 1)/page != (s.session->tokens() - 1)/page && !release_mtp_layer()) return false;
-    if (!s.resize_attention(decode ? s.decode_bytes : s.host->layout().bytes,decode)) return false;
+    if (!s.resize_attention(decode ? s.decode_bytes : s.prefill_bytes,decode)) return false;
     if (!s.session->begin(active,queries,decode)) {
         // Feedback can also request repartition within one page. A guarded
         // rejection that did not poison the session is safe to retry unguarded.
@@ -768,6 +786,7 @@ bool llama_kv_stream_model::restore(size_t tokens) { return !impl->mtp_owner && 
 bool llama_kv_stream_model::truncate(size_t tokens) { return !impl->mtp_owner && impl->truncate(tokens); }
 size_t llama_kv_stream_model::tokens() const noexcept { return impl->session ? impl->session->tokens() : 0; }
 uint32_t llama_kv_stream_model::max_batch_rows() const noexcept { return impl->config.max_batch_rows; }
+bool llama_kv_stream_model::bounded_prefill() const noexcept { return impl->prefill_span_bytes != 0; }
 size_t llama_kv_stream_model::granted_bytes() const noexcept {
     if (impl->shared) return device_grant_bytes();
     return (impl->arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->arena.get())) : 0) +
@@ -786,7 +805,7 @@ bool llama_kv_stream_model::memory_requirements(
         type,
         impl->config.pool_bytes,
         32768,
-        impl->host->layout().bytes,
+        impl->prefill_bytes,
         impl->decode_bytes,
         std::max(size_t(128),ggml_backend_buft_get_alignment(type)),
         impl->config.shared_device_memory_bytes,

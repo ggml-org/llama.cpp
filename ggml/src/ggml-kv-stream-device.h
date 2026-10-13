@@ -67,6 +67,9 @@ struct ggml_kv_stream_partial_ops {
     bool (*resume_spans)(ggml_backend_t backend, const ggml_tensor * attention, ggml_backend_buffer_t workspace,
             const ggml_kv_stream_resume_plan & plan, const ggml_kv_stream_span_plan_view & spans,
             size_t first, size_t end) = nullptr;
+    // Version 12: history-independent scratch for one width; zero permits native execution without extras.
+    bool (*prefill_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
+            uint32_t kv_heads, uint32_t queries, size_t tokens, size_t & bytes) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 

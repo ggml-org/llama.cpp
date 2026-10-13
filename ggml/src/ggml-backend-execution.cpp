@@ -22,6 +22,29 @@ bool ggml_backend_execution_has_external_workspace(const ggml_tensor * op) {
     if (!op || op->op != GGML_OP_FLASH_ATTN_EXT) return false;
     int32_t value = 0;
     std::memcpy(&value, op->op_params + external_workspace_param, sizeof(value));
+    return value == 1 || value == 2;
+}
+void ggml_backend_execution_set_verified_workspace(ggml_tensor * op) {
+    GGML_ASSERT(op && op->op == GGML_OP_FLASH_ATTN_EXT);
+    const int32_t value=2;
+    std::memcpy(op->op_params+external_workspace_param,&value,sizeof(value));
+}
+bool ggml_backend_execution_has_verified_workspace(const ggml_tensor * op) {
+    if (!op || op->op != GGML_OP_FLASH_ATTN_EXT) return false;
+    int32_t value=0;
+    std::memcpy(&value,op->op_params+external_workspace_param,sizeof(value));
+    return value == 2;
+}
+
+void ggml_backend_execution_set_stock_conversion(ggml_tensor * op, bool enabled) {
+    GGML_ASSERT(op && op->op == GGML_OP_FLASH_ATTN_EXT);
+    const int32_t value=enabled ? 1 : 0;
+    std::memcpy(op->op_params+external_workspace_param-1,&value,sizeof(value));
+}
+bool ggml_backend_execution_has_stock_conversion(const ggml_tensor * op) {
+    if (!op || op->op != GGML_OP_FLASH_ATTN_EXT) return false;
+    int32_t value=0;
+    std::memcpy(&value,op->op_params+external_workspace_param-1,sizeof(value));
     return value == 1;
 }
 

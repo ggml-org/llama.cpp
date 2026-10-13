@@ -38,6 +38,7 @@ struct llama_kv_stream_resident::implementation {
     bool fallback = false;
     bool native_graph_attention = false;
     bool resumed_decode = false;
+    size_t prefill_scratch_bytes = 0;
     std::vector<llama_kv_stream_rows> ranges;
     std::vector<llama_kv_stream_rows> layer_ranges{{0,ggml_kv_stream_operand::k,0,0},{0,ggml_kv_stream_operand::v,0,0}};
     size_t active = 0, bytes = 0, calls = 0;
@@ -372,6 +373,16 @@ bool llama_kv_stream_resident::configure_resumed_decode(bool enable) {
     auto & s = *impl;
     if (s.busy || s.sequence || s.capturing()) return false;
     s.resumed_decode = enable; return true;
+}
+bool llama_kv_stream_resident::configure_prefill_workspace(size_t bytes) {
+    auto & s=*impl;
+    if (s.busy || s.sequence || s.capturing() || bytes > SIZE_MAX-s.content->host()->layout().bytes) return false;
+    if (bytes) {
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend)),"ggml_backend_kv_stream_partial_ops"));
+        if (!get || !get() || get()->version < 12 || !get()->prefill_workspace || !get()->spans_workspace || !get()->spans) return false;
+    }
+    s.prefill_scratch_bytes=bytes; return true;
 }
 size_t llama_kv_stream_resident::suggested_span_pages() const noexcept {
     (void) feedback();
@@ -1051,6 +1062,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     ggml_kv_stream_layout gathered;
     ggml_kv_stream_resume_plan resume_plan;
     const bool prefill = cross && !s.sequence->decode;
+    const bool bounded_prefill=prefill && s.prefill_scratch_bytes;
     const bool resumed = s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 8 && !s.fallback &&
         ops->version >= 5 && ops->resume_plan && ops->resume &&
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
@@ -1077,7 +1089,8 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         lease(ggml_backend_memory_lease_retain(workspace),ggml_backend_memory_lease_free);
     auto * wb = ggml_backend_memory_lease_buffer(lease.get());
     ggml_backend_memory_region region;
-    const size_t required_workspace = (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded ?
+    const size_t required_workspace = bounded_prefill ? s.content->host()->layout().bytes+s.prefill_scratch_bytes :
+        (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded ?
         0 : resumed ? resume_plan.bytes : native && !segmented ? gathered.bytes : work.bytes;
     if (!wb || !ggml_backend_memory_lease_get_region(lease.get(),&region) ||
             region.size != ggml_backend_buffer_get_size(wb) || region.size < required_workspace ||
@@ -1227,7 +1240,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return true;
     };
     if (prefetch && !cross) for (size_t block = 0; block < std::min(slots,blocks); block += width(block)) if (!enqueue(block)) return false;
-    if ((native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded && !segmented) {
+    if (!bounded_prefill && (native || (resumed && !resume_plan.resume_resident)) && !s.fallback && prefix == padded && !segmented) {
         if (!describe(0,prefix,0,true) || !ops->direct(s.backend,&op)) return false;
         ++s.attention_calls; direct_result = true; return finish();
     }
@@ -1357,7 +1370,25 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
         ggml_backend_execution_set_external_workspace(&op, ggml_backend_execution_has_external_workspace(output));
         op.src[0] = q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &slice;
-        if (!ops->direct(s.backend,&op)) return false;
+        if (bounded_prefill) {
+            const size_t offset=s.content->host()->layout().bytes;
+            ggml_backend_buffer_ptr execution(ggml_backend_buffer_view(wb,offset,s.prefill_scratch_bytes));
+            if (!execution) return false;
+            const ggml_kv_stream_span_source source{lease.get(),lease.get(),0,active_tokens,0,gathered.v_offset};
+            ggml_kv_stream_span_plan_t raw=nullptr;
+            if (ggml_kv_stream_span_plan_make(s.binding.config.shape,&source,1,active_tokens,size_t(q->ne[1]),raw).status !=
+                    ggml_kv_stream_status::success) return false;
+            resident_span_plan_ptr plan(raw,ggml_kv_stream_span_plan_free);
+            ggml_backend_execution_set_stock_conversion(&op,true);
+            size_t needed=0;
+            if (!ops->prefill_workspace(s.backend,k.type,v.type,uint32_t(q->ne[2]),uint32_t(k.ne[2]),
+                    uint32_t(q->ne[1]),padded,needed) || needed > s.prefill_scratch_bytes) return false;
+            if (needed) {
+                if (!ops->spans_workspace(s.backend,&op,plan.get(),needed) || needed > s.prefill_scratch_bytes ||
+                        !ops->spans(s.backend,&op,plan.get(),execution.get())) return false;
+            } else if (!ops->direct(s.backend,&op)) return false;
+            ggml_backend_synchronize(s.backend);
+        } else if (!ops->direct(s.backend,&op)) return false;
         ++s.attention_calls; direct_result = true; return finish();
     };
     const auto convert_inputs = [&] {

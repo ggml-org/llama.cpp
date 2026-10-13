@@ -581,6 +581,11 @@ llama_context::llama_context(
         }
 
         memory.reset(model.create_memory(params_mem, cparams));
+        if (cparams.kv_streaming()) {
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(memory.get());
+            auto * stream=hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+            cparams.kv_stream_prefill=stream && stream->bounded_prefill();
+        }
         if (mtp_attached) {
             auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
             if (!draft_kv || !draft_kv->attach_mtp_auxiliary_cache(mtp_attached, mtp_target_stream)) {
