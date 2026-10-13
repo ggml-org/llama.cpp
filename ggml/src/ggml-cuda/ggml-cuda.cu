@@ -1939,6 +1939,52 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
     return true;
 }
 
+static bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const int64_t a_start = (int64_t) a->data;
+    const int64_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
+
+    const int64_t b_start = (int64_t) b->data;
+    const int64_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
+
+    return (b_start <= a_start && a_start < b_end) || (a_start <= b_start && b_start < a_end);
+}
+
+static bool ggml_cuda_should_fuse_glu_mmq(const ggml_tensor * glu, const ggml_tensor * dst, const int cc) {
+    if (dst->op == GGML_OP_MUL_MAT_ID && glu->ne[1] == 1 && dst->src[2]->ne[0] > 1) {
+        return false;
+    }
+
+    const ggml_tensor * weight = dst->src[0];
+    const ggml_tensor * gate   = glu->src[0];
+    const ggml_tensor * up     = glu->src[1] != nullptr ? glu->src[1] : gate;
+
+    // native FP4 has its own activation quantization path
+    const bool native_fp4 = blackwell_mma_available(cc) && (weight->type == GGML_TYPE_MXFP4 || weight->type == GGML_TYPE_NVFP4);
+
+    // a padded weight buffer gets cleared on first use; the fused path must not skip that
+    const bool bad_padding_clear = ggml_backend_buffer_get_usage(weight->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+        ggml_nbytes(weight) != ggml_backend_buffer_get_alloc_size(weight->buffer, weight) && weight->view_src;
+
+    // the fused quantizer reads gate/up with float4 loads at the layout of the GLU output
+    const bool layout_ok =
+        gate->type == GGML_TYPE_F32 && up->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        glu->ne[0] % 4 == 0 &&
+        ggml_is_contiguous(glu) && ggml_is_contiguous(gate) && ggml_is_contiguous(up) &&
+        ggml_cuda_is_aligned(gate, sizeof(float4)) && ggml_cuda_is_aligned(up, sizeof(float4));
+
+    // only fuse where the plain dispatch would pick MMQ for this batch size
+    const bool use_mmq = dst->op == GGML_OP_MUL_MAT ?
+        !ggml_cuda_should_use_mmvq(weight->type, cc, glu->ne[1]) &&
+            ggml_cuda_should_use_mmq(weight->type, cc, glu->ne[1], /*n_experts=*/0) :
+        glu->ne[2] > get_mmvq_mmid_max_batch(weight->type, cc) &&
+            ggml_cuda_should_use_mmq(weight->type, cc, glu->ne[2], weight->ne[2]);
+
+    static constexpr std::array<ggml_glu_op, 4> valid_glu_ops = { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI, GGML_GLU_OP_SWIGLU_CLAMP };
+
+    return layout_ok && !native_fp4 && !bad_padding_clear && use_mmq &&
+        std::find(valid_glu_ops.begin(), valid_glu_ops.end(), ggml_get_glu_op(glu)) != valid_glu_ops.end();
+}
+
 static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
@@ -3445,20 +3491,6 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int *         out_nodes,
                                                  const int           out_count,
                                                  const bool          is_topk_moe = false) {
-    auto nodes_overlap = [&](const ggml_tensor * a, const ggml_tensor * b) {
-        const int64_t a_start = (int64_t) a->data;
-        const int64_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
-
-        const int64_t b_start = (int64_t) b->data;
-        const int64_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
-
-        if ((b_start <= a_start && a_start < b_end) || (a_start <= b_start && b_start < a_end)) {
-            return true;
-        }
-
-        return false;
-    };
-
     bool is_ok = true;
     // one block reads all logits before it writes, so logits may alias the out nodes
     const ggml_tensor * logits_may_alias = nullptr;
@@ -3481,7 +3513,7 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                     continue;
                 }
 
-                if (nodes_overlap(dst, src)) {
+                if (ggml_cuda_tensors_overlap(dst, src)) {
                     bool found = false;
 
                     for (int k = node_idx; k < j; ++k) {
@@ -3940,13 +3972,60 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
-static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i, std::vector<bool> & nodes_fused) {
 
     if (ggml_cuda_fusion_disabled()) {
         return 0;
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    // fuse a GLU into the Q8_1 activation quantization of the MMQ matmul consuming it (a few
+    // nodes ahead after stream reordering); skip if any node between them overlaps its output.
+    if (node->op == GGML_OP_GLU && cuda_ctx->stream_context().concurrent_events.empty()) {
+        ggml_tensor * glu = cgraph->nodes[i];
+        const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+        const int j_end = std::min(i + 8, cgraph->n_nodes);
+        for (int j = i + 1; j < j_end; ++j) {
+            ggml_tensor * dst = cgraph->nodes[j];
+            if (dst->op != GGML_OP_MUL_MAT && dst->op != GGML_OP_MUL_MAT_ID) {
+                continue;
+            }
+            if (dst->src[1] != glu || ggml_is_empty(dst)) {
+                continue;
+            }
+            int idxs[2] = { i, j };
+            const ggml_op ops[2] = { GGML_OP_GLU, dst->op };
+            int out_nodes[1] = { j };
+            if (!ggml_can_fuse_subgraph_ext(cgraph, idxs, 2, ops, out_nodes, 1) ||
+                !ggml_cuda_should_fuse_glu_mmq(glu, dst, cc)) {
+                break;
+            }
+
+            bool output_safe = true;
+            for (int k = i + 1; k < j && output_safe; ++k) {
+                output_safe = !ggml_cuda_tensors_overlap(dst, cgraph->nodes[k]);
+                for (int s = 0; s < GGML_MAX_SRC && output_safe; ++s) {
+                    const ggml_tensor * src = cgraph->nodes[k]->src[s];
+                    output_safe = src == nullptr || !ggml_cuda_tensors_overlap(dst, src);
+                }
+                // Do not read weight or ids before an intervening write, including aliases.
+                if (!ggml_cuda_is_view_or_noop(cgraph->nodes[k])) {
+                    for (const ggml_tensor * src : { dst->src[0], dst->src[2] }) {
+                        if (src && ggml_cuda_tensors_overlap(src, cgraph->nodes[k])) {
+                            output_safe = false;
+                        }
+                    }
+                }
+            }
+            if (output_safe) {
+                ggml_cuda_mul_mat_q(*cuda_ctx, dst->src[0], glu, dst->op == GGML_OP_MUL_MAT_ID ? dst->src[2] : nullptr, dst, nullptr, true);
+                nodes_fused[i] = true;
+                nodes_fused[j] = true;
+            }
+            break;
+        }
+    }
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
@@ -4855,8 +4934,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
+            std::vector<bool> nodes_fused(cgraph->n_nodes, false);
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
+                if (nodes_fused[i]) {
+                    continue;
+                }
 #ifdef USE_CUDA_GRAPH
                 // fused nodes are skipped together, so a cut never splits a fusion
                 // a concurrent region must join before its capture can end
@@ -4906,8 +4989,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
-                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
+                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i, nodes_fused);
 
+                if (nodes_fused[i]) {
+                    // the node was handled by a fusion together with a future consumer
+                    continue;
+                }
                 if (nodes_to_skip != 0) {
 #ifdef GGML_CUDA_DEBUG
                     const int last_fused = i + nodes_to_skip;
