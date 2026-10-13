@@ -238,6 +238,8 @@ if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     set_tests_properties(test-fp8-requantize PROPERTIES FIXTURES_REQUIRED fp8-models)
 endif()
 
+llama_test(test-llama-archs NAME test-fp8-kv ARGS -a ^llama$ -b CPU -s 0)
+
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
 file(MAKE_DIRECTORY "${MODEL_DIR}")
 
