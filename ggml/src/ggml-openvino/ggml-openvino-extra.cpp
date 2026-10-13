@@ -405,6 +405,10 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
             return ExtraQuantType::Q4_1_64;
         }
     }
+    if (tensor->type == GGML_TYPE_Q5_0) {
+        //return ExtraQuantType::Q4_0_128;
+        return ExtraQuantType::Q4_0_64;
+    }
     // MoE expert weights (3D, ne[2] = n_expert) stored as Q5_1/Q8_0 are the expert-side
     // equivalent of Q6_K/Q5_K: kept at 8 bits by default while the rest of the model is at 4
     // (gemma-4 26B-A4B keeps its down projection there). Send them to 4 bits under the same
