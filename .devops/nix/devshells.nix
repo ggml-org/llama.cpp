@@ -16,6 +16,12 @@
           scripts = config.packages.python-scripts;
         in
         lib.pipe (config.packages) [
+          # rocm-rx9070xt.nix defines its own shell; the launcher and env wrapper are not build targets.
+          (lib.flip builtins.removeAttrs [
+            "rocm-rx9070xt"
+            "llama-rocm-env"
+            "serve-openai"
+          ])
           (lib.concatMapAttrs (
             name: package: {
               ${name} = pkgs.mkShell {

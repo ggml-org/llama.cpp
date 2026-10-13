@@ -80,6 +80,7 @@
           .devops/nix/apps.nix
           .devops/nix/devshells.nix
           .devops/nix/jetson-support.nix
+          .devops/nix/rocm-rx9070xt.nix
         ];
 
         # An overlay can be used to have a more granular control over llama-cpp's
