@@ -93,6 +93,16 @@ int main(int argc, char ** argv) {
     if (!cuda) return t.summary();
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+    t.test("borrowed_resident_output_rejects_native_conversion_extras", [&](testing & t) {
+        for (auto type : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
+            fixture f(backend.get(), true, type, type, 4352, false, 2, 4, 64);
+            if (!t.assert_true(f.attach())) return;
+            llama_kv_stream_capture_stamp stamp;
+            t.assert_true(f.resident->capture_state(backend.get(), 4256, stamp));
+            t.assert_equal(type == GGML_TYPE_F16, f.resident->capture_without_output_extras(24, 4256));
+            t.assert_true(!f.resident->capture_without_output_extras(0, 4256));
+        }
+    });
     if (argc > 2 && !std::strcmp(argv[2],"--unsupported")) {
         llama_kv_stream_cuda_executor executor(backend.get());
         t.test("unsupported_stream_optimizer_rejects_capture", [&](testing & t) { t.assert_true(!executor.supported()); });

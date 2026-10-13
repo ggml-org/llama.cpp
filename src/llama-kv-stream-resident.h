@@ -46,6 +46,8 @@ public:
     bool ready(size_t active_tokens) const noexcept;
     // Capture identity excludes ordinary data writes and live-length changes within one padded page extent.
     bool capture_state(ggml_backend_t backend, size_t active_tokens, llama_kv_stream_capture_stamp & output) const;
+    // Borrowed model outputs may replay only native kernels with no trailing allocation extras.
+    bool capture_without_output_extras(uint32_t query_heads, size_t active_tokens) const;
     bool capture_attention(const ggml_tensor * attention, size_t active_tokens) const;
     // Ordered one-block path. Hold a binding pin; Q/mask/output and the disjoint workspace lease remain live until return.
     // Caller supplies padded causal mask values. Query backend capabilities before planning native or converted K/V.

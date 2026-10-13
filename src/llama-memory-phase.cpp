@@ -2,9 +2,19 @@
 
 #include <limits>
 #include <algorithm>
+#include <cstring>
+
+// Read unchecked enum storage before validating its numeric range.
+static int32_t cache_type_code(const ggml_type & type) noexcept {
+    static_assert(sizeof(type) == sizeof(int32_t), "unexpected cache type size");
+    int32_t code;
+    std::memcpy(&code, &type, sizeof(code));
+    return code;
+}
 
 bool llama_memory_cache_format_equal(const llama_memory_cache_format & a, const llama_memory_cache_format & b) noexcept {
-    return a.key_type == b.key_type && a.value_type == b.value_type && a.key_head_dim == b.key_head_dim &&
+    return cache_type_code(a.key_type) == cache_type_code(b.key_type) &&
+        cache_type_code(a.value_type) == cache_type_code(b.value_type) && a.key_head_dim == b.key_head_dim &&
         a.value_head_dim == b.value_head_dim && a.kv_heads == b.kv_heads && a.value_transposed == b.value_transposed;
 }
 
@@ -12,8 +22,8 @@ bool llama_memory_cache_bound_make(const llama_memory_cache_requirement & r,
         const llama_memory_cache_requirement * source, llama_memory_cache_bound & output) noexcept {
     if (!r.identity.id || !r.identity.generation || !r.layers || !r.history_rows || !r.row_bytes ||
             !r.row_padding || (r.row_padding & (r.row_padding-1)) ||
-            r.format.key_type < GGML_TYPE_F32 || r.format.key_type >= GGML_TYPE_COUNT ||
-            r.format.value_type < GGML_TYPE_F32 || r.format.value_type >= GGML_TYPE_COUNT ||
+            cache_type_code(r.format.key_type) < GGML_TYPE_F32 || cache_type_code(r.format.key_type) >= GGML_TYPE_COUNT ||
+            cache_type_code(r.format.value_type) < GGML_TYPE_F32 || cache_type_code(r.format.value_type) >= GGML_TYPE_COUNT ||
             !r.format.key_head_dim || !r.format.value_head_dim || !r.format.kv_heads) return false;
     if (r.role == llama_memory_cache_role::read_only_source) {
         if (!source || source->role == llama_memory_cache_role::read_only_source ||

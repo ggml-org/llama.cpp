@@ -230,6 +230,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
             auto * query = alias(q); auto * causal = alias(mask);
             if (!query || !causal) return false;
             auto * attention = resident->attention(next->context.get(),layer,query,causal,target,scale);
+            // This address belongs to a model output slot, not the rest of its graph workspace.
+            if (attention && ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(output->buffer),attention) > ggml_nbytes(output)) return false;
             if (!attention || ggml_backend_tensor_alloc(output->buffer,attention,output->data) != GGML_STATUS_SUCCESS) return false;
             auto * graph = ggml_new_graph_custom(next->context.get(),64,false); ggml_build_forward_expand(graph,attention);
             auto owner = binding->acquire();
@@ -738,7 +740,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
             s.pin = s.binding->acquire();
             llama_kv_stream_capture_stamp stamp;
             s.direct_mode = !s.ring_guard && queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
-                s.resident->capture_state(s.backend,active,stamp);
+                s.resident->capture_state(s.backend,active,stamp) && s.resident->capture_without_output_extras(s.config.query_heads,active);
             if (s.direct_mode) {
                 if (!s.pin || !s.resident->synchronize(active)) {
                     s.drain(); s.poisoned = true; return false;

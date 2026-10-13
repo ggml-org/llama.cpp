@@ -683,6 +683,24 @@ bool llama_kv_stream_resident::capture_state(ggml_backend_t backend, size_t toke
     return true;
 }
 
+// Ask the backend for the native allocation, not the managed node's reduced output quote.
+bool llama_kv_stream_resident::capture_without_output_extras(uint32_t query_heads, size_t tokens) const {
+    const auto & s = *impl;
+    llama_kv_stream_capture_stamp state;
+    if (!query_heads || query_heads > INT32_MAX || query_heads%uint32_t(s.binding.config.shape.heads) ||
+            !capture_state(s.backend, tokens, state)) return false;
+    ggml_context_ptr context(ggml_init({65536, nullptr, true}));
+    if (!context) return false;
+    auto * q = ggml_new_tensor_3d(context.get(), GGML_TYPE_F32, s.binding.config.shape.head_dim_k, 1, query_heads);
+    auto * mask = ggml_new_tensor_2d(context.get(), GGML_TYPE_F16, state.padded_tokens, 1);
+    auto k = s.descriptor(0, false, state.padded_tokens);
+    auto v = s.descriptor(0, true, state.padded_tokens);
+    auto * op = ggml_flash_attn_ext(context.get(), q, &k, &v, mask, 1.0f, 0, 0);
+    ggml_flash_attn_ext_set_prec(op, GGML_PREC_F32);
+    return ggml_backend_supports_op(s.backend, op) &&
+        ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(s.binding.buffer), op) == ggml_nbytes(op);
+}
+
 // Only ordinary native TG1 attention over this consumer's exact resident planes is capturable here.
 bool llama_kv_stream_resident::capture_attention(const ggml_tensor * op, size_t tokens) const {
     const auto & s = *impl;

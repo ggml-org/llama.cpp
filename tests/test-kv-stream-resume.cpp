@@ -208,6 +208,38 @@ int main(int argc, char ** argv) {
             }
         }
     });
+    if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-bf16-regression")))
+        t.test("resident_bf16_decode_matches_stock_at_tail_and_page_boundaries", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        for (size_t active : {4095u,4096u,4097u,4254u,4255u,4256u,4352u,4353u}) {
+            fixture f(backend.get(),true,GGML_TYPE_BF16,GGML_TYPE_BF16,active,false,2,4,64);
+            ggml_kv_stream_layout page;
+            ggml_kv_stream_layout_make(f.policy.shape,256,page);
+            f.policy.pool_bytes=page.bytes*64;
+            if (!t.assert_true(f.attach() && f.resident->configure_native_graph_attention(true) &&
+                    f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            size_t bytes=0;
+            if (!t.assert_true(get()->decode_workspace(backend.get(),GGML_TYPE_BF16,GGML_TYPE_BF16,
+                    24,4,8,f.host->layout().tokens,bytes))) return;
+            block_workspace workspace(f,bytes);
+            for (uint32_t queries : {1u,2u,3u,4u,5u,6u,7u,8u}) {
+                block_inputs input(f,active,queries,false,24);
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,true}))) return;
+                for (uint32_t layer=0; layer<2; ++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
+                            active,1.f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+            }
+        }
+    });
     t.test("resume_layout_is_bounded_and_transactional", [&](testing & t) {
         ggml_kv_stream_resume_plan plan;
         if (!t.assert_true(ggml_kv_stream_resume_layout_make(24,1,3,8,plan))) return;

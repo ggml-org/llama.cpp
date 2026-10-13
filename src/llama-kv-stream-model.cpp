@@ -477,6 +477,8 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
                 s->compact_prefill_mask=compact;
             }
         }
+        // Embedded MTP retains its separately qualified gathered-prefill path in the same serial scratch lease.
+        if (s->auxiliary_cache) s->prefill_bytes=std::max(s->prefill_bytes,s->auxiliary_cache->host()->layout().bytes);
         const bool resume_capable = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") &&
             partial_ops && partial_ops->version >= 5 && partial_ops->resume_plan && partial_ops->resume;
         const auto plan_resume = [&](uint32_t queries) {

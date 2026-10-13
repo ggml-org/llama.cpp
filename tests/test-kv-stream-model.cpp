@@ -312,6 +312,18 @@ int main(int argc,char ** argv) {
             t.assert_true(std::all_of(native.padded_tokens.begin(),native.padded_tokens.end(),[](int64_t tokens) { return tokens == 768; }));
         }
     });
+    t.test("auxiliary_prefill_quote_covers_legacy_mtp_gather", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,65536,false,2,2,12);
+        llama_kv_stream_model_config config{backend.get(),f.host->config(),f.policy.pool_bytes,256,12};
+        config.auxiliary_cache_layers=1;
+        config.shared_device_memory_bytes=256*1048576;
+        auto model=llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model) && model->bounded_prefill())) return;
+        llama_kv_stream_memory_requirements requirements;
+        if (!t.assert_true(model->memory_requirements(requirements))) return;
+        t.assert_true(requirements.attention_prefill_bytes >= model->auxiliary_cache()->host()->layout().bytes);
+        t.assert_true(requirements.attention_decode_bytes < requirements.attention_prefill_bytes);
+    });
     t.test("native_attention_admission_does_not_label_allocation_failure_as_missing_code", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         for (bool host : {true,false}) {

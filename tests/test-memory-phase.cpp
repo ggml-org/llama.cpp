@@ -208,6 +208,24 @@ int main() {
         }
     });
 
+    t.test("cache_alias_rejects_invalid_source_type_storage", [](testing & t) {
+        llama_memory_cache_requirement source{{101, 2}, {}, llama_memory_cache_role::full_history,
+                                             2, 4096, 0, 0, 256, 1664};
+        source.format = {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 128, 128, 8, false};
+        auto alias = source;
+        alias.identity = {102, 1};
+        alias.source = source.identity;
+        alias.role = llama_memory_cache_role::read_only_source;
+        alias.layers = 1;
+        source.format.key_type = static_cast<ggml_type>(-1);
+        t.assert_true(!llama_memory_cache_format_equal(alias.format, source.format));
+        llama_memory_cache_bound output{31, 17, true};
+        t.assert_true(!llama_memory_cache_bound_make(alias, &source, output));
+        t.assert_equal(uint32_t(31), output.capacity_rows);
+        t.assert_equal(size_t(17), output.storage_bytes);
+        t.assert_true(output.writable);
+    });
+
     t.test("injection_prediction_and_verification_are_distinct_workloads", [](testing & t) {
         using phase = llama_memory_work_phase;
         llama_memory_cache_requirement cache{{101, 1}, {}, llama_memory_cache_role::bounded_resident,
