@@ -24,20 +24,29 @@ SPEC = importlib.util.spec_from_file_location("dflash_sweep", ROOT / "benchmarks
 assert SPEC is not None and SPEC.loader is not None
 SWEEP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SWEEP)
+KV_TYPES = ("f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1")
 
 
 def server_command(args, context, depth):
     if depth not in (1, 3, 7) or not 512 <= context <= 262144:
         raise ValueError("ordinary control requires D=1,3,7 and a valid context")
+    batch = getattr(args,"batch_size",256)
+    ubatch = getattr(args,"ubatch_size",256)
+    key = getattr(args,"target_k","q8_0")
+    value = getattr(args,"target_v","q4_0")
+    if any(type(n) is not int or not 1 <= n <= 2**32-1 for n in (batch,ubatch)):
+        raise ValueError("batch limits must be positive uint32 values")
+    if any(t not in KV_TYPES for t in (key,value,args.draft_k,args.draft_v)):
+        raise ValueError("unknown KV type")
     command = [str(args.server), "--model", str(args.target), "--model-draft", str(args.draft),
             "--spec-type", "draft-dflash", "--spec-draft-n-max", str(depth),
             "--spec-draft-n-min", "0", "--spec-draft-p-min", "0",
-            "--ctx-size", str(context), "--batch-size", "256", "--ubatch-size", "256",
+            "--ctx-size", str(context), "--batch-size", str(batch), "--ubatch-size", str(ubatch),
             "--parallel", "1", "--n-gpu-layers", "999", "--spec-draft-ngl", "999",
-            "--flash-attn", "on", "--cache-type-k", "q8_0", "--cache-type-v", "q4_0",
+            "--flash-attn", "on", "--cache-type-k", key, "--cache-type-v", value,
             "--spec-draft-type-k", args.draft_k, "--spec-draft-type-v", args.draft_v,
             "--fit", "off", "--no-mmproj", "--host", "127.0.0.1", "--port", str(args.port),
-            "--threads", "8", "--threads-batch", "8", "-lv", "3"]
+            "--threads", "8", "--threads-batch", "8", "-lv", str(getattr(args,"verbosity",3))]
     arena = getattr(args, "arena_mib", 0)
     if arena < 0:
         raise ValueError("negative arena size")
@@ -58,10 +67,12 @@ def validate_result(result, prompt_tokens, decode_tokens):
 
 
 def failure_kind(text):
+    if "shared arena quota insufficient" in text.lower():
+        return "quota_failure"
     return "capacity_failure" if "out of memory" in text.lower() else "failed"
 
 
-def summarize_trace(rows, depth):
+def summarize_trace(rows, depth, max_injection_rows=256):
     rows = [r for r in rows if not r.get("warmup", False)]
     processes = [r for r in rows if r.get("event") == "process"]
     if any(r.get("ret") != 0 for r in processes):
@@ -73,7 +84,7 @@ def summarize_trace(rows, depth):
     attention = [r for r in rows if r.get("event") == "attention" and r.get("role") == "draft"]
     if not injection or not draft or not target or not lattice or not attention:
         raise ValueError("trace does not cover injection, prediction, verification, lattice and SWA masks")
-    if any(r.get("feature_width") != 25600 or not 1 <= r.get("rows", 0) <= 256 for r in injection):
+    if any(r.get("feature_width") != 25600 or not 1 <= r.get("rows", 0) <= max_injection_rows for r in injection):
         raise ValueError("invalid feature injection geometry")
     if any(r.get("rows") != depth+1 for r in draft):
         raise ValueError("draft block width differs from configured control")
@@ -307,7 +318,7 @@ def run_point(args, context, depth, token_cache, mode):
     elif mode == "capture":
         try:
             trace = [json.loads(line) for line in (directory / "trace.jsonl").read_text().splitlines()]
-            row["trace"] = summarize_trace(trace, depth)
+            row["trace"] = summarize_trace(trace, depth,max_injection_rows=args.ubatch_size)
             row["trace"]["verified_payloads"] = validate_payloads(directory, trace)
             if context >= 2304 and not args.arena_mib and not args.rs_host_spill:
                 row["fit_ledger"] = fit_ledger(row, trace)
@@ -326,8 +337,14 @@ def main():
     parser.add_argument("--depths", default="1,3,7")
     parser.add_argument("--prompt-tokens", type=int, default=2304)
     parser.add_argument("--decode-tokens", type=int, default=64)
-    parser.add_argument("--draft-k", choices=("f16", "q8_0"), default="f16")
-    parser.add_argument("--draft-v", choices=("f16", "q4_0"), default="f16")
+    parser.add_argument("--batch-size",type=int,default=256)
+    parser.add_argument("--ubatch-size",type=int,default=256)
+    parser.add_argument("--verbosity",type=int,default=3,
+                        help="use 5 for allocator diagnostics in a GGML_ALLOCATOR_DEBUG build; not for timing")
+    parser.add_argument("--target-k",choices=KV_TYPES,default="q8_0")
+    parser.add_argument("--target-v",choices=KV_TYPES,default="q4_0")
+    parser.add_argument("--draft-k", choices=KV_TYPES, default="f16")
+    parser.add_argument("--draft-v", choices=KV_TYPES, default="f16")
     parser.add_argument("--prefill-text", type=Path, default=ROOT/"benchmarks/data/online-articles-262144-words.txt")
     parser.add_argument("--trace-library", type=Path)
     parser.add_argument("--nsys", type=Path)

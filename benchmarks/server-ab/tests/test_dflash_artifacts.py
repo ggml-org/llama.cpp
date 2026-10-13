@@ -337,6 +337,26 @@ class OrdinaryControls(unittest.TestCase):
         self.controls = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.controls)
 
+    def test_configurable_batches_and_target_kv_are_not_rewritten(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(server=Path("server"),target=Path("target"),draft=Path("draft"),
+                               port=12351,draft_k="f16",draft_v="f16",batch_size=512,
+                               ubatch_size=128,target_k="q5_1",target_v="q4_1")
+        command = self.controls.server_command(args,4096,3)
+        for option,value in (("--batch-size","512"),("--ubatch-size","128"),
+                             ("--cache-type-k","q5_1"),("--cache-type-v","q4_1")):
+            self.assertEqual(command.count(option),1)
+            self.assertEqual(command[command.index(option)+1],value)
+
+    def test_invalid_profile_arguments_are_rejected_before_launch(self):
+        from types import SimpleNamespace
+        base = dict(server=Path("server"),target=Path("target"),draft=Path("draft"),
+                    port=12351,draft_k="f16",draft_v="f16")
+        for field,value in (("batch_size",0),("ubatch_size",-1),("batch_size",True),
+                            ("ubatch_size",2**32),("target_k","not-a-type")):
+            with self.subTest(field=field,value=value), self.assertRaises(ValueError):
+                self.controls.server_command(SimpleNamespace(**base,**{field:value}),4096,3)
+
     def test_native_command_preserves_profile_without_streaming(self):
         from types import SimpleNamespace
         args = SimpleNamespace(server=Path("server"), target=Path("target"), draft=Path("draft"),
@@ -376,6 +396,7 @@ class OrdinaryControls(unittest.TestCase):
         self.assertNotIn("--kv-stream-auxiliary-layers",command)
 
     def test_capacity_failure_does_not_hide_kernel_or_other_failure(self):
+        self.assertEqual(self.controls.failure_kind("shared arena quota insufficient for phase 1 resource 5"),"quota_failure")
         for text in ("CUDA error: out of memory", "cudaMalloc failed: out of memory"):
             self.assertEqual(self.controls.failure_kind(text), "capacity_failure")
         for text in ("missing flash attention kernel", "invalid resource handle", "segmentation fault"):
@@ -401,6 +422,11 @@ class OrdinaryControls(unittest.TestCase):
         warm = {"event": "process", "role": "draft", "kind": "tokens", "rows": 2,
                 "ret": 0, "warmup": True}
         self.assertEqual(self.controls.summarize_trace([warm]+rows, 3)["draft_widths"], [4])
+        wider=copy.deepcopy(rows)
+        wider[1]["rows"]=512
+        self.assertEqual(self.controls.summarize_trace(wider,3,max_injection_rows=512)["injection_rows"],[512])
+        with self.assertRaises(ValueError):
+            self.controls.summarize_trace(wider,3,max_injection_rows=256)
 
     def test_trace_payload_checksums_and_paths(self):
         with tempfile.TemporaryDirectory() as directory:

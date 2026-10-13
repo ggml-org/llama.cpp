@@ -32,6 +32,20 @@ struct fixture {
 
 int main() {
     testing t;
+    t.test("all_cache_types_and_prefill_widths_have_geometry_based_metadata", [](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};
+        for (auto key : types) for (auto value : types) for (int64_t rows : {1,8,64,129,256,512,1024}) {
+            fixture f;
+            f.metadata.type_k=key; f.metadata.type_v=value; f.metadata.queries=rows;
+            f.metadata.active_tokens=262143; f.metadata.padded_tokens=262144;
+            size_t bytes=0;
+            t.assert_true(ggml_cuda_kv_stream_attention_metadata_validate(f.metadata,bytes) == status::success);
+            t.assert_equal(size_t(rows)*256*24*sizeof(float),bytes);
+            f.support.streamed_compiled=false;
+            f.reject(t,status::missing_streamed_implementation,family::mma,style::resumable);
+        }
+    });
     t.test("wide_mma_queries_use_stock_column_groups", [](testing & t) {
         for (uint32_t queries = 1; queries <= 8; ++queries) {
             for (int ratio : {2, 6, 8}) {
