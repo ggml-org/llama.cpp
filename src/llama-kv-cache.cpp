@@ -1584,6 +1584,73 @@ ggml_tensor * llama_kv_cache::build_input_kv_tag(ggml_context * ctx) const {
     return res;
 }
 
+bool llama_kv_cache::resize_kv_stream(size_t resident_size) {
+    if (!stream) {
+        return false;
+    }
+
+    size_t bytes_per_cell = 0;
+    for (const auto & layer : layers) {
+        bytes_per_cell += ggml_row_size(layer.k->type, layer.k->ne[0]) + ggml_row_size(layer.v->type, layer.v->ne[0]);
+    }
+    const uint32_t n_pages = (get_size() + llama_kv_stream::page_size - 1)/llama_kv_stream::page_size;
+    const uint32_t n_slots = std::min(n_pages, llama_kv_stream::slots_for(resident_size, bytes_per_cell));
+    if (n_slots == stream->n_pool()) {
+        return true;
+    }
+    if (n_slots < std::min(n_pages, 8u)) {
+        LLAMA_LOG_ERROR("%s: %zu bytes hold %u pages, at least 8 are needed\n", __func__, resident_size, n_slots);
+        return false;
+    }
+
+    const int64_t t_start_us = ggml_time_us();
+
+    // write the resident pages back and free the pool before allocating the new one, so that both never coexist
+    stream->release_pool();
+
+    std::vector<ggml_backend_buffer_type_t> bufts;
+    for (auto & [ctx, buf] : ctxs_bufs) {
+        bufts.push_back(ggml_backend_buffer_get_type(buf.get()));
+        buf.reset();
+    }
+
+    const int64_t n_rows = (int64_t) n_slots*llama_kv_stream::page_size;
+    const auto reshape = [&](ggml_tensor * t) {
+        if (!t) {
+            return;
+        }
+        t->ne[1] = n_rows;
+        t->nb[2] = t->nb[1]*t->ne[1];
+        t->nb[3] = t->nb[2]*t->ne[2];
+        t->data   = nullptr;
+        t->buffer = nullptr;
+    };
+    for (auto & layer : layers) {
+        reshape(layer.k);
+        reshape(layer.v);
+        for (auto * t : layer.k_stream) {
+            reshape(t);
+        }
+        for (auto * t : layer.v_stream) {
+            reshape(t);
+        }
+    }
+
+    for (size_t i = 0; i < ctxs_bufs.size(); ++i) {
+        auto & [ctx, buf] = ctxs_bufs[i];
+        buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), bufts[i]));
+        if (!buf) {
+            throw std::runtime_error(format("KV streaming: failed to allocate a pool of %u pages", n_slots));
+        }
+        ggml_backend_buffer_clear(buf.get(), 0);
+    }
+
+    stream->set_pool(n_slots);
+
+    LLAMA_LOG_INFO("%s: pool resized to %u pages in %.1f ms\n", __func__, n_slots, (ggml_time_us() - t_start_us)/1000.0);
+    return true;
+}
+
 void llama_kv_cache::set_input_kv_pages(ggml_tensor * dst) const {
     stream->set_input_pages(dst);
 }

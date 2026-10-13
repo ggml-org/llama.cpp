@@ -1750,6 +1750,10 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.moe_cache_size = params.moe_cache_size;
     cparams.kv_resident_size = params.kv_stream ? params.kv_resident_size : 0;
+    // also given to a draft context that does not stream: it then only shrinks its compute buffers between prefills
+    cparams.kv_resident_size_decode = params.kv_resident_size_decode;
+    // a decode step verifies up to the longest draft plus one token in every slot
+    cparams.n_tokens_decode = (uint32_t) (std::max(params.n_parallel, 1) * (common_speculative_n_max(&params.speculative) + 1));
 
     return cparams;
 }

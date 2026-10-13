@@ -74,6 +74,7 @@ public:
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
     llama_kv_stream * get_kv_stream() override;
+    bool resize_kv_stream(size_t resident_size) override;
 
     // state write/load
 

@@ -15,6 +15,7 @@
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -371,6 +372,8 @@ llama_context::llama_context(
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
     cparams.kv_resident_size = params.kv_resident_size;
+    cparams.kv_resident_size_decode = params.kv_resident_size_decode;
+    cparams.n_tokens_decode         = std::min(params.n_tokens_decode > 0 ? params.n_tokens_decode : 4u, cparams.n_ubatch);
 
     if (cparams.kv_resident_size > 0 && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
         throw std::runtime_error("KV streaming requires Flash Attention to be enabled explicitly");
@@ -579,6 +582,11 @@ llama_context::llama_context(
             throw std::runtime_error("KV streaming is not supported by this model's memory");
         }
 
+        if (cparams.kv_resident_size_decode > 0 && params.ctx_other) {
+            phase_leader = params.ctx_other;
+            phase_leader->phase_followers.push_back(this);
+        }
+
         sched_reserve();
 
         if (!cparams.flash_attn) {
@@ -602,6 +610,11 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+
+    if (phase_leader) {
+        auto & f = phase_leader->phase_followers;
+        f.erase(std::remove(f.begin(), f.end(), this), f.end());
+    }
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.hparams.no_alloc && !opt_ctx) {
@@ -745,6 +758,28 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
 }
 
+void llama_context::switch_phase(bool decode) {
+    if (decode == phase_decode) {
+        return;
+    }
+    synchronize();
+    if (decode) {
+        // the followers' compute buffers shrink first, then ours, then the pool grows into what they freed
+        for (llama_context * f : phase_followers) {
+            f->switch_phase(true);
+        }
+    } else if (memory) {
+        // the pool shrinks before the prefill buffers come back (a follower grows its own on its next prefill)
+        memory->resize_kv_stream(cparams.kv_resident_size);
+    }
+    phase_decode       = decode;
+    sched_need_reserve = true;
+    sched_reserve();
+    if (decode && memory) {
+        memory->resize_kv_stream(cparams.kv_resident_size_decode);
+    }
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -788,6 +823,26 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
     resolve_fused_ops(mctx.get(), n_seqs);
+
+    // between prefills (kv_resident_size_decode): buffers for decode batches only; decode() switches back to the
+    // prefill buffers before a larger batch
+    if (phase_decode) {
+        const uint32_t n_tokens_dec = std::min(n_tokens, cparams.n_tokens_decode);
+        if (!graph_reserve(n_tokens_dec, n_seqs, n_tokens_dec, mctx.get(), model.hparams.no_alloc)) {
+            throw std::runtime_error("failed to allocate compute decode buffers");
+        }
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            if (!model.hparams.no_alloc) {
+                backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
+            }
+            if (backend_buf_exp_size[i] > 1) {
+                LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB (decode)\n", __func__,
+                        ggml_backend_buft_name(backend_buft[i]), backend_buf_exp_size[i] / 1024.0 / 1024.0);
+            }
+        }
+        LLAMA_LOG_INFO("%s: reserve took %.2f ms\n", __func__, (ggml_time_us() - t_start_us)/1000.0);
+        return;
+    }
 
     // reserve worst-case graph
     int n_splits_pp        = -1;
@@ -1944,6 +1999,19 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     output_swaps.clear();
     embd_batch_idxs.clear();
+
+    // kv_resident_size_decode: decode batches run with decode-sized compute buffers and a larger KV stream pool. The
+    // memory is traded in the order that never needs both: the pool shrinks before the prefill buffers come back, and
+    // grows after the compute buffers shrank.
+    // The first switch waits for a prefill (or a restored state): small batches before one (a warmup) may run before a
+    // draft context has allocated its buffers, which the decode pool would take.
+    if (cparams.kv_resident_size_decode > 0) {
+        const bool decode_batch = n_tokens_all <= cparams.n_tokens_decode;
+        phase_seen_prefill = phase_seen_prefill || !decode_batch;
+        if (decode_batch != phase_decode && phase_seen_prefill) {
+            switch_phase(decode_batch);
+        }
+    }
 
     sched_reserve();
 
@@ -3681,6 +3749,9 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         memory->state_read(io);
     }
 
+    // a restored context counts as a prefill for the phase switches (kv_resident_size_decode)
+    phase_seen_prefill = true;
+
     return io.n_bytes();
 }
 
@@ -3695,6 +3766,10 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (memory) {
         memory->state_read(io, seq_id, flags);
+    }
+
+    if (!(flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)) {
+        phase_seen_prefill = true;
     }
 
     return io.n_bytes();
@@ -4036,6 +4111,8 @@ llama_context_params llama_context_default_params() {
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
         /*.kv_resident_size            =*/ 0,
+        /*.kv_resident_size_decode     =*/ 0,
+        /*.n_tokens_decode             =*/ 0,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

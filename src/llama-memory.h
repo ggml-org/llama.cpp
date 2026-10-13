@@ -124,6 +124,10 @@ struct llama_memory_i {
     // KV streaming (llama-kv-stream.h), null if this memory does not stream
     virtual llama_kv_stream * get_kv_stream() { return nullptr; }
 
+    // KV streaming: resize the pool of resident pages to the pages that fit in resident_size bytes (between batches);
+    // false if this memory does not stream
+    virtual bool resize_kv_stream(size_t resident_size) { (void) resident_size; return false; }
+
     //
     // state write/read
     //

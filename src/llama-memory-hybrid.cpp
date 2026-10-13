@@ -71,6 +71,10 @@ llama_kv_stream * llama_memory_hybrid::get_kv_stream() {
     return mem_attn->get_kv_stream();
 }
 
+bool llama_memory_hybrid::resize_kv_stream(size_t resident_size) {
+    return mem_attn->resize_kv_stream(resident_size);
+}
+
 llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     do {
         balloc.split_reset();

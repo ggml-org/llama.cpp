@@ -569,6 +569,36 @@ void llama_kv_stream::clear() {
     layout_id++;
 }
 
+void llama_kv_stream::release_pool() {
+    drain();
+    for (uint32_t p = 0; p < n_pages; ++p) {
+        if (page_slot[p] >= 0) {
+            evict(p);
+        }
+    }
+    if (backend) {
+        ggml_backend_synchronize(backend);
+    }
+    page_ring.assign(n_pages, -1);
+    n_streamed = 0;
+}
+
+void llama_kv_stream::set_pool(uint32_t n_slots) {
+    for (uint32_t p = 0; p < n_pages; ++p) {
+        GGML_ASSERT(page_slot[p] < 0 && "llama_kv_stream: set_pool without release_pool");
+    }
+    this->n_slots = n_slots;
+    slot_page.assign(n_slots, -1);
+    layout_id++;
+
+    // the slots hold the pages that stream, packed (see set_backend), or a whole layer for gathers
+    const uint32_t n_ring = prefill_paged && !debug_rotate ? std::max<uint32_t>(1, n_pages > n_slots ? n_pages - n_slots : 1) : n_pages;
+    alloc_slots((int64_t) n_ring*page_size, false);
+
+    LLAMA_LOG_INFO("%s: %u of %u pages resident, slots = %8.2f MiB\n", __func__, n_slots, n_pages,
+            ggml_backend_buffer_get_size(slots_buf.get())/1024.0/1024.0);
+}
+
 void llama_kv_stream::get_rows(int32_t ikv, bool is_v, uint32_t c0, uint32_t c1, void * dst) {
     drain();
     if (backend) {

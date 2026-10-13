@@ -372,6 +372,18 @@ private:
     // true until then, because the first output_reserve() runs before any graph is reserved
     bool graph_has_logits = true;
 
+    // kv_resident_size_decode: the compute buffers are reserved for decode batches (n_tokens_decode) and the KV stream
+    // pool takes the decode budget; a larger batch switches back to the prefill buffers and pool first
+    bool phase_decode       = false;
+    bool phase_seen_prefill = false;
+
+    // a context created against another one (a draft context, params.ctx_other) follows its phases: the other context
+    // switches its followers to decode before it grows its pool into the memory their compute buffers free
+    llama_context *              phase_leader = nullptr;
+    std::vector<llama_context *> phase_followers;
+
+    void switch_phase(bool decode);
+
     // state of sched_copy_experts, reset before each graph compute
     struct copy_experts_info {
         const ggml_tensor *  ids = nullptr;
