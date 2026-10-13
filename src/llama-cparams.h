@@ -30,6 +30,11 @@ struct llama_cparams {
     bool mtp_publish_host = false;
     bool mtp_span_attention = false;
     uint32_t serial_block_rows = 0; // separately owned block drafter, not an auxiliary MTP cache
+    // Rebuild the same declared draft workload that startup measured for the serial lease.
+    uint32_t serial_graph_reserve_rows(bool decode) const noexcept {
+        const uint32_t maximum = n_ctx < n_ubatch ? n_ctx : n_ubatch;
+        return serial_block_rows ? serial_block_rows : decode && maximum > 4 ? 4 : maximum;
+    }
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation

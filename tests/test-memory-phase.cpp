@@ -1,9 +1,11 @@
 #include "../src/llama-memory-phase.h"
+#include "../src/llama-cparams.h"
 #include "testing.h"
 #include <limits>
 
 using phase_status = llama_memory_text_phase_status;
 using text_phase   = llama_memory_text_phase;
+
 
 static llama_memory_text_phase_signal signal(text_phase phase, uint32_t tokens = 1) {
     return { phase, tokens, true, true, false };
@@ -11,6 +13,24 @@ static llama_memory_text_phase_signal signal(text_phase phase, uint32_t tokens =
 
 int main() {
     testing t;
+    t.test("serial_draft_rebuild_uses_its_measured_block_width", [](testing & t) {
+        llama_cparams params{};
+        params.n_ctx = 8192;
+        params.n_ubatch = 256;
+        for (uint32_t rows : {2u, 4u, 8u}) {
+            params.serial_block_rows = rows;
+            t.assert_equal(rows, params.serial_graph_reserve_rows(false));
+            t.assert_equal(rows, params.serial_graph_reserve_rows(true));
+        }
+        params.serial_block_rows = 0;
+        t.assert_equal(uint32_t(256), params.serial_graph_reserve_rows(false));
+        t.assert_equal(uint32_t(4), params.serial_graph_reserve_rows(true));
+        params.n_ctx = 2;
+        t.assert_equal(uint32_t(2), params.serial_graph_reserve_rows(false));
+        t.assert_equal(uint32_t(2), params.serial_graph_reserve_rows(true));
+        params.n_ctx = 8192; params.n_ubatch = 4; params.serial_block_rows = 2;
+        t.assert_equal(uint32_t(2), params.serial_graph_reserve_rows(true));
+    });
 
     t.test("explicit_intent_distinguishes_one_token_prompt_and_tg1", [](testing & t) {
         llama_memory_text_phase_tracker tracker;

@@ -920,7 +920,7 @@ void llama_context::sched_reserve() {
 
     const uint32_t n_seqs = cparams.n_seq_max;
     const uint32_t n_injection = std::min(cparams.n_ctx, cparams.n_ubatch);
-    const uint32_t n_tokens = cparams.serial_block_rows ? cparams.serial_block_rows : n_injection;
+    const uint32_t n_tokens = cparams.serial_graph_reserve_rows(false);
 
     const size_t max_nodes = this->graph_max_nodes(n_injection);
 
@@ -2504,9 +2504,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     }
     if (draft_graph_rebuild) {
         auto reserve_context = memory->init_full();
-        const uint32_t reserve_tokens = text_phase == llama_memory_text_phase::decode ?
-            std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) :
-            cparams.serial_block_rows ? cparams.serial_block_rows : std::min(cparams.n_ctx, cparams.n_ubatch);
+        const uint32_t reserve_tokens = cparams.serial_graph_reserve_rows(text_phase == llama_memory_text_phase::decode);
         const uint32_t reserve_outputs = std::min(reserve_tokens, cparams.n_outputs_max);
         ggml_cgraph * reserved;
         {
