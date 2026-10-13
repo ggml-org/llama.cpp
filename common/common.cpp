@@ -62,6 +62,10 @@
 #include <sys/systemcfg.h>
 #endif
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -2363,6 +2367,24 @@ bool common_prompt_batch_decode(
     return true;
 }
 
+// a checkpoint holds hundreds of MiB, and filling a fresh allocation is dominated by faulting in its 4 KiB pages (about
+// 3 GB/s): allocate without touching the memory, ask for transparent huge pages, then size it
+static void checkpoint_buf_resize(std::vector<uint8_t> & buf, size_t size) {
+    if (size > buf.capacity()) {
+        std::vector<uint8_t>().swap(buf); // the old contents are overwritten anyway, do not copy them
+        buf.reserve(size);
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+        const uintptr_t page  = (uintptr_t) sysconf(_SC_PAGESIZE);
+        const uintptr_t begin = ((uintptr_t) buf.data() + page - 1) & ~(page - 1);
+        const uintptr_t end   = ((uintptr_t) buf.data() + size) & ~(page - 1);
+        if (end > begin) {
+            madvise((void *) begin, end - begin, MADV_HUGEPAGE); // best effort
+        }
+#endif
+    }
+    buf.resize(size);
+}
+
 size_t common_prompt_checkpoint::size() const {
     return data_tgt.size() + data_dft.size() + data_spec.size();
 }
@@ -2401,7 +2423,7 @@ void common_prompt_checkpoint::update_tgt(
 
     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
 
-    data_tgt.resize(ckpt_size);
+    checkpoint_buf_resize(data_tgt, ckpt_size);
 
     const size_t n = llama_state_seq_get_data_ext(ctx, data_tgt.data(), ckpt_size, seq_id, flags);
     if (n != ckpt_size) {
@@ -2419,7 +2441,7 @@ void common_prompt_checkpoint::update_dft(
 
     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
 
-    data_dft.resize(ckpt_size);
+    checkpoint_buf_resize(data_dft, ckpt_size);
 
     const size_t n = llama_state_seq_get_data_ext(ctx, data_dft.data(), ckpt_size, seq_id, flags);
     if (n != ckpt_size) {
