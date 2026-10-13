@@ -2364,6 +2364,8 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
         return;
     }
 
+    // a cache without SWA can be rolled back to any position with seq_rm, so it holds no partial state: a partial save
+    // writes nothing (the SWA cache of llama_kv_cache_iswa still writes its cells)
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) && swa_type == LLAMA_SWA_TYPE_NONE) {
         return;
     }
@@ -2445,6 +2447,7 @@ const slot_info_vec_t *   sinfos_in) {
         return;
     }
 
+    // see state_write: no partial state without SWA
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) && swa_type == LLAMA_SWA_TYPE_NONE) {
         return;
     }
