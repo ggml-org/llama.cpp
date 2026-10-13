@@ -125,8 +125,14 @@ struct llama_memory_i {
     virtual llama_kv_stream * get_kv_stream() { return nullptr; }
 
     // KV streaming: resize the pool of resident pages to the pages that fit in resident_size bytes (between batches);
-    // false if this memory does not stream
-    virtual bool resize_kv_stream(size_t resident_size) { (void) resident_size; return false; }
+    // false if this memory does not stream. decode: resident_size also holds the device slots, sized to the pages that
+    // stream once a batch of n_tokens is placed, plus some headroom
+    virtual bool resize_kv_stream(size_t resident_size, bool decode, uint32_t n_tokens = 0) {
+        (void) resident_size; (void) decode; (void) n_tokens; return false;
+    }
+
+    // KV streaming: after a decode resize, whether a batch of n_tokens more could stream more pages than the slots hold
+    virtual bool kv_stream_needs_resize(uint32_t n_tokens) const { (void) n_tokens; return false; }
 
     //
     // state write/read

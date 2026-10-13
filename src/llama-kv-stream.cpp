@@ -640,9 +640,10 @@ void llama_kv_stream::release_pool() {
     }
     page_ring.assign(n_pages, -1);
     n_streamed = 0;
+    slots_buf.reset();
 }
 
-void llama_kv_stream::set_pool(uint32_t n_slots) {
+void llama_kv_stream::set_pool(uint32_t n_slots, uint32_t n_ring) {
     for (uint32_t p = 0; p < n_pages; ++p) {
         GGML_ASSERT(page_slot[p] < 0 && "llama_kv_stream: set_pool without release_pool");
     }
@@ -651,7 +652,11 @@ void llama_kv_stream::set_pool(uint32_t n_slots) {
     layout_id++;
 
     // the slots hold the pages that stream, packed (see set_backend), or a whole layer for gathers
-    const uint32_t n_ring = prefill_paged && !debug_rotate ? std::max<uint32_t>(1, n_pages > n_slots ? n_pages - n_slots : 1) : n_pages;
+    if (!ring_packed()) {
+        n_ring = n_pages;
+    } else if (n_ring == 0) {
+        n_ring = std::max<uint32_t>(1, n_pages > n_slots ? n_pages - n_slots : 1);
+    }
     alloc_slots((int64_t) n_ring*page_size, false);
 
     LLAMA_LOG_INFO("%s: %u of %u pages resident, slots = %8.2f MiB\n", __func__, n_slots, n_pages,

@@ -133,11 +133,21 @@ public:
     // pool pages
     uint32_t n_pool() const { return n_slots; }
 
+    // pages each device slot holds
+    uint32_t n_ring() const { return slots[0].k ? (uint32_t) (slots[0].k->ne[1]/page_size) : 0; }
+
+    // the slots hold the streamed pages packed (paged prefill and decode), so they can be smaller than the context
+    bool ring_packed() const { return prefill_paged && !debug_rotate; }
+
+    // bytes of one page in both slots
+    size_t ring_page_size() const { return 2*page_size*(row_size(0, false) + row_size(0, true)); }
+
     // resizing the pool (the cache reallocates the pool tensors in between): release_pool writes every resident page
-    // back to the host store if it was written since it was loaded, and leaves the pool empty and the backend idle;
-    // set_pool then takes the new pool size, and the pages come back on demand
+    // back to the host store if it was written since it was loaded, frees the slots, and leaves the pool empty and the
+    // backend idle; set_pool then takes the new pool size and allocates slots of n_ring pages (0: every page that is
+    // not resident), and the pages come back on demand
     void release_pool();
-    void set_pool(uint32_t n_slots);
+    void set_pool(uint32_t n_slots, uint32_t n_ring = 0);
 
     // rows [c0, c1) of layer ikv, wherever they live; for state save/restore, with the backend idle
     void get_rows(int32_t ikv, bool is_v, uint32_t c0, uint32_t c1, void * dst);

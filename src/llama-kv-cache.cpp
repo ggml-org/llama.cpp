@@ -1584,7 +1584,28 @@ ggml_tensor * llama_kv_cache::build_input_kv_tag(ggml_context * ctx) const {
     return res;
 }
 
-bool llama_kv_cache::resize_kv_stream(size_t resident_size) {
+// decode resizes size the slots for the pages used plus this many (LLAMA_KV_STREAM_HEADROOM, for tests), and resize
+// again when the context outgrows them
+static uint32_t kv_stream_headroom_pages() {
+    static const uint32_t n = [] {
+        const char * env = getenv("LLAMA_KV_STREAM_HEADROOM");
+        return env ? (uint32_t) std::max(0, atoi(env)) : 16u;
+    }();
+    return n;
+}
+
+static uint32_t kv_stream_pages(uint32_t n_cells) {
+    return (n_cells + llama_kv_stream::page_size - 1)/llama_kv_stream::page_size;
+}
+
+uint32_t llama_kv_cache::kv_stream_pages_next(uint32_t n_tokens) const {
+    // the batch goes after the used cells, or after the head if find_slot starts past them; get_n_kv pads the result
+    const uint32_t n_cells   = std::max(v_cells[0].used_max_p1(), v_heads[0]) + n_tokens;
+    const uint32_t n_pad_cur = std::max(n_pad, 256u);
+    return std::min(kv_stream_pages(get_size()), kv_stream_pages(GGML_PAD(n_cells, n_pad_cur)));
+}
+
+bool llama_kv_cache::resize_kv_stream(size_t resident_size, bool decode, uint32_t n_tokens) {
     if (!stream) {
         return false;
     }
@@ -1593,9 +1614,27 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size) {
     for (const auto & layer : layers) {
         bytes_per_cell += ggml_row_size(layer.k->type, layer.k->ne[0]) + ggml_row_size(layer.v->type, layer.v->ne[0]);
     }
-    const uint32_t n_pages = (get_size() + llama_kv_stream::page_size - 1)/llama_kv_stream::page_size;
-    const uint32_t n_slots = std::min(n_pages, llama_kv_stream::slots_for(resident_size, bytes_per_cell));
-    if (n_slots == stream->n_pool()) {
+    const uint32_t n_pages = kv_stream_pages(get_size());
+
+    uint32_t n_slots = std::min(n_pages, llama_kv_stream::slots_for(resident_size, bytes_per_cell));
+    uint32_t n_ring  = 0; // the default: every page that is not resident
+    if (decode && stream->ring_packed()) {
+        // the budget holds the pool and the slots; the slots hold what streams for n_need attended pages: P pool pages
+        // and n_need - P ring pages take P*page_pool + (n_need - P)*page_ring bytes
+        const uint32_t n_need    = std::min(n_pages, kv_stream_pages_next(n_tokens) + kv_stream_headroom_pages());
+        const size_t   page_pool = bytes_per_cell*llama_kv_stream::page_size;
+        const size_t   page_ring = stream->ring_page_size();
+        if (resident_size >= (size_t) n_need*page_pool + page_ring) {
+            n_slots = std::min(n_pages, (uint32_t) ((resident_size - page_ring)/page_pool));
+            n_ring  = 1;
+        } else if (resident_size > (size_t) n_need*page_ring) {
+            n_slots = (uint32_t) ((resident_size - (size_t) n_need*page_ring)/(page_pool - page_ring));
+            n_ring  = n_need - n_slots;
+        } else {
+            n_slots = 0;
+        }
+    }
+    if (n_slots == stream->n_pool() && (n_ring == 0 ? stream->n_ring() + n_slots >= n_pages : stream->n_ring() == n_ring)) {
         return true;
     }
     if (n_slots < std::min(n_pages, 8u)) {
@@ -1605,7 +1644,8 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size) {
 
     const int64_t t_start_us = ggml_time_us();
 
-    // write the resident pages back and free the pool before allocating the new one, so that both never coexist
+    // write the resident pages back and free the pool and the slots before allocating the new ones, so that the old
+    // and new never coexist
     stream->release_pool();
 
     std::vector<ggml_backend_buffer_type_t> bufts;
@@ -1645,10 +1685,19 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size) {
         ggml_backend_buffer_clear(buf.get(), 0);
     }
 
-    stream->set_pool(n_slots);
+    stream->set_pool(n_slots, n_ring);
 
-    LLAMA_LOG_INFO("%s: pool resized to %u pages in %.1f ms\n", __func__, n_slots, (ggml_time_us() - t_start_us)/1000.0);
+    LLAMA_LOG_INFO("%s: pool resized to %u pages, slots to %u pages, in %.1f ms\n", __func__, n_slots, stream->n_ring(),
+            (ggml_time_us() - t_start_us)/1000.0);
     return true;
+}
+
+bool llama_kv_cache::kv_stream_needs_resize(uint32_t n_tokens) const {
+    if (!stream || !stream->ring_packed()) {
+        return false;
+    }
+    // at most every attended page that is not resident streams
+    return kv_stream_pages_next(n_tokens) > stream->n_pool() + stream->n_ring();
 }
 
 void llama_kv_cache::set_input_kv_pages(ggml_tensor * dst) const {

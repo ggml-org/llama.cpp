@@ -382,7 +382,8 @@ private:
     llama_context *              phase_leader = nullptr;
     std::vector<llama_context *> phase_followers;
 
-    void switch_phase(bool decode);
+    // n_tokens_next: the batch about to run, which the decode slots must hold
+    void switch_phase(bool decode, uint32_t n_tokens_next);
 
     // state of sched_copy_experts, reset before each graph compute
     struct copy_experts_info {

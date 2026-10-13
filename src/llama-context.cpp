@@ -758,7 +758,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
 }
 
-void llama_context::switch_phase(bool decode) {
+void llama_context::switch_phase(bool decode, uint32_t n_tokens_next) {
     if (decode == phase_decode) {
         return;
     }
@@ -766,17 +766,17 @@ void llama_context::switch_phase(bool decode) {
     if (decode) {
         // the followers' compute buffers shrink first, then ours, then the pool grows into what they freed
         for (llama_context * f : phase_followers) {
-            f->switch_phase(true);
+            f->switch_phase(true, n_tokens_next);
         }
     } else if (memory) {
         // the pool shrinks before the prefill buffers come back (a follower grows its own on its next prefill)
-        memory->resize_kv_stream(cparams.kv_resident_size);
+        memory->resize_kv_stream(cparams.kv_resident_size, false);
     }
     phase_decode       = decode;
     sched_need_reserve = true;
     sched_reserve();
     if (decode && memory) {
-        memory->resize_kv_stream(cparams.kv_resident_size_decode);
+        memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_next);
     }
 }
 
@@ -2009,7 +2009,18 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         const bool decode_batch = n_tokens_all <= cparams.n_tokens_decode;
         phase_seen_prefill = phase_seen_prefill || !decode_batch;
         if (decode_batch != phase_decode && phase_seen_prefill) {
-            switch_phase(decode_batch);
+            switch_phase(decode_batch, n_tokens_all);
+        } else if (phase_decode && memory->kv_stream_needs_resize(n_tokens_all)) {
+            // the context outgrew the decode slots: split the same budget again, and rebuild the graphs, whose views
+            // point into the old pool and slots
+            synchronize();
+            memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_all);
+            for (auto & res : gf_res_prev) {
+                if (res) {
+                    res->reset();
+                }
+            }
+            gf_res_prev_active = nullptr;
         }
     }
 

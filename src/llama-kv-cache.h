@@ -150,7 +150,11 @@ public:
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
     llama_kv_stream * get_kv_stream() override { return stream.get(); }
-    bool resize_kv_stream(size_t resident_size) override;
+    bool resize_kv_stream(size_t resident_size, bool decode, uint32_t n_tokens) override;
+    bool kv_stream_needs_resize(uint32_t n_tokens) const override;
+
+    // KV streaming: the pages attended once a batch of n_tokens is placed (at most)
+    uint32_t kv_stream_pages_next(uint32_t n_tokens) const;
 
     // state write/load
 

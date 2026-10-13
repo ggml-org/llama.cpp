@@ -71,8 +71,12 @@ llama_kv_stream * llama_memory_hybrid::get_kv_stream() {
     return mem_attn->get_kv_stream();
 }
 
-bool llama_memory_hybrid::resize_kv_stream(size_t resident_size) {
-    return mem_attn->resize_kv_stream(resident_size);
+bool llama_memory_hybrid::resize_kv_stream(size_t resident_size, bool decode, uint32_t n_tokens) {
+    return mem_attn->resize_kv_stream(resident_size, decode, n_tokens);
+}
+
+bool llama_memory_hybrid::kv_stream_needs_resize(uint32_t n_tokens) const {
+    return mem_attn->kv_stream_needs_resize(n_tokens);
 }
 
 llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {

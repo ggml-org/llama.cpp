@@ -399,9 +399,9 @@ extern "C" {
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
 
         size_t kv_resident_size; // KV streaming: device bytes for resident K/V pages, the rest of the context is kept in host memory, 0 = disabled [EXPERIMENTAL]
-        size_t kv_resident_size_decode; // KV streaming: device bytes for resident pages between prefills (batches of at most n_tokens_decode
-                                        // tokens), when the compute buffers shrink to decode size; also shrinks a draft (MTP) context's compute
-                                        // buffers then, 0 = disabled [EXPERIMENTAL]
+        size_t kv_resident_size_decode; // KV streaming: device bytes for the resident pages and the streaming slots between prefills (batches
+                                        // of at most n_tokens_decode tokens), when the compute buffers shrink to decode size; also shrinks a
+                                        // draft (MTP) context's compute buffers then, 0 = disabled [EXPERIMENTAL]
         uint32_t n_tokens_decode;       // with kv_resident_size_decode: the largest batch that runs with the decode buffers, e.g. the slots
                                         // times (draft length + 1); 0 = 4
 

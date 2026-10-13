@@ -2814,8 +2814,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_KV_RESIDENT_MIB"));
     add_opt(common_arg(
         {"--kv-resident-mib-decode"}, "N",
-        "with --kv-stream: GPU memory in MiB for the resident KV pages between prefills, when the compute buffers shrink "
-        "to decode size (default: --kv-resident-mib, and the compute buffers keep their prefill size)",
+        "with --kv-stream: GPU memory in MiB for the resident KV pages and the streaming slots between prefills, when the "
+        "compute buffers shrink to decode size (default: --kv-resident-mib, and the compute buffers keep their prefill size)",
         [](common_params & params, int value) {
             if (value <= 0) {
                 throw std::invalid_argument("invalid value");
