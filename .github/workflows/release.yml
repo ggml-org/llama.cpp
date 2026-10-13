@@ -654,19 +654,12 @@ jobs:
 
     runs-on: ubuntu-24.04
 
-    outputs:
-      openvino_version: ${{ steps.openvino_version.outputs.value }}
-
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
-      - name: Set OpenVINO version output
-        id: openvino_version
-        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
@@ -765,20 +758,12 @@ jobs:
 
     runs-on: windows-2022
 
-    outputs:
-      openvino_version: ${{ steps.openvino_version.outputs.value }}
-
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
-      - name: Set OpenVINO version output
-        id: openvino_version
-        shell: bash
-        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
