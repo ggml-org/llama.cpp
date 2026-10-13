@@ -41,37 +41,8 @@ llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_s
         throw std::runtime_error("failed to allocate the KV stream host store");
     }
 
-    // two device slots, each the size of a layer
-    {
-        ggml_init_params params = {
-            /*.mem_size   =*/ 4*ggml_tensor_overhead(),
-            /*.mem_buffer =*/ nullptr,
-            /*.no_alloc   =*/ true,
-        };
-        slots_ctx.reset(ggml_init(params));
-
-        for (int s = 0; s < 2; ++s) {
-            slots[s].k = ggml_new_tensor_2d(slots_ctx.get(), layers[0].k->type, layers[0].k->ne[0], (int64_t) n_pages*page_size);
-            slots[s].v = ggml_new_tensor_2d(slots_ctx.get(), layers[0].v->type, layers[0].v->ne[0], (int64_t) n_pages*page_size);
-            ggml_format_name(slots[s].k, "kv_stream_slot_k%d", s);
-            ggml_format_name(slots[s].v, "kv_stream_slot_v%d", s);
-        }
-
-        ggml_backend_buffer_type_t buft_dev = ggml_backend_buffer_get_type(layers[0].k->buffer);
-        if (no_alloc) {
-            // dummy buffer, so that the scheduler does not try to allocate the slots
-            slots_buf.reset(ggml_backend_buft_alloc_buffer(buft_dev, 0));
-            for (ggml_tensor * t = ggml_get_first_tensor(slots_ctx.get()); t; t = ggml_get_next_tensor(slots_ctx.get(), t)) {
-                t->buffer = slots_buf.get();
-            }
-        } else {
-            slots_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(slots_ctx.get(), buft_dev));
-        }
-        if (!slots_buf) {
-            throw std::runtime_error("failed to allocate the KV stream device slots");
-        }
-        ggml_backend_buffer_clear(slots_buf.get(), 0);
-    }
+    // two device slots, each the size of a layer until set_backend knows whether prefill reads the pages in place
+    alloc_slots((int64_t) n_pages*page_size, no_alloc);
 
     // pages stream only when the pool cannot hold the context
     if (n_slots < n_pages) {
@@ -141,6 +112,38 @@ uint32_t llama_kv_stream::slots_for(size_t bytes, size_t bytes_per_cell) {
     return (uint32_t) std::min<size_t>(bytes/(bytes_per_cell*page_size), UINT32_MAX);
 }
 
+void llama_kv_stream::alloc_slots(int64_t rows, bool no_alloc) {
+    slots_buf.reset();
+    ggml_init_params params = {
+        /*.mem_size   =*/ 4*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    slots_ctx.reset(ggml_init(params));
+
+    for (int s = 0; s < 2; ++s) {
+        slots[s].k = ggml_new_tensor_2d(slots_ctx.get(), layers[0].k->type, layers[0].k->ne[0], rows);
+        slots[s].v = ggml_new_tensor_2d(slots_ctx.get(), layers[0].v->type, layers[0].v->ne[0], rows);
+        ggml_format_name(slots[s].k, "kv_stream_slot_k%d", s);
+        ggml_format_name(slots[s].v, "kv_stream_slot_v%d", s);
+    }
+
+    ggml_backend_buffer_type_t buft_dev = ggml_backend_buffer_get_type(layers[0].k->buffer);
+    if (no_alloc) {
+        // dummy buffer, so that the scheduler does not try to allocate the slots
+        slots_buf.reset(ggml_backend_buft_alloc_buffer(buft_dev, 0));
+        for (ggml_tensor * t = ggml_get_first_tensor(slots_ctx.get()); t; t = ggml_get_next_tensor(slots_ctx.get(), t)) {
+            t->buffer = slots_buf.get();
+        }
+    } else {
+        slots_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(slots_ctx.get(), buft_dev));
+    }
+    if (!slots_buf) {
+        throw std::runtime_error("failed to allocate the KV stream device slots");
+    }
+    ggml_backend_buffer_clear(slots_buf.get(), 0);
+}
+
 void llama_kv_stream::set_backend(ggml_backend_t backend, int64_t n_head) {
     this->backend = backend;
 
@@ -174,6 +177,16 @@ void llama_kv_stream::set_backend(ggml_backend_t backend, int64_t n_head) {
 
     prefill_paged = ggml_backend_supports_op(backend, fa);
     LLAMA_LOG_INFO("%s: prefill attends %s\n", __func__, prefill_paged ? "the pages directly" : "gathers of the pages");
+
+    // Without gathers, a slot only holds the pages that stream, packed: the attended pages that are not resident. The
+    // pool is full of attended pages whenever any page streams (free slots take attended pages first, and pages outside
+    // the attended range leave fewer to attend), so at most n_pages - n_slots stream per ubatch.
+    if (prefill_paged && ggml_backend_buffer_get_size(slots_buf.get()) > 0 && !debug_rotate) {
+        const uint32_t n_ring = std::max<uint32_t>(1, n_pages > n_slots ? n_pages - n_slots : 1);
+        alloc_slots((int64_t) n_ring*page_size, false);
+        LLAMA_LOG_INFO("%s: slots hold %u streamed pages, %8.2f MiB\n", __func__, n_ring,
+                ggml_backend_buffer_get_size(slots_buf.get())/1024.0/1024.0);
+    }
 }
 
 size_t llama_kv_stream::row_size(int32_t ikv, bool is_v) const {
@@ -330,6 +343,9 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
             copies.push_back({ p, dst, 1 });
         }
     }
+
+    // packed, the streamed pages must fit the slots (sized in set_backend)
+    GGML_ASSERT(!decode || (int64_t) n_streamed*page_size <= slots[0].k->ne[1]);
 
     run_list.clear();
     for (uint32_t p = 0; p < n_att; ++p) {

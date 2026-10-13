@@ -85,6 +85,7 @@ public:
     // n_head: query heads, to check whether the backend's attention takes paged K/V for prefill ubatches too
     void set_backend(ggml_backend_t backend, int64_t n_head);
 
+
     // prefill ubatches read the pages through the page table like decode, instead of attending a gather
     bool paged_prefill() const { return prefill_paged; }
 
@@ -128,6 +129,7 @@ public:
     void set_rows(int32_t ikv, bool is_v, uint32_t c0, uint32_t c1, const void * src);
 
 private:
+    void   alloc_slots(int64_t rows, bool no_alloc);
     size_t row_size(int32_t ikv, bool is_v) const;
     char * host(int32_t ikv, bool is_v, uint32_t page) const;
 
