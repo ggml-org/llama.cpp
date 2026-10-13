@@ -2733,7 +2733,7 @@ private:
     // checkpoints are appended to the slot save file, after the llama state payload
     // they cannot be recreated from the final state alone (a recurrent state cannot be rewound)
     static constexpr uint32_t SLOT_CKPT_MAGIC   = 0x504b4353; // "SCKP"
-    static constexpr uint32_t SLOT_CKPT_VERSION = 1;
+    static constexpr uint32_t SLOT_CKPT_VERSION = 2; // 2: the draft context's state follows the count
 
     static bool ckpt_read(std::ifstream & ifs, void * dst, size_t size, size_t & n_read) {
         if (!ifs.read((char *) dst, size)) {
@@ -2769,7 +2769,7 @@ private:
     // returns false if the appendix could not be written completely
     bool save_slot_checkpoints(const std::string & filepath, const server_slot & slot, size_t & n_written) const {
         n_written = 0;
-        if (slot.prompt.checkpoints.empty()) {
+        if (slot.prompt.checkpoints.empty() && ctx_dft == nullptr) {
             return true;
         }
         std::ofstream ofs(std::filesystem::u8path(filepath), std::ios::binary | std::ios::app);
@@ -2783,6 +2783,13 @@ private:
         ckpt_write(ofs, &magic,   sizeof(magic),   n_written);
         ckpt_write(ofs, &version, sizeof(version), n_written);
         ckpt_write(ofs, &count,   sizeof(count),   n_written);
+        // the draft context's full state: a draft model (MTP) attends the whole prompt too
+        std::vector<uint8_t> data_dft;
+        if (ctx_dft != nullptr) {
+            data_dft.resize(llama_state_seq_get_size_ext(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE));
+            llama_state_seq_get_data_ext(ctx_dft, data_dft.data(), data_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        }
+        ckpt_write_buf(ofs, data_dft, n_written);
         for (const auto & cur : slot.prompt.checkpoints) {
             ckpt_write(ofs, &cur.n_tokens, sizeof(cur.n_tokens), n_written);
             ckpt_write(ofs, &cur.pos_min,  sizeof(cur.pos_min),  n_written);
@@ -2816,8 +2823,10 @@ private:
         if (!ckpt_read(ifs, &magic, sizeof(magic), n_read) || magic != SLOT_CKPT_MAGIC) {
             return 0;
         }
-        if (!ckpt_read(ifs, &version, sizeof(version), n_read) || version != SLOT_CKPT_VERSION ||
-            !ckpt_read(ifs, &count,   sizeof(count),   n_read)) {
+        std::vector<uint8_t> data_dft;
+        if (!ckpt_read(ifs, &version, sizeof(version), n_read) || version < 1 || version > SLOT_CKPT_VERSION ||
+            !ckpt_read(ifs, &count,   sizeof(count),   n_read) ||
+            (version >= 2 && !ckpt_read_buf(ifs, data_dft, n_avail, n_read))) {
             SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
             return 0;
         }
@@ -2857,6 +2866,14 @@ private:
         }
         slot.prompt.checkpoints = std::move(checkpoints);
         SLT_INF(slot, "restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
+        if (ctx_dft != nullptr && !data_dft.empty()) {
+            if (llama_state_seq_set_data_ext(ctx_dft, data_dft.data(), data_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE) == 0) {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+                SLT_WRN(slot, "draft context state in '%s' does not match the draft context - dropped\n", filepath.c_str());
+            } else {
+                SLT_INF(slot, "restored the draft context state (%.3f MiB)\n", data_dft.size() / 1024.0 / 1024.0);
+            }
+        }
         return n_read;
     }
 
