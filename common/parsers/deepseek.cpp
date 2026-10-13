@@ -139,7 +139,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
             }
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     bool require_tools   = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;

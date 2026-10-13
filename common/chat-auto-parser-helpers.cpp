@@ -322,7 +322,7 @@ std::string apply_template(const common_chat_template & tmpl, const template_par
     tmpl_params.extra_context["enable_thinking"] = params.enable_thinking;
 
     try {
-        return common_chat_template_direct_apply(tmpl, tmpl_params);
+        return common_chat_template_direct_apply(tmpl, tmpl_params).str();
     } catch (const std::exception & e) {
         LOG_DBG("Template application failed: %s\n", e.what());
         return ERR_TMPL;

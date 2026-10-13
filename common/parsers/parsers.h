@@ -24,7 +24,7 @@ void foreach_function(const json & tools, const std::function<void(size_t, const
 void foreach_parameter(const json & function, const std::function<void(size_t, const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn);
 
 // render a template; the override arguments let a parser feed in messages, tools or context it has rewritten
-std::string common_chat_template_direct_apply_impl(
+common_chat_prompt common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs,
     const std::optional<json> & messages_override = std::nullopt,

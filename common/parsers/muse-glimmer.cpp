@@ -38,7 +38,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
             data.generation_prompt += "<|eom|><|start|>assistant to=user<|message|>" + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;

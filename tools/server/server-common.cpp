@@ -1434,7 +1434,7 @@ json oaicompat_chat_params_parse(
     session_params.echo = json_value(body, "echo", false);
     out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
 
-    llama_params["prompt"] = out_session.prompt();
+    llama_params["prompt"] = out_session.prompt().str();
 
     // Reasoning budget: pass parameters through to sampling layer
     {

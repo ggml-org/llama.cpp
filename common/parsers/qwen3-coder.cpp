@@ -56,7 +56,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             data.generation_prompt += msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     std::vector<std::string> tool_call_starts = { "<tool_call>" };

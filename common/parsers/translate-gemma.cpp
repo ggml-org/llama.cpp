@@ -51,7 +51,7 @@ common_chat_params common_chat_params_init_translate_gemma(
 
     if (inputs.has_continuation()) {
         data.generation_prompt = "<start_of_turn>model\n" + inputs.continue_msg.render_content();
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
