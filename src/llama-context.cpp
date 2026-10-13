@@ -585,6 +585,7 @@ llama_context::llama_context(
             auto * hybrid=dynamic_cast<llama_memory_hybrid *>(memory.get());
             auto * stream=hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
             cparams.kv_stream_prefill=stream && stream->bounded_prefill();
+            cparams.kv_stream_mask=stream && stream->compact_prefill_mask() && hybrid->get_mem_attn()->supports_mask_bounds();
         }
         if (mtp_attached) {
             auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
@@ -1941,6 +1942,12 @@ llm_graph_result * llama_context::process_ubatch(
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
+    if (stream && cparams.kv_stream_mask && phase == llama_memory_text_phase::prefill &&
+            !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->prepare_mask_bounds(ubatch,cparams.causal_attn)) {
+        LLAMA_LOG_ERROR("%s: managed prefill mask cannot be represented by an exact visibility interval\n",__func__);
+        ret=GGML_STATUS_FAILED;
         return nullptr;
     }
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.mtp_publish_host) {

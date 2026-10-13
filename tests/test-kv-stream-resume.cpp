@@ -1,4 +1,5 @@
 #include "kv-stream-block-test.h"
+#include "../ggml/src/ggml-backend-execution.h"
 #include "../src/llama-kv-stream-model.h"
 #include <chrono>
 #include <cstdio>
@@ -125,13 +126,47 @@ int main(int argc, char ** argv) {
                     short_workspace.lease.get(),true,4));
                 t.assert_true(same_float_bits(before,input.read()));
             }
-            for (uint32_t queries : {9u,64u,129u,256u,512u,1024u}) {
+            for (uint32_t queries : {1u,2u,3u,4u,8u,9u,64u,129u,256u,512u,1024u}) {
                 block_inputs input(f,active,queries,false,12);
                 if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
                 for (uint32_t layer=0;layer<2;++layer) {
                     const auto expected=ordinary(f,input,layer);
                     if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,
                             active,1.0f/16,workspace.lease.get(),true,4))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+                ggml_context_ptr bounds_context(ggml_init({8192,nullptr,true}));
+                auto * bounds=ggml_new_tensor_2d(bounds_context.get(),GGML_TYPE_I32,4,queries);
+                ggml_backend_buffer_ptr bounds_buffer(ggml_backend_alloc_ctx_tensors(bounds_context.get(),backend.get()));
+                if (!t.assert_true(bool(bounds_buffer))) return;
+                std::vector<ggml_backend_execution_mask_interval> intervals(queries);
+                for (size_t row=0; row<queries; ++row)
+                    intervals[row]={0,int32_t(active-queries+row+1),int32_t(capacity),1};
+                ggml_backend_tensor_set(bounds,intervals.data(),0,ggml_nbytes(bounds));
+                if (queries == 9 && active == 2049) {
+                    const auto before=input.read();
+                    auto * previous=bounds->data;
+                    bounds->data=static_cast<char *>(ggml_backend_buffer_get_base(bounds_buffer.get()))+
+                        ggml_backend_buffer_get_size(bounds_buffer.get())-sizeof(int32_t);
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                    t.assert_true(!f.resident->compute_streamed(0,input.q,bounds,input.output,
+                        active,1.f/16,workspace.lease.get(),true,4));
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(before,input.read()));
+                    bounds->data=previous;
+                    block_workspace short_workspace(f,scratch-1,24);
+                    if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                    t.assert_true(!f.resident->compute_streamed(0,input.q,bounds,input.output,
+                        active,1.f/16,short_workspace.lease.get(),true,4));
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(before,input.read()));
+                }
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,4,SIZE_MAX,{queries,false}))) return;
+                for (uint32_t layer=0; layer<2; ++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,bounds,input.output,
+                            active,1.f/16,workspace.lease.get(),true,4))) return;
                     ggml_backend_synchronize(backend.get());
                     t.assert_true(same_float_bits(expected,input.read()));
                 }

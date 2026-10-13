@@ -1047,14 +1047,19 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     if (!active_tokens) return false;
     if (cross && s.sequence->queries && q->ne[1] != s.sequence->queries) return false;
     const size_t padded = (active_tokens+255)/256*256;
+    const bool compact_mask=mask->type == GGML_TYPE_I32;
     const size_t prefix = std::min(padded,s.placement(layer).planes.tokens);
     const size_t slots = s.binding.initial_policy.ring_slots;
     if (!slots || !span_pages || slots > s.layout.ring.bytes/s.page.bytes) return false;
     const size_t blocks = (padded-prefix)/s.page.tokens + ((padded-prefix)%s.page.tokens != 0);
     const auto width = [&](size_t block) { return ggml_kv_stream_contiguous_pages(block,blocks,slots,span_pages); };
-    if (padded > s.content->host()->layout().tokens || mask->ne[0] < int64_t(padded) ||
+    if (compact_mask) {
+        if (mask->ne[0] != 4 || mask->ne[1] != q->ne[1] || mask->ne[2] != 1 || mask->ne[3] != 1 ||
+                !mask->data || !ggml_is_contiguous(mask)) return false;
+    } else if (mask->ne[0] < int64_t(padded) ||
             mask->type != GGML_TYPE_F16 || !mask->data || mask->nb[0] != sizeof(ggml_fp16_t) ||
             mask->ne[0] > INT32_MAX || mask->nb[1] < size_t(mask->ne[0])*sizeof(ggml_fp16_t)) return false;
+    if (padded > s.content->host()->layout().tokens) return false;
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend));
     auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
     const auto * ops = get ? get() : nullptr;
@@ -1064,6 +1069,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     ggml_kv_stream_resume_plan resume_plan;
     const bool prefill = cross && !s.sequence->decode;
     const bool bounded_prefill=prefill && s.prefill_scratch_bytes;
+    if (compact_mask && (!bounded_prefill || ops->version < 14)) return false;
     const bool resumed = ((s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 8) || bounded_prefill) && !s.fallback &&
         ops->version >= 5 && ops->resume_plan && ops->resume &&
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
@@ -1131,15 +1137,21 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             }
             if (!ops->supports_conversion(s.backend,&k,&ck) || !ops->supports_conversion(s.backend,&v,&cv)) return false;
         }
-        slice = *mask; slice.ne[0] = int64_t(count);
-        if (uintptr_t(mask->data) > UINTPTR_MAX-first*sizeof(ggml_fp16_t)) return false;
-        slice.data = reinterpret_cast<void *>(uintptr_t(mask->data)+first*sizeof(ggml_fp16_t));
+        slice = *mask;
+        if (!compact_mask) {
+            slice.ne[0] = int64_t(count);
+            if (uintptr_t(mask->data) > UINTPTR_MAX-first*sizeof(ggml_fp16_t)) return false;
+            slice.data = reinterpret_cast<void *>(uintptr_t(mask->data)+first*sizeof(ggml_fp16_t));
+        }
         op = *output; op.op = GGML_OP_FLASH_ATTN_EXT;
         std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
         ggml_backend_execution_set_external_workspace(&op, ggml_backend_execution_has_external_workspace(output));
         if (bounded_prefill) ggml_backend_execution_set_stock_conversion(&op,true);
-        op.src[0] = q; op.src[1] = s.fallback ? &ck : &k; op.src[2] = s.fallback ? &cv : &v; op.src[3] = &slice;
+        op.src[0] = q; op.src[1] = s.fallback ? &ck : &k; op.src[2] = s.fallback ? &cv : &v;
+        if (compact_mask) {
+            if (!ggml_backend_execution_set_mask_bounds(&op,&slice)) return false;
+        } else op.src[3]=&slice;
         return ops->supports(s.backend,&op);
     };
     const size_t resident_chunk = s.fallback ? s.page.tokens : prefix;
@@ -1441,7 +1453,10 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
             ggml_backend_execution_set_external_workspace(&op,ggml_backend_execution_has_external_workspace(output));
             if (bounded_prefill) ggml_backend_execution_set_stock_conversion(&op,true);
-            op.src[0]=q; op.src[1]=&k; op.src[2]=&v; op.src[3]=mask;
+            op.src[0]=q; op.src[1]=&k; op.src[2]=&v;
+            if (compact_mask) {
+                if (!ggml_backend_execution_set_mask_bounds(&op,mask)) return false;
+            } else op.src[3]=mask;
             for (const auto & request : requests)
                 if (!s.copy_ops->acquire_span(s.copies.get(),request.slot,request.pages)) return false;
             const ggml_kv_stream_span_plan_view view{s.binding.config.shape,sources.data(),sources.size(),padded,size_t(q->ne[1])};

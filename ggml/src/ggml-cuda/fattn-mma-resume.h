@@ -11,6 +11,7 @@ struct ggml_cuda_fattn_mma_resume_control {
     uint32_t native_blocks = 0;
     const uint32_t * state_ids = nullptr;
     bool state_per_block = false;
+    const int32_t * mask_bounds = nullptr;
 };
 
 struct ggml_cuda_fattn_mma_resume_layout {

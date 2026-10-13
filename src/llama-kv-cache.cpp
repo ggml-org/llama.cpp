@@ -3268,6 +3268,17 @@ bool llama_kv_cache_context::mtp_span_append(const llama_ubatch & ubatch) const 
         ubatch.token != nullptr,false});
 }
 
+bool llama_kv_cache::supports_mask_bounds() const {
+    return !hparams.use_alibi && swa_type == LLAMA_SWA_TYPE_NONE;
+}
+
+bool llama_kv_cache_context::prepare_mask_bounds(const llama_ubatch & ubatch, bool causal) const {
+    mask_bounds.clear();
+    if (!kv->supports_mask_bounds() || n_kv <= 0) return false;
+    const auto & cells=kv->get_cells(0);
+    return llama_kv_stream_mask_bounds(cells,cells.get_used(),size_t(n_kv),ubatch,causal,mask_bounds);
+}
+
 
 ggml_type llama_kv_cache_context::type_k() const {
     return kv->type_k();
@@ -3322,6 +3333,12 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
 }
 
 void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+    if (dst->type == GGML_TYPE_I32) {
+        GGML_ASSERT(dst->ne[0] == 4 && dst->ne[1] == ubatch->n_tokens &&
+            mask_bounds.size() == size_t(ubatch->n_tokens)*4);
+        ggml_backend_tensor_set(dst,mask_bounds.data(),0,mask_bounds.size()*sizeof(int32_t));
+        return;
+    }
     kv->set_input_kq_mask(dst, ubatch, causal_attn);
 }
 

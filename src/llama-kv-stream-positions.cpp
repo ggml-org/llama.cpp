@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include "../ggml/src/ggml-backend-execution.h"
 
 bool llama_kv_stream_validate_append(const llama_batch_ext & batch,
         const llama_kv_stream_append_coordinates & c) noexcept {
@@ -94,5 +95,48 @@ bool llama_kv_stream_suffix(const llama_kv_cells & cells, size_t count,
     const size_t first = lower(begin), last = end < 0 ? count : lower(end);
     if (first != last && last != count) return false;
     retained = first == last ? count : first;
+    return true;
+}
+
+bool llama_kv_stream_mask_bounds(const llama_kv_cells & cells, size_t count, size_t padded,
+        const llama_ubatch & batch, bool causal, std::vector<int32_t> & bounds) {
+    if (!count || padded < count || padded > INT32_MAX || !batch.n_tokens || batch.n_tokens > INT32_MAX/4 ||
+            !batch.pos || !batch.seq_id || !batch.n_seq_id || batch.n_seqs_unq != 1 ||
+            !batch.seq_id_unq || batch.seq_id_unq[0] != 0 ||
+            (batch.n_pos != 1 && batch.n_pos != 4) || !llama_kv_stream_validate_cells(cells,count,false)) return false;
+    std::vector<int32_t> next;
+    try { next.resize(size_t(batch.n_tokens)*4); }
+    catch (const std::bad_alloc &) { return false; }
+    for (uint32_t i=0; i<batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || !batch.seq_id[i] || batch.seq_id[i][0] != 0 || batch.pos[i] < 0) return false;
+        const auto position=batch.pos[i];
+        const bool spatial=causal && batch.is_pos_2d();
+        const auto x=spatial ? batch.pos[i+size_t(batch.n_tokens)*2] : 0;
+        const auto y=spatial ? batch.pos[i+size_t(batch.n_tokens)] : 0;
+        if (spatial && (x < 0 || y < 0)) return false;
+        size_t first=0, last=count;
+        if (causal) {
+            while (first < last) {
+                const size_t middle=first+(last-first)/2;
+                if (cells.pos_get(uint32_t(middle)) <= position) first=middle+1;
+                else last=middle;
+            }
+        } else first=count;
+        size_t end=first;
+        if (spatial) {
+            size_t equal=first;
+            while (equal && cells.pos_get(uint32_t(equal-1)) == position) --equal;
+            bool dropped=false;
+            for (size_t token=equal; token<first; ++token) {
+                if (cells.ext_get(uint32_t(token)).is_2d_gt(x,y)) {
+                    if (!dropped) end=token;
+                    dropped=true;
+                } else if (dropped) return false;
+            }
+        }
+        const ggml_backend_execution_mask_interval interval{0,int32_t(end),int32_t(padded),1};
+        std::memcpy(next.data()+size_t(i)*4,&interval,sizeof(interval));
+    }
+    bounds=std::move(next);
     return true;
 }

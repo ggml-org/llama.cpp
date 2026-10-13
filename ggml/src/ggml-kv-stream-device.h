@@ -70,6 +70,9 @@ struct ggml_kv_stream_partial_ops {
     // Version 12 quotes gathered spans; version 13 quotes history-independent native continuation.
     bool (*prefill_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
             uint32_t kv_heads, uint32_t queries, size_t tokens, size_t & bytes) = nullptr;
+    // Version 14: exact interval masks in the selected bounded prefill family, not an ordinary FA input.
+    bool (*prefill_mask_bounds)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
+            uint32_t kv_heads, uint32_t queries, size_t tokens) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 

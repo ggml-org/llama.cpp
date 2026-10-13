@@ -202,6 +202,7 @@ struct ggml_cuda_fattn_mma_contiguous_kv {
     static constexpr bool spanned = false;
     static constexpr bool staged = false;
     static constexpr bool resumable = false;
+    __device__ __forceinline__ const int32_t * mask_bounds() const { return nullptr; }
     __device__ __forceinline__ uint32_t block_index() const { return blockIdx.x; }
     __device__ __forceinline__ uint32_t block_count() const { return gridDim.x; }
     __device__ __forceinline__ ggml_cuda_fattn_mma_contiguous_kv with_head(int) const { return {}; }
@@ -227,6 +228,7 @@ struct ggml_cuda_fattn_mma_typed_span_kv {
     int head;
     uint32_t conversion_flags = 3;
     ggml_cuda_fattn_mma_resume_control control;
+    __device__ __forceinline__ const int32_t * mask_bounds() const { return control.mask_bounds; }
     int slice = 0;
     __device__ __forceinline__ uint32_t block_index() const {
         if constexpr (resume) return control.block_ids ? control.block_ids[blockIdx.x] : blockIdx.x;

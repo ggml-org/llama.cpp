@@ -23,6 +23,11 @@ using execution_style = ggml_cuda_kv_stream_execution_style;
 // Verify serial metadata before calling stock selection, which assumes valid grouped-head dimensions.
 static plan_status describe_metadata(const ggml_tensor * op, const ggml_kv_stream_span_plan_view * view,
         ggml_cuda_kv_stream_attention_metadata & metadata) {
+    if (op && op->src[5] && !op->src[3]) {
+        ggml_tensor logical{}, mask{};
+        if (!ggml_backend_execution_mask_metadata(op,logical,mask)) return plan_status::invalid_metadata;
+        return describe_metadata(&logical,view,metadata);
+    }
     if (!op || op->op != GGML_OP_FLASH_ATTN_EXT || op->type != GGML_TYPE_F32 ||
             !op->src[0] || !op->src[1] || !op->src[2]) return plan_status::invalid_metadata;
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2];
@@ -139,7 +144,18 @@ static ggml_kv_stream_capabilities capabilities(ggml_backend_t backend, int32_t 
 static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool segmented) {
     if (!backend || !ggml_backend_is_cuda(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT ||
             ggml_get_op_params_i32(op,4) != 0) return false;
+    const ggml_tensor * physical_mask=op->src[5] ? op->src[5] : op->src[3];
+    ggml_tensor logical_mask{}, logical_op{};
+    if (op->src[5]) {
+        if (!ggml_backend_execution_mask_metadata(op,logical_op,logical_mask)) return false;
+        op=&logical_op;
+    }
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * mask = op->src[3];
+    if (op->src[5]) {
+        auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+        const auto family=ggml_cuda_flash_attn_ext_kernel_family(ctx.device,op);
+        if (family != kernel_family::mma && family != kernel_family::vector) return false;
+    }
     if (!q || !k || !v || !mask || q->type != GGML_TYPE_F32 ||
             mask->type != GGML_TYPE_F16 || op->type != GGML_TYPE_F32 ||
             mask->ne[2] != 1 || mask->ne[3] != 1 || mask->nb[0] != 2 ||
@@ -147,7 +163,7 @@ static bool supports_common(ggml_backend_t backend, const ggml_tensor * op, bool
     const auto caps = capabilities(backend,k->type,v->type);
     if (!caps.direct_pair) return false;
     span ranges[5];
-    if (!tensor_span(backend,q,ranges[0]) || !tensor_span(backend,mask,ranges[3]) ||
+    if (!tensor_span(backend,q,ranges[0]) || !tensor_span(backend,physical_mask,ranges[3]) ||
             !tensor_span(backend,op,ranges[4])) return false;
     if (!segmented && (!tensor_span(backend,k,ranges[1]) || !tensor_span(backend,v,ranges[2]))) return false;
     for (int i : {0,3}) if (overlap(ranges[i],ranges[4])) return false;
@@ -233,6 +249,7 @@ static bool workspace_valid(ggml_backend_t backend, ggml_backend_buffer_t buffer
 
 // Export two native vector splits. A shifted maximum remains a valid common (m,L,U) coordinate.
 static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t buffer, bool second) {
+    if (op && op->src[5]) return false;
     if (capture_active(backend) || !supports(backend, op)) return false;
     ggml_kv_stream_block_layout layout;
     if (ggml_kv_stream_block_layout_make(size_t(op->ne[1])*size_t(op->ne[2]), 256, layout).status != ggml_kv_stream_partial_status::success ||
@@ -267,6 +284,7 @@ static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend
 
 // Use ordinary attention only when the graph allocator has reserved its backend-specific output extras.
 static bool direct(ggml_backend_t backend, const ggml_tensor * op) {
+    if (op && op->src[5]) return false;
     if (capture_active(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT || !ggml_backend_supports_op(backend,op)) return false;
     ggml_cuda_kv_stream_attention_plan description;
     if (ggml_cuda_kv_stream_attention_plan_query(backend, op, nullptr, execution_style::native, description) != plan_status::success ||
@@ -390,7 +408,8 @@ static bool resume_common(
     if (!tensor_span(backend,op,touched) || overlap(scratch,touched)) return false;
     for (int i = 0; i < 4; ++i) {
         if (segmented && (i == 1 || i == 2)) continue;
-        if (!tensor_span(backend,op->src[i],touched) || overlap(scratch,touched)) return false;
+        const auto * source=i == 3 && op->src[5] ? op->src[5] : op->src[i];
+        if (!tensor_span(backend,source,touched) || overlap(scratch,touched)) return false;
     }
     return true;
 }
@@ -401,6 +420,11 @@ static bool resume_launch(
         const ggml_tensor & k, const ggml_tensor & v,
         ggml_backend_buffer_t workspace, const ggml_kv_stream_resume_plan & plan,
         ggml_kv_resume_kernel_t kernel, size_t first, size_t mask_tokens, bool last) {
+    ggml_tensor logical{}, logical_mask{};
+    if (op->src[5] && !op->src[3]) {
+        if (!ggml_backend_execution_mask_metadata(op,logical,logical_mask)) return false;
+        op=&logical;
+    }
     const auto * q = op->src[0];
     const auto * m = op->src[3];
     if (k.type != op->src[1]->type || v.type != op->src[2]->type ||
@@ -427,7 +451,8 @@ static bool resume_launch(
         int32_t(v.nb[1]),int32_t(v.nb[2]),int64_t(v.nb[3]),
         int32_t(m->ne[1]),int32_t(1),int32_t(1),
         int32_t(m->nb[1]),int32_t(m->nb[2]),int64_t(m->nb[3]),
-        reinterpret_cast<float *>(base),int(first),int(first+k.ne[1]),first == 0,last);
+        reinterpret_cast<float *>(base),int(first),int(first+k.ne[1]),first == 0,last,
+        op->src[5] ? static_cast<const int32_t *>(op->src[5]->data) : nullptr);
     CUDA_CHECK(cudaGetLastError());
     if (last) {
         if (plan.splits > 1) {
@@ -496,7 +521,7 @@ static bool resume_spans(ggml_backend_t backend, const ggml_tensor * op, ggml_ba
     const span scratch{base,base+capacity};
     span public_ranges[3];
     for (int i=0;i<3;++i) {
-        if (!tensor_span(backend,i == 0 ? q : i == 1 ? op->src[3] : op,public_ranges[i]) ||
+        if (!tensor_span(backend,i == 0 ? q : i == 1 ? (op->src[5] ? op->src[5] : op->src[3]) : op,public_ranges[i]) ||
                 overlap(scratch,public_ranges[i])) return false;
     }
     ggml_cuda_kv_span descriptors[3];
@@ -564,7 +589,17 @@ static bool resume(
         span range;
         if (!tensor_span(backend,op,range) || overlap(scratch,range)) return false;
         for (int i=0;i<4;++i)
-            if (!tensor_span(backend,op->src[i],range) || overlap(scratch,range)) return false;
+            if (!tensor_span(backend,i == 3 && op->src[5] ? op->src[5] : op->src[i],range) || overlap(scratch,range)) return false;
+        if (op->src[5]) {
+            ggml_tensor global_k=*k, global_v=*v, logical=*op;
+            global_k.ne[1]=global_v.ne[1]=int64_t(tokens);
+            logical.src[1]=&global_k; logical.src[2]=&global_v;
+            const ggml_cuda_kv_span source{static_cast<const char *>(k->data),static_cast<const char *>(v->data),
+                int32_t(first),int32_t(k->ne[1]),int64_t(k->nb[1]),int64_t(v->nb[1]),int64_t(k->nb[2]),int64_t(v->nb[2])};
+            auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
+            return ggml_cuda_flash_attn_ext_mma_f16_resume(ctx,&logical,&source,1,reinterpret_cast<void *>(base),capacity,
+                first,first+size_t(k->ne[1]),tokens);
+        }
         ggml_tensor mask=*op->src[3];
         const uintptr_t mb=uintptr_t(ggml_backend_buffer_get_base(mask.buffer)), md=uintptr_t(mask.data);
         if (md < mb || md-mb < first*sizeof(half)) return false;
@@ -621,6 +656,7 @@ static bool resume(
     span touched;
     if (!tensor_span(backend,k,touched) || overlap(scratch,touched) ||
             !tensor_span(backend,v,touched) || overlap(scratch,touched)) return false;
+    if (op->src[5]) return resume_span_launch(backend,op,*k,*v,workspace,plan,kernel,first,plan.tokens,last);
     ggml_tensor global_mask = *op->src[3];
     const size_t mask_offset = first*sizeof(ggml_fp16_t);
     const auto mask_base = uintptr_t(ggml_backend_buffer_get_base(global_mask.buffer));
@@ -645,6 +681,12 @@ struct streamed_plan {
 // Sizing and dispatch consume one stock-selected description; no payload or full-context staging is needed.
 static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor * op,
         const ggml_kv_stream_span_plan_view & view, execution_style style, streamed_plan & output, bool metadata_checked = false) {
+    if (op && op->src[5] && !op->src[3]) {
+        if (style != execution_style::resumable) return plan_status::unsupported_geometry;
+        ggml_tensor logical{}, mask{};
+        if (!ggml_backend_execution_mask_metadata(op,logical,mask)) return plan_status::invalid_metadata;
+        return describe_streamed(backend,&logical,view,style,output,metadata_checked);
+    }
     ggml_cuda_kv_stream_attention_metadata metadata;
     const auto valid = describe_metadata(op, &view, metadata);
     if (valid != plan_status::success) return valid;
@@ -1089,6 +1131,7 @@ ggml_cuda_kv_stream_plan_status ggml_cuda_kv_stream_attention_plan_query(
         ggml_backend_t backend, const ggml_tensor * op, const ggml_kv_stream_span_plan_view * view,
         ggml_cuda_kv_stream_execution_style style, ggml_cuda_kv_stream_attention_plan & output) {
     if (!backend || !ggml_backend_is_cuda(backend)) return plan_status::unsupported_device_features;
+    if (op && op->src[5] && style == execution_style::native) return plan_status::unsupported_geometry;
     if (style > execution_style::resumable || (style == execution_style::native ? view != nullptr : view == nullptr))
         return plan_status::invalid_metadata;
     if (capture_active(backend)) return plan_status::unsupported_launch_resources;
@@ -1117,7 +1160,7 @@ ggml_cuda_kv_stream_plan_status ggml_cuda_kv_stream_attention_plan_query(
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{13,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
+    static const ggml_kv_stream_partial_ops ops{14,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows,mma_workspace,
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t max_queries,size_t tokens,size_t & bytes) {
             if (!max_queries || max_queries > 8) return false;
             size_t required=0;
@@ -1152,6 +1195,10 @@ const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
         [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t rows,size_t tokens,size_t & bytes) {
             if (!rows || rows > INT32_MAX || rows > tokens) return false;
             return mma_workspace_for_queries(backend,key,value,heads,kv_heads,rows,tokens,1,bytes,true);
+        },
+        [](ggml_backend_t backend,int32_t key,int32_t value,uint32_t heads,uint32_t kv_heads,uint32_t rows,size_t tokens) {
+            ggml_kv_stream_resume_plan plan;
+            return resume_plan(backend,key,value,heads,kv_heads,rows,tokens,plan) && plan.kernel_config[0] != 1;
         }};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);

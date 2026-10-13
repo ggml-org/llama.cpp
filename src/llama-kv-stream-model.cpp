@@ -70,6 +70,7 @@ struct llama_kv_stream_model::implementation {
     size_t decode_bytes = 0;
     size_t span_bytes = 0;
     size_t prefill_span_bytes = 0, prefill_bytes = 0;
+    bool compact_prefill_mask=false;
     std::array<model_lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::shared_ptr<void> prepared_copies;
     size_t prepared_copy_capacity = 0;
@@ -270,11 +271,15 @@ struct llama_kv_stream_model::implementation {
             case GGML_OP_FLASH_ATTN_EXT: {
                 uint32_t k_layer,v_layer; bool k_value,v_value;
                 if (!plane(op->src[1],k_layer,k_value) || !plane(op->src[2],v_layer,v_value) ||
-                        k_value || !v_value || k_layer != v_layer || !op->src[0] || !op->src[3] || op->src[4]) return false;
+                        k_value || !v_value || k_layer != v_layer || !op->src[0] || (!op->src[3] && !op->src[5]) || op->src[4]) return false;
+                ggml_tensor logical{}, mask{};
+                if (op->src[5] && (!compact_prefill_mask ||
+                        !ggml_backend_execution_mask_metadata(op,logical,mask))) return false;
                 float params[3]; std::memcpy(params,op->op_params,sizeof(params));
                 return params[0] > 0 && params[1] == 0 && params[2] == 0 && op->src[0]->ne[0] == 256 &&
                     op->src[0]->ne[1] > 0 && op->src[0]->ne[1] <= config.max_batch_rows &&
-                    op->src[0]->ne[2] == config.query_heads && op->src[0]->ne[3] == 1 && op->src[3]->type == GGML_TYPE_F16;
+                    op->src[0]->ne[2] == config.query_heads && op->src[0]->ne[3] == 1 &&
+                    (op->src[5] || op->src[3]->type == GGML_TYPE_F16);
             }
             default: return false;
         }
@@ -337,7 +342,7 @@ struct llama_kv_stream_model::implementation {
             return GGML_STATUS_FAILED;
         }
         float scale; std::memcpy(&scale,op->op_params,sizeof(scale));
-        const bool ok = session->attention(layer,op->src[0],op->src[3],op,scale);
+        const bool ok = session->attention(layer,op->src[0],op->src[5] ? op->src[5] : op->src[3],op,scale);
         if (!ok) LLAMA_LOG_WARN("%s: target attention failed at layer %u, rows %u\n",
             __func__, layer, queries);
         return ok ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
@@ -451,16 +456,21 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         if (!std::getenv("LLAMA_KV_STREAM_PREFILL_GATHER") && partial_ops && partial_ops->version >= 13 && partial_ops->prefill_workspace) {
             size_t bytes=0;
             bool available=true;
+            bool compact=partial_ops->version >= 14 && partial_ops->prefill_mask_bounds &&
+                !std::getenv("LLAMA_KV_STREAM_DENSE_MASK");
             const uint32_t maximum=uint32_t(std::min(size_t(config.max_batch_rows),s->host->layout().tokens));
             for (uint32_t rows=1;rows<=maximum;++rows) {
                 size_t bound=0;
                 if (!partial_ops->prefill_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
                         config.query_heads,config.host.shape.heads,rows,s->host->layout().tokens,bound)) { available=false; break; }
                 bytes=std::max(bytes,bound);
+                if (compact && !partial_ops->prefill_mask_bounds(config.backend,config.host.shape.type_k,config.host.shape.type_v,
+                        config.query_heads,config.host.shape.heads,rows,s->host->layout().tokens)) compact=false;
             }
             if (available) {
                 if (bytes > SIZE_MAX-s->prefill_bytes) return {};
                 s->prefill_span_bytes=bytes; s->prefill_bytes=bytes;
+                s->compact_prefill_mask=compact;
             }
         }
         const bool resume_capable = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") &&
@@ -787,6 +797,7 @@ bool llama_kv_stream_model::truncate(size_t tokens) { return !impl->mtp_owner &&
 size_t llama_kv_stream_model::tokens() const noexcept { return impl->session ? impl->session->tokens() : 0; }
 uint32_t llama_kv_stream_model::max_batch_rows() const noexcept { return impl->config.max_batch_rows; }
 bool llama_kv_stream_model::bounded_prefill() const noexcept { return impl->prefill_span_bytes != 0; }
+bool llama_kv_stream_model::compact_prefill_mask() const noexcept { return impl->compact_prefill_mask; }
 size_t llama_kv_stream_model::granted_bytes() const noexcept {
     if (impl->shared) return device_grant_bytes();
     return (impl->arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->arena.get())) : 0) +

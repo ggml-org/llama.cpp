@@ -26,6 +26,7 @@ struct llama_cparams {
     }
     bool kv_stream_decode = false;
     bool kv_stream_prefill = false;
+    bool kv_stream_mask = false;
     bool mtp_publish_host = false;
     bool mtp_span_attention = false;
     uint32_t serial_block_rows = 0; // separately owned block drafter, not an auxiliary MTP cache

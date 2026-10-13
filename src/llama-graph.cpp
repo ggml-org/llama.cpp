@@ -37,6 +37,13 @@ static ggml_tensor * build_attn_inp_kq_mask(
     const auto n_tokens = ubatch.n_tokens;
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
 
+    if (cparams.kv_stream_mask && !cparams.kv_stream_decode) {
+        ggml_tensor * res=ggml_new_tensor_2d(ctx,GGML_TYPE_I32,4,n_tokens);
+        ggml_set_input(res);
+        ggml_set_name(res,"attn_inp_kq_bounds");
+        return res;
+    }
+
     // flash attention requires an f16 mask
     const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
@@ -55,6 +62,10 @@ static bool can_reuse_kq_mask(
     const auto n_kv     = mctx->get_n_kv();
     const auto n_tokens = ubatch.n_tokens;
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+
+    const bool compact=cparams.kv_stream_mask && !cparams.kv_stream_decode;
+    if (compact || kq_mask->type == GGML_TYPE_I32) return compact && kq_mask->type == GGML_TYPE_I32 &&
+        kq_mask->ne[0] == 4 && kq_mask->ne[1] == n_tokens && kq_mask->ne[2] == 1 && kq_mask->ne[3] == 1;
 
     bool res = true;
 
@@ -529,6 +540,7 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     this->mctx = mctx;
 
     bool res = true;
+    res &= n_kv_cached == mctx->get_n_kv();
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
@@ -2827,8 +2839,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+        const bool compact_mask=kq_mask && kq_mask->type == GGML_TYPE_I32;
+        cur = ggml_flash_attn_ext(ctx0, q, k, v, compact_mask ? nullptr : kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        if (compact_mask) GGML_ASSERT(ggml_backend_execution_set_mask_bounds(cur,kq_mask));
         ggml_backend_execution_set_external_workspace(cur,
             cparams.mtp_publish_host ? cparams.mtp_span_attention : cparams.kv_stream_decode || cparams.kv_stream_prefill);
         if (cparams.kv_stream_prefill && !cparams.mtp_publish_host) ggml_backend_execution_set_verified_workspace(cur);
@@ -3013,6 +3027,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     const llama_kv_cache_context * mctx_cur) {
 
     auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
+    inp->n_kv_cached=mctx_cur->get_n_kv();
 
     {
         GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_iswa for SWA");

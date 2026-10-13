@@ -194,6 +194,7 @@ public:
     ggml_tensor * get_v_storage(int32_t il) const;
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
+    bool supports_mask_bounds() const;
 
     // The stream holding seq_id's cells.
     uint32_t get_stream(llama_seq_id seq_id) const;
@@ -430,6 +431,7 @@ public:
 
     uint32_t get_n_kv() const;
     bool kv_stream_begin(const llama_ubatch & ubatch, bool decode) const;
+    bool prepare_mask_bounds(const llama_ubatch & ubatch, bool causal) const;
     bool mtp_span_append(const llama_ubatch & ubatch) const;
 
     ggml_type type_k() const;
@@ -502,4 +504,5 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+    mutable std::vector<int32_t> mask_bounds;
 };

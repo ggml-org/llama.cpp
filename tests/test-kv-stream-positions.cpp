@@ -1,5 +1,6 @@
 #include "../src/llama-kv-stream-positions.h"
 #include "../src/llama-batch.h"
+#include "../ggml/src/ggml-backend-execution.h"
 #include "testing.h"
 
 #include <limits>
@@ -29,6 +30,50 @@ static llama_kv_cells cells_with(std::initializer_list<llama_pos> positions) {
 
 int main() {
     testing t;
+    t.test("compact_visibility_matches_stock_positions_and_padding", [](testing & t) {
+        auto cells=cells_with({0,1,2,2,2,10,11});
+        llama_pos positions[12]={0,2,2,0,1,2,0,1,0,0,0,0};
+        llama_seq_id seq=0;
+        llama_seq_id * sequences[3]={&seq,&seq,&seq};
+        int32_t counts[3]={1,1,1};
+        llama_ubatch batch{};
+        batch.n_tokens=3; batch.n_pos=4; batch.pos=positions; batch.seq_id=sequences;
+        batch.n_seq_id=counts; batch.n_seqs_unq=1; batch.seq_id_unq=&seq;
+        std::vector<int32_t> bounds;
+        for (uint32_t channels : {1u,4u}) for (bool causal : {false,true}) {
+            batch.n_pos=channels;
+            if (!t.assert_true(llama_kv_stream_mask_bounds(cells,7,256,batch,causal,bounds))) return;
+            t.assert_equal(size_t(12),bounds.size());
+            for (uint32_t query=0; query<3; ++query) {
+                ggml_backend_execution_mask_interval row;
+                std::memcpy(&row,bounds.data()+4*query,sizeof(row));
+                for (uint32_t token=0; token<256; ++token) {
+                    bool visible=token<7;
+                    if (visible && causal) {
+                        const auto position=cells.pos_get(token);
+                        visible=position <= positions[query];
+                        if (visible && channels == 4 && position == positions[query])
+                            visible=!cells.ext_get(token).is_2d_gt(positions[query+6],positions[query+3]);
+                    }
+                    if (!t.assert_equal(ggml_fp16_t(visible ? 0 : 0xfc00),
+                            ggml_backend_execution_mask_interval_value(row,int32_t(token)))) return;
+                }
+            }
+        }
+        const auto previous=bounds;
+        cells.rm(3);
+        t.assert_true(!llama_kv_stream_mask_bounds(cells,7,256,batch,true,bounds));
+        t.assert_true(bounds == previous);
+        cells=cells_with({0,1,2,2,2,10,11});
+        cells.ext_set(3,{0,9}); cells.ext_set(4,{0,0});
+        t.assert_true(!llama_kv_stream_mask_bounds(cells,7,256,batch,true,bounds));
+        t.assert_true(bounds == previous);
+        t.assert_true(!llama_kv_stream_mask_bounds(cells,7,6,batch,true,bounds));
+        t.assert_true(!llama_kv_stream_mask_bounds(cells,7,size_t(INT32_MAX)+1,batch,true,bounds));
+        seq=1;
+        t.assert_true(!llama_kv_stream_mask_bounds(cells,7,256,batch,true,bounds));
+        t.assert_true(bounds == previous);
+    });
     t.test("native_mixed_rows_preserve_serial_positions_and_payload_bounds", [](testing & t) {
         llama_batch_ext batch(8,2,2,1,nullptr,64,4);
         auto text = [&](llama_pos position) {

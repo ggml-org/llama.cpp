@@ -41,7 +41,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         float * resume_state, int chunk_first, int chunk_end, bool reset_state, bool finish_state,
-        int work_y, int work_count, int output_y, int output_count) {
+        int work_y, int work_count, int output_y, int output_count, const int32_t * mask_bounds = nullptr) {
     // Ring reuse records an event after resumed launches, so they must not signal completion before their final read.
     if constexpr (!resumable) ggml_cuda_pdl_lc();
 #ifdef FLASH_ATTN_AVAILABLE
@@ -113,7 +113,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
 
-    const half * maskh  = (const half  *) (mask + nb33*(sequence % ne33) + nb31*ic0);
+    const half * maskh  = mask ? (const half *) (mask + nb33*(sequence % ne33) + nb31*ic0) : nullptr;
 
     const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
@@ -276,10 +276,10 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
     K     += local_first * nb11;
     V     += local_first * nb21;
     // K/V addresses are span-local, while the causal mask retains global token coordinates.
-    maskh += resumable ? first_owned : local_first;
+    if (maskh) maskh += resumable ? first_owned : local_first;
     for (int k_VKQ_0 = first_owned; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += work_count*nthreads,
              // Increment pointers after each loop:
-             K += work_count*nthreads*nb11, V += work_count*nthreads*nb21, maskh += work_count*nthreads) {
+             K += work_count*nthreads*nb11, V += work_count*nthreads*nb21, maskh = maskh ? maskh+work_count*nthreads : nullptr) {
 
         // Calculate KQ tile and keep track of new maximum KQ values:
         float KQ_reg[ncols]; // KQ in registers.
@@ -304,8 +304,16 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                     sum = logit_softcap*tanhf(sum);
                 }
 
-                if (token_valid && mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
-                    sum += slope*__half2float(maskh[j*ne11 + i_KQ]);
+                if (token_valid && (mask || mask_bounds) && (ncols == 1 || ic0 + j < int(ne01.z))) {
+                    half mask_value;
+                    if (mask_bounds) {
+                        const int32_t * row=mask_bounds+4*(ic0+j);
+                        const int token=k_VKQ_0+i_KQ;
+                        const bool visible=row[3] == 1 && row[0] >= 0 && row[0] <= row[1] && row[1] <= row[2] &&
+                            token >= row[0] && token < row[1];
+                        mask_value=half(visible ? 0.f : -INFINITY);
+                    } else mask_value=maskh[j*ne11+i_KQ];
+                    sum += slope*__half2float(mask_value);
                 }
 
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], sum + FATTN_KQ_MAX_OFFSET);
@@ -661,9 +669,9 @@ static __global__ void flash_attn_ext_vec_resume(
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
-        float * state, int first, int end, bool reset, bool finish) {
+        float * state, int first, int end, bool reset, bool finish, const int32_t * mask_bounds = nullptr) {
     flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true,tail_safe>(
-        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31,nb32,nb33,state,first,end,reset,finish,int(blockIdx.y),int(gridDim.y),int(blockIdx.y),int(gridDim.y));
+        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31,nb32,nb33,state,first,end,reset,finish,int(blockIdx.y),int(gridDim.y),int(blockIdx.y),int(gridDim.y),mask_bounds);
 
 }
 

@@ -550,6 +550,11 @@ static bool mma_span_launch_make(
         size_t span_count, mma_span_launch & output, ggml_cuda_kv_stream_plan_status * failure = nullptr,
         bool resumable = false) {
     using status = ggml_cuda_kv_stream_plan_status;
+    if (dst && dst->src[5] && !dst->src[3]) {
+        ggml_tensor logical{}, mask{};
+        return ggml_backend_execution_mask_metadata(dst,logical,mask) &&
+            mma_span_launch_make(ctx,&logical,span_count,output,failure,resumable);
+    }
     if (failure) *failure = status::unsupported_geometry;
     if (!dst || dst->op != GGML_OP_FLASH_ATTN_EXT || !span_count || span_count > 3 ||
             ggml_get_op_params_i32(dst,4) != 0) return false;
@@ -808,6 +813,14 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         const ggml_cuda_kv_span * spans, size_t count,
         void * workspace, const mma_span_launch & plan,
         ggml_cuda_fattn_mma_resume_control control = {}) {
+    if (dst && dst->src[5] && !dst->src[3]) {
+        ggml_tensor logical{}, mask{};
+        if (!ggml_backend_execution_mask_metadata(dst,logical,mask)) return false;
+        control.mask_bounds=static_cast<const int32_t *>(dst->src[5]->data);
+        if (!control.mask_bounds) return false;
+        return ggml_cuda_flash_attn_ext_mma_f16_spans_case<ncols1,ncols2>(
+            ctx,&logical,spans,count,workspace,plan,control);
+    }
     constexpr int DKQ = 256, DV = 256;
     auto kernel=ggml_cuda_kv_stream_mma_kernel(dst->src[1]->type,dst->src[2]->type,ncols1,ncols2,plan.resumable);
     if (!kernel) return false;
