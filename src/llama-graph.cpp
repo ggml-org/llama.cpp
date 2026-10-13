@@ -3058,10 +3058,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // the KV values are padded with zeros up to the KV dimension of the mask
     const int64_t n_kv_pad = kq_mask->ne[0] - k->ne[2];
-    if (n_kv_pad > 0) {
-        k = ggml_pad(ctx0, k, 0, 0, n_kv_pad, 0);
-        v = ggml_pad(ctx0, v, 0, 0, n_kv_pad, 0);
-    }
+
+    k = ggml_pad(ctx0, k, 0, 0, n_kv_pad, 0);
+    v = ggml_pad(ctx0, v, 0, 0, n_kv_pad, 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
