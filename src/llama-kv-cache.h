@@ -265,6 +265,9 @@ private:
         ggml_tensor * k;
         ggml_tensor * v;
 
+        ggml_tensor * k_scale;
+        ggml_tensor * v_scale;
+
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
     };

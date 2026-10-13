@@ -315,6 +315,9 @@ endif()
 
 llama_build(test-backend-ops.cpp LINK ggml)
 
+llama_build_and_test(test-kv-cache.cpp)
+target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
 llama_build_and_test(test-tiled-mulmat.cpp LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")

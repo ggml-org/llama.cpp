@@ -246,7 +246,7 @@ llama_kv_cache::llama_kv_cache(
 
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, k, v, k_stream, v_stream, });
+        layers.push_back({ il, k, v, model.layers[il].k_cache_scale, model.layers[il].v_cache_scale, k_stream, v_stream, });
     }
 
     if (reuse) {
@@ -1351,13 +1351,13 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
     const int32_t ikv = map_layer_ids.at(il);
 
-    return model.layers[layers[ikv].il].k_cache_scale;
+    return layers[ikv].k_scale;
 }
 
 ggml_tensor * llama_kv_cache::get_v_scale(int32_t il) const {
     const int32_t ikv = map_layer_ids.at(il);
 
-    return model.layers[layers[ikv].il].v_cache_scale;
+    return layers[ikv].v_scale;
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
