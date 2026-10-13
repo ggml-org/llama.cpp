@@ -87,7 +87,6 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             break;
         default:
             GGML_ABORT("fatal error");
-            break;
     }
 }
 

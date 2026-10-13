@@ -348,7 +348,6 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
             break;
         default:
             GGML_ASSERT(false && "fatal error");
-            break;
     }
 }
 
