@@ -654,7 +654,7 @@ static plan_status describe_streamed(ggml_backend_t backend, const ggml_tensor *
     if (family == kernel_family::none) return plan_status::stock_unavailable;
     if (!op->src[3] || op->src[4] || ggml_get_op_params_i32(op,4) != 0 ||
             metadata.head_dim_k != 256 || metadata.head_dim_v != 256 ||
-            metadata.queries > 8) return plan_status::unsupported_geometry;
+            (metadata.queries > 8 && family != kernel_family::mma)) return plan_status::unsupported_geometry;
     if (op->src[3]->nb[1] < size_t(op->src[1]->ne[1])*sizeof(half) || op->src[3]->nb[1]%sizeof(half))
         return plan_status::unsupported_geometry;
     float params[3]; std::memcpy(params, op->op_params, sizeof(params));

@@ -27,7 +27,7 @@ static inline ggml_cuda_kv_stream_attention_path ggml_cuda_kv_stream_attention_s
 
 // Match stock columns for admitted head-256 groups; Turing-only builds cap tiles at 32 columns.
 static inline int ggml_cuda_kv_stream_mma_ncols1(uint32_t queries, int gqa_ratio, bool turing_only = false) {
-    if (!queries || queries > 8 || (gqa_ratio != 2 && gqa_ratio != 6 && gqa_ratio != 8)) return 0;
+    if (!queries || queries > uint32_t(INT32_MAX) || (gqa_ratio != 2 && gqa_ratio != 6 && gqa_ratio != 8)) return 0;
     const int ncols2 = gqa_ratio > 4 ? 8 : 2;
     if (queries <= uint32_t(8/ncols2)) return 8/ncols2;
     if (queries <= uint32_t(16/ncols2)) return 16/ncols2;

@@ -561,7 +561,7 @@ static bool mma_span_launch_make(
             dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst) ||
             dst->ne[0] != 256 || dst->ne[1] != q->ne[2] || dst->ne[2] != q->ne[1] || dst->ne[3] != 1 ||
             q->ne[0] != 256 || v->ne[0] != 256 ||
-            k->ne[0] != 256 || q->ne[1] < 1 || q->ne[1] > 8 ||
+            k->ne[0] != 256 || q->ne[1] < 1 || q->ne[1] > INT32_MAX ||
             k->ne[2] <= 0 || v->ne[2] != k->ne[2] || q->ne[2] <= 0 || q->ne[2] > 65535 ||
             q->ne[2]%k->ne[2] ||
             (q->ne[2]/k->ne[2] != 2 && q->ne[2]/k->ne[2] != 6 && q->ne[2]/k->ne[2] != 8) ||
@@ -569,6 +569,7 @@ static bool mma_span_launch_make(
             k->ne[1] != v->ne[1] || k->ne[1] <= 0 || k->ne[1] > INT_MAX ||
             mask->type != GGML_TYPE_F16 || mask->ne[0] < k->ne[1] ||
             mask->ne[1] < q->ne[1] || mask->ne[2] != 1 || mask->ne[3] != 1) return false;
+    if (q->ne[1] > INT32_MAX/512/q->ne[2]) return false;
     float params[3];
     memcpy(params,dst->op_params,sizeof(params));
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;

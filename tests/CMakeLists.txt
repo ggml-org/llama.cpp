@@ -432,6 +432,8 @@ if (GGML_CUDA AND GGML_CUDA_FA)
     set_target_properties(test-cuda-fattn-mma-resume PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_ARCHITECTURES "${FATTN_TEST_ARCHITECTURES}")
     llama_test(test-cuda-fattn-mma-resume)
     set_tests_properties(test-cuda-fattn-mma-resume PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME test-cuda-fattn-prefill COMMAND test-cuda-fattn-mma-resume --prefill-only)
+    set_tests_properties(test-cuda-fattn-prefill PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 
     add_executable(test-cuda-fattn-resume test-cuda-fattn-resume.cu)
     target_include_directories(test-cuda-fattn-resume PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-cuda)

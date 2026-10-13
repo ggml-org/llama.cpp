@@ -1,4 +1,6 @@
 #include "fattn-mma-f16.cuh"
+#include "fattn.cuh"
+#include "../ggml/src/ggml-backend-impl.h"
 
 #include <algorithm>
 #include <atomic>
@@ -214,7 +216,7 @@ static void check_attention(int queries, int active, int count, bool interleaved
     check_cuda(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&span_occupancy,span_kernel,threads,span_shared));
     if (!span_occupancy) throw std::runtime_error("span kernel has no resource-valid resident block");
     ggml_cuda_fattn_stream_k_plan plan;
-    const int tiles = capacity/rows, dst_tiles = span_fixture::heads;
+    const int tiles = capacity/rows, dst_tiles = (queries+columns-1)/columns*span_fixture::heads;
     if (!ggml_cuda_fattn_stream_k_plan_make(dst_tiles,tiles,occupancy*properties.multiProcessorCount,
             cc >= GGML_CUDA_CC_ADA_LOVELACE,false,plan)) throw std::runtime_error("invalid stock launch plan");
     const int blocks = split_mode == 1 ? 1 : split_mode == 2 ? 3 : plan.blocks;
@@ -393,11 +395,13 @@ static void check_attention(int queries, int active, int count, bool interleaved
         if (blocks%dst_tiles == 0 && blocks > dst_tiles) {
             flash_attn_stream_k_fixup_uniform<dim,columns,8><<<dim3(dst_tiles,columns,8),dim>>>(
                 out,fixup,queries,heads,span_fixture::heads,blocks,ratio,blocks/dst_tiles,
-                init_fastdiv_values(dst_tiles),init_fastdiv_values(1),init_fastdiv_values(1));
+                init_fastdiv_values(dst_tiles),init_fastdiv_values((queries+columns-1)/columns),
+                init_fastdiv_values((queries+columns-1)/columns));
         } else if (dst_tiles%blocks != 0) {
             flash_attn_stream_k_fixup_general<dim,columns,8><<<dim3(blocks,columns,8),dim>>>(
                 out,fixup,queries,heads,ratio,tiles*dst_tiles,
-                init_fastdiv_values(tiles*dst_tiles),init_fastdiv_values(tiles),init_fastdiv_values(tiles),init_fastdiv_values(tiles));
+                init_fastdiv_values(tiles*dst_tiles),init_fastdiv_values(tiles*((queries+columns-1)/columns)),
+                init_fastdiv_values(tiles*((queries+columns-1)/columns)),init_fastdiv_values(tiles));
         }
         check_cuda(cudaGetLastError());
         output_bytes[implementation].resize(out_bytes+2*guard);
@@ -531,6 +535,25 @@ static size_t check_encoded_tile_type(ggml_backend_t backend, bool quick) {
     return cases;
 }
 
+// Prefill keeps the complete query batch; the native column bucket covers several query tiles.
+static void check_prefill_requirements(ggml_backend_t backend,int queries,ggml_type key,ggml_type value) {
+    ggml_context_ptr ctx(ggml_init({16*ggml_tensor_overhead()+ggml_graph_overhead(),nullptr,true}));
+    auto * q=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_F32,256,queries,12,1);
+    auto * k=ggml_new_tensor_4d(ctx.get(),key,256,262144,2,1);
+    auto * v=ggml_new_tensor_4d(ctx.get(),value,256,262144,2,1);
+    auto * mask=ggml_new_tensor_4d(ctx.get(),GGML_TYPE_F16,262144,queries,1,1);
+    auto * op=ggml_flash_attn_ext(ctx.get(),q,k,v,mask,1.0f/16,0,0);
+    ggml_prec_set_acc(op,GGML_PREC_F32);
+    auto & cuda=*static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_kv_stream_workspace_requirements requirements;
+    ggml_cuda_kv_stream_plan_status failure;
+    if (!ggml_cuda_flash_attn_ext_mma_f16_spans_requirements(cuda,op,1,requirements,&failure))
+        throw std::runtime_error("prefill span requirements rejected: width="+std::to_string(queries));
+    if (!requirements.known || !requirements.backend_scratch_known || requirements.output_extra_bytes ||
+            !requirements.scratch_bytes || requirements.scratch_bytes > 32*1024*1024)
+        throw std::runtime_error("prefill span requirements contain unbounded conversion planes");
+}
+
 int main(int argc, char ** argv) {
     const bool long_benchmark=argc == 2 && !std::strcmp(argv[1],"--benchmark-long");
     benchmark_mma=long_benchmark || (argc == 2 && !std::strcmp(argv[1],"--benchmark"));
@@ -542,6 +565,20 @@ int main(int argc, char ** argv) {
     ggml_backend_ptr backend(ggml_backend_init_by_name("CUDA0",nullptr));
     if (!backend) return 77;
     try {
+        if (argc == 2 && !std::strcmp(argv[1],"--prefill-only")) {
+            for (int queries : {9,16,64,129,256,512,1024}) {
+                check_prefill_requirements(backend.get(),queries,GGML_TYPE_F16,GGML_TYPE_F16);
+                check_prefill_requirements(backend.get(),queries,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0);
+                check_attention<8>(queries,queries+1023,3,true,0,1.0f);
+                for (uint32_t flags : {0u,3u}) {
+                    quant_span_fixture encoded(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                        queries+1023,(queries+1278)/256*256,3,true,flags,false,false);
+                    check_attention<8,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0>(queries,queries+1023,3,true,0,1.0f,&encoded);
+                }
+            }
+            std::puts("Prefill MMA widths 9-1024 preserve stock output and checkpoint bits");
+            return 0;
+        }
         if (argc == 2 && !std::strcmp(argv[1],"--case-mma-checkpoint")) {
             check_attention<1>(1,1023,3,false,1,16.0f);
             std::puts("MMA checkpoint stress case matches stock");

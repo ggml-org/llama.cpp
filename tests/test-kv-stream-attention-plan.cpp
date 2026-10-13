@@ -58,8 +58,21 @@ int main() {
             }
         }
     });
+    t.test("prefill_mma_widths_preserve_stock_buckets_and_multiple_query_tiles", [](testing & t) {
+        for (uint32_t queries : {9u,16u,17u,32u,33u,64u,65u,129u,256u,512u,1024u}) {
+            for (int ratio : {2,6,8}) for (bool turing : {false,true}) {
+                const int groups=ratio > 4 ? 8 : 2;
+                const int expected=queries <= uint32_t(8/groups) ? 8/groups :
+                    queries <= uint32_t(16/groups) ? 16/groups :
+                    queries <= uint32_t(32/groups) || turing ? 32/groups : 64/groups;
+                t.assert_equal(expected,ggml_cuda_kv_stream_mma_ncols1(queries,ratio,turing));
+                t.assert_equal(int((queries+uint32_t(expected)-1)/uint32_t(expected)),
+                    ggml_cuda_kv_stream_mma_query_tiles(queries,ratio,turing));
+            }
+        }
+    });
     t.test("invalid_mma_widths_and_groups_do_not_select_a_tile", [](testing & t) {
-        for (uint32_t queries : {0u, 9u, 16u, std::numeric_limits<uint32_t>::max()})
+        for (uint32_t queries : {0u, std::numeric_limits<uint32_t>::max()})
             for (int ratio : {2, 6, 8})
                 t.assert_equal(0, ggml_cuda_kv_stream_mma_ncols1(queries, ratio));
         for (int ratio : {-1, 0, 1, 3, 4, std::numeric_limits<int>::max()})
