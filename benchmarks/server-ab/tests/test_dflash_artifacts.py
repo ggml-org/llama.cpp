@@ -552,5 +552,48 @@ class OrdinaryControls(unittest.TestCase):
             self.controls.fit_ledger(dict(row, context=1000), trace, 262144)
 
 
+class ProfileAnalysisTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("dflash_profile", SCRIPT.parent / "analyze_dflash_profile.py")
+        self.profile = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.profile)
+
+    def test_interval_union_does_not_double_count_overlap(self):
+        self.assertEqual(self.profile.interval_ns([(0, 10), (5, 15), (15, 20), (30, 35)]), 25)
+        self.assertEqual(self.profile.interval_ns([]), 0)
+        with self.assertRaises(ValueError):
+            self.profile.interval_ns([(10, 9)])
+
+    def test_async_work_follows_submission_not_gpu_completion(self):
+        ranges = [(0, 100, 7, "target/tokens/256"), (100, 200, 7, "draft/tokens/8")]
+        runtime = [(10, 20, 7, 11, "cudaLaunchKernel"), (120, 130, 7, 12, "cudaMemcpyAsync"),
+                   (140, 160, 7, 0, "cudaStreamSynchronize")]
+        kernels = [(150, 180, 11, "flash_attn_ext_f16_resume"), (300, 310, 99, "unknown")]
+        copies = [(170, 190, 12, 1000, 1), (175, 195, 12, 1000, 1)]
+        result = self.profile.summarize_records(ranges, runtime, kernels, copies)
+        self.assertEqual(result["target_prefill"]["kernel_ns"], 30)
+        self.assertEqual(result["draft_prediction"]["h2d_bytes"], 2000)
+        self.assertEqual(result["draft_prediction"]["h2d_active_ns"], 25)
+        self.assertEqual(result["draft_prediction"]["cpu_wait_ns"], 20)
+        self.assertEqual(result["unattributed"]["kernel_ns"], 10)
+
+    def test_missing_ranges_never_fabricates_phase_attribution(self):
+        result = self.profile.summarize_records([], [], [(0, 10, 1, "convert_rows")], [])
+        self.assertEqual(result["unattributed"]["kernel_ns"], 10)
+        self.assertEqual(result["unattributed"]["kernel_categories"]["conversion"]["calls"], 1)
+
+    def test_inline_converter_type_does_not_relabel_the_attention_kernel(self):
+        self.assertEqual(self.profile.kernel_category("flash_attn_ext_f16<converted_span>"),
+                         "attention_including_checkpoint")
+        self.assertEqual(self.profile.kernel_category("flash_attn_ext_mma_convert_rows_kernel"), "conversion")
+        self.assertEqual(self.profile.kernel_category("flash_attn_ext_stream_k_fixup"), "attention_finalization")
+        self.assertEqual(self.profile.kernel_category("mul_mat_q_stream_k_fixup"), "weight_matmul")
+
+    def test_model_compute_is_separate_from_attention(self):
+        self.assertEqual(self.profile.kernel_category("mul_mat_vec_q"), "weight_matmul")
+        self.assertEqual(self.profile.kernel_category("blackwell_gemm"), "weight_matmul")
+        self.assertEqual(self.profile.kernel_category("gated_delta_net_chunk"), "recurrent")
+
+
 if __name__ == "__main__":
     unittest.main()

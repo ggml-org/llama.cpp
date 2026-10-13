@@ -797,3 +797,28 @@ The independent target-pair controls now match native for Q5_1/Q4_1, Q4_1/Q5_1, 
 The D=1, b=256/ub=4 control exposed a separate handoff error: startup measured the admitted two-row DFlash block, but the runtime rebuild retained embedded MTP's four-row reservation. Draft warmup and the first prediction failed inside the borrowed range even though ordinary fallback completed the response. Trace validation correctly rejected those runs. A common `serial_graph_reserve_rows()` now keeps startup and rebuild aligned with the declared block width while preserving the legacy embedded-MTP ceiling. The new test reproduces both undersized two-row and wider eight-row mismatches before the fix, then passes on host and ASan/UBSan (12 phase cases, 255 assertions). The corrected control has no failed traced process and matches all 256 token IDs and 2765 records (`benchmarks/results/pf4-depth1-ub4-fixed`).
 
 The expanded CUDA attention suite passes 15 cases/3127 assertions, including the BF16 tail/page regression. Memcheck and synccheck each report zero errors. Full-context execution, further lifecycle controls and PF5/PF6 performance acceptance remain open.
+
+### PF4 full-context gate and PF5 measured publication tuning (2026-10-13)
+
+The non-UVM IQ4_XS/Q8-K/Q4-V target with a Q8/Q4 DFlash draft, D=7, b/ub=256/256 and a 1024 MiB arena completes 261873 prompt tokens and 256 generated tokens at context capacity 262144. This reserves response space rather than overflowing the native limit. The sample records 494.07 prefill and 19.96 accepted decode tok/s with no allocation or execution failure (`benchmarks/results/pf4-full-context-262k`). PF4's anchor full-execution gate is now met; this is not a claim that every type/batch/device fits that same budget.
+
+The independent target TG1-TG8 rollback control passes 1888 assertions. Embedded MTP lengths 1/2/3 match native logits, features, KV and recurrent state through 12 forced-decision rounds at 16K, with both target and MTP streaming forced by the small grant (3262/3476/3607 records per mode). The DFlash D=1/3/7 recovery control passes 490 assertions. These controls remain required after pipeline changes.
+
+PF5 profiled resident (16K), onset (40K), moderate (80K) and heavy (144K) histories with equal 1024 MiB parents. The profiler attributes GPU work by the CPU launch correlation, not completion time; it preserves unattributed events, counts overlapping device/copy intervals once and distinguishes weight matmul, recurrent compute, attention, dedicated conversion, finalization and writer kernels. Inline conversion/checkpoint work stays included in attention. CPU range duration is not a denominator for a utilization percentage when queued work finishes after that range.
+
+The trace identifies a low-risk submission optimization: staged recurrent snapshots were downloaded individually even when a plane's rows were physically contiguous. The common stage owner now prepares bounded raw read spans using the backend's normal tensor initialization. Publication waits until every row of that plane is produced, then queues one prefix read; padded layouts retain individual reads. Short captures do not overwrite untouched historical rows. The existing two-slot completion fences protect source storage and metadata until consumption; prepared stream/event resources and physical VRAM/host snapshot sizes do not grow.
+
+At 80K, target-prefill D2H calls fall from 226809 to 43065 and verification calls from 65351 to 12647, with identical transferred bytes (360.878 GB prefill, 100.230 GB verification). Total CUDA memcpy/event-record/stream-wait API time in the instrumented request falls by about 0.48 seconds. Equal-budget uninstrumented samples show only small throughput changes: prefill +0.07 to +0.16 percent and decode -0.06 to +1.16 percent across the four histories. This is a measured reduction in driver submission work, not a statistically established large token-speed gain. Results and matched captures are under `benchmarks/results/pf5-packed-*`; the 80K follow-up profile is `pf5-packed-81920-nsight-only`.
+
+TDD covers padding on either plane, partial snapshot sets, reversed publication order, three layers sharing two slots, delayed consumption, failures after either packed transfer and cancellation/retry. Host and ASan/UBSan pass 17 cases/3324 assertions; CUDA passes 19 cases/3324 assertions with zero memcheck/synccheck errors. DFlash's 490-assertion and MTP's 42-assertion exact controls remain green after batching.
+
+The page-sized writer grant added in PF4 is also measured against an explicit old 32 KiB grant, not the larger idle ring. For 256 Q8 rows, median staged write time falls from 236.11 to 64.32 microseconds (nine reads/copies to one); at 512 rows it falls from 483.30 to 125.94 microseconds (18 to two). This microbenchmark is not an end-to-end speedup claim. The grant uses generic row/backend quotes and changes no encoded bytes.
+
+Reproduce the profiling summary after exporting an existing Nsight report:
+
+```bash
+nsys export --type sqlite --output /path/to/profile.sqlite /path/to/profile.nsys-rep
+python benchmarks/analyze_dflash_profile.py /path/to/profile.sqlite
+```
+
+PF5's sampled pipeline tuning is qualified on this hardware/configuration. PF6's full sweep, maximum-fit comparisons, remaining crossed/unsupported cases and final production restoration are still open. Do not infer full-context native numerical equivalence from the successful physical-fit run alone.

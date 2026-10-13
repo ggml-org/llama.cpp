@@ -145,6 +145,7 @@ struct llama_recurrent_stage_buffer::implementation {
     ggml_context * ctx = nullptr;
     ggml_backend_buffer_t backing = nullptr;
     std::vector<ggml_tensor *> tensors;
+    std::vector<ggml_tensor *> plane_spans;
     std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> lease{nullptr,ggml_backend_memory_lease_free};
 
     ~implementation() {
@@ -168,15 +169,18 @@ std::unique_ptr<llama_recurrent_stage_buffer> llama_recurrent_stage_buffer::crea
         auto state=std::make_unique<implementation>();
         if (!llama_recurrent_stage_layout_make(
                 snapshots,slots,ggml_backend_buft_get_alignment(device_type),state->planned)) return {};
-        size_t count=0,metadata_bytes=0;
+        size_t count=0,span_count=0,metadata_count=0,metadata_bytes=0;
         if (!multiply(state->planned.layers.size(),state->planned.depth,count) ||
                 !multiply(count,slots,count) ||
                 !multiply(count,2,count) ||
-                !multiply(count,ggml_tensor_overhead(),metadata_bytes) ||
+                !multiply(state->planned.layers.size(),slots,span_count) || !multiply(span_count,2,span_count) ||
+                !add(count,span_count,metadata_count) ||
+                !multiply(metadata_count,ggml_tensor_overhead(),metadata_bytes) ||
                 !add(metadata_bytes,4096,metadata_bytes)) return {};
         state->ctx=ggml_init({metadata_bytes,nullptr,true});
         if (!state->ctx) return {};
         state->tensors.resize(count,nullptr);
+        state->plane_spans.resize(span_count,nullptr);
         for (uint32_t slot=0;slot<slots;++slot) {
             for (size_t layer=0;layer<snapshots.layers.size();++layer) {
                 if (!snapshots.layers[layer].enabled) continue;
@@ -220,6 +224,18 @@ std::unique_ptr<llama_recurrent_stage_buffer> llama_recurrent_stage_buffer::crea
                                 ggml_backend_tensor_alloc(state->backing,tensor,base+offset) != GGML_STATUS_SUCCESS) return {};
                     }
                 }
+                const auto & part=state->planned.layers[layer];
+                for (bool value : {false,true}) {
+                    const size_t row=value ? part.s_snapshot_bytes : part.r_snapshot_bytes;
+                    if (row != (value ? part.s_stride : part.r_stride)) continue;
+                    size_t bytes=0,offset=0,one=0;
+                    if (!multiply(row,snapshots.depth,bytes) || bytes > size_t(INT64_MAX) ||
+                            !llama_recurrent_stage_region(state->planned,layer,value,1,slot,offset,one) || one != row) return {};
+                    auto * span=ggml_new_tensor_1d(state->ctx,GGML_TYPE_I8,int64_t(bytes));
+                    if (ggml_backend_buft_get_alloc_size(device_type,span) > bytes ||
+                            ggml_backend_tensor_alloc(state->backing,span,base+offset) != GGML_STATUS_SUCCESS) continue;
+                    state->plane_spans[(size_t(slot)*snapshots.layers.size()+layer)*2+size_t(value)]=span;
+                }
             }
         }
         return std::unique_ptr<llama_recurrent_stage_buffer>(new llama_recurrent_stage_buffer(std::move(state)));
@@ -238,6 +254,11 @@ ggml_tensor * llama_recurrent_stage_buffer::tensor(
     return s.tensors[s.index(layer,value,snapshot,slot)];
 }
 ggml_backend_buffer_t llama_recurrent_stage_buffer::buffer() const noexcept { return impl->backing; }
+ggml_tensor * llama_recurrent_stage_buffer::plane_span(size_t layer, bool value, uint32_t slot) const noexcept {
+    const auto & s=*impl;
+    if (layer >= s.planned.layers.size() || slot >= s.planned.slots) return nullptr;
+    return s.plane_spans[(size_t(slot)*s.planned.layers.size()+layer)*2+size_t(value)];
+}
 size_t llama_recurrent_stage_buffer::bytes() const noexcept { return impl->planned.total_bytes; }
 const llama_recurrent_stage_layout & llama_recurrent_stage_buffer::layout() const noexcept { return impl->planned; }
 
@@ -372,20 +393,33 @@ bool llama_recurrent_spill_bank::implementation::publish_node(
     }
     size_t host_offset=0,bytes=0;
     if (!region(layer,value,snapshot,host_offset,bytes) || !bind(p.copy_backend)) return false;
-    const size_t ready_index=(size_t(p.current_slot)*layout.depth+snapshot-1)*2+size_t(value);
-    auto * ready=p.ready_events[ready_index];
-    if (ready) {
-        ggml_backend_event_record(ready,producer);
-        ggml_backend_event_wait(p.copy_backend,ready);
-    } else {
-        ggml_backend_synchronize(producer);
-    }
-    auto * host_base=static_cast<uint8_t *>(ggml_backend_buffer_get_base(host));
     // Submission may fail after the destination was modified; cancellation must invalidate it.
     touched[index(layer,value,snapshot)]=1;
     ++submitted;
-    try { ggml_backend_tensor_get_async(p.copy_backend,op->src[0],host_base+host_offset,0,bytes); }
-    catch (...) { submission_failed=true; return false; }
+    const auto * source=op->src[0];
+    bool ready_to_copy=true;
+    if (auto * span=p.stage->plane_span(layer,value,p.current_slot)) {
+        const uint32_t count=value ? p.expected_s : layout.depth;
+        for (uint32_t row=1;row<=count;++row) ready_to_copy &= touched[index(layer,value,row)] != 0;
+        if (ready_to_copy) {
+            size_t row_bytes=0;
+            if (!region(layer,value,1,host_offset,row_bytes) || !multiply(row_bytes,count,bytes) ||
+                    bytes > ggml_nbytes(span) || host_offset > layout.host_snapshot_bytes ||
+                    bytes > layout.host_snapshot_bytes-host_offset) return false;
+            source=span;
+        }
+    }
+    if (ready_to_copy) {
+        const size_t ready_index=(size_t(p.current_slot)*layout.depth+snapshot-1)*2+size_t(value);
+        auto * ready=p.ready_events[ready_index];
+        if (ready) {
+            ggml_backend_event_record(ready,producer);
+            ggml_backend_event_wait(p.copy_backend,ready);
+        } else ggml_backend_synchronize(producer);
+        auto * host_base=static_cast<uint8_t *>(ggml_backend_buffer_get_base(host));
+        try { ggml_backend_tensor_get_async(p.copy_backend,source,host_base+host_offset,0,bytes); }
+        catch (...) { submission_failed=true; return false; }
+    }
     if (--p.remaining == 0) {
         auto * consumed=p.slot_events[p.current_slot];
         if (consumed) ggml_backend_event_record(consumed,p.copy_backend);

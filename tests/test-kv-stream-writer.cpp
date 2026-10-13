@@ -175,8 +175,22 @@ int main(int argc, char ** argv) {
             writer_fixture f(backend.get(), true); encoder e(f, rows, GGML_TYPE_Q8_0);
             std::vector<uint8_t> bytes(rows*e.row_bytes);
             if (!baseline_only) GGML_ASSERT(f.resident->configure_writes(512));
-            for (int mode = 0; mode < (baseline_only ? 2 : 3); ++mode) {
-                const bool rowwise = mode == 1, staged = mode == 2;
+            for (int mode = 0; mode < (baseline_only ? 2 : 4); ++mode) {
+                const bool rowwise = mode == 1, staged = mode >= 2;
+                arena_ptr page_arena{nullptr,ggml_backend_memory_arena_free};
+                lease_ptr page_lease{nullptr,ggml_backend_memory_lease_free};
+                if (staged) {
+                    auto * type=llama_kv_stream_device_buffer_type(ggml_backend_get_device(backend.get()));
+                    size_t scratch=0;
+                    GGML_ASSERT(llama_kv_stream_writer::requirements(type,f.host->config().shape,512,scratch));
+                    if (mode == 2) scratch=32768;
+                    page_arena.reset(ggml_backend_memory_arena_new(type,scratch));
+                    GGML_ASSERT(page_arena && ggml_backend_memory_arena_begin(page_arena.get(),0) &&
+                        ggml_backend_memory_arena_reserve_at(page_arena.get(),93,0,scratch,128,0,nullptr) &&
+                        ggml_backend_memory_arena_commit(page_arena.get()));
+                    page_lease.reset(ggml_backend_memory_arena_acquire(page_arena.get(),93));
+                    GGML_ASSERT(f.resident->configure_writes(512,page_lease.get()));
+                }
                 std::vector<double> times;
                 for (int repeat = 0; repeat < 110; ++repeat) {
                     const auto start = std::chrono::steady_clock::now();
@@ -189,7 +203,7 @@ int main(int argc, char ** argv) {
                 }
                 std::sort(times.begin(), times.end());
                 const auto stats = f.resident->last_write_stats();
-                std::cout << (staged ? "staged" : rowwise ? "rowwise" : "coalesced") << ',' << rows << ',' << times[50] << ',' << times[95] << ','
+                std::cout << (mode == 3 ? "staged_page" : staged ? "staged" : rowwise ? "rowwise" : "coalesced") << ',' << rows << ',' << times[50] << ',' << times[95] << ','
                     << bytes.size() << ',' << (staged ? stats.d2h_calls : rowwise ? rows : 1) << ',' << f.resident->last_upload_bytes() << ',' << f.resident->last_upload_calls()
                     << ',' << (staged ? stats.d2d_bytes : 0) << ',' << (staged ? stats.d2d_calls : 0) << '\n';
             }

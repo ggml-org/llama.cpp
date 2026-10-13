@@ -47,6 +47,9 @@ struct recurrent_copy_backend_probe {
     bool deferred = false;
     bool fail_prepare = false;
     size_t preparations = 0;
+    size_t downloads = 0;
+    size_t fail_download = 0;
+    bool observed = false;
     explicit recurrent_copy_backend_probe(ggml_backend_dev_t device) : device(device),original(device->iface.init_backend) {
         GGML_ASSERT(!active); active=this;
         device->iface.init_backend=[](ggml_backend_dev_t dev,const char * params) {
@@ -71,13 +74,26 @@ struct recurrent_copy_backend_probe {
         GGML_ASSERT(copy && !deferred);
         get=copy->iface.get_tensor_async; deferred=true;
         copy->iface.get_tensor_async=[](ggml_backend_t,const ggml_tensor * tensor,void * data,size_t offset,size_t bytes) {
+            ++active->downloads;
             active->pending.push_back({tensor,data,offset,bytes});
+            if (active->fail_download == active->downloads) throw std::runtime_error("after packed recurrent submission");
         };
         copy->iface.synchronize=[](ggml_backend_t) { active->flush(); };
         device->iface.init_backend=original;
     }
+    void observe_downloads() {
+        GGML_ASSERT(copy && !deferred && !observed);
+        get=copy->iface.get_tensor_async; observed=true;
+        copy->iface.get_tensor_async=[](ggml_backend_t backend,const ggml_tensor * tensor,void * data,size_t offset,size_t bytes) {
+            ++active->downloads;
+            if (active->get) active->get(backend,tensor,data,offset,bytes);
+            else ggml_backend_tensor_get(tensor,data,offset,bytes);
+        };
+        device->iface.init_backend=original;
+    }
     ~recurrent_copy_backend_probe() {
         if (deferred) { flush(); copy->iface.get_tensor_async=get; }
+        if (observed) copy->iface.get_tensor_async=get;
         if (copy) copy->iface.synchronize=sync;
         device->iface.init_backend=original; active=nullptr;
     }
@@ -85,6 +101,106 @@ struct recurrent_copy_backend_probe {
 
 int main(int argc, char ** argv) {
     testing t;
+    t.test("contiguous_snapshot_planes_batch_without_copying_padding_or_untouched_rows", [&](testing & t) {
+        const bool gpu=argc > 1 && !std::strcmp(argv[1],"--cuda");
+        ggml_backend_load_all();
+        auto * device=ggml_backend_dev_by_name(gpu ? "CUDA0" : "CPU");
+        if (!t.assert_true(device != nullptr)) return;
+        for (uint32_t r_width : {31u,32u}) for (uint32_t s_width : {63u,64u}) {
+            ggml_backend_ptr producer(ggml_backend_dev_init(device,nullptr));
+            auto * host_type=ggml_backend_dev_host_buffer_type(device);
+            if (!host_type) host_type=ggml_backend_cpu_buffer_type();
+            llama_recurrent_spill_layout layout;
+            if (!t.assert_true(llama_recurrent_spill_layout_make(
+                    std::vector<llama_recurrent_spill_layer>(3,{GGML_TYPE_F32,GGML_TYPE_F32,r_width,s_width,true}),1,7,layout))) return;
+            auto bank=llama_recurrent_spill_bank::create(layout,host_type,97,0);
+            recurrent_copy_backend_probe probe(device);
+            if (!t.assert_true(bank && bank->enable_publication(device,ggml_backend_dev_buffer_type(device),2))) return;
+            if (gpu) probe.observe_downloads(); else probe.defer_downloads();
+            const auto original_stage=bank->staged_device_bytes(),original_host=bank->host_bytes();
+            ggml_context_ptr ctx(ggml_init({1024*1024,nullptr,true}));
+            std::vector<ggml_tensor *> input(42);
+            for (size_t layer=0;layer<3;++layer) for (uint32_t snapshot=1;snapshot<=7;++snapshot)
+                for (bool value : {false,true}) input[(layer*7+snapshot-1)*2+size_t(value)]=
+                    ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,value ? s_width : r_width);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+            if (!t.assert_true(bool(buffer))) return;
+            std::vector<uint64_t> generations(42);
+            std::vector<std::vector<float>> expected(42);
+            for (uint32_t width : {1u,2u,4u,8u}) {
+                auto * graph=ggml_new_graph_custom(ctx.get(),256,false);
+                for (size_t layer=0;layer<3;++layer) for (bool value : {false,true}) {
+                    const uint32_t snapshots=value ? width-1 : 7;
+                    for (uint32_t j=0;j<snapshots;++j) {
+                        const uint32_t snapshot=snapshots-j;
+                        const size_t index=(layer*7+snapshot-1)*2+size_t(value);
+                        expected[index].assign(value ? s_width : r_width,float(1000*width+100*layer+10*snapshot+value));
+                        generations[index]=width;
+                        ggml_backend_tensor_set(input[index],expected[index].data(),0,ggml_nbytes(input[index]));
+                        auto * staged=ggml_cpy(ctx.get(),input[index],bank->staging_tensor(layer,value,snapshot));
+                        ggml_build_forward_expand(graph,ggml_cpy(ctx.get(),staged,bank->publication_tensor(layer,value,snapshot)));
+                    }
+                }
+                const auto before=probe.downloads;
+                if (!t.assert_true(bank->begin_staged_capture({97,0,width},width) &&
+                        ggml_backend_graph_compute(producer.get(),graph) == GGML_STATUS_SUCCESS &&
+                        bank->publish_capture() && bank->complete_capture())) return;
+                const size_t r_calls=r_width == 32 ? 1 : 7;
+                const size_t s_calls=width == 1 ? 0 : s_width == 64 ? 1 : width-1;
+                t.assert_equal(3*(r_calls+s_calls),probe.downloads-before);
+                t.assert_equal(original_stage,bank->staged_device_bytes());
+                t.assert_equal(original_host,bank->host_bytes());
+                for (size_t layer=0;layer<3;++layer) for (uint32_t snapshot=1;snapshot<=7;++snapshot)
+                    for (bool value : {false,true}) {
+                        const size_t index=(layer*7+snapshot-1)*2+size_t(value);
+                        t.assert_equal(generations[index],bank->snapshot_generation(layer,value,snapshot));
+                        const auto * bytes=bank->snapshot_data(layer,value,snapshot,generations[index]);
+                        if (generations[index]) t.assert_true(bytes && !std::memcmp(bytes,expected[index].data(),ggml_nbytes(input[index])));
+                        else t.assert_true(!bytes && bank->snapshot_pristine(layer,value,snapshot));
+                    }
+            }
+        }
+    });
+    t.test("packed_transfer_failure_invalidates_every_touched_snapshot_and_retries", [](testing & t) {
+        for (size_t failure : {1u,2u}) {
+            ggml_backend_ptr producer(ggml_backend_cpu_init());
+            auto * device=ggml_backend_get_device(producer.get());
+            llama_recurrent_spill_layout layout;
+            if (!t.assert_true(llama_recurrent_spill_layout_make(
+                    {{GGML_TYPE_F32,GGML_TYPE_F32,32,64,true}},1,3,layout))) return;
+            auto bank=llama_recurrent_spill_bank::create(layout,ggml_backend_cpu_buffer_type(),99,0);
+            recurrent_copy_backend_probe probe(device);
+            if (!t.assert_true(bank && bank->enable_publication(device,ggml_backend_cpu_buffer_type(),2))) return;
+            probe.defer_downloads();
+            ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+            auto * r=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,32);
+            auto * s=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,64);
+            ggml_backend_buffer_ptr source(ggml_backend_alloc_ctx_tensors(ctx.get(),producer.get()));
+            if (!t.assert_true(bool(source))) return;
+            ggml_backend_tensor_memset(r,0x11,0,ggml_nbytes(r));
+            ggml_backend_tensor_memset(s,0x22,0,ggml_nbytes(s));
+            auto * graph=ggml_new_graph_custom(ctx.get(),64,false);
+            for (bool value : {false,true}) for (uint32_t snapshot=1;snapshot<=3;++snapshot) {
+                auto * copy=ggml_cpy(ctx.get(),value ? s : r,bank->staging_tensor(0,value,snapshot));
+                ggml_build_forward_expand(graph,ggml_cpy(ctx.get(),copy,bank->publication_tensor(0,value,snapshot)));
+            }
+            probe.fail_download=failure;
+            if (!t.assert_true(bank->begin_staged_capture({99,0,1},4))) return;
+            t.assert_true(ggml_backend_graph_compute(producer.get(),graph) == GGML_STATUS_FAILED);
+            t.assert_true(!bank->publish_capture());
+            bank->cancel();
+            t.assert_true(probe.pending.empty());
+            for (uint32_t snapshot=1;snapshot<=3;++snapshot) {
+                t.assert_true(!bank->snapshot_data(0,false,snapshot,1) && !bank->snapshot_pristine(0,false,snapshot));
+                t.assert_equal(failure == 1,bank->snapshot_pristine(0,true,snapshot));
+            }
+            probe.fail_download=0;
+            t.assert_true(bank->begin_staged_capture({99,0,2},4) &&
+                ggml_backend_graph_compute(producer.get(),graph) == GGML_STATUS_SUCCESS &&
+                bank->publish_capture() && bank->complete_capture());
+            t.assert_true(bank->snapshot_data(0,true,3,2) != nullptr);
+        }
+    });
     t.test("publication_resources_are_prepared_transactionally_before_admission", [](testing & t) {
         ggml_backend_ptr producer(ggml_backend_cpu_init());
         auto * device=ggml_backend_get_device(producer.get());

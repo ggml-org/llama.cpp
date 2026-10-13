@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run pinned ordinary DFlash2 controls. No streaming, UVM, fit retries or implicit offload."""
+"""Run matched native/streamed DFlash2 controls with explicit fitting and profiling options."""
 
 import argparse
 import copy

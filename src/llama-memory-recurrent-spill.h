@@ -84,6 +84,8 @@ public:
     llama_recurrent_stage_buffer & operator=(const llama_recurrent_stage_buffer &) = delete;
 
     ggml_tensor * tensor(size_t layer, bool value, uint32_t snapshot, uint32_t slot) const noexcept;
+    // A prebound raw span is available only when snapshot rows have no physical padding.
+    ggml_tensor * plane_span(size_t layer, bool value, uint32_t slot) const noexcept;
     ggml_backend_buffer_t buffer() const noexcept;
     size_t bytes() const noexcept;
     const llama_recurrent_stage_layout & layout() const noexcept;
