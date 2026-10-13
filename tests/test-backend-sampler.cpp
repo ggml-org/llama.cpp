@@ -2063,7 +2063,8 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
 
 // Snapshot the first read after decode before scalar getters can hide a missing wait.
 static void test_sampling_view_first_read(const test_params & params) {
-    for (int mode = 0; mode < 5; ++mode) {
+    for (int scenario = 0; scenario < 10; ++scenario) {
+        const int mode = scenario % 5;
         llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
         if (mode == 1) {
             llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(10));
@@ -2081,37 +2082,138 @@ static void test_sampling_view_first_read(const test_params & params) {
                 configs.push_back({1, other.get()});
             }
         }
-        test_context t(params, configs, 2, 4, 4, 2);
-        int32_t pos = 0;
-        for (int idx : {3, 2, 1, 0, -1}) {
+        test_context t(params, configs, 2, 6, 2, 3);
+        for (int pass = 0; pass < 3; ++pass) {
             common_batch batch(t.ctx.get());
-            for (int seq : {1, 0}) {
-                for (int i = 0; i < 2; ++i) {
-                    batch.add(llama_vocab_bos(t.vocab), pos + i, seq, true);
+            std::vector<int32_t> idxs;
+            for (int pos = 0; pos < 3; ++pos) {
+                for (int seq : {1, 0}) {
+                    const int32_t idx = batch.add(pos % 2 ? llama_vocab_eos(t.vocab) : llama_vocab_bos(t.vocab),
+                            3 * pass + pos, seq, pos >= pass);
+                    if (pos >= pass) {
+                        idxs.push_back(idx);
+                    }
                 }
             }
-            pos += 2;
             GGML_ASSERT(llama_process(t.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
-            const auto out = llama_get_sampling_output_ith(t.ctx.get(), idx);
-            const uint32_t n = out.probs ? out.n_probs : out.sampled_logits ? out.n_logits : t.n_vocab;
-            const float * values = out.sampled_logits ? out.sampled_logits : out.logits;
-            GGML_ASSERT(values && n > 0);
-            const std::vector<float> logits(values, values + n);
-            std::vector<float> probs;
-            std::vector<llama_token> ids;
-            if (out.probs) { probs.assign(out.probs, out.probs + out.n_probs); }
-            if (out.sampled_logits) { ids.assign(out.candidates, out.candidates + n); }
-            GGML_ASSERT(out.token == llama_get_sampled_token_ith(t.ctx.get(), idx));
-            GGML_ASSERT(out.n_probs == llama_get_sampled_probs_count_ith(t.ctx.get(), idx));
-            GGML_ASSERT(out.n_logits == llama_get_sampled_logits_count_ith(t.ctx.get(), idx));
-            const float * expected = llama_get_logits_ith(t.ctx.get(), idx);
-            GGML_ASSERT(std::all_of(logits.begin(), logits.end(), [](float v) { return std::isfinite(v); }));
-            GGML_ASSERT(std::equal(logits.begin(), logits.end(), expected));
-            if (!probs.empty()) { GGML_ASSERT(std::equal(probs.begin(), probs.end(), llama_get_sampled_probs_ith(t.ctx.get(), idx))); }
-            if (!ids.empty()) { GGML_ASSERT(std::equal(ids.begin(), ids.end(), llama_get_sampled_candidates_ith(t.ctx.get(), idx))); }
+            const auto * outputs = scenario >= 5 ? llama_get_outputs(t.ctx.get()) : nullptr;
+            const auto read_row = [&](int32_t idx) {
+                return outputs ? outputs->get_sampling_ith(idx) : llama_get_sampling_output_ith(t.ctx.get(), idx);
+            };
+
+            struct row_copy {
+                int32_t idx;
+                llama_token token;
+                uint32_t n_probs;
+                uint32_t n_logits;
+                std::vector<float> logits;
+                std::vector<float> probs;
+                std::vector<llama_token> ids;
+            };
+            std::vector<row_copy> rows;
+            const size_t n_outputs = idxs.size();
+            for (size_t i = 0; i < n_outputs; ++i) {
+                idxs.push_back((int32_t) i - (int32_t) n_outputs);
+            }
+            // Copy every row before any scalar getter can hide a missing wait or reorder.
+            for (int32_t idx : idxs) {
+                const auto out = read_row(idx);
+                const uint32_t n = out.sampled_logits ? out.n_logits : llama_vocab_n_tokens(t.vocab);
+                const float * values = out.sampled_logits ? out.sampled_logits : out.logits;
+                GGML_ASSERT(values && n > 0);
+                row_copy row{idx, out.token, out.n_probs, out.n_logits, {}, {}, {}};
+                row.logits.assign(values, values + n);
+                if (out.probs) {
+                    row.probs.assign(out.probs, out.probs + out.n_probs);
+                }
+                if (out.sampled_logits) {
+                    row.ids.assign(out.candidates, out.candidates + n);
+                }
+                rows.push_back(std::move(row));
+            }
+#ifdef NDEBUG
+            // Invalid logits abort in debug builds; release builds return null through the existing getters.
+            for (int32_t idx : {-7, -1000000, 6, 1000000}) {
+                const auto out = read_row(idx);
+                const auto expected = llama_get_sampling_output_ith(t.ctx.get(), idx);
+                GGML_ASSERT(out.token == expected.token && out.logits == expected.logits && out.sampled_logits == expected.sampled_logits);
+            }
+            for (int32_t idx = 0; idx < 2 * pass; ++idx) {
+                GGML_ASSERT(!read_row(idx).logits);
+            }
+#endif
+            for (const auto & row : rows) {
+                GGML_ASSERT(row.token == llama_get_sampled_token_ith(t.ctx.get(), row.idx));
+                GGML_ASSERT(row.n_probs == llama_get_sampled_probs_count_ith(t.ctx.get(), row.idx));
+                GGML_ASSERT(row.n_logits == llama_get_sampled_logits_count_ith(t.ctx.get(), row.idx));
+                const float * expected = llama_get_sampled_logits_ith(t.ctx.get(), row.idx);
+                if (!expected) {
+                    expected = llama_get_logits_ith(t.ctx.get(), row.idx);
+                }
+                GGML_ASSERT(std::memcmp(row.logits.data(), expected, row.logits.size() * sizeof(float)) == 0);
+                if (!row.probs.empty()) {
+                    GGML_ASSERT(std::memcmp(row.probs.data(), llama_get_sampled_probs_ith(t.ctx.get(), row.idx), row.probs.size() * sizeof(float)) == 0);
+                }
+                if (!row.ids.empty()) {
+                    GGML_ASSERT(std::equal(row.ids.begin(), row.ids.end(), llama_get_sampled_candidates_ith(t.ctx.get(), row.idx)));
+                }
+            }
         }
     }
-    printf("sampling view first-read test PASSED\n");
+    printf("batch outputs first-read test PASSED\n");
+}
+
+static void test_outputs_embeddings_first_read(const test_params & params) {
+    std::vector<llama_sampler_seq_config> configs;
+    test_context t(params, configs, 2, 6, 2, 3);
+    llama_set_embeddings_layer_inp(t.ctx.get(), 0, true);
+    llama_set_embeddings_layer_inp(t.ctx.get(), 1, true);
+    for (int pass = 0; pass < 3; ++pass) {
+        const bool enabled = pass != 2;
+        const bool masked = pass == 0;
+        llama_set_embeddings(t.ctx.get(), !enabled);
+        llama_set_embeddings_nextn(t.ctx.get(), enabled, masked);
+        common_batch batch(t.ctx.get());
+        for (int pos = 0; pos < 3; ++pos) {
+            for (int seq : {1, 0}) {
+                batch.add(pos % 2 ? llama_vocab_eos(t.vocab) : llama_vocab_bos(t.vocab), 3 * pass + pos, seq, pos > 0);
+            }
+        }
+        GGML_ASSERT(llama_process(t.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+        const auto * outputs = llama_get_outputs(t.ctx.get());
+        const size_t n_embd = llama_model_n_embd(llama_get_model(t.ctx.get()));
+        const size_t n_embd_out = llama_model_n_embd_out(llama_get_model(t.ctx.get()));
+        std::vector<float> embeddings;
+        if (!enabled) {
+            GGML_ASSERT(outputs->embeddings);
+            embeddings.assign(outputs->embeddings, outputs->embeddings + 6 * n_embd_out);
+        } else {
+            GGML_ASSERT(!outputs->embeddings);
+        }
+        std::vector<float> nextn;
+        if (enabled) {
+            GGML_ASSERT(outputs->embeddings_nextn);
+            nextn.assign(outputs->embeddings_nextn, outputs->embeddings_nextn + (masked ? 4 : 6) * n_embd_out);
+        } else {
+            GGML_ASSERT(!outputs->embeddings_nextn);
+        }
+        std::vector<std::vector<float>> layers;
+        for (uint32_t lid = 0; lid < 2; ++lid) {
+            const float * layer = outputs->get_embeddings_layer_inp(lid);
+            GGML_ASSERT(layer);
+            layers.emplace_back(layer, layer + 6 * n_embd);
+        }
+        if (!embeddings.empty()) {
+            GGML_ASSERT(std::memcmp(embeddings.data(), llama_get_embeddings(t.ctx.get()), embeddings.size() * sizeof(float)) == 0);
+        }
+        if (enabled) {
+            GGML_ASSERT(std::memcmp(nextn.data(), llama_get_embeddings_nextn(t.ctx.get()), nextn.size() * sizeof(float)) == 0);
+        }
+        for (uint32_t lid = 0; lid < 2; ++lid) {
+            GGML_ASSERT(std::memcmp(layers[lid].data(), llama_get_embeddings_layer_inp(t.ctx.get(), lid), layers[lid].size() * sizeof(float)) == 0);
+        }
+    }
+    printf("batch embeddings first-read test PASSED\n");
 }
 
 struct backend_test_case {
@@ -2122,6 +2224,7 @@ struct backend_test_case {
 
 // note: test names are "test_<suffix>" and match the function implementing them
 static const backend_test_case BACKEND_TESTS[] = {
+    { "test_outputs_embeddings_first_read", test_outputs_embeddings_first_read, true },
     { "test_sampling_view_first_read", test_sampling_view_first_read, true },
     // single sampler
     { "test_greedy",                 test_greedy,                 true },

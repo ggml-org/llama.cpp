@@ -67,6 +67,10 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
 //
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
 
+struct llama_outputs;
+// Sample from an acquired batch view without synchronizing again.
+llama_token common_sampler_sample_from_outputs(common_sampler * gsmpl, const llama_outputs * outputs, int idx, bool grammar_first = false);
+
 // generalized version of common_sampler_sample
 //
 // will cross-reference the sampled tokens with a batch of draft tokens and accept those that match

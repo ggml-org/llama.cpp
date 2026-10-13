@@ -1213,6 +1213,8 @@ public:
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
+        const auto * outputs = llama_get_outputs(ctx_tgt);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_batch_beg[seq_id] < 0) {
                 continue;
@@ -1252,7 +1254,7 @@ public:
                 // injects them into the K/V cache at the target positions
                 features_buf.resize((size_t) n_chunk * n_embd_enc);
                 for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                    const float * layer = outputs->get_embeddings_layer_inp((uint32_t) target_layer_ids[k]);
                     if (!layer) {
                         GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                     }
@@ -1322,6 +1324,8 @@ public:
             return;
         }
 
+        const auto * outputs = llama_get_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1337,7 +1341,7 @@ public:
 
             // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
             for (int32_t i = 1; i < n_block_tokens; ++i) {
-                common_sampler_sample(smpl, ctx_dft, beg + i, true);
+                common_sampler_sample_from_outputs(smpl, outputs, beg + i, true);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
