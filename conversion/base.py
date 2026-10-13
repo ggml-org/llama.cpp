@@ -334,9 +334,18 @@ class ModelBase:
             if not name.endswith((".k_scale", ".v_scale")):
                 continue
 
-            new_name = self.tensor_map.get_name(key=name, try_suffixes=(".k_scale", ".v_scale"))
-            if new_name is None:
+            mapped = self.tensor_map.get_type_and_name(key=name, try_suffixes=(".k_scale", ".v_scale"))
+            if mapped is None:
                 continue
+
+            tensor_type, new_name = mapped
+            if tensor_type not in (gguf.MODEL_TENSOR.ATTN_K, gguf.MODEL_TENSOR.ATTN_V, gguf.MODEL_TENSOR.ATTN_QKV):
+                continue
+
+            bid = int(new_name.split(".")[1])
+            scale_type = gguf.MODEL_TENSOR.ATTN_K if name.endswith(".k_scale") else gguf.MODEL_TENSOR.ATTN_V
+            suffix = ".k_scale" if name.endswith(".k_scale") else ".v_scale"
+            new_name = gguf.TENSOR_NAMES[scale_type].format(bid=bid) + suffix
 
             scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)())
             if scale.dtype != torch.float32 or scale.numel() != 1:
