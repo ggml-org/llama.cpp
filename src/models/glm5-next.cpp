@@ -667,7 +667,6 @@ llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }
 
 llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params) :
@@ -800,8 +799,6 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // KDA layer, g_a/g_b output gate

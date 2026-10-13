@@ -341,8 +341,6 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
 
         res->t_logits = cur;
     }
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // media entries (an image or audio prefix) are embeddings, text entries are tokens

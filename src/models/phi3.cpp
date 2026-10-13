@@ -187,8 +187,6 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
     }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // Explicit template instantiations

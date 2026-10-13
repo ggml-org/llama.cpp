@@ -326,8 +326,6 @@ llama_model_granite_switch::graph::graph(
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(

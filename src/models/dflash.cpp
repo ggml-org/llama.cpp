@@ -841,8 +841,6 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
-
     // DSpark: bias the draft logits with the Markov head
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);
@@ -1021,8 +1019,6 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     cur = build_lora_mm(output, cur, output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);

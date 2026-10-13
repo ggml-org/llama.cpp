@@ -3305,6 +3305,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // add on pooling layer
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
 
+    // add the LM head (if the context outputs logits)
+    llm->build_logits();
+
     // add backend sampling layers (if any)
     llm->build_sampling();
 
