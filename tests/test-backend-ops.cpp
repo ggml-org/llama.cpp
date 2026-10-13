@@ -3303,6 +3303,7 @@ struct test_bin_bcast : public test_case {
     bool perm1; // permute src1?
     bool src_overlap; // src0 and src1 are overlapping views of the same buffer
     const ggml_type type_b; // type of src1, GGML_TYPE_COUNT -> same as src0
+    bool weights;
 
     bool run_whole_graph() override { return nf > 1; }
 
@@ -3310,6 +3311,9 @@ struct test_bin_bcast : public test_case {
         std::string s = VARS_TO_STR6(type, ne, nr, nf, perm1, src_overlap);
         if (type_b != GGML_TYPE_COUNT) {
             s += "," + VAR_TO_STR(type_b);
+        }
+        if (weights) {
+            s += ",weights=1";
         }
         return s;
     }
@@ -3323,28 +3327,38 @@ struct test_bin_bcast : public test_case {
             std::array<int, 4> nr = {1, 2, 1, 1},
             int nf = 1,
             bool perm1 = false, bool src_overlap = false,
-            ggml_type type_b = GGML_TYPE_COUNT)
-        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap), type_b(type_b) {}
+            ggml_type type_b = GGML_TYPE_COUNT, bool weights = false)
+        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap), type_b(type_b), weights(weights) {}
+
+    bool use_weight_context() override {
+        return weights;
+    }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        return build_graph(ctx, ctx);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
         GGML_ASSERT(nf <= 16);
 
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
         ggml_set_name(a, "a");
 
         const ggml_type tb = type_b == GGML_TYPE_COUNT ? type : type_b;
+        ggml_context * ctx_b = weights ? ctx_weights : ctx;
+        GGML_ASSERT(ctx_b);
 
         ggml_tensor * b[16];
         for (int i = 0; i < nf; ++i) {
             if (perm1) {
                 const int p[4] = { 1, 2, 0, 3 }; // hardcoded for now
 
-                b[i] = ggml_new_tensor_4d(ctx, tb, ne[p[0]], ne[p[1]], ne[p[2]], ne[p[3]]);
-                b[i] = ggml_permute(ctx, b[i], p[0], p[1], p[2], p[3]);
+                b[i] = ggml_new_tensor_4d(ctx_b, tb, ne[p[0]], ne[p[1]], ne[p[2]], ne[p[3]]);
+                b[i] = ggml_permute(ctx_b, b[i], p[0], p[1], p[2], p[3]);
             } else if (src_overlap) {
                 b[i] = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], 2 * (ne[3] / 3), a->nb[1], a->nb[2], a->nb[3], (ne[3] / 3) * a->nb[3]);
             } else {
-                b[i] = ggml_new_tensor(ctx, tb, 4, ne.data());
+                b[i] = ggml_new_tensor(ctx_b, tb, 4, ne.data());
             }
             ggml_set_name(b[i], (std::string("b") + std::to_string(i)).c_str());
         }
@@ -10386,6 +10400,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         //add_test_bin_bcast(type, {3, 3, 2560, 1280}, {1, 1, 1, 1});
         //add_test_bin_bcast(type, {3, 3, 2560, 1280}, {2, 1, 1, 1});
     }
+
+    for (auto op : {ggml_add, ggml_mul}) {
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F32, {1, 2, 2, 2}, {17, 1, 1, 1}, 1, false, false, GGML_TYPE_COUNT, true));
+    }
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {2, 2, 2, 2}, {17, 1, 1, 1}, 1, false, false, GGML_TYPE_COUNT, true));
 
     // single inplace tests, especially important for WebGPU backend since kernels for inplace vs. not are different
     test_cases.emplace_back(new test_bin_bcast(ggml_add_inplace, GGML_TYPE_F32, {16, 5, 4, 3}, {1, 1, 1, 1}, 16));
