@@ -355,6 +355,9 @@ llama_build(test-backend-ops.cpp LINK ggml)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 
+llama_build_and_test(test-kv-cache.cpp)
+target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
 llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
 llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
