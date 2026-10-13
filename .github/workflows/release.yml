@@ -714,6 +714,9 @@ jobs:
             -DGGML_OPENVINO=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build/ReleaseOV --config Release --parallel
 
@@ -752,8 +755,10 @@ jobs:
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
+  # note: builds only the ggml-openvino backend - llama-server and the CPU backend are injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-openvino:
-    needs: [check-release, ui-build]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -769,12 +774,6 @@ jobs:
         uses: actions/checkout@v6
         with:
             fetch-depth: 0
-
-      - name: Download UI build
-        uses: actions/download-artifact@v8
-        with:
-          name: llama-ui.zip
-          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -823,11 +822,13 @@ jobs:
             -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_OPENVINO=ON ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
-            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
-            ${{ env.CMAKE_ARGS }}
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 
-          cmake --build build\ReleaseOV --config Release -- /m
+          cmake --build build\ReleaseOV --config Release --target ggml-openvino -- /m
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -855,12 +856,12 @@ jobs:
           Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
 
           Copy-Item LICENSE $dest
-          7z a -snl llama-${{ needs.check-release.outputs.tag_name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
+          7z a -snl llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+          path: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
           archive: false
 
       - name: ccache-clear
