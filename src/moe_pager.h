@@ -66,8 +66,23 @@ public:
     // demand path's needs. Returns false (and keeps the old size) when the
     // allocation fails.
     bool reserve_staging(int n);
-    // Free staging slots right now (for admission control).
-    int n_free_staging() const { return (int) free_stage_.size(); }
+    // Split the arena: `n_demand` slots serve blocking demand fetches only and
+    // the rest serve prefetches, so a prefetch burst can never take the last
+    // slot a demand read needs. That starvation is what made split-free decode
+    // fall through to the zero sentinel and emit garbage.
+    bool reserve_staging_split(int n_total, int n_demand);
+    int n_free_staging() const { return (int) free_stage_.size() + (int) free_demand_.size(); }
+    int n_free_demand()  const { return (int) free_demand_.size(); }
+
+    // ---- Tier 1: pinned host RAM cache -----------------------------------
+    // A cold expert read once is kept in host memory and served from there over
+    // PCIe (~20 GB/s) instead of the NVMe (~2.8 GB/s). Sized by `bytes`; 0 off.
+    bool init_cache(size_t bytes);
+    size_t cache_bytes() const { return cache_bytes_; }
+    long stats_cache_hit()   const { return n_cache_hit_; }
+    long stats_cache_miss()  const { return n_cache_miss_; }
+    long stats_cache_fill()  const { return n_cache_fill_; }
+    long stats_cache_evict() const { return n_cache_evict_; }
 
     // public for verification: exact file range this pager reads for an expert
     const moe_expert_slice * slices(int il, int e) const { return &idx_[((size_t) il * n_expert_ + e) * 3]; }
@@ -92,7 +107,7 @@ public:
     long stats_pf_hit()   const { return n_pf_hit_; }
 
 private:
-    struct Req { int il, e, stage, done; bool used; long got[3]; };
+    struct Req { int il, e, stage, done; bool used, demand; long got[3]; };
     // public for verification: the exact file range this pager reads for an expert
 
     std::string path_;
@@ -117,12 +132,24 @@ private:
     static const long ALIGN = 4096;
 
     std::vector<Req> reqs_;
-    std::vector<int> free_stage_;
+    std::vector<int> free_stage_;    // prefetch-eligible staging slots
+    std::vector<int> free_demand_;   // demand-only staging slots
+    long              demand_stages_ = 0;
+
+    // Tier 1: pinned host arena holding whole experts, indexed by (il,e)
+    char * cache_ = nullptr;
+    size_t cache_bytes_ = 0;             // per-expert bytes in the arena
+    int    cache_slots_ = 0;
+    std::vector<int>  cache_idx_;        // il*n_expert+e -> slot, -1 = absent
+    std::vector<char> cache_used_;       // slot occupied
+    std::vector<long> cache_stamp_;      // slot last-use tick (LFU)
+    long cache_tick_ = 0;
+    long n_cache_hit_ = 0, n_cache_miss_ = 0, n_cache_fill_ = 0, n_cache_evict_ = 0;
     void * ring_ = nullptr;
     long io_ops_ = 0, io_bytes_ = 0, n_io_fail_ = 0;
     long n_pf_issued_ = 0, n_pf_hit_ = 0;
 
-    int submit_(int key);
+    int submit_(int key, bool demand);
     int find_(int key) const;
     double wait_(int r);
     bool wait_ok_(int r); // true when all 3 roles moved their full length

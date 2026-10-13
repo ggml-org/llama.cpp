@@ -17,6 +17,7 @@
 #include <sstream>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
@@ -188,25 +189,28 @@ int moe_pager::find_(int key) const {
     return -1;
 }
 
-int moe_pager::submit_(int key) {
+int moe_pager::submit_(int key, bool demand) {
     // No free stage: drop the oldest COMPLETED-but-unclaimed prefetch (its
     // data is stale by definition - nobody demanded it while it sat ready).
     // Never drop in-flight reads: a later commit may be waiting on them.
-    if (free_stage_.empty()) {
+    std::vector<int> & pool = demand ? free_demand_ : free_stage_;
+    if (pool.empty()) {
+        // fall back to stealing a slot from the OTHER pool only if it is free;
+        // never evict an in-flight read, a later commit may be waiting on it
         const int need_ok = pack_mode_ ? 1 : 3;   // pack mode completes in 1 read
         for (size_t i = 0; i < reqs_.size(); i++) {
-            if (reqs_[i].used && reqs_[i].done >= need_ok) {
-                free_stage_.push_back(reqs_[i].stage);
+            if (reqs_[i].used && reqs_[i].done >= need_ok && reqs_[i].demand == demand) {
+                pool.push_back(reqs_[i].stage);
                 reqs_[i].used = false;
                 break;
             }
         }
-        if (free_stage_.empty()) return -1;
+        if (pool.empty()) return -1;
     }
     const int il = key / n_expert_, e = key % n_expert_;
     const moe_expert_slice * s = slices(il, e);
 
-    const int st = free_stage_.back(); free_stage_.pop_back();
+    const int st = pool.back(); pool.pop_back();
     const int ridx = (int) reqs_.size();
     int pending = 0;
     long got_self[3] = { -1, -1, -1 };
@@ -238,7 +242,7 @@ int moe_pager::submit_(int key) {
         sqe->user_data = (uint64_t)((ridx * 4) + r);
         boff += s[r].len;
     }
-    Req q; q.il = il; q.e = e; q.stage = st; q.done = pending; q.used = true;
+    Req q; q.il = il; q.e = e; q.stage = st; q.done = pending; q.used = true; q.demand = demand;
     q.got[0] = got_self[0]; q.got[1] = got_self[1]; q.got[2] = got_self[2];
     reqs_.push_back(q);
     io_uring_submit((struct io_uring *) ring_);
@@ -320,10 +324,66 @@ bool moe_pager::reserve_staging(int n) {
     return true;
 }
 
+bool moe_pager::reserve_staging_split(int n_total, int n_demand) {
+    // Grow the arena to `n_total` slots, then split it into a demand-only pool
+    // and a prefetch pool. Only valid on a quiet ring.
+    if (n_total <= 0) return true;
+    for (size_t i = 0; i < reqs_.size(); i++) {
+        if (reqs_[i].used) return false;
+    }
+    char * stage = nullptr;
+    if (cudaHostAlloc(&stage, stage_bytes_ * (size_t) n_total, cudaHostAllocDefault) != cudaSuccess) {
+        return false;
+    }
+    cudaFreeHost(stage_);
+    stage_ = stage;
+    if (n_demand < 0) n_demand = 0;
+    if (n_demand > n_total) n_demand = n_total;
+    demand_stages_ = n_demand;
+    free_stage_.clear();
+    free_demand_.clear();
+    // prefetch gets the tail, demand the head: nothing is shared
+    for (int i = n_total - 1; i >= n_demand; i--) free_stage_.push_back(i);
+    for (int i = n_demand - 1; i >= 0; i--) free_demand_.push_back(i);
+    return true;
+}
+
+// ---- Tier 1: pinned host RAM cache --------------------------------------
+bool moe_pager::init_cache(size_t bytes) {
+    if (bytes == 0) return true;
+    if (stage_bytes_ == 0) return false;                  // need the expert size
+    // the arena must hold a WHOLE expert (gate+up+down), not one role: sizing
+    // it by the largest role makes every fill overrun its slot into the next
+    size_t per = 0;
+    if (pack_mode_) {
+        for (int il = 0; il < n_layer_; il++) {
+            per = std::max(per, role_bytes_[(size_t) il * 3 + 0]
+                              + role_bytes_[(size_t) il * 3 + 1]
+                              + role_bytes_[(size_t) il * 3 + 2]);
+        }
+    } else {
+        const moe_expert_slice * s = slices(0, 0);
+        per = s[0].len + s[1].len + s[2].len;
+    }
+    if (per == 0) return false;
+    cache_bytes_ = per;
+    cache_slots_ = (int) (bytes / per);
+    if (cache_slots_ <= 0) return false;
+    if (cudaHostAlloc(&cache_, cache_bytes_ * (size_t) cache_slots_, cudaHostAllocDefault) != cudaSuccess) {
+        cache_ = nullptr; cache_slots_ = 0; return false;
+    }
+    fprintf(stderr, "moe_pager: Tier 1 host cache %.2f GiB, %d slots x %zu B\n",
+            (double) bytes / (1024.0*1024.0*1024.0), cache_slots_, cache_bytes_);
+    cache_idx_.assign((size_t) n_layer_ * n_expert_, -1);
+    cache_used_.assign((size_t) cache_slots_, 0);
+    cache_stamp_.assign((size_t) cache_slots_, 0);
+    return true;
+}
+
 bool moe_pager::prefetch(int il, int e) {
     const int key = il * n_expert_ + e;
     if (find_(key) >= 0) return true;
-    const int r = submit_(key);
+    const int r = submit_(key, false);
     if (r >= 0) n_pf_issued_++;
     return r >= 0;
 }
@@ -332,13 +392,41 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
                                   void * dst_up,     size_t up_bytes,
                                   void * dst_down,   size_t down_bytes) {
     const int key = il * n_expert_ + e;
+
+    // Tier 1 first: a resident host copy is a PCIe copy, not an NVMe read
+    if (cache_ && cache_slots_ > 0) {
+        const int cslot = cache_idx_[(size_t) key];
+        if (cslot >= 0) {
+            const moe_expert_slice * cs = slices(il, e);
+            const char * csrc = cache_ + (size_t) cslot * cache_bytes_;
+            // the cache holds the expert COMPACT (gate|up|down, no O_DIRECT
+            // pre-pad), so the offsets are the role sizes, not bsrc_[], which
+            // index the aligned staging read
+            size_t coff = 0;
+            void * cdst[3] = { dst_gate, dst_up, dst_down };
+            size_t cwant[3] = { gate_bytes, up_bytes, down_bytes };
+            for (int k = 0; k < 3; k++) {
+                const size_t cav = pack_mode_
+                    ? role_bytes_[(size_t) il * 3 + (size_t) k]
+                    : ((size_t) cs[k].len - cs[k].pre);
+                cudaMemcpyAsync(cdst[k], csrc + coff, std::min(cwant[k], cav),
+                                cudaMemcpyHostToDevice, 0);
+                coff += cav;
+            }
+            cache_stamp_[(size_t) cslot] = ++cache_tick_;
+            n_cache_hit_++;
+            return true;
+        }
+        n_cache_miss_++;
+    }
+
     int r = find_(key);
     const bool was_prefetch = (r >= 0); // in flight before demand arrived
-    if (r < 0) r = submit_(key);
+    if (r < 0) r = submit_(key, true);
     if (r < 0) return false;
     if (!wait_ok_(r)) {
         n_io_fail_++;
-        free_stage_.push_back(reqs_[r].stage);
+        (reqs_[r].demand ? free_demand_ : free_stage_).push_back(reqs_[r].stage);
         reqs_[r].used = false;
         return false;
     }
@@ -364,7 +452,50 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
         if (!pack_mode_) off += s[k].len;
     }
 
-    free_stage_.push_back(reqs_[r].stage);
+    // keep a host copy so the next time this expert is demanded it comes over
+    // PCIe instead of the NVMe
+    if (cache_ && cache_slots_ > 0 && cache_idx_[(size_t) key] < 0) {
+        int cslot = -1;
+        for (int i = 0; i < cache_slots_; i++) {
+            if (!cache_used_[(size_t) i]) { cslot = i; break; }
+        }
+        if (cslot < 0) {   // evict the least recently used
+            long oldest = std::numeric_limits<long>::max();
+            for (int i = 0; i < cache_slots_; i++) {
+                if (cache_stamp_[(size_t) i] < oldest) { oldest = cache_stamp_[(size_t) i]; cslot = i; }
+            }
+            const int old_key = (int) (cache_stamp_.size() ? -1 : -1);
+            (void) old_key;
+            for (size_t k = 0; k < cache_idx_.size(); k++) {
+                if (cache_idx_[k] == cslot) { cache_idx_[k] = -1; break; }
+            }
+            n_cache_evict_++;
+        }
+        char * csrc = stage_ + (size_t) reqs_[r].stage * stage_bytes_;
+        char * cdst = cache_ + (size_t) cslot * cache_bytes_;
+        size_t at = 0;
+        if (pack_mode_) {
+            const uint32_t * cbs = &bsrc_[(size_t) key * 3];
+            for (int k = 0; k < 3; k++) {
+                const size_t nb = role_bytes_[(size_t) il * 3 + (size_t) k];
+                memcpy(cdst + at, csrc + cbs[k], nb);
+                at += nb;
+            }
+        } else {
+            const moe_expert_slice * cs = slices(il, e);
+            for (int k = 0; k < 3; k++) {
+                const size_t nb = (size_t) cs[k].len - cs[k].pre;
+                memcpy(cdst + at, csrc + cs[k].pre, nb);
+                at += nb;
+            }
+        }
+        cache_used_[(size_t) cslot] = 1;
+        cache_stamp_[(size_t) cslot] = ++cache_tick_;
+        cache_idx_[(size_t) key] = cslot;
+        n_cache_fill_++;
+    }
+
+    (reqs_[r].demand ? free_demand_ : free_stage_).push_back(reqs_[r].stage);
     reqs_[r].used = false;
     return true;
 }

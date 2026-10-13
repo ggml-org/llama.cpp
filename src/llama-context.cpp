@@ -498,8 +498,18 @@ llama_context::llama_context(
                         // staging for demand plus lookahead: 2 layers of layer-ahead
                         // plus token-ahead, all potentially unclaimed (65% predictor
                         // miss), plus margin so demand never starves
-                        if (!pager.reserve_staging(5 * n_used + 32)) {
+                        // Staging is split: 64 slots serve blocking demand only, the
+                        // rest serve prefetch, so a prefetch burst can never take the
+                        // last slot a demand read needs. Tier 1 (MOE_CACHE_MIB) adds
+                        // a pinned host arena so a repeat expert comes over PCIe
+                        // instead of the NVMe.
+                        const char * cm = getenv("MOE_CACHE_MIB");
+                        const size_t cache_bytes = cm ? (size_t) atoi(cm) * 1048576u : 0u;
+                        if (!pager.reserve_staging_split(384, 64)) {
                             LLAMA_LOG_ERROR("%s: staging reserve failed -> moe_direct_io OFF\n", __func__);
+                        } else if (cache_bytes && !pager.init_cache(cache_bytes)) {
+                            LLAMA_LOG_WARN("%s: Tier 1 host cache unavailable (%zu MiB asked)\n",
+                                           __func__, cache_bytes / 1048576);
                         } else {
                             // every not-yet-resident expert points at the zero
                             // sentinel until the first publish maps it
