@@ -1,131 +1,137 @@
 #!/usr/bin/env python3
-"""Multi-layer (cross-layer) router predictor - does cross-layer routing history
-predict the next step better than each layer in isolation?
+"""Overfit-First ML Debugging Protocol for Router Predictor.
 
-The premise being tested: routing is a cross-layer trajectory, so a predictor
-that sees ALL 48 layers' picks should beat one that sees only its own layer.
-
-Architecture (the "mini-MTP router predictor" in compact integer form - the
-model is fed routing decisions, not hidden states, so no transformer over the
-125B activations is needed):
-
-    E : Embedding(512 experts -> d)              d = 64      = 32,768 params
-    z_L = sum over ctx previous steps, all 48 layers of E[picked expert]
-    logits_L = W z_L + b_L   (512 experts, per layer)
-                                              48 * 64 * 512 = 1,572,864 params
-    total                                              ~1.6M params (~6 MB)
-
-Compared against the same model restricted to its own layer, and against
-per-layer LFU. Reported as per-layer recall at fixed candidate set K, which is
-the only metric comparable to the paper's K=8/12/16: recall over a large
-candidate set is trivially high and says nothing about prefetch cost.
-
-No PyTorch on this box; this is the compact linear-embedding form of the same
-model, trained with SGD + BCE on the routing trace.
+Architecture:
+  Layer-Decoupled Vectorized MLP:
+  - 48 independent per-layer MLPs running in a single batched GEMM
+  - Context: 4 previous steps multi-hot concatenated (input_dim = 4 * 512 = 2048)
+  - Hidden: 256 with ReLU
+  - Output: 512 logits per layer
+  - Optimizer: AdamW(lr=1e-3, weight_decay=1e-4)
+  - Loss: BCEWithLogitsLoss(pos_weight=40.0)
 """
-import argparse
-import collections
 
+import argparse
+import os
+import sys
+import time
 import numpy as np
 
+try:
+    import torch
+    import torch.nn as nn
+except ImportError:
+    # If run outside the uv venv, re-exec with uv venv python if available
+    venv_py = "/tmp/uv_venv/bin/python"
+    if os.path.exists(venv_py) and sys.executable != venv_py:
+        os.execv(venv_py, [venv_py] + sys.argv)
+    raise
 
-def load(path, n_used, n_layer):
-    a = np.fromfile(path, dtype=np.uint16)
-    n = len(a) // (n_layer * n_used)
-    return a[:n * n_layer * n_used].reshape(n, n_layer, n_used).astype(np.int32)
+
+class LayerDecoupledMLP(nn.Module):
+    def __init__(self, n_layers=48, in_dim=2048, hidden_dim=256, out_dim=512):
+        super().__init__()
+        self.W1 = nn.Parameter(torch.randn(n_layers, in_dim, hidden_dim) * (2.0 / in_dim) ** 0.5)
+        self.b1 = nn.Parameter(torch.zeros(1, n_layers, hidden_dim))
+        self.W2 = nn.Parameter(torch.randn(n_layers, hidden_dim, out_dim) * (2.0 / hidden_dim) ** 0.5)
+        self.b2 = nn.Parameter(torch.zeros(1, n_layers, out_dim))
+        self.act = nn.ReLU()
+
+    def forward(self, x):
+        # x: [B, n_layers, in_dim]
+        h = self.act(torch.einsum("bld,ldh->blh", x, self.W1) + self.b1)
+        out = torch.einsum("blh,lhe->ble", h, self.W2) + self.b2
+        return out
+
+
+def make_dataset(A, K=4, n_exp=512):
+    T, L, _ = A.shape
+    B = T - K
+    X = torch.zeros(B, L, K * n_exp, dtype=torch.float32)
+    Y = torch.zeros(B, L, n_exp, dtype=torch.float32)
+    for t in range(K, T):
+        b_idx = t - K
+        for k in range(K):
+            for l in range(L):
+                X[b_idx, l, k * n_exp + A[t - K + k, l]] = 1.0
+        for l in range(L):
+            Y[b_idx, l, A[t, l]] = 1.0
+    return X, Y
+
+
+def eval_recall(logits, A, K=4):
+    topk20 = torch.topk(logits, 20, dim=-1).indices
+    T, L, _ = A.shape
+    res = {}
+    for k_eval in [10, 16, 20]:
+        top_k = topk20[:, :, :k_eval]
+        hit, tot = 0, 0
+        for l in range(L):
+            target = torch.from_numpy(A[K:T, l].astype(np.int64))
+            hits_l = (top_k[:, l, :, None] == target[:, None, :]).any(dim=-1).sum().item()
+            hit += hits_l
+            tot += target.numel()
+        res[k_eval] = 100.0 * hit / tot
+    return res
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--ids", required=True)
-    p.add_argument("--n-layer", type=int, default=48)
-    p.add_argument("--n-used", type=int, default=8)
-    p.add_argument("--n-exp", type=int, default=512)
-    p.add_argument("--ctx", type=int, default=1)
-    p.add_argument("--dim", type=int, default=64)
-    p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--holdout", type=float, default=0.2)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--trace", type=str, default="/tmp/bg.ids.u16")
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--pos-weight", type=float, default=40.0)
+    parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--ctx", type=int, default=4)
+    args = parser.parse_args()
 
-    A = load(args.ids, args.n_used, args.n_layer)
-    cut = int(len(A) * (1 - args.holdout))
-    tr, te = A[:cut], A[cut:]
-    D = args.dim
-    print("trace %d steps (train %d / test %d), %d layers x top-%d of %d, ctx=%d, d=%d"
-          % (len(A), len(tr), len(te), args.n_layer, args.n_used, args.n_exp, args.ctx, D))
+    torch.set_num_threads(12)
 
-    rng = np.random.default_rng(0)
-    E = rng.normal(0, 0.1, (args.n_exp, D)).astype(np.float32)
-    b = np.zeros(args.n_exp, np.float32)
-    # cross: sums over ALL layers; same: sums over its own layer only
-    Wc = [rng.normal(0, 0.05, (D, args.n_exp)).astype(np.float32) for _ in range(args.n_layer)]
-    Ws = [rng.normal(0, 0.05, (D, args.n_exp)).astype(np.float32) for _ in range(args.n_layer)]
-    n_par = E.size + sum(w.size for w in Wc) + sum(b.size for b in [b] * args.n_layer)
-    print("parameters: %.2fM (%.1f MB fp32)" % (n_par / 1e6, n_par * 4 / 1e6))
+    # Load trace
+    raw = np.fromfile(args.trace, dtype=np.uint16)
+    all_steps = raw.reshape(-1, 48, 10)
+    # Decode steps start after prefill (index 6)
+    P1 = all_steps[6 : 6 + 512]
+    P2 = all_steps[6 + 512 : 6 + 1024]
 
-    def zvec(step, L, cross):
-        s = np.zeros(D, np.float32)
-        for k in range(1, args.ctx + 1):
-            if cross:
-                s += E[tr[step - k].ravel()].sum(0)
-            else:
-                s += E[tr[step - k, L, :]].sum(0)
-        return s / (args.ctx * (args.n_layer if cross else 1))
+    os.makedirs("traces/qwen38", exist_ok=True)
+    P1.tofile("traces/qwen38/trace_512.ids.u16")
+    # Also save u8 modulo 256 for systems requiring u8
+    (P1 % 256).astype(np.uint8).tofile("traces/qwen38/trace_512.ids.u8")
 
-    idx = np.arange(args.ctx, len(tr) - 1)
-    y = np.zeros(args.n_exp, np.float32)
-    for ep in range(args.epochs):
-        rng.shuffle(idx)
-        lr = 2.0 / (1 + ep)
-        for i in idx:
-            for L in range(args.n_layer):
-                y[:] = 0
-                y[tr[i + 1, L, :]] = 1
-                for cross, W in ((True, Wc), (False, Ws)):
-                    z = zvec(i, L, cross)
-                    pr = 1.0 / (1.0 + np.exp(-np.clip(z @ W[L] + b, -12, 12)))
-                    pr = np.clip(pr, 1e-6, 1 - 1e-6)
-                    g = (pr - y)[:, None] * lr
-                    W[L] -= np.outer(z, g.sum(0))
-                    b -= g.sum(0)
-                # embedding gets gradient from the cross-layer branch only
-                z = zvec(i, 0, True)
-                pr = 1.0 / (1.0 + np.exp(-np.clip(z @ Wc[0] + b, -12, 12)))
-    print("trained %d epochs" % args.epochs)
+    X1, Y1 = make_dataset(P1, K=args.ctx)
+    X2, Y2 = make_dataset(P2, K=args.ctx)
 
-    def scores_cross(L, t):
-        z = np.zeros(D, np.float32)
-        for k in range(1, args.ctx + 1):
-            z += E[te[t - k].ravel()].sum(0)
-        return (z / (args.ctx * args.n_layer)) @ Wc[L] + b
+    model = LayerDecoupledMLP(n_layers=48, in_dim=args.ctx * 512, hidden_dim=args.hidden_dim, out_dim=512)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Architecture: Layer-Decoupled MLPs (48 layers)")
+    print(f"Parameters: {n_params:,} ({n_params * 4 / 1024 / 1024:.2f} MB fp32)")
 
-    def scores_same(L, t):
-        z = np.zeros(D, np.float32)
-        for k in range(1, args.ctx + 1):
-            z += E[te[t - k, L, :]].sum(0)
-        return (z / args.ctx) @ Ws[L] + b
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([args.pos_weight]))
 
-    lfu = [collections.Counter(tr[:, L, :].ravel().tolist()) for L in range(args.n_layer)]
+    print(f"\n--- Training on Prompt 1 (512 steps, K={args.ctx}) ---")
+    t0 = time.time()
+    for epoch in range(1, args.epochs + 1):
+        optimizer.zero_grad()
+        logits1 = model(X1)
+        loss = criterion(logits1, Y1)
+        loss.backward()
+        optimizer.step()
 
-    def evaluate(fn, K):
-        hit = tot = 0
-        for t in range(args.ctx, len(te)):
-            for L in range(args.n_layer):
-                top = np.argpartition(-fn(L, t), K)[:K]
-                for e in te[t, L, :]:
-                    tot += 1
-                    hit += e in top
-        return 100.0 * hit / tot
+        if epoch in [10, 20, 50, 100, 150, 200] or epoch == args.epochs:
+            with torch.no_grad():
+                r1 = eval_recall(logits1, P1, K=args.ctx)
+            print(f"Epoch {epoch:3d} | Loss: {loss.item():.4f} | R@10: {r1[10]:.2f}% | R@16: {r1[16]:.2f}% | R@20: {r1[20]:.2f}%")
 
-    print("\n%-40s %7s %7s %7s %7s" % ("model", "R@8", "R@16", "R@32", "R@64"))
-    print("%-40s %7.1f %7.1f %7.1f %7.1f" % ("per-layer LFU (0 params)",
-          *[evaluate(lambda L, t, c=collections.Counter(lfu[L]): np.array([c.get(e, 0) for e in range(args.n_exp)], np.float32), K) for K in (8, 16, 32, 64)]))
-    print("%-40s %7.1f %7.1f %7.1f %7.1f" % ("same-layer only",
-          *[evaluate(lambda L, t: scores_same(L, t), K) for K in (8, 16, 32, 64)]))
-    print("%-40s %7.1f %7.1f %7.1f %7.1f" % ("CROSS-LAYER (all 48 layers)",
-          *[evaluate(lambda L, t: scores_cross(L, t), K) for K in (8, 16, 32, 64)]))
-    print("\nuniform-random baseline: %.1f / %.1f / %.1f / %.1f"
-          % tuple(100 * K / 512 for K in (8, 16, 32, 64)))
+    with torch.no_grad():
+        r1_final = eval_recall(model(X1), P1, K=args.ctx)
+        r2_final = eval_recall(model(X2), P2, K=args.ctx)
+
+    print("\n--- Final Results ---")
+    print(f"Prompt 1 (Train): R@10={r1_final[10]:.2f}% | R@16={r1_final[16]:.2f}% | R@20={r1_final[20]:.2f}%")
+    print(f"Prompt 2 (Test):  R@10={r2_final[10]:.2f}% | R@16={r2_final[16]:.2f}% | R@20={r2_final[20]:.2f}%")
+    print(f"Generalization Gap: R@10 Gap={r1_final[10]-r2_final[10]:.2f}% | R@16 Gap={r1_final[16]-r2_final[16]:.2f}% | R@20 Gap={r1_final[20]-r2_final[20]:.2f}%")
 
 
 if __name__ == "__main__":
