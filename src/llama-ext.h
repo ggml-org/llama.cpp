@@ -217,3 +217,22 @@ struct llama_sampling_output_view {
     uint32_t n_logits;
 };
 LLAMA_API llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, int32_t i);
+
+// Borrowed outputs from the last successful encode/decode. Do not use after the context outputs change or the context is freed.
+struct llama_outputs {
+    const llama_vocab * vocab = nullptr;
+    uint32_t n_vocab = 0;
+    const float * embeddings = nullptr;
+    const float * embeddings_nextn = nullptr;
+
+    // Use the existing accessor checks without synchronizing again.
+    LLAMA_API llama_sampling_output_view get_sampling_ith(int32_t i) const;
+    LLAMA_API const float * get_embeddings_layer_inp(uint32_t lid) const;
+
+private:
+    friend struct llama_context;
+    llama_context * ctx = nullptr;
+};
+
+// Wait for the current batch and reorder its requested outputs once. Does not copy output tensors.
+LLAMA_API const llama_outputs * llama_get_outputs(llama_context * ctx);

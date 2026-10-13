@@ -1087,6 +1087,19 @@ enum llama_pooling_type llama_context::pooling_type() const {
     return cparams.pooling_type;
 }
 
+const llama_outputs * llama_context::get_outputs() {
+    synchronize();
+    output_reorder();
+
+    outputs.ctx = this;
+    outputs.vocab = &model.vocab;
+    outputs.n_vocab = model.vocab.n_tokens();
+    outputs.embeddings = embd.data;
+    outputs.embeddings_nextn = embd_nextn.data;
+
+    return &outputs;
+}
+
 float * llama_context::get_logits() {
     output_reorder();
 
@@ -4576,8 +4589,7 @@ bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler *
     return ctx->set_sampler(seq_id, smpl);
 }
 
-llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+static llama_sampling_output_view llama_get_sampling_output(llama_context * ctx, int32_t i) {
     llama_sampling_output_view result{};
     result.token = ctx->get_sampled_token_ith(i);
     result.probs = ctx->get_sampled_probs_ith(i);
@@ -4589,6 +4601,23 @@ llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, in
         result.logits = ctx->get_logits_ith(i);
     }
     return result;
+}
+
+llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+    return llama_get_sampling_output(ctx, i);
+}
+
+llama_sampling_output_view llama_outputs::get_sampling_ith(int32_t i) const {
+    return llama_get_sampling_output(ctx, i);
+}
+
+const float * llama_outputs::get_embeddings_layer_inp(uint32_t lid) const {
+    return ctx->get_embeddings_layer_inp(lid);
+}
+
+const llama_outputs * llama_get_outputs(llama_context * ctx) {
+    return ctx->get_outputs();
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {
