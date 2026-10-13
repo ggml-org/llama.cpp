@@ -1026,9 +1026,17 @@ struct ggml_backend_cuda_comm_context {
 
     ggml_cuda_ar_pipeline *     ar_pipeline = nullptr;
 
-    // Number of ranks in the communicator. The reduction uses it to pick the FP32/BF16 threshold.
-    // Zero unless comm_init_rank created this context.
+    // Number of ranks in the communicator when each rank is a separate process. Zero unless
+    // comm_init_rank created this context.
     int                         world_size = 0;
+
+    // Number of ranks taking part in the reduction. For a communicator from comm_init_rank this is
+    // world_size. Otherwise it is the number of backends this process holds. The NCCL reduction
+    // uses it to choose the tensor size below which it reduces in F32 rather than converting to
+    // BF16 first.
+    size_t n_ranks() const {
+        return world_size > 0 ? (size_t) world_size : backends.size();
+    }
 
 #ifdef GGML_USE_NCCL
     std::vector<ncclComm_t>     comms;
@@ -1057,6 +1065,7 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
     }
 
     const size_t n_backends = comm_ctx->backends.size();
+    const size_t n_ranks    = comm_ctx->n_ranks();
 
     for (size_t i = 0; i < n_backends; ++i) {
         GGML_ASSERT(tensors[i] != nullptr);
@@ -1066,7 +1075,7 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
 
     // For small tensors, simply reduce them as FP32.
     // The following heuristic for how "small" a tensor should be is based on RTX 4090s connected via 16x PCIe 4.0.
-    if ((n_backends <= 2 && ne < 32768) || (n_backends == 3 && ne < 131072) || (n_backends >= 4 && ne < 262144)) {
+    if ((n_ranks <= 2 && ne < 32768) || (n_ranks == 3 && ne < 131072) || (n_ranks >= 4 && ne < 262144)) {
         for (size_t i = 0; i < n_backends; ++i) {
             if ((tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                 ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
@@ -1315,85 +1324,6 @@ static bool ggml_backend_cuda_comm_get_unique_id(void * id_out) {
     return true;
 }
 
-// Reduces this rank's contribution in place across the communicator. Small tensors reduce as
-// FP32, larger ones convert to BF16 to halve the bytes on the wire. Returns false if the tensor
-// cannot be handled, in which case the caller is responsible for falling back.
-static bool ggml_backend_cuda_comm_allreduce_rank(
-        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor * tensor) {
-    if (comm_ctx == nullptr || tensor == nullptr) {
-        return false;
-    }
-    if (comm_ctx->world_size < 1 || comm_ctx->comms.size() != 1) {
-        GGML_LOG_ERROR("%s: communicator was not created by comm_init_rank\n", __func__);
-        return false;
-    }
-
-    // Only F32 is reduced, matching ggml_backend_cuda_comm_allreduce_nccl.
-    if (tensor->type != GGML_TYPE_F32) {
-        GGML_LOG_DEBUG("%s: unsupported type %s\n", __func__, ggml_type_name(tensor->type));
-        return false;
-    }
-    if (!ggml_is_contiguously_allocated(tensor)) {
-        GGML_LOG_DEBUG("%s: tensor %s is not contiguously allocated\n", __func__, tensor->name);
-        return false;
-    }
-
-    const int64_t ne = ggml_nelements(tensor);
-    if (ne == 0) {
-        return true;
-    }
-
-    const size_t       n_ranks  = (size_t) comm_ctx->world_size;
-    ncclComm_t         comm     = comm_ctx->comms[0];
-    auto *             cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[0]->context;
-    const cudaStream_t stream   = cuda_ctx->stream();
-
-    ggml_cuda_set_device(cuda_ctx->device);
-
-    // Shards that were disabled (zero-sized slice) must contribute zero rather than whatever
-    // happens to be in the buffer.
-    const bool active = (tensor->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
-
-    // For small tensors, simply reduce them as FP32.
-    if ((n_ranks <= 2 && ne < 32768) || (n_ranks == 3 && ne < 131072) || (n_ranks >= 4 && ne < 262144)) {
-        if (!active) {
-            CUDA_CHECK(cudaMemsetAsync(tensor->data, 0, ggml_nbytes(tensor), stream));
-        }
-        NCCL_CHECK(ncclAllReduce(tensor->data, tensor->data, ne, ncclFloat, ncclSum, comm, stream));
-        return true;
-    }
-
-    // For large tensors it's faster to compress them to BF16 for the reduction.
-    to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(GGML_TYPE_F32);
-    to_fp32_cuda_t to_fp32 = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
-
-    ggml_cuda_pool_alloc<nv_bfloat16> tmp(cuda_ctx->pool());
-    tmp.alloc(ne);
-
-    if (active) {
-        to_bf16(tensor->data, tmp.get(), ne, stream);
-    } else {
-        CUDA_CHECK(cudaMemsetAsync(tmp.get(), 0, ne * sizeof(nv_bfloat16), stream));
-    }
-    CUDA_CHECK(cudaGetLastError());
-
-    NCCL_CHECK(ncclAllReduce(tmp.get(), tmp.get(), ne, ncclBfloat16, ncclSum, comm, stream));
-
-    to_fp32(tmp.get(), (float *) tensor->data, ne, stream);
-    CUDA_CHECK(cudaGetLastError());
-
-    return true;
-}
-
-// A communicator from comm_init_rank spans one backend, so tensors has one entry.
-static bool ggml_backend_cuda_comm_try_allreduce_rank(
-        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
-    if (tensors == nullptr) {
-        return false;
-    }
-    return ggml_backend_cuda_comm_allreduce_rank(comm_ctx, tensors[0]);
-}
-
 // Builds the communicator with ncclCommInitRank, for the case where each rank is its own
 // process. Blocks until all world_size ranks have joined.
 static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, const void * id_in, int rank, int world_size) {
@@ -1420,7 +1350,7 @@ static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, const voi
     ret->dev_ids.push_back(cuda_ctx->device);
     ret->world_size = world_size;
     ret->comms.resize(1);
-    ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_rank;
+    ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_nccl;
 
     ncclUniqueId id;
     memcpy(&id, id_in, sizeof(id));

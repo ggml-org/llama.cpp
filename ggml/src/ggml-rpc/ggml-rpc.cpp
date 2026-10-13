@@ -1424,7 +1424,6 @@ public:
 
 private:
     void sync_all_backends();
-    void * backend_comm_proc_address(uint32_t dev_id, const char * name);
     void comm_free_device(uint32_t dev_id);
     static bool comm_allreduce_pairwise(void * comm_ctx_v, ggml_tensor ** tensors);
     bool get_cached_file(uint64_t hash, std::vector<uint8_t> & data);
@@ -2233,24 +2232,11 @@ void rpc_server::sync_all_backends() {
     }
 }
 
-// Look up a function by name in the registry of the backend that owns this device. A nullptr
-// result means the backend does not provide it, which is a normal answer rather than a failure.
-void * rpc_server::backend_comm_proc_address(uint32_t dev_id, const char * name) {
-    ggml_backend_dev_t dev = ggml_backend_get_device(backends[dev_id]);
-    if (dev == nullptr) {
-        return nullptr;
-    }
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-    if (reg == nullptr) {
-        return nullptr;
-    }
-    return ggml_backend_reg_get_proc_address(reg, name);
-}
-
 void rpc_server::comm_free_device(uint32_t dev_id) {
     comm_state & state = comm_states[dev_id];
     if (state.backend_comm_ctx != nullptr) {
-        auto comm_free = (ggml_backend_comm_free_t) backend_comm_proc_address(dev_id, "ggml_backend_comm_free");
+        auto comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backends[dev_id])), "ggml_backend_comm_free");
         if (comm_free != nullptr) {
             comm_free(state.backend_comm_ctx);
         }
@@ -2338,10 +2324,11 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
     // is enough, because the negotiation spreads the decision.
     const bool no_backend_communicator = std::getenv("GGML_RPC_NO_BACKEND_COMMUNICATOR") != nullptr;
 
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backends[dev_id]));
     auto get_unique_id = no_backend_communicator ? nullptr : (ggml_backend_comm_get_unique_id_t)
-        backend_comm_proc_address(dev_id, "ggml_backend_comm_get_unique_id");
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_get_unique_id");
     auto init_rank     = no_backend_communicator ? nullptr : (ggml_backend_comm_init_rank_t)
-        backend_comm_proc_address(dev_id, "ggml_backend_comm_init_rank");
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_init_rank");
 
     uint8_t use_backend_communicator = 0;
     uint8_t id[GGML_BACKEND_COMM_UNIQUE_ID_SIZE] = {};
@@ -2388,7 +2375,7 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
         }
         state.backend_comm_ctx = backend_ctx;
         state.allreduce_fn     = (ggml_backend_comm_allreduce_tensor_t)
-            backend_comm_proc_address(dev_id, "ggml_backend_comm_allreduce_tensor");
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_allreduce_tensor");
         if (state.allreduce_fn == nullptr) {
             comm_free_device(dev_id);
             return true;
