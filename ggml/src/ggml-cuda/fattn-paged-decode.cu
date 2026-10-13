@@ -12,7 +12,12 @@ static bool pd_disabled() {
     return disabled;
 }
 
-// Prototype: prefill ubatches (more than 4 query tokens) in row tiles, for measurement against the stock kernels.
+// Batches of up to this many query tokens (speculative verify) take the decode kernel: up to 5 tokens fill one 32-row
+// tile, 6-8 take two; larger ones take the chunked prefill.
+static constexpr int64_t PD_DECODE_MAX_NB = 8;
+
+// Prototype: prefill ubatches (more than PD_DECODE_MAX_NB query tokens) in row tiles, for measurement against the stock
+// kernels.
 static bool pd_prefill() {
     static const bool enabled = getenv("GGML_CUDA_PAGED_PREFILL") != nullptr;
     return enabled;
@@ -63,7 +68,7 @@ bool ggml_cuda_fattn_paged_decode_enabled(int device, const ggml_tensor * dst) {
         return false;
     }
     // Paged K/V with more query tokens: row tiles, for the shapes the chunked prefill does not take (dispatched first).
-    return pd_shapes_ok(device, dst, paged || pd_prefill() ? INT32_MAX : 4);
+    return pd_shapes_ok(device, dst, paged || pd_prefill() ? INT32_MAX : PD_DECODE_MAX_NB);
 }
 
 static int pd_prefill_chunk_pages() {
@@ -121,7 +126,7 @@ bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) 
     const ggml_tensor * K     = dst->src[1];
     const bool          paged = dst->src[GGML_FA_SRC_PAGES] != nullptr;
     const int64_t       chunk = (int64_t) pd_prefill_chunk_pages()*PD_PAGE;
-    if (Q->ne[1] <= 4 || pd_prefill()) {
+    if (Q->ne[1] <= PD_DECODE_MAX_NB || pd_prefill()) {
         return false;
     }
     // paged K/V needs the runs; contiguous K/V is one run, worth splitting when longer than a chunk (bounds the stock
@@ -235,8 +240,11 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
         if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }
     } else if (M_TILES == 1) {
         if (pages) { PD_LAUNCH(1, true, 4); } else { PD_LAUNCH(1, false, 4); }
-    } else {
+    } else if (nb <= 4) {
         if (pages) { PD_LAUNCH(2, true, 4); } else { PD_LAUNCH(2, false, 4); }
+    } else {
+        // 5 query tokens (30 rows) in one 32-row tile
+        if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }
     }
 #undef PD_LAUNCH
     CUDA_CHECK(cudaGetLastError());

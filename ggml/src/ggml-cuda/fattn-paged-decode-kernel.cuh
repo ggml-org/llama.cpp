@@ -1,6 +1,6 @@
 #pragma once
 
-// Decode attention over contiguous or paged K/V for Q8_0 K / Q4_0 V, head size 256, GQA 6, 1-4 query tokens, RDNA4
+// Decode attention over contiguous or paged K/V for Q8_0 K / Q4_0 V, head size 256, GQA 6, 1-8 query tokens, RDNA4
 // WMMA. Plain HIP (no ggml dependencies); ggml's dispatch lives in fattn-paged-decode.cu.
 
 #include <hip/hip_runtime.h>

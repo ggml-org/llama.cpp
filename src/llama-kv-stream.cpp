@@ -323,7 +323,7 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
     }
 
     // the attended pages that are not resident stream: packed for the decode kernel, in place for a gather
-    const bool decode = cells.size() <= 4 || prefill_paged;
+    const bool decode = cells.size() <= decode_max_tokens || prefill_paged;
 
     std::fill(page_ring.begin(), page_ring.end(), -1);
     n_streamed = 0;
@@ -373,7 +373,7 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
     }
     {
         std::lock_guard<std::mutex> lock(mtx);
-        jobs.push_back({ tag, std::move(copies), wb_pending, cells.size() <= 4 });
+        jobs.push_back({ tag, std::move(copies), wb_pending, cells.size() <= decode_max_tokens });
         n_jobs++;
     }
     wb_pending = nullptr;

@@ -10069,9 +10069,9 @@ static const ggml_type other_types[] = {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
-    // Decode shapes of the RDNA4 Q8_0/Q4_0 paged decode kernel (4 KV heads x GQA 6, head 256, 1-4 query tokens).
+    // Decode shapes of the RDNA4 Q8_0/Q4_0 paged decode kernel (4 KV heads x GQA 6, head 256, 1-8 query tokens).
     for (int kv : { 256, 1000, 8192, 32768, }) {
-        for (int nb : { 1, 2, 3, 4, }) {
+        for (int nb : { 1, 2, 3, 4, 5, 6, 8, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
         }
     }
@@ -10083,7 +10083,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     for (int kv : { 256, 1024, 8192, 32768, }) {
-        for (int nb : { 1, 2, 3, 4, }) {
+        for (int nb : { 1, 2, 3, 4, 5, 6, 8, }) {
             for (int ring_every : { 0, 1, 3, }) {
                 test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, ring_every));
             }
@@ -12872,7 +12872,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Decode shapes of the RDNA4 Q8_0/Q4_0 paged decode kernel, short to long contexts.
     for (int kv : { 512, 2048, 8192, 32768, 131072, 262144, }) {
-        for (int nb : { 1, 2, 3, 4, }) {
+        for (int nb : { 1, 2, 3, 4, 5, 6, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
             test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 0));
             test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 2));

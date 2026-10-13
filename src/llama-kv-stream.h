@@ -26,7 +26,7 @@
 // queues each layer's copies once the slot's previous reader has released it, and a publisher thread sets the layer's
 // ready flag when they have landed; the attention waits for the flag and releases the slot (ggml_flash_attn_ext_set_sync).
 //
-// Decode ubatches (up to 4 tokens, the paged decode kernel) read resident pages from the pool and streamed pages from the
+// Decode ubatches (up to decode_max_tokens, the paged decode kernel) read resident pages from the pool and streamed pages from the
 // slot through a page table (ggml_flash_attn_ext_set_pages); streamed pages are packed at the start of the slot. So do
 // larger ubatches if the backend's attention takes paged K/V for them (paged_prefill()); otherwise they attend the slot
 // as a contiguous copy of the whole layer for the stock kernels: streamed pages are copied to their logical place by the
@@ -64,6 +64,9 @@ struct llama_kv_stream_attn {
 class llama_kv_stream {
 public:
     static constexpr uint32_t page_size = 256;
+
+    // ubatches up to this size (decode and speculative verification) take the backend's paged decode attention
+    static constexpr uint32_t decode_max_tokens = 8;
 
     // pool tensors of one layer: [n_embd_gqa, n_slots*page_size]
     struct layer {
@@ -167,7 +170,7 @@ private:
         uint32_t tag;
         std::vector<run> copies; // page: host page, slot: page index in the device slot
         ggml_backend_event_t wb = nullptr; // write-backs the copies read, recorded on the compute stream
-        bool small = false;                // a decode-sized ubatch: prefetch the next one
+        bool small = false;                // a decode ubatch (decode_max_tokens): prefetch the next one
     };
 
     // copier: the layers copied ahead for the next job

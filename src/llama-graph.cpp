@@ -572,7 +572,8 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
 static bool can_reuse_kv_stream(const llm_graph_input_attn_kv * inp, const llama_kv_cache_context * mctx) {
     const llama_kv_stream * stream = mctx->get_kv_stream();
     return !stream || (inp->kv_synced == stream->synced() &&
-            (inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= 4 || stream->paged_prefill()));
+            (inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= llama_kv_stream::decode_max_tokens ||
+             stream->paged_prefill()));
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
