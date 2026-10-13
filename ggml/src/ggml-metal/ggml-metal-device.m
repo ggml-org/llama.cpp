@@ -1725,9 +1725,38 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_FLASH_ATTN_EXT:
-            // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+            // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
             if (op->src[5] != NULL) {
-                return false;
+                const struct ggml_tensor * kv_rows = op->src[5];
+
+                if (kv_rows->type != GGML_TYPE_I32 ||
+                    !ggml_is_contiguous(kv_rows) ||
+                    kv_rows->ne[2] != 1 || kv_rows->ne[3] != 1 ||
+                    kv_rows->ne[1] != op->src[0]->ne[3] ||
+                    !op->src[3] || op->src[1]->ne[3] != 1 || op->src[2]->ne[3] != 1) {
+                    return false;
+                }
+
+                // the non-vec kernels attend over a contiguous F16 copy of the referenced rows:
+                // - F16 K/V is gathered directly
+                // - quantized K/V is first dequantized with kernel_flash_attn_ext_kv_*_f16
+                // - other types keep attending to the whole cache (dense mask)
+                switch (op->src[1]->type) {
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                        break;
+                    default:
+                        return false;
+                }
+
+                // the row gather copies F16 values in groups of 4
+                if (op->src[2]->ne[0] % 4 != 0) {
+                    return false;
+                }
             }
             // for new head sizes, add checks here
             if (op->src[0]->ne[0] != 32 &&
