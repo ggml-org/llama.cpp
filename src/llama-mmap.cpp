@@ -835,7 +835,7 @@ const bool llama_mlock::SUPPORTED = false;
 #endif
 
 void llama_prefetch(llama_memory_ranges mr) {
-#if defined(__linux__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
+#if defined(__linux__) || defined(__APPLE__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
     if (mr.empty()) {
         return;
     }
@@ -874,6 +874,7 @@ void llama_prefetch(llama_memory_ranges mr) {
     };
 #else
     auto prefetch = [&]() {
+        // TODO: in a follow-up, use posix_madvise(.., POSIX_MADV_WILLNEED) to match the rest of this file
         if (madvise((void *) begin, end - begin, MADV_WILLNEED) != 0) {
             LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
             return false;
