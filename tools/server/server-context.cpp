@@ -16,6 +16,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -4938,6 +4939,7 @@ private:
         });
 
         // speculative decoding - main model sample and accept
+        const llama_outputs * outputs = nullptr;
         iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING || !slot.can_speculate() ||
                     slot.spec_draft.empty() || slot.spec_i_batch.empty()) {
@@ -4971,10 +4973,15 @@ private:
                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
                 } else if (slot.spec_is_replay && slot.use_spec_rejection()) {
                     accepted = server_accept_replay(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
-                } else if (use_rejection) {
-                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
                 } else {
-                    accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
+                    if (!outputs) {
+                        outputs = llama_get_outputs(ctx_tgt);
+                    }
+                    if (use_rejection) {
+                        accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
+                    } else {
+                        accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft);
+                    }
                 }
 
                 GGML_ASSERT(accepted.size() >= 1);

@@ -600,9 +600,6 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
 }
 
 static llama_token common_sampler_sample_impl(common_sampler * gsmpl, int n_vocab, const llama_sampling_output_view & output, bool grammar_first) {
-    // Context synchronization and output retrieval precede CPU sampling timing.
-    const auto tm = gsmpl->tm();
-
     llama_token id = LLAMA_TOKEN_NULL;
 
     auto & grmr  = gsmpl->grmr;
@@ -682,22 +679,42 @@ static llama_token common_sampler_sample_impl(common_sampler * gsmpl, int n_voca
 }
 
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
-    const auto output = llama_get_sampling_output_ith(ctx, idx);
+    llama_synchronize(ctx);
+
+    // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations
+    const auto tm = gsmpl->tm();
+
+    llama_sampling_output_view output;
+    output.probs = llama_get_sampled_probs_ith(ctx, idx);
+    output.sampled_logits = llama_get_sampled_logits_ith(ctx, idx);
+    output.candidates = llama_get_sampled_candidates_ith(ctx, idx);
+    if (output.probs) {
+        output.n_probs = llama_get_sampled_probs_count_ith(ctx, idx);
+    } else if (output.sampled_logits) {
+        output.n_logits = llama_get_sampled_logits_count_ith(ctx, idx);
+    } else {
+        output.logits = llama_get_logits_ith(ctx, idx);
+    }
+    output.token = llama_get_sampled_token_ith(ctx, idx);
     const auto * vocab = llama_model_get_vocab(llama_get_model(ctx));
     return common_sampler_sample_impl(gsmpl, llama_vocab_n_tokens(vocab), output, grammar_first);
 }
 
 llama_token common_sampler_sample_from_outputs(common_sampler * gsmpl, const llama_outputs * outputs, int idx, bool grammar_first) {
+    const auto tm = gsmpl->tm();
     return common_sampler_sample_impl(gsmpl, outputs->n_vocab, outputs->get_sampling_ith(idx), grammar_first);
 }
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
+    return common_sampler_sample_and_accept_n(gsmpl, llama_get_outputs(ctx), idxs, draft, grammar_first);
+}
+
+std::vector<llama_token> common_sampler_sample_and_accept_n(common_sampler * gsmpl, const llama_outputs * outputs, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
 
-    const auto * outputs = llama_get_outputs(ctx);
     const llama_vocab * vocab = outputs->vocab;
 
     size_t i = 0;
@@ -739,6 +756,10 @@ static float prob_of(const llama_token_data * data, size_t n, llama_token id) {
 // Preserves the target distribution exactly, and accepts more often than matching does when the
 // draft samples instead of taking its argmax.
 std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first) {
+    return common_sampler_sample_and_accept_n_rejection(gsmpl, llama_get_outputs(ctx), idxs, draft, draft_q, grammar_first);
+}
+
+std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(common_sampler * gsmpl, const llama_outputs * outputs, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first) {
     GGML_ASSERT(idxs.size()    == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
     GGML_ASSERT(draft_q.size() == draft.size() && "draft_q must have one entry per draft token");
 
@@ -751,8 +772,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
     std::vector<llama_token_data> residual;
 
     std::vector<llama_token_data> cand; // candidate array masked by the grammar, if there is one
-
-    const auto * outputs = llama_get_outputs(ctx);
 
     size_t i = 0;
     for (; i < draft.size(); i++) {

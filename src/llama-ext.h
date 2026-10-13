@@ -206,17 +206,16 @@ LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
 // each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
 LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);
 
-// Read one sampling row after synchronization. Borrowed pointers are valid until the context outputs change.
+// Borrowed sampling outputs for one row.
 struct llama_sampling_output_view {
-    llama_token token;
-    const float * probs;
-    const float * sampled_logits;
-    const llama_token * candidates;
-    const float * logits;
-    uint32_t n_probs;
-    uint32_t n_logits;
+    llama_token token = LLAMA_TOKEN_NULL;
+    const float * probs = nullptr;
+    const float * sampled_logits = nullptr;
+    const llama_token * candidates = nullptr;
+    const float * logits = nullptr;
+    uint32_t n_probs = 0;
+    uint32_t n_logits = 0;
 };
-LLAMA_API llama_sampling_output_view llama_get_sampling_output_ith(llama_context * ctx, int32_t i);
 
 // Borrowed outputs from the last successful encode/decode. Do not use after the context outputs change or the context is freed.
 struct llama_outputs {
@@ -225,13 +224,31 @@ struct llama_outputs {
     const float * embeddings = nullptr;
     const float * embeddings_nextn = nullptr;
 
-    // Use the existing accessor checks without synchronizing again.
-    LLAMA_API llama_sampling_output_view get_sampling_ith(int32_t i) const;
-    LLAMA_API const float * get_embeddings_layer_inp(uint32_t lid) const;
+    // Positive indices are batch token positions; negative indices count from the last output row.
+    // An invalid index returns an empty row.
+    llama_sampling_output_view get_sampling_ith(int32_t i) const {
+        int64_t row = i;
+        if (i < 0) {
+            row += (int64_t) sampling.size();
+        } else {
+            if (!output_ids || (size_t) i >= output_ids->size()) {
+                return {};
+            }
+            row = (*output_ids)[i];
+        }
+        return row >= 0 && (size_t) row < sampling.size() ? sampling[row] : llama_sampling_output_view{};
+    }
+
+    const float * get_embeddings_layer_inp(uint32_t lid) const {
+        GGML_ASSERT(lid < embeddings_layer_inp.size() && embeddings_layer_inp[lid]);
+        return embeddings_layer_inp[lid];
+    }
 
 private:
     friend struct llama_context;
-    llama_context * ctx = nullptr;
+    std::vector<llama_sampling_output_view> sampling;
+    std::vector<const float *> embeddings_layer_inp;
+    const std::vector<int32_t> * output_ids = nullptr;
 };
 
 // Wait for the current batch and reorder its requested outputs once. Does not copy output tensors.
