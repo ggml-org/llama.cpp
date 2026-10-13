@@ -30,3 +30,18 @@ GGML_API bool ggml_backend_execution_has_stock_conversion(const ggml_tensor * op
 // Wider workloads omit native extras only after the owner quotes their replacement storage.
 GGML_API void ggml_backend_execution_set_verified_workspace(ggml_tensor * op);
 GGML_API bool ggml_backend_execution_has_verified_workspace(const ggml_tensor * op);
+
+// One exact [begin,end) visibility interval per query. Tokens includes stock KV padding.
+struct ggml_backend_execution_mask_interval {
+    int32_t begin, end, tokens, version;
+};
+static_assert(sizeof(ggml_backend_execution_mask_interval) == 4*sizeof(int32_t), "mask descriptor layout");
+// Reject holes, biases, NaNs and signed zero rather than approximating a dense mask.
+GGML_API bool ggml_backend_execution_mask_interval_encode(const ggml_fp16_t * mask, size_t tokens,
+        ggml_backend_execution_mask_interval & interval);
+GGML_API ggml_fp16_t ggml_backend_execution_mask_interval_value(const ggml_backend_execution_mask_interval & interval,
+        int32_t token);
+// Private source 5 is an I32 [4,queries] input, never a dense F16 mask alias.
+GGML_API bool ggml_backend_execution_set_mask_bounds(ggml_tensor * op, ggml_tensor * bounds);
+// Produce planning-only dense metadata with no storage. Never use it for physical range validation or byte I/O.
+GGML_API bool ggml_backend_execution_mask_metadata(const ggml_tensor * op, ggml_tensor & logical, ggml_tensor & mask);

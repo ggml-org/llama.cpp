@@ -4,6 +4,7 @@
 #include <memory>
 #include <atomic>
 #include <cstring>
+#include <climits>
 
 static std::atomic<size_t> execution_buffers{0};
 bool ggml_backend_execution_buffers_present() { return execution_buffers.load(std::memory_order_acquire) != 0; }
@@ -46,6 +47,59 @@ bool ggml_backend_execution_has_stock_conversion(const ggml_tensor * op) {
     int32_t value=0;
     std::memcpy(&value,op->op_params+external_workspace_param-1,sizeof(value));
     return value == 1;
+}
+
+bool ggml_backend_execution_mask_interval_encode(const ggml_fp16_t * mask, size_t tokens,
+        ggml_backend_execution_mask_interval & interval) {
+    if (!mask || !tokens || tokens > INT32_MAX) return false;
+    ggml_backend_execution_mask_interval next{0,0,int32_t(tokens),1};
+    bool started=false, ended=false;
+    for (size_t i=0; i<tokens; ++i) {
+        if (mask[i] == 0) {
+            if (ended) return false;
+            if (!started) { next.begin=int32_t(i); started=true; }
+            next.end=int32_t(i+1);
+        } else {
+            if (mask[i] != 0xfc00) return false;
+            ended=started;
+        }
+    }
+    interval=next;
+    return true;
+}
+
+ggml_fp16_t ggml_backend_execution_mask_interval_value(const ggml_backend_execution_mask_interval & interval, int32_t token) {
+    const bool valid=interval.version == 1 && interval.tokens > 0 && interval.begin >= 0 &&
+        interval.begin <= interval.end && interval.end <= interval.tokens;
+    return valid && token >= interval.begin && token < interval.end ? 0 : 0xfc00;
+}
+
+bool ggml_backend_execution_mask_metadata(const ggml_tensor * op, ggml_tensor & logical, ggml_tensor & mask) {
+    if (!op || op->op != GGML_OP_FLASH_ATTN_EXT || op->src[3] || op->src[4] ||
+            !op->src[0] || !op->src[1] || !op->src[5]) return false;
+    const auto * q=op->src[0], * k=op->src[1], * bounds=op->src[5];
+    if (q->ne[1] <= 0 || q->ne[1] > INT32_MAX || k->ne[1] <= 0 || k->ne[1] > INT32_MAX ||
+            q->ne[3] != 1 || bounds->type != GGML_TYPE_I32 || bounds->ne[0] != 4 || bounds->ne[1] != q->ne[1] ||
+            bounds->ne[2] != 1 || bounds->ne[3] != 1 || !ggml_is_contiguous(bounds)) return false;
+    ggml_tensor next{};
+    next.type=GGML_TYPE_F16; next.ne[0]=k->ne[1]; next.ne[1]=q->ne[1]; next.ne[2]=next.ne[3]=1;
+    next.nb[0]=sizeof(ggml_fp16_t);
+    for (int i=1; i<4; ++i) {
+        if (size_t(next.ne[i-1]) > SIZE_MAX/next.nb[i-1]) return false;
+        next.nb[i]=next.nb[i-1]*size_t(next.ne[i-1]);
+    }
+    mask=next; logical=*op; logical.src[3]=&mask;
+    return true;
+}
+
+bool ggml_backend_execution_set_mask_bounds(ggml_tensor * op, ggml_tensor * bounds) {
+    if (!op) return false;
+    auto candidate=*op;
+    candidate.src[5]=bounds;
+    ggml_tensor logical{}, mask{};
+    if (!ggml_backend_execution_mask_metadata(&candidate,logical,mask)) return false;
+    op->src[5]=bounds;
+    return true;
 }
 
 struct execution_storage {
@@ -116,7 +170,8 @@ bool ggml_backend_buft_is_execution(ggml_backend_buffer_type_t type) { return ty
 bool ggml_backend_execution_owner(const ggml_tensor * op,ggml_backend_buffer_t & owner) {
     owner = nullptr;
     if (!op) return false;
-    if (!ggml_backend_execution_buffers_present()) return true;
+    const bool compact=op->op == GGML_OP_FLASH_ATTN_EXT && op->src[5];
+    if (!ggml_backend_execution_buffers_present()) return !compact;
     const auto accept = [&](ggml_backend_buffer_t buffer) {
         while (buffer && !ggml_backend_buft_is_execution(buffer->buft)) buffer = buffer->parent;
         if (!buffer) return true;
@@ -127,7 +182,7 @@ bool ggml_backend_execution_owner(const ggml_tensor * op,ggml_backend_buffer_t &
     if (op->view_src && !accept(op->view_src->buffer)) return false;
     for (auto * source : op->src) if (source &&
             (!accept(source->buffer) || (source->view_src && !accept(source->view_src->buffer)))) return false;
-    return true;
+    return !compact || owner;
 }
 bool ggml_backend_execution_supports(ggml_backend_buffer_t owner,ggml_backend_dev_t device,const ggml_tensor * op) {
     return owner && op && ggml_backend_buft_is_execution(owner->buft) && owner->buft->device == device &&
