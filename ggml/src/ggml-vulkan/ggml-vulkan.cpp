@@ -1274,9 +1274,6 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
 static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
     GGML_UNUSED(n_kv);
-    GGML_UNUSED(k_type);
-    GGML_UNUSED(v_type);
-    GGML_UNUSED(f32acc);
 
     vk_fa_tuning_params result{};
     result.path = FA_COOPMAT1;
@@ -1288,11 +1285,7 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
 
     const uint32_t num_subgroups = 4;
 
-    // Double the Q rows per workgroup for large-batch (prefill) to halve the K/V
-    // re-read (two SfMat/PVMat coopmat tiles per subgroup). Only wins end-to-end on
-    // bandwidth-starved integrated GPUs (shared memory, little cache); discrete RDNA4
-    // regresses from the reduced concurrency of the heavier workgroups. Validated on
-    // Strix Halo (RDNA3.5).
+    // Halves K/V re-reads; only wins on UMA, regresses on discrete RDNA4
     const bool double_block_rows = device->uma &&
         (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4) && n_rows >= 64;
     result.block_rows = double_block_rows ? 2 * coopmat_block_rows : coopmat_block_rows;
@@ -1301,15 +1294,17 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     result.subgroup_size = device->subgroup_size;
     result.workgroup_size = num_subgroups * result.subgroup_size;
 
-    // Hold Q resident in coopmat registers instead of re-reading it from LDS per KV tile,
-    // freeing the Qf LDS buffer for occupancy. Only on the single-tile (block_rows == 16)
-    // path: doubling the Q rows needs two register tiles per d-step and spills (RDNA3.5).
-    result.q_in_regs = !double_block_rows;
-
     const uint32_t D_lsb = D ^ (D & (D-1));  // extract lowest set bit
     result.d_split = std::min(std::min(result.subgroup_size, 8u), D_lsb / 4);
 
     result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
+
+    if (double_block_rows && !ggml_vk_flash_attn_coopmat_shmem_support(device, result, hsk, hsv, f32acc, k_type, v_type)) {
+        result.block_rows = coopmat_block_rows;
+    }
+
+    // Br=32 spills
+    result.q_in_regs = result.block_rows == coopmat_block_rows && device->vendor_id == VK_VENDOR_ID_AMD;
 
     return result;
 }
@@ -8104,14 +8099,12 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     // DATA_A_IQ4_NL is compiled into the FA shaders unconditionally, so its shared table is always allocated.
     const uint32_t iq_shmem = 16 * sizeof(ggml_fp16_t);
 
-    // Qf is dropped on the q_in_regs path (Q staged through Psh into registers), but
-    // kept here conservatively: it only over-counts the block_rows == 16 path, which is
-    // far below the shared-memory limit, and keeps the check correct for block_rows == 32.
     const uint32_t qstride = hsk_pad / 4 + 2;
-    const uint32_t Qf = Br * qstride * f16vec4;
+    const uint32_t Qf = (params.q_in_regs ? 1 : Br * qstride) * f16vec4;
 
     const uint32_t psh_stride = Br / 4 + 2;
-    const uint32_t Psh = Bc * psh_stride * f16vec4;
+    const uint32_t qchunk_stride = 4 * 16 / 4 + 2;
+    const uint32_t Psh = std::max(Bc * psh_stride, params.q_in_regs ? Br * qchunk_stride : 0) * f16vec4;
 
     const uint32_t sfshstride = (hsk <= 128) ? (Br + 8) : Br;
     const uint32_t sfsh = Bc * sfshstride * acctype;
@@ -8223,9 +8216,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const ggml_type k_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : k->type;
     const ggml_type v_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : v->type;
 
-    // Probe tuning with the largest packable N so the probe's block size matches
-    // what the packed pipeline will actually compute. For scalar/coopmat2 this equals
-    // the result at any large N; for coopmat1 it avoids the prefill-doubled block size.
+    // N=32 avoids the cm1 prefill block_rows doubling
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 32, KV, k_type_eff, v_type_eff, f32acc);
     const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
 
