@@ -313,6 +313,8 @@ public:
     // between graph launches (MOE_POST_REFRESH=1): the decode graph then runs
     // with no split at all, which is where the per-token latency was going.
     void moe_post_refresh();
+    // neural lookahead prefetch via 31M native CUDA router predictor
+    void moe_predict_and_prefetch();
     const ggml_tensor * moe_pool_tensor(const char * which, int il) const;
     // pre-populate every layer's slots with the offline hot profile so the
     // first decode step starts warm; pages synchronously, failures are

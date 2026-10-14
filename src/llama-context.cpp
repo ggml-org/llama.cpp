@@ -1,4 +1,5 @@
 #include "llama-context.h"
+#include "moe_predictor.h"
 
 #include "ggml.h"
 #include "llama-arch.h"
@@ -540,6 +541,11 @@ llama_context::llama_context(
                                            __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
                                            n_layer, s_pl);
                             moe_seed_hot();
+                            const char * p_bin = getenv("MOE_PREDICTOR_BIN");
+                            std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_31m.bin";
+                            if (moe_predictor_init(pred_bin.c_str(), moe.n_layer, 2048, 256, 512)) {
+                                LLAMA_LOG_INFO("%s: 31M native CUDA router predictor armed from %s\n", __func__, pred_bin.c_str());
+                            }
                         } // staging reserved
                     } // buf ok
                 } else {
@@ -678,6 +684,9 @@ llama_context::~llama_context() {
     // release the sparse-MoE slot pool (fit-probe contexts must not leak VRAM)
     if (moe.buf) { ggml_backend_buffer_free(moe.buf); moe.buf = nullptr; }
     if (moe.ctx) { ggml_free(moe.ctx); moe.ctx = nullptr; }
+    if (moe_predictor_is_ready()) {
+        moe_predictor_free();
+    }
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.hparams.no_alloc && !opt_ctx) {
@@ -1687,6 +1696,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // decode only: the graph is done and nothing reads the pool, so refresh the
     // whole table here instead of splitting the graph at all 48 MoE layers
     if (moe_ready && ubatch.n_tokens == 1) {
+        moe_predict_and_prefetch();
         moe_post_refresh();
     }
 
@@ -5024,6 +5034,58 @@ void llama_context::moe_post_refresh() {
     }
 }
 
+void llama_context::moe_predict_and_prefetch() {
+    if (!moe_ready || !moe_predictor_is_ready()) return;
+
+    const int n_layer = moe.n_layer;
+    const int n_exp   = moe.n_expert;
+    const int n_used  = moe.n_used;
+
+    // Rolling history buffer [4, n_layer, n_used]
+    static std::vector<uint16_t> history(4 * 48 * 10, 0);
+
+    // Shift previous 3 steps: [0..2] <- [1..3]
+    memmove(history.data(), history.data() + n_layer * n_used, 3 * n_layer * n_used * sizeof(uint16_t));
+
+    // Append newly completed decode step's routing into slice 3
+    for (int il = 0; il < n_layer; il++) {
+        for (int k = 0; k < n_used; k++) {
+            const int32_t e = moe.step_sel[(size_t) il * n_used + k];
+            history[(3 * n_layer + il) * n_used + k] = (e >= 0 && e < n_exp) ? (uint16_t) e : 0;
+        }
+    }
+
+    static std::vector<uint16_t> top16(n_layer * 16, 0);
+    static float s_lat_total = 0.0f;
+    static long  s_pred_steps = 0;
+    static long  s_pf_enqueued = 0;
+
+    const float lat_ms = moe_predictor_predict(history.data(), top16.data());
+    s_lat_total += lat_ms;
+    s_pred_steps++;
+
+    // Enqueue non-resident predicted candidates into direct-IO prefetch ring
+    int budget = std::max(0, pager.n_free_staging() - 2 * n_used);
+    for (int il = 0; il < n_layer && budget > 0; il++) {
+        for (int k = 0; k < 16 && budget > 0; k++) {
+            const int32_t e = top16[(size_t) il * 16 + k];
+            if (e < 0 || e >= n_exp) continue;
+            if (moe.slot_of[(size_t) il * n_exp + e] >= 0) continue;
+            if (pager.prefetch(il, e)) {
+                budget--;
+                s_pf_enqueued++;
+            }
+        }
+    }
+
+    if (s_pred_steps == 1 || (s_pred_steps % 25 == 0)) {
+        fprintf(stderr, "[moe_predictor] step=%ld lat=%.4f ms (mean=%.4f ms), pf_enqueued=%ld, pf_hit=%ld, pf_issued=%ld\n",
+            s_pred_steps, lat_ms, s_lat_total / s_pred_steps, s_pf_enqueued,
+            pager.stats_pf_hit(), pager.stats_pf_issued());
+        fflush(stderr);
+    }
+}
+
 void llama_context::moe_adapt_run() {
     if (!moe_adapt_on()) return;
     const int n_exp = moe.n_expert;
@@ -5244,6 +5306,30 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const char * nm = ggml_get_name(t);
     if (!nm) {
         return false;
+    }
+    // MOE_TRACE_LOGITS: dump the continuous router scores (the tensor feeding
+    // argsort_top_k) so a logit-space transition model can be trained offline.
+    // ffn_moe_probs[_masked|_biased] are all [n_expert, n_tokens] F32.
+    if (!ask && getenv("MOE_TRACE_LOGITS")
+        && (!strcmp(nm, "ffn_moe_probs") || !strcmp(nm, "ffn_moe_probs_masked")
+            || !strcmp(nm, "ffn_moe_probs_biased"))) {
+        static FILE * lf = nullptr;
+        static bool  linit = false;
+        if (!linit) {
+            linit = true;
+            const char * p = getenv("MOE_TRACE_LOGITS");
+            if (p && p[0]) lf = fopen((std::string(p) + ".logits.f32").c_str(), "wb");
+        }
+        if (lf) {
+            // name is ffn_moe_probs[_masked|_biased]-<il>
+            int il = atoi(strrchr(nm, '-') + 1);
+            std::vector<float> buf((size_t) t->ne[0] * t->ne[1]);
+            ggml_backend_tensor_get(t, buf.data(), 0, buf.size() * sizeof(float));
+            int32_t h = il;
+            fwrite(&h, sizeof(h), 1, lf);
+            fwrite(buf.data(), sizeof(float), buf.size(), lf);
+            fflush(lf);
+        }
     }
     if (!ctx || !ctx->moe_enabled()) {
         return false;
