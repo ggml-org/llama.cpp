@@ -5055,32 +5055,36 @@ void llama_context::moe_predict_and_prefetch() {
         }
     }
 
-    static std::vector<uint16_t> top16(n_layer * 16, 0);
+    static std::vector<uint16_t> cold_top16(n_layer * 16, 0);
     static float s_lat_total = 0.0f;
     static long  s_pred_steps = 0;
     static long  s_pf_enqueued = 0;
 
-    const float lat_ms = moe_predictor_predict(history.data(), top16.data());
+    // Pass moe.slot_of.data() to mask out resident experts and return pure COLD candidates
+    const float lat_ms = moe_predictor_predict(history.data(), cold_top16.data(), moe.slot_of.data());
     s_lat_total += lat_ms;
     s_pred_steps++;
 
-    // Enqueue non-resident predicted candidates into direct-IO prefetch ring
+    // Enqueue top cold non-resident experts per layer into direct-IO prefetch ring
+    const int max_cold_per_layer = 6;
     int budget = std::max(0, pager.n_free_staging() - 2 * n_used);
+    int step_enqueued = 0;
     for (int il = 0; il < n_layer && budget > 0; il++) {
-        for (int k = 0; k < 16 && budget > 0; k++) {
-            const int32_t e = top16[(size_t) il * 16 + k];
+        for (int k = 0; k < max_cold_per_layer && budget > 0; k++) {
+            const int32_t e = cold_top16[(size_t) il * 16 + k];
             if (e < 0 || e >= n_exp) continue;
             if (moe.slot_of[(size_t) il * n_exp + e] >= 0) continue;
             if (pager.prefetch(il, e)) {
                 budget--;
                 s_pf_enqueued++;
+                step_enqueued++;
             }
         }
     }
 
     if (s_pred_steps == 1 || (s_pred_steps % 25 == 0)) {
-        fprintf(stderr, "[moe_predictor] step=%ld lat=%.4f ms (mean=%.4f ms), pf_enqueued=%ld, pf_hit=%ld, pf_issued=%ld\n",
-            s_pred_steps, lat_ms, s_lat_total / s_pred_steps, s_pf_enqueued,
+        fprintf(stderr, "[moe_predictor] step=%ld lat=%.4f ms (mean=%.4f ms), step_pf=%d, total_pf=%ld, pf_hit=%ld, pf_issued=%ld\n",
+            s_pred_steps, lat_ms, s_lat_total / s_pred_steps, step_enqueued, s_pf_enqueued,
             pager.stats_pf_hit(), pager.stats_pf_issued());
         fflush(stderr);
     }

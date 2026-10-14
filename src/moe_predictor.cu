@@ -16,15 +16,15 @@
 #define N_USED_DEF 10
 
 // Fused RouterPredictorV2 Kernel: Cross-Layer Residual Conditioning + 512 Hidden Dim
-// Grid: 48 blocks (1 per layer)
-// Block: 512 threads
+// With Resident Slot Masking for pure COLD non-resident candidate ranking
 __global__ void moe_predictor_v2_fused_kernel(
-    const uint16_t * __restrict__ history_k4, // [4, n_layer, n_used]
-    const half     * __restrict__ W1,         // [n_layer, 2048, 512]
-    const half     * __restrict__ b1,         // [n_layer, 512]
-    const half     * __restrict__ W2,         // [n_layer, 512, 512] (row-major)
-    const half     * __restrict__ b2,         // [n_layer, 512]
-    uint16_t       * __restrict__ out_top16   // [n_layer, 16]
+    const uint16_t * __restrict__ history_k4,    // [4, n_layer, n_used]
+    const half     * __restrict__ W1,            // [n_layer, 2048, 512]
+    const half     * __restrict__ b1,            // [n_layer, 512]
+    const half     * __restrict__ W2,            // [n_layer, 512, 512] (row-major)
+    const half     * __restrict__ b2,            // [n_layer, 512]
+    const int32_t  * __restrict__ resident_slots,// [n_layer, 512] (slot_of) or null
+    uint16_t       * __restrict__ out_top16      // [n_layer, 16]
 ) {
     const int l = blockIdx.x; // [0..47]
     const int j = threadIdx.x; // [0..511]
@@ -54,10 +54,9 @@ __global__ void moe_predictor_v2_fused_kernel(
         }
     } else {
         // Layers 1..47: 2 steps of Layer L (t-2, t-1) + 2 steps of Layer L-1 (t-2, t-1)
-        // Layer L (t-2, t-1) -> features 0..1023
         #pragma unroll
         for (int k = 0; k < 2; ++k) {
-            const int hist_offset = ((k + 2) * N_LAYER_MAX + l) * N_USED_DEF; // step 2, 3
+            const int hist_offset = ((k + 2) * N_LAYER_MAX + l) * N_USED_DEF;
             #pragma unroll
             for (int u = 0; u < N_USED_DEF; ++u) {
                 uint16_t exp_id = history_k4[hist_offset + u];
@@ -67,7 +66,6 @@ __global__ void moe_predictor_v2_fused_kernel(
                 }
             }
         }
-        // Layer L-1 (t-2, t-1) -> features 1024..2047 (vertical cascading)
         #pragma unroll
         for (int k = 0; k < 2; ++k) {
             const int hist_offset = ((k + 2) * N_LAYER_MAX + (l - 1)) * N_USED_DEF;
@@ -85,7 +83,7 @@ __global__ void moe_predictor_v2_fused_kernel(
     h_shared[j] = __float2half(fmaxf(sum1, 0.0f));
     __syncthreads();
 
-    // 2. Layer 2: All 512 threads compute 1 output logit each (coalesced across warps!)
+    // 2. Layer 2: All 512 threads compute 1 output logit each
     float sum2 = 0.0f;
     #pragma unroll 8
     for (int k = 0; k < H_DIM_V2; ++k) {
@@ -93,11 +91,19 @@ __global__ void moe_predictor_v2_fused_kernel(
     }
     sum2 += __half2float(b2[l * OUT_DIM_DEF + j]);
 
+    // MASK OUT RESIDENT EXPERTS: if expert j is already in VRAM, set to -1e9f
+    // so Top-K selects exclusively COLD NON-RESIDENT experts!
+    if (resident_slots != nullptr) {
+        if (resident_slots[l * OUT_DIM_DEF + j] >= 0) {
+            sum2 = -1e9f;
+        }
+    }
+
     s_val[j] = sum2;
     s_idx[j] = (uint16_t) j;
     __syncthreads();
 
-    // 3. Fast Parallel Top-16 Selection
+    // 3. Fast Parallel Top-16 Selection (now guaranteed pure cold candidates)
     #pragma unroll
     for (int sel = 0; sel < 16; ++sel) {
         if (j < 256) {
@@ -163,6 +169,7 @@ static struct {
     half * d_b2 = nullptr;
 
     uint16_t * d_hist = nullptr;
+    int32_t  * d_resident = nullptr;
     uint16_t * d_top16 = nullptr;
     uint16_t * h_top16_pinned = nullptr;
 
@@ -213,9 +220,12 @@ bool moe_predictor_init(const char * bin_path, int n_layer, int in_dim, int h_di
     if (err != cudaSuccess) return false;
 
     size_t hist_bytes = (size_t) K_HIST_DEF * n_layer * N_USED_DEF * sizeof(uint16_t);
+    size_t res_bytes  = (size_t) n_layer * out_dim * sizeof(int32_t);
     size_t top16_bytes = (size_t) n_layer * 16 * sizeof(uint16_t);
 
     err = cudaMalloc(&g_pred.d_hist, hist_bytes);
+    if (err != cudaSuccess) return false;
+    err = cudaMalloc(&g_pred.d_resident, res_bytes);
     if (err != cudaSuccess) return false;
     err = cudaMalloc(&g_pred.d_top16, top16_bytes);
     if (err != cudaSuccess) return false;
@@ -227,7 +237,6 @@ bool moe_predictor_init(const char * bin_path, int n_layer, int in_dim, int h_di
     cudaEventCreate(&g_pred.start_evt);
     cudaEventCreate(&g_pred.stop_evt);
 
-    // Upload weights to GPU
     char * p = buf.data();
     cudaMemcpyAsync(g_pred.d_W1, p, w1_bytes, cudaMemcpyHostToDevice, g_pred.stream); p += w1_bytes;
     cudaMemcpyAsync(g_pred.d_b1, p, b1_bytes, cudaMemcpyHostToDevice, g_pred.stream); p += b1_bytes;
@@ -236,8 +245,8 @@ bool moe_predictor_init(const char * bin_path, int n_layer, int in_dim, int h_di
     cudaStreamSynchronize(g_pred.stream);
 
     g_pred.ready = true;
-    fprintf(stderr, "%s: RouterPredictorV2 (60M) initialized on GPU (%.2f MB VRAM)\n",
-            __func__, (total_w_bytes + hist_bytes + top16_bytes) / (1024.0 * 1024.0));
+    fprintf(stderr, "%s: RouterPredictorV2 (60M) armed on GPU (%.2f MB VRAM, cold-mask enabled)\n",
+            __func__, (total_w_bytes + hist_bytes + res_bytes + top16_bytes) / (1024.0 * 1024.0));
     return true;
 }
 
@@ -248,6 +257,7 @@ void moe_predictor_free() {
     if (g_pred.d_W2) cudaFree(g_pred.d_W2);
     if (g_pred.d_b2) cudaFree(g_pred.d_b2);
     if (g_pred.d_hist) cudaFree(g_pred.d_hist);
+    if (g_pred.d_resident) cudaFree(g_pred.d_resident);
     if (g_pred.d_top16) cudaFree(g_pred.d_top16);
     if (g_pred.h_top16_pinned) cudaFreeHost(g_pred.h_top16_pinned);
     if (g_pred.stream) cudaStreamDestroy(g_pred.stream);
@@ -260,19 +270,26 @@ bool moe_predictor_is_ready() {
     return g_pred.ready;
 }
 
-float moe_predictor_predict(const uint16_t * history_k4, uint16_t * out_top16) {
+float moe_predictor_predict(const uint16_t * history_k4, uint16_t * out_top16, const int32_t * resident_slots) {
     if (!g_pred.ready || !history_k4 || !out_top16) {
         return 0.0f;
     }
 
     size_t hist_bytes = (size_t) K_HIST_DEF * g_pred.n_layer * N_USED_DEF * sizeof(uint16_t);
     size_t top16_bytes = (size_t) g_pred.n_layer * 16 * sizeof(uint16_t);
+    size_t res_bytes  = (size_t) g_pred.n_layer * g_pred.out_dim * sizeof(int32_t);
 
     cudaMemcpyAsync(g_pred.d_hist, history_k4, hist_bytes, cudaMemcpyHostToDevice, g_pred.stream);
 
+    const int32_t * d_res_ptr = nullptr;
+    if (resident_slots) {
+        cudaMemcpyAsync(g_pred.d_resident, resident_slots, res_bytes, cudaMemcpyHostToDevice, g_pred.stream);
+        d_res_ptr = g_pred.d_resident;
+    }
+
     cudaEventRecord(g_pred.start_evt, g_pred.stream);
     moe_predictor_v2_fused_kernel<<<g_pred.n_layer, OUT_DIM_DEF, 0, g_pred.stream>>>(
-        g_pred.d_hist, g_pred.d_W1, g_pred.d_b1, g_pred.d_W2, g_pred.d_b2, g_pred.d_top16
+        g_pred.d_hist, g_pred.d_W1, g_pred.d_b1, g_pred.d_W2, g_pred.d_b2, d_res_ptr, g_pred.d_top16
     );
     cudaEventRecord(g_pred.stop_evt, g_pred.stream);
 
