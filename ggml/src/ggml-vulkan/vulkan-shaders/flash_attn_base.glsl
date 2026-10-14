@@ -30,8 +30,6 @@ const bool Q_IN_REGS       = (Flags & 32) != 0;
 // coopmat1: subgroups own Q rows, K/V tile shared through LDS, O in coopmat accumulators.
 const bool FLIP            = (Flags & 64) != 0;
 const bool FLIP_KVSEP      = (Flags & 128) != 0;
-const bool FLIP_PF2        = (Flags & 256) != 0;
-const bool FLIP_VT         = (Flags & 512) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;

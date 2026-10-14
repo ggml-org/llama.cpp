@@ -1318,15 +1318,11 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
         k_type == v_type && (k_type == GGML_TYPE_F16 || k_type == GGML_TYPE_BF16)) {
         result.flip = true;
         result.flip_kvsep = device->uma;
-        result.flip_pf2 = !device->uma;
         if (force_flip != nullptr && strcmp(force_flip, "kvsep") == 0) {
             result.flip_kvsep = true;
-            result.flip_pf2 = false;
         } else if (force_flip != nullptr && strcmp(force_flip, "pf2") == 0) {
             result.flip_kvsep = false;
-            result.flip_pf2 = true;
         }
-        result.flip_vt = true;
         result.block_rows = num_subgroups * coopmat_block_rows;
         result.block_cols = 32;
         result.q_in_regs = false;
@@ -1425,9 +1421,7 @@ vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_
                      (use_sparse        ? 16 : 0) |
                      (params.q_in_regs  ? 32 : 0) |
                      (params.flip       ? 64 : 0) |
-                     (params.flip_kvsep ? 128 : 0) |
-                     (params.flip_pf2   ? 256 : 0) |
-                     (params.flip_vt    ? 512 : 0);
+                     (params.flip_kvsep ? 128 : 0);
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 
@@ -8154,12 +8148,15 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
 
     if (params.flip) {
         const uint32_t d_pad = std::max(hsk_pad, hsv_pad);
-        const uint32_t kvbuf = std::max(Bc * (d_pad / 4 + 2), params.flip_vt ? hsv_pad * (Bc / 4 + 2) : 0u) * 8;
+        const uint32_t wg = params.workgroup_size;
+        const uint32_t vld = CEIL_DIV(Bc * hsv_pad / 8, wg);
+        const bool vt = vld % 4 == 0 && wg % (hsv_pad / 8) == 0 && vld * (wg / (hsv_pad / 8)) == Bc;
+        const uint32_t kvbuf = std::max(Bc * (d_pad / 4 + 2), vt ? hsv_pad * (Bc / 4 + 2) : 0u) * 8;
         const uint32_t kvshf = (params.flip_kvsep ? 2 : 1) * kvbuf;
         const uint32_t sshf = params.row_split * 16 * (Bc / 4 + (f32acc ? 1 : 2)) * 4 * acctype;
         // f16/quant K/V stage P and Q through the S slab; only bf16 keeps a separate pshf.
         const bool p_in_sshf = k_type != GGML_TYPE_BF16;
-        const uint32_t pshf = p_in_sshf ? f16vec4 : params.row_split * 16 * (Bc / 4 + 2) * f16vec4;
+        const uint32_t pshf = p_in_sshf ? 0 : params.row_split * 16 * (Bc / 4 + 2) * f16vec4;
         total_size = sizeof(float) + iq_shmem + 3 * f16vec4 + 4 * acctype + acctype + kvshf + sshf + pshf;
     }
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
