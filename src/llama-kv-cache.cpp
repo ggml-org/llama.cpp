@@ -1584,15 +1584,8 @@ ggml_tensor * llama_kv_cache::build_input_kv_tag(ggml_context * ctx) const {
     return res;
 }
 
-// decode resizes size the slots for the pages used plus this many (LLAMA_KV_STREAM_HEADROOM, for tests), and resize
-// again when the context outgrows them
-static uint32_t kv_stream_headroom_pages() {
-    static const uint32_t n = [] {
-        const char * env = getenv("LLAMA_KV_STREAM_HEADROOM");
-        return env ? (uint32_t) std::max(0, atoi(env)) : 16u;
-    }();
-    return n;
-}
+// a decode resize sizes the slots for the pages in use plus this many, and resizes again when the context outgrows them
+static constexpr uint32_t kv_stream_headroom_pages = 16;
 
 static uint32_t kv_stream_pages(uint32_t n_cells) {
     return (n_cells + llama_kv_stream::page_size - 1)/llama_kv_stream::page_size;
@@ -1621,7 +1614,7 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size, bool decode, uint32_
     if (decode && stream->ring_packed()) {
         // the budget holds the pool and the slots; the slots hold what streams for n_need attended pages: P pool pages
         // and n_need - P ring pages take P*page_pool + (n_need - P)*page_ring bytes
-        const uint32_t n_need    = std::min(n_pages, kv_stream_pages_next(n_tokens) + kv_stream_headroom_pages());
+        const uint32_t n_need    = std::min(n_pages, kv_stream_pages_next(n_tokens) + kv_stream_headroom_pages);
         const size_t   page_pool = bytes_per_cell*llama_kv_stream::page_size;
         const size_t   page_ring = stream->ring_page_size();
         if (resident_size >= (size_t) n_need*page_pool + page_ring) {
@@ -1687,7 +1680,7 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size, bool decode, uint32_
 
     stream->set_pool(n_slots, n_ring);
 
-    LLAMA_LOG_INFO("%s: pool resized to %u pages, slots to %u pages, in %.1f ms\n", __func__, n_slots, stream->n_ring(),
+    LLAMA_LOG_DEBUG("%s: pool resized to %u pages, slots to %u pages, in %.1f ms\n", __func__, n_slots, stream->n_ring(),
             (ggml_time_us() - t_start_us)/1000.0);
     return true;
 }

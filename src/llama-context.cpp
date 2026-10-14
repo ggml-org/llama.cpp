@@ -774,20 +774,21 @@ void llama_context::switch_phase(bool decode, uint32_t n_tokens_next) {
     }
     phase_decode       = decode;
     sched_need_reserve = true;
-    sched_reserve();
+    sched_reserve(true);
     if (decode && memory) {
         memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_next);
     }
 }
 
-void llama_context::sched_reserve() {
+void llama_context::sched_reserve(bool quiet) {
     if (!sched_need_reserve) {
         return;
     }
+    const ggml_log_level log_level = quiet ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
 
     sched_need_reserve = false;
 
-    LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
+    llama_log_internal(log_level, "%s: reserving ...\n", __func__);
 
     synchronize();
 
@@ -836,11 +837,11 @@ void llama_context::sched_reserve() {
                 backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
             }
             if (backend_buf_exp_size[i] > 1) {
-                LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB (decode)\n", __func__,
+                llama_log_internal(log_level, "%s: %10s compute buffer size = %8.2f MiB (decode)\n", __func__,
                         ggml_backend_buft_name(backend_buft[i]), backend_buf_exp_size[i] / 1024.0 / 1024.0);
             }
         }
-        LLAMA_LOG_INFO("%s: reserve took %.2f ms\n", __func__, (ggml_time_us() - t_start_us)/1000.0);
+        llama_log_internal(log_level, "%s: reserve took %.2f ms\n", __func__, (ggml_time_us() - t_start_us)/1000.0);
         return;
     }
 
@@ -927,7 +928,7 @@ void llama_context::sched_reserve() {
             backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
         }
         if (backend_buf_exp_size[i] > 1) {
-            LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+            llama_log_internal(log_level, "%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                     ggml_backend_buft_name(buft),
                     backend_buf_exp_size[i] / 1024.0 / 1024.0);
         }
@@ -941,7 +942,7 @@ void llama_context::sched_reserve() {
             return diff ? format("%d / %d", v_pp, v_tg) : format("%d", v_pp);
         };
 
-        LLAMA_LOG_INFO("%s: graph%s: nodes = %s, splits = %s, input objects = %s, input tensors = %s\n",
+        llama_log_internal(log_level, "%s: graph%s: nodes = %s, splits = %s, input objects = %s, input tensors = %s\n",
                 __func__,
                 diff ? format(" (pp bs=%d, tg bs=%d)", n_tokens, n_seqs).c_str() : "",
                 val(n_nodes_pp, n_nodes_tg).c_str(),
@@ -952,7 +953,7 @@ void llama_context::sched_reserve() {
 
     const int64_t t_end_us = ggml_time_us();
 
-    LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
+    llama_log_internal(log_level, "%s: reserve took %.2f ms, sched copies = %d\n",
             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
 }
 

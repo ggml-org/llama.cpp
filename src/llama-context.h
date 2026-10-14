@@ -56,7 +56,7 @@ struct llama_context {
     //   - changing samplers
     //   - changing attention type
     //   - etc.
-    void sched_reserve();
+    void sched_reserve(bool quiet = false); // quiet: log at debug level (a phase switch, on every prompt)
 
     void synchronize();
 

@@ -67,9 +67,6 @@ llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_s
 
     const char * debug = getenv("LLAMA_KV_STREAM_DEBUG");
     debug_rotate = debug && strcmp(debug, "rotate") == 0;
-    debug_trace  = debug && strcmp(debug, "trace")  == 0;
-    debug_nocopy = debug && strcmp(debug, "nocopy") == 0;
-    no_prefetch  = debug && strcmp(debug, "noprefetch") == 0;
 
     if (const char * timeout = getenv("LLAMA_KV_STREAM_TIMEOUT")) {
         timeout_us = (int64_t) (atof(timeout)*1e6);
@@ -367,10 +364,6 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
     GGML_ASSERT(ce && "llama_kv_stream: no copy engine");
 
     tag++;
-    if (debug_trace) {
-        LLAMA_LOG_INFO("%s: tag %u: %zu cells, %u attended pages, %u streamed in %zu runs (%s)\n", __func__, tag, cells.size(),
-                n_att, n_streamed, copies.size(), decode ? "packed" : "in place");
-    }
     {
         std::lock_guard<std::mutex> lock(mtx);
         jobs.push_back({ tag, std::move(copies), wb_pending, cells.size() <= decode_max_tokens });
@@ -437,7 +430,7 @@ void llama_kv_stream::copier_main() {
             return false;
         }
 
-        for (const auto & r : debug_nocopy ? std::vector<run>() : copies) {
+        for (const auto & r : copies) {
             for (bool is_v : { false, true }) {
                 ggml_tensor * dst = is_v ? slots[s].v : slots[s].k;
                 const size_t bytes = (size_t) page_size*row_size(ikv, is_v);
@@ -452,10 +445,6 @@ void llama_kv_stream::copier_main() {
             n_enqueued.store(++g, std::memory_order_release);
         }
         cv.notify_all();
-        if (debug_trace) {
-            LLAMA_LOG_INFO("%s: tag %u layer %d queued (%zu runs)%s\n", __func__, t, ikv, copies.size(), is_prefetch ? " (prefetch)" : "");
-        }
-
         // a prefetched slot has no reader until the next job claims it
         if (!is_prefetch) {
             reader[s] = { ikv, t };
@@ -511,7 +500,7 @@ void llama_kv_stream::copier_main() {
 
         // nothing queued behind a decode ubatch: copy the first layers of the next one while the host works
         bool idle = false;
-        if (j.small && !no_prefetch) {
+        if (j.small) {
             std::lock_guard<std::mutex> lock(mtx);
             idle = jobs.empty() && !stop;
         }
@@ -557,9 +546,6 @@ void llama_kv_stream::publisher_main() {
             __atomic_store_n(flags + sp.ikv, sp.tag, __ATOMIC_RELEASE);
         }
         n_published.store(++g, std::memory_order_release);
-        if (debug_trace) {
-            LLAMA_LOG_INFO("%s: tag %u layer %d ready\n", __func__, sp.tag, sp.ikv);
-        }
     }
 }
 
@@ -659,7 +645,7 @@ void llama_kv_stream::set_pool(uint32_t n_slots, uint32_t n_ring) {
     }
     alloc_slots((int64_t) n_ring*page_size, false);
 
-    LLAMA_LOG_INFO("%s: %u of %u pages resident, slots = %8.2f MiB\n", __func__, n_slots, n_pages,
+    LLAMA_LOG_DEBUG("%s: %u of %u pages resident, slots = %8.2f MiB\n", __func__, n_slots, n_pages,
             ggml_backend_buffer_get_size(slots_buf.get())/1024.0/1024.0);
 }
 

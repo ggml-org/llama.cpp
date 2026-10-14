@@ -38,9 +38,7 @@
 // about once per page of tokens); otherwise they are copied again over the prefetched data.
 //
 // Debug: LLAMA_KV_STREAM_DEBUG=rotate (when the pool holds the whole context) moves every resident page through host
-// memory into a rotated slot before every ubatch; LLAMA_KV_STREAM_DEBUG=trace logs the copy queue;
-// LLAMA_KV_STREAM_DEBUG=nocopy runs the copy queue without copying (wrong results; for the cost of the copies);
-// LLAMA_KV_STREAM_DEBUG=noprefetch disables the prefetch.
+// memory into a rotated slot before every ubatch.
 //
 // Stalls: every wait of the copy queue is bounded (LLAMA_KV_STREAM_TIMEOUT seconds, default 30) and aborts with the queue
 // state; the attention's waits trap after 60 s.
@@ -248,9 +246,6 @@ private:
     bool     prefill_paged = false;
 
     bool     debug_rotate = false;
-    bool     debug_trace  = false;
-    bool     debug_nocopy = false;
-    bool     no_prefetch  = false;
 
     int64_t  timeout_us = 30*1000*1000; // LLAMA_KV_STREAM_TIMEOUT, seconds
     uint32_t rotation     = 0;
