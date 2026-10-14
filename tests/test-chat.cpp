@@ -2193,6 +2193,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("<think>\nI'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .run();
 
+        // the model does not always emit the canonical whitespace around </think>
+        tst.test("\nI'm\nthinking\n\n</think>\n\n\nHello, world!\nWhat's up?\n")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_thoughts)
+            .run();
+
         tst.test(
                "<tool_call>\n"
                "<function=special_function>\n"
@@ -8067,12 +8074,12 @@ static void test_chat_session() {
         for (size_t i = 0; i < thinking.size(); i += 3) {
             session.feed(common_chat_input(thinking.substr(i, 3)));
         }
-        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n"), session.msg());
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking"), session.msg());
 
         for (size_t i = thinking.size(); i < output.size(); i += 3) {
             session.feed(common_chat_input(output.substr(i, 3)));
         }
-        assert_msg_equals(simple_assist_msg("", "I'm\nthinking\n", "special_function", "{\"arg1\":1}"), session.finish());
+        assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
     }
 
     // a copy does not see what is fed to the original

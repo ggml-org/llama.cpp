@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "peg-parser.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 
@@ -312,19 +313,28 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
     }
 }
 
+// Whitespace before a closing tag, a tool call or the end of the message is not part of it.
+// A partial node is trimmed too, the whitespace comes back once more text follows it.
+std::string common_chat_peg_mapper::trimmed_text(const common_peg_ast_node & node) const {
+    auto   text = node.sanitized_text();
+    size_t keep = std::max(node.start, generation_prompt_size);
+    int    max  = node.end > keep ? (int) (node.end - keep) : 0;
+    return std::string(trim_trailing_space(text, max));
+}
+
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     // Handle reasoning/content tags
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
     bool is_content   = node.tag == common_chat_peg_builder::CONTENT;
 
     if (is_reasoning) { // GPT OSS can have more than 1 reasoning block, so concatenate here
-        result.reasoning_content += node.sanitized_text();
+        result.reasoning_content += trimmed_text(node);
     }
 
     if (is_content) {
         // Concatenate content from multiple content nodes (e.g., when reasoning markers
         // are preserved before content markers in reasoning_format=NONE mode)
-        result.content += node.sanitized_text();
+        result.content += trimmed_text(node);
     }
 
     // Handle tool-related tags (supporting both JSON and tagged formats)
