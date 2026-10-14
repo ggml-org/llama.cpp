@@ -4100,7 +4100,7 @@ llama_context_params llama_context_default_params() {
         /*.moe_slots                  =*/ 4096,
         /*.moe_gguf_path              =*/ nullptr,
         /*.moe_pack_dir               =*/ nullptr,
-        /*.moe_chunk_max              =*/ 8,
+        /*.moe_chunk_max              =*/ 64,
         /*.moe_profile_path           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,

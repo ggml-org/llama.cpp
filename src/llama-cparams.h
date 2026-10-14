@@ -71,7 +71,7 @@ struct llama_cparams {
     const char * moe_profile_path = nullptr; // optional hot profile (null = built-in)
     // prefill micro-chunk ceiling: pool engages only when a batch row carries
     // at most this many tokens (measured row union fits 72 slots at 8)
-    int32_t      moe_chunk_max = 8;
+    int32_t      moe_chunk_max = 64;
 
     llama_context * ctx_other;
 };
