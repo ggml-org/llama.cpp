@@ -1490,6 +1490,45 @@ static void dequantize_block_iq3_xxs(const void * __restrict__ vx, dst_t * __res
 
 }
 
+template<typename dst_t>
+static void dequantize_block_iq3_xxs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                             const sycl::nd_item<3> & item_ct1, const int64_t nb,
+                                             const uint32_t * iq3xxs_grid,
+                                             const uint8_t * ksigns_iq2xs,
+                                             const uint8_t * kmask_iq2xs) {
+    const int64_t i   = item_ct1.get_group(2);
+    const int64_t tid = item_ct1.get_local_id(2);
+#if QK_K == 256
+    const int64_t il = tid / 8;
+    const int64_t ib = tid % 8;
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+    const uint8_t * qs = base + i * (3 * QK_K / 8);
+    const ggml_half * d = reinterpret_cast<const ggml_half *>(base + nb * (3 * QK_K / 8));
+    const uint8_t * q3 = qs + 8 * ib;
+    const uint16_t * gas = reinterpret_cast<const uint16_t *>(qs + QK_K / 4) + 2 * ib;
+    const uint8_t * grid1 = reinterpret_cast<const uint8_t *>(iq3xxs_grid + q3[2*il+0]);
+    const uint8_t * grid2 = reinterpret_cast<const uint8_t *>(iq3xxs_grid + q3[2*il+1]);
+    const uint32_t aux32 = gas[0] | (gas[1] << 16);
+    const float dl = (float) d[i] * (0.5f + (aux32 >> 28)) * 0.5f;
+    const uint8_t signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
+    dst_t * y = yy + i * QK_K + 32 * ib + 8 * il;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        y[j+0] = dl * grid1[j] * (signs & kmask_iq2xs[j+0] ? -1.f : 1.f);
+        y[j+4] = dl * grid2[j] * (signs & kmask_iq2xs[j+4] ? -1.f : 1.f);
+    }
+#else
+    GGML_UNUSED(vx);
+    GGML_UNUSED(yy);
+    GGML_UNUSED(item_ct1);
+    GGML_UNUSED(nb);
+    GGML_UNUSED(iq3xxs_grid);
+    GGML_UNUSED(ksigns_iq2xs);
+    GGML_UNUSED(kmask_iq2xs);
+    GGML_ABORT("IQ3_XXS reorder dequantization requires QK_K == 256");
+#endif
+}
+
 template <typename dst_t>
 __dpct_inline__ static void
 dequantize_block_iq3_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
@@ -1518,6 +1557,48 @@ dequantize_block_iq3_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
     assert(false);
 #endif
 
+}
+
+template <typename dst_t>
+__dpct_inline__ static void
+dequantize_block_iq3_s_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                               const sycl::nd_item<3> & item_ct1, const int64_t nb,
+                               const uint8_t * kmask_iq2xs, const uint32_t * iq3s_grid) {
+    const int64_t i   = item_ct1.get_group(2);
+    const int64_t tid = item_ct1.get_local_id(2);
+#if QK_K == 256
+    const int64_t il = tid / 8;
+    const int64_t ib = tid % 8;
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+    const uint8_t * qs = base + i * (QK_K / 4);
+    const uint8_t * qh = base + nb * (QK_K / 4) + i * (QK_K / 32);
+    const uint8_t * signs_base = base + nb * (QK_K / 4 + QK_K / 32) + i * (QK_K / 8);
+    const uint8_t * metadata = base + nb * (QK_K / 4 + QK_K / 32 + QK_K / 8) +
+                               i * (sizeof(ggml_half) + IQ3S_N_SCALE);
+    const ggml_half d = *reinterpret_cast<const ggml_half *>(metadata);
+    const uint8_t * scales = metadata + sizeof(ggml_half);
+    const uint8_t * qs_ib = qs + 8 * ib;
+    const uint8_t * grid1 = reinterpret_cast<const uint8_t *>(
+        iq3s_grid + (qs_ib[2*il+0] | ((qh[ib] << (8 - 2*il)) & 256)));
+    const uint8_t * grid2 = reinterpret_cast<const uint8_t *>(
+        iq3s_grid + (qs_ib[2*il+1] | ((qh[ib] << (7 - 2*il)) & 256)));
+    const float dl = (float) d * (1 + 2 * ((scales[ib/2] >> (4 * (ib%2))) & 0xf));
+    const uint8_t signs = signs_base[4 * ib + il];
+    dst_t * y = yy + i * QK_K + 32 * ib + 8 * il;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        y[j+0] = dl * grid1[j] * (signs & kmask_iq2xs[j+0] ? -1.f : 1.f);
+        y[j+4] = dl * grid2[j] * (signs & kmask_iq2xs[j+4] ? -1.f : 1.f);
+    }
+#else
+    GGML_UNUSED(vx);
+    GGML_UNUSED(yy);
+    GGML_UNUSED(item_ct1);
+    GGML_UNUSED(nb);
+    GGML_UNUSED(kmask_iq2xs);
+    GGML_UNUSED(iq3s_grid);
+    GGML_ABORT("IQ3_S reorder dequantization requires QK_K == 256");
+#endif
 }
 
 template <typename dst_t>

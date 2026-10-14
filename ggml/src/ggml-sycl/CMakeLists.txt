@@ -131,33 +131,65 @@ endif()
 # Link against oneDNN
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)
+    # oneAPI installs dnnl-config.cmake under a versioned path CMake does not
+    # search by default. When the user did not point CMake at it explicitly
+    # (DNNL_DIR), auto-detect the oneAPI-bundled GPU build via the DNNLROOT
+    # environment variable or the standard oneAPI install prefixes. A shell
+    # with setvars.sh sourced already exports CMAKE_PREFIX_PATH and finds it
+    # without any of this.
+    if(NOT DEFINED DNNL_DIR)
+        if(DEFINED ENV{DNNLROOT} AND EXISTS "$ENV{DNNLROOT}/lib/cmake/dnnl/dnnl-config.cmake")
+            set(DNNL_DIR "$ENV{DNNLROOT}/lib/cmake/dnnl")
+        elseif(EXISTS "/opt/intel/oneapi/dnnl/latest/lib/cmake/dnnl/dnnl-config.cmake")
+            set(DNNL_DIR "/opt/intel/oneapi/dnnl/latest/lib/cmake/dnnl")
+        elseif(EXISTS "/usr/intel/oneapi/dnnl/latest/lib/cmake/dnnl/dnnl-config.cmake")
+            set(DNNL_DIR "/usr/intel/oneapi/dnnl/latest/lib/cmake/dnnl")
+        endif()
+        if(DEFINED DNNL_DIR)
+            message(STATUS "oneDNN: auto-detected config at ${DNNL_DIR}")
+        endif()
+    endif()
     find_package(DNNL)
-    if(DNNL_FOUND)
-        if (NOT DEFINED DNNL_GPU_VENDOR)
-            # default to intel target
-            set(DNNL_GPU_VENDOR "INTEL")
-            if(NOT "${GGML_SYCL_TARGET}" STREQUAL "INTEL")
-                message(WARNING "oneDNN builds bundled with oneapi release only support INTEL target")
-            endif()
-        endif()
+    if(NOT DNNL_FOUND)
+        # GGML_SYCL_DNN defaults to ON, so a plain build used to continue
+        # silently without oneDNN: every flash-attention then runs the much
+        # slower MKL-FA path (20-40% prefill loss on long prompts). Fail
+        # loudly instead of producing a degraded binary.
+        message(FATAL_ERROR
+            "oneDNN (DNNL) was requested (GGML_SYCL_DNN=ON) but not found. "
+            "The SYCL backend needs the oneAPI-bundled GPU build: install "
+            "intel-oneapi-dnnl and intel-oneapi-dnnl-devel from the oneAPI "
+            "repo, source setvars.sh, or pass "
+            "-DDNNL_DIR=<dnnl-prefix>/lib/cmake/dnnl (or export DNNLROOT). "
+            "To build without oneDNN on purpose, pass -DGGML_SYCL_DNN=OFF.")
+    endif()
+    if(NOT DEFINED DNNL_GPU_VENDOR)
+        # A DNNL package that does not declare DNNL_GPU_VENDOR has no GPU/SYCL
+        # support compiled in (e.g. Debian/Ubuntu's CPU-only libdnnl-dev).
+        # The old code defaulted the vendor to INTEL here, which fake-passed
+        # the target check below and silently linked a CPU-only library into
+        # the SYCL backend.
+        message(FATAL_ERROR
+            "Found oneDNN at ${DNNL_DIR} but it does not declare "
+            "DNNL_GPU_VENDOR - it is a CPU-only build (Debian/Ubuntu "
+            "libdnnl-dev?). Install the oneAPI-bundled GPU build "
+            "(intel-oneapi-dnnl-devel) instead.")
+    endif()
 
-        # Verify oneDNN was compiled for the same target as llama
-        if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
-            target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
-            set(GGML_SYCL_DNNL 1)
-            get_target_property(CONFIGS DNNL::dnnl IMPORTED_CONFIGURATIONS)
-            foreach(CONFIG ${CONFIGS})
-                get_target_property(DNNL_LIB DNNL::dnnl IMPORTED_LOCATION_${CONFIG})
-                message(STATUS "Found oneDNN: ${DNNL_LIB}")
-            endforeach()
-        else()
-            message(WARNING
-                "oneDNN must be compiled for the same target as llama.cpp.
-                 llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}.
-                 Disabling oneDNN support.")
-        endif()
+    # Verify oneDNN was compiled for the same target as llama
+    if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
+        target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
+        set(GGML_SYCL_DNNL 1)
+        get_target_property(CONFIGS DNNL::dnnl IMPORTED_CONFIGURATIONS)
+        foreach(CONFIG ${CONFIGS})
+            get_target_property(DNNL_LIB DNNL::dnnl IMPORTED_LOCATION_${CONFIG})
+            message(STATUS "Found oneDNN: ${DNNL_LIB}")
+        endforeach()
     else()
-        message(STATUS "oneDNN not found, disabling oneDNN support")
+        message(FATAL_ERROR
+            "oneDNN must be compiled for the same target as llama.cpp: "
+            "llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}. "
+            "Pass -DGGML_SYCL_DNN=OFF to build without oneDNN.")
     endif()
 else()
     message(STATUS "oneDNN support disabled by the user")
