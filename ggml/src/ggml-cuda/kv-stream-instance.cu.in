@@ -26,11 +26,11 @@ struct dense_strided_kv : ggml_cuda_fattn_mma_typed_span_kv<K,V,resume> {
     }
     template<int stride, int warps, int rows>
     __device__ __forceinline__ void finish_key(const char * raw, half2 * tile, int width) const {
-        ggml_cuda_fattn_finish_encoded_tile<K,stride,warps,rows>(raw,tile,width,0,width,false);
+        ggml_cuda_fattn_finish_encoded_tile<K,stride,warps,rows,true>(raw,tile,width,0,width,false);
     }
     template<int stride, int warps, int rows>
     __device__ __forceinline__ void finish_value(const char * raw, half2 * tile, int width) const {
-        ggml_cuda_fattn_finish_encoded_tile<V,stride,warps,rows>(raw,tile,width,0,width,false);
+        ggml_cuda_fattn_finish_encoded_tile<V,stride,warps,rows,true>(raw,tile,width,0,width,false);
     }
 };
 

@@ -2,6 +2,7 @@
 
 #include "kv-stream-span.h"
 #include "fattn-mma-quant.cuh"
+#include "fattn-mma-quant-chunk.cuh"
 #include "fattn-mma-resume.h"
 
 // Copy register fragments as integer words, without floating-point conversion or arithmetic.
@@ -170,7 +171,7 @@ static __device__ __forceinline__ void ggml_cuda_fattn_prefetch_encoded_tile(
 }
 
 // Expand completed compressed rows into the FP16 swizzle after their readers have retired.
-template<ggml_type type, int stride, int warps, int rows>
+template<ggml_type type, int stride, int warps, int rows, bool group_strided = false>
 static __device__ __forceinline__ void ggml_cuda_fattn_finish_encoded_tile(
         const char * staging, half2 * tile, int full_width, int feature, int width, bool contiguous) {
     constexpr int warp = ggml_cuda_get_physical_warp_size();
@@ -187,9 +188,13 @@ static __device__ __forceinline__ void ggml_cuda_fattn_finish_encoded_tile(
             for (int k0 = begin; k0 < end; k0 += step) {
                 const int k = k0+(step == warp ? threadIdx.x : threadIdx.x%step);
                 half2 decoded[4];
+                if constexpr (group_strided) {
+                    ggml_cuda_fattn_decode_strided_chunk8<type>(staging+row*bytes,2*feature+8*k,decoded);
+                } else {
 #pragma unroll
-                for (int pair = 0; pair < 4; ++pair) decoded[pair] = ggml_cuda_fattn_decode_pair<type>(
-                    staging+row*bytes,2*feature+8*k+2*pair,contiguous);
+                    for (int pair = 0; pair < 4; ++pair) decoded[pair] = ggml_cuda_fattn_decode_pair<type>(
+                        staging+row*bytes,2*feature+8*k+2*pair,contiguous);
+                }
                 ggml_cuda_memcpy_1<16>(swizzle<stride>(tile,row*stride+k*4,row),decoded);
             }
         }
