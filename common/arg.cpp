@@ -2240,6 +2240,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "BNF-like grammar to constrain generations (see samples in grammars/ dir)",
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, value};
+            params.sampling.json_schema.clear();
         }
     ).set_sampling());
     add_opt(common_arg(
@@ -2247,6 +2248,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, read_file(value)};
+            params.sampling.json_schema.clear();
         }
     ).set_sampling());
     add_opt(common_arg(
@@ -2254,6 +2256,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{\"type\": \"object\"}` for any JSON object",
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(value))};
+            params.sampling.json_schema = value;
         }
     ).set_sampling());
     add_opt(common_arg(
@@ -2271,6 +2274,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::back_inserter(schema)
             );
             params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(schema))};
+            params.sampling.json_schema = schema;
         }
     ).set_sampling());
     add_opt(common_arg(

@@ -1915,6 +1915,9 @@ void common_chat_session::apply_sampling(common_params_sampling & sampling) cons
     }
     if (!grammar_text.empty()) {
         sampling.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, grammar_text};
+    } else if (sampling.grammar.type == COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT) {
+        // the template ignored the schema, and a bare schema grammar cannot accept the generation prompt
+        sampling.grammar = {};
     }
     sampling.grammar_lazy      = grammar_lazy;
     sampling.generation_prompt = generation_prompt_text;
