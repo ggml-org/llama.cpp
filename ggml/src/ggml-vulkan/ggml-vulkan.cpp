@@ -6581,7 +6581,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
 
     // column stride in bytes of the B buffer: raw src1 keeps its own stride, staging buffers are tightly packed
-    const uint64_t b_col_bytes = (y_non_contig || qy_needs_dequant || quantize_y)
+    const uint64_t b_col_bytes = (y_needs_reformat || qy_needs_dequant || quantize_y)
         ? (quantize_y ? (uint64_t)(ne10 / ggml_blck_size(GGML_TYPE_Q8_1)) * ggml_type_size(GGML_TYPE_Q8_1) : (uint64_t)ne10 * sizeof(ggml_fp16_t))
         : (uint64_t)src1->nb[1];
 
