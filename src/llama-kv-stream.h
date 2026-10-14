@@ -63,8 +63,11 @@ class llama_kv_stream {
 public:
     static constexpr uint32_t page_size = 256;
 
-    // ubatches up to this size (decode and speculative verification) take the backend's paged decode attention
-    static constexpr uint32_t decode_max_tokens = 8;
+    // ubatches up to this size (decode and speculative verification, also n-gram drafts) take the backend's paged decode
+    // attention; larger ones also get the page runs, for the chunked paged prefill. On the RX 9070 XT the decode kernel's
+    // row tiles are the faster of the two up to 96 query tokens (at 64k: 2.3x at 17, 1.2x at 65, 1.1x at 96) and the
+    // slower from 128.
+    static constexpr uint32_t decode_max_tokens = 96;
 
     // pool tensors of one layer: [n_embd_gqa, n_slots*page_size]
     struct layer {

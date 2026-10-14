@@ -8708,6 +8708,8 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
 // table is row 1 of two, row 0 is garbage.
 struct test_flash_attn_ext_paged : public test_case {
     static constexpr int64_t page = 256;
+    // page runs only above this many query tokens, as llama attaches them (llama_kv_stream::decode_max_tokens)
+    static constexpr int64_t decode_max_tokens = 96;
 
     const int64_t hs;
     const int64_t nh;
@@ -8740,7 +8742,7 @@ struct test_flash_attn_ext_paged : public test_case {
     int64_t pool_rows() const { return (n_pages() + 3) * page; }
     int64_t n_ring() const { return ring_every ? (n_pages() + ring_every - 1) / ring_every : 0; }
 
-    // the page table, and its runs for prefill (more than 4 query tokens)
+    // the page table, and its runs for prefill (more than decode_max_tokens query tokens)
     std::vector<int32_t> table() const {
         std::vector<int32_t> slots(pool_rows() / page);
         std::iota(slots.begin(), slots.end(), 0);
@@ -8783,7 +8785,7 @@ struct test_flash_attn_ext_paged : public test_case {
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(hs), 0.0f, 0.0f);
         ggml_flash_attn_ext_set_pages(out, pages, 1, page, rk, rv);
-        if (nb > 4) {
+        if (nb > decode_max_tokens) {
             const std::vector<int32_t> tab = table();
             run_list.clear();
             for (int32_t p = 0; p < (int32_t) n_pages(); ++p) {
@@ -10075,9 +10077,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
         }
     }
-    // prefill shapes: the chunked paged prefill, and row tiles for the paged shapes it does not take
+    // larger batches (n-gram drafts, short prompts, prefill): the decode kernel's row tiles for paged K/V up to 96 query
+    // tokens, the chunked paged prefill above
     for (int kv : { 1024, 8192, }) {
-        for (int nb : { 7, 33, 512, }) {
+        for (int nb : { 7, 9, 17, 33, 65, 96, 97, 512, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
             test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 3));
         }
@@ -12876,6 +12879,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
             test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 0));
             test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 2));
+        }
+    }
+
+    // Verify shapes of n-gram drafts over paged Q8_0/Q4_0 K/V (pool in logical order): the decode kernel's row tiles up
+    // to 96 query tokens, the chunked paged prefill from 97.
+    for (int kv : { 4096, 16384, 65536, }) {
+        for (int nb : { 9, 17, 33, 65, 96, 97, 128, }) {
+            test_cases.emplace_back(new test_flash_attn_ext_paged(256, 4, 6, kv, nb, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 0, false));
         }
     }
 

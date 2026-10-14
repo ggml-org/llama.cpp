@@ -13,7 +13,8 @@ static bool pd_disabled() {
 }
 
 // Batches of up to this many query tokens (speculative verify) take the decode kernel: up to 5 tokens fill one 32-row
-// tile, 6-8 take two; larger ones take the chunked prefill.
+// tile, 6-8 take two. Larger ones take the chunked prefill when they have page runs (llama attaches them above
+// llama_kv_stream::decode_max_tokens), and otherwise the decode kernel's row tiles for paged K/V or the stock kernels.
 static constexpr int64_t PD_DECODE_MAX_NB = 8;
 
 static pd_sync pd_get_sync(const ggml_tensor * dst) {
