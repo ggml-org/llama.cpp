@@ -268,6 +268,7 @@ class Keys:
         SCALING_ATTN_FACTOR       = "{arch}.rope.scaling.attn_factor"
         SCALING_ORIG_CTX_LEN      = "{arch}.rope.scaling.original_context_length"
         SCALING_FINETUNED         = "{arch}.rope.scaling.finetuned"
+        SCALING_YARN_TRUNCATE     = "{arch}.rope.scaling.yarn_truncate"
         SCALING_YARN_LOG_MUL      = "{arch}.rope.scaling.yarn_log_multiplier"
         SCALING_YARN_EXT_FACTOR   = "{arch}.rope.scaling.yarn_ext_factor"
         SCALING_YARN_ATTN_FACTOR  = "{arch}.rope.scaling.yarn_attn_factor"
