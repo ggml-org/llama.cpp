@@ -144,7 +144,9 @@ extern float ggml_table_f32_ue4m3[1 << 8];
 // do not produce codegen as checks below don't test for __F16C__
 // but this check does.
 #if defined(__F16C__)
-#define GGML_CPU_FP16_TO_FP32(x) GGML_CPU_COMPUTE_FP16_TO_FP32(x)
+// force FP16 -> FP32 conversion to use LUT instead
+// see: https://github.com/ggml-org/llama.cpp/issues/30342
+//#define GGML_CPU_FP16_TO_FP32(x) GGML_CPU_COMPUTE_FP16_TO_FP32(x)
 #define GGML_CPU_FP32_TO_FP16(x) GGML_CPU_COMPUTE_FP32_TO_FP16(x)
 #endif
 
