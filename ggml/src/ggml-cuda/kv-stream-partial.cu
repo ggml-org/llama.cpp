@@ -3,6 +3,7 @@
 #include "kv-stream-dispatch.cuh"
 #include "kv-stream-attention-dispatch.h"
 #include "kv-stream-tile.cuh"
+#include "fattn-plan-cache.h"
 #include "convert.cuh"
 #include "fattn.cuh"
 #include "../ggml-backend-impl.h"
@@ -347,6 +348,10 @@ static bool resume_plan(
             ggml_cuda_kv_stream_attention_select(device.cc,queries,ggml_type(key),ggml_type(value)) == ggml_cuda_kv_stream_attention_path::none ||
             family != kernel_family::vector ||
             (!ggml_is_quantized(ggml_type(key)) && !ggml_is_quantized(ggml_type(value)))) return false;
+    const ggml_cuda_fattn_plan_key cache_key{ctx.device,device.cc,compiled_arch,device.nsm,device.warp_size,device.smpbo,
+        key,value,heads,kv_heads,queries,uint32_t(tokens),0,uint32_t(kernel_family::vector),true,false};
+    static thread_local ggml_cuda_fattn_plan_cache<ggml_kv_stream_resume_plan> cache;
+    if (cache.find(cache_key,output)) return true;
     int occupancy = 0;
     if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy,native,128,0) != cudaSuccess) {
         (void) cudaGetLastError(); return false;
@@ -370,6 +375,7 @@ static bool resume_plan(
             heads,queries,uint32_t(splits),
             ggml_cuda_kv_stream_vector_values_per_thread(ggml_type(value),compiled_arch),next)) return false;
     next.tokens = tokens;
+    cache.store(cache_key,next);
     output = next;
     return true;
 }

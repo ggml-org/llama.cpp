@@ -6,6 +6,7 @@
 #include "fattn.cuh"
 #include "kv-stream-attention-dispatch.h"
 #include "kv-stream-dispatch.cuh"
+#include "fattn-plan-cache.h"
 #include "../ggml-kv-stream-device.h"
 #include "../ggml-backend-execution.h"
 
@@ -552,6 +553,13 @@ static uint32_t mma_span_conversion_flags(const ggml_tensor * dst) {
         ((ggml_is_contiguous(k) ? 1 : 0)|(ggml_is_contiguous(v) ? 2 : 0)));
 }
 
+struct mma_cached_plan {
+    mma_span_launch plan;
+    fattn_kernel_t ordinary=nullptr;
+    ggml_kv_mma_span_kernel_t spanned=nullptr;
+    size_t native_shared_bytes=0;
+};
+
 // Reproduce stock Stream-K planning while accounting for descriptors in caller-owned scratch.
 static bool mma_span_launch_make(
         ggml_backend_cuda_context & ctx, const ggml_tensor * dst,
@@ -609,7 +617,27 @@ static bool mma_span_launch_make(
         if (failure) *failure = status::unsupported_device_features;
         return false;
     }
-    const bool turing_only = ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_TURING;
+    const auto & device=ggml_cuda_info().devices[ctx.device];
+    const int compiled_arch=ggml_cuda_highest_compiled_arch(cc);
+    const bool dense_strided=ggml_cuda_kv_stream_mma_dense_strided(dst->src[5] != nullptr,mma_span_conversion_flags(dst));
+    const ggml_cuda_fattn_plan_key cache_key{ctx.device,cc,compiled_arch,device.nsm,device.warp_size,device.smpbo,
+        k->type,v->type,uint32_t(q->ne[2]),uint32_t(k->ne[2]),uint32_t(q->ne[1]),uint32_t(k->ne[1]),
+        uint32_t(span_count),uint32_t(ggml_cuda_kv_stream_kernel_family::mma),resumable,dense_strided};
+    static thread_local ggml_cuda_fattn_plan_cache<mma_cached_plan> cache;
+    mma_cached_plan cached;
+    if (cache.find(cache_key,cached)) {
+        // Function attributes are mutable driver state, so reapply them even for prepared geometry.
+        if (cudaFuncSetAttribute(cached.spanned,cudaFuncAttributeMaxDynamicSharedMemorySize,int(cached.plan.shared_bytes)) != cudaSuccess ||
+                cudaFuncSetAttribute(cached.ordinary,cudaFuncAttributeMaxDynamicSharedMemorySize,int(cached.native_shared_bytes)) != cudaSuccess) {
+            if (failure) *failure=status::unsupported_launch_resources;
+            (void) cudaGetLastError();
+            return false;
+        }
+        output=cached.plan;
+        if (failure) *failure=status::success;
+        return true;
+    }
+    const bool turing_only = compiled_arch == GGML_CUDA_CC_TURING;
     const int ncols1 = ggml_cuda_kv_stream_mma_ncols1(uint32_t(q->ne[1]), gqa_ratio, turing_only);
     if (!ncols1) return false;
     const int ncols = ncols1*ncols2;
@@ -634,7 +662,7 @@ static bool mma_span_launch_make(
 
     mma_span_launch next;
     next.resumable=resumable;
-    next.dense_strided=ggml_cuda_kv_stream_mma_dense_strided(dst->src[5] != nullptr,mma_span_conversion_flags(dst));
+    next.dense_strided=dense_strided;
     next.ncols1 = ncols1;
     next.ncols2 = ncols2;
     next.shared_bytes = std::max(shared_combine,q_in_reg ?
@@ -762,6 +790,7 @@ static bool mma_span_launch_make(
         }
         // Singleton slices write only fixup fragments until the last K tile, so no private output is needed.
     }
+    cache.store(cache_key,{next,ordinary,spanned,native_shared_bytes});
     output = next;
     if (failure) *failure = status::success;
     return true;
