@@ -1,0 +1,80 @@
+{"id": 0, "category": "code", "domain": "python", "prompt": "Red-Black Tree implementation with recoloring, rotations, deletion fixups, and property verifications."}
+{"id": 1, "category": "code", "domain": "python", "prompt": "Asynchronous web crawler with asyncio, aiohttp, priority queue, per-domain rate limiting, and backpressure."}
+{"id": 2, "category": "code", "domain": "python", "prompt": "Bytecode compiler and stack-based virtual machine executing arithmetic, jumps, and function calls."}
+{"id": 3, "category": "code", "domain": "python", "prompt": "Custom PyTorch autograd engine implementing Tensor, backward DAG traversal, and Adam optimizer from scratch."}
+{"id": 4, "category": "code", "domain": "rust", "prompt": "Work-stealing thread pool with Chase-Lev deques, crossbeam-style task stealing, and graceful atomic shutdown."}
+{"id": 5, "category": "code", "domain": "rust", "prompt": "Zero-copy HTTP/1.1 streaming request parser operating on raw byte slices with chunked transfer state machine."}
+{"id": 6, "category": "code", "domain": "rust", "prompt": "Lock-free concurrent skip list with atomic compare-and-swap pointer tagging and hazard pointers."}
+{"id": 7, "category": "code", "domain": "rust", "prompt": "B-Tree implementation with node splitting, merging, rebalancing, and binary search within nodes."}
+{"id": 8, "category": "code", "domain": "c", "prompt": "Buddy memory allocator with order 0 (4KB) to order 10 (4MB) blocks and integrated slab caches."}
+{"id": 9, "category": "code", "domain": "c", "prompt": "High-performance Linux network server using edge-triggered epoll, ring buffers, signalfd, and timerfd."}
+{"id": 10, "category": "code", "domain": "c", "prompt": "Userspace cooperative green thread scheduler using swapcontext, makecontext, and sleep queues."}
+{"id": 11, "category": "code", "domain": "c", "prompt": "Custom dynamic memory profiler hooking malloc, calloc, realloc, free using LD_PRELOAD and backtrace."}
+{"id": 12, "category": "code", "domain": "sql", "prompt": "PostgreSQL recursive CTE computing 10-level corporate org tree depth, cumulative budgets, and rankings."}
+{"id": 13, "category": "code", "domain": "sql", "prompt": "E-commerce customer lifetime value, cohort retention matrix, and churn risk indicators using window functions."}
+{"id": 14, "category": "code", "domain": "sql", "prompt": "Financial transaction fraud detection pipeline using rolling partition windows and standard deviation filters."}
+{"id": 15, "category": "code", "domain": "sql", "prompt": "Inventory replenishment reorder point optimizer with lead-time percentiles and safety stock calculations."}
+{"id": 16, "category": "code", "domain": "go", "prompt": "Distributed key-value store with Raft consensus, log compaction, leader election, and snapshotting."}
+{"id": 17, "category": "code", "domain": "go", "prompt": "Concurrent bounded rate limiter using token bucket algorithm with sync/atomic and select channels."}
+{"id": 18, "category": "code", "domain": "typescript", "prompt": "Complete type-safe GraphQL query parser and AST validator with custom schema directives."}
+{"id": 19, "category": "code", "domain": "typescript", "prompt": "Reactive state management library implementing signals, computed values, effects, and batching."}
+{"id": 20, "category": "code", "domain": "cpp", "prompt": "SIMD-vectorized matrix multiplication library using AVX-512 intrinsics with cache tiling."}
+{"id": 21, "category": "code", "domain": "cpp", "prompt": "Lock-free MPMC ring buffer queue with cacheline padding and memory order acquire/release."}
+{"id": 22, "category": "code", "domain": "kernel", "prompt": "Linux kernel character device driver with ioctl handlers, mutex locking, and sysfs attributes."}
+{"id": 23, "category": "code", "domain": "compiler", "prompt": "LR(1) parser generator constructing canonical collections of items, action/goto tables, and AST generation."}
+{"id": 24, "category": "code", "domain": "python", "prompt": "Distributed map-reduce engine with master coordinator, RPC worker tasks, and shuffle sorting."}
+{"id": 25, "category": "code", "domain": "rust", "prompt": "Raft consensus implementation handling AppendEntries RPCs, vote requests, and persistent state."}
+{"id": 26, "category": "code", "domain": "c", "prompt": "Custom ELF binary parser reading program headers, section headers, symbol tables, and relocations."}
+{"id": 27, "category": "code", "domain": "sql", "prompt": "Temporal database schema tracking bi-temporal valid-time and transaction-time tables with audit trails."}
+{"id": 28, "category": "code", "domain": "python", "prompt": "Graph neural network message passing framework implementing GCN and GAT convolution layers."}
+{"id": 29, "category": "code", "domain": "rust", "prompt": "Asynchronous TLS 1.3 handshake state machine parsing ClientHello, ServerHello, and certificate chains."}
+{"id": 30, "category": "code", "domain": "c", "prompt": "Ext2 filesystem inspection tool reading superblock, block group descriptors, and inode tables."}
+{"id": 31, "category": "code", "domain": "typescript", "prompt": "Virtual DOM diffing and reconciliation algorithm computing minimum tree edit patches."}
+{"id": 32, "category": "math", "domain": "linear_algebra", "prompt": "Rigorous step-by-step proof of the Spectral Theorem for real symmetric matrices with mathematical induction."}
+{"id": 33, "category": "math", "domain": "pde", "prompt": "Analytical solution of the 1D heat equation with homogeneous Dirichlet boundary conditions via separation of variables."}
+{"id": 34, "category": "math", "domain": "game_theory", "prompt": "Infinitely repeated Prisoner's Dilemma analysis proving Grim Trigger equilibrium via One-Shot Deviation Principle."}
+{"id": 35, "category": "math", "domain": "probability", "prompt": "Gambler's Ruin recurrence relation derivation, characteristic roots, and Martingale stopping time analysis."}
+{"id": 36, "category": "math", "domain": "abstract_algebra", "prompt": "Proof of the First Isomorphism Theorem for groups and classification of finite abelian groups."}
+{"id": 37, "category": "math", "domain": "topology", "prompt": "Proof of Tychonoff's Theorem for arbitrary products of compact topological spaces using ultrafilters."}
+{"id": 38, "category": "math", "domain": "complex_analysis", "prompt": "Derivation of Cauchy's Integral Formula and evaluation of contour integrals using Residue Theorem."}
+{"id": 39, "category": "math", "domain": "calculus_variations", "prompt": "Derivation of the Euler-Lagrange equations from Hamilton's principle of stationary action with constraints."}
+{"id": 40, "category": "math", "domain": "differential_geometry", "prompt": "Computation of Riemann curvature tensor, Ricci tensor, and Ricci scalar on a Riemannian 2-sphere."}
+{"id": 41, "category": "math", "domain": "number_theory", "prompt": "Proof of the Quadratic Reciprocity Law using Gauss sums and Legendre symbols."}
+{"id": 42, "category": "math", "domain": "real_analysis", "prompt": "Rigorous proof of the Stone-Weierstrass Approximation Theorem on compact metric spaces."}
+{"id": 43, "category": "math", "domain": "combinatorics", "prompt": "Derivation of the master theorem for divide-and-conquer recurrences with tight asymptotic bounds."}
+{"id": 44, "category": "math", "domain": "optimization", "prompt": "Karush-Kuhn-Tucker (KKT) necessary and sufficient conditions derivation for convex optimization with duality."}
+{"id": 45, "category": "math", "domain": "stochastic", "prompt": "It\u00f4's Lemma derivation and analytical solution to the Black-Scholes partial differential equation."}
+{"id": 46, "category": "math", "domain": "graph_theory", "prompt": "Proof of the Max-Flow Min-Cut theorem using residual networks and augmenting paths."}
+{"id": 47, "category": "math", "domain": "numerical", "prompt": "Convergence rate proof for the Conjugate Gradient method on symmetric positive definite linear systems."}
+{"id": 48, "category": "chat", "domain": "physics", "prompt": "Detailed quantum entanglement and CHSH inequality derivation proving Tsirelson's bound vs classical limits."}
+{"id": 49, "category": "chat", "domain": "physics", "prompt": "Derivation of the Schwarzschild metric from Einstein's vacuum field equations with Newtonian limit."}
+{"id": 50, "category": "chat", "domain": "biology", "prompt": "Molecular biology of CRISPR-Cas9 genome editing, PAM recognition, R-loop formation, and repair mechanisms."}
+{"id": 51, "category": "chat", "domain": "history", "prompt": "Analytical comparison of industrial modernization in Meiji Japan vs 19th-century Imperial Prussia."}
+{"id": 52, "category": "chat", "domain": "astrophysics", "prompt": "Thermodynamics and hydrodynamics of stellar nucleosynthesis from hydrogen burning to iron core collapse."}
+{"id": 53, "category": "chat", "domain": "neuroscience", "prompt": "Biophysics of action potential generation: Hodgkin-Huxley model, ion channel gating kinetics, and Nernst potentials."}
+{"id": 54, "category": "chat", "domain": "chemistry", "prompt": "Transition state theory and Marcus electron transfer theory in outer-sphere redox reactions."}
+{"id": 55, "category": "chat", "domain": "philosophy", "prompt": "Comparative essay on Kantian deontological ethics vs Scanlonian contractualism on moral duties."}
+{"id": 56, "category": "chat", "domain": "economics", "prompt": "Monetary policy transmission mechanisms under zero lower bound: quantitative easing vs forward guidance."}
+{"id": 57, "category": "chat", "domain": "quantum_computing", "prompt": "Detailed mathematical operation of Shor's quantum factoring algorithm and quantum Fourier transform."}
+{"id": 58, "category": "chat", "domain": "materials", "prompt": "Electronic band structure of graphene and topological insulators: Dirac cones and Berry phase."}
+{"id": 59, "category": "chat", "domain": "linguistics", "prompt": "Generative syntax and Minimalist Program: Merge operation, Phase Theory, and feature valuation."}
+{"id": 60, "category": "chat", "domain": "climate", "prompt": "Geophysical fluid dynamics of oceanic thermohaline circulation and atmospheric Rossby waves."}
+{"id": 61, "category": "chat", "domain": "evolutionary_bio", "prompt": "Kin selection, Hamilton's rule, and evolutionary game theory in the evolution of eusociality."}
+{"id": 62, "category": "chat", "domain": "history", "prompt": "The Fall of the Western Roman Empire: institutional decay, economic crises, and barbarian federates."}
+{"id": 63, "category": "chat", "domain": "epistemology", "prompt": "The Gettier problem and contemporary responses: reliabilism, virtue epistemology, and sensitivity conditions."}
+{"id": 64, "category": "tool", "domain": "cloud", "prompt": "Comprehensive Terraform-like JSON specification provisioning a multi-region HA Kubernetes cluster on AWS."}
+{"id": 65, "category": "tool", "domain": "agent", "prompt": "International airline customer support agent router returning strictly formatted structured JSON actions."}
+{"id": 66, "category": "tool", "domain": "medical", "prompt": "Emergency department clinical triaging assistant outputting structured JSON with ICD-10 codes and ESI score."}
+{"id": 67, "category": "tool", "domain": "finance", "prompt": "High-frequency trading algorithmic execution plan using Almgren-Chriss model as strict JSON schema."}
+{"id": 68, "category": "tool", "domain": "devops", "prompt": "CI/CD multi-stage deployment pipeline definition JSON with canary stages, rollback policies, and metrics."}
+{"id": 69, "category": "tool", "domain": "database", "prompt": "Zero-downtime database schema migration plan JSON with table renaming, shadow columns, and backfills."}
+{"id": 70, "category": "tool", "domain": "security", "prompt": "SOC2 compliance audit evidence payload JSON mapping security controls to AWS IAM policies and logs."}
+{"id": 71, "category": "tool", "domain": "ecommerce", "prompt": "Omnichannel order fulfillment dispatch optimization plan JSON assigning orders to nearest fulfillment hubs."}
+{"id": 72, "category": "tool", "domain": "billing", "prompt": "Usage-based metered billing calculation schema JSON handling tiered rates, prepaid credits, and overages."}
+{"id": 73, "category": "tool", "domain": "iot", "prompt": "Industrial telemetry anomaly detection event JSON schema for smart grid sensor networks with alert thresholds."}
+{"id": 74, "category": "tool", "domain": "nlp", "prompt": "Named entity recognition and relation extraction payload JSON for biomedical clinical trial publications."}
+{"id": 75, "category": "tool", "domain": "travel", "prompt": "Dynamic multi-modal route navigation itinerary JSON combining flights, trains, and rideshares with layovers."}
+{"id": 76, "category": "tool", "domain": "insurance", "prompt": "Automated motor vehicle insurance claim assessment report JSON with damage estimates and fraud scores."}
+{"id": 77, "category": "tool", "domain": "hr", "prompt": "Global payroll tax withholding and compliance calculation JSON for multi-jurisdiction distributed employees."}
+{"id": 78, "category": "tool", "domain": "gaming", "prompt": "Massively multiplayer online game matchmaking lobby state JSON with ELO rankings and latency brackets."}
+{"id": 79, "category": "tool", "domain": "logistics", "prompt": "Global container shipping freight route dispatch JSON with port customs clearance milestones and ETA predictions."}

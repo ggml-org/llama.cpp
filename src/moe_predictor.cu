@@ -10,54 +10,85 @@
 
 #define N_LAYER_MAX 48
 #define IN_DIM_DEF 2048
-#define H_DIM_DEF 256
+#define H_DIM_V2 512
 #define OUT_DIM_DEF 512
 #define K_HIST_DEF 4
 #define N_USED_DEF 10
 
-// Fused 31M Router Predictor Kernel (512 threads/block, coalesced warps)
-__global__ void moe_predictor_fused_fast512(
+// Fused RouterPredictorV2 Kernel: Cross-Layer Residual Conditioning + 512 Hidden Dim
+// Grid: 48 blocks (1 per layer)
+// Block: 512 threads
+__global__ void moe_predictor_v2_fused_kernel(
     const uint16_t * __restrict__ history_k4, // [4, n_layer, n_used]
-    const half     * __restrict__ W1,         // [n_layer, in_dim, h_dim]
-    const half     * __restrict__ b1,         // [n_layer, h_dim]
-    const half     * __restrict__ W2,         // [n_layer, h_dim, out_dim] (row-major)
-    const half     * __restrict__ b2,         // [n_layer, out_dim]
+    const half     * __restrict__ W1,         // [n_layer, 2048, 512]
+    const half     * __restrict__ b1,         // [n_layer, 512]
+    const half     * __restrict__ W2,         // [n_layer, 512, 512] (row-major)
+    const half     * __restrict__ b2,         // [n_layer, 512]
     uint16_t       * __restrict__ out_top16   // [n_layer, 16]
 ) {
-    const int l = blockIdx.x;
+    const int l = blockIdx.x; // [0..47]
     const int j = threadIdx.x; // [0..511]
 
-    __shared__ half  h_shared[H_DIM_DEF];
+    __shared__ half  h_shared[H_DIM_V2];
     __shared__ float s_val[OUT_DIM_DEF];
     __shared__ uint16_t s_idx[OUT_DIM_DEF];
 
-    const half * w1_l = W1 + (size_t) l * IN_DIM_DEF * H_DIM_DEF;
-    const half * w2_l = W2 + (size_t) l * H_DIM_DEF * OUT_DIM_DEF;
+    const half * w1_l = W1 + (size_t) l * IN_DIM_DEF * H_DIM_V2;
+    const half * w2_l = W2 + (size_t) l * H_DIM_V2 * OUT_DIM_DEF;
 
-    // 1. Layer 1: First 256 threads compute Hidden (256)
-    if (j < H_DIM_DEF) {
-        float sum1 = 0.0f;
+    // 1. Layer 1: 512 threads compute 512 hidden units
+    float sum1 = 0.0f;
+    if (l == 0) {
+        // Layer 0: 4 steps of Layer 0 (t-4, t-3, t-2, t-1) -> 40 active inputs
         #pragma unroll
-        for (int k = 0; k < K_HIST_DEF; ++k) {
-            const int hist_offset = (k * N_LAYER_MAX + l) * N_USED_DEF;
+        for (int k = 0; k < 4; ++k) {
+            const int hist_offset = (k * N_LAYER_MAX + 0) * N_USED_DEF;
             #pragma unroll
             for (int u = 0; u < N_USED_DEF; ++u) {
                 uint16_t exp_id = history_k4[hist_offset + u];
                 if (exp_id < OUT_DIM_DEF) {
                     int feat_idx = k * OUT_DIM_DEF + exp_id;
-                    sum1 += __half2float(w1_l[(size_t) feat_idx * H_DIM_DEF + j]);
+                    sum1 += __half2float(w1_l[(size_t) feat_idx * H_DIM_V2 + j]);
                 }
             }
         }
-        sum1 += __half2float(b1[l * H_DIM_DEF + j]);
-        h_shared[j] = __float2half(fmaxf(sum1, 0.0f));
+    } else {
+        // Layers 1..47: 2 steps of Layer L (t-2, t-1) + 2 steps of Layer L-1 (t-2, t-1)
+        // Layer L (t-2, t-1) -> features 0..1023
+        #pragma unroll
+        for (int k = 0; k < 2; ++k) {
+            const int hist_offset = ((k + 2) * N_LAYER_MAX + l) * N_USED_DEF; // step 2, 3
+            #pragma unroll
+            for (int u = 0; u < N_USED_DEF; ++u) {
+                uint16_t exp_id = history_k4[hist_offset + u];
+                if (exp_id < OUT_DIM_DEF) {
+                    int feat_idx = k * OUT_DIM_DEF + exp_id;
+                    sum1 += __half2float(w1_l[(size_t) feat_idx * H_DIM_V2 + j]);
+                }
+            }
+        }
+        // Layer L-1 (t-2, t-1) -> features 1024..2047 (vertical cascading)
+        #pragma unroll
+        for (int k = 0; k < 2; ++k) {
+            const int hist_offset = ((k + 2) * N_LAYER_MAX + (l - 1)) * N_USED_DEF;
+            #pragma unroll
+            for (int u = 0; u < N_USED_DEF; ++u) {
+                uint16_t exp_id = history_k4[hist_offset + u];
+                if (exp_id < OUT_DIM_DEF) {
+                    int feat_idx = 1024 + k * OUT_DIM_DEF + exp_id;
+                    sum1 += __half2float(w1_l[(size_t) feat_idx * H_DIM_V2 + j]);
+                }
+            }
+        }
     }
+    sum1 += __half2float(b1[l * H_DIM_V2 + j]);
+    h_shared[j] = __float2half(fmaxf(sum1, 0.0f));
     __syncthreads();
 
-    // 2. Layer 2: All 512 threads compute 1 output logit each
+    // 2. Layer 2: All 512 threads compute 1 output logit each (coalesced across warps!)
     float sum2 = 0.0f;
     #pragma unroll 8
-    for (int k = 0; k < H_DIM_DEF; ++k) {
+    for (int k = 0; k < H_DIM_V2; ++k) {
         sum2 += __half2float(h_shared[k]) * __half2float(w2_l[k * OUT_DIM_DEF + j]);
     }
     sum2 += __half2float(b2[l * OUT_DIM_DEF + j]);
@@ -111,7 +142,7 @@ __global__ void moe_predictor_fused_fast512(
             }
             if (j == 0) {
                 out_top16[l * 16 + sel] = idx;
-                s_val[idx] = -1e9f; // Mask out selected element
+                s_val[idx] = -1e9f;
             }
         }
         __syncthreads();
@@ -123,7 +154,7 @@ static struct {
     bool ready = false;
     int n_layer = 48;
     int in_dim = 2048;
-    int h_dim = 256;
+    int h_dim = 512;
     int out_dim = 512;
 
     half * d_W1 = nullptr;
@@ -205,7 +236,7 @@ bool moe_predictor_init(const char * bin_path, int n_layer, int in_dim, int h_di
     cudaStreamSynchronize(g_pred.stream);
 
     g_pred.ready = true;
-    fprintf(stderr, "%s: 31M router predictor initialized on GPU (%.2f MB VRAM)\n",
+    fprintf(stderr, "%s: RouterPredictorV2 (60M) initialized on GPU (%.2f MB VRAM)\n",
             __func__, (total_w_bytes + hist_bytes + top16_bytes) / (1024.0 * 1024.0));
     return true;
 }
@@ -237,16 +268,14 @@ float moe_predictor_predict(const uint16_t * history_k4, uint16_t * out_top16) {
     size_t hist_bytes = (size_t) K_HIST_DEF * g_pred.n_layer * N_USED_DEF * sizeof(uint16_t);
     size_t top16_bytes = (size_t) g_pred.n_layer * 16 * sizeof(uint16_t);
 
-    // Upload history (3,840 bytes) to device stream
     cudaMemcpyAsync(g_pred.d_hist, history_k4, hist_bytes, cudaMemcpyHostToDevice, g_pred.stream);
 
     cudaEventRecord(g_pred.start_evt, g_pred.stream);
-    moe_predictor_fused_fast512<<<g_pred.n_layer, OUT_DIM_DEF, 0, g_pred.stream>>>(
+    moe_predictor_v2_fused_kernel<<<g_pred.n_layer, OUT_DIM_DEF, 0, g_pred.stream>>>(
         g_pred.d_hist, g_pred.d_W1, g_pred.d_b1, g_pred.d_W2, g_pred.d_b2, g_pred.d_top16
     );
     cudaEventRecord(g_pred.stop_evt, g_pred.stream);
 
-    // Download top16 (1,536 bytes) to pinned host buffer, then copy to out
     cudaMemcpyAsync(g_pred.h_top16_pinned, g_pred.d_top16, top16_bytes, cudaMemcpyDeviceToHost, g_pred.stream);
     cudaStreamSynchronize(g_pred.stream);
 

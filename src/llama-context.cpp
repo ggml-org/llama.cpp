@@ -542,9 +542,9 @@ llama_context::llama_context(
                                            n_layer, s_pl);
                             moe_seed_hot();
                             const char * p_bin = getenv("MOE_PREDICTOR_BIN");
-                            std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_31m.bin";
-                            if (moe_predictor_init(pred_bin.c_str(), moe.n_layer, 2048, 256, 512)) {
-                                LLAMA_LOG_INFO("%s: 31M native CUDA router predictor armed from %s\n", __func__, pred_bin.c_str());
+                            std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_v2.bin";
+                            if (moe_predictor_init(pred_bin.c_str(), moe.n_layer, 2048, 512, 512)) {
+                                LLAMA_LOG_INFO("%s: RouterPredictorV2 (60M) armed from %s\n", __func__, pred_bin.c_str());
                             }
                         } // staging reserved
                     } // buf ok
