@@ -45,7 +45,11 @@ const uint32_t qstride = HSK_pad / 4 + 2;
 shared FLOAT_TYPEV4 Qf[Q_IN_REGS ? 1 : (Br * qstride)];
 
 const uint psh_stride = Br / 4 + 2;
-shared FLOAT_TYPEV4 Psh[Bc * psh_stride];
+const uint32_t qchunk_dtiles = 4;
+const uint32_t qchunk_stride = qchunk_dtiles * 16 / 4 + 2;
+const uint32_t psh_size = Bc * psh_stride;
+const uint32_t qchunk_size = Q_IN_REGS ? Br * qchunk_stride : 0;
+shared FLOAT_TYPEV4 Psh[psh_size >= qchunk_size ? psh_size : qchunk_size];
 
 // Avoid padding for hsk==256 to make it fit in 48KB shmem.
 const uint32_t sfshstride = (HSK <= 128) ? (Br / 4 + 2) : Br / 4;
@@ -57,7 +61,7 @@ const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * nu
 const uint vsh_stride = v_cols;
 shared FLOAT_TYPEV4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride)];
 
-// PV result is staged through sfsh, which is idle between the softmax and the next S store.
+// PV result reuses sfsh
 const uint32_t osh_stride = row_split * MatBr / 4;
 #if defined(FLOAT16) && !defined(ACC_TYPE_MAX)
 const uint32_t pv_per_acc = 2;
@@ -97,19 +101,14 @@ void main() {
 
     uint32_t q_offset = gqa_iq1*p.nb01 + (iq2*p.nb02+iq3*p.nb03) / 4;
 
-    // On the Q_IN_REGS path Q is held resident in coopmat B tiles (filled once, staged
-    // through Psh which is idle here); otherwise it stays in the Qf LDS buffer and is
-    // re-read on every KV tile.
     coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> Qreg[Q_IN_REGS ? (d_tiles * q_tiles) : 1];
 
     if (Q_IN_REGS) {
-        const uint32_t qchunk_dtiles = 4;
-        const uint32_t qchunk_stride = qchunk_dtiles * 16 / 4 + 2;
         [[unroll]] for (uint32_t dbase = 0; dbase < d_tiles; dbase += qchunk_dtiles) {
             [[unroll]] for (uint32_t idx = 0; idx < Br * qchunk_dtiles * 16 / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t dvec = (idx + tid) % (qchunk_dtiles * 16 / 4);
                 uint32_t r = (idx + tid) / (qchunk_dtiles * 16 / 4);
-                if (r < Br && idx + tid < Br * qchunk_dtiles * 16 / 4) {
+                if (r < Br) {
                     uint32_t d = dbase * 4 + dvec;
                     FLOAT_TYPEV4 val = FLOAT_TYPEV4(0);
                     if (d < HSK / 4 && i * Br + r < N) {
@@ -318,7 +317,7 @@ void main() {
         coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA> KMat;
         coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMat;
 
-        [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
+        [[unroll]] for (uint32_t d = 0; d < d_tiles; ++d) {
             // If SHMEM_STAGING is set, a Bc * HSK_pad size tile of K is loaded to shmem
             // If not, K is loaded directly from global memory if aligned, otherwise
             // staged through a Bc * MatBr size staging buffer.
@@ -572,7 +571,6 @@ void main() {
                     }
                 }
 
-                // Store PVMat to sfsh and load into Of
                 [[unroll]] for (uint32_t q = 0; q < q_tiles; ++q) {
                     coopMatStore(PVMat[q], sfsh, (o_offset + q * MatBc * osh_stride) / pv_per_acc, osh_stride / pv_per_acc, gl_CooperativeMatrixLayoutRowMajor);
                 }
