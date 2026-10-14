@@ -16,13 +16,6 @@ static bool pd_disabled() {
 // tile, 6-8 take two; larger ones take the chunked prefill.
 static constexpr int64_t PD_DECODE_MAX_NB = 8;
 
-// Prototype: prefill ubatches (more than PD_DECODE_MAX_NB query tokens) in row tiles, for measurement against the stock
-// kernels.
-static bool pd_prefill() {
-    static const bool enabled = getenv("GGML_CUDA_PAGED_PREFILL") != nullptr;
-    return enabled;
-}
-
 static pd_sync pd_get_sync(const ggml_tensor * dst) {
     const ggml_tensor * tag = dst->src[GGML_FA_SRC_TAG];
     if (!tag) {
@@ -68,7 +61,7 @@ bool ggml_cuda_fattn_paged_decode_enabled(int device, const ggml_tensor * dst) {
         return false;
     }
     // Paged K/V with more query tokens: row tiles, for the shapes the chunked prefill does not take (dispatched first).
-    return pd_shapes_ok(device, dst, paged || pd_prefill() ? INT32_MAX : PD_DECODE_MAX_NB);
+    return pd_shapes_ok(device, dst, paged ? INT32_MAX : PD_DECODE_MAX_NB);
 }
 
 static int pd_prefill_chunk_pages() {
@@ -126,7 +119,7 @@ bool ggml_cuda_fattn_paged_prefill_enabled(int device, const ggml_tensor * dst) 
     const ggml_tensor * K     = dst->src[1];
     const bool          paged = dst->src[GGML_FA_SRC_PAGES] != nullptr;
     const int64_t       chunk = (int64_t) pd_prefill_chunk_pages()*PD_PAGE;
-    if (Q->ne[1] <= PD_DECODE_MAX_NB || pd_prefill()) {
+    if (Q->ne[1] <= PD_DECODE_MAX_NB) {
         return false;
     }
     // paged K/V needs the runs; contiguous K/V is one run, worth splitting when longer than a chunk (bounds the stock
@@ -234,7 +227,7 @@ void ggml_cuda_flash_attn_ext_paged_decode(ggml_backend_cuda_context & ctx, ggml
     const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
 #define PD_LAUNCH(M, P, MT) \
     pd_partial<M, P, MT><<<grid, PD_NWARPS * 32, 0, stream>>>((const char *) Q->data, Q->nb[1], Q->nb[2], kv_k, kv_v, sync, \
-        mask_data, mask_nb1, scale, n_kv, nb, n_chunks, chunks_per_split, O_part, ML_part, 0)
+        mask_data, mask_nb1, scale, n_kv, nb, n_chunks, chunks_per_split, O_part, ML_part)
     if (n_tiles > 1) {
         // a 32-row tile spans at most 7 query tokens
         if (pages) { PD_LAUNCH(2, true, 8); } else { PD_LAUNCH(2, false, 8); }

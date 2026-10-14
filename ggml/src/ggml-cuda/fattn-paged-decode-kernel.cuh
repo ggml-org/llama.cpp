@@ -129,7 +129,7 @@ static __global__ void pd_partial(
         const pd_kv K, const pd_kv V, const pd_sync sync,
         const char * __restrict__ mask, const int64_t mask_nb1,
         const float scale, const int n_kv, const int nb, const int n_chunks, const int chunks_per_split,
-        float * __restrict__ O_part, float2 * __restrict__ ML_part, const int ablate) {
+        float * __restrict__ O_part, float2 * __restrict__ ML_part) {
 #if PD_RDNA4
     constexpr int R   = M_TILES * 16;          // rows
     constexpr int TPR = PD_NWARPS * 32 / R;    // softmax threads per row
@@ -258,7 +258,7 @@ static __global__ void pd_partial(
             Ms[tid + j * PD_NWARPS * 32] = mreg[j];
         }
         __syncthreads();
-        if (c + 1 < c1 && !(ablate & 4)) {
+        if (c + 1 < c1) {
             fetch(c + 1);
         }
 
@@ -269,7 +269,6 @@ static __global__ void pd_partial(
             const char * krow = Kr + n * PD_K_ROW;
 #pragma unroll
             for (int ks = 0; ks < PD_D / 16; ++ks) {
-                if (ablate & 1) break;
                 const int d0 = ks * 16 + 8 * (lane / 16);
                 const char * blk = krow + (d0 / PD_QK) * PD_Q8_BLK;
                 const half d = *(const half *) blk;
@@ -340,7 +339,6 @@ static __global__ void pd_partial(
         }
 #pragma unroll
         for (int ks = 0; ks < PD_CHUNK / 16; ++ks) {
-            if (ablate & 2) break;
             const int k0 = ks * 16 + 8 * (lane / 16);
             pd_half8 a[M_TILES];
 #pragma unroll

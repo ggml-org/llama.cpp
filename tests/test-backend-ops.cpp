@@ -10075,7 +10075,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
         }
     }
-    // prefill shapes (GGML_CUDA_PAGED_PREFILL prototype on CUDA): row tiles, tiles spanning several query tokens
+    // prefill shapes: the chunked paged prefill, and row tiles for the paged shapes it does not take
     for (int kv : { 1024, 8192, }) {
         for (int nb : { 7, 33, 512, }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
