@@ -459,6 +459,855 @@ static void test_shared_removal() {
 }
 
 //
+// real repo listings captured from the HF API on 2026-10-14: 1221 GGUF repos
+// of the major publishers reduced to one listing per naming pattern, each
+// pruned to whole quant groups; the expectations are what each file really is
+// per its GGUF header, so a mismatch is a resolution bug, not a fixture choice
+//
+
+// a file name, or with `parts` a shard prefix standing for the verbatim names
+// <prefix>-00001-of-0000n.gguf .. <prefix>-0000n-of-0000n.gguf
+struct real_file {
+    const char * name;
+    int          parts = 0;
+};
+
+// a nullptr field is not asserted, where the right pick is not settled
+struct real_plan {
+    const char * tag;     // the request is <repo>:<tag>, or <repo> when empty
+    const char * primary;
+    int          parts;   // number of model files, all splits of the primary
+    const char * mmproj;
+    const char * mtp;
+    const char * dflash;
+    const char * eagle3;
+    const char * dspark;
+};
+
+struct real_repo {
+    const char * id;
+    std::vector<real_file> files;
+    std::vector<real_plan> plans;
+    std::vector<std::string> listing; // the tags the cache listing reports
+};
+
+static const real_repo real_repos[] = {
+    {"a-mo-yehia/Qwen3-VL-8B-Contracts-OCR-GGUF",
+     {{"gguf/mmproj_f16.gguf"},
+      {"gguf/model_f16.gguf"},
+      {"gguf/model_q4_k_m.gguf"},
+      {"gguf/model_q8_0.gguf"}},
+     {
+      {"", "gguf/model_q4_k_m.gguf", 1, "gguf/mmproj_f16.gguf", "", "", "", ""},
+      {"F16", "gguf/model_f16.gguf", 1, "gguf/mmproj_f16.gguf", "", "", "", ""},
+      {"Q4_K_M", "gguf/model_q4_k_m.gguf", 1, "gguf/mmproj_f16.gguf", "", "", "", ""},
+      {"Q8_0", "gguf/model_q8_0.gguf", 1, "gguf/mmproj_f16.gguf", "", "", "", ""}},
+     {"F16", "Q4_K_M", "Q8_0"}},
+
+    {"AesSedai/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF",
+     {{"Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-BF16-Q4_K_M", 3},
+      {"imatrix-2.gguf"},
+      {"imatrix.gguf"}},
+     {
+      {"", "Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-BF16-Q4_K_M-00001-of-00003.gguf", 3, "", "", "", "", ""},
+      {"Q4_K_M", "Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-BF16-Q4_K_M-00001-of-00003.gguf", 3, "", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"bartowski/Qwen3.8-Flash-Next-GGUF",
+     {{"Qwen3.8-Flash-Next-Q4_K_M/Qwen3.8-Flash-Next-Q4_K_M", 4},
+      {"Qwen3.8-Flash-Next-imatrix.gguf"},
+      {"mmproj-Qwen3.8-Flash-Next-bf16.gguf"},
+      {"mmproj-Qwen3.8-Flash-Next-f16.gguf"},
+      {"mtp-Qwen3.8-Flash-Next-Q4_0.gguf"},
+      {"mtp-Qwen3.8-Flash-Next-Q8_0.gguf"},
+      {"mtp-Qwen3.8-Flash-Next-bf16.gguf"}},
+     {
+      {"", "Qwen3.8-Flash-Next-Q4_K_M/Qwen3.8-Flash-Next-Q4_K_M-00001-of-00004.gguf", 4, "mmproj-Qwen3.8-Flash-Next-bf16.gguf", "mtp-Qwen3.8-Flash-Next-Q4_0.gguf", "", "", ""},
+      {"Q4_K_M", "Qwen3.8-Flash-Next-Q4_K_M/Qwen3.8-Flash-Next-Q4_K_M-00001-of-00004.gguf", 4, "mmproj-Qwen3.8-Flash-Next-bf16.gguf", "mtp-Qwen3.8-Flash-Next-Q4_0.gguf", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"DevQuasar/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp-GGUF",
+     {{"MXFP4_MOE/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.MXFP4_MOE.gguf", 12},
+      {"Q2_K/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.Q2_K.gguf", 8},
+      {"Q4_K_M/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.Q4_K_M.gguf", 14},
+      {"mmproj-deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf"}},
+     {
+      {"", "Q4_K_M/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.Q4_K_M.gguf-00001-of-00014.gguf", 14, "mmproj-deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf", "", "", "", ""},
+      {"MXFP4_MOE", "MXFP4_MOE/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.MXFP4_MOE.gguf-00001-of-00012.gguf", 12, "mmproj-deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf", "", "", "", ""},
+      {"Q2_K", "Q2_K/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.Q2_K.gguf-00001-of-00008.gguf", 8, "mmproj-deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf", "", "", "", ""},
+      {"Q4_K_M", "Q4_K_M/deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf.Q4_K_M.gguf-00001-of-00014.gguf", 14, "mmproj-deepseek-ai.DeepSeek-V4-Flash-Vision-Exp.f16.gguf", "", "", "", ""}},
+     {"MXFP4_MOE", "Q2_K", "Q4_K_M"}},
+
+    {"DevQuasar/meta-models.Muse-Glimmer-30B-GGUF",
+     {{"Q4_K_M/meta-models.Muse-Glimmer-30B.f16.gguf.Q4_K_M.gguf"},
+      {"dflash-meta-models.Muse-Glimmer-30B.Q4_K_M.gguf"},
+      {"dflash-meta-models.Muse-Glimmer-30B.Q8_0.gguf"},
+      {"dflash-meta-models.Muse-Glimmer-30B.bf16.gguf"},
+      {"mmproj-meta-models.Muse-Glimmer-30B.f16.gguf"}},
+     {
+      {"", "Q4_K_M/meta-models.Muse-Glimmer-30B.f16.gguf.Q4_K_M.gguf", 1, "mmproj-meta-models.Muse-Glimmer-30B.f16.gguf", "", "dflash-meta-models.Muse-Glimmer-30B.Q4_K_M.gguf", "", ""},
+      {"Q4_K_M", "Q4_K_M/meta-models.Muse-Glimmer-30B.f16.gguf.Q4_K_M.gguf", 1, "mmproj-meta-models.Muse-Glimmer-30B.f16.gguf", "", "dflash-meta-models.Muse-Glimmer-30B.Q4_K_M.gguf", "", ""}},
+     {"Q4_K_M"}},
+
+    {"DevQuasar/microsoft.Phi-4-reasoning-vision-15B-GGUF",
+     {{"microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q2_K.gguf"},
+      {"microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q3_K_M.gguf"},
+      {"microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q4_K_M.gguf"},
+      {"microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q5_K_M.gguf"},
+      {"microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q6_K.gguf"},
+      {"microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q8_0.gguf"},
+      {"mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf"}},
+     {
+      {"", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q4_K_M.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""},
+      {"Q2_K", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q2_K.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""},
+      {"Q3_K_M", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q3_K_M.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""},
+      {"Q4_K_M", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q4_K_M.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""},
+      {"Q5_K_M", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q5_K_M.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""},
+      {"Q6_K", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q6_K.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""},
+      {"Q8_0", "microsoft.Phi-4-reasoning-vision-15B.f16.gguf.Q8_0.gguf", 1, "mmproj-microsoft.Phi-4-reasoning-vision-15B.f16.gguf", "", "", "", ""}},
+     {"Q2_K", "Q3_K_M", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"}},
+
+    {"DevQuasar/moonshotai.Kimi-K3-GGUF",
+     {{"F16/moonshotai.Kimi-K3.bf16", 100},
+      {"Q2_K/moonshotai.Kimi-K3.Q2_K", 70}},
+     {
+      {"", "F16/moonshotai.Kimi-K3.bf16-00001-of-00100.gguf", 100, "", "", "", "", ""},
+      {"BF16", "F16/moonshotai.Kimi-K3.bf16-00001-of-00100.gguf", 100, "", "", "", "", ""},
+      {"Q2_K", "Q2_K/moonshotai.Kimi-K3.Q2_K-00001-of-00070.gguf", 70, "", "", "", "", ""}},
+     {"BF16", "Q2_K"}},
+
+    {"DevQuasar/NOT_WOKRKING-LGAI-EXAONE.K-EXAONE-2.0-750B-A37B-GGUF",
+     {{"Q2_K/LGAI-EXAONE.K-EXAONE-2.0-750B-A37B.Q2_K", 18}},
+     {
+      {"", "Q2_K/LGAI-EXAONE.K-EXAONE-2.0-750B-A37B.Q2_K-00001-of-00018.gguf", 18, "", "", "", "", ""},
+      {"Q2_K", "Q2_K/LGAI-EXAONE.K-EXAONE-2.0-750B-A37B.Q2_K-00001-of-00018.gguf", 18, "", "", "", "", ""}},
+     {"Q2_K"}},
+
+    {"DevQuasar/nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-GGUF",
+     {{"Q4_K_M/nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.f16.gguf.Q4_K_M.gguf"},
+      {"mtp-nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.f16.gguf"}},
+     {
+      {"", "Q4_K_M/nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.f16.gguf.Q4_K_M.gguf", 1, "", "mtp-nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.f16.gguf", "", "", ""},
+      {"Q4_K_M", "Q4_K_M/nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.f16.gguf.Q4_K_M.gguf", 1, "", "mtp-nvidia.NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.f16.gguf", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"DevQuasar/poolside.Laguna-S-2.1-GGUF",
+     {{"Q4_K_M/poolside.Laguna-S-2.1.f16.gguf.Q4_K_M.gguf", 6}},
+     {
+      {"", "Q4_K_M/poolside.Laguna-S-2.1.f16.gguf.Q4_K_M.gguf-00001-of-00006.gguf", 6, "", "", "", "", ""},
+      {"Q4_K_M", "Q4_K_M/poolside.Laguna-S-2.1.f16.gguf.Q4_K_M.gguf-00001-of-00006.gguf", 6, "", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"DevQuasar/Qwen.Qwen3-Coder-30B-A3B-Instruct-GGUF",
+     {{"Qwen.Qwen3-Coder-30B-A3B-Instruct.Q4_K_M.gguf"},
+      {"Qwen.Qwen3-Coder-30B-A3B-Instruct.f16", 2}},
+     {
+      {"", "Qwen.Qwen3-Coder-30B-A3B-Instruct.Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_M", "Qwen.Qwen3-Coder-30B-A3B-Instruct.Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"F16", "Qwen.Qwen3-Coder-30B-A3B-Instruct.f16-00001-of-00002.gguf", 2, "", "", "", "", ""}},
+     {"F16", "Q4_K_M"}},
+
+    {"DevQuasar/sarvamai.sarvam-30b-GGUF",
+     {{"sarvamai.sarvam-30b.f16.gguf.Q4_K_M.gguf"}},
+     {
+      {"", "sarvamai.sarvam-30b.f16.gguf.Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_M", "sarvamai.sarvam-30b.f16.gguf.Q4_K_M.gguf", 1, "", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"DevQuasar/xai-org.grok-2-GGUF",
+     {{"imatrix/xai-org.grok_imatrix.gguf"},
+      {"xai-org.grok-2.Q4_K_M", 12}},
+     {
+      {"", "xai-org.grok-2.Q4_K_M-00001-of-00012.gguf", 12, "", "", "", "", ""},
+      {"Q4_K_M", "xai-org.grok-2.Q4_K_M-00001-of-00012.gguf", 12, "", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"ggml-org/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+     {{"DeepSeek-V4-Flash-Vision-Exp-MXFP4", 2},
+      {"DeepSeek-V4-Flash-Vision-Exp-Q2_K", 2},
+      {"DeepSeek-V4-Flash-Vision-Exp-Q2_K_S", 2},
+      {"dspark-DeepSeek-V4-Flash-Vision-Exp-BF16.gguf"},
+      {"dspark-DeepSeek-V4-Flash-Vision-Exp-MXFP4.gguf"},
+      {"mmproj-DeepSeek-V4-Flash-Vision-Exp-BF16.gguf"},
+      {"mmproj-DeepSeek-V4-Flash-Vision-Exp-Q8_0.gguf"}},
+     {
+      {"", "DeepSeek-V4-Flash-Vision-Exp-MXFP4-00001-of-00002.gguf", 2, "mmproj-DeepSeek-V4-Flash-Vision-Exp-Q8_0.gguf", "", "", "", "dspark-DeepSeek-V4-Flash-Vision-Exp-MXFP4.gguf"},
+      {"MXFP4", "DeepSeek-V4-Flash-Vision-Exp-MXFP4-00001-of-00002.gguf", 2, "mmproj-DeepSeek-V4-Flash-Vision-Exp-Q8_0.gguf", "", "", "", "dspark-DeepSeek-V4-Flash-Vision-Exp-MXFP4.gguf"},
+      {"Q2_K", "DeepSeek-V4-Flash-Vision-Exp-Q2_K-00001-of-00002.gguf", 2, "mmproj-DeepSeek-V4-Flash-Vision-Exp-Q8_0.gguf", "", "", "", "dspark-DeepSeek-V4-Flash-Vision-Exp-MXFP4.gguf"},
+      {"Q2_K_S", "DeepSeek-V4-Flash-Vision-Exp-Q2_K_S-00001-of-00002.gguf", 2, "mmproj-DeepSeek-V4-Flash-Vision-Exp-Q8_0.gguf", "", "", "", "dspark-DeepSeek-V4-Flash-Vision-Exp-MXFP4.gguf"}},
+     {"MXFP4", "Q2_K", "Q2_K_S"}},
+
+    {"ggml-org/gemma-4-E2B-it-GGUF",
+     {{"gemma-4-E2B-it-Q8_0.gguf"},
+      {"mmproj-gemma-4-E2B-it-BF16.gguf"},
+      {"mmproj-gemma-4-E2B-it-Q8_0.gguf"},
+      {"mtp-gemma-4-E2B-it-BF16.gguf"},
+      {"mtp-gemma-4-E2B-it-Q4_0.gguf"},
+      {"mtp-gemma-4-E2B-it-Q8_0.gguf"}},
+     {
+      {"", "gemma-4-E2B-it-Q8_0.gguf", 1, "mmproj-gemma-4-E2B-it-Q8_0.gguf", "mtp-gemma-4-E2B-it-Q8_0.gguf", "", "", ""},
+      {"Q8_0", "gemma-4-E2B-it-Q8_0.gguf", 1, "mmproj-gemma-4-E2B-it-Q8_0.gguf", "mtp-gemma-4-E2B-it-Q8_0.gguf", "", "", ""},
+      {"Q4_0", "", 0, "", "mtp-gemma-4-E2B-it-Q4_0.gguf", "", "", ""}},
+     {"Q8_0"}},
+
+    {"ggml-org/GLM-4.5V-GGUF",
+     {{"GLM-4.5V-Q4_K_M", 2},
+      {"mmproj-GLM-4.5V-Q8_0.gguf"},
+      {"mtp-GLM-4.5V-Q4_0.gguf"},
+      {"mtp-GLM-4.5V-Q8_0.gguf"}},
+     {
+      {"", "GLM-4.5V-Q4_K_M-00001-of-00002.gguf", 2, "mmproj-GLM-4.5V-Q8_0.gguf", "mtp-GLM-4.5V-Q4_0.gguf", "", "", ""},
+      {"Q4_K_M", "GLM-4.5V-Q4_K_M-00001-of-00002.gguf", 2, "mmproj-GLM-4.5V-Q8_0.gguf", "mtp-GLM-4.5V-Q4_0.gguf", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"ggml-org/gpt-oss-120b-GGUF",
+     {{"eagle3-gpt-oss-120b-BF16.gguf"},
+      {"eagle3-gpt-oss-120b-Q8_0.gguf"},
+      {"gpt-oss-120b-MXFP4.gguf"}},
+     {
+      {"", "gpt-oss-120b-MXFP4.gguf", 1, "", "", "", "eagle3-gpt-oss-120b-Q8_0.gguf", ""},
+      {"MXFP4", "gpt-oss-120b-MXFP4.gguf", 1, "", "", "", "eagle3-gpt-oss-120b-Q8_0.gguf", ""}},
+     {"MXFP4"}},
+
+    {"ggml-org/Muse-Glimmer-30B-GGUF",
+     {{"Muse-Glimmer-30B-Q4_K_M.gguf"},
+      {"dflash-Muse-Glimmer-30B-BF16.gguf"},
+      {"dflash-Muse-Glimmer-30B-Q4_0.gguf"},
+      {"dflash-Muse-Glimmer-30B-Q8_0.gguf"},
+      {"mmproj-Muse-Glimmer-30B-BF16.gguf"},
+      {"mmproj-Muse-Glimmer-30B-Q8_0.gguf"}},
+     {
+      {"", "Muse-Glimmer-30B-Q4_K_M.gguf", 1, "mmproj-Muse-Glimmer-30B-Q8_0.gguf", "", "dflash-Muse-Glimmer-30B-Q4_0.gguf", "", ""},
+      {"Q4_K_M", "Muse-Glimmer-30B-Q4_K_M.gguf", 1, "mmproj-Muse-Glimmer-30B-Q8_0.gguf", "", "dflash-Muse-Glimmer-30B-Q4_0.gguf", "", ""}},
+     {"Q4_K_M"}},
+
+    {"ggml-org/SmolVLM-500M-Instruct-GGUF",
+     {{"SmolVLM-500M-Instruct-Q8_0.gguf"},
+      {"mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"},
+      {"mmproj-SmolVLM-500M-Instruct-f16.gguf"}},
+     {
+      {"", "SmolVLM-500M-Instruct-Q8_0.gguf", 1, "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf", "", "", "", ""},
+      {"Q8_0", "SmolVLM-500M-Instruct-Q8_0.gguf", 1, "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf", "", "", "", ""}},
+     {"Q8_0"}},
+
+    {"ggml-org/tinygemma3-GGUF",
+     {{"mmproj-tinygemma3.gguf"},
+      {"tinygemma3-Q8_0.gguf"}},
+     {
+      {"", "tinygemma3-Q8_0.gguf", 1, "mmproj-tinygemma3.gguf", "", "", "", ""},
+      {"Q8_0", "tinygemma3-Q8_0.gguf", 1, "mmproj-tinygemma3.gguf", "", "", "", ""}},
+     {"Q8_0"}},
+
+    {"ggml-org/vocabs",
+     {{"HybridDNA/ggml-vocab-carbon.gguf"}},
+     {
+      {"", "HybridDNA/ggml-vocab-carbon.gguf", 1, "", "", "", "", ""},
+      {"CARBON", "HybridDNA/ggml-vocab-carbon.gguf", 1, "", "", "", "", ""}},
+     {"CARBON"}},
+
+    {"google/gemma-3-12b-it-qat-q4_0-gguf",
+     {{"gemma-3-12b-it-q4_0.gguf"},
+      {"mmproj-model-f16-12B.gguf"}},
+     {
+      {"", "gemma-3-12b-it-q4_0.gguf", 1, "mmproj-model-f16-12B.gguf", "", "", "", ""},
+      {"Q4_0", "gemma-3-12b-it-q4_0.gguf", 1, "mmproj-model-f16-12B.gguf", "", "", "", ""}},
+     {"Q4_0"}},
+
+    {"google/gemma-4-26B-A4B-it-qat-q4_0-gguf",
+     {{"gemma-4-26B-it-mmproj.gguf"},
+      {"gemma-4-26B_q4_0-it.gguf"}},
+     {
+      {"", "gemma-4-26B_q4_0-it.gguf", 1, "gemma-4-26B-it-mmproj.gguf", "", "", "", ""},
+      {"IT", "gemma-4-26B_q4_0-it.gguf", 1, "gemma-4-26B-it-mmproj.gguf", "", "", "", ""}},
+     {"IT"}},
+
+    {"ibm-granite/granite-vision-3.3-2b-chart2csv-preview-GGUF",
+     {{"granite-vision-3.3-2b-chart2csv-preview-Q4_K_M.gguf"},
+      {"granite-vision-3.3-2b-chart2csv-preview-Q5_K_M.gguf"},
+      {"granite-vision-3.3-2b-chart2csv-preview-Q6_K.gguf"},
+      {"granite-vision-3.3-2b-chart2csv-preview-Q8_0.gguf"},
+      {"granite-vision-3.3-2b-chart2csv-preview-bf16.gguf"},
+      {"mmproj-model-f16.gguf"}},
+     {
+      {"", "granite-vision-3.3-2b-chart2csv-preview-Q4_K_M.gguf", 1, "mmproj-model-f16.gguf", "", "", "", ""},
+      {"Q4_K_M", "granite-vision-3.3-2b-chart2csv-preview-Q4_K_M.gguf", 1, "mmproj-model-f16.gguf", "", "", "", ""},
+      {"Q5_K_M", "granite-vision-3.3-2b-chart2csv-preview-Q5_K_M.gguf", 1, "mmproj-model-f16.gguf", "", "", "", ""},
+      {"Q6_K", "granite-vision-3.3-2b-chart2csv-preview-Q6_K.gguf", 1, "mmproj-model-f16.gguf", "", "", "", ""},
+      {"Q8_0", "granite-vision-3.3-2b-chart2csv-preview-Q8_0.gguf", 1, "mmproj-model-f16.gguf", "", "", "", ""},
+      {"BF16", "granite-vision-3.3-2b-chart2csv-preview-bf16.gguf", 1, "mmproj-model-f16.gguf", "", "", "", ""}},
+     {"BF16", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"}},
+
+    {"ibm-granite/granitelib-rag-r1.0",
+     {{"answerability/granite4.1_30b/lora/Lora-bf16.gguf"}},
+     {
+      {"", "answerability/granite4.1_30b/lora/Lora-bf16.gguf", 1, "", "", "", "", ""},
+      {"BF16", "answerability/granite4.1_30b/lora/Lora-bf16.gguf", 1, "", "", "", "", ""}},
+     {"BF16"}},
+
+    {"jashepp/Ornith-1.5-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF",
+     {{"Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf"},
+      {"Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0-Imatrix.gguf"},
+      {"Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"},
+      {"z-combined-imatrix.gguf"}},
+     {
+      {"", "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0-Imatrix.gguf", 1, "", "", "", "", ""},
+      {"IMATRIX", "Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf", 1, "", "", "", "", ""}},
+     {"IMATRIX"}},
+
+    {"JetBrains/Qwen3.8-3.6-27B-blend-GGUF",
+     {{"Qwen3.8-3.6-27B-blend-Q4_K_M.gguf"},
+      {"mmproj-Qwen3.8-3.6-27B-blend-BF16.gguf"},
+      {"mmproj-Qwen3.8-3.6-27B-blend-Q8_0.gguf"},
+      {"quantization-mmproj-Q8_0.json"}},
+     {
+      {"", "Qwen3.8-3.6-27B-blend-Q4_K_M.gguf", 1, "mmproj-Qwen3.8-3.6-27B-blend-Q8_0.gguf", "", "", "", ""},
+      {"Q4_K_M", "Qwen3.8-3.6-27B-blend-Q4_K_M.gguf", 1, "mmproj-Qwen3.8-3.6-27B-blend-Q8_0.gguf", "", "", "", ""},
+      {"IQ3_S", "", 0, "", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"LiquidAI/LFM2-Audio-1.5B-GGUF",
+     {{"LFM2-Audio-1.5B-F16.gguf"},
+      {"LFM2-Audio-1.5B-Q8_0.gguf"},
+      {"audiodecoder-LFM2-Audio-1.5B-F16.gguf"},
+      {"audiodecoder-LFM2-Audio-1.5B-Q8_0.gguf"},
+      {"mmproj-audioencoder-LFM2-Audio-1.5B-F16.gguf"},
+      {"mmproj-audioencoder-LFM2-Audio-1.5B-Q8_0.gguf"},
+      {"runners/android-arm64/lfm2-audio-android-arm64.zip"},
+      {"runners/macos-arm64/lfm2-audio-macos-arm64.zip"},
+      {"runners/ubuntu-arm64/lfm2-audio-ubuntu-arm64.zip"},
+      {"runners/ubuntu-x64/lfm2-audio-ubuntu-x64.zip"}},
+     {
+      {"", "LFM2-Audio-1.5B-Q8_0.gguf", 1, "mmproj-audioencoder-LFM2-Audio-1.5B-Q8_0.gguf", "", "", "", ""},
+      {"F16", "LFM2-Audio-1.5B-F16.gguf", 1, "mmproj-audioencoder-LFM2-Audio-1.5B-F16.gguf", "", "", "", ""},
+      {"Q8_0", "LFM2-Audio-1.5B-Q8_0.gguf", 1, "mmproj-audioencoder-LFM2-Audio-1.5B-Q8_0.gguf", "", "", "", ""}},
+     {"F16", "Q8_0"}},
+
+    {"LiquidAI/LFM2.5-1.2B-Instruct-DSpark-GGUF",
+     {{"LFM2.5-1.2B-Instruct-DSpark-F16.gguf"},
+      {"LFM2.5-1.2B-Instruct-DSpark-Q4_K_M.gguf"},
+      {"LFM2.5-1.2B-Instruct-DSpark-Q8_0.gguf"}},
+     {
+      {"", "LFM2.5-1.2B-Instruct-DSpark-Q4_K_M.gguf", 1, "", "", "", "", ""}},
+     {}},
+
+    {"LiquidAI/LFM2.5-Audio-1.5B-GGUF",
+     {{"LFM2.5-Audio-1.5B-F16.gguf"},
+      {"LFM2.5-Audio-1.5B-Q4_0.gguf"},
+      {"LFM2.5-Audio-1.5B-Q8_0.gguf"},
+      {"liquid_audio_chat.py"},
+      {"mmproj-LFM2.5-Audio-1.5B-F16.gguf"},
+      {"mmproj-LFM2.5-Audio-1.5B-Q4_0.gguf"},
+      {"mmproj-LFM2.5-Audio-1.5B-Q8_0.gguf"},
+      {"runners/llama-liquid-audio-android-arm64.zip"},
+      {"runners/llama-liquid-audio-macos-arm64.zip"},
+      {"runners/llama-liquid-audio-ubuntu-arm64.zip"},
+      {"runners/llama-liquid-audio-ubuntu-x64.zip"},
+      {"tokenizer-LFM2.5-Audio-1.5B-F16.gguf"},
+      {"tokenizer-LFM2.5-Audio-1.5B-Q4_0.gguf"},
+      {"tokenizer-LFM2.5-Audio-1.5B-Q8_0.gguf"},
+      {"vocoder-LFM2.5-Audio-1.5B-F16.gguf"},
+      {"vocoder-LFM2.5-Audio-1.5B-Q4_0.gguf"},
+      {"vocoder-LFM2.5-Audio-1.5B-Q8_0.gguf"}},
+     {
+      {"", "LFM2.5-Audio-1.5B-Q8_0.gguf", 1, "mmproj-LFM2.5-Audio-1.5B-Q8_0.gguf", "", "", "", ""},
+      {"F16", "LFM2.5-Audio-1.5B-F16.gguf", 1, "mmproj-LFM2.5-Audio-1.5B-F16.gguf", "", "", "", ""},
+      {"Q4_0", "LFM2.5-Audio-1.5B-Q4_0.gguf", 1, "mmproj-LFM2.5-Audio-1.5B-Q4_0.gguf", "", "", "", ""},
+      {"Q8_0", "LFM2.5-Audio-1.5B-Q8_0.gguf", 1, "mmproj-LFM2.5-Audio-1.5B-Q8_0.gguf", "", "", "", ""}},
+     {"F16", "Q4_0", "Q8_0"}},
+
+    {"LiquidAI/LFM2.5-Encoder-230M-GGUF",
+     {{"LFM2.5-Encoder-230M-F16.gguf"},
+      {"LFM2.5-Encoder-230M-Q4_0.gguf"},
+      {"LFM2.5-Encoder-230M-Q8_0.gguf"}},
+     {
+      {"", "LFM2.5-Encoder-230M-Q8_0.gguf", 1, "", "", "", "", ""},
+      {"F16", "LFM2.5-Encoder-230M-F16.gguf", 1, "", "", "", "", ""},
+      {"Q4_0", "LFM2.5-Encoder-230M-Q4_0.gguf", 1, "", "", "", "", ""},
+      {"Q8_0", "LFM2.5-Encoder-230M-Q8_0.gguf", 1, "", "", "", "", ""}},
+     {"F16", "Q4_0", "Q8_0"}},
+
+    {"MaziyarPanahi/Meta-Llama-3.1-405B-Instruct-GGUF",
+     {{"Meta-Llama-3.1-405B-Instruct.Q2_K.gguf", 9}},
+     {
+      {"", "Meta-Llama-3.1-405B-Instruct.Q2_K.gguf-00001-of-00009.gguf", 9, "", "", "", "", ""},
+      {"Q2_K", "Meta-Llama-3.1-405B-Instruct.Q2_K.gguf-00001-of-00009.gguf", 9, "", "", "", "", ""}},
+     {"Q2_K"}},
+
+    {"MaziyarPanahi/Yi-Coder-9B-Chat-GGUF",
+     {{"Yi-Coder-9B-Chat-GGUF_imatrix.dat"},
+      {"Yi-Coder-9B-Chat.IQ1_M.gguf"},
+      {"Yi-Coder-9B-Chat.Q4_K_M.gguf"}},
+     {
+      {"", "Yi-Coder-9B-Chat.Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"IQ1_M", "Yi-Coder-9B-Chat.IQ1_M.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_M", "Yi-Coder-9B-Chat.Q4_K_M.gguf", 1, "", "", "", "", ""}},
+     {"IQ1_M", "Q4_K_M"}},
+
+    {"microsoft/VibeVoice-ASR-BitNet",
+     {{"vibeasr-lm-i2_s-embed-q6_k.gguf"},
+      {"vibeasr-vae-encoder-i8_s.gguf"}},
+     {
+      {"", "vibeasr-lm-i2_s-embed-q6_k.gguf", 1, "", "", "", "", ""},
+      {"Q6_K", "vibeasr-lm-i2_s-embed-q6_k.gguf", 1, "", "", "", "", ""},
+      {"I8_S", "vibeasr-vae-encoder-i8_s.gguf", 1, "", "", "", "", ""}},
+     {"I8_S", "Q6_K"}},
+
+    {"mistralai/Magistral-Small-2506_gguf",
+     {{"Magistral-Small-2506.gguf"},
+      {"Magistral-Small-2506_Q8_0.gguf"}},
+     {
+      {"", "Magistral-Small-2506_Q8_0.gguf", 1, "", "", "", "", ""},
+      {"2506", "Magistral-Small-2506.gguf", 1, "", "", "", "", ""},
+      {"2506_Q8_0", "Magistral-Small-2506_Q8_0.gguf", 1, "", "", "", "", ""}},
+     {"2506", "2506_Q8_0"}},
+
+    {"mradermacher/Phi-2-OmniMatrix-i1-GGUF",
+     {{"Phi-2-OmniMatrix.i1-IQ1_M.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ1_S.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ2_M.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ2_S.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ2_XS.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ2_XXS.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ3_M.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ3_S.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ3_XS.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ3_XXS.gguf"},
+      {"Phi-2-OmniMatrix.i1-IQ4_XS.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q2_K.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q3_K_L.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q3_K_M.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q3_K_S.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q4_0.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q4_0_4_4.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q4_0_4_8.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q4_0_8_8.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q4_K_M.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q4_K_S.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q5_K_M.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q5_K_S.gguf"},
+      {"Phi-2-OmniMatrix.i1-Q6_K.gguf"},
+      {"imatrix.dat"}},
+     {
+      {"", "Phi-2-OmniMatrix.i1-Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"IQ1_M", "Phi-2-OmniMatrix.i1-IQ1_M.gguf", 1, "", "", "", "", ""},
+      {"IQ1_S", "Phi-2-OmniMatrix.i1-IQ1_S.gguf", 1, "", "", "", "", ""},
+      {"IQ2_M", "Phi-2-OmniMatrix.i1-IQ2_M.gguf", 1, "", "", "", "", ""},
+      {"IQ2_S", "Phi-2-OmniMatrix.i1-IQ2_S.gguf", 1, "", "", "", "", ""},
+      {"IQ2_XS", "Phi-2-OmniMatrix.i1-IQ2_XS.gguf", 1, "", "", "", "", ""},
+      {"IQ2_XXS", "Phi-2-OmniMatrix.i1-IQ2_XXS.gguf", 1, "", "", "", "", ""},
+      {"IQ3_M", "Phi-2-OmniMatrix.i1-IQ3_M.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_M", "Phi-2-OmniMatrix.i1-Q4_K_M.gguf", 1, "", "", "", "", ""}},
+     {"IQ1_M", "IQ1_S", "IQ2_M", "IQ2_S", "IQ2_XS", "IQ2_XXS", "IQ3_M", "IQ3_S", "IQ3_XS", "IQ3_XXS", "IQ4_XS", "Q2_K", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_0", "Q4_0_4_4", "Q4_0_4_8", "Q4_0_8_8", "Q4_K_M", "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q6_K"}},
+
+    {"mradermacher/Qwen3.5-397B-A17B-FP8-GGUF",
+     {{"Qwen3.5-397B-A17B-FP8.Q2_K.gguf"},
+      {"Qwen3.5-397B-A17B-FP8.mmproj-Q8_0.gguf"},
+      {"Qwen3.5-397B-A17B-FP8.mmproj-f16.gguf"}},
+     {
+      {"", "Qwen3.5-397B-A17B-FP8.Q2_K.gguf", 1, "Qwen3.5-397B-A17B-FP8.mmproj-Q8_0.gguf", "", "", "", ""},
+      {"Q2_K", "Qwen3.5-397B-A17B-FP8.Q2_K.gguf", 1, "Qwen3.5-397B-A17B-FP8.mmproj-Q8_0.gguf", "", "", "", ""}},
+     {"Q2_K"}},
+
+    {"noctrex/gemma-4-26B-A4B-it-MXFP4_MOE-GGUF",
+     {{"gemma-4-26B-A4B-it-MXFP4_MOE.gguf"},
+      {"gemma-4-26B-A4B-it-mmproj-BF16.gguf"},
+      {"gemma-4-26B-A4B-it-mmproj-F32.gguf"}},
+     {
+      {"", "gemma-4-26B-A4B-it-MXFP4_MOE.gguf", 1, "gemma-4-26B-A4B-it-mmproj-BF16.gguf", "", "", "", ""},
+      {"MXFP4_MOE", "gemma-4-26B-A4B-it-MXFP4_MOE.gguf", 1, "gemma-4-26B-A4B-it-mmproj-BF16.gguf", "", "", "", ""}},
+     {"MXFP4_MOE"}},
+
+    {"noctrex/KAT-Coder-V2.5-Dev-MXFP4_MOE-GGUF",
+     {{"KAT-Coder-V2.5-Dev-MTP-MXFP4_MOE.gguf"}},
+     {
+      {"", "KAT-Coder-V2.5-Dev-MTP-MXFP4_MOE.gguf", 1, "", "", "", "", ""},
+      {"MXFP4_MOE", "KAT-Coder-V2.5-Dev-MTP-MXFP4_MOE.gguf", 1, "", "", "", "", ""}},
+     {"MXFP4_MOE"}},
+
+    {"NousResearch/DeepHermes-AscensionMaze-RLAIF-8b-Atropos-GGUF",
+     {{"DeepHermes-AscensionMaze-RLAIF-8b-Atropos-Q4.gguf"},
+      {"ascend_cold.gguf"},
+      {"ascend_graphmaybe.gguf"},
+      {"ascend_lildanger.gguf"},
+      {"ascend_retlow.gguf"},
+      {"ascend_smartyrude.gguf"},
+      {"ascend_smolpost.gguf"}},
+     {
+      {"", "DeepHermes-AscensionMaze-RLAIF-8b-Atropos-Q4.gguf", 1, "", "", "", "", ""},
+      {"Q4", "DeepHermes-AscensionMaze-RLAIF-8b-Atropos-Q4.gguf", 1, "", "", "", "", ""}},
+     {"Q4"}},
+
+    {"nvidia/nemo-nano-codec-22khz-1.89kbps-21.5fps",
+     {{"nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf"}},
+     {
+      {"", "nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf", 1, "", "", "", "", ""},
+      {"F16", "nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf", 1, "", "", "", "", ""}},
+     {"F16"}},
+
+    // an omni model with a vision and an audio encoder, the plan holds one mmproj
+    {"openbmb/MiniCPM-o-4_5-gguf",
+     {{"MiniCPM-o-4_5-Q4_K_M.gguf"},
+      {"audio/MiniCPM-o-4_5-audio-F16.gguf"},
+      {"token2wav-gguf/encoder.gguf"},
+      {"token2wav-gguf/flow_extra.gguf"},
+      {"token2wav-gguf/flow_matching.gguf"},
+      {"token2wav-gguf/hifigan2.gguf"},
+      {"token2wav-gguf/prompt_cache.gguf"},
+      {"tts/MiniCPM-o-4_5-projector-F16.gguf"},
+      {"tts/MiniCPM-o-4_5-tts-F16.gguf"},
+      {"vision/MiniCPM-o-4_5-vision-F16.gguf"}},
+     {
+      {"", "MiniCPM-o-4_5-Q4_K_M.gguf", 1, nullptr, "", "", "", ""},
+      {"Q4_K_M", "MiniCPM-o-4_5-Q4_K_M.gguf", 1, nullptr, "", "", "", ""},
+      {"F16", "audio/MiniCPM-o-4_5-audio-F16.gguf", 1, nullptr, "", "", "", ""}},
+     {"F16", "Q4_K_M"}},
+
+    {"openbmb/MiniCPM-V-4.7-1B-DSpark-gguf",
+     {{"dspark-MiniCPM-V-4_7-1B-F16.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q4_0.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q4_1.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q4_K_M.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q4_K_S.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q5_0.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q5_1.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q5_K_M.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q5_K_S.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q6_K.gguf"},
+      {"dspark-MiniCPM-V-4_7-1B-Q8_0.gguf"}},
+     {
+      {"", "dspark-MiniCPM-V-4_7-1B-Q4_K_M.gguf", 1, "", "", "", "", ""}},
+     {}},
+
+    {"openbmb/MiniCPM4-0.5B-QAT-Int4-GGUF",
+     {{"MiniCPM4-0.5B-QAT-Int4_gptq_aware_q4_0.gguf"}},
+     {
+      {"", "MiniCPM4-0.5B-QAT-Int4_gptq_aware_q4_0.gguf", 1, "", "", "", "", ""},
+      {"INT4_GPTQ_AWARE_Q4_0", "MiniCPM4-0.5B-QAT-Int4_gptq_aware_q4_0.gguf", 1, "", "", "", "", ""}},
+     {"INT4_GPTQ_AWARE_Q4_0"}},
+
+    {"openbmb/MiniCPM5-2B-DSpark-GGUF",
+     {{"MiniCPM5-2.6B-DSpark.gguf"}},
+     {
+      {"", "MiniCPM5-2.6B-DSpark.gguf", 1, "", "", "", "", ""}},
+     {}},
+
+    {"pentacoxian-dev/Qwen3.8-Flash-Next-IQ3E-Q8D-MTP-GGUF",
+     {{"Qwen3.8-Flash-Next-IQ3E-Q8D-MTP.gguf"}},
+     {
+      {"", "Qwen3.8-Flash-Next-IQ3E-Q8D-MTP.gguf", 1, "", "", "", "", ""},
+      {"MTP", "Qwen3.8-Flash-Next-IQ3E-Q8D-MTP.gguf", 1, "", "", "", "", ""}},
+     {"MTP"}},
+
+    {"Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+     {{"Qwen3VL-30B-A3B-Instruct-F16-split", 2},
+      {"Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"},
+      {"mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf"},
+      {"mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf"}},
+     {
+      {"", "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf", 1, "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf", "", "", "", ""},
+      {"SPLIT", "Qwen3VL-30B-A3B-Instruct-F16-split-00001-of-00002.gguf", 2, "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf", "", "", "", ""},
+      {"Q4_K_M", "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf", 1, "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf", "", "", "", ""}},
+     {"Q4_K_M", "SPLIT"}},
+
+    {"Qwen/QwQ-32B-GGUF",
+     {{"fp16/qwq-32b-fp16", 17},
+      {"qwq-32b-q4_k_m.gguf"}},
+     {
+      {"", "qwq-32b-q4_k_m.gguf", 1, "", "", "", "", ""},
+      {"FP16", "fp16/qwq-32b-fp16-00001-of-00017.gguf", 17, "", "", "", "", ""},
+      {"Q4_K_M", "qwq-32b-q4_k_m.gguf", 1, "", "", "", "", ""}},
+     {"FP16", "Q4_K_M"}},
+
+    {"second-state/gpt-oss-120b-GGUF",
+     {{"gpt-oss-120b-MXFP4_MOE", 3},
+      {"gpt-oss-120b-f16", 3}},
+     {
+      {"", "gpt-oss-120b-MXFP4_MOE-00001-of-00003.gguf", 3, "", "", "", "", ""},
+      {"MXFP4_MOE", "gpt-oss-120b-MXFP4_MOE-00001-of-00003.gguf", 3, "", "", "", "", ""},
+      {"F16", "gpt-oss-120b-f16-00001-of-00003.gguf", 3, "", "", "", "", ""}},
+     {"F16", "MXFP4_MOE"}},
+
+    {"second-state/Llava-v1.5-7B-GGUF",
+     {{"llava-v1.5-7b-Q4_K_M.gguf"},
+      {"llava-v1.5-7b-mmproj-model-f16.gguf"}},
+     {
+      {"", "llava-v1.5-7b-Q4_K_M.gguf", 1, "llava-v1.5-7b-mmproj-model-f16.gguf", "", "", "", ""},
+      {"Q4_K_M", "llava-v1.5-7b-Q4_K_M.gguf", 1, "llava-v1.5-7b-mmproj-model-f16.gguf", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"second-state/Qwen2-Audio-7B-Instruct-GGUF",
+     {{"Qwen2-Audio-7B-Instruct-Q2_K.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q3_K_L.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q3_K_M.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q3_K_S.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q4_0.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q4_K_M.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q4_K_S.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q5_0.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q5_K_M.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q5_K_S.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q6_K.gguf"},
+      {"Qwen2-Audio-7B-Instruct-Q8_0.gguf"},
+      {"Qwen2-Audio-7B-Instruct-f16.gguf"}},
+     {
+      {"", "Qwen2-Audio-7B-Instruct-Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q2_K", "Qwen2-Audio-7B-Instruct-Q2_K.gguf", 1, "", "", "", "", ""},
+      {"Q3_K_L", "Qwen2-Audio-7B-Instruct-Q3_K_L.gguf", 1, "", "", "", "", ""},
+      {"Q3_K_M", "Qwen2-Audio-7B-Instruct-Q3_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q3_K_S", "Qwen2-Audio-7B-Instruct-Q3_K_S.gguf", 1, "", "", "", "", ""},
+      {"Q4_0", "Qwen2-Audio-7B-Instruct-Q4_0.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_M", "Qwen2-Audio-7B-Instruct-Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_S", "Qwen2-Audio-7B-Instruct-Q4_K_S.gguf", 1, "", "", "", "", ""}},
+     {"F16", "Q2_K", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_0", "Q4_K_M", "Q4_K_S", "Q5_0", "Q5_K_M", "Q5_K_S", "Q6_K", "Q8_0"}},
+
+    {"second-state/Qwen2-VL-2B-Instruct-GGUF",
+     {{"Qwen2-VL-2B-Instruct-Q4_K_M.gguf"},
+      {"Qwen2-VL-2B-Instruct-vision-encoder.gguf"}},
+     {
+      {"", "Qwen2-VL-2B-Instruct-Q4_K_M.gguf", 1, "Qwen2-VL-2B-Instruct-vision-encoder.gguf", "", "", "", ""},
+      {"Q4_K_M", "Qwen2-VL-2B-Instruct-Q4_K_M.gguf", 1, "Qwen2-VL-2B-Instruct-vision-encoder.gguf", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"second-state/Qwen2.5-VL-7B-Instruct-GGUF",
+     {{"Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"},
+      {"Qwen2.5-VL-7B-Instruct-vision.gguf"}},
+     {
+      {"", "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf", 1, "Qwen2.5-VL-7B-Instruct-vision.gguf", "", "", "", ""},
+      {"Q4_K_M", "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf", 1, "Qwen2.5-VL-7B-Instruct-vision.gguf", "", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"stepfun-ai/Step-3.5-Flash-GGUF-Q4_K_S",
+     {{"step3p5_flash_Q4_K_S", 12}},
+     {
+      {"", "step3p5_flash_Q4_K_S-00001-of-00012.gguf", 12, "", "", "", "", ""}},
+     {"Q4_K_S"}},
+
+    {"stepfun-ai/Step-3.7-Flash-GGUF",
+     {{"BF16/Step3.7-flash-bf16", 9},
+      {"Q8_0/Step-3.7-flash-Q8_0", 5},
+      {"Step-3.7.imatrix.gguf"},
+      {"Step3.7-flash-mtp-BF16.gguf"},
+      {"Step3.7-flash-mtp-Q8_0.gguf"},
+      {"mmproj-step3.7-flash-f16.gguf"}},
+     {
+      {"", "Q8_0/Step-3.7-flash-Q8_0-00001-of-00005.gguf", 5, "mmproj-step3.7-flash-f16.gguf", "Step3.7-flash-mtp-Q8_0.gguf", "", "", ""},
+      {"BF16", "BF16/Step3.7-flash-bf16-00001-of-00009.gguf", 9, "mmproj-step3.7-flash-f16.gguf", "Step3.7-flash-mtp-BF16.gguf", "", "", ""},
+      {"Q8_0", "Q8_0/Step-3.7-flash-Q8_0-00001-of-00005.gguf", 5, "mmproj-step3.7-flash-f16.gguf", "Step3.7-flash-mtp-Q8_0.gguf", "", "", ""}},
+     {"BF16", "Q8_0"}},
+
+    {"TheBloke/NeuralBeagle14-7B-GGUF",
+     {{"neuralbeagle14-7b.Q2_K.gguf"},
+      {"neuralbeagle14-7b.Q3_K_L.gguf"},
+      {"neuralbeagle14-7b.Q3_K_M.gguf"},
+      {"neuralbeagle14-7b.Q3_K_S.gguf"},
+      {"neuralbeagle14-7b.Q4_0.gguf"},
+      {"neuralbeagle14-7b.Q4_K_M.gguf"},
+      {"neuralbeagle14-7b.Q4_K_S.gguf"},
+      {"neuralbeagle14-7b.Q5_0.gguf"},
+      {"neuralbeagle14-7b.Q5_K_M.gguf"},
+      {"neuralbeagle14-7b.Q5_K_S.gguf"},
+      {"neuralbeagle14-7b.Q6_K.gguf"},
+      {"neuralbeagle14-7b.Q8_0.gguf"}},
+     {
+      {"", "neuralbeagle14-7b.Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q2_K", "neuralbeagle14-7b.Q2_K.gguf", 1, "", "", "", "", ""},
+      {"Q3_K_L", "neuralbeagle14-7b.Q3_K_L.gguf", 1, "", "", "", "", ""},
+      {"Q3_K_M", "neuralbeagle14-7b.Q3_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q3_K_S", "neuralbeagle14-7b.Q3_K_S.gguf", 1, "", "", "", "", ""},
+      {"Q4_0", "neuralbeagle14-7b.Q4_0.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_M", "neuralbeagle14-7b.Q4_K_M.gguf", 1, "", "", "", "", ""},
+      {"Q4_K_S", "neuralbeagle14-7b.Q4_K_S.gguf", 1, "", "", "", "", ""}},
+     {"Q2_K", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_0", "Q4_K_M", "Q4_K_S", "Q5_0", "Q5_K_M", "Q5_K_S", "Q6_K", "Q8_0"}},
+
+    {"ubergarm/Kimi-K2-Instruct-GGUF",
+     {{"imatrix-Kimi-K2-Instruct-Q8_0.dat"},
+      {"mainline/imatrix-mainline-pr9400-plus-kimi-k2-942c55cd5-Kimi-K2-Instruct-Q8_0.gguf"},
+      {"smol-IQ1_KT/Kimi-K2-Instruct-smol-IQ1_KT", 5}},
+     {
+      {"", "smol-IQ1_KT/Kimi-K2-Instruct-smol-IQ1_KT-00001-of-00005.gguf", 5, "", "", "", "", ""},
+      {"IQ1_KT", "smol-IQ1_KT/Kimi-K2-Instruct-smol-IQ1_KT-00001-of-00005.gguf", 5, "", "", "", "", ""}},
+     {"IQ1_KT"}},
+
+    {"unsloth/DeepSeek-V4-Flash-0731-GGUF",
+     {{"UD-IQ1_M/DeepSeek-V4-Flash-0731-UD-IQ1_M", 3},
+      {"dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf"},
+      {"dspark/dspark-DeepSeek-V4-Flash-0731-BF16.gguf"}},
+     {
+      {"", "UD-IQ1_M/DeepSeek-V4-Flash-0731-UD-IQ1_M-00001-of-00003.gguf", 3, "", "", "", "", "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf"},
+      {"IQ1_M", "UD-IQ1_M/DeepSeek-V4-Flash-0731-UD-IQ1_M-00001-of-00003.gguf", 3, "", "", "", "", "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf"}},
+     {"IQ1_M"}},
+
+    {"unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+     {{"UD-IQ1_M/DeepSeek-V4-Flash-Vision-Exp-UD-IQ1_M", 3},
+      {"UD-IQ1_S/DeepSeek-V4-Flash-Vision-Exp-UD-IQ1_S", 3},
+      {"UD-IQ2_XXS/DeepSeek-V4-Flash-Vision-Exp-UD-IQ2_XXS", 3},
+      {"UD-IQ3_S/DeepSeek-V4-Flash-Vision-Exp-UD-IQ3_S", 4},
+      {"UD-IQ3_XXS/DeepSeek-V4-Flash-Vision-Exp-UD-IQ3_XXS", 4},
+      {"UD-IQ4_XS/DeepSeek-V4-Flash-Vision-Exp-UD-IQ4_XS", 4},
+      {"UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL", 3},
+      {"UD-Q3_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q3_K_XL", 4},
+      {"UD-Q4_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q4_K_XL", 5},
+      {"UD-Q8_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q8_K_XL", 5},
+      {"mmproj-BF16.gguf"},
+      {"mmproj-F16.gguf"}},
+     {
+      {"", "UD-IQ1_M/DeepSeek-V4-Flash-Vision-Exp-UD-IQ1_M-00001-of-00003.gguf", 3, "mmproj-BF16.gguf", "", "", "", ""},
+      {"IQ1_M", "UD-IQ1_M/DeepSeek-V4-Flash-Vision-Exp-UD-IQ1_M-00001-of-00003.gguf", 3, "mmproj-BF16.gguf", "", "", "", ""},
+      {"IQ1_S", "UD-IQ1_S/DeepSeek-V4-Flash-Vision-Exp-UD-IQ1_S-00001-of-00003.gguf", 3, "mmproj-BF16.gguf", "", "", "", ""},
+      {"IQ2_XXS", "UD-IQ2_XXS/DeepSeek-V4-Flash-Vision-Exp-UD-IQ2_XXS-00001-of-00003.gguf", 3, "mmproj-BF16.gguf", "", "", "", ""},
+      {"IQ3_S", "UD-IQ3_S/DeepSeek-V4-Flash-Vision-Exp-UD-IQ3_S-00001-of-00004.gguf", 4, "mmproj-BF16.gguf", "", "", "", ""},
+      {"IQ3_XXS", "UD-IQ3_XXS/DeepSeek-V4-Flash-Vision-Exp-UD-IQ3_XXS-00001-of-00004.gguf", 4, "mmproj-BF16.gguf", "", "", "", ""},
+      {"IQ4_XS", "UD-IQ4_XS/DeepSeek-V4-Flash-Vision-Exp-UD-IQ4_XS-00001-of-00004.gguf", 4, "mmproj-BF16.gguf", "", "", "", ""},
+      {"Q2_K_XL", "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf", 3, "mmproj-BF16.gguf", "", "", "", ""}},
+     {"IQ1_M", "IQ1_S", "IQ2_XXS", "IQ3_S", "IQ3_XXS", "IQ4_XS", "Q2_K_XL", "Q3_K_XL", "Q4_K_XL", "Q8_K_XL"}},
+
+    {"unsloth/gemma-4-E2B-it-GGUF",
+     {{"MTP/mtp-gemma-4-E2B-it-BF16.gguf"},
+      {"MTP/mtp-gemma-4-E2B-it-F16.gguf"},
+      {"MTP/mtp-gemma-4-E2B-it-Q8_0.gguf"},
+      {"gemma-4-E2B-it-Q4_K_M.gguf"},
+      {"imatrix_unsloth.gguf_file"},
+      {"mmproj-BF16.gguf"},
+      {"mmproj-F16.gguf"},
+      {"mmproj-F32.gguf"},
+      {"mtp-gemma-4-E2B-it.gguf"}},
+     {
+      {"", "gemma-4-E2B-it-Q4_K_M.gguf", 1, "mmproj-BF16.gguf", "mtp-gemma-4-E2B-it.gguf", "", "", ""},
+      {"Q4_K_M", "gemma-4-E2B-it-Q4_K_M.gguf", 1, "mmproj-BF16.gguf", "mtp-gemma-4-E2B-it.gguf", "", "", ""}},
+     {"Q4_K_M"}},
+
+    {"unsloth/LFM2.5-24B-A2B-GGUF",
+     {{"BF16/LFM2.5-24B-A2B-BF16.gguf"},
+      {"LFM2.5-24B-A2B-Q8_0.gguf"}},
+     {
+      {"", "LFM2.5-24B-A2B-Q8_0.gguf", 1, "", "", "", "", ""},
+      {"BF16", "BF16/LFM2.5-24B-A2B-BF16.gguf", 1, "", "", "", "", ""},
+      {"Q8_0", "LFM2.5-24B-A2B-Q8_0.gguf", 1, "", "", "", "", ""}},
+     {"BF16", "Q8_0"}},
+
+    {"unsloth/Muse-Glimmer-30B-GGUF",
+     {{"Muse-Glimmer-30B-Q8_0.gguf"},
+      {"dflash-kquant.gguf"},
+      {"mmproj-Muse-Glimmer-30B-BF16.gguf"},
+      {"mmproj-Muse-Glimmer-30B-Q8_0.gguf"},
+      {"mmproj-kquant.gguf"}},
+     {
+      {"", "Muse-Glimmer-30B-Q8_0.gguf", 1, "mmproj-Muse-Glimmer-30B-Q8_0.gguf", "", "dflash-kquant.gguf", "", ""},
+      {"Q8_0", "Muse-Glimmer-30B-Q8_0.gguf", 1, "mmproj-Muse-Glimmer-30B-Q8_0.gguf", "", "dflash-kquant.gguf", "", ""}},
+     {"Q8_0"}},
+
+    {"unsloth/Qwen3.8-27B-GGUF",
+     {{"MTP/mtp-Qwen3.8-27B-Q4_0.gguf"},
+      {"Qwen3.8-27B-UD-IQ1_M.gguf"},
+      {"Qwen3.8-27B-UD-Q4_K_M.gguf"},
+      {"imatrix_unsloth.gguf"},
+      {"mmproj-BF16.gguf"},
+      {"mmproj-F16.gguf"}},
+     {
+      {"", "Qwen3.8-27B-UD-Q4_K_M.gguf", 1, "mmproj-BF16.gguf", "MTP/mtp-Qwen3.8-27B-Q4_0.gguf", "", "", ""},
+      {"IQ1_M", "Qwen3.8-27B-UD-IQ1_M.gguf", 1, "mmproj-BF16.gguf", "MTP/mtp-Qwen3.8-27B-Q4_0.gguf", "", "", ""},
+      {"Q4_K_M", "Qwen3.8-27B-UD-Q4_K_M.gguf", 1, "mmproj-BF16.gguf", "MTP/mtp-Qwen3.8-27B-Q4_0.gguf", "", "", ""}},
+     {"IQ1_M", "Q4_K_M"}},
+};
+
+static std::vector<std::string> real_files(const real_repo & r) {
+    std::vector<std::string> out;
+    for (const auto & f : r.files) {
+        if (f.parts == 0) {
+            out.push_back(f.name);
+            continue;
+        }
+        for (int i = 1; i <= f.parts; ++i) {
+            char suffix[32];
+            snprintf(suffix, sizeof(suffix), "-%05d-of-%05d.gguf", i, f.parts);
+            out.push_back(std::string(f.name) + suffix);
+        }
+    }
+    return out;
+}
+
+// every mismatch is reported before the test fails, so one run lists them all
+static int g_real_failures = 0;
+
+static void expect_eq(const std::string & what, const std::string & actual, const char * expected) {
+    if (expected && actual != expected) {
+        fprintf(stderr, "  [%s] %s\n    actual:   '%s'\n    expected: '%s'\n",
+                g_context.c_str(), what.c_str(), actual.c_str(), expected);
+        g_real_failures++;
+    }
+}
+
+static void check_real_plan(const real_repo & r, const real_plan & p) {
+    g_context = std::string(r.id) + (p.tag[0] ? std::string(":") + p.tag : "");
+
+    common_download_opts opts;
+    opts.download_mmproj = true;
+    opts.download_mtp    = true;
+    opts.download_dflash = true;
+    opts.download_eagle3 = true;
+    opts.download_dspark = true;
+
+    auto plan = common_download_get_hf_plan(model_ref(g_context), opts);
+
+    expect_eq("primary", plan.primary.path, p.primary);
+    expect_eq("parts",   std::to_string(plan.model_files.size()), std::to_string(p.parts).c_str());
+    expect_eq("mmproj",  plan.mmproj.path, p.mmproj);
+    expect_eq("mtp",     plan.mtp.path,    p.mtp);
+    expect_eq("dflash",  plan.dflash.path, p.dflash);
+    expect_eq("eagle3",  plan.eagle3.path, p.eagle3);
+    expect_eq("dspark",  plan.dspark.path, p.dspark);
+}
+
+// the listing reads the cache, so the repo is materialized there as a snapshot
+static void check_real_listing(const real_repo & r, const std::vector<std::string> & files) {
+    g_context = std::string(r.id) + " listing";
+
+    std::string folder = r.id;
+    string_replace_all(folder, "/", "--");
+    const std::filesystem::path repo_dir = cache_dir / ("models--" + folder);
+    std::filesystem::create_directories(repo_dir / "refs");
+    { std::ofstream(repo_dir / "refs" / "main") << COMMIT; }
+    for (const auto & f : files) {
+        std::filesystem::path p = cached(r.id, f);
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p) << "gguf";
+    }
+
+    std::vector<std::string> actual;
+    for (const auto & e : common_list_cached_models()) {
+        if (e.repo == r.id) {
+            actual.push_back(e.tag);
+        }
+    }
+    std::sort(actual.begin(), actual.end());
+    auto expected = r.listing;
+    std::sort(expected.begin(), expected.end());
+    expect_eq("tags", string_join(actual, " "), string_join(expected, " ").c_str());
+
+    std::filesystem::remove_all(repo_dir);
+}
+
+static void test_real_repos() {
+    printf("test-model-resolution: real listings on %zu repos\n", sizeof(real_repos) / sizeof(real_repos[0]));
+
+    for (const auto & r : real_repos) {
+        auto files = real_files(r);
+        g_repos.clear();
+        g_repos[r.id] = files;
+        for (const auto & p : r.plans) {
+            check_real_plan(r, p);
+        }
+        check_real_listing(r, files);
+    }
+    g_repos.clear();
+
+    if (g_real_failures > 0) {
+        fprintf(stderr, "test-model-resolution: %d mismatches on real listings\n", g_real_failures);
+        std::abort();
+    }
+}
+
+//
 // end-to-end assembly: real CLI parsing, real handler init resolving over the
 // loopback, downloads skipped by flipping offline before apply
 //
@@ -631,6 +1480,7 @@ int main(void) {
     test_plan_partials();
     test_sidecar_removal();
     test_shared_removal();
+    test_real_repos();
     test_task_assembly();
 
     server.stop();
