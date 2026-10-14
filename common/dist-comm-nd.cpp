@@ -17,6 +17,11 @@ bool dist_nd_send2(dist_nd_conn *, const void *, size_t, const void *, size_t, s
     return false;
 }
 bool dist_nd_recv(dist_nd_conn *, void *, size_t, std::string & err) { err = "no ND"; return false; }
+bool dist_nd_exchange_pair(dist_nd_conn *, dist_nd_conn *, const void *, size_t, const void *, size_t,
+                           void *, void *, void *, void *, std::string & err) {
+    err = "no ND";
+    return false;
+}
 bool dist_nd_send_drain(dist_nd_conn *, std::string &) { return true; }
 void dist_nd_free(dist_nd_conn *) {}
 
@@ -991,6 +996,26 @@ static bool nd_wait_ack_progressing(dist_nd_conn * c) {
     }
 }
 
+// Posts the chunk staged in the current slot. The caller has made sure the window allows it: either
+// fewer than ND_WINDOW chunks are unacknowledged, or an ack is in hand.
+static bool nd_post_staged(dist_nd_conn * c) {
+    if (c->tx_since_ack >= ND_WINDOW) {
+        c->ack_pending--;
+        c->tx_since_ack = 0;
+    }
+    const int slot = c->tx_slot_cur;
+    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
+    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
+    const size_t len = sizeof(hdr) + c->tx_fill;
+    c->tx_fill = 0;
+    if (!nd_post_send(c, slot, len)) {
+        return false;
+    }
+    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
+    c->tx_since_ack++;
+    return true;
+}
+
 static bool nd_flush(dist_nd_conn * c) {
     if (c->tx_fill == 0) {
         return true;
@@ -1007,20 +1032,8 @@ static bool nd_flush(dist_nd_conn * c) {
                 }
             }
         }
-        c->ack_pending--;
-        c->tx_since_ack = 0;
     }
-    const int slot = c->tx_slot_cur;
-    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
-    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
-    const size_t len = sizeof(hdr) + c->tx_fill;
-    c->tx_fill = 0;
-    if (!nd_post_send(c, slot, len)) {
-        return false;
-    }
-    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
-    c->tx_since_ack++;
-    return true;
+    return nd_post_staged(c);
 }
 
 static bool nd_send_raw(dist_nd_conn * c, const void * data, size_t size) {
@@ -1296,6 +1309,201 @@ bool dist_nd_send_drain(dist_nd_conn * c, std::string & err) {
 bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err) {
     if (!nd_recv_raw(c, data, size)) {
         err = c->peer_gone ? "peer closed connection" : "NetworkDirect recv failed";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// two-peer exchange for the 3-rank full mesh (multi-chunk mode only)
+//
+// One message, a header followed by its payload, leaves for both peers while one message of the
+// same size arrives from each, all four directions at once. Nothing here waits on one connection
+// while the other could move: the two halves below stage, post and consume only what is possible
+// right now, and the loop in dist_nd_exchange_pair polls both completion queues between rounds.
+// Received bytes go straight into the caller's buffers, so a payload of many chunks costs no copy
+// beyond the staging one, and the acks for them leave as soon as a window's worth is consumed, so
+// neither peer stalls at its send window while this rank is still busy sending.
+// ---------------------------------------------------------------------------------------
+
+// Stages and posts as much of [hdr | payload] on c as it can take without waiting. pos counts the
+// message bytes already staged. Stops at the send window (an ack has to arrive first) and when
+// every staging slot is still on the wire (a send completion has to retire one first).
+static bool nd_tx_pump(dist_nd_conn * c, const uint8_t * hdr, size_t hdr_size,
+                       const uint8_t * payload, size_t size, size_t & pos, bool & moved) {
+    const size_t total = hdr_size + size;
+    for (;;) {
+        // a full chunk, or the last bytes of the message, leaves as soon as the window allows
+        if (c->tx_fill == ND_PAYLOAD || (pos == total && c->tx_fill > 0)) {
+            if (c->tx_since_ack >= ND_WINDOW && c->ack_pending == 0) {
+                return true;
+            }
+            if (!nd_post_staged(c)) {
+                return false;
+            }
+            moved = true;
+            continue;
+        }
+        if (pos == total) {
+            return true;
+        }
+        // a fresh chunk: the slot must not still be on the wire before it is written
+        if (c->tx_fill == 0 && c->tx_inflight >= ND_TX_DEPTH) {
+            return true;
+        }
+        size_t take = ND_PAYLOAD - c->tx_fill;
+        const uint8_t * src;
+        if (pos < hdr_size) {
+            take = std::min(take, hdr_size - pos);
+            src  = hdr + pos;
+        } else {
+            take = std::min(take, total - pos);
+            src  = payload + (pos - hdr_size);
+        }
+        memcpy(c->tx_slot(c->tx_slot_cur) + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
+        c->tx_fill += take;
+        pos += take;
+        moved = true;
+    }
+}
+
+// Copies whatever has arrived on c into [hdr | payload], without waiting: bytes spilled earlier
+// first, then the receive ring, exactly the order nd_recv_raw reads them in. pos counts the
+// message bytes received so far. Bytes past the end of this message stay where they are, for the
+// next one.
+static bool nd_rx_pump(dist_nd_conn * c, uint8_t * hdr, size_t hdr_size,
+                       uint8_t * payload, size_t size, size_t & pos, bool & moved) {
+    const size_t total = hdr_size + size;
+    auto put = [&](const uint8_t * src, size_t n) {
+        while (n > 0) {
+            size_t    take = n;
+            uint8_t * dst;
+            if (pos < hdr_size) {
+                take = std::min(take, hdr_size - pos);
+                dst  = hdr + pos;
+            } else {
+                dst  = payload + (pos - hdr_size);
+            }
+            memcpy(dst, src, take);
+            src += take;
+            n   -= take;
+            pos += take;
+        }
+    };
+    while (pos < total && c->rx_spill_off < c->rx_spill.size()) {
+        const size_t take = std::min(c->rx_spill.size() - c->rx_spill_off, total - pos);
+        put(c->rx_spill.data() + c->rx_spill_off, take);
+        c->rx_spill_off += take;
+        if (c->rx_spill_off == c->rx_spill.size()) {
+            c->rx_spill.clear();
+            c->rx_spill_off = 0;
+        }
+        moved = true;
+    }
+    while (pos < total && c->rx_spill.empty() && !c->rx_ready.empty()) {
+        nd_rx_item & it = c->rx_ready.front();
+        const size_t take = std::min((size_t)(it.len - it.off), total - pos);
+        put(c->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off, take);
+        it.off += (uint32_t)take;
+        moved = true;
+        if (it.off == it.len) {
+            const int slot = it.slot;
+            c->rx_ready.pop_front();
+            if (!c->post_rx(slot)) {
+                return false;
+            }
+            if (++c->rx_since_ack >= ND_WINDOW) {
+                c->rx_since_ack = 0;
+                if (!nd_post_ack_direct(c)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr, size_t hdr_size,
+                           const void * payload, size_t size, void * hdr_from_a, void * from_a,
+                           void * hdr_from_b, void * from_b, std::string & err) {
+    if (a == nullptr || b == nullptr || a == b) {
+        err = "two-peer exchange needs two distinct ND connections";
+        return false;
+    }
+    if (!nd_multichunk()) {
+        err = "two-peer exchange needs LLAMA_DIST_TP_RDMA_MULTICHUNK";
+        return false;
+    }
+    const uint8_t * h   = (const uint8_t *)hdr;
+    const uint8_t * p   = (const uint8_t *)payload;
+    const size_t    total = hdr_size + size;
+    size_t tx_a = 0, tx_b = 0, rx_a = 0, rx_b = 0;
+
+    const int64_t tick       = nd_tick_ticks();
+    int64_t       last_check = nd_qpc();
+    uint32_t      idle_steps = 0;
+    bool ok = true;
+    for (;;) {
+        bool moved = false;
+        ok = nd_tx_pump(a, h, hdr_size, p, size, tx_a, moved) &&
+             nd_tx_pump(b, h, hdr_size, p, size, tx_b, moved) &&
+             nd_rx_pump(a, (uint8_t *)hdr_from_a, hdr_size, (uint8_t *)from_a, size, rx_a, moved) &&
+             nd_rx_pump(b, (uint8_t *)hdr_from_b, hdr_size, (uint8_t *)from_b, size, rx_b, moved);
+        if (!ok) {
+            break;
+        }
+        if (tx_a == total && tx_b == total && a->tx_fill == 0 && b->tx_fill == 0 &&
+            rx_a == total && rx_b == total) {
+            break;
+        }
+        int stepped = 0;
+        for (dist_nd_conn * c : { a, b }) {
+            const int r = nd_try_step(c);
+            if (r < 0) {
+                ok = false;
+                break;
+            }
+            stepped += r;
+        }
+        if (!ok) {
+            break;
+        }
+        if (moved) {
+            idle_steps = 0;
+            continue;
+        }
+        if (stepped > 0) {
+            // completions that never let anything move mean a queue is replaying something stale
+            if (++idle_steps > ND_MAX_IDLE_STEPS) {
+                ND_LOG_ERR("two-peer exchange consumed %u completions without moving data\n", idle_steps);
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        YieldProcessor();
+        const int64_t now = nd_qpc();
+        if (now - last_check >= tick) {
+            last_check = now;
+            for (dist_nd_conn * c : { a, b }) {
+                if (nd_tcp_peer_closed(c->tcp_in) || nd_tcp_peer_closed(c->tcp_out)) {
+                    ND_LOG_DBG("peer dropped the ring socket\n");
+                    c->peer_gone = true;
+                    ok = false;
+                }
+            }
+            if (!ok) {
+                break;
+            }
+        }
+    }
+    if (ok && !nd_full_duplex()) {
+        ok = nd_send_drain_local(a) && nd_send_drain_local(b);
+    }
+    if (!ok) {
+        a->tx_fill = 0;   // drop any half-staged chunk; the connections are finished either way
+        b->tx_fill = 0;
+        err = (a->peer_gone || b->peer_gone) ? "peer closed connection" : "NetworkDirect two-peer exchange failed";
         return false;
     }
     return true;
