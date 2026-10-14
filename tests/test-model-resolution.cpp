@@ -1258,7 +1258,8 @@ static void check_real_plan(const real_repo & r, const real_plan & p) {
     expect_eq("dspark",  plan.dspark.path, p.dspark);
 }
 
-// the listing reads the cache, so the repo is materialized there as a snapshot
+// the listing reads the cache, so the repo is materialized there as a snapshot;
+// a path the filesystem refuses (MAX_PATH on Windows) leaves the listing unchecked
 static void check_real_listing(const real_repo & r, const std::vector<std::string> & files) {
     g_context = std::string(r.id) + " listing";
 
@@ -1269,8 +1270,14 @@ static void check_real_listing(const real_repo & r, const std::vector<std::strin
     { std::ofstream(repo_dir / "refs" / "main") << COMMIT; }
     for (const auto & f : files) {
         std::filesystem::path p = cached(r.id, f);
-        std::filesystem::create_directories(p.parent_path());
-        std::ofstream(p) << "gguf";
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
+        { std::ofstream(p) << "gguf"; }
+        if (!std::filesystem::exists(p, ec)) {
+            printf("  %s: listing unchecked, the filesystem refuses %s\n", r.id, f.c_str());
+            std::filesystem::remove_all(repo_dir, ec);
+            return;
+        }
     }
 
     std::vector<std::string> actual;
