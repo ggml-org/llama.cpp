@@ -260,6 +260,8 @@ void llama_kv_stream::evict(uint32_t page) {
 void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv) {
     GGML_ASSERT(n_kv % page_size == 0);
 
+    n_prepared++;
+
     const uint32_t n_att = std::min(n_kv/page_size, n_pages);
 
     std::vector<uint8_t> written(n_pages, 0);
@@ -366,7 +368,7 @@ void llama_kv_stream::prepare(const std::vector<uint32_t> & cells, uint32_t n_kv
     tag++;
     {
         std::lock_guard<std::mutex> lock(mtx);
-        jobs.push_back({ tag, std::move(copies), wb_pending, cells.size() <= decode_max_tokens });
+        jobs.push_back({ tag, std::move(copies), wb_pending, cells.size() <= decode_max_tokens, n_prepared });
         n_jobs++;
     }
     wb_pending = nullptr;
@@ -477,9 +479,12 @@ void llama_kv_stream::copier_main() {
             ggml_backend_event_free(j.wb);
         }
 
-        // the prefetched layers hold this job's pages if it streams the same copies: publish them once they landed
+        // the prefetched layers hold this job's pages if it is the ubatch right after the prefetch's job and streams the
+        // same copies: publish them once they landed. A ubatch in between that streamed nothing does not advance the tag,
+        // and may have evicted pages that the prefetch copied before their write-back.
         int32_t first = 0;
-        if (pf.valid && pf.tag == j.tag && pf.epoch == epoch.load(std::memory_order_acquire) && same_copies(pf.copies, j.copies)) {
+        if (pf.valid && pf.ubatch == j.ubatch && pf.epoch == epoch.load(std::memory_order_acquire) &&
+            same_copies(pf.copies, j.copies)) {
             if (!wait_for([&]() { return n_published.load(std::memory_order_acquire) >= pf.g_end; },
                           "the prefetched copies to land", 0, j.tag)) {
                 return;
@@ -512,7 +517,7 @@ void llama_kv_stream::copier_main() {
                 }
             }
             pf.valid  = true;
-            pf.tag    = j.tag + 1;
+            pf.ubatch = j.ubatch + 1;
             pf.g_end  = g;
             pf.copies = std::move(j.copies);
         }

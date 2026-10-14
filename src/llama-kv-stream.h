@@ -169,14 +169,15 @@ private:
         std::vector<run> copies; // page: host page, slot: page index in the device slot
         ggml_backend_event_t wb = nullptr; // write-backs the copies read, recorded on the compute stream
         bool small = false;                // a decode ubatch (decode_max_tokens): prefetch the next one
+        uint64_t ubatch = 0;               // n_prepared when it was queued
     };
 
     // copier: the layers copied ahead for the next job
     struct prefetch {
-        bool             valid = false;
-        uint32_t         tag   = 0;
-        uint64_t         epoch = 0;
-        uint64_t         g_end = 0; // copy events up to the prefetched layers
+        bool             valid  = false;
+        uint64_t         ubatch = 0; // the ubatch it was copied for: the one after its job's
+        uint64_t         epoch  = 0;
+        uint64_t         g_end  = 0; // copy events up to the prefetched layers
         std::vector<run> copies;
     };
     static constexpr int32_t n_prefetch = 2; // one layer per device slot
@@ -218,6 +219,7 @@ private:
     uint64_t layout_id  = 0;
     uint32_t n_streamed = 0; // pages streamed in the current ubatch
     uint32_t tag        = 0; // tag of the current ubatch, counts the ubatches that streamed
+    uint64_t n_prepared = 0; // counts every ubatch, streamed or not: a prefetch only serves the ubatch right after its job
 
     // write-backs since the last job, for the next one to wait for
     ggml_backend_event_t wb_pending = nullptr;
