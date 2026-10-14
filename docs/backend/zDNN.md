@@ -48,7 +48,23 @@ The IBM zDNN backend has the following CMake options that control the behaviour 
 
 ## 1. Install zDNN Library
 
-Note: Using the zDNN library provided via `apt` or `yum` may not work correctly as reported in [#15772](https://github.com/ggml-org/llama.cpp/issues/15772). It is preferred that you compile from source.
+Note: A minimum of libzdnn 1.1.2 is required for the IBM zDNN backend to link correctly.
+
+### Install using apt
+
+```sh
+sudo apt update
+sudo apt install -y libzdnn-dev
+```
+
+### Install using yum
+
+```sh
+sudo yum update
+sudo yum install -y libzdnn-devel
+```
+
+### Install from source
 
 ```sh
 git clone --recurse-submodules https://github.com/IBM/zDNN
@@ -73,3 +89,11 @@ cmake -S . -G Ninja -B build \
     -DZDNN_ROOT=/opt/zdnn-libs
 cmake --build build --config Release -j$(nproc)
 ```
+
+## 3. Run a model
+
+```sh
+build/bin/llama-server -hf taronaeo/Granite-3.3-2B-Instruct-BE-GGUF:Q4_K_M -fa on
+```
+
+Note: FlashAttention (`-fa on`) is strongly recommended as it forces attention to run on the IBM zAIU accelerator instead of the CPU ([see PR](https://github.com/ggml-org/llama.cpp/pull/30512)). By default, FlashAttention is turned off.
