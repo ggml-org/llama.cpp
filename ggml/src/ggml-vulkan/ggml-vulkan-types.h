@@ -1362,13 +1362,17 @@ struct vk_fa_tuning_params {
     bool shmem_staging;
     bool disable_subgroups;
     bool q_in_regs;
+    bool flip;
+    bool flip_kvsep;
+    bool flip_pf2;
+    bool flip_vt;
     uint32_t limit_occupancy_shmem;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
                      " block_rows=" << block_rows << " block_cols=" << block_cols << " d_split=" << d_split <<
                      " row_split=" << row_split << " shmem_staging=" << shmem_staging << " disable_subgroups=" << disable_subgroups <<
-                     " q_in_regs=" << q_in_regs << " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
+                     " q_in_regs=" << q_in_regs << " flip=" << flip << " flip_kvsep=" << flip_kvsep << " flip_pf2=" << flip_pf2 << " flip_vt=" << flip_vt << " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
     }
 };
 
