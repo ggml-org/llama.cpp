@@ -1,5 +1,8 @@
 #include "llama-context.h"
 #include "moe_predictor.h"
+#include "moe_doorbell.h"
+#include <thread>
+#include <atomic>
 
 #include "ggml.h"
 #include "llama-arch.h"
@@ -29,6 +32,45 @@ static thread_local double moe_diag_publish_ms = 0.0;
 #include <cstdlib>
 #include <vector>
 
+
+static std::atomic<bool> g_doorbell_running{false};
+static std::thread g_doorbell_thread;
+
+static void start_doorbell_worker(llama_context * ctx) {
+    if (g_doorbell_running.load()) return;
+    g_doorbell_running.store(true);
+    g_doorbell_thread = std::thread([ctx]() {
+        LayerDoorbell * dbs = moe_doorbell_get_host_ptr();
+        if (!dbs) return;
+        while (g_doorbell_running.load(std::memory_order_relaxed)) {
+            bool handled = false;
+            for (int il = 0; il < ctx->moe.n_layer; il++) {
+                if (dbs[il].state == 1) {
+                    const uint32_t n_miss = dbs[il].miss_count;
+                    for (uint32_t m = 0; m < n_miss && m < 10; m++) {
+                        int32_t exp = dbs[il].miss_experts[m];
+                        int slot = ctx->moe_page(il, exp);
+                        dbs[il].assigned_slots[m] = slot;
+                    }
+                    std::atomic_thread_fence(std::memory_order_seq_cst);
+                    dbs[il].gpu_ready = 1;
+                    handled = true;
+                }
+            }
+            if (!handled) {
+                std::this_thread::yield();
+            }
+        }
+    });
+}
+
+static void stop_doorbell_worker() {
+    if (!g_doorbell_running.load()) return;
+    g_doorbell_running.store(false);
+    if (g_doorbell_thread.joinable()) {
+        g_doorbell_thread.join();
+    }
+}
 // sparse MoE paging callback (defined near the moe_page helpers below)
 static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud);
 
@@ -546,6 +588,10 @@ llama_context::llama_context(
                             if (moe_predictor_init(pred_bin.c_str(), moe.n_layer, 2048, 512, 512)) {
                                 LLAMA_LOG_INFO("%s: RouterPredictorV2 (60M) armed from %s\n", __func__, pred_bin.c_str());
                             }
+                            if (moe_doorbell_init(moe.n_layer, moe.n_expert, moe.s_per_layer)) {
+                                LLAMA_LOG_INFO("%s: Zero-Split Stream-Ordered Doorbell armed (%d layers)\n", __func__, moe.n_layer);
+                                start_doorbell_worker(this);
+                            }
                         } // staging reserved
                     } // buf ok
                 } else {
@@ -686,6 +732,10 @@ llama_context::~llama_context() {
     if (moe.ctx) { ggml_free(moe.ctx); moe.ctx = nullptr; }
     if (moe_predictor_is_ready()) {
         moe_predictor_free();
+    }
+    stop_doorbell_worker();
+    if (moe_doorbell_is_active()) {
+        moe_doorbell_free();
     }
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
@@ -2897,6 +2947,9 @@ llm_graph_cb llama_context::graph_get_cb() const {
         } else {
             ggml_set_name(cur, name);
         }
+        if (moe_ready && strcmp(name, "ffn_moe_topk") == 0 && il >= 0 && il < moe.n_layer) {
+            const_cast<llama_context*>(this)->moe.step_topk[(size_t) il] = cur;
+        }
 
         // - norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
         // - force the last op of the layer on the specified backend to avoid running it on the backend of the next layer due to scheduling
@@ -4999,7 +5052,7 @@ void llama_context::moe_adapt_note(int il, int e) {
 // whole decode run as one unbroken CUDA graph, which is worth ~30 tok/s.
 void llama_context::moe_post_refresh() {
     static int on = -1;
-    if (on < 0) on = getenv("MOE_POST_REFRESH") ? atoi(getenv("MOE_POST_REFRESH")) : 0;
+    if (on < 0) on = getenv("MOE_POST_REFRESH") ? atoi(getenv("MOE_POST_REFRESH")) : 1;
     if (!on || !moe_ready) return;
 
     const int n_exp  = moe.n_expert;
@@ -5346,37 +5399,17 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
         return false;
     }
     if (ask) {
-        // MOE_STATIC_HOT=1 (Direction 1): no split at all. slot_table was
-        // published once at init with the hot set mapped and every cold expert
-        // mapped to the zero sentinel, so the remap is pure device data and the
-        // 48 MoE layers execute as one unbroken graph.
-        // MOE_BOUNDARY=1: split retired, tables refreshed once per step.
-        // MOE_NOSPLIT=1: split retired, tables never refreshed (diagnostic).
-        // MOE_SPLIT_LAYER=N: split only at layer N (default 0), so the other
-        // MoE layers run inside one unbroken graph. A split costs a host sync
-        // plus a graph relaunch (~4 ms), and doing it at all 48 layers is the
-        // whole decode latency; one split keeps the routing table fresh for the
-        // layer that is actually about to run.
         static int mode = -1;
-        static int split_layer = 0;
         if (mode < 0) {
-            mode = 0;
-            if (getenv("MOE_SPLIT_LAYER")) split_layer = atoi(getenv("MOE_SPLIT_LAYER"));
-            if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) mode = 3;
-            else if (getenv("MOE_BOUNDARY") && atoi(getenv("MOE_BOUNDARY"))) mode = 1;
-            else if (getenv("MOE_NOSPLIT") && atoi(getenv("MOE_NOSPLIT"))) mode = 2;
-            else if (getenv("MOE_SPLIT_LAYER")) mode = 4;
+            if (getenv("MOE_NOSPLIT") && atoi(getenv("MOE_NOSPLIT"))) mode = 2;
+            else if (getenv("MOE_POST_REFRESH") && atoi(getenv("MOE_POST_REFRESH"))) mode = 4;
+            else if (getenv("MOE_STATIC_HOT") && atoi(getenv("MOE_STATIC_HOT"))) mode = 3;
+            else mode = 0;
         }
-        if (mode != 0 && mode != 4) return false;   // no split
-        if (mode == 4) {
-            // decode only: the table is refreshed between graph launches instead.
-            // a prefill row batch still pages inside the graph, so it needs the split.
-            static int post = -1;
-            if (post < 0) post = getenv("MOE_POST_REFRESH") ? atoi(getenv("MOE_POST_REFRESH")) : 0;
-            if (t->ne[1] == 1 && post) return false;   // decode: refresh between graphs
-            return true;                              // prefill: split where it pages
-        }
-        return true;                                // mode 0: split at every layer
+        if (mode == 2) return false; // n_splits = 1
+        if (mode == 4 && t->ne[1] == 1) return false;
+        if (mode == 3) return false;
+        return true; // Mode 0
     }
     // data phase: page the selected experts (I32 [n_used, n_tokens]).
     // the graph only reads the pool when the slot_ids remap node exists;
