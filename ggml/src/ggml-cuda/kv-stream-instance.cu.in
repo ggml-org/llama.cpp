@@ -114,38 +114,41 @@ fattn_kernel_t ggml_cuda_kv_stream_vector_kernel_@KV_STREAM_KEY@(ggml_type value
     return nullptr;
 }
 
+// Select the mask once per launch; dense decode must not test descriptors inside each key tile.
+template<ggml_type V, bool tail_safe>
+static ggml_kv_resume_kernel_t vector_resume_kernel(uint32_t queries, bool compact_mask) {
+    if (queries == 1) return compact_mask ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,V,tail_safe,true> :
+        flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,V,tail_safe,false>;
+    if (queries == 2) return compact_mask ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,V,tail_safe,true> :
+        flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,V,tail_safe,false>;
+    return nullptr;
+}
+
 // Use the same compiled-pair flags as the upstream vector registry.
-ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries) {
-    GGML_UNUSED(value); GGML_UNUSED(queries);
+ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries, bool compact_mask) {
+    GGML_UNUSED_VARS(value,queries,compact_mask);
 #ifndef GGML_CUDA_NO_FA
     switch (value) {
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_F16
-        case GGML_TYPE_F16: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_F16> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_F16> : nullptr;
+        case GGML_TYPE_F16: return vector_resume_kernel<GGML_TYPE_F16,true>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_BF16
-        case GGML_TYPE_BF16: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_BF16> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_BF16> : nullptr;
+        case GGML_TYPE_BF16: return vector_resume_kernel<GGML_TYPE_BF16,true>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_0
-        case GGML_TYPE_Q4_0: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_0> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_0> : nullptr;
+        case GGML_TYPE_Q4_0: return vector_resume_kernel<GGML_TYPE_Q4_0,true>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_1
-        case GGML_TYPE_Q4_1: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_1> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_1> : nullptr;
+        case GGML_TYPE_Q4_1: return vector_resume_kernel<GGML_TYPE_Q4_1,true>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_0
-        case GGML_TYPE_Q5_0: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_0> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_0> : nullptr;
+        case GGML_TYPE_Q5_0: return vector_resume_kernel<GGML_TYPE_Q5_0,true>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_1
-        case GGML_TYPE_Q5_1: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_1> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_1> : nullptr;
+        case GGML_TYPE_Q5_1: return vector_resume_kernel<GGML_TYPE_Q5_1,true>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q8_0
-        case GGML_TYPE_Q8_0: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q8_0> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q8_0> : nullptr;
+        case GGML_TYPE_Q8_0: return vector_resume_kernel<GGML_TYPE_Q8_0,true>(queries,compact_mask);
 #endif
         default: break;
     }
@@ -154,37 +157,30 @@ ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_t
 }
 
 // Use the same compiled-pair flags as the upstream vector registry.
-ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries) {
-    GGML_UNUSED(value); GGML_UNUSED(queries);
+ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries, bool compact_mask) {
+    GGML_UNUSED_VARS(value,queries,compact_mask);
 #ifndef GGML_CUDA_NO_FA
     switch (value) {
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_F16
-        case GGML_TYPE_F16: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_F16,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_F16,false> : nullptr;
+        case GGML_TYPE_F16: return vector_resume_kernel<GGML_TYPE_F16,false>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_BF16
-        case GGML_TYPE_BF16: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_BF16,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_BF16,false> : nullptr;
+        case GGML_TYPE_BF16: return vector_resume_kernel<GGML_TYPE_BF16,false>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_0
-        case GGML_TYPE_Q4_0: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_0,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_0,false> : nullptr;
+        case GGML_TYPE_Q4_0: return vector_resume_kernel<GGML_TYPE_Q4_0,false>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q4_1
-        case GGML_TYPE_Q4_1: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_1,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q4_1,false> : nullptr;
+        case GGML_TYPE_Q4_1: return vector_resume_kernel<GGML_TYPE_Q4_1,false>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_0
-        case GGML_TYPE_Q5_0: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_0,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_0,false> : nullptr;
+        case GGML_TYPE_Q5_0: return vector_resume_kernel<GGML_TYPE_Q5_0,false>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q5_1
-        case GGML_TYPE_Q5_1: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_1,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q5_1,false> : nullptr;
+        case GGML_TYPE_Q5_1: return vector_resume_kernel<GGML_TYPE_Q5_1,false>(queries,compact_mask);
 #endif
 #if GGML_CUDA_FA_@KV_STREAM_KEY@_Q8_0
-        case GGML_TYPE_Q8_0: return queries == 1 ? flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q8_0,false> :
-            queries == 2 ? flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_Q8_0,false> : nullptr;
+        case GGML_TYPE_Q8_0: return vector_resume_kernel<GGML_TYPE_Q8_0,false>(queries,compact_mask);
 #endif
         default: break;
     }

@@ -78,7 +78,7 @@ using ggml_kv_resume_kernel_t = void (*)(
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33, float *, int, int, bool, bool, const int32_t *);
-#define KV_RESUME_DECLARE(K) ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_##K(ggml_type value, uint32_t queries);
+#define KV_RESUME_DECLARE(K) ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_##K(ggml_type value, uint32_t queries, bool compact_mask);
 KV_RESUME_DECLARE(F16)
 KV_RESUME_DECLARE(BF16)
 KV_RESUME_DECLARE(Q4_0)
@@ -87,7 +87,7 @@ KV_RESUME_DECLARE(Q5_0)
 KV_RESUME_DECLARE(Q5_1)
 KV_RESUME_DECLARE(Q8_0)
 #undef KV_RESUME_DECLARE
-#define KV_RESUME_ALIGNED_DECLARE(K) ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel_##K(ggml_type value, uint32_t queries);
+#define KV_RESUME_ALIGNED_DECLARE(K) ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel_##K(ggml_type value, uint32_t queries, bool compact_mask);
 KV_RESUME_ALIGNED_DECLARE(F16)
 KV_RESUME_ALIGNED_DECLARE(BF16)
 KV_RESUME_ALIGNED_DECLARE(Q4_0)
@@ -120,9 +120,9 @@ static inline fattn_kernel_t ggml_cuda_kv_stream_vector_kernel(ggml_type key, gg
     }
 }
 
-static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel(ggml_type key, ggml_type value, uint32_t queries) {
+static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel(ggml_type key, ggml_type value, uint32_t queries, bool compact_mask = false) {
     switch (key) {
-#define KV_RESUME_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_kernel_##K(value, queries);
+#define KV_RESUME_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_kernel_##K(value, queries, compact_mask);
         KV_RESUME_CASE(F16)
         KV_RESUME_CASE(BF16)
         KV_RESUME_CASE(Q4_0)
@@ -134,9 +134,9 @@ static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel(ggml_typ
         default: return nullptr;
     }
 }
-static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel(ggml_type key, ggml_type value, uint32_t queries) {
+static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_aligned_kernel(ggml_type key, ggml_type value, uint32_t queries, bool compact_mask = false) {
     switch (key) {
-#define KV_RESUME_ALIGNED_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_aligned_kernel_##K(value, queries);
+#define KV_RESUME_ALIGNED_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_aligned_kernel_##K(value, queries, compact_mask);
         KV_RESUME_ALIGNED_CASE(F16)
         KV_RESUME_ALIGNED_CASE(BF16)
         KV_RESUME_ALIGNED_CASE(Q4_0)

@@ -1,4 +1,5 @@
 #include "fattn-mma-f16.cuh"
+#include "ggml-kv-stream-device.h"
 
 #include <algorithm>
 #include <atomic>

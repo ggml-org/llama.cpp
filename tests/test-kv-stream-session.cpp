@@ -79,9 +79,10 @@ int main(int argc, char ** argv) {
     const bool guard_only = argc > 1 && !std::strcmp(argv[1],"--cuda-guard-handoff");
     const bool page_boundary_only = argc > 1 && !std::strcmp(argv[1],"--cuda-mtp-page-boundary");
     const bool short_prefill_only = argc > 1 && !std::strcmp(argv[1],"--cuda-short-prefill");
+    const bool prefill_tail_only = argc > 1 && !std::strcmp(argv[1],"--cuda-prefill-tail");
     const bool wide_resume_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wide-resume");
     const bool wave_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wave-batching");
-    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -90,6 +91,7 @@ int main(int argc, char ** argv) {
     if (physical_map_only) t.set_filter("shared_physical_pool_publishes_only_target_pairs");
     if (page_boundary_only) t.set_filter("speculative_page_boundary_reconstruction_reopens_mtp_admission");
     if (short_prefill_only) t.set_filter("short_prefill_uses_its_gather_grant_and_matches_stock");
+    if (prefill_tail_only) t.set_filter("resident_one_query_prefill_keeps_compact_mask_out_of_decode_capture");
     if (wide_resume_only) t.set_filter("wide_target_decode_reuses_small_ring_and_matches_stock");
     if (wave_only) t.set_filter("wrapped_resume_waves_reduce_launches_without_changing_tokens");
     if (cuda) t.test("wrapped_resume_waves_reduce_launches_without_changing_tokens",[&](testing & t) {
@@ -244,6 +246,44 @@ int main(int argc, char ** argv) {
         session.reset();
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(writer.arena.get()));
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(partial.arena.get()));
+    });
+    if (cuda) t.test("resident_one_query_prefill_keeps_compact_mask_out_of_decode_capture", [&](testing & t) {
+        constexpr size_t active=2049;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4096,false,2,4,40);
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        size_t scratch=0;
+        if (!t.assert_true(get && get() && get()->prefill_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                24,4,256,4096,scratch))) return;
+        block_workspace writer(f,131072,19),attention(f,scratch,29),graph(f,65536,31);
+        llama_kv_stream_session_config config{f.policy,256,24,false,true,true};
+        config.prefill_span_bytes=scratch;
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+            f.lease.get(),writer.lease.get(),attention.lease.get());
+        if (!t.assert_true(bool(session) && session->set_workspaces({graph.lease.get()}) && session->restore(active-1))) return;
+        block_inputs input(f,active,1,false,24);
+        session_inputs kv(backend.get(),1,1024);
+        auto * q=ggml_new_tensor_3d(input.context.get(),GGML_TYPE_F32,256,1,24);
+        auto * out=ggml_new_tensor_3d(input.context.get(),GGML_TYPE_F32,256,24,1);
+        auto * bounds=ggml_new_tensor_2d(input.context.get(),GGML_TYPE_I32,4,1);
+        auto * buffer=ggml_backend_memory_lease_buffer(graph.lease.get());
+        auto * base=static_cast<char *>(ggml_backend_buffer_get_base(buffer));
+        if (!t.assert_true(ggml_backend_tensor_alloc(buffer,q,base) == GGML_STATUS_SUCCESS &&
+                ggml_backend_tensor_alloc(buffer,out,base+24576) == GGML_STATUS_SUCCESS &&
+                ggml_backend_tensor_alloc(buffer,bounds,base+49152) == GGML_STATUS_SUCCESS)) return;
+        ggml_backend_tensor_set(q,input.qdata.data(),0,input.qdata.size()*sizeof(float));
+        const int32_t interval[4]={0,int32_t(active),int32_t(input.padded),1};
+        ggml_backend_tensor_set(bounds,interval,0,sizeof(interval));
+        input.q=q; input.output=out;
+        if (!t.assert_true(session->begin(active,1,false))) return;
+        for (uint32_t layer=0;layer<2;++layer) {
+            if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                    session->attention(layer,input.q,bounds,input.output,1.f/16))) return;
+            ggml_backend_synchronize(backend.get());
+            t.assert_true(same_float_bits(stock_attention(f,input,layer),input.read()));
+        }
+        t.assert_equal(active,session->tokens());
+        t.assert_equal(size_t(0),session->captured_layers());
     });
     if (cuda) t.test("short_prefill_uses_its_gather_grant_and_matches_stock", [&](testing & t) {
         constexpr size_t active = 1067;

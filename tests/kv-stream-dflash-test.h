@@ -37,12 +37,16 @@ static std::vector<uint32_t> dflash_exact_lattice(const float * data,size_t rows
 }
 
 // Match the same block execution and force decisions independently of sampler acceptance.
-static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar) {
+static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar,bool lifecycle=false) {
     const auto vocabulary=llama_model_get_vocab(model);
     const auto vocab=llama_vocab_n_tokens(vocabulary);
     const auto seed=common_tokenize(vocabulary,"A controlled comparison of windowed drafting and target recovery. ",true);
-    for (const auto profile : {std::array<size_t,3>{1,2304,8192},{3,2304,8192},{7,2304,8192},{7,16000,16384}}) {
+    const std::vector<std::array<size_t,3>> profiles=lifecycle ?
+        std::vector<std::array<size_t,3>>{{7,2047,16384},{7,2048,16384},{7,2049,16384},{7,2304,16384},{7,16000,16384}} :
+        std::vector<std::array<size_t,3>>{{1,2304,8192},{3,2304,8192},{7,2304,8192},{7,16000,16384}};
+    for (const auto profile : profiles) {
         for (bool quantized : {false,true}) {
+            if (lifecycle && !quantized && profile[1] != 2049) continue;
             kv_stream_bit_oracle oracle;
             for (bool streaming : {false,true}) {
                 if (streaming) oracle.compare();
@@ -104,6 +108,114 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
                     submit("prefill",part,false,false); history.insert(history.end(),part.begin(),part.end());
                 }
                 llama_token anchor=seed[0];
+                if (lifecycle) {
+                    const size_t saved_position=position;
+                    const auto saved_history=history;
+                    const auto save=[&](llama_context * ctx) {
+                        std::vector<uint8_t> data(llama_state_seq_get_size(ctx,0));
+                        if (data.empty() || llama_state_seq_get_data(ctx,data.data(),data.size(),0) != data.size())
+                            throw std::runtime_error("DFlash lifecycle state save failed");
+                        return data;
+                    };
+                    const auto target_state=save(target.get());
+                    const auto draft_state=save(draft->context());
+                    const auto restore=[&] {
+                        if (llama_state_seq_set_data(target.get(),target_state.data(),target_state.size(),0) != target_state.size() ||
+                                llama_state_seq_set_data(draft->context(),draft_state.data(),draft_state.size(),0) != draft_state.size())
+                            throw std::runtime_error("DFlash lifecycle state restore failed");
+                        position=saved_position; history=saved_history;
+                        common_speculative_begin(spec.get(),0,history);
+                    };
+                    const auto predict=[&] {
+                        llama_tokens result;
+                        auto & dp=common_speculative_get_draft_params(spec.get(),0);
+                        dp.drafting=true; dp.n_max=int(profile[0]); dp.pos0=int(position); dp.id_last=anchor;
+                        dp.prompt=&history; dp.result=&result;
+                        common_speculative_draft(spec.get()); llama_synchronize(draft->context());
+                        return result;
+                    };
+                    const auto probe=[&](kv_stream_bit_oracle & replay) {
+                        const auto first=position;
+                        const auto proposed=predict();
+                        if (proposed.size() != profile[0]) throw std::runtime_error("DFlash lifecycle prediction failed");
+                        replay.bytes("proposals",proposed.data(),proposed.size()*sizeof(llama_token));
+                        const auto lattice=dflash_exact_lattice(llama_get_embeddings_nextn(draft->context()),profile[0]+1,
+                            size_t(llama_model_n_embd(draft->model())),size_t(llama_model_dflash_selector_top_k(draft->model())),size_t(vocab));
+                        replay.bytes("selector",lattice.data(),lattice.size()*sizeof(uint32_t));
+                        if (!llama_memory_seq_rm(llama_get_memory(draft->context()),0,llama_pos(first),-1))
+                            throw std::runtime_error("DFlash lifecycle temporary suffix retirement failed");
+                        llama_tokens verified{anchor}; verified.insert(verified.end(),proposed.begin(),proposed.end());
+                        submit("lifecycle",verified,true,false);
+                        for (size_t i=0;i<verified.size();++i)
+                            replay.bytes("logits/"+std::to_string(i),llama_get_logits_ith(target.get(),int(i)),size_t(vocab)*sizeof(float));
+                        const auto * ids=llama_model_target_layer_ids(draft->model());
+                        for (uint32_t i=0;i<llama_model_target_layer_ids_n(draft->model());++i)
+                            replay.bytes("features/"+std::to_string(i),llama_get_embeddings_layer_inp(target.get(),uint32_t(ids[i])),
+                                verified.size()*size_t(llama_model_n_embd(model))*sizeof(float));
+                        const auto keep=first+3;
+                        if (!llama_memory_seq_rm(llama_get_memory(target.get()),0,llama_pos(keep),-1) ||
+                                !llama_memory_seq_rm(llama_get_memory(draft->context()),0,llama_pos(keep),-1))
+                            throw std::runtime_error("DFlash lifecycle rejection failed");
+                        position=keep;
+                        kv_stream_exact_kv(replay,"target_KV",hybrid->get_mem_attn(),first,3);
+                        kv_stream_exact_kv(replay,"draft_KV",window->get_swa(),first,3);
+                        kv_stream_exact_state state;
+                        hybrid->get_mem_recr()->state_write(state,0,0); state.compare_with(replay,"recurrent");
+                    };
+                    kv_stream_bit_oracle retained;
+                    const auto window_tokens=std::min(size_t(2048),saved_position);
+                    const auto target_tokens=std::min(size_t(256),saved_position);
+                    const auto retained_rows=[&] {
+                        kv_stream_exact_kv(retained,"retained_target",hybrid->get_mem_attn(),saved_position-target_tokens,target_tokens);
+                        kv_stream_exact_kv(retained,"retained_draft",window->get_swa(),saved_position-window_tokens,window_tokens);
+                    };
+                    retained_rows();
+                    const auto old_cells=window->get_swa()->get_cells(0).seq_pos_get(0).size();
+                    // Stock sequence snapshots compact masked SWA rows; both probes must use that same layout.
+                    restore();
+                    retained.compare(); retained_rows(); retained.finish();
+                    t.out << "DFlash checkpoint cells " << old_cells << " -> "
+                        << window->get_swa()->get_cells(0).seq_pos_get(0).size() << '\n';
+                    kv_stream_bit_oracle replay;
+                    probe(replay);
+                    restore();
+                    // Exercise another prompt and window wrap before restoring the original branch.
+                    llama_memory_clear(llama_get_memory(target.get()),true);
+                    llama_memory_clear(llama_get_memory(draft->context()),true);
+                    position=0; history.clear();
+                    while (position < 15872) {
+                        llama_tokens part(std::min(size_t(256),size_t(15872)-position));
+                        for (size_t i=0;i<part.size();++i) part[i]=seed[(position+i+7)%seed.size()];
+                        submit("other_prompt",part,false,false); history.insert(history.end(),part.begin(),part.end());
+                    }
+                    restore();
+                    if (!t.assert_equal(size_t(0),llama_state_seq_set_data(target.get(),target_state.data(),target_state.size()-1,0))) return;
+                    restore();
+                    if (!t.assert_equal(size_t(0),llama_state_seq_set_data(draft->context(),draft_state.data(),draft_state.size()-1,0))) return;
+                    restore();
+                    for (bool cancel_draft : {false,true}) {
+                        auto * ctx=cancel_draft ? draft->context() : target.get();
+                        int calls=0;
+                        llama_set_abort_callback(ctx,[](void * data) { ++*static_cast<int *>(data); return true; },&calls);
+                        if (cancel_draft) {
+                            const auto proposed=predict();
+                            llama_set_abort_callback(ctx,nullptr,nullptr);
+                            if (!t.assert_true(proposed.empty() && calls > 0)) return;
+                        } else {
+                            common_batch batch(ctx);
+                            batch.add(anchor,llama_pos(position),0,true);
+                            llama_set_kv_stream_decode(ctx,true);
+                            const auto status=llama_process(ctx,LLAMA_PROCESS_TYPE_DECODE,batch.get());
+                            llama_set_abort_callback(ctx,nullptr,nullptr);
+                            if (!t.assert_true(status == 2 && calls > 0)) return;
+                        }
+                        restore();
+                    }
+                    replay.compare(); probe(replay); replay.finish();
+                    restore();
+                    t.out << "DFlash lifecycle restored prefix=" << saved_position << " quant=" << quantized
+                        << " streamed=" << streaming << '\n';
+                }
                 const std::array<size_t,8> lengths{7,4,6,5,1,3,2,0};
                 for (size_t round=0;round<lengths.size();++round) {
                     const auto name="round/"+std::to_string(round);

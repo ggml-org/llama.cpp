@@ -86,17 +86,18 @@ public:
     const llama_kv_stream_prefetch_request * front() const { return count ? &records[head] : nullptr; }
     size_t pending() const { return count; }
     size_t used() const { return used_pages; }
-    // Inspect a submitted logical prefix; physical wrap starts a new span, not a new attention evaluation.
-    bool ready_wave(size_t max_pages, size_t max_spans, llama_kv_stream_prefetch_wave & output) const {
-        if (!max_pages || !max_spans || max_spans > 3 || !count) return false;
+    // Keep the first transfer whole above the grouping target so demand always makes progress.
+    bool ready_wave(size_t preferred_pages, size_t max_spans, llama_kv_stream_prefetch_wave & output) const {
+        if (!preferred_pages || !max_spans || max_spans > 3 || !count) return false;
         llama_kv_stream_prefetch_wave next;
         const auto * first=request(0);
         size_t logical=first->first, physical=first->slot;
         for (size_t i=0;i<count;++i) {
             const auto * r=request(i);
             if (!r->submitted || r->layer != first->layer || r->first != logical ||
-                    !r->pages || r->pages > max_pages-next.pages || r->pages > records.size() || r->slot > records.size()-r->pages ||
+                    !r->pages || r->pages > records.size() || r->slot > records.size()-r->pages ||
                     !r->tokens || r->tokens > SIZE_MAX-logical) break;
+            if (next.requests && (next.pages >= preferred_pages || r->pages > preferred_pages-next.pages)) break;
             const bool separate=!next.requests || r->slot != physical;
             if (separate && next.spans == max_spans) break;
             next.spans+=separate; ++next.requests; next.pages+=r->pages; next.tokens+=r->tokens;

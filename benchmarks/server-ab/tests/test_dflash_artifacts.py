@@ -348,6 +348,18 @@ class OrdinaryControls(unittest.TestCase):
             self.assertEqual(command.count(option),1)
             self.assertEqual(command[command.index(option)+1],value)
 
+    def test_shared_prompt_headroom_preserves_comparison_prefix(self):
+        from types import SimpleNamespace
+        args=SimpleNamespace(prompt_tokens=262144,decode_tokens=256,prompt_headroom=15,max_depth=7)
+        for depth in (3,7):
+            self.assertEqual(self.controls.prompt_count(args,8192,depth),7921)
+        args.prompt_headroom=None
+        self.assertEqual(self.controls.prompt_count(args,262144,7),261873)
+        for headroom in (0,7,True,-1):
+            args.prompt_headroom=headroom
+            with self.subTest(headroom=headroom),self.assertRaises(ValueError):
+                self.controls.prompt_count(args,8192,7)
+
     def test_invalid_profile_arguments_are_rejected_before_launch(self):
         from types import SimpleNamespace
         base = dict(server=Path("server"),target=Path("target"),draft=Path("draft"),
@@ -562,6 +574,24 @@ class DflashPlotTests(unittest.TestCase):
     def setUp(self):
         spec=importlib.util.spec_from_file_location("dflash_plot",SCRIPT.parent/"plot_dflash_controls.py")
         self.plot=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.plot)
+
+    def test_target_mtp_controls_keep_modes_and_no_speculation_has_no_acceptance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            log=root/"server.log"
+            log.write_text("memory_phase: phase=decode parent=1073741824 kv_pool=900000000\n")
+            row={"status":"ok","uvm":False,"context_capacity":8192,"mtp_length":0,"arena_mib":1024,"log":str(log),
+                 "prefill_tps":1000,"decode_tps":40,"mtp_draft_generated":None,"mtp_draft_accepted":None}
+            mtp=dict(row,mtp_length=3,mtp_draft_generated=100,mtp_draft_accepted=80,decode_tps=80)
+            (root/"results.jsonl").write_text(json.dumps(row)+"\n"+json.dumps(mtp)+"\n")
+            points=self.plot.load_series(root)
+            self.assertEqual({p["spec_type"] for p in points},{"none","mtp"})
+            baseline=next(p for p in points if p["spec_type"] == "none")
+            self.assertIsNone(baseline["acceptance_pct"])
+            self.assertEqual(next(p for p in points if p["spec_type"] == "mtp")["acceptance_pct"],80)
+            mtp["mtp_draft_generated"]=0
+            (root/"results.jsonl").write_text(json.dumps(mtp)+"\n")
+            with self.assertRaises(ValueError):self.plot.load_series(root)
 
     def test_timing_only_and_decode_grant_not_arena_are_reported(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -739,7 +739,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
             s.span = std::max(size_t(1),s.resident->suggested_span_pages());
             s.pin = s.binding->acquire();
             llama_kv_stream_capture_stamp stamp;
-            s.direct_mode = !s.ring_guard && queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
+            s.direct_mode = decode && !s.ring_guard && queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
                 s.resident->capture_state(s.backend,active,stamp) && s.resident->capture_without_output_extras(s.config.query_heads,active);
             if (s.direct_mode) {
                 if (!s.pin || !s.resident->synchronize(active)) {

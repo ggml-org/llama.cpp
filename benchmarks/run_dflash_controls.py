@@ -36,6 +36,18 @@ def effective_microbatch(args, context):
     return min(batch,context,ubatch or batch)
 
 
+def prompt_count(args, context, depth):
+    maximum=getattr(args,"max_depth",depth)
+    headroom=getattr(args,"prompt_headroom",None)
+    headroom=maximum+8 if headroom is None else headroom
+    if type(headroom) is not int or headroom < maximum+1:
+        raise ValueError("prompt headroom must cover the configured verification width")
+    count=min(args.prompt_tokens,context-args.decode_tokens-headroom)
+    if count < 256:
+        raise ValueError("context does not leave room for the prompt")
+    return count
+
+
 def auto_arena_for_point(args, context, depth, token_cache):
     if not getattr(args,"auto_max_arena",False):
         return args.arena_mib,None
@@ -358,7 +370,7 @@ def run_point(args, context, depth, token_cache, mode):
             if "tokens" not in token_cache:
                 token_cache["tokens"] = request_json(url+"/tokenize", {
                     "content": args.prefill_text.read_text(), "add_special": False}, timeout=180)["tokens"]
-            count = min(args.prompt_tokens, context-args.decode_tokens-getattr(args,"max_depth",depth)-8)
+            count = prompt_count(args,context,depth)
             if count < 256 or len(token_cache["tokens"]) < count:
                 raise ValueError("insufficient context/corpus for ordinary control")
             result = stream_completion(url+"/completion", {"prompt": token_cache["tokens"][:count],
@@ -401,6 +413,8 @@ def main():
     parser.add_argument("--depths", default="1,3,7")
     parser.add_argument("--prompt-tokens", type=int, default=2304)
     parser.add_argument("--decode-tokens", type=int, default=64)
+    parser.add_argument("--prompt-headroom",type=int,
+                        help="positions beyond decode tokens; use 15 for matched DFlash D=3/7 and target/MTP comparisons")
     parser.add_argument("--batch-size",type=int,default=256)
     parser.add_argument("--ubatch-size",type=int,default=256)
     parser.add_argument("--verbosity",type=int,default=3,
@@ -442,6 +456,7 @@ def main():
     for context in contexts:
         for depth in depths:
             server_command(args, context, depth)
+            prompt_count(args,context,depth)
     for name in ("target", "draft", "draft_config", "server", "prefill_text", "trace_library", "nsys"):
         value = getattr(args, name)
         if value is not None:

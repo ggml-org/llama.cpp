@@ -397,7 +397,7 @@ static bool resume_common(
     const int compiled_arch = ggml_cuda_highest_compiled_arch(ggml_cuda_info().devices[ctx.device].cc);
     if (q->ne[1] != plan.queries || q->ne[2] != plan.heads ||
             compiled_arch < 0 || !resume_plan_valid(plan,v->type,compiled_arch)) return false;
-    kernel = ggml_cuda_kv_stream_resume_kernel(k->type,v->type,plan.queries);
+    kernel = ggml_cuda_kv_stream_resume_kernel(k->type,v->type,plan.queries,op->src[5] != nullptr);
     base = uintptr_t(ggml_backend_buffer_get_base(workspace));
     const size_t capacity = ggml_backend_buffer_get_size(workspace);
     if (!kernel || !base || base%128 || base > UINTPTR_MAX-capacity || capacity < plan.bytes ||
@@ -484,7 +484,7 @@ static bool resume_span_launch(
     const size_t tokens=size_t(k.ne[1]);
     const size_t bulk=ggml_cuda_kv_stream_vector_bulk_tokens(first,tokens);
     if (!bulk) return resume_launch(backend,op,k,v,workspace,plan,guarded,first,mask_tokens,last);
-    auto aligned=ggml_cuda_kv_stream_resume_aligned_kernel(k.type,v.type,plan.queries);
+    auto aligned=ggml_cuda_kv_stream_resume_aligned_kernel(k.type,v.type,plan.queries,op->src[5] != nullptr);
     if (!aligned) return false;
     ggml_tensor bulk_k=k, bulk_v=v;
     bulk_k.ne[1]=bulk_v.ne[1]=int64_t(bulk);

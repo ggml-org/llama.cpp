@@ -43,6 +43,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--max-context", type=int, default=262144,
                         help="inclusive context endpoint in tokens (default: 262144 / 256 Ki)")
     parser.add_argument("--context-step", type=int, default=8192)
+    parser.add_argument("--contexts", help="comma-separated capacities; overrides the min/max/step range")
+    parser.add_argument("--prompt-headroom", type=int,
+                        help="reserve this many positions beyond decode tokens; use 15 to match DFlash2 D=7 controls")
     parser.add_argument("--decode-tokens", type=int, default=256)
     parser.add_argument("--arena-mib", type=int, default=2368,
                         help="fixed arena size in MiB, or starting probe when --auto-max-arena is set")
@@ -197,10 +200,31 @@ def series(rows: list[dict], mtp_length: int) -> list[dict]:
     )
 
 
-def prompt_tokens_for_context(context: int, decode_tokens: int, mtp_lengths: tuple[int, ...]) -> int:
+def context_points(args: argparse.Namespace) -> list[int]:
+    explicit=getattr(args,"contexts",None)
+    if explicit is not None:
+        try:
+            points=[int(value) for value in explicit.split(",")]
+        except ValueError as error:
+            raise ValueError("contexts must be comma-separated positive integers") from error
+        if not points or len(points) > 4096 or any(not 0 < point <= 2**31-1 for point in points) or len(set(points)) != len(points):
+            raise ValueError("contexts must be unique positive int32 values, at most 4096 points")
+        return sorted(points)
+    if not 0 < args.min_context <= args.max_context <= 2**31-1 or args.context_step <= 0:
+        raise ValueError("invalid context range")
+    if (args.max_context-args.min_context)//args.context_step+1 > 4096:
+        raise ValueError("context range exceeds 4096 points; increase the step")
+    return list(range(args.min_context,args.max_context+1,args.context_step))
+
+
+def prompt_tokens_for_context(context: int, decode_tokens: int, mtp_lengths: tuple[int, ...], headroom: int | None = None) -> int:
     # Draft verification needs room beyond the requested output; keep the prompt
     # identical across MTP settings so the sweep remains comparable.
     draft_headroom = max(mtp_lengths) + 1 if max(mtp_lengths) else 0
+    if headroom is not None:
+        if type(headroom) is not int or headroom < draft_headroom:
+            raise ValueError("prompt headroom must cover the configured verification width")
+        draft_headroom=headroom
     return context - decode_tokens - draft_headroom
 
 
@@ -287,7 +311,7 @@ def probe_arena(args: argparse.Namespace, context: int, mtp_length: int, arena_m
                     token_cache["tokens"] = request_json(url + "/tokenize",
                         {"content": article_text, "add_special": False}, timeout=180)["tokens"]
                 source_tokens = token_cache["tokens"]
-                prompt_count = prompt_tokens_for_context(context, args.decode_tokens, args.mtp_lengths)
+                prompt_count = prompt_tokens_for_context(context, args.decode_tokens, args.mtp_lengths,getattr(args,"prompt_headroom",None))
                 if source_tokens is None or len(source_tokens) < prompt_count:
                     raise RuntimeError(f"prefill text has fewer than {prompt_count} tokens")
                 warmups = [(source_tokens[:256], 4)]
@@ -478,8 +502,13 @@ def main() -> int:
         raise SystemExit("model or server executable does not exist")
     if not args.prefill_text.is_file():
         raise SystemExit(f"prefill text does not exist: {args.prefill_text}")
-    if prompt_tokens_for_context(args.min_context, args.decode_tokens, args.mtp_lengths) <= 0 or args.context_step <= 0 or args.max_context < args.min_context:
-        raise SystemExit("invalid context range")
+    try:
+        contexts=context_points(args)
+        args.min_context, args.max_context=min(contexts),max(contexts)
+        if prompt_tokens_for_context(args.min_context,args.decode_tokens,args.mtp_lengths,args.prompt_headroom) <= 0:
+            raise ValueError("context does not leave room for the prompt")
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
     article_text = args.prefill_text.read_text(encoding="utf-8")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -503,10 +532,10 @@ def main() -> int:
     try:
         for context, mtp_length in (
             (context, length)
-            for context in range(args.min_context, args.max_context + 1, args.context_step)
+            for context in contexts
             for length in args.mtp_lengths
         ):
-            prompt_tokens = prompt_tokens_for_context(context, args.decode_tokens, args.mtp_lengths)
+            prompt_tokens = prompt_tokens_for_context(context, args.decode_tokens, args.mtp_lengths,args.prompt_headroom)
             full_results: dict[int, dict] = {}
             arena_mib = arena_for_point(args, context, mtp_length, logs, url, article_text, token_cache, full_results)
             cached = full_results.get(arena_mib)
@@ -536,7 +565,7 @@ def main() -> int:
                                 timeout=180,
                             )["tokens"]
                             needed = max(256, prompt_tokens_for_context(
-                                args.max_context, args.decode_tokens, args.mtp_lengths,
+                                args.max_context, args.decode_tokens, args.mtp_lengths,args.prompt_headroom,
                             ))
                             if len(tokens) < needed:
                                 raise RuntimeError(
@@ -599,6 +628,10 @@ def main() -> int:
             decode_tps = float(timing["predicted_per_second"])
             h2d_gbs = h2d_mib * 1048576 * decode_tps / 1e9 if mtp_length == 0 else None
             row = {
+                "status": "ok",
+                "uvm": args.uvm,
+                "budget_policy": "maximum-fit" if args.auto_max_arena else "fixed",
+                "command": server_command(args,context,mtp_length,arena_mib),
                 "context_capacity": context,
                 "mtp_length": mtp_length,
                 "mtp_draft_accepted": draft_accepted,

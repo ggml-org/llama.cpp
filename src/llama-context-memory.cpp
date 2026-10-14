@@ -1044,6 +1044,11 @@ ggml_status llama_context_memory::compute_async(ggml_cgraph * graph) {
         const auto result = ggml_backend_sched_graph_compute_async(impl->sched, graph);
         if (result != GGML_STATUS_SUCCESS) impl->executor.quiesce();
         GGML_ASSERT(impl->transition->finish(admission));
+        // Cancellation can recapture after draining; other execution failures stay quiescent.
+        if (result == GGML_STATUS_ABORTED && !impl->invalidate()) {
+            impl->invalid=true;
+            return GGML_STATUS_FAILED;
+        }
         return result;
     } catch (...) {
         impl->executor.quiesce();

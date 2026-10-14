@@ -17,7 +17,7 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
 #pragma clang diagnostic ignored "-Wpass-failed"
 #endif // __clang__
 template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool resumable,
-        bool tail_safe = resumable>
+        bool tail_safe = resumable, bool compact_mask = false>
 static __device__ __forceinline__ void flash_attn_ext_vec_impl(
         const char * Q_ptr,
         const char * K_ptr,
@@ -304,9 +304,9 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                     sum = logit_softcap*tanhf(sum);
                 }
 
-                if (token_valid && (mask || mask_bounds) && (ncols == 1 || ic0 + j < int(ne01.z))) {
+                if (token_valid && (mask || compact_mask) && (ncols == 1 || ic0 + j < int(ne01.z))) {
                     half mask_value;
-                    if (mask_bounds) {
+                    if constexpr (compact_mask) {
                         const int32_t * row=mask_bounds+4*(ic0+j);
                         const int token=k_VKQ_0+i_KQ;
                         const bool visible=row[3] == 1 && row[0] >= 0 && row[0] <= row[1] && row[1] <= row[2] &&
@@ -645,7 +645,7 @@ static __global__ void flash_attn_ext_vec(
 }
 
 // Save per-thread accumulators before native reductions; resume the same logical tile ownership.
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool tail_safe = true>
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool tail_safe = true, bool compact_mask = false>
 __launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
 static __global__ void flash_attn_ext_vec_resume(
         const char * Q_ptr,
@@ -670,7 +670,7 @@ static __global__ void flash_attn_ext_vec_resume(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         float * state, int first, int end, bool reset, bool finish, const int32_t * mask_bounds = nullptr) {
-    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true,tail_safe>(
+    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true,tail_safe,compact_mask>(
         Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31,nb32,nb33,state,first,end,reset,finish,int(blockIdx.y),int(gridDim.y),int(blockIdx.y),int(gridDim.y),mask_bounds);
 
 }
