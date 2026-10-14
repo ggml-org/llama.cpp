@@ -2224,9 +2224,17 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
     }
 
-    GGML_ASSERT(n_tokens_all <= cparams.n_batch);
+    if (n_tokens_all > cparams.n_batch) {
+        LLAMA_LOG_ERROR("%s: n_tokens = %u exceeds n_batch = %u (for causal attention n_batch is capped at n_ctx = %u)\n",
+                __func__, n_tokens_all, cparams.n_batch, cparams.n_ctx);
+        return -1;
+    }
 
-    GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
+    if (!cparams.causal_attn && n_tokens_all > cparams.n_ubatch) {
+        LLAMA_LOG_ERROR("%s: non-causal attention requires n_ubatch >= n_tokens (n_ubatch = %u, n_tokens = %u)\n",
+                __func__, cparams.n_ubatch, n_tokens_all);
+        return -1;
+    }
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
