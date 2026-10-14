@@ -222,6 +222,4 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
 
     cb(cur, "result_embd", -1);
     res->t_embd = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
