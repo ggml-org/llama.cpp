@@ -8,6 +8,11 @@
 #include <sstream>
 #include <string>
 #include <cctype>
+#include <cfloat>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 #include <optional>
 #include <algorithm>
@@ -1517,6 +1522,65 @@ void global_from_json(context & ctx, const common_json & json_obj, bool mark_inp
     }
 }
 
+// a float as Python writes it (repr, json.dumps): the shortest digits that read back as the same value
+static std::string float_to_json(double val) {
+    if (!std::isfinite(val)) {
+        return std::isnan(val) ? "nan" : val < 0 ? "-inf" : "inf"; // as before (json.dumps writes NaN and Infinity, str() writes nan and inf)
+    }
+    const double mag = std::fabs(val);
+
+    // at a power of 2 the gap to the value below is half the gap above, the nearest digits can miss while the next ones up read back
+    int exp2 = 0;
+    const bool is_pow2 = std::frexp(mag, &exp2) == 0.5;
+
+    // a normal double has at most one decimal of up to DBL_DIG digits that reads back as it, the search can start at DBL_DIG digits
+    // 17 digits always read back
+    std::string digits;
+    int exp10 = 0;
+    for (int prec = mag < DBL_MIN ? 0 : DBL_DIG - 1; digits.empty(); prec++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.*e", prec, mag);
+        const char * e = std::strchr(buf, 'e');
+        // only the digits, the decimal point depends on the locale
+        std::string d(buf, e - buf);
+        d.erase(std::remove_if(d.begin(), d.end(), [](char c) { return c < '0' || c > '9'; }), d.end());
+        exp10 = std::atoi(e + 1);
+        const auto reads_back = [&](const std::string & cand) {
+            return std::strtod((cand + "e" + std::to_string(exp10 - prec)).c_str(), nullptr) == mag;
+        };
+        if (prec == 16 || reads_back(d)) {
+            digits = d;
+        } else if (is_pow2 && d.back() != '9') {
+            d.back()++;
+            if (reads_back(d)) {
+                digits = d;
+            }
+        }
+    }
+    while (digits.size() > 1 && digits.back() == '0') {
+        digits.pop_back();
+    }
+
+    // fixed notation for 1e-4 <= |val| < 1e16, else d.ddde+XX
+    const int n     = static_cast<int>(digits.size());
+    const int point = exp10 + 1; // number of digits before the decimal point
+    std::string out = std::signbit(val) ? "-" : "";
+    if (point > -4 && point <= 16) {
+        if (point <= 0) {
+            out += "0." + std::string(-point, '0') + digits;
+        } else if (point >= n) {
+            out += digits + std::string(point - n, '0') + ".0";
+        } else {
+            out += digits.substr(0, point) + "." + digits.substr(point);
+        }
+    } else {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "e%c%02d", exp10 < 0 ? '-' : '+', std::abs(exp10));
+        out += digits.substr(0, 1) + (n > 1 ? "." + digits.substr(1) : "") + buf;
+    }
+    return out;
+}
+
 // recursively convert value to JSON string
 // TODO: avoid circular references
 static void value_to_json_internal(std::ostringstream & oss, const value & val, int curr_lvl, int indent, const std::string_view item_sep, const std::string_view key_sep) {
@@ -1534,7 +1598,7 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
     } else if (is_val<value_int>(val)) {
         oss << val->as_int();
     } else if (is_val<value_float>(val)) {
-        oss << val->as_float();
+        oss << float_to_json(val->as_float());
     } else if (is_val<value_string>(val)) {
         oss << "\"";
         for (char c : val->as_string().str()) {

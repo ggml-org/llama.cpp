@@ -1026,6 +1026,31 @@ static void test_literals(testing & t) {
         "3.14"
     );
 
+    // Python writes the shortest digits that read back as the same value
+    test_template(t, "tojson floats",
+        "{{ data|tojson }}",
+        {{"data", json::array({0.1, 1.0, 100.0, 8.3, 123456789.0, 48.858844, 0.30000000000000004, -0.0, 5.960464477539063e-08})}},
+        "[0.1, 1.0, 100.0, 8.3, 123456789.0, 48.858844, 0.30000000000000004, -0.0, 5.960464477539063e-08]"
+    );
+
+    test_template(t, "tojson floats, exponent",
+        "{{ data|tojson }}",
+        {{"data", json::array({1e15, 1e16, 0.0001, 0.00001, 1.5e10, -2.5e-7, 5e-324, 1.7976931348623157e308})}},
+        "[1000000000000000.0, 1e+16, 0.0001, 1e-05, 15000000000.0, -2.5e-07, 5e-324, 1.7976931348623157e+308]"
+    );
+
+    test_template(t, "tojson floats, nested with indent=2",
+        "{{ data|tojson(indent=2) }}",
+        {{"data", {{"total", 20.0}, {"items", json::array({{{"price", 9.99}, {"qty", 2}}})}}}},
+        "{\n  \"total\": 20.0,\n  \"items\": [\n    {\n      \"price\": 9.99,\n      \"qty\": 2\n    }\n  ]\n}"
+    );
+
+    test_template(t, "float|string",
+        "{{ a|string }} {{ b|string }} {{ (b * 10)|string }}",
+        {{"a", 1.0}, {"b", 1e308}},
+        "1.0 1e+308 inf"
+    );
+
     test_template(t, "string|tojson",
         "{{ 'hello' | tojson }}",
         json::object(),
