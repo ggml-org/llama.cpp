@@ -198,9 +198,12 @@ bool SSEClient::parse_sse_line(const std::string &line, SSEMessage &msg,
     msg.data += value;
     has_data = true;
   } else if (field == "id") {
-    // Empty id is valid (clears the last event ID)
-    msg.id = value;
-    has_id = true;
+    // An id that cannot be sent back as Last-Event-ID is ignored. Empty id is
+    // valid (clears the last event ID)
+    if (detail::fields::is_field_value(value)) {
+      msg.id = value;
+      has_id = true;
+    }
   } else if (field == "retry") {
     // Parse retry interval in milliseconds
     // Per the SSE spec, a value that is not all ASCII digits is ignored.
@@ -273,22 +276,36 @@ void SSEClient::run_event_loop() {
     SSEMessage current_msg;
     auto has_data = false;
     auto has_id = false;
+    auto first_line = true;
+    auto after_cr = false;
 
     while (running_.load() && result.next()) {
+      // What is left in the buffer has no line ending
+      auto search_pos = buffer.size();
       buffer.append(result.data(), result.size());
 
-      // Process complete lines in the buffer
+      // Process complete lines in the buffer. A line ends with \r\n, \n or \r
+      // per the SSE spec
       size_t line_start = 0;
-      size_t newline_pos;
+      size_t eol_pos;
 
-      while ((newline_pos = buffer.find('\n', line_start)) !=
+      while ((eol_pos = buffer.find_first_of("\r\n", search_pos)) !=
              std::string::npos) {
-        auto line = buffer.substr(line_start, newline_pos - line_start);
-        line_start = newline_pos + 1;
+        auto line = buffer.substr(line_start, eol_pos - line_start);
+        line_start = eol_pos + 1;
+        search_pos = line_start;
 
-        // Strip the \r of a CRLF line ending so that every field, including
-        // one without a colon, sees the same line
-        if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+        // The \n of a \r\n may arrive in a later chunk than its \r
+        auto is_lf_of_crlf =
+            after_cr && line.empty() && buffer[eol_pos] == '\n';
+        after_cr = buffer[eol_pos] == '\r';
+        if (is_lf_of_crlf) { continue; }
+
+        // A UTF-8 BOM at the start of the stream is ignored per the SSE spec
+        if (first_line) {
+          first_line = false;
+          if (line.compare(0, 3, "\xEF\xBB\xBF") == 0) { line.erase(0, 3); }
+        }
 
         // Parse the line and check if event is complete
         auto event_complete = parse_sse_line(
@@ -3408,8 +3425,7 @@ const char *get_header_value(const Headers &headers,
   }
 
   auto rng = headers.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
+  auto it = bounded_next(rng.first, id, rng.second);
   if (it != rng.second) { return it->second.c_str(); }
   return def;
 }
@@ -3462,8 +3478,7 @@ template <typename Map>
 typename Map::mapped_type
 get_multimap_value(const Map &m, const std::string &key, size_t id) {
   auto rng = m.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
+  auto it = bounded_next(rng.first, id, rng.second);
   if (it != rng.second) { return it->second; }
   return typename Map::mapped_type();
 }
@@ -3692,8 +3707,9 @@ read_content_without_length(Stream &strm, size_t payload_max_length,
     if (n < 0) { return ReadContentResult::Error; }
 
     // Check if adding this data would exceed the payload limit
-    if (r > payload_max_length ||
-        payload_max_length - r < static_cast<size_t>(n)) {
+    if (payload_max_length > 0 &&
+        (r > payload_max_length ||
+         payload_max_length - r < static_cast<size_t>(n))) {
       return ReadContentResult::PayloadTooLarge;
     }
 
@@ -3728,8 +3744,9 @@ ReadContentResult read_content_chunked(Stream &strm, T &x,
       return ReadContentResult::Success;
     }
 
-    if (total_len > payload_max_length ||
-        payload_max_length - total_len < static_cast<size_t>(n)) {
+    if (payload_max_length > 0 &&
+        (total_len > payload_max_length ||
+         payload_max_length - total_len < static_cast<size_t>(n))) {
       return ReadContentResult::PayloadTooLarge;
     }
 
@@ -4449,7 +4466,7 @@ bool parse_range_header(const std::string &s, Ranges &ranges) try {
     return std::all_of(str.cbegin(), str.cend(), is_ascii_digit);
   };
 
-  if (s.size() > 7 && s.compare(0, 6, "bytes=") == 0) {
+  if (s.size() > 7 && case_ignore::equal(s.substr(0, 6), "bytes=")) {
     const auto pos = static_cast<size_t>(6);
     const auto len = static_cast<size_t>(s.size() - 6);
     auto all_valid_ranges = true;
@@ -4507,8 +4524,30 @@ bool parse_range_header(const std::string &s, Ranges &ranges) try {
 } catch (...) { return false; }
 #endif
 
+// Removes each quoted-string, honoring a quoted-pair (RFC 9110 Section 5.6.4)
+std::string remove_quoted_strings(const std::string &s) {
+  std::string out;
+  auto in_quotes = false;
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] == '"') {
+      in_quotes = !in_quotes;
+    } else if (!in_quotes) {
+      out += s[i];
+    } else if (s[i] == '\\') {
+      i++;
+    }
+  }
+  return out;
+}
+
 bool parse_accept_header(const std::string &s,
                                 std::vector<std::string> &content_types) {
+  // Parameter values are not used here, so a quoted-string is dropped rather
+  // than parsed: a ',' or ';' inside one must not be read as a delimiter.
+  if (s.find('"') != std::string::npos) {
+    return parse_accept_header(remove_quoted_strings(s), content_types);
+  }
+
   content_types.clear();
 
   // Empty string is considered valid (no preference)
@@ -5583,6 +5622,17 @@ bool is_request_target(const std::string &s) {
   return std::all_of(s.begin(), s.end(), is_field_vchar);
 }
 
+// RFC 9110 §7.2: the bytes of uri-host [ ":" port ], i.e. unreserved,
+// sub-delims, "%", ":" and the IP-literal brackets. An empty value is valid.
+bool is_host(const std::string &s) {
+  return std::all_of(s.begin(), s.end(), [](char c) {
+    return is_ascii_alnum(c) || c == '-' || c == '.' || c == '_' || c == '~' ||
+           c == '!' || c == '$' || c == '&' || c == '\'' || c == '(' ||
+           c == ')' || c == '*' || c == '+' || c == ',' || c == ';' ||
+           c == '=' || c == '%' || c == ':' || c == '[' || c == ']';
+  });
+}
+
 } // namespace fields
 
 bool perform_websocket_handshake(Stream &strm, Request &req,
@@ -6039,12 +6089,14 @@ bool match_hostname(const std::string &pattern,
   // Compare each component with wildcard support
   // Supports: "*" (full wildcard), "prefix*" (partial wildcard)
   // https://bugs.launchpad.net/ubuntu/+source/firefox-3.0/+bug/376484
+  // Only the leftmost label may carry a wildcard (RFC 6125 6.4.3)
   auto itr = pattern_components.begin();
   for (const auto &h : host_components) {
     auto &p = *itr;
-    if (!detail::case_ignore::equal(p, h) && p != "*") {
+    auto is_leftmost = itr == pattern_components.begin();
+    if (!detail::case_ignore::equal(p, h) && !(is_leftmost && p == "*")) {
       bool partial_match = false;
-      if (!p.empty() && p[p.size() - 1] == '*') {
+      if (is_leftmost && !p.empty() && p[p.size() - 1] == '*') {
         const auto prefix_length = p.size() - 1;
         if (prefix_length == 0) {
           partial_match = true;
@@ -6953,8 +7005,7 @@ bool Request::is_multipart_form_data() const {
 std::string MultipartFormData::get_field(const std::string &key,
                                                 size_t id) const {
   auto rng = fields.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
+  auto it = detail::bounded_next(rng.first, id, rng.second);
   if (it != rng.second) { return it->second.content; }
   return std::string();
 }
@@ -9839,6 +9890,16 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
     return write_response(strm, close_connection, req, res);
   }
 
+  // RFC 9112 §3.2: Reject more than one Host field line or an invalid Host
+  // value, so that every recipient of the request sees the same authority.
+  if (req.get_header_value_count("Host") > 1 ||
+      !detail::fields::is_host(req.get_header_value("Host"))) {
+    connection_closed = true;
+    res.status = StatusCode::BadRequest_400;
+    output_error_log(Error::InvalidHeaders, &req);
+    return write_response(strm, close_connection, req, res);
+  }
+
   // Check if the request URI doesn't exceed the limit
   if (req.target.size() > CPPHTTPLIB_REQUEST_URI_MAX_LENGTH) {
     connection_closed = true;
@@ -11156,7 +11217,8 @@ void ClientImpl::setup_redirect_client(ClientType &client) {
   if (!proxy_host_.empty() && proxy_port_ != -1) {
     client.set_proxy(proxy_host_, proxy_port_);
 
-    if (!proxy_basic_auth_username_.empty()) {
+    if (!proxy_basic_auth_username_.empty() ||
+        !proxy_basic_auth_password_.empty()) {
       client.set_proxy_basic_auth(proxy_basic_auth_username_,
                                   proxy_basic_auth_password_);
     }
@@ -11259,8 +11321,8 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
   // otherwise NO_PROXY-matched requests, and requests inside a TLS tunnel,
   // would leak proxy credentials to the destination server.
   if (is_proxy_enabled_for_host(host_) && (!is_ssl() || is_connect)) {
-    if (!proxy_basic_auth_username_.empty() &&
-        !proxy_basic_auth_password_.empty() &&
+    if ((!proxy_basic_auth_username_.empty() ||
+         !proxy_basic_auth_password_.empty()) &&
         !req.has_header("Proxy-Authorization")) {
       req.headers.insert(make_basic_authentication_header(
           proxy_basic_auth_username_, proxy_basic_auth_password_, true));
@@ -18119,6 +18181,14 @@ void WebSocket::start_heartbeat() {
       if (max_missed_pongs_ > 0 && unacked_pings_ >= max_missed_pongs_) {
         lock.unlock();
         close(CloseStatus::GoingAway, "pong timeout");
+        // Wake a read() blocked on the unresponsive peer. Only the read side
+        // is shut down: a TLS backend answers the EOF with an alert, and
+        // writing it to a socket closed for writing raises SIGPIPE.
+#ifdef _WIN32
+        shutdown(strm_.socket(), SD_RECEIVE);
+#else
+        shutdown(strm_.socket(), SHUT_RD);
+#endif
         return;
       }
       lock.unlock();

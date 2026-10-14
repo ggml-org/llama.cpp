@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.60.1"
-#define CPPHTTPLIB_VERSION_NUM "0x003c01"
+#define CPPHTTPLIB_VERSION "0.61.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003d00"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -1141,8 +1141,7 @@ private:
     pointer operator->() const { return data_ + idx_; }
 
     iterator_t &operator++() {
-      // Saturating, so that advancing past the last entry of a key (which
-      // get_multimap_value() does when asked for an out-of-range id) stays at
+      // Saturating, so that advancing past the last entry of a key stays at
       // end() instead of running off the container.
       if (idx_ >= size_) { return *this; }
       ++idx_;
@@ -3477,13 +3476,20 @@ inline bool is_numeric(const std::string &str) {
   return !str.empty() && std::all_of(str.cbegin(), str.cend(), is_ascii_digit);
 }
 
+// std::ranges::next(first, n, last) for C++11
+template <typename It> inline It bounded_next(It first, size_t n, It last) {
+  for (; n > 0 && first != last; --n) {
+    ++first;
+  }
+  return first;
+}
+
 inline size_t get_header_value_u64(const Headers &headers,
                                    const std::string &key, size_t def,
                                    size_t id, bool &is_invalid_value) {
   is_invalid_value = false;
   auto rng = headers.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
+  auto it = bounded_next(rng.first, id, rng.second);
   if (it != rng.second) {
     if (is_numeric(it->second)) {
       // Parse at size_t width so an out-of-range Content-Length is reported
@@ -3968,6 +3974,7 @@ bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
 bool is_field_valid(const std::string &name, const std::string &value);
 bool is_request_target(const std::string &s);
+bool is_host(const std::string &s);
 
 } // namespace fields
 } // namespace detail
