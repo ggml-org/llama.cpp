@@ -374,6 +374,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_k3(params);
         case LLM_ARCH_KIMI_K31:
             return new llama_model_kimi_k31(params);
+        case LLM_ARCH_RAON1_MINI:
+            return new llama_model_raon1_mini(params);
         case LLM_ARCH_GLM5_NEXT:
             return new llama_model_glm5_next(params);
         case LLM_ARCH_STEP35:
@@ -1123,6 +1125,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_24B_A2B:       return "24B.A2B";
         case LLM_TYPE_26B_A4B:       return "26B.A4B";
+        case LLM_TYPE_29B_A4B:       return "29B.A4B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_32B_A9B:       return "32B.A9B";
@@ -3675,6 +3678,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
             return LLAMA_ROPE_TYPE_NONE;
