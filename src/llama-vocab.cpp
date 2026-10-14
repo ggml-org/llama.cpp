@@ -1021,7 +1021,20 @@ struct llm_tokenizer_ugm_session {
 
         // normalize the input first
         std::string normalized;
-        normalize(text, &normalized);
+        if (vocab.get_normalizer_opts().nfc) {
+            try {
+                std::string canonical;
+                for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                    canonical += unicode_cpt_to_utf8(cpt);
+                }
+                normalize(canonical, &normalized);
+            } catch (const std::invalid_argument &) {
+                // Use the existing UGM normalization path for malformed input.
+                normalize(text, &normalized);
+            }
+        } else {
+            normalize(text, &normalized);
+        }
         size_t input_len = normalized.size();
         if (input_len == 0) {
             return;
@@ -1950,7 +1963,7 @@ struct llama_vocab::impl {
     bool escape_whitespaces         = true;
     bool treat_whitespace_as_suffix = false;
 
-    // BertNormalizer options
+    // Tokenizer normalizer options
     llama_vocab::normalizer_options normalizer_opts;
 
     std::unordered_map<std::string, llama_token> token_to_id;
@@ -2778,7 +2791,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // BertNormalizer options
+        // Tokenizer normalizer options
+        ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_NFC, normalizer_opts.nfc, false);
         ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_LOWERCASE,     normalizer_opts.lowercase,     false);
         normalizer_opts.strip_accents = normalizer_opts.lowercase;
         ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_STRIP_ACCENTS, normalizer_opts.strip_accents, false);

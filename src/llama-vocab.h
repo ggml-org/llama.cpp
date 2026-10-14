@@ -83,6 +83,7 @@ struct llama_vocab {
     };
 
     struct normalizer_options {
+        bool nfc           = false;
         bool lowercase     = true;
         bool strip_accents = true;
         // TODO: clean_text, handle_chinese_chars

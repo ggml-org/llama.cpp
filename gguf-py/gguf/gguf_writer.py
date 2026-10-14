@@ -1329,6 +1329,9 @@ class GGUFWriter:
     def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
         self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)
 
+    def add_normalizer_nfc(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.NORMALIZER_NFC, value)
+
     def add_normalizer_lowercase(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
 

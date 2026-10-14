@@ -364,6 +364,7 @@ class Keys:
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
         # Normalizer constants
+        NORMALIZER_NFC           = "tokenizer.ggml.normalizer.nfc"
         NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
         NORMALIZER_STRIP_ACCENTS = "tokenizer.ggml.normalizer.strip_accents"
         # FIM/Infill special tokens constants
