@@ -541,8 +541,16 @@ struct mma_span_launch {
     bool state_per_block = false;
     size_t output_offset = 0;
     bool resumable = false;
+    bool dense_strided = false;
     size_t bytes = 0;
 };
+
+static uint32_t mma_span_conversion_flags(const ggml_tensor * dst) {
+    const auto * k=dst->src[1], * v=dst->src[2];
+    return uint32_t(ggml_backend_execution_has_stock_conversion(dst) ?
+        ((ggml_is_contiguously_allocated(k) ? 1 : 0)|(ggml_is_contiguously_allocated(v) ? 2 : 0)) :
+        ((ggml_is_contiguous(k) ? 1 : 0)|(ggml_is_contiguous(v) ? 2 : 0)));
+}
 
 // Reproduce stock Stream-K planning while accounting for descriptors in caller-owned scratch.
 static bool mma_span_launch_make(
@@ -626,6 +634,7 @@ static bool mma_span_launch_make(
 
     mma_span_launch next;
     next.resumable=resumable;
+    next.dense_strided=ggml_cuda_kv_stream_mma_dense_strided(dst->src[5] != nullptr,mma_span_conversion_flags(dst));
     next.ncols1 = ncols1;
     next.ncols2 = ncols2;
     next.shared_bytes = std::max(shared_combine,q_in_reg ?
@@ -657,7 +666,7 @@ static bool mma_span_launch_make(
             flash_attn_ext_f16<DKQ,DV,4,2,false,false,false>) :
         ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,8,8,false,false,false> :
             flash_attn_ext_f16<DKQ,DV,8,2,false,false,false>;
-    auto spanned = ggml_cuda_kv_stream_mma_kernel(k->type,v->type,uint32_t(ncols1),uint32_t(ncols2),resumable);
+    auto spanned = ggml_cuda_kv_stream_mma_kernel(k->type,v->type,uint32_t(ncols1),uint32_t(ncols2),resumable,next.dense_strided);
     if (!spanned) {
         if (failure) *failure=status::missing_streamed_implementation;
         return false;
@@ -822,7 +831,7 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
             ctx,&logical,spans,count,workspace,plan,control);
     }
     constexpr int DKQ = 256, DV = 256;
-    auto kernel=ggml_cuda_kv_stream_mma_kernel(dst->src[1]->type,dst->src[2]->type,ncols1,ncols2,plan.resumable);
+    auto kernel=ggml_cuda_kv_stream_mma_kernel(dst->src[1]->type,dst->src[2]->type,ncols1,ncols2,plan.resumable,plan.dense_strided);
     if (!kernel) return false;
     auto * device_spans = static_cast<ggml_cuda_kv_span *>(workspace);
     CUDA_CHECK(cudaMemcpyAsync(
@@ -891,9 +900,7 @@ static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         int32_t(mask->ne[1]),int32_t(mask->ne[2]),int32_t(mask->ne[3]),
         int32_t(mask->nb[1]),int32_t(mask->nb[2]),int64_t(mask->nb[3]),
         device_spans,int(count),int(plan.span_shared_offset),
-        uint32_t(ggml_backend_execution_has_stock_conversion(dst) ?
-            ((ggml_is_contiguously_allocated(k) ? 1 : 0)|(ggml_is_contiguously_allocated(v) ? 2 : 0)) :
-            ((ggml_is_contiguous(k) ? 1 : 0)|(ggml_is_contiguous(v) ? 2 : 0))),control);
+        mma_span_conversion_flags(dst),control);
     CUDA_CHECK(cudaGetLastError());
 
     if (plan.resumable && control.end < k->ne[1]) return true;

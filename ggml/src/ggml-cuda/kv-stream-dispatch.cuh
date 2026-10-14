@@ -29,7 +29,7 @@ using ggml_kv_mma_span_kernel_t = void (*)(
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         const ggml_cuda_kv_span *, int, int, uint32_t, ggml_cuda_fattn_mma_resume_control);
 
-#define KV_MMA_DECLARE(K) ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel_##K(ggml_type value, uint32_t ncols1, uint32_t ncols2, bool resume);
+#define KV_MMA_DECLARE(K) ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel_##K(ggml_type value, uint32_t ncols1, uint32_t ncols2, bool resume, bool dense_strided);
 KV_MMA_DECLARE(F16)
 KV_MMA_DECLARE(BF16)
 KV_MMA_DECLARE(Q4_0)
@@ -40,9 +40,9 @@ KV_MMA_DECLARE(Q8_0)
 #undef KV_MMA_DECLARE
 
 static inline ggml_kv_mma_span_kernel_t ggml_cuda_kv_stream_mma_kernel(
-        ggml_type key, ggml_type value, uint32_t ncols1, uint32_t ncols2, bool resume = false) {
+        ggml_type key, ggml_type value, uint32_t ncols1, uint32_t ncols2, bool resume = false, bool dense_strided = false) {
     switch (key) {
-#define KV_MMA_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_mma_kernel_##K(value,ncols1,ncols2,resume);
+#define KV_MMA_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_mma_kernel_##K(value,ncols1,ncols2,resume,dense_strided);
         KV_MMA_CASE(F16)
         KV_MMA_CASE(BF16)
         KV_MMA_CASE(Q4_0)

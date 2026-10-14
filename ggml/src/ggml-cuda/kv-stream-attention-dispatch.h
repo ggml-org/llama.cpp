@@ -12,6 +12,11 @@ static inline size_t ggml_cuda_kv_stream_vector_bulk_tokens(size_t first, size_t
 
 enum class ggml_cuda_kv_stream_attention_path { none, vector, mma };
 
+// Other conversion modes can round differently; compact masks require the general loader.
+static inline bool ggml_cuda_kv_stream_mma_dense_strided(bool compact_mask, uint32_t conversion_flags) {
+    return !compact_mask && conversion_flags == 0;
+}
+
 static inline ggml_cuda_kv_stream_attention_path ggml_cuda_kv_stream_attention_select(
         int cc, uint32_t queries, ggml_type key, ggml_type value) {
     if (queries < 1 || queries > 2) return ggml_cuda_kv_stream_attention_path::none;

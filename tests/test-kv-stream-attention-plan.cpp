@@ -32,6 +32,12 @@ struct fixture {
 
 int main() {
     testing t;
+    t.test("dense_mma_specialization_preserves_mask_and_conversion_modes", [](testing & t) {
+        for (uint32_t flags : {0u,1u,2u,3u,4u,UINT32_MAX}) {
+            t.assert_true(ggml_cuda_kv_stream_mma_dense_strided(false,flags) == (flags == 0));
+            t.assert_true(!ggml_cuda_kv_stream_mma_dense_strided(true,flags));
+        }
+    });
     t.test("all_cache_types_and_prefill_widths_have_geometry_based_metadata", [](testing & t) {
         const ggml_type types[] = {GGML_TYPE_F32,GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q8_0,
             GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1};

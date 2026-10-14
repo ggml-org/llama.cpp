@@ -203,15 +203,17 @@ struct stock_attention_case {
     ggml_tensor * v_storage = nullptr;
     ggml_tensor * k = nullptr;
     ggml_tensor * v = nullptr;
+    ggml_tensor * output = nullptr;
 
     stock_attention_case(fixture & f, block_inputs & input) : f(f), context(ggml_init({65536, nullptr, true})) {
-        k_storage = ggml_new_tensor_2d(context.get(), ggml_type(f.policy.shape.type_k), 512, input.padded);
-        v_storage = ggml_new_tensor_2d(context.get(), ggml_type(f.policy.shape.type_v), 512, input.padded);
-        k = ggml_view_3d(context.get(), k_storage, 256, input.padded, 2,
-            ggml_row_size(k_storage->type, 512), ggml_row_size(k_storage->type, 256), 0);
-        v = ggml_view_3d(context.get(), v_storage, 256, input.padded, 2,
-            ggml_row_size(v_storage->type, 512), ggml_row_size(v_storage->type, 256), 0);
-        auto * output = ggml_flash_attn_ext(context.get(), input.q, k, v, input.mask, 1.0f/16, 0, 0);
+        const int64_t heads=f.policy.shape.heads;
+        k_storage = ggml_new_tensor_2d(context.get(), ggml_type(f.policy.shape.type_k), 256*heads, input.padded);
+        v_storage = ggml_new_tensor_2d(context.get(), ggml_type(f.policy.shape.type_v), 256*heads, input.padded);
+        k = ggml_view_3d(context.get(), k_storage, 256, input.padded, heads,
+            ggml_row_size(k_storage->type, 256*heads), ggml_row_size(k_storage->type, 256), 0);
+        v = ggml_view_3d(context.get(), v_storage, 256, input.padded, heads,
+            ggml_row_size(v_storage->type, 256*heads), ggml_row_size(v_storage->type, 256), 0);
+        output = ggml_flash_attn_ext(context.get(), input.q, k, v, input.mask, 1.0f/16, 0, 0);
         ggml_flash_attn_ext_set_prec(output, GGML_PREC_F32);
         graph = ggml_new_graph_custom(context.get(), 64, false);
         ggml_build_forward_expand(graph, output);
@@ -280,15 +282,15 @@ static int benchmark_spans() {
             ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
     const auto * ops = get ? get() : nullptr;
     GGML_ASSERT(ops && ops->version >= 7 && ops->spans && ops->spans_workspace);
-    for (size_t active : {size_t(8192), size_t(32768), size_t(65536), size_t(131072), size_t(131073)}) {
-        for (uint32_t queries : {1u, 4u}) {
+    for (size_t active : {size_t(16384),size_t(65536),size_t(131072),size_t(131073)}) {
+        for (uint32_t queries = 1; queries <= 8; ++queries) {
             const ggml_type type_k = GGML_TYPE_Q8_0;
             const ggml_type type_v = GGML_TYPE_Q4_0;
-            fixture f(backend.get(), true, type_k, type_v, (active+255)/256*256);
+            fixture f(backend.get(), true, type_k, type_v, (active+255)/256*256,false,2,4);
             GGML_ASSERT(f.attach());
             auto pin = f.binding->acquire();
             GGML_ASSERT(pin);
-            block_inputs input(f, active, queries);
+            block_inputs input(f, active, queries,false,24);
             stock_attention_case stock(f, input);
             const double stock_us = average_us([&] { stock.run(); });
             const std::vector<std::vector<size_t>> layouts{
@@ -300,6 +302,14 @@ static int benchmark_spans() {
                 auto storage = span_storage::create(f, 0, active, queries, cuts);
                 GGML_ASSERT(storage && storage->plan);
                 span_attention_case spans(f,ops,stock,*storage,input);
+                stock.run();
+                std::vector<float> expected(ggml_nelements(stock.output));
+                ggml_backend_tensor_get(stock.output,expected.data(),0,ggml_nbytes(stock.output));
+                spans.run();
+                if (!same_float_bits(expected,input.read())) {
+                    std::fprintf(stderr,"span benchmark numerical mismatch: active=%zu TG%u spans=%zu\n",active,queries,cuts.size()-1);
+                    return 1;
+                }
                 const double span_us = average_us([&] { spans.run(); });
                 std::printf(
                     "span-bench,active=%zu,tg=%u,spans=%zu,stock_us=%.3f,span_us=%.3f,overhead_pct=%.2f\n",
@@ -389,7 +399,7 @@ int main(int argc, char ** argv) {
             }
         });
     if (argc > 1 && (!std::strcmp(argv[1], "--cuda-wide-plan") || !std::strcmp(argv[1], "--cuda")))
-        t.test("wide_query_plans_distinguish_missing_kernels_from_invalid_geometry", [](testing & t) {
+        t.test("wide_query_plans_match_compiled_pairs_and_preserve_rejected_output", [](testing & t) {
             using status = ggml_cuda_kv_stream_plan_status;
             using family = ggml_cuda_kv_stream_kernel_family;
             using style = ggml_cuda_kv_stream_execution_style;
@@ -421,18 +431,19 @@ int main(int argc, char ** argv) {
                 t.assert_true(native.family == family::mma);
                 t.assert_equal(int64_t(width), native.metadata.queries);
                 auto unchanged = native;
-                const auto expected = width > 8 ? status::unsupported_geometry :
-                    pair.first == GGML_TYPE_Q8_0 ? status::success : status::missing_streamed_implementation;
+                const bool available=get()->capabilities(backend.get(),pair.first,pair.second).direct_pair;
+                const auto expected=available ? status::success : status::missing_streamed_implementation;
                 t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == expected);
                 if (expected != status::success) t.assert_equal(native.output_allocation_bytes, unchanged.output_allocation_bytes);
-                const auto saved = unchanged;
+                const auto spanned = unchanged;
                 t.assert_true(query(backend.get(), op, &view, style::resumable, unchanged) == expected);
                 if (expected == status::success)
-                    t.assert_true(unchanged.requirements.scratch_bytes >= saved.requirements.scratch_bytes);
+                    t.assert_true(unchanged.requirements.scratch_bytes >= spanned.requirements.scratch_bytes);
+                const auto saved=unchanged;
                 size_t bytes = 77;
-                const bool available = pair.first == GGML_TYPE_Q8_0 && width <= 8;
-                t.assert_true(get()->decode_workspace(backend.get(), pair.first, pair.second, 24, 4, width, 768, bytes) == available);
-                if (!available) t.assert_equal(size_t(77), bytes);
+                const bool decode_available=available && width <= 8;
+                t.assert_true(get()->decode_workspace(backend.get(), pair.first, pair.second, 24, 4, width, 768, bytes) == decode_available);
+                if (!decode_available) t.assert_equal(size_t(77), bytes);
                 ++q->nb[1];
                 t.assert_true(query(backend.get(), op, &view, style::spanned, unchanged) == status::unsupported_geometry);
                 --q->nb[1];
