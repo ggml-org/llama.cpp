@@ -152,6 +152,32 @@ def test_synth_ignores_target_tokens():
     assert res.body["stop_type"] == "limit"
 
 
+def test_draft_n_ubatch_smaller_than_target():
+    global server
+    request = {
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+    }
+
+    # draft with the default ubatch size of the draft context
+    server.start()
+    res_default = server.make_request("POST", "/completion", data=request)
+    server.stop()
+    assert res_default.status_code == 200
+    assert res_default.body["timings"]["draft_n"] > 0
+
+    # a smaller draft ubatch splits the draft batches into more ubatches, but must not change the result
+    server.spec_draft_n_ubatch = 8
+    server.start()
+    res_small = server.make_request("POST", "/completion", data=request)
+    server.stop()
+    assert res_small.status_code == 200
+    assert res_small.body["timings"]["draft_n"] > 0
+    assert res_small.body["tokens"] == res_default.body["tokens"]
+
+
 def test_slot_ctx_not_exceeded():
     global server
     server.n_ctx = 256
