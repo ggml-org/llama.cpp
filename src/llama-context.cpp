@@ -3795,7 +3795,10 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     sched_need_reserve = true;
     sched_reserve();
 
-    ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), GGML_OPT_LOSS_TYPE_CROSS_ENTROPY);
+    opt_loss_type = lopt_params.assistant_loss_only ?
+        GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED : GGML_OPT_LOSS_TYPE_CROSS_ENTROPY;
+
+    ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), opt_loss_type);
     opt_params.opt_period      = n_batch / n_ubatch;
     opt_params.get_opt_pars    = lopt_params.get_opt_pars;
     opt_params.get_opt_pars_ud = lopt_params.get_opt_pars_ud;
@@ -3858,6 +3861,7 @@ void llama_context::opt_epoch_iter(
         ggml_opt_result_t                result,
         const std::vector<llama_token> & tokens,
         const std::vector<llama_token> & labels_sparse,
+        const std::vector<int32_t>     & masks_sparse,
         llama_batch                    & batch,
         ggml_opt_epoch_callback          callback,
         bool                             train,
@@ -3958,13 +3962,26 @@ void llama_context::opt_epoch_iter(
             res->set_inputs(&ubatch);
             {
                 struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
+                struct ggml_tensor * masks  = opt_loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED && ggml_opt_dataset_masks(dataset) ?
+                    ggml_opt_masks(opt_ctx) : nullptr;
                 GGML_ASSERT(labels->ne[1] == n_ubatch);
                 ggml_set_zero(labels);
+                if (masks) {
+                    GGML_ASSERT(masks->ne[1] == n_ubatch);
+                    ggml_set_zero(masks);
+                }
                 const float onef = 1.0f;
                 for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
                     const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
+                    if (masks && masks_sparse[ilabel] == 0) {
+                        continue;
+                    }
                     GGML_ASSERT(labels_sparse[ilabel] < labels->ne[0]);
                     ggml_backend_tensor_set(labels, &onef, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
+                    if (masks) {
+                        // the mask of a row is its first element
+                        ggml_backend_tensor_set(masks, &onef, pos_ubatch*masks->ne[0]*sizeof(float), sizeof(float));
+                    }
                 }
             }
             copy_experts.reset();
@@ -4001,6 +4018,7 @@ void llama_context::opt_epoch(
     struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
     std::vector<llama_token>        tokens(n_ctx);
     std::vector<llama_token> labels_sparse(n_ctx);
+    std::vector<int32_t>      masks_sparse(n_ctx);
 
     // the first resume_from_batch training batches of this epoch were already done
     int64_t idata = resume_from_batch > 0 ? resume_from_batch : 0;
@@ -4011,8 +4029,13 @@ void llama_context::opt_epoch(
         constexpr bool train = true;
         const int64_t idata_in_loop = idata * ubatch_per_ctx;
 
-        ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
-        opt_epoch_iter(dataset, result_train, tokens, labels_sparse, batch,
+        if (opt_loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED && ggml_opt_dataset_masks(dataset)) {
+            ggml_opt_dataset_get_batch_host_with_masks(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), masks_sparse.data(), idata);
+
+        } else {
+            ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
+        }
+        opt_epoch_iter(dataset, result_train, tokens, labels_sparse, masks_sparse, batch,
             callback_train, train, idata_in_loop, ndata_in_loop, t_loop_start);
 
     }
@@ -4023,8 +4046,12 @@ void llama_context::opt_epoch(
         constexpr bool train = false;
         const int64_t idata_in_loop = (idata - idata_split)*ubatch_per_ctx;
 
-        ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
-        opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, batch,
+        if (opt_loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED && ggml_opt_dataset_masks(dataset)) {
+            ggml_opt_dataset_get_batch_host_with_masks(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), masks_sparse.data(), idata);
+        } else {
+            ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
+        }
+        opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, masks_sparse, batch,
             callback_eval, train, idata_in_loop, ndata_in_loop, t_loop_start);
 
     }

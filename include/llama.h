@@ -1735,6 +1735,8 @@ extern "C" {
         // Optional checkpoint loading
         const char * checkpoint_path;        // path to checkpoint file to load optimizer state from (nullptr = don't load)
         bool load_optimizer_state;          // whether to load optimizer state from checkpoint_path
+
+        bool assistant_loss_only;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
