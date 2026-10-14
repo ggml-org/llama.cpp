@@ -4089,6 +4089,215 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
     {
+        // Raon-1 mini: ChatML turns, an explicit <think> envelope on every assistant turn and Qwen3-Coder style XML tool calls
+        auto tst = peg_tester("models/templates/KRAFTON-Raon-1-mini-preview.jinja", detailed_debug);
+
+        // reasoning on: the generation prompt opens "<think>\n"
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .enable_thinking(true)
+            .expect_content("<think>\nI'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
+            .run();
+
+        // reasoning off: the generation prompt already closes the envelope
+        tst.test("Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .expect(message_assist)
+            .run();
+
+        // typed arguments: integer
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_rules({ "tool-0", "tool-0-arg-0" })
+            .run();
+
+        tst.test(
+               "I'm\nthinking\n</think>\n\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // typed arguments: string and integer, optional arguments out of order
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_4opt>\n"
+               "<parameter=req1>\nhello\n</parameter>\n"
+               "<parameter=req2>\n42\n</parameter>\n"
+               "<parameter=opt4>\n100\n</parameter>\n"
+               "<parameter=opt1>\nworld\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({
+                { "tool_2req_4opt", R"({"req1": "hello", "req2": 42, "opt4": 100, "opt1": "world"})", {} },
+            })
+            .run();
+
+        // typed arguments: boolean, object and array values stay JSON
+        tst.test(
+               "<tool_call>\n"
+               "<function=toggle>\n"
+               "<parameter=enabled>\ntrue\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call>\n"
+               "<function=set_config>\n"
+               "<parameter=config>\n{\"mode\": \"fast\", \"level\": 2}\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call>\n"
+               "<function=todo_list>\n"
+               "<parameter=todos>\n[{\"item\": \"Check stuff\", \"selected\": false}]\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ toggle_tool, config_tool, todo_list })
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+                { "set_config", R"({"config": {"mode": "fast", "level": 2}})", {} },
+                { "todo_list", R"({"todos": [{"item": "Check stuff", "selected": false}]})", {} },
+            })
+            .run();
+
+        // a string argument that looks like a number stays a string
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=filename>\n2024.c\n</parameter>\n"
+               "<parameter=oldString>\n1\n</parameter>\n"
+               "<parameter=newString>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ edit_tool })
+            .expect_tool_calls({
+                { "edit", R"({"filename": "2024.c", "oldString": "1", "newString": "2"})", {} },
+            })
+            .run();
+
+        // nullable arguments
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str>\n"
+               "<parameter=name>\nnull\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({
+                { "set_nullable_str", R"({"name": null})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({
+                { "set_nullable_str", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_int>\n"
+               "<parameter=count>\nnull\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ nullable_int_tool })
+            .expect_tool_calls({
+                { "set_nullable_int", R"({"count": null})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_int>\n"
+               "<parameter=count>\n42\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .tools({ nullable_int_tool })
+            .expect_tool_calls({
+                { "set_nullable_int", R"({"count": 42})", {} },
+            })
+            .run();
+
+        // content before the call, then reasoning + parallel calls
+        tst.test(
+               "I'm\nthinking\n</think>\n\n"
+               "Hello, world!\nWhat's up?\n\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts_content)
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call>\n"
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "<parameter=arg2>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+    }
+
+    {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test(
                "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": "
@@ -7782,6 +7991,13 @@ static void test_template_generation_prompt() {
     }
 
     {
+        auto tmpls = read_templates("models/templates/KRAFTON-Raon-1-mini-preview.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+    }
+
+    {
         auto tmpls = read_templates("models/templates/openai-gpt-oss-120b.jinja");
         check(tmpls, basic(),                  "<|start|>assistant");
         check(tmpls, continuation_content(),   "<|start|>assistant<|channel|>analysis<|message|>I'm thinking<|end|><|start|>assistant<|channel|>final<|message|>Hello, ");
@@ -8290,6 +8506,179 @@ static void test_deepseek_v4_1_message_fields() {
     }
 }
 
+// Raon-1 mini template (models/templates/KRAFTON-Raon-1-mini-preview.jinja) prompt rendering
+static void test_raon_prompt() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/KRAFTON-Raon-1-mini-preview.jinja");
+
+    common_chat_msg developer_msg;
+    developer_msg.role    = "developer";
+    developer_msg.content = "You are RAON.";
+
+    common_chat_msg system_msg = developer_msg;
+    system_msg.role = "system";
+
+    auto render = [&](const std::vector<common_chat_msg> & messages, bool with_tools, bool enable_thinking = true) {
+        common_chat_templates_inputs inputs;
+        inputs.messages        = messages;
+        inputs.enable_thinking = enable_thinking;
+        if (with_tools) {
+            inputs.tools = { special_function_tool };
+        }
+        return common_chat_templates_apply(tmpls.get(), inputs);
+    };
+
+    // a leading developer message is rendered as the system turn (the template itself rejects "developer")
+    {
+        const auto prompt = render({ developer_msg, message_user }, false).prompt.str();
+        assert_equals(std::string(
+            "<|im_start|>system\nYou are RAON.<|im_end|>\n"
+            "<|im_start|>user\nHey there!<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n"), prompt);
+        assert_equals(render({ system_msg, message_user }, false).prompt.str(), prompt);
+    }
+
+    // with tools the system text follows the tool block in the same system turn
+    {
+        const auto prompt = render({ developer_msg, message_user }, true).prompt.str();
+        assert_equals(true, string_starts_with(prompt, "<|im_start|>system\n# Tools\n\n"));
+        assert_contains(prompt, "\"name\": \"special_function\"");
+        assert_contains(prompt, "</IMPORTANT>\n\nYou are RAON.<|im_end|>\n<|im_start|>user\nHey there!<|im_end|>\n");
+        assert_not_contains(prompt, "developer");
+        assert_equals(render({ system_msg, message_user }, true).prompt.str(), prompt);
+    }
+
+    // reasoning off closes the think envelope in the generation prompt
+    {
+        const auto params = render({ message_user }, false, /* enable_thinking = */ false);
+        assert_equals(std::string("<|im_start|>assistant\n<think></think>\n\n"), params.generation_prompt);
+        assert_ends_with(params.prompt.str(), params.generation_prompt);
+    }
+
+    // assistant history as HF apply_chat_template renders it: kept reasoning and tool calls after the last query, an earlier turn's reasoning kept by default and dropped with truncate_history_thinking=true
+    {
+        common_chat_msg calls;
+        calls.role              = "assistant";
+        calls.reasoning_content = "Two calls.";
+        calls.tool_calls.push_back({ "special_function", "{\"arg1\": 1}", "call_1" });
+        calls.tool_calls.push_back({ "special_function", "{\"arg1\": 2}", "call_2" });
+        common_chat_msg r1; r1.role = "tool"; r1.tool_call_id = "call_1"; r1.content = "one";
+        common_chat_msg r2; r2.role = "tool"; r2.tool_call_id = "call_2"; r2.content = "two";
+        common_chat_msg user_q; user_q.role = "user"; user_q.content = "Call it twice.";
+        assert_ends_with(render({ user_q, calls, r1, r2 }, true).prompt.str(), std::string(
+            "<|im_start|>user\n"
+            "Call it twice.<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "<think>\n"
+            "Two calls.\n"
+            "</think>\n"
+            "\n"
+            "<tool_call>\n"
+            "<function=special_function>\n"
+            "<parameter=arg1>\n"
+            "1\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>\n"
+            "<tool_call>\n"
+            "<function=special_function>\n"
+            "<parameter=arg1>\n"
+            "2\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call><|im_end|>\n"
+            "<|im_start|>user\n"
+            "<tool_response>\n"
+            "one\n"
+            "</tool_response>\n"
+            "<tool_response>\n"
+            "two\n"
+            "</tool_response><|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "<think>\n"));
+
+        common_chat_msg old;  old.role  = "assistant"; old.content  = "<think>Old thought.\n</think>\n\nAnswer.";
+        common_chat_msg again; again.role = "user";     again.content = "Again.";
+        // with truncate_history_thinking = true the earlier turn's reasoning is dropped
+        {
+            common_chat_templates_inputs inputs;
+            inputs.messages = { user_q, old, again };
+            inputs.chat_template_kwargs["truncate_history_thinking"] = "true";
+            assert_equals(std::string(
+                "<|im_start|>user\n"
+                "Call it twice.<|im_end|>\n"
+                "<|im_start|>assistant\n"
+                "<think></think>\n"
+                "\n"
+                "Answer.<|im_end|>\n"
+                "<|im_start|>user\n"
+                "Again.<|im_end|>\n"
+                "<|im_start|>assistant\n"
+                "<think>\n"), common_chat_templates_apply(tmpls.get(), inputs).prompt.str());
+        }
+
+        // by default (the template defaults truncate_history_thinking to false) the earlier turn keeps the reasoning split out of its content
+        {
+            assert_equals(std::string(
+                "<|im_start|>user\n"
+                "Call it twice.<|im_end|>\n"
+                "<|im_start|>assistant\n"
+                "<think>\n"
+                "Old thought.\n"
+                "</think>\n"
+                "\n"
+                "Answer.<|im_end|>\n"
+                "<|im_start|>user\n"
+                "Again.<|im_end|>\n"
+                "<|im_start|>assistant\n"
+                "<think>\n"), render({ user_q, old, again }, false).prompt.str());
+        }
+    }
+
+    // continuing an assistant message without reasoning: the shared Qwen3-Coder handler writes "<think>\n\n</think>\n\n", the template "<think></think>\n\n"; this pins the handler's behaviour
+    {
+        common_chat_templates_inputs inputs;
+        inputs.messages               = { message_user, simple_assist_msg("Hello, ") };
+        inputs.add_generation_prompt  = false;
+        inputs.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+        assert_ends_with(common_chat_templates_apply(tmpls.get(), inputs).prompt.str(),
+                         std::string("<|im_start|>assistant\n<think>\n\n</think>\n\nHello, "));
+    }
+
+    // Keep system instructions in order, including instructions sent as developer messages.
+    {
+        common_chat_msg second_system = system_msg;
+        second_system.content = "Keep it short.";
+
+        const std::string system_turn        = "<|im_start|>system\nYou are RAON.<|im_end|>\n";
+        const std::string second_system_turn = "<|im_start|>system\nKeep it short.<|im_end|>\n";
+        const std::string user_turn          = "<|im_start|>user\nHey there!<|im_end|>\n";
+        const std::string generation_prompt  = "<|im_start|>assistant\n<think>\n";
+
+        assert_equals(system_turn + second_system_turn + user_turn + generation_prompt,
+                      render({ system_msg, second_system, message_user }, false).prompt.str());
+        assert_equals(system_turn + user_turn + second_system_turn + generation_prompt,
+                      render({ system_msg, message_user, second_system }, false).prompt.str());
+        assert_equals(user_turn + system_turn + generation_prompt,
+                      render({ message_user, developer_msg }, false).prompt.str());
+
+        // A system instruction can start a conversation without a user message.
+        assert_equals(system_turn + generation_prompt, render({ system_msg }, false).prompt.str());
+    }
+
+    // A closing tag in the answer is literal, even after an initial reasoning block.
+    {
+        const auto literal = simple_assist_msg("The answer quotes </think>.");
+        assert_contains(render({ message_user, literal, message_user }, false).prompt.str(),
+                        "<|im_start|>assistant\n<think></think>\n\nThe answer quotes </think>.<|im_end|>\n");
+
+        const auto with_reasoning = simple_assist_msg("<think>Reasoning.</think>\n\nThe answer quotes </think>.");
+        assert_contains(render({ message_user, with_reasoning, message_user }, false).prompt.str(),
+                        "<|im_start|>assistant\n<think>\nReasoning.\n</think>\n\nThe answer quotes </think>.<|im_end|>\n");
+    }
+}
+
 static void test_prompt_parts() {
     LOG_DBG("%s\n", __func__);
     const std::string tmpl_src =
@@ -8711,6 +9100,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_deepseek_v4_1_message_fields();
+        test_raon_prompt();
         test_template_generation_prompt();
         test_reasoning_effort_caps();
         test_prompt_parts();
