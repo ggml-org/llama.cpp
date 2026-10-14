@@ -674,7 +674,7 @@ static bool resume(
     ggml_tensor logical = *op;
     logical.src[3] = &global_mask;
     return resume_span_launch(
-        backend,&logical,*k,*v,workspace,plan,kernel,first,plan.tokens,last);
+        backend,&logical,*k,*v,workspace,plan,kernel,first,global_mask.nb[1]/sizeof(half),last);
 }
 
 

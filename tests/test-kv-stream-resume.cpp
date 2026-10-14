@@ -82,6 +82,48 @@ int main(int argc, char ** argv) {
     if (argc > 1 && !std::strcmp(argv[1],"--verify-long-ring")) return verify_long_ring_exact();
     if (argc > 1 && !std::strcmp(argv[1],"--bench-ring-decode")) return benchmark_ring_decode(argc > 2 && !std::strcmp(argv[2],"160k"));
     testing t;
+    if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-mask-pitch")))
+        t.test("strided_vector_masks_keep_stock_bits_across_ring_wrap", [&](testing & t) {
+        ggml_backend_load_all();
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        constexpr size_t active=32769;
+        for (uint32_t queries : {1u,2u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,4,81);
+            f.policy.initial_ring_slots=65;
+            ggml_kv_stream_resume_plan plan;
+            if (!t.assert_true(get && get() && get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                    24,4,queries,(active+255)/256*256,plan) && f.attach() &&
+                    f.resident->configure_native_graph_attention(true) && f.resident->configure_resumed_decode(true))) return;
+            auto pin=f.binding->acquire();
+            block_workspace workspace(f,plan.bytes,37);
+            block_inputs input(f,active,queries,false,24);
+            ggml_context_ptr context(ggml_init({8192,nullptr,true}));
+            const size_t pitch=input.padded+256;
+            auto * storage=ggml_new_tensor_2d(context.get(),GGML_TYPE_F16,int64_t(pitch),queries);
+            auto * mask=ggml_view_2d(context.get(),storage,int64_t(input.padded),queries,pitch*sizeof(ggml_fp16_t),0);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(),backend.get()));
+            if (!t.assert_true(bool(buffer))) return;
+            std::vector<ggml_fp16_t> masks(pitch*queries);
+            for (size_t row=0;row<queries;++row) for (size_t token=0;token<pitch;++token)
+                masks[row*pitch+token]=ggml_fp32_to_fp16(token < active-queries+row+1 ? 0.f : -INFINITY);
+            ggml_backend_tensor_set(storage,masks.data(),0,ggml_nbytes(storage));
+            for (int round=0;round<3;++round) {
+                if (!t.assert_true(f.resident->begin_sequence({0,1},active,32,SIZE_MAX,{queries,true}))) return;
+                for (uint32_t layer=0;layer<2;++layer) {
+                    const auto expected=ordinary(f,input,layer);
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,round == 1 ? mask : input.mask,
+                            input.output,active,1.f/16,workspace.lease.get(),true,32))) return;
+                    ggml_backend_synchronize(backend.get());
+                    t.assert_true(same_float_bits(expected,input.read()));
+                }
+                t.assert_true(!f.resident->sequence_active());
+            }
+        }
+    });
     if (argc>1 && (!std::strcmp(argv[1],"--cuda") || !std::strcmp(argv[1],"--cuda-mask-routing")))
         t.test("dense_decode_and_compact_prefill_can_alternate_without_numerical_drift", [&](testing & t) {
         ggml_backend_load_all();

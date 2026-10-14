@@ -22,7 +22,7 @@ int main() {
         if (kind == 2) bad.acc_bytes = 2;
         if (kind == 3) bad.query_heads = 3;
         if (kind == 4) bad.nbatch_fa = 31;
-        if (kind == 5) bad.queries = 5;
+        if (kind == 5) bad.queries = 9;
         if (kind == 6) bad.splits = UINT32_MAX;
         if (kind == 7) bad.width = 0;
         if (kind == 8) bad.kv_heads = 0;
