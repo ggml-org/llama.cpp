@@ -16365,7 +16365,10 @@ uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev) {
         return 18;
     case 0xE20B:  // B580
     case 0xE211:  // Pro B60
+    case 0xE222:  // Pro B65
         return 20;
+    case 0xE223:  // Pro B70
+        return 32;
     case 0xB080:  // PTL Xe3 LPG 2x6 (12 subslices)
         return 12;
     default:
