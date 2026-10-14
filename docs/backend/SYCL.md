@@ -313,6 +313,8 @@ When targeting an intel GPU, the user should expect one or more devices among th
 
 ### II. Build llama.cpp
 
+HTTPS downloads, including Hugging Face models, require OpenSSL development libraries at build time. See the [build prerequisites](../build.md) for installation commands. If OpenSSL is not found, the build can still complete without HTTPS support.
+
 #### Intel GPU
 
 ```sh
