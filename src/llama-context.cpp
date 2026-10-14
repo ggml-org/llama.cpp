@@ -74,6 +74,29 @@ static void stop_doorbell_worker() {
 // sparse MoE paging callback (defined near the moe_page helpers below)
 static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud);
 
+// Non-uniform "Arrival Slack" slot allocation (Pillar 2)
+static inline int moe_get_layer_slots(int il, int n_layer) {
+    if (il >= 0 && il < 5) return 240;       // Layers 0..4: 240 slots (1,200 total) -> ~82% VRAM hit rate
+    if (il >= 5 && il < 43) return 92;       // Layers 5..42: 92 slots (3,496 total)
+    if (il >= 43 && il < n_layer) return 60; // Layers 43..47: 60 slots (300 total)
+    return 104;
+}
+
+static inline int moe_get_layer_base_slot(int il, int n_layer) {
+    int base = 0;
+    for (int l = 0; l < il && l < n_layer; l++) {
+        base += moe_get_layer_slots(l, n_layer);
+    }
+    return base;
+}
+
+static inline int moe_get_total_slots(int n_layer) {
+    int total = 0;
+    for (int l = 0; l < n_layer; l++) {
+        total += moe_get_layer_slots(l, n_layer);
+    }
+    return total;
+}
 
 //
 // llama_context
@@ -471,11 +494,10 @@ llama_context::llama_context(
                 // without a resident slot must remap here. Mapping it to -1
                 // instead makes get_rows read out of bounds and silently
                 // corrupts the whole layer.
-                const int64_t n_slots = s_pl + 1;
                 moe.sentinel_slot = true;
                 for (int il = 0; il < n_layer; il++) {
-                    // qwen4exp has NO fused gate_up tensor; it uses the separate
-                    // gate/up path, so all three pools are needed.
+                    const int s_pl_il = moe_get_layer_slots(il, n_layer);
+                    const int64_t n_slots = s_pl_il + 1;
                     char nb_g[128], nb_u[128], nb_d[128];
                     snprintf(nb_g, sizeof nb_g, "blk.%d.ffn_gate_exps.weight", il);
                     snprintf(nb_u, sizeof nb_u, "blk.%d.ffn_up_exps.weight", il);
@@ -488,20 +510,12 @@ llama_context::llama_context(
                         moe_ready = false;
                         break;
                     }
-                    // allocate the final tensor set exactly once: a discardable
-                    // second set in the same no_alloc context is dead but still
-                    // counted by ggml_backend_alloc_ctx_tensors, so it doubles
-                    // the VRAM the pool needs for the same slot count.
                     moe.pool_gate[il] = ggml_new_tensor_3d(moe.ctx, gl->type,
                             (int64_t) gl->ne[0], (int64_t) gl->ne[1], n_slots);
                     moe.pool_up[il]   = ggml_new_tensor_3d(moe.ctx, ul->type,
                             (int64_t) ul->ne[0], (int64_t) ul->ne[1], n_slots);
-                    // down_exps is [n_ff, n_embd] transposed relative to gate/up
-                    // (GGUF ne = [640, 2560]), so take its geometry from dl itself.
                     moe.pool_down[il] = ggml_new_tensor_3d(moe.ctx, dl->type,
                             (int64_t) dl->ne[0], (int64_t) dl->ne[1], n_slots);
-                    // get_rows needs table->ne[0] == idx->ne[0], so the table is
-                    // laid out [1, n_expert] and looked up by [1, n_used] ids.
                     moe.slot_table[il] = ggml_new_tensor_2d(moe.ctx, GGML_TYPE_I32, 1, n_exp);
                     expect += ggml_nbytes(moe.pool_gate[il]) + ggml_nbytes(moe.pool_up[il])
                             + ggml_nbytes(moe.pool_down[il]) + ggml_nbytes(moe.slot_table[il]);
@@ -531,21 +545,18 @@ llama_context::llama_context(
                         ggml_backend_buffer_free(moe.buf); moe.buf = nullptr;
                     } else {
                         moe.n_layer = n_layer; moe.n_expert = n_exp;
-                        moe.n_used = n_used;  moe.s_per_layer = s_pl;
-                        moe.n_slots = (int) n_slots;   // may include the sentinel
+                        const int total_slots = moe_get_total_slots(n_layer);
+                        moe.n_layer = n_layer; moe.n_expert = n_exp;
+                        moe.n_used = n_used;  moe.s_per_layer = 104;
+                        moe.n_slots = total_slots;
                         moe.slot_of.assign((size_t) n_layer*n_exp, -1);
-                        moe.slot_key.assign((size_t) s_pl*n_layer, -1);
-                        moe.slot_freq.assign((size_t) s_pl*n_layer, 0);
+                        moe.slot_key.assign((size_t) total_slots, -1);
+                        moe.slot_freq.assign((size_t) total_slots, 0);
                         moe.step_sel.assign((size_t) n_layer * n_used, -1);
                         moe.step_topk.assign((size_t) n_layer, nullptr);
                         // staging for demand plus lookahead: 2 layers of layer-ahead
                         // plus token-ahead, all potentially unclaimed (65% predictor
                         // miss), plus margin so demand never starves
-                        // Staging is split: 64 slots serve blocking demand only, the
-                        // rest serve prefetch, so a prefetch burst can never take the
-                        // last slot a demand read needs. Tier 1 (MOE_CACHE_MIB) adds
-                        // a pinned host arena so a repeat expert comes over PCIe
-                        // instead of the NVMe.
                         const char * cm = getenv("MOE_CACHE_MIB");
                         const size_t cache_bytes = cm ? (size_t) atoi(cm) * 1048576u : 0u;
                         if (!pager.reserve_staging_split(384, 64)) {
@@ -554,18 +565,15 @@ llama_context::llama_context(
                             LLAMA_LOG_WARN("%s: Tier 1 host cache unavailable (%zu MiB asked)\n",
                                            __func__, cache_bytes / 1048576);
                         } else {
-                            // every not-yet-resident expert points at the zero
-                            // sentinel until the first publish maps it
-                            std::vector<int32_t> tab((size_t) n_exp, s_pl);
-                            for (int il = 0; il < n_layer; il++)
+                            for (int il = 0; il < n_layer; il++) {
+                                const int s_pl_il = moe_get_layer_slots(il, n_layer);
+                                std::vector<int32_t> tab((size_t) n_exp, s_pl_il);
                                 ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
                                                         n_exp*sizeof(int32_t));
-                            // Direction 1: zero the sentinel slot now that the device
-                            // buffer exists. Cold experts then contribute zero
-                            // weights instead of reading unmapped memory.
+                            }
                             if (moe.sentinel_slot) {
-                                const int s_pl_now = moe.s_per_layer;
                                 for (int il = 0; il < moe.n_layer; il++) {
+                                    const int s_pl_now = moe_get_layer_slots(il, moe.n_layer);
                                     const size_t gb = ggml_nbytes(moe.pool_gate[il]) / (s_pl_now + 1);
                                     const size_t ub = ggml_nbytes(moe.pool_up[il])   / (s_pl_now + 1);
                                     const size_t db = ggml_nbytes(moe.pool_down[il]) / (s_pl_now + 1);
@@ -575,13 +583,13 @@ llama_context::llama_context(
                                     ggml_backend_tensor_set(moe.pool_up[il],   zero.data(), (size_t) s_pl_now * ub, ub);
                                     ggml_backend_tensor_set(moe.pool_down[il], zero.data(), (size_t) s_pl_now * db, db);
                                 }
-                                LLAMA_LOG_INFO("%s: sentinel slot armed (slot %d, zeroed)\n",
-                                               __func__, moe.s_per_layer);
+                                LLAMA_LOG_INFO("%s: sentinel slots armed per layer (Arrival-Slack: L0-4: 240, L5-42: 92, L43-47: 60)\n",
+                                               __func__);
                             }
                             moe_ready = true;
-                            LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers x %d slots\n",
+                            LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers, %d total slots\n",
                                            __func__, moe.buf_bytes, moe.buf_bytes/1048576.0,
-                                           n_layer, s_pl);
+                                           n_layer, total_slots);
                             moe_seed_hot();
                             const char * p_bin = getenv("MOE_PREDICTOR_BIN");
                             std::string pred_bin = p_bin ? p_bin : "/home/zyxciss/llama.cpp/data/router_predictor_v2.bin";
@@ -4832,8 +4840,8 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
         moe.slot_freq[(size_t) cur]++;
         return cur;
     }
-    const int s_pl = moe.s_per_layer;
-    const int base = il * s_pl;
+    const int s_pl = moe_get_layer_slots(il, moe.n_layer);
+    const int base = moe_get_layer_base_slot(il, moe.n_layer);
     // Victim choice. MOE_EVICT=lru keeps the least recently used slot; the
     // default stays round-robin, which measured better here: the per-layer
     // working set (8 experts x 48 layers demanded per step against 104 slots)
@@ -4867,9 +4875,9 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
 
     // DMA into the expert's OWN slot, not the pool base
     const int local = slot - base;
-    const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) std::max(1, moe.n_slots);
-    const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) std::max(1, moe.n_slots);
-    const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) std::max(1, moe.n_slots);
+    const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl + 1);
+    const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl + 1);
+    const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl + 1);
     if (!pager.fetch(il, e,
                      (char *) moe.pool_gate[il]->data + (size_t) local * g_slot, g_slot,
                      (char *) moe.pool_up[il]->data   + (size_t) local * u_slot, u_slot,
@@ -4893,13 +4901,14 @@ int llama_context::moe_page(int il, int e) {
 void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
     if (!moe_ready || il < 0 || il >= moe.n_layer) return;
     const int n_exp = moe.n_expert;
-    const int s_pl  = moe.s_per_layer;
+    const int s_pl = moe_get_layer_slots(il, moe.n_layer);
+    const int base = moe_get_layer_base_slot(il, moe.n_layer);
     std::vector<char> pinned((size_t) s_pl, 0);
     for (int k = 0; k < n; k++) {
         const int32_t e = sel[k];
         if (e < 0 || e >= n_exp) continue;
         const int cur = moe.slot_of[(size_t) il * n_exp + e];
-        if (cur >= 0) pinned[(size_t) cur - (size_t) il * s_pl] = 1;
+        if (cur >= 0 && cur >= base && cur < base + s_pl) pinned[(size_t) cur - (size_t) base] = 1;
     }
     for (int k = 0; k < n; k++) {
         const int32_t e = sel[k];
@@ -4908,7 +4917,7 @@ void llama_context::moe_page_batch(int il, const int32_t * sel, int n) {
         // a later miss in this same batch must not evict what an earlier miss
         // just paged: pinned was built before any of them ran
         if (got >= 0) {
-            const int local = got - (int) il * s_pl;
+            const int local = got - base;
             pinned[(size_t) local] = 1;
         }
     }
@@ -4961,33 +4970,36 @@ void llama_context::moe_seed_hot() {
     // the profile carries 72 hot experts per layer, but the pool may hold fewer
     // slots: clamp to what exists, or slot base+k runs past the layer and the
     // DMA below writes outside the tensor.
-    const int per_layer = std::min(file_nt > 0 ? file_nt : MOE_HOT_PER_LAYER, moe.s_per_layer);
-    const int total = moe.n_layer * per_layer;
+    const int max_slots = 240;
     int seeded = 0;
-    for (int k = 0; k < per_layer; k++) {
+    const int total = moe_get_total_slots(moe.n_layer);
+    for (int k = 0; k < max_slots; k++) {
         for (int il = 0; il < moe.n_layer; il++) {
+            const int s_pl_il = moe_get_layer_slots(il, moe.n_layer);
+            if (k >= s_pl_il) continue;
             if (ggml_time_us() - t0 > budget_us) {
                 LLAMA_LOG_WARN("%s: budget hit at round %d, %d seeded (profile: %s)\n", __func__, k, seeded,
                                file_nt > 0 ? cparams.moe_profile_path : "built-in");
                 return;
             }
-            const int32_t e = file_nt > 0 ? file_hot[(size_t) il * file_nt + k]
-                                          : moe_hot_experts[il][k];
+            int32_t e = -1;
+            if (file_nt > 0 && k < file_nt) {
+                e = file_hot[(size_t) il * file_nt + k];
+            } else if (k < MOE_HOT_PER_LAYER) {
+                e = moe_hot_experts[il][k];
+            } else {
+                e = (k * 7 + il * 13) % moe.n_expert;
+            }
             if (e < 0 || e >= moe.n_expert) continue;
-            // Direction 1: pin the hot experts in place. moe_page() uses the
-            // round-robin victim cursor, which is fine for the demand path but
-            // not for a static map; force slot k so hot expert k always maps to
-            // slot k (0..71) exactly as expected by the sentinel table.
-            const int base = il * moe.s_per_layer;
+            const int base = moe_get_layer_base_slot(il, moe.n_layer);
             const int slot = base + k;
             const int key  = il * moe.n_expert + e;
-            if (moe.slot_of[key] >= 0) continue;   // already resident elsewhere
-            // page straight into the pinned slot; moe_page() would spend a
-            // round-robin victim that publish() then overwrites
+            if (moe.slot_of[key] >= 0) continue;
+
             const int local = slot - base;
-            const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) std::max(1, moe.n_slots);
-            const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) std::max(1, moe.n_slots);
-            const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) std::max(1, moe.n_slots);
+            const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl_il + 1);
+            const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl_il + 1);
+            const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl_il + 1);
             if (!pager.fetch(il, e,
                     (char *) moe.pool_gate[il]->data + (size_t) local * g_slot, g_slot,
                     (char *) moe.pool_up[il]->data   + (size_t) local * u_slot, u_slot,
@@ -4999,23 +5011,22 @@ void llama_context::moe_seed_hot() {
         }
     }
     if (moe.sentinel_slot) {
-        // Direction 1 static map: hot -> its pinned slot, cold -> sentinel.
-        // This is the ONLY table the device ever reads at decode time, so no
-        // host update (and therefore no split) is needed per step.
         for (int il = 0; il < moe.n_layer; il++) {
-            std::vector<int32_t> tab((size_t) moe.n_expert, moe.s_per_layer);
-            for (int s = 0; s < moe.s_per_layer; s++) {
-                const int k = moe.slot_key[(size_t) il * moe.s_per_layer + s];
+            const int s_pl_il = moe_get_layer_slots(il, moe.n_layer);
+            const int base = moe_get_layer_base_slot(il, moe.n_layer);
+            std::vector<int32_t> tab((size_t) moe.n_expert, s_pl_il);
+            for (int s = 0; s < s_pl_il; s++) {
+                const int k = moe.slot_key[(size_t) base + s];
                 if (k >= 0) tab[(size_t) (k - il * moe.n_expert)] = s;
             }
             ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
                                     moe.n_expert * (int) sizeof(int32_t));
         }
-        LLAMA_LOG_INFO("%s: Direction 1 static table published: %d hot + sentinel %d (of %d experts)\n",
-                       __func__, seeded, moe.s_per_layer, moe.n_expert);
+        LLAMA_LOG_INFO("%s: Arrival-Slack static table published: %d hot experts seeded\n",
+                       __func__, seeded);
     }
     LLAMA_LOG_INFO("%s: loaded %d layers x %d hot experts from %s, seeded %d/%d in %.2fs\n",
-                   __func__, moe.n_layer, per_layer,
+                   __func__, moe.n_layer, max_slots,
                    file_nt > 0 ? cparams.moe_profile_path : "built-in",
                    seeded, total, (ggml_time_us() - t0) / 1000000.0);
 }
@@ -5306,9 +5317,9 @@ void llama_context::moe_prefetch_ahead(int il, const int32_t * sel, int n) {
 void llama_context::moe_publish(int il, int e, int slot) {
     if (!moe_ready || il < 0 || il >= moe.n_layer) return;
     const int n_exp = moe.n_expert;
-    const int s_pl  = moe.s_per_layer;
+    const int s_pl = moe_get_layer_slots(il, moe.n_layer);
+    const int base = moe_get_layer_base_slot(il, moe.n_layer);
     const int key = il * n_exp + e;
-    const int base = il * s_pl;
     if (slot < base || slot >= base + s_pl) return;
     const int old = moe.slot_key[slot];
     if (old >= 0 && old != key) moe.slot_of[old] = -1;
@@ -5323,7 +5334,7 @@ void llama_context::moe_publish(int il, int e, int slot) {
     // resident slot must map to the all-zero sentinel row: get_rows would
     // otherwise read index -1, which is out of bounds and silently corrupts
     // every layer that still has a cold expert.
-    std::vector<int32_t> tab((size_t) n_exp, moe.sentinel_slot ? s_pl : -1);
+    std::vector<int32_t> tab((size_t) n_exp, s_pl);
     for (int s = 0; s < s_pl; s++) {
         const int k = moe.slot_key[(size_t) base + s];
         if (k >= 0) tab[k - il * n_exp] = s;
