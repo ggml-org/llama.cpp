@@ -397,6 +397,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_RAON:
+                regex_exprs = {
+                    // regex from tokenizer.json (the CJK ranges are literal characters there), matched byte for byte in unicode_regex_split_custom()
+                    " ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_QWEN35:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -673,6 +679,14 @@ struct llm_tokenizer_bpe_session {
                     normalized_text += cpt == 0x0130 ? "i\xcc\x87" : unicode_cpt_to_utf8(unicode_tolower(cpt));
                     space = false;
                 }
+            }
+            word_collection = unicode_regex_split(normalized_text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        } else if (tok_pre == LLAMA_VOCAB_PRE_TYPE_RAON) {
+            // Raon-1 mini's HF tokenizer applies an NFC normalizer before pre-tokenization.
+            // TODO: the converter also writes tokenizer.ggml.normalizer.nfc (read for UGM only); gate BPE on that flag once #30708 lands
+            std::string normalized_text;
+            for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                normalized_text += unicode_cpt_to_utf8(cpt);
             }
             word_collection = unicode_regex_split(normalized_text, tokenizer.regex_exprs, tokenizer.byte_encode);
         } else {
@@ -2578,6 +2592,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "kormo" ||
                     tokenizer_pre == "f2llmv2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
+                clean_spaces = false;
+            } else if (tokenizer_pre == "raon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_RAON;
                 clean_spaces = false;
             } else if (
                     tokenizer_pre == "qwen35") {
