@@ -416,5 +416,5 @@ static __global__ void pd_combine(
         den += w * ml.y;
     }
     float * out = (float *) (dst + (r / PD_GQA) * dst_nb2 + (head * PD_GQA + r % PD_GQA) * dst_nb1);
-    out[threadIdx.x] = num / den;
+    out[threadIdx.x] = den == 0.0f ? 0.0f : num / den; // a fully masked row is 0, as in the CPU reference and pd_merge
 }
