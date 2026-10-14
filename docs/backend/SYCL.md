@@ -273,7 +273,7 @@ SYCL backend depends on:
 
 With the 2026.0 release, the Intel® oneAPI Base toolkit and the HPC toolkit are combined into the **Intel® oneAPI Toolkit**, and **oneDNN is removed from the Intel® Deep Learning Essentials** package (oneDNN is distributed separately since then). The **Intel® oneAPI Toolkit** includes oneDNN until 2027.0.
 
-It's recommended to install the **Intel® oneAPI Toolkit**.
+It's recommended to install the **Intel® oneAPI Toolkit**. This includes all dependencies for the SYCL backend.
 
 The **Intel® oneAPI Toolkit** can be obtained from the official [Intel® oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) page.
 
