@@ -565,6 +565,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.gate.e_score_correction",          # nemotron-h-moe
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
+            "model.layers.{bid}.moe.gate.e_score_correction",               # raon1_mini
             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
             "model.layers.{bid}.mlp.experts.e_score_correction",       # laguna
         ),
@@ -637,6 +638,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w3",                        # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.up_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.up_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.up_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.up_proj",               # step3.5
         ),
 
@@ -689,6 +691,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
             "layers.{bid}.shared_experts.w1",                          # mistral-large
             "model.layers.{bid}.block_sparse_moe.shared_experts.gate_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.gate_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.gate_proj",               # step3.5
         ),
 
@@ -860,6 +863,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w2",                          # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.down_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.down_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.down_proj",               # step3.5
             "layers.{bid}.moe.shared_expert.down",                     # metis16
         ),
@@ -1120,6 +1124,10 @@ class TensorNameMap:
             "layers.{bid}.linear_attn.in_proj_b",        # qwen3.5 text
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
             "model.layers.{bid}.attention.b_proj",       # bailingmoe3
+        ),
+        # Raon-1 mini RDA: per-head write-gate offset
+        MODEL_TENSOR.SSM_RDA: (
+            "model.layers.{bid}.self_attn.rda_w_proj",
         ),
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (
