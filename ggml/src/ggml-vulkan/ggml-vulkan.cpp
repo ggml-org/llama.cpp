@@ -1303,8 +1303,8 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
         result.block_rows = coopmat_block_rows;
     }
 
-    // Br=32 spills
-    result.q_in_regs = result.block_rows == coopmat_block_rows && device->vendor_id == VK_VENDOR_ID_AMD;
+    // Br=32 spills registers, only prefill benefits
+    result.q_in_regs = result.block_rows == coopmat_block_rows && device->vendor_id == VK_VENDOR_ID_AMD && n_rows >= 64;
 
     return result;
 }
