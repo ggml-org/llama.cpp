@@ -195,12 +195,16 @@
               # MTP drafts 3 tokens every step; ngram-mod drafts instead when the output repeats the context (code
               # being copied or edited): up to 16 tokens after a 24-token match. On copies and edits that decoded 2-2.6x
               # faster than MTP alone at 8k and 1.8x at 71k; on reasoning it rarely drafts (about -2% at 71k). n_max 64
-              # was faster at 8k but slower at depth. Its decode buffers take ~40 MiB more VRAM; measured without a
-              # desktop session (peak 16,140 of 16,304 MiB at 71k). LLAMA_SPEC_TYPE=draft-mtp turns n-gram drafts off.
+              # was faster at 8k but slower at depth. The match length stays at the default 24: in agent sessions its
+              # false drafts (~80-100 ms each: checkpoint, 17-token verify, restore and replay) cost under 0.5% of decode
+              # with 24 and 32 alike, and the longest coding session gained 4.4% with 24. A later
+              # --spec-ngram-mod-n-match overrides it.
+              # Its decode buffers take ~40 MiB more VRAM; measured without a desktop session (peak 16,140 of 16,304
+              # MiB at 71k). LLAMA_SPEC_TYPE=draft-mtp turns n-gram drafts off.
               # (Not LLAMA_ARG_SPEC_TYPE: the server reads that too, and --spec-type adds to the list.)
               spec_type="''${LLAMA_SPEC_TYPE:-draft-mtp,ngram-mod}"
               spec_note=""
-              case "$spec_type" in *ngram-mod*) spec_note=" (ngram-mod n_max 16, n_min 12)" ;; esac
+              case "$spec_type" in *ngram-mod*) spec_note=" (ngram-mod n_max 16, n_min 12, n_match 24)" ;; esac
 
               {
                 echo "=========================================================="
@@ -237,6 +241,7 @@
                 --spec-type "$spec_type" \
                 --spec-ngram-mod-n-max 16 \
                 --spec-ngram-mod-n-min 12 \
+                --spec-ngram-mod-n-match 24 \
                 --chat-template-kwargs "{\"reasoning_effort\":\"$reasoning_effort\"}" \
                 -b 2048 \
                 -ub 512 \
