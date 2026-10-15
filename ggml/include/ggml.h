@@ -2012,10 +2012,6 @@ extern "C" {
             float                 beta_slow),
         "use ggml_rope_ext_inplace instead");
 
-    // compute correction dims for YaRN RoPE scaling
-    GGML_API void ggml_rope_yarn_corr_dims(
-        int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, bool truncate, float dims[2]);
-
     // rotary position embedding backward, i.e compute dx from dy
     // a - dy
     GGML_API struct ggml_tensor * ggml_rope_ext_back(
@@ -2062,8 +2058,6 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_rope_set_truncate(
             struct ggml_tensor * a,
             bool                 truncate);
-
-    GGML_API bool ggml_rope_get_truncate(const struct ggml_tensor * a);
 
     // im2col
     // converts data into a format that effectively results in a convolution when combined with matrix multiplication
