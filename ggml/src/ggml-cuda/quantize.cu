@@ -556,7 +556,7 @@ static __global__ void quantize_mmq_q8_1(
 }
 
 // quantize_mmq_q8_1 (2-D, no ids) on silu(gate)*up computed in place of a load of the GLU output. The product is a
-// separate rounding (__fmul_rn), as when the GLU kernel stores it, so it is not contracted into the block sums.
+// separate rounding (ggml_cuda_fmul_rn), as when the GLU kernel stores it, so it is not contracted into the block sums.
 template <mmq_q8_1_ds_layout ds_layout>
 static __global__ void quantize_mmq_q8_1_swiglu(
         const float * __restrict__ gate, const float * __restrict__ up, const int64_t s_gate, const int64_t s_up,
@@ -582,7 +582,7 @@ static __global__ void quantize_mmq_q8_1_swiglu(
     if (i0 < ne00) {
 #pragma unroll
         for (int k = 0; k < 4; ++k) {
-            v[k] = __fmul_rn(ggml_cuda_op_silu_single(gate[row*s_gate + i0 + k]), up[row*s_up + i0 + k]);
+            v[k] = ggml_cuda_fmul_rn(ggml_cuda_op_silu_single(gate[row*s_gate + i0 + k]), up[row*s_up + i0 + k]);
         }
     }
     const float4 xi = make_float4(v[0], v[1], v[2], v[3]);

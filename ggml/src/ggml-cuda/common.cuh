@@ -1452,6 +1452,34 @@ static inline bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_t
     return a0 && b0 && a0 < b0 + ggml_nbytes(b) && b0 < a0 + ggml_nbytes(a);
 }
 
+// a*b rounded on its own, never contracted into an fma with a later add (HIP's __fmul_rn is a plain product)
+static __device__ __forceinline__ float ggml_cuda_fmul_rn(const float a, const float b) {
+#if defined(GGML_USE_HIP)
+#pragma clang fp contract(off)
+    return a * b;
+#else
+    return __fmul_rn(a, b);
+#endif // defined(GGML_USE_HIP)
+}
+
+// Element i of an mmvq q8_1 copy (rows of whole blocks, no padding) as quantize_q8_1 makes it, with lane i % QK8_1 of a
+// warp holding element i. A product as xi must be rounded on its own (ggml_cuda_fmul_rn), else the block sum differs.
+static __device__ __forceinline__ void quantize_q8_1_lane(const float xi, block_q8_1 * y, const int64_t i) {
+    float amax = fabsf(xi);
+    float sum  = xi;
+
+    amax = warp_reduce_max<QK8_1>(amax);
+    sum  = warp_reduce_sum<QK8_1>(sum);
+
+    const float  d = amax / 127.0f;
+    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+    y[i / QK8_1].qs[i % QK8_1] = q;
+    if (i % QK8_1 == 0) {
+        y[i / QK8_1].ds = make_half2(d, sum);
+    }
+}
+
 // mmvq quantizes its activations (src1) to q8_1 whatever the weight type: the matrix-vector products that follow on
 // the same activations (sibling projections such as q/k/v or gate/up) read that copy instead of quantizing again.
 // The copy is valid until a node writes over the activations; the graph evaluation invalidates it then, and at the

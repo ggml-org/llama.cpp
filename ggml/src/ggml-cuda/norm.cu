@@ -465,8 +465,8 @@ static void rms_norm_f32_cuda(
 
 // ADD(a, b) -> RMS_NORM -> MUL(w): rms_norm_f32<block_size, true> over the sum, which is written too. The sum is
 // formed as the add kernel forms it and the square accumulated as rms_norm_f32 accumulates it, so both outputs are
-// bit-identical to the unfused ops. With yq, also the q8_1 copy of the product that mmvq would make
-// (quantize_q8_1: ncols a multiple of block_size, so lane l of a warp holds element l of a q8_1 block).
+// bit-identical to the unfused ops. With yq, also the q8_1 copy of the product that mmvq would make (ncols a multiple
+// of block_size, so lane l of a warp holds element l of a q8_1 block).
 template <int block_size, bool quantize>
 static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, float * sum, float * dst, const float * w,
                                             const int ncols, const float eps, block_q8_1 * yq) {
@@ -514,23 +514,10 @@ static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, fl
     const float scale = rsqrtf(mean + eps);
 
     const auto out = [&](const int col, const float x, const float wc) {
-        const float v = scale * x * wc;
+        const float v = ggml_cuda_fmul_rn(scale * x, wc);
         dr[col] = v;
         if constexpr (quantize) {
-            float amax = fabsf(v);
-            float qsum = v;
-
-            amax = warp_reduce_max<QK8_1>(amax);
-            qsum = warp_reduce_sum<QK8_1>(qsum);
-
-            const float  d = amax / 127.0f;
-            const int8_t q = amax == 0.0f ? 0 : roundf(v / d);
-
-            const int64_t i = row*ncols + col;
-            yq[i / QK8_1].qs[i % QK8_1] = q;
-            if (i % QK8_1 == 0) {
-                yq[i / QK8_1].ds = make_half2(d, qsum);
-            }
+            quantize_q8_1_lane(v, yq, row*ncols + col);
         }
     };
 
