@@ -7887,6 +7887,57 @@ static void test_chat_session() {
     }
 }
 
+static void test_chat_json_depth() {
+    LOG_DBG("%s\n", __func__);
+    const auto arrays = [](size_t n) {
+        return std::string(n, '[') + std::string(n, ']');
+    };
+    // a schema of n nested array types
+    const auto schema = [](size_t n) {
+        std::string s;
+        for (size_t i = 0; i < n; i++) {
+            s += R"({"type": "array", "items": )";
+        }
+        return s + R"({"type": "string"})" + std::string(n, '}');
+    };
+    const auto rejected = [](const std::function<void()> & fn) {
+        try {
+            fn();
+        } catch (const std::invalid_argument & e) {
+            return std::string(e.what()).find("nested more than 128 levels") != std::string::npos;
+        }
+        return false;
+    };
+
+    assert_equals(false, rejected([&] { common_chat_check_json_depth(json::parse(arrays(128))); }));
+    assert_equals(true, rejected([&] { common_chat_check_json_depth(json::parse(arrays(129))); }));
+    assert_equals(true, rejected([&] { common_chat_check_json_depth(json::parse(R"({"a": )" + arrays(128) + "}")); }));
+
+    // the inputs are checked before the template and the schema code walk them with recursion
+    auto         tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
+    const size_t deep  = 1000;
+
+    common_chat_templates_inputs tool_schema;
+    tool_schema.messages = { message_user };
+    tool_schema.tools    = { { "f", "", R"({"type": "object", "properties": {"x": )" + schema(deep) + "}}" } };
+    assert_equals(true, rejected([&] { common_chat_templates_apply(tmpls.get(), tool_schema); }));
+
+    common_chat_templates_inputs tool_args;
+    tool_args.messages = { message_user, simple_assist_msg("", "", "special_function", R"({"arg1": )" + arrays(deep) + "}") };
+    tool_args.tools    = { special_function_tool };
+    assert_equals(true, rejected([&] { common_chat_templates_apply(tmpls.get(), tool_args); }));
+
+    common_chat_templates_inputs kwargs;
+    kwargs.messages                     = { message_user };
+    kwargs.chat_template_kwargs["deep"] = arrays(deep);
+    assert_equals(true, rejected([&] { common_chat_templates_apply(tmpls.get(), kwargs); }));
+
+    common_chat_templates_inputs json_schema;
+    json_schema.messages    = { message_user };
+    json_schema.json_schema = schema(deep);
+    assert_equals(true, rejected([&] { common_chat_templates_apply(tmpls.get(), json_schema); }));
+}
+
 static void test_reasoning_budget_tokens_per_request() {
     LOG_DBG("%s\n", __func__);
     // Use Qwen3 template which has <think>...</think> reasoning markers.
@@ -8135,6 +8186,7 @@ int main(int argc, char ** argv) {
         test_reasoning_effort_caps();
         test_prompt_parts();
         test_chat_session();
+        test_chat_json_depth();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);

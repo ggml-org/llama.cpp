@@ -607,6 +607,23 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
     throw std::invalid_argument("Invalid continue_final_message: expected a boolean, \"content\" or \"reasoning_content\"");
 }
 
+// stops one level past the limit, so the recursion is at most COMMON_CHAT_JSON_MAX_DEPTH + 1 calls deep
+static void check_json_depth(const json & value, size_t depth) {
+    if (!value.is_array() && !value.is_object()) {
+        return;
+    }
+    if (depth > COMMON_CHAT_JSON_MAX_DEPTH) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(COMMON_CHAT_JSON_MAX_DEPTH) + " levels deep");
+    }
+    for (const auto & item : value) {
+        check_json_depth(item, depth + 1);
+    }
+}
+
+void common_chat_check_json_depth(const json & value) {
+    check_json_depth(value, 1);
+}
+
 bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
     if (use_jinja) {
         try {
@@ -1360,6 +1377,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         params.json_schema = json::parse(inputs.json_schema);
     }
 
+    for (const json * value : { &params.messages, &params.tools, &params.extra_context, &params.json_schema }) {
+        common_chat_check_json_depth(*value);
+    }
+
     params.parallel_tool_calls = inputs.parallel_tool_calls;
 
     if (params.tools.is_array()) {
@@ -1486,7 +1507,9 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
     common_chat_params params;
     params.prompt = common_chat_prompt(std::string(buf.data(), res));
     if (!inputs.json_schema.empty()) {
-        params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));
+        const json schema = json::parse(inputs.json_schema);
+        common_chat_check_json_depth(schema);
+        params.grammar = json_schema_to_grammar(schema);
     } else {
         params.grammar = inputs.grammar;
     }
