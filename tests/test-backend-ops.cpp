@@ -11223,6 +11223,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    // rows too long for a thread to keep its values in registers between the passes
+    test_cases.emplace_back(new test_add_rms_norm_mul({10000, 4, 1, 1}, false));
 
     // ... and the matmuls after it: batches mmvq multiplies (the fusion writes their q8_1 activations) and one it does not
     for (ggml_type type_mat : {GGML_TYPE_Q4_K, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0}) {

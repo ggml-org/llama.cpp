@@ -480,11 +480,32 @@ static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, fl
     float       * sr = sum + row*ncols;
     float       * dr = dst + row*ncols;
 
+    // Rows of up to n_reg*block_size columns keep a thread's sums and weights in registers between the two passes:
+    // a decode batch has a few rows, one block each, so the block's loads are latency, not bandwidth.
+    constexpr int n_reg = 8;
+    const bool    in_reg = ncols <= n_reg*block_size;
+    float xr[n_reg];
+    float wr[n_reg];
+
     float tmp = 0.0f;
-    for (int col = tid; col < ncols; col += block_size) {
-        const float xi = ar[col] + br[col];
-        sr[col] = xi;
-        tmp += xi * xi;
+    if (in_reg) {
+#pragma unroll
+        for (int j = 0; j < n_reg; ++j) {
+            const int col = tid + j*block_size;
+            if (col < ncols) {
+                const float xi = ar[col] + br[col];
+                sr[col] = xi;
+                tmp += xi * xi;
+                xr[j] = xi;
+                wr[j] = w[col];
+            }
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = ar[col] + br[col];
+            sr[col] = xi;
+            tmp += xi * xi;
+        }
     }
 
     tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
@@ -492,9 +513,8 @@ static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, fl
     const float mean  = tmp / ncols;
     const float scale = rsqrtf(mean + eps);
 
-    // each thread reads back the sums it wrote
-    for (int col = tid; col < ncols; col += block_size) {
-        const float v = scale * sr[col] * w[col];
+    const auto out = [&](const int col, const float x, const float wc) {
+        const float v = scale * x * wc;
         dr[col] = v;
         if constexpr (quantize) {
             float amax = fabsf(v);
@@ -511,6 +531,21 @@ static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, fl
             if (i % QK8_1 == 0) {
                 yq[i / QK8_1].ds = make_half2(d, qsum);
             }
+        }
+    };
+
+    if (in_reg) {
+#pragma unroll
+        for (int j = 0; j < n_reg; ++j) {
+            const int col = tid + j*block_size;
+            if (col < ncols) {
+                out(col, xr[j], wr[j]);
+            }
+        }
+    } else {
+        // each thread reads back the sums it wrote
+        for (int col = tid; col < ncols; col += block_size) {
+            out(col, sr[col], w[col]);
         }
     }
 }
