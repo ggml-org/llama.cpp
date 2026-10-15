@@ -5,13 +5,18 @@ void llama_model_mellum::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
 
+    hparams.expert_weights_norm = true;
+    hparams.expert_gating_func  = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM, hparams.expert_weights_norm, false);
+    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,  hparams.expert_gating_func,  false);
+
     if (hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
         load_swa_pattern(ml, 4);
 
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
-        hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        hparams.rope_freq_scale_train_swa = 1.0f;  // SWA layers use plain RoPE, no YaRN
 
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
     } else {
@@ -33,6 +38,13 @@ void llama_model_mellum::load_arch_tensors(llama_model_loader &) {
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
+    if (n_expert == 0) {
+        throw std::runtime_error("n_expert must be > 0 for Mellum");
+    }
+    if (n_expert_used == 0) {
+        throw std::runtime_error("n_expert_used must be > 0 for Mellum");
+    }
+
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
@@ -47,13 +59,6 @@ void llama_model_mellum::load_arch_tensors(llama_model_loader &) {
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
         layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
-
-        if (n_expert == 0) {
-            throw std::runtime_error("n_expert must be > 0 for Mellum");
-        }
-        if (n_expert_used == 0) {
-            throw std::runtime_error("n_expert_used must be > 0 for Mellum");
-        }
 
         const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
 
@@ -119,34 +124,24 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
 
             const bool is_swa = hparams.is_swa(il);
 
-            if (is_swa) {
-                // For sliding window layers, use regular rope with no yarn rope scaling.
-                // This is achieved here by setting freq_scale and attn_factor to 1.
-                // We also set ext_factor to 0 to avoid a few unnecessary computations.
-                Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, 1.0,
-                    0.0, 1.0, beta_fast, beta_slow
-                    );
+            const float freq_base_l   = model.get_rope_freq_base(cparams, il);
+            const float freq_scale_l  = model.get_rope_freq_scale(cparams, il);
+            const float ext_factor_l  = is_swa ? 0.0f : ext_factor;
+            const float attn_factor_l = is_swa ? 1.0f : attn_factor;
+            const float beta_fast_l   = is_swa ? 32.0f : beta_fast;
+            const float beta_slow_l   = is_swa ? 1.0f  : beta_slow;
 
-                Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, 1.0,
-                    0.0, 1.0, beta_fast, beta_slow
-                    );
-            } else {
-                Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Qcur = ggml_rope_ext(
+                ctx0, Qcur, inp_pos, nullptr,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l
+                );
 
-                Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            }
+            Kcur = ggml_rope_ext(
+                ctx0, Kcur, inp_pos, nullptr,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l
+                );
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -177,9 +172,9 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
                     model.layers[il].ffn_down_exps,
                     nullptr,
                     n_expert, n_expert_used,
-                    LLM_FFN_SILU, true,
+                    LLM_FFN_SILU, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
-                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il,
                     nullptr, nullptr,
                     model.layers[il].ffn_up_exps_s,
