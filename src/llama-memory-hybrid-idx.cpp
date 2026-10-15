@@ -257,13 +257,9 @@ void llama_memory_hybrid_idx::state_write(llama_io_write_i & io, llama_seq_id se
     llama_memory_hybrid::state_write(io, seq_id, flags);
 
     // [TAG_HYBRID_IDX_STATE] the indexer section goes last, so it is a pure suffix: an old reader stops early instead of misparsing it
-    // The indexer mirrors the attention cache, so it uses the same PARTIAL_ONLY gate.
-    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        if (mem_idx) {
-            mem_idx->state_write(io, seq_id, flags);
-        }
+    if (mem_idx) {
+        mem_idx->state_write(io, seq_id, flags);
     }
-
 }
 
 void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
@@ -276,17 +272,16 @@ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_
     llama_kv_cache::slot_info_vec_t sinfos_attn;
 
     try {
-        if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-            get_mem_attn()->state_read_sinfo(io, seq_id, flags, mem_idx ? &sinfos_attn : nullptr, nullptr);
-        }
+        // the indexer cache has the SWA type of the attention cache, so both read the same partial state
+        get_mem_attn()->state_read_sinfo(io, seq_id, flags, mem_idx ? &sinfos_attn : nullptr, nullptr);
 
         get_mem_recr()->state_read(io, seq_id, flags);
 
         // [TAG_HYBRID_IDX_STATE] must mirror the write order in state_write
-        if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-            if (mem_idx) {
-                mem_idx->state_read_sinfo(io, seq_id, flags, nullptr, &sinfos_attn);
-                // the restore rewrites the cells behind the pool layout's back
+        if (mem_idx) {
+            mem_idx->state_read_sinfo(io, seq_id, flags, nullptr, &sinfos_attn);
+            // a restore that rewrites cells does it behind the pool layout's back
+            if (!sinfos_attn.empty()) {
                 mem_idx_stale_set(seq_id, 0);
             }
         }

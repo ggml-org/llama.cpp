@@ -341,6 +341,49 @@ struct case_state_roundtrip : ctx_test {
     }
 };
 
+// the partial state holds what seq_rm cannot roll back: recurrent states and SWA windows
+struct case_state_partial_size : ctx_test {
+    const char * name() const override { return "ps"; }
+
+    const char * description() const override {
+        return "the partial state is not larger than the full state and, without SWA, does not grow with the tokens";
+    }
+
+    case_result run(model_run & mr) const override {
+        auto ctx = mr.ctx();
+        if (!ctx) {
+            return case_result::fail();
+        }
+
+        const llama_pos n_tokens = mr.tokens.size();
+        const llama_pos n_half   = n_tokens / 2;
+
+        if (!decode_seq(ctx.get(), mr.tokens, 0, n_half, 0, true)) {
+            return case_result::fail();
+        }
+
+        const size_t partial_a = llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        const size_t full_a    = llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+
+        if (!decode_seq(ctx.get(), mr.tokens, n_half, n_tokens, 0, true)) {
+            return case_result::fail();
+        }
+
+        const size_t partial_b = llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        const size_t full_b    = llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+
+        TLOG_INF("%s: partial %zu -> %zu, full %zu -> %zu\n", __func__, partial_a, partial_b, full_a, full_b);
+
+        CTX_REQUIRE(partial_a <= full_a && partial_b <= full_b, "the partial state is larger than the full state");
+
+        if (llama_model_n_swa(mr.model) == 0) {
+            CTX_REQUIRE(partial_a == partial_b, "the partial state grows with the tokens");
+        }
+
+        return case_result::pass();
+    }
+};
+
 // a failed restore must leave the sequence empty and must not change the logits of other sequences
 struct case_state_restore_failure : ctx_test {
     const char * name() const override { return "rf"; }
@@ -686,6 +729,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_seq_cp_scatter>(false));
     cases.push_back(std::make_unique<case_seq_cp_scatter>(true));
     cases.push_back(std::make_unique<case_state_roundtrip>());
+    cases.push_back(std::make_unique<case_state_partial_size>());
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
