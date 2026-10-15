@@ -155,6 +155,13 @@ struct clip_graph_whisper_enc : clip_graph {
     ggml_cgraph * build() override;
 };
 
+// causal whisper-like encoder with a sliding window KV cache (voxtral realtime)
+struct clip_graph_voxtral_rt : clip_graph {
+    clip_enc_state * state; // nullptr during warmup, the cache is then a graph input
+    clip_graph_voxtral_rt(clip_ctx * ctx, const clip_image_f32 & img, clip_enc_state * state) : clip_graph(ctx, img), state(state) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_deepseekocr : clip_graph {
     clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;

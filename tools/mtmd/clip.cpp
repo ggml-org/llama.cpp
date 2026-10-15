@@ -1050,6 +1050,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_llama4>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_VOXTRAL_RT:
+            {
+                builder = std::make_unique<clip_graph_voxtral_rt>(ctx, img, params ? params->enc_state : nullptr);
+            } break;
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_QWEN2A:
@@ -1922,6 +1926,22 @@ struct clip_model_loader {
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+                    } break;
+                case PROJECTOR_TYPE_VOXTRAL_RT:
+                    {
+                        get_u32(KEY_A_PROJ_STACK_FACTOR, hparams.proj_stack_factor);
+                        get_u32(KEY_A_ATTN_WINDOW_SIZE,  hparams.attn_window_size);
+                        hparams.rope_theta = 1000000.0f; // params.json
+                        hparams.ffn_op = FFN_SILU;
+                        log_ffn_op = "silu";
+
+                        // audio preprocessing params
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 400;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
+                        // 2 context frames + 8 s of new frames, see clip_enc_state_init()
+                        hparams.warmup_audio_size  = 2 + 2*400;
                     } break;
                 case PROJECTOR_TYPE_MIMO_AUDIO:
                     {
@@ -3320,6 +3340,7 @@ struct clip_model_loader {
                     }
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
+            case PROJECTOR_TYPE_VOXTRAL_RT:
                 {
                     model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
                     model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
@@ -4459,6 +4480,11 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                     n_patches = n_patches_y * n_patches_x;
                 }
             } break;
+        case PROJECTOR_TYPE_VOXTRAL_RT:
+            {
+                // 2 context frames, conv stride 2, then stacked frames
+                n_patches = (img->nx() - 2) / 2 / ctx->model.hparams.proj_stack_factor;
+            } break;
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
             {
                 const int64_t fold = ctx->model.hparams.audio_samples_per_token();
@@ -4656,6 +4682,56 @@ static std::vector<c2w_state_slot> list_gen_state_slots(const clip_hparams & hpa
     }
 }
 
+clip_enc_state * clip_enc_state_init(clip_ctx * ctx, int32_t n_frames_max) {
+    const auto & hparams = ctx->model.hparams;
+    if (ctx->proj_type() != PROJECTOR_TYPE_VOXTRAL_RT || hparams.attn_window_size <= 0) {
+        LOG_ERR("%s: the encoder does not support streaming input\n", __func__);
+        return nullptr;
+    }
+    if (n_frames_max <= 0) {
+        LOG_ERR("%s: invalid n_frames_max %d\n", __func__, n_frames_max);
+        return nullptr;
+    }
+
+    const int n_layer   = hparams.n_layer;
+    const int d_head    = hparams.n_embd_head > 0 ? hparams.n_embd_head : hparams.n_embd / hparams.n_head;
+    const int n_embd_kv = hparams.n_head_kv * d_head;
+
+    auto st = std::make_unique<clip_enc_state>();
+    st->n_ctx = hparams.attn_window_size + n_frames_max;
+    st->slot_pos.assign(st->n_ctx, -1);
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 2 * n_layer,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    st->ctx_data.reset(ggml_init(params));
+    for (int il = 0; il < n_layer; il++) {
+        ggml_tensor * k = ggml_new_tensor_2d(st->ctx_data.get(), GGML_TYPE_F16, n_embd_kv, st->n_ctx);
+        ggml_tensor * v = ggml_new_tensor_2d(st->ctx_data.get(), GGML_TYPE_F16, n_embd_kv, st->n_ctx);
+        ggml_format_name(k, "enc_state_k_%d", il);
+        ggml_format_name(v, "enc_state_v_%d", il);
+        st->k.push_back(k);
+        st->v.push_back(v);
+    }
+    st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), ctx->backend));
+    if (!st->buf) {
+        LOG_ERR("%s: failed to allocate the encoder state\n", __func__);
+        return nullptr;
+    }
+    // empty slots are masked out, but they must not hold NaN
+    ggml_backend_buffer_clear(st->buf.get(), 0);
+
+    LOG_INF("%s: encoder state: %d slots, %.2f MiB\n", __func__, st->n_ctx, ggml_backend_buffer_get_size(st->buf.get()) / 1024.0 / 1024.0);
+
+    return st.release();
+}
+
+void clip_enc_state_free(clip_enc_state * state) {
+    delete state;
+}
+
 bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     const clip_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
@@ -4839,6 +4915,44 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
     // set input per projector
     switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_VOXTRAL_RT:
+            {
+                clip_enc_state * st = params->enc_state;
+                if (!st) {
+                    LOG_ERR("%s: this encoder needs a clip_enc_state\n", __func__);
+                    return false;
+                }
+                const int n_window = hparams.attn_window_size;
+                const int n_new    = (imgs.entries[0].nx() - 2) / 2;
+                GGML_ASSERT(n_new <= st->n_ctx - n_window);
+
+                std::vector<int32_t> pos(n_new);
+                std::vector<int64_t> idx(n_new);
+                std::vector<int32_t> slot_pos = st->slot_pos; // including the frames written by this call
+                for (int i = 0; i < n_new; i++) {
+                    pos[i] = st->n_past + i;
+                    idx[i] = pos[i] % st->n_ctx;
+                    slot_pos[idx[i]] = pos[i];
+                }
+                set_input_i32("inp_pos", pos);
+                ggml_backend_tensor_set(get_inp_tensor("inp_kv_idx"), idx.data(), 0, idx.size() * sizeof(int64_t));
+
+                // each frame sees itself and the n_window - 1 frames before it
+                std::vector<float> mask((size_t) st->n_ctx * n_new, -INFINITY);
+                for (int i = 0; i < n_new; i++) {
+                    for (int s = 0; s < st->n_ctx; s++) {
+                        const int32_t p = slot_pos[s];
+                        if (p >= 0 && p <= pos[i] && p > pos[i] - n_window) {
+                            mask[(size_t) i * st->n_ctx + s] = 0.0f;
+                        }
+                    }
+                }
+                set_input_attn_mask(mask);
+
+                std::vector<float> tail = st->stem_tail;
+                tail.resize(hparams.n_embd, 0.0f);
+                set_input_f32("inp_stem_tail", tail);
+            } break;
         case PROJECTOR_TYPE_MUSE_GLIMMER:
             {
                 const int grid_w = pos_w;            // image_size_width  / patch_size
@@ -6099,6 +6213,20 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             out_audio.resize((size_t) n_frames * hop);
         }
     }
+    if (params->enc_state != nullptr) {
+        clip_enc_state * st = params->enc_state;
+        ggml_tensor * tail = ggml_graph_get_tensor(gf, "out_stem_tail");
+        GGML_ASSERT(tail != nullptr);
+        st->stem_tail.resize(ggml_nelements(tail));
+        ggml_backend_tensor_get(tail, st->stem_tail.data(), 0, ggml_nbytes(tail));
+
+        const int n_new = (imgs.entries[0].nx() - 2) / 2;
+        for (int i = 0; i < n_new; i++) {
+            st->slot_pos[(st->n_past + i) % st->n_ctx] = st->n_past + i;
+        }
+        st->n_past += n_new;
+    }
+
     if (params->state_out != nullptr) {
         auto & state_out = *params->state_out;
         size_t total = 0;
@@ -6233,6 +6361,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
+        case PROJECTOR_TYPE_VOXTRAL_RT:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_MERALION:

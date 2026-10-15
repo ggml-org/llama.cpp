@@ -50,6 +50,9 @@ struct mtmd_audio_cache {
     );
 };
 
+// compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
+void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
+
 struct mtmd_audio_preprocessor {
     const clip_hparams & hparams;
 

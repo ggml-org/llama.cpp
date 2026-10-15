@@ -364,6 +364,51 @@ struct mtmd_caps {
 MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
 
 /////////////////////////////////////////
+// EXPERIMENTAL API for realtime audio input, subjected to breaking changes
+//
+// a stream turns incoming PCM into decoder-ready embedding rows, one row per decoder position
+// it keeps the encoder state between calls, so audio can be fed as it arrives
+// how text tokens are mixed into the rows is a model detail hidden inside the stream
+// the text model given to mtmd_init_from_file() is required
+
+// whether the current model supports mtmd_audio_stream
+MTMD_API bool mtmd_support_audio_stream(const mtmd_context * ctx);
+
+struct mtmd_audio_stream;
+typedef struct mtmd_audio_stream mtmd_audio_stream;
+
+struct mtmd_audio_stream_params {
+    int32_t step_ms; // audio encoded per encoder call, rounded up to the model step (default: 320)
+};
+MTMD_API struct mtmd_audio_stream_params mtmd_audio_stream_params_default(void);
+
+// returns nullptr on failure
+MTMD_API mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, struct mtmd_audio_stream_params params);
+MTMD_API void                mtmd_audio_stream_free(mtmd_audio_stream * stream);
+
+// samples are PCM F32 at mtmd_get_audio_sample_rate()
+// returns 0 on success, 1 if the stream has ended
+MTMD_API int32_t mtmd_audio_stream_push(mtmd_audio_stream * stream, const float * samples, size_t n_samples);
+
+// pad the stream so that all pending rows can be produced
+// end = false: the stream stays open (use it on a pause, to get a partial transcript)
+// end = true:  no more push() is accepted
+// returns 0 on success, 1 if the stream has ended
+MTMD_API int32_t mtmd_audio_stream_flush(mtmd_audio_stream * stream, bool end);
+
+// produce the next decoder rows
+// last_token is the token sampled from the previous row, LLAMA_TOKEN_NULL before the first sample
+// return value:
+//   > 0 number of rows ready, read them with mtmd_audio_stream_get_output_embd()
+//   0   more audio is needed
+//   -1  end of stream, nothing more will be produced
+//   -2  error
+MTMD_API int32_t mtmd_audio_stream_step(mtmd_audio_stream * stream, llama_token last_token);
+
+// rows of the last step, the reading size (in bytes) is n_rows * llama_model_n_embd_inp(model) * sizeof(float)
+MTMD_API const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * stream);
+
+/////////////////////////////////////////
 // EXPERIMENTAL API for audio generation, subjected to breaking changes
 
 // represent the pipeline type
@@ -492,6 +537,11 @@ struct mtmd_batch_deleter {
     void operator()(mtmd_batch * val) { mtmd_batch_free(val); }
 };
 using batch_ptr = std::unique_ptr<mtmd_batch, mtmd_batch_deleter>;
+
+struct mtmd_audio_stream_deleter {
+    void operator()(mtmd_audio_stream * val) { mtmd_audio_stream_free(val); }
+};
+using audio_stream_ptr = std::unique_ptr<mtmd_audio_stream, mtmd_audio_stream_deleter>;
 
 struct bitmap {
     bitmap_ptr ptr;

@@ -175,6 +175,7 @@ class Keys:
         HAS_CONFIDENCE_HEAD               = "{arch}.has_confidence_head"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
+        REALTIME_DELAY_TOKENS             = "{arch}.realtime_delay_tokens"
 
     class Adapters:
         COUNT                = "{arch}.adapters.count"
@@ -481,6 +482,7 @@ class Keys:
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
+            HEAD_DIM        = "clip.audio.attention.head_dim" # set when qkv width != n_embd
             LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
 
         class Projector:
@@ -758,6 +760,8 @@ class MODEL_TENSOR(IntEnum):
     FFN_POST_NORM        = auto()
     FFN_POST_NORM_1      = auto() # gemma4
     FFN_POST_NORM_2      = auto() # gemma4
+    FFN_NORM_ADA_DOWN    = auto() # voxtral realtime
+    FFN_NORM_ADA_UP      = auto() # voxtral realtime
     FFN_GATE             = auto()
     FFN_DOWN             = auto()
     FFN_UP               = auto()
@@ -1572,6 +1576,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_PRE_NORM_2:            "blk.{bid}.pre_ffw_norm_2",  # gemma4
     MODEL_TENSOR.FFN_POST_NORM_1:           "blk.{bid}.post_ffw_norm_1", # gemma4
     MODEL_TENSOR.FFN_POST_NORM_2:           "blk.{bid}.post_ffw_norm_2", # gemma4
+    MODEL_TENSOR.FFN_NORM_ADA_DOWN:         "blk.{bid}.ffn_norm_ada_down",
+    MODEL_TENSOR.FFN_NORM_ADA_UP:           "blk.{bid}.ffn_norm_ada_up",
     MODEL_TENSOR.FFN_GATE:                  "blk.{bid}.ffn_gate",
     MODEL_TENSOR.FFN_DOWN:                  "blk.{bid}.ffn_down",
     MODEL_TENSOR.FFN_UP:                    "blk.{bid}.ffn_up",
@@ -5554,6 +5560,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_ROT_EMBD,
         MODEL_TENSOR.FFN_GATE_INP,
         MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_NORM_ADA_DOWN,
+        MODEL_TENSOR.FFN_NORM_ADA_UP,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
@@ -6297,6 +6305,7 @@ class VisionProjectorType:
     GLMA = "glma" # audio
     QWEN25O = "qwen2.5o" # omni
     VOXTRAL = "voxtral"
+    VOXTRAL_RT = "voxtral_rt"
     MERALION = "meralion"  # audio: Whisper + gated MLP adaptor
     LFM2 = "lfm2"
     KIMIVL = "kimivl"

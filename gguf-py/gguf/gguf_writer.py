@@ -1138,6 +1138,9 @@ class GGUFWriter:
     def add_attn_temperature_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.TEMPERATURE_SCALE.format(arch=self.arch), value)
 
+    def add_realtime_delay_tokens(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.REALTIME_DELAY_TOKENS.format(arch=self.arch), value)
+
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 
@@ -1578,6 +1581,9 @@ class GGUFWriter:
 
     def add_audio_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Attention.HEAD_COUNT, value)
+
+    def add_audio_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Attention.HEAD_DIM, value)
 
     def add_audio_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipAudio.Attention.LAYERNORM_EPS, value)

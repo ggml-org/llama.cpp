@@ -281,6 +281,9 @@ struct llama_hparams {
     float    f_attn_temp_scale       = 0.0f;
     float    f_attn_temp_offset      = 0.0f; // offset position index
 
+    // realtime models: number of tokens the output lags behind the audio input
+    uint32_t n_tokens_delay          = 0;
+
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
     uint32_t i_altup_act  = 0; // altup_active_idx

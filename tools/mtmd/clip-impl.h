@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "gguf.h"
 #include "clip.h"
 
@@ -446,6 +447,20 @@
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
+// sliding window KV cache of a causal audio encoder, see clip_enc_state_init()
+struct clip_enc_state {
+    int32_t n_ctx  = 0; // ring slots: attention window + frames per call
+    int32_t n_past = 0; // absolute position of the next frame
+
+    std::vector<int32_t> slot_pos;  // absolute position held by each slot, -1 if empty
+    std::vector<float>   stem_tail; // last conv stem output frame, empty on a cold start
+
+    ggml_context_ptr        ctx_data;
+    ggml_backend_buffer_ptr buf;
+    std::vector<ggml_tensor *> k; // per layer [n_embd_kv, n_ctx]
+    std::vector<ggml_tensor *> v;
+};
+
 // forward declaration
 // TODO: improve this later
 struct clip_ctx;
@@ -480,6 +495,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLMA,
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
+    PROJECTOR_TYPE_VOXTRAL_RT,
     PROJECTOR_TYPE_MERALION,
     PROJECTOR_TYPE_MUSIC_FLAMINGO,
     PROJECTOR_TYPE_LFM2,
@@ -553,6 +569,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GLMA,              "glma"},
     { PROJECTOR_TYPE_QWEN25O,           "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,           "voxtral"},
+    { PROJECTOR_TYPE_VOXTRAL_RT,        "voxtral_rt"},
     { PROJECTOR_TYPE_MERALION,          "meralion"},
     { PROJECTOR_TYPE_MUSIC_FLAMINGO,    "musicflamingo"},
     { PROJECTOR_TYPE_LFM2,              "lfm2"},
