@@ -6061,6 +6061,10 @@ void ggml_vk_matmul(
     ctx->prealloc_split_k_need_sync = true;
 }
 
+static bool ggml_vk_src1_prec_allows_q8(ggml_prec prec) {
+    return prec == GGML_PREC_UNDEFINED || prec >= GGML_PREC_Q8;
+}
+
 static bool ggml_vk_get_mul_mat_mat_f16acc(ggml_backend_vk_context * ctx, ggml_type src0_type, ggml_type src1_type, ggml_prec prec) {
     if (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_BF16) return false;
     if (src1_type == GGML_TYPE_Q8_1) return false;
@@ -7545,10 +7549,10 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 #else
     const bool y_decode_vector_staging = false;
 #endif
-    // GGML_PREC_F32: q8_1 too lossy, keep the f32 B path (src1 rescaled to avoid f16 overflow)
+    // src1 hint above Q8 forbids q8_1; GGML_PREC_F32 additionally rescales src1 to avoid f16 overflow
     const bool src1_prec_f32 = dst->op_params[3] == GGML_PREC_F32;
     const bool can_quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 &&
-                                ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0 && !src1_prec_f32;
+                                ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8((ggml_prec)dst->op_params[3]);
     // Intel coopmat1 matrix cores prefer f16 activations for quantized weights
     const bool prefer_f16_b = ctx->device->coopmat_support && !ctx->device->coopmat2 &&
                               ctx->device->vendor_id == VK_VENDOR_ID_INTEL &&
@@ -7887,7 +7891,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     const bool y_non_contig = !ggml_vk_dim01_contiguous(src1);
 
     const bool f16_f32_kernel = src1->type == GGML_TYPE_F32;
-    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_should_use_mmvq(ctx->device, ne01, ne12, ne10, src0->type);
+    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8((ggml_prec)dst->op_params[3]) && ggml_vk_should_use_mmvq(ctx->device, ne01, ne12, ne10, src0->type);
 
     vk_pipeline to_fp16_vk_0 = nullptr;
     vk_pipeline to_fp16_vk_1 = nullptr;
