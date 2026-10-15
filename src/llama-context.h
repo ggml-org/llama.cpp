@@ -268,6 +268,7 @@ public:
         std::vector<ggml_tensor *> pool_gate, pool_up, pool_gate_up, pool_down, slot_table;
         ggml_tensor * prefill_stage[2] = {nullptr, nullptr};
         size_t prefill_stage_bytes = 0;
+        std::vector<ggml_tensor *> prefill_tables;
         std::vector<int32_t> slot_of, slot_key;
         // per-slot demand count, for LFU eviction. A routing trace of this
         // model shows the top 104 experts per layer cover 66% of all router

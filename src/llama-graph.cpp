@@ -1523,6 +1523,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     moe_gate_up        (params.moe_gate_up),
     moe_down           (params.moe_down),
     moe_table          (params.moe_table),
+    moe_prefill_tables (params.moe_prefill_tables),
     moe_n_layer        (params.moe_n_layer),
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
@@ -2277,7 +2278,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         bool do_chunked = false;
         if (chunked_on == 1 && n_tokens > 32 && cparams.moe_direct_io &&
             moe_n_layer > il && il >= 0 && moe_gate && moe_up && moe_down && moe_table &&
+            moe_prefill_tables &&
             moe_gate[il] && moe_up[il] && moe_down[il] && moe_table[il] &&
+            moe_prefill_tables[(size_t) il * 8 + 7] &&
             ((const ggml_tensor *) moe_up[il])->ne[2] >= 65 &&
             !weight_before_ffn && type_op == LLM_FFN_SILU && gate_exps &&
             (gate_up_exps == nullptr || gate_up_exps->ne[1] != 2 * ((ggml_tensor *) moe_up[il])->ne[1]) &&
@@ -2317,7 +2320,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             };
             ggml_tensor * parts[8] = { nullptr };
             for (int r = 0; r < 8; r++) {
-                ggml_tensor * s_flat = ggml_get_rows(ctx0, (ggml_tensor *) moe_table[il], ids_flat);
+                ggml_tensor * stable = (ggml_tensor *) moe_prefill_tables[(size_t) il * 8 + r];
+                ggml_tensor * s_flat = ggml_get_rows(ctx0, stable, ids_flat);
                 ggml_tensor * s_ids = ggml_reshape_2d(ctx0, s_flat, n_expert_used, n_tokens);
                 cb(s_ids, slot_nm[r], il);
                 ggml_tensor * u_r = build_lora_mm_id(p_up, cur, s_ids, up_exps_s);

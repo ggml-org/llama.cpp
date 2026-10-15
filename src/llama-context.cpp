@@ -489,12 +489,13 @@ llama_context::llama_context(
                     }
                 }
                 ggml_init_params ip = {
-                    ggml_tensor_overhead()*(size_t)(n_layer*4 + 16) + ggml_graph_overhead(),
+                    ggml_tensor_overhead()*(size_t)(n_layer*4 + 16 + n_layer*8) + ggml_graph_overhead(),
                     nullptr, /*no_alloc=*/true };
                 moe.ctx = ggml_init(ip);
                 moe.pool_gate.resize(n_layer); moe.pool_up.resize(n_layer);
                 moe.pool_gate_up.resize(n_layer);
                 moe.pool_down.resize(n_layer); moe.slot_table.resize(n_layer);
+                moe.prefill_tables.assign((size_t) n_layer * 8, nullptr);
 
                 const ggml_tensor * gt0 = model.get_tensor("blk.0.ffn_gate_exps.weight");
                 const ggml_tensor * dt0 = model.get_tensor("blk.0.ffn_down_exps.weight");
@@ -535,6 +536,11 @@ llama_context::llama_context(
                     moe.slot_table[il] = ggml_new_tensor_2d(moe.ctx, GGML_TYPE_I32, 1, n_exp);
                     expect += ggml_nbytes(moe.pool_gate[il]) + ggml_nbytes(moe.pool_up[il])
                             + ggml_nbytes(moe.pool_down[il]) + ggml_nbytes(moe.slot_table[il]);
+                    for (int r = 0; r < 8; r++) {
+                        ggml_tensor * t = ggml_new_tensor_2d(moe.ctx, GGML_TYPE_I32, 1, n_exp);
+                        moe.prefill_tables[(size_t) il * 8 + r] = t;
+                        expect += ggml_nbytes(t);
+                    }
                 }
                 if (!pool_ok) {
                     LLAMA_LOG_ERROR("%s: pool incomplete -> moe_direct_io OFF\n", __func__);
@@ -604,6 +610,14 @@ llama_context::llama_context(
                                 std::vector<int32_t> tab((size_t) n_exp, s_pl_il);
                                 ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0,
                                                         n_exp*sizeof(int32_t));
+                                for (int r = 0; r < 8; r++) {
+                                    std::vector<int32_t> tr((size_t) n_exp, s_pl_il);
+                                    for (int e = r * 64; e < r * 64 + 64 && e < n_exp; e++) {
+                                        tr[(size_t) e] = e - r * 64;
+                                    }
+                                    ggml_backend_tensor_set(moe.prefill_tables[(size_t) il * 8 + r],
+                                        tr.data(), 0, n_exp * sizeof(int32_t));
+                                }
                             }
                             if (moe.sentinel_slot) {
                                 for (int il = 0; il < moe.n_layer; il++) {
@@ -2953,6 +2967,7 @@ llm_graph_params llama_context::graph_params(
         /*.moe_up       =*/ moe_ready ? (const ggml_tensor * const *) moe.pool_up.data()     : nullptr,
         /*.moe_down     =*/ moe_ready ? (const ggml_tensor * const *) moe.pool_down.data()  : nullptr,
         /*.moe_table    =*/ moe_ready ? (const ggml_tensor * const *) moe.slot_table.data() : nullptr,
+        /*.moe_prefill_tables =*/ moe_ready && !moe.prefill_tables.empty() ? (const ggml_tensor * const *) moe.prefill_tables.data() : nullptr,
         /*.moe_n_layer  =*/ moe_ready ? moe.n_layer : 0,
     };
 }
@@ -5001,11 +5016,10 @@ void llama_context::moe_page_batch_sorted(int il, const int32_t * sel, int n) {
     }
 }
 
-// Chunked prefill range pager. Remaps the layer table so experts in [r*64,
-// r*64+63] read slots 0..63 and everything else reads the zero sentinel.
-// Pages the needed subset of the range into fixed slots (e - r*64) in ascending
-// order for sequential NVMe. Called from the slot_ids_c data phase, before the
-// range GEMMs run.
+// Chunked prefill range pager. Pages the needed subset of range [r*64,
+// r*64+63] into fixed pool slots (e - r*64) in ascending order for sequential
+// NVMe. The remap tables are static (prefill_tables), so no table update is
+// needed here. Called from the slot_ids_c data phase, before the range GEMMs.
 void llama_context::moe_page_prefill_range(int il, int range) {
     if (!moe_ready || il < 0 || il >= moe.n_layer) return;
     if (range < 0 || range >= 8) return;
@@ -5013,11 +5027,6 @@ void llama_context::moe_page_prefill_range(int il, int range) {
     const int s_pl = moe_get_layer_slots(il, moe.n_layer);
     const int base = moe_get_layer_base_slot(il, moe.n_layer);
     if (s_pl < 65) return;
-    std::vector<int32_t> tab((size_t) n_exp, s_pl);
-    for (int e = range * 64; e < range * 64 + 64 && e < n_exp; e++) {
-        tab[(size_t) e] = e - range * 64;
-    }
-    ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
     const std::vector<int32_t> & ids = moe.prefill_topk[(size_t) il];
     if (ids.empty()) return;
     std::vector<char> seen(64, 0);
