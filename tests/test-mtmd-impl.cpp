@@ -45,6 +45,27 @@ struct test_registry {
 // mtmd_image
 //
 
+MAKE_TEST(test_image_preprocessor_longest_edge) {
+    clip_hparams hparams;
+    hparams.image_longest_edge = 1540;
+    hparams.patch_size = 14;
+    hparams.n_merge = 2;
+
+    const std::vector<std::pair<clip_image_size, clip_image_size>> cases = {
+        { {  463,  463 }, {  476,  476 } },
+        { {  463,  300 }, {  476,  308 } },
+        { {  448,  280 }, {  448,  280 } },
+        { { 2000, 1000 }, { 1540,  784 } },
+    };
+
+    for (const auto & [input, expected] : cases) {
+        const clip_image_size actual = mtmd_image_preprocessor_longest_edge::get_target_size(hparams, input);
+        const std::string name = std::to_string(input.width) + "x" + std::to_string(input.height);
+        t.assert_equal(name + " width", expected.width, actual.width);
+        t.assert_equal(name + " height", expected.height, actual.height);
+    }
+}
+
 MAKE_TEST(test_image_preprocessor_lfm2) {
     clip_hparams hparams;
     hparams.patch_size = 16;
