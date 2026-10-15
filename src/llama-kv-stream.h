@@ -82,8 +82,10 @@ public:
         uint32_t n;
     };
 
+    // n_slots: the initial (prefill) pool; n_slots_decode: the pages the decode budget holds, 0 without one
     // no_alloc: size the buffers only (memory fitting), as the cache does
-    llama_kv_stream(const std::vector<layer> & layers, uint32_t n_slots, uint32_t kv_size, ggml_backend_dev_t dev, bool no_alloc);
+    llama_kv_stream(const std::vector<layer> & layers, uint32_t n_slots, uint32_t n_slots_decode, uint32_t kv_size,
+            ggml_backend_dev_t dev, bool no_alloc);
     ~llama_kv_stream();
 
     // pool pages that fit in `bytes` when each cell takes bytes_per_cell (K and V of every layer)

@@ -15,7 +15,8 @@ static inline void cpu_relax() {
 #endif
 }
 
-llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_slots, uint32_t kv_size, ggml_backend_dev_t dev, bool no_alloc) :
+llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_slots, uint32_t n_slots_decode, uint32_t kv_size,
+        ggml_backend_dev_t dev, bool no_alloc) :
     layers(layers), n_slots(n_slots), kv_size(kv_size), n_pages((kv_size + page_size - 1)/page_size), dev(dev) {
     GGML_ASSERT(!layers.empty());
 
@@ -44,13 +45,15 @@ llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_s
     // two device slots, each the size of a layer until set_backend knows whether prefill reads the pages in place
     alloc_slots((int64_t) n_pages*page_size, no_alloc);
 
-    // pages stream only when the pool cannot hold the context
-    if (n_slots < n_pages) {
+    // pages stream when a phase's pool cannot hold the context: the prefill pool, or the decode budget, which holds the
+    // pool and the slots (at least one ring page)
+    const bool streams = n_slots < n_pages || (n_slots_decode > 0 && n_slots_decode <= n_pages);
+    if (streams) {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         auto get_iface = (ggml_backend_copy_engine_get_iface_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_copy_engine");
         if (!get_iface) {
-            throw std::runtime_error(format("KV streaming: %u of %u pages fit in the resident budget, and %s has no copy "
-                                            "engine to stream the rest", n_slots, n_pages, ggml_backend_dev_name(dev)));
+            throw std::runtime_error(format("KV streaming: the resident budgets cannot hold all %u pages, and %s has no "
+                                            "copy engine to stream the rest", n_pages, ggml_backend_dev_name(dev)));
         }
         ce_iface = get_iface();
         if (!no_alloc) {
@@ -76,9 +79,17 @@ llama_kv_stream::llama_kv_stream(const std::vector<layer> & layers, uint32_t n_s
         debug_rotate = false;
     }
 
-    LLAMA_LOG_INFO("%s: %u of %u pages resident, %10s host store = %8.2f MiB, slots = %8.2f MiB%s\n", __func__,
-            n_slots, n_pages, ggml_backend_buffer_name(host_buf.get()), size/1024.0/1024.0,
+    LLAMA_LOG_INFO("%s: %u of %u pages resident (%u tokens), %10s host store = %8.2f MiB, slots = %8.2f MiB%s\n", __func__,
+            n_slots, n_pages, n_slots*page_size, ggml_backend_buffer_name(host_buf.get()), size/1024.0/1024.0,
             ggml_backend_buffer_get_size(slots_buf.get())/1024.0/1024.0, debug_rotate ? " (debug: rotate)" : "");
+    if (n_slots_decode > 0) {
+        // the decode budget also holds the slots of the pages that stream, so its pool shrinks as more of them stream
+        LLAMA_LOG_INFO("%s: between prefills, the decode budget holds up to %u of %u pages (%u tokens)\n", __func__,
+                std::min(n_slots_decode, n_pages), n_pages, std::min(n_slots_decode, n_pages)*page_size);
+    }
+    if (streams) {
+        LLAMA_LOG_INFO("%s: the other pages stream from the host store into the ubatches that attend them\n", __func__);
+    }
 }
 
 llama_kv_stream::~llama_kv_stream() {

@@ -30,7 +30,8 @@ llama_memory_hybrid::llama_memory_hybrid(
                             /* layer filters */
     const layer_filter_cb & filter_attn,
     const layer_filter_cb & filter_recr,
-                   size_t   attn_stream_resident_size) :
+                   size_t   attn_stream_resident_size,
+                   size_t   attn_stream_resident_size_decode) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
@@ -52,7 +53,8 @@ llama_memory_hybrid::llama_memory_hybrid(
         nullptr,
         nullptr,
         "",
-        attn_stream_resident_size
+        attn_stream_resident_size,
+        attn_stream_resident_size_decode
     )),
     mem_recr(new llama_memory_recurrent(
         model,

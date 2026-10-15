@@ -117,7 +117,8 @@ public:
         // a model can hold more than one cache, so the tensor names have to stay unique
                  const char *   name_tag = "",
         // KV streaming (llama-kv-stream.h): device bytes for resident pages, 0 = disabled
-                     size_t   stream_resident_size = 0);
+                     size_t   stream_resident_size = 0,
+                     size_t   stream_resident_size_decode = 0);
 
     ~llama_kv_cache() = default;
 

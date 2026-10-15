@@ -578,6 +578,11 @@ llama_context::llama_context(
                     kv_stream->set_backend(backend.get(), model.hparams.n_head());
                 }
             }
+            if (cparams.kv_resident_size_decode > 0 && cparams.kv_resident_size_decode < cparams.kv_resident_size) {
+                LLAMA_LOG_WARN("%s: the decode KV budget (%zu MiB) is smaller than the prefill budget (%zu MiB): decode has "
+                        "the smaller compute buffers, so this only keeps fewer pages resident between prefills\n", __func__,
+                        cparams.kv_resident_size_decode/(1024*1024), cparams.kv_resident_size/(1024*1024));
+            }
         } else if (cparams.kv_resident_size > 0 && cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {
             throw std::runtime_error("KV streaming is not supported by this model's memory");
         }

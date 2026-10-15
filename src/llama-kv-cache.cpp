@@ -80,7 +80,8 @@ llama_kv_cache::llama_kv_cache(
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
              const char *   name_tag,
-                 size_t   stream_resident_size) :
+                 size_t   stream_resident_size,
+                 size_t   stream_resident_size_decode) :
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
@@ -164,8 +165,9 @@ llama_kv_cache::llama_kv_cache(
     const bool is_mla = hparams.is_mla();
 
     // KV streaming: the K/V tensors become a pool of n_slots resident pages
-    uint32_t n_rows  = kv_size;
-    uint32_t n_slots = 0;
+    uint32_t n_rows         = kv_size;
+    uint32_t n_slots        = 0;
+    uint32_t n_slots_decode = 0; // the pages the decode budget holds
     if (stream_resident_size > 0) {
         if (n_stream != 1 || v_trans || other || reuse || share || swa_type != LLAMA_SWA_TYPE_NONE || is_mla) {
             throw std::runtime_error("KV streaming requires Flash Attention, one sequence (or a unified cache) and a cache "
@@ -194,6 +196,7 @@ llama_kv_cache::llama_kv_cache(
             throw std::runtime_error(format("KV streaming: the resident budget holds %u pages, at least 8 are needed", n_slots));
         }
         n_rows = n_slots*llama_kv_stream::page_size;
+        n_slots_decode = llama_kv_stream::slots_for(stream_resident_size_decode, bytes_per_cell);
     }
 
     for (uint32_t il = 0; il < n_layer; il++) {
@@ -334,7 +337,7 @@ llama_kv_cache::llama_kv_cache(
             sl.push_back({ layer.k, layer.v });
         }
         ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(layers[0].k->buffer));
-        stream = std::make_unique<llama_kv_stream>(sl, n_slots, kv_size, dev, hparams.no_alloc);
+        stream = std::make_unique<llama_kv_stream>(sl, n_slots, n_slots_decode, kv_size, dev, hparams.no_alloc);
     }
 
     {
