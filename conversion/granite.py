@@ -239,8 +239,21 @@ class GraniteSwitchModel(GraniteMoeModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # the weightless switch reserves one cache slot: one fewer block than num_hidden_layers
-        self.block_count = self.block_count - 1
+        # The weightless switch layer(s) are counted in num_hidden_layers but carry no tensors.
+        # The count is not fixed, nor is it present in hparams, so we derive it here based on tensor block names.
+        layer_ids = {
+            int(m.group(1))
+            for name in self.model_tensors
+            if (m := re.match(r"(?:model\.)?layers\.(\d+)\.", name))
+        }
+        if not layer_ids:
+            raise ValueError("graniteswitch: no 'model.layers.N' tensors found in checkpoint")
+        n_weight_layers = max(layer_ids) + 1
+        logger.info(
+            "gguf: (graniteswitch) num_hidden_layers %s counts %d weightless switch layer(s); using %d blocks",
+            self.hparams["num_hidden_layers"], self.block_count - n_weight_layers, n_weight_layers,
+        )
+        self.block_count = n_weight_layers
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         self._n_adapters = int(self.hparams["num_adapters"])
