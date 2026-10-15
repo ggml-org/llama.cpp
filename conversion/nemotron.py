@@ -397,8 +397,7 @@ class NemotronModel(TextModel):
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
         # Use explicit head_dim when available; fallback keeps standard Nemotron working.
-        # Without this, models where n_head * head_dim != n_embd (e.g. 48 heads, head_dim=128)
-        # produce the wrong rope dimension count.
+        # Without this, models where n_head * head_dim != n_embd (e.g. 48 heads, head_dim=128) produce the wrong rope dimension count.
         head_dim = self.hparams.get("head_dim") or n_embd // n_head
         self.gguf_writer.add_rope_dimension_count(int(rot_pct * head_dim))
 
