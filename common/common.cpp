@@ -13,6 +13,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "unicode.h"
+#include "chat.h"
 
 #include <algorithm>
 #include <cinttypes>
