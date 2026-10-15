@@ -6,15 +6,19 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <condition_variable>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -1859,6 +1863,94 @@ static ggml_guid_t ggml_backend_meta_guid() {
     return &guid;
 }
 
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+static inline void ggml_meta_cpu_relax() { _mm_pause(); }
+#else
+static inline void ggml_meta_cpu_relax() { std::this_thread::yield(); }
+#endif
+
+// LLAMA_DIST_TP_RECORD_AHEAD=1 (dist-TP, one Vulkan device per rank): while the all-reduce of
+// subgraph i is on the network, a helper thread records subgraph i+1 into a Vulkan command buffer
+// that is held back (ggml_backend_vk_set_defer_submit). Once the reduced tensor is written back,
+// the held work is submitted (ggml_backend_vk_flush_deferred). Subgraph i has finished on the GPU
+// before the recording starts, so nothing the GPU uses changes under it, and the main thread does
+// not touch the Vulkan backend until the helper is done. LLAMA_DIST_TP_RECORD_AHEAD_SPIN_US
+// (default 2000): how long the helper polls for the next job before it sleeps.
+typedef void (*ggml_backend_vk_set_defer_submit_t)(ggml_backend_t backend, bool defer);
+typedef void (*ggml_backend_vk_flush_deferred_t)(ggml_backend_t backend);
+
+struct ggml_meta_record_ahead {
+    ggml_backend_vk_set_defer_submit_t set_defer = nullptr;
+    ggml_backend_vk_flush_deferred_t   flush     = nullptr;
+    int64_t                            spin_us   = 2000;
+
+    std::thread             th;
+    std::mutex              mtx;
+    std::condition_variable cv;
+    std::atomic<int>        state{0}; // 0 idle, 1 job posted, 2 job done, 3 quit
+    ggml_backend_t          backend = nullptr;
+    ggml_cgraph *           cgraph  = nullptr;
+    ggml_status             status  = GGML_STATUS_SUCCESS;
+
+    void run() {
+        int64_t t_last = ggml_time_us();
+        for (;;) {
+            const int st = state.load(std::memory_order_acquire);
+            if (st == 1) {
+                set_defer(backend, true);
+                status = ggml_backend_graph_compute_async(backend, cgraph);
+                set_defer(backend, false);
+                state.store(2, std::memory_order_release);
+                t_last = ggml_time_us();
+                continue;
+            }
+            if (st == 3) {
+                return;
+            }
+            if (ggml_time_us() - t_last < spin_us) {
+                ggml_meta_cpu_relax();
+                continue;
+            }
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, [this] {
+                const int v = state.load(std::memory_order_acquire);
+                return v == 1 || v == 3;
+            });
+        }
+    }
+
+    // record cgraph on backend, held back until flush
+    void post(ggml_backend_t b, ggml_cgraph * g) {
+        backend = b;
+        cgraph  = g;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            state.store(1, std::memory_order_release);
+        }
+        cv.notify_one();
+    }
+
+    ggml_status wait() {
+        while (state.load(std::memory_order_acquire) != 2) {
+            ggml_meta_cpu_relax();
+        }
+        state.store(0, std::memory_order_relaxed);
+        return status;
+    }
+
+    ~ggml_meta_record_ahead() {
+        if (th.joinable()) {
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                state.store(3, std::memory_order_release);
+            }
+            cv.notify_one();
+            th.join();
+        }
+    }
+};
+
 struct ggml_backend_meta_context {
     struct cgraph_config {
         ggml_cgraph * cgraph_main = nullptr;
@@ -1908,6 +2000,8 @@ struct ggml_backend_meta_context {
     ggml_backend_meta_dist_allreduce_tensor_t dist_comm_allreduce = nullptr;
     ggml_backend_meta_dist_cfg                dist_cfg;
 
+    std::unique_ptr<ggml_meta_record_ahead>   ahead; // LLAMA_DIST_TP_RECORD_AHEAD
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) meta_dev->context;
         dist_cfg = meta_dev_ctx->dist_cfg;
@@ -1955,9 +2049,30 @@ struct ggml_backend_meta_context {
         }
 
         ggml_backend_meta_get_dist_allreduce(&dist_comm_ctx, &dist_comm_allreduce);
+
+        const char * record_ahead = getenv("LLAMA_DIST_TP_RECORD_AHEAD");
+        if (record_ahead != nullptr && atoi(record_ahead) != 0 && n_devs == 1) {
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(simple_backends[0]));
+            auto set_defer = (ggml_backend_vk_set_defer_submit_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_set_defer_submit");
+            auto flush     = (ggml_backend_vk_flush_deferred_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_flush_deferred");
+            if (set_defer != nullptr && flush != nullptr) {
+                ahead.reset(new ggml_meta_record_ahead);
+                ahead->set_defer = set_defer;
+                ahead->flush     = flush;
+                if (const char * spin = getenv("LLAMA_DIST_TP_RECORD_AHEAD_SPIN_US")) {
+                    ahead->spin_us = atoll(spin);
+                }
+                ggml_meta_record_ahead * a = ahead.get();
+                ahead->th = std::thread([a] { a->run(); });
+                GGML_LOG_INFO("%s: dist-tp record-ahead on (helper polls %lld us)\n", __func__, (long long) ahead->spin_us);
+            } else {
+                GGML_LOG_WARN("%s: LLAMA_DIST_TP_RECORD_AHEAD ignored, %s has no deferred submit\n", __func__, ggml_backend_reg_name(reg));
+            }
+        }
     }
 
     ~ggml_backend_meta_context() {
+        ahead.reset(); // stops the helper before the backends go
         if (comm_ctx != nullptr) {
             ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
@@ -2698,7 +2813,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         return false;
     };
 
-    auto dist_allreduce_fallback = [&](const std::vector<std::vector<ggml_tensor *>> & nodes_dist_per_backend) -> ggml_status {
+    // ahead_next: with record-ahead, the subgraph to record while this all-reduce is on the network;
+    // ahead_posted is set when that happened, and the caller then only has to flush it
+    auto dist_allreduce_fallback = [&](const std::vector<std::vector<ggml_tensor *>> & nodes_dist_per_backend,
+                                       ggml_cgraph * ahead_next, bool & ahead_posted) -> ggml_status {
 
         int dist_rank = 0;
         int dist_world_size = 1;
@@ -2783,6 +2901,14 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 }
                 if (distprof) { dp_t_get += dp_g1 - dp_g0; dp_t_sync += dp_g2 - dp_g1; dp_nbnd++; dp_bytes += n * sizeof(float); }
 
+                // the GPU is idle now: record the next subgraph while the network runs
+                bool ahead_wait = false;
+                if (ahead_next != nullptr && !ahead_posted) {
+                    backend_ctx->ahead->post(bcj.backend, ahead_next);
+                    ahead_posted = true;
+                    ahead_wait   = true;
+                }
+
                 // Host-side ring all-reduce: accumulate into `cur`, forward via `send`.
                 // Avoids the per-boundary GPU ADD kernel submission + node_tmp upload,
                 // which on a high submit-latency backend (Vulkan iGPU) dominates decode.
@@ -2795,6 +2921,9 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     int32_t recv_src = -1;
                     const int64_t dp_n0 = distprof ? ggml_time_us() : 0;
                     if (!backend_ctx->dist_comm_allreduce(backend_ctx->dist_comm_ctx, send.data(), n, cur_src, recv.data(), &recv_src)) {
+                        if (ahead_wait) {
+                            backend_ctx->ahead->wait();
+                        }
                         return GGML_STATUS_FAILED;
                     }
                     const int64_t dp_s0 = distprof ? ggml_time_us() : 0;
@@ -2810,6 +2939,14 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                         cur_src = recv_src;
                     }
                     if (distprof) { dp_t_setadd += ggml_time_us() - dp_s0; }
+                }
+
+                // the helper has to be done with the backend before the write-back
+                if (ahead_wait) {
+                    const ggml_status ahead_status = backend_ctx->ahead->wait();
+                    if (ahead_status != GGML_STATUS_SUCCESS) {
+                        return ahead_status;
+                    }
                 }
 
                 // Write the fully-reduced result back to the boundary tensor once.
@@ -2829,12 +2966,20 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     };
 
 
+    // record-ahead: subgraph i may already be recorded (during the previous all-reduce) and then
+    // only has to be submitted
+    bool recorded_ahead = false;
     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
-        for (size_t j = 0; j < n_backends; j++) {
-            auto & bcj = backend_ctx->backend_configs[j];
-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
-            if (status != GGML_STATUS_SUCCESS) {
-                return status;
+        if (recorded_ahead) {
+            backend_ctx->ahead->flush(backend_ctx->backend_configs[0].backend);
+            recorded_ahead = false;
+        } else {
+            for (size_t j = 0; j < n_backends; j++) {
+                auto & bcj = backend_ctx->backend_configs[j];
+                const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
+                if (status != GGML_STATUS_SUCCESS) {
+                    return status;
+                }
             }
         }
 
@@ -2886,10 +3031,14 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     // get + one merged synchronize (which waits for the in-flight subgraph
                     // compute together with the copy), so the previous per-backend full
                     // ggml_backend_synchronize here is no longer needed.
-                    const ggml_status status = dist_allreduce_fallback(nodes_dist_per_backend);
+                    ggml_cgraph * ahead_next = backend_ctx->ahead && n_backends == 1 && i + 1 < backend_ctx->n_subgraphs ?
+                        backend_ctx->backend_configs[0].cgraphs[i + 1].cgraph_main : nullptr;
+                    bool ahead_posted = false;
+                    const ggml_status status = dist_allreduce_fallback(nodes_dist_per_backend, ahead_next, ahead_posted);
                     if (status != GGML_STATUS_SUCCESS) {
                         return status;
                     }
+                    recorded_ahead = ahead_posted;
                 }
             }
         }
