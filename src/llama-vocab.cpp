@@ -3606,6 +3606,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 // tokenizer.encode('', add_special_tokens=True)  returns [1]
                 // tokenizer.encode('', add_special_tokens=False) returns []
 
+                // TODO: honor metaspace_prepend_scheme (add_space_prefix currently behaves like "always")
                 bool is_prev_special = true;  // prefix with space if first token
 
                 if (add_special && add_bos) {
@@ -3729,6 +3730,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                     GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
                     output.push_back(special_bos_id);
                 }
+                // TODO: honor metaspace_prepend_scheme
                 llm_tokenizer_ugm_session session(vocab, *static_cast<const llm_tokenizer_ugm *>(tokenizer.get()));
 
                 for (const auto & fragment : fragment_buffer) {
@@ -3996,7 +3998,7 @@ int32_t llama_vocab::impl::detokenize(
     int32_t total = 0;
 
     // remove the leading space
-    bool remove_space = add_space_prefix || pre_type == LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL;
+    bool remove_space = add_space_prefix;
 
     if (remove_special && add_bos) {
         if (n_tokens > 0 && tokens[0] == special_bos_id) {
@@ -4012,10 +4014,17 @@ int32_t llama_vocab::impl::detokenize(
         }
     }
 
+    // Metaspace prepend_scheme "first": remove the leading space of the first rendered piece, so a skipped BOS does not consume it
+    // TODO: honor metaspace_prepend_scheme for the other vocab types
+    bool remove_first_space = type == LLAMA_VOCAB_TYPE_BPE && metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
+
     for (int32_t i = 0; i < n_tokens; ++i) {
         GGML_ASSERT(avail >= 0);
-        int32_t n_chars = token_to_piece(tokens[i], text, avail, remove_space, unparse_special);
+        int32_t n_chars = token_to_piece(tokens[i], text, avail, remove_space || remove_first_space, unparse_special);
         remove_space = false;
+        if (unparse_special || !(token_get_attr(tokens[i]) & (LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_CONTROL))) {
+            remove_first_space = false;
+        }
         if (n_chars < 0) {
             avail = 0;
             total -= n_chars;
