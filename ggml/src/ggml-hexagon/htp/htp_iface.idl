@@ -18,6 +18,7 @@ interface htp_iface : remote_handle64 {
     AEEResult profiler(in uint32 mode, in htp_iface_pmu_conf pmu);
     AEEResult etm(in uint32 enable);
     AEEResult hwinfo(rout uint32 n_threads, rout uint32 n_hvx, rout uint32 n_hmx, rout uint64 vtcm_size);
+    AEEResult hmx_probe(in int32 force, rout uint32 fp16);
 };
 
 #endif /* HTP_IDL */

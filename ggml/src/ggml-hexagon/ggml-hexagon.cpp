@@ -151,6 +151,7 @@ static size_t opt_mbuf_total  = 0;                        // total buffer space 
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_head_split = 1; // 1 = partition flash_attn by KV heads in multicore (default on), 0 = token-based (original)
+static int    opt_hmx_fp16 = -1; // -1 = probe the device, 0/1 = force (HMX without FP16 uses the integer HMX path for Q4_0)
 static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select  = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
 static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD (default), 0 = full reduction
@@ -589,6 +590,7 @@ struct ggml_hexagon_session {
     uint32_t n_threads   = 0;
     uint32_t n_hvx       = 0;
     uint32_t n_hmx       = 0;
+    bool     hmx_fp16    = true;   // false: HMX without FP16 (probed at session start)
     uint64_t vtcm_size   = 0;
     size_t   max_vmem    = 0;
     uint32_t fence_seq   = 0;
@@ -4999,6 +5001,16 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
     this->valid_iface = true;
     GGML_LOG_INFO("ggml-hex: %s power mode: %s\n", this->c_name(), htp_power_mode_to_str(opt_power_mode));
 
+    if (this->n_hmx > 0) {
+        uint32_t fp16 = 1;
+        err = htp_iface_hmx_probe(this->handle, opt_hmx_fp16, &fp16);
+        if (err == 0) {
+            this->hmx_fp16 = opt_hmx_fp16 >= 0 ? (opt_hmx_fp16 != 0) : (fp16 != 0);
+            GGML_LOG_INFO("ggml-hex: %s HMX FP16: %s%s\n", this->c_name(), fp16 ? "yes" : "no",
+                          this->hmx_fp16 ? "" : " (integer HMX for Q4_0 matmul and attention)");
+        }
+    }
+
     if (opt_profile) {
         htp_iface_pmu_conf pmu_conf{};
         std::copy(opt_pmu_evt.begin(), opt_pmu_evt.end(), pmu_conf.events);
@@ -5109,7 +5121,7 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
         return false;
     }
 
-    if (opt_fa_select < 2) {
+    if (opt_fa_select < 2 || !sess->hmx_fp16) {
         return false;
     }
 
@@ -5406,7 +5418,7 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
     const uint32_t n_threads  = (std::min)((uint32_t) sess->n_threads, total_rows);
 
     const bool can_use_hmx = (opt_gdn_select >= 2) &&
-                             (sess->n_hmx > 0) &&
+                             (sess->n_hmx > 0) && sess->hmx_fp16 &&
                              (S_v % 64 == 0) &&
                              (n_tokens >= HTP_GDN_MIN_TOKENS) &&
                              (g->ne[0] == 1) &&
@@ -5777,6 +5789,7 @@ static void ggml_hexagon_precompute_matmul_params_impl(
 
     // Check HMX eligibility and try precomputing HMX parameters
     bool hmx_enabled = (sess->n_hmx > 0) && (opt_mm_select >= 2);
+    if (!sess->hmx_fp16 && (wtype != GGML_TYPE_Q4_0 || is_matmul_id)) hmx_enabled = false;
     if (hmx_enabled && ggml_hexagon_matmul_is_hmx_eligible(src0, src1, dst, ne01_padded, is_matmul_id, is_batched)) {
         if (ggml_hexagon_precompute_hmx_mm_params(sess, src0, src1, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, src2_size, vtcm_budget, kparams)) {
             goto finalize;
@@ -6457,7 +6470,7 @@ static void ggml_hexagon_precompute_gated_delta_net_params(
     const uint32_t n_threads  = (std::min)((uint32_t) sess->n_threads, total_rows);
 
     const bool can_use_hmx = (opt_gdn_select >= 2) &&
-                             (sess->n_hmx > 0) &&
+                             (sess->n_hmx > 0) && sess->hmx_fp16 &&
                              (S_v % 64 == 0) &&
                              (n_tokens >= HTP_GDN_MIN_TOKENS) &&
                              (g->ne[0] == 1) &&
@@ -6930,7 +6943,7 @@ static void ggml_hexagon_precompute_fused_mmnx_params(
     const size_t vtcm_budget = sess->vtcm_size;
     const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
 
-    bool hmx_enabled = (sess->n_hmx > 0) && (opt_mm_select >= 2);
+    bool hmx_enabled = (sess->n_hmx > 0) && (opt_mm_select >= 2) && (sess->hmx_fp16 || wtype == GGML_TYPE_Q4_0);
     if (hmx_enabled && ggml_hexagon_matmul_is_hmx_eligible(src0, act, nullptr, ne01_padded, false, is_batched)) {
         if (ggml_hexagon_precompute_hmx_mm_params(sess, src0, act, nullptr, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, is_batched, 0, vtcm_budget, kparams)) {
             kparams->n_weights = n_weights;
@@ -9986,6 +9999,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_fa_select = getenv("GGML_HEXAGON_FA_SELECT");
     const char * str_fa_head_split = getenv("GGML_HEXAGON_FA_HEAD_SPLIT");
     const char * str_gdn_select = getenv("GGML_HEXAGON_GDN_SELECT");
+    const char * str_hmx_fp16 = getenv("GGML_HEXAGON_HMX_FP16");
     const char * str_ar_select = getenv("GGML_HEXAGON_AR_SELECT");
     const char * str_ar_scatter = getenv("GGML_HEXAGON_AR_SCATTER");
     const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
@@ -10050,6 +10064,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
     opt_fa_head_split = str_fa_head_split ? atoi(str_fa_head_split)       : opt_fa_head_split;
     opt_gdn_select    = str_gdn_select    ? atoi(str_gdn_select)          : opt_gdn_select;
+    opt_hmx_fp16      = str_hmx_fp16      ? atoi(str_hmx_fp16)            : opt_hmx_fp16;
     opt_ar_select     = str_ar_select     ? atoi(str_ar_select)           : opt_ar_select;
     opt_ar_scatter    = str_ar_scatter    ? atoi(str_ar_scatter)          : opt_ar_scatter;
 
