@@ -182,11 +182,48 @@ class TensorNameMap:
         MODEL_TENSOR.A_QF_PROJ_LINEAR: (
             "projector.linear",
         ),
+        MODEL_TENSOR.LILICORR_TOKEN_PROJ: (
+            "model.lilicorr.token_proj",
+        ),
+        MODEL_TENSOR.LILICORR_PASS_HIDDEN_PROJ: (
+            "model.lilicorr.pass_hidden_proj",
+        ),
+        MODEL_TENSOR.LILICORR_SLOT_EMBD: (
+            "model.lilicorr.slot_embedding",
+        ),
+        MODEL_TENSOR.LILICORR_RANK_EMBD: (
+            "model.lilicorr.rank_embedding",
+        ),
+        MODEL_TENSOR.LILICORR_ATTN_BIAS: (
+            "model.lilicorr.attention_bias",
+        ),
+        MODEL_TENSOR.LILICORR_CONTEXT_PROJ: (
+            "model.lilicorr.context_proj",
+        ),
+        MODEL_TENSOR.LILICORR_OUTPUT_NORM: (
+            "model.lilicorr.output_norm",
+        ),
+        MODEL_TENSOR.LILICORR_ANCHOR_NORM: (
+            "model.lilicorr.anchor_norm",
+        ),
+        MODEL_TENSOR.LILICORR_FACTOR_INPUT_PROJ: (
+            "model.lilicorr.factor_input_proj",
+        ),
+        MODEL_TENSOR.LILICORR_OUT_HEAD: (
+            "model.lilicorr.out_head",
+        ),
+        MODEL_TENSOR.LILICORR_IN_HEAD: (
+            "model.lilicorr.in_head",
+        ),
+        MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD: (
+            "model.lilicorr.anchor_out_head",
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
+            "model.lilicorr.layers.{bid}.attn_norm",                # lilicorr
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
             "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais exaone
             "transformer.blocks.{bid}.norm_1",                      # mpt
@@ -324,6 +361,7 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
+            "model.lilicorr.layers.{bid}.attn.out_proj",                    # lilicorr
             "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
             "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
             "transformer.blocks.{bid}.attn.out_proj",                       # mpt
@@ -407,6 +445,8 @@ class TensorNameMap:
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
+            "model.lilicorr.layers.{bid}.mlp_norm",                          # lilicorr
+            "model.lilicorr.feature_mlp.{bid}.norm",                         # lilicorr
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
             "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
             "h.{bid}.post_attention_layernorm",                              # bloom
@@ -504,6 +544,8 @@ class TensorNameMap:
 
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
+            "model.lilicorr.layers.{bid}.mlp.up_proj",                # lilicorr
+            "model.lilicorr.feature_mlp.{bid}.up_proj",               # lilicorr
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox
             "transformer.h.{bid}.mlp.c_fc",                           # gpt2 jais
             "transformer.blocks.{bid}.ffn.up_proj",                   # mpt
@@ -640,6 +682,8 @@ class TensorNameMap:
 
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
+            "model.lilicorr.layers.{bid}.mlp.down_proj",              # lilicorr
+            "model.lilicorr.feature_mlp.{bid}.down_proj",             # lilicorr
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
             "transformer.h.{bid}.mlp.c_proj",                         # gpt2 refact qwen jais
             "transformer.blocks.{bid}.ffn.down_proj",                 # mpt
@@ -1553,6 +1597,9 @@ class TensorNameMap:
 
         MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN: (
             "model.candidate_selector.hidden_projection",
+        ),
+        MODEL_TENSOR.LILICORR_ATTN_IN_PROJ: (
+            "model.lilicorr.layers.{bid}.attn.in_proj",
         ),
 
         MODEL_TENSOR.CLS: (
