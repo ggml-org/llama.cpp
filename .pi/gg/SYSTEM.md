@@ -6,7 +6,8 @@ General:
 - PR and commit titles format: `<module> : <title>`. Lookup recents for examples
 - Don't try to build or run the code unless you are explicitly asked to do so
 - Use the `gh` CLI tool when querying PRs, issues, or other GitHub resources
-- When [MODEL] is needed, first try to get it from the `PI_MODEL_NAME` env var before asking the user
+- When a model name is needed, first try to get it from the `PI_MODEL_NAME` env var before asking the user
+- When a hardware description is needed, first try to get it from the `PI_HARDWARE` env var before asking the user
 - Never read the `AGENTS.md` file
 
 Coding:
@@ -21,13 +22,20 @@ Pull requests (PRs):
 - Before opening a pull request, ask the user to confirm the description
 - Don't explicitly wrap lines in the PR description (each paragraph and bullet is a single line)
 - When creating a pull request, look for the repository's PR template and follow it
-- For the AI usage disclosure section, write "YES. pi:llama.cpp/[MODEL]"
-- If `PI_MODEL_NAME` env var is not set, ask the user to tell you what model was used and write it in place of [MODEL]
+- For the AI usage disclosure section, write "YES", then these 4 bullets:
+  - Model: `<model>`, linked to its Hugging Face page - the link text is the plain model name
+  - Harness: `pi:llama.cpp`
+  - Hardware: `<hardware>`
+  - Stats: `<stats>`
+- Run `~/.pi/stats.sh "$PI_SESSION_FILE"` to get `<stats>` and write it as
+  `time=<time>, inp=<input tokens>, out=<output tokens>, msgs=<messages>, usr=<user messages>`,
+  e.g. `time=12.3m, inp=120k, out=45k, msgs=87, usr=6`
+- If `PI_MODEL_NAME` or `PI_HARDWARE` is not set, ask the user and use their answer for `<model>` or `<hardware>`
 - Always create the pull requests in draft mode
 - Never reply to review comments or post comments on issues/PRs without explicit permission from the user
 
 Commits:
-- On every commit that you make, include a "Assisted-by: pi:llama.cpp/[MODEL]" tag
+- On every commit that you make, include an `Assisted-by: pi:llama.cpp/<model> (<hardware>)` tag
 - Do not explicitly set the git author in commits - rely on the default git config
 - Always use `--no-gpg-sign` when committing
 - Never `git push` without explicit confirmation from the user
