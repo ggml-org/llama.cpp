@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -105,6 +106,8 @@ public:
     // completed prefetch reads still unconsumed when a demand commit for the
     // same expert arrived (prefetch hit); cumulative
     long stats_pf_hit()   const { return n_pf_hit_; }
+    void dma_table_int(struct ggml_tensor * table, int e, int32_t v);
+    static void * worker_stream();
 
 private:
     struct Req { int il, e, stage, done; bool used, demand; long got[3]; };
@@ -126,6 +129,7 @@ private:
     long n_gguf_reads_ = 0, n_pack_reads_ = 0;
 
     void * backend_ = nullptr;
+    std::mutex mtx_;
     char * stage_ = nullptr;              // pinned staging, NSTAGE slots
     size_t stage_bytes_ = 0;
     static const int NSTAGE = 48;
@@ -153,4 +157,6 @@ private:
     int find_(int key) const;
     double wait_(int r);
     bool wait_ok_(int r); // true when all 3 roles moved their full length
+    bool commit_locked(int il, int e, void * dst_gate, size_t gate_bytes,
+        void * dst_up, size_t up_bytes, void * dst_down, size_t down_bytes);
 };

@@ -20,7 +20,9 @@
 #include <cinttypes>
 #include <chrono>
 #include <algorithm>
+#include <climits>
 #include <map>
+#include <mutex>
 #include <string>
 
 static thread_local double moe_diag_publish_ms = 0.0;
@@ -28,52 +30,27 @@ static thread_local double moe_diag_publish_ms = 0.0;
 #include <cstring>
 #include <limits>
 #include <stdexcept>
-#include <string>
 #include <unordered_map>
 #include <cstdlib>
 #include <vector>
 
 
-static std::atomic<bool> g_doorbell_running{false};
-static std::thread g_doorbell_thread;
+static inline int moe_get_layer_slots(int il, int n_layer);
+static inline int moe_get_layer_base_slot(int il, int n_layer);
 
-static void start_doorbell_worker(llama_context * ctx) {
-    if (g_doorbell_running.load()) return;
-    g_doorbell_running.store(true);
-    g_doorbell_thread = std::thread([ctx]() {
-        LayerDoorbell * dbs = moe_doorbell_get_host_ptr();
-        if (!dbs) return;
-        while (g_doorbell_running.load(std::memory_order_relaxed)) {
-            bool handled = false;
-            for (int il = 0; il < ctx->moe.n_layer; il++) {
-                if (dbs[il].state == 1) {
-                    const uint32_t n_miss = dbs[il].miss_count;
-                    for (uint32_t m = 0; m < n_miss && m < 10; m++) {
-                        int32_t exp = dbs[il].miss_experts[m];
-                        int slot = ctx->moe_page(il, exp);
-                        dbs[il].assigned_slots[m] = slot;
-                    }
-                    std::atomic_thread_fence(std::memory_order_seq_cst);
-                    dbs[il].gpu_ready = 1;
-                    handled = true;
-                }
-            }
-            if (!handled) {
-                std::this_thread::yield();
-            }
-        }
-    });
-}
-
-static void stop_doorbell_worker() {
-    if (!g_doorbell_running.load()) return;
-    g_doorbell_running.store(false);
-    if (g_doorbell_thread.joinable()) {
-        g_doorbell_thread.join();
+static bool moe_doorbell_on(const llama_context * ctx) {
+    static int on = -1;
+    if (on < 0) {
+        const char * e = getenv("MOE_DOORBELL");
+        on = (!e || atoi(e) != 0) ? 1 : 0;
     }
+    return on && ctx && ctx->moe_enabled();
 }
+
+
 // sparse MoE paging callback (defined near the moe_page helpers below)
 static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud);
+
 
 // Non-uniform "Arrival Slack" slot allocation (Pillar 2)
 static int g_moe_slots_total = 0; // 0 = fixed table; else scaled total
@@ -650,7 +627,6 @@ llama_context::llama_context(
                             }
                             if (moe_doorbell_init(moe.n_layer, moe.n_expert, moe.s_per_layer)) {
                                 LLAMA_LOG_INFO("%s: Zero-Split Stream-Ordered Doorbell armed (%d layers)\n", __func__, moe.n_layer);
-                                start_doorbell_worker(this);
                             }
                         } // staging reserved
                     } // buf ok
@@ -793,7 +769,6 @@ llama_context::~llama_context() {
     if (moe_predictor_is_ready()) {
         moe_predictor_free();
     }
-    stop_doorbell_worker();
     if (moe_doorbell_is_active()) {
         moe_doorbell_free();
     }
@@ -1803,11 +1778,52 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    {
+        static bool seen_tg = false, seen_pp = false;
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t_gpu0).count();
+        if (ubatch.n_tokens == 1 && !seen_tg) {
+            seen_tg = true;
+            fprintf(stderr, "%s: first decode splits=%d nodes=%d n_tokens=%u n_ubatch=%u compute=%.2f ms\n",
+                __func__, ggml_backend_sched_get_n_splits(sched.get()),
+                ggml_graph_n_nodes(res->get_gf()), ubatch.n_tokens, cparams.n_ubatch, ms);
+        } else if (ubatch.n_tokens > 1 && !seen_pp) {
+            seen_pp = true;
+            fprintf(stderr, "%s: first prefill splits=%d nodes=%d n_tokens=%u n_ubatch=%u compute=%.2f ms\n",
+                __func__, ggml_backend_sched_get_n_splits(sched.get()),
+                ggml_graph_n_nodes(res->get_gf()), ubatch.n_tokens, cparams.n_ubatch, ms);
+        }
+    }
+
     // decode only: the graph is done and nothing reads the pool, so refresh the
     // whole table here instead of splitting the graph at all 48 MoE layers
     if (moe_ready && ubatch.n_tokens == 1) {
         moe_predict_and_prefetch();
-        moe_post_refresh();
+        if (moe_doorbell_on(this)) {
+            if (moe_serve_doorbell()) {
+                const llama_seq_id sid = ubatch.seq_id[0][0];
+                const llama_pos pos = ubatch.pos[0];
+                if (memory->seq_rm(sid, pos, pos + 1)) {
+                    if (mctx && !mctx->apply()) {
+                        LLAMA_LOG_ERROR("%s: doorbell re-apply failed\n", __func__);
+                        ret = GGML_STATUS_FAILED;
+                        return nullptr;
+                    }
+                    res->set_inputs(&ubatch);
+                    const auto status2 = graph_compute(res->get_gf(), false);
+                    if (status2 != GGML_STATUS_SUCCESS) {
+                        LLAMA_LOG_ERROR("%s: doorbell recompute failed, compute status = %d\n", __func__, status2);
+                        ret = status2;
+                        return nullptr;
+                    }
+                    moe_serve_doorbell();
+                } else {
+                    LLAMA_LOG_WARN("%s: doorbell rollback unavailable, pass-1 output kept\n", __func__);
+                }
+            }
+        } else {
+            moe_post_refresh();
+        }
     }
 
     if (diag) {
@@ -4880,7 +4896,7 @@ static thread_local int moe_rr = 0;
 // the mapping. `pinned[local]` marks slots that must not be evicted (experts
 // still needed by the current batch); may be nullptr. Returns the layer-local
 // slot, or -1 on failure.
-int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
+int llama_context::moe_page_pinned(int il, int e, const bool * pinned, bool update_table) {
     if (!moe_ready || il < 0 || il >= moe.n_layer || e < 0 || e >= moe.n_expert) {
         return -1;
     }
@@ -4895,26 +4911,19 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
     }
     const int s_pl = moe_get_layer_slots(il, moe.n_layer);
     const int base = moe_get_layer_base_slot(il, moe.n_layer);
-    // Victim choice. MOE_EVICT=lru keeps the least recently used slot; the
-    // default stays round-robin, which measured better here: the per-layer
-    // working set (8 experts x 48 layers demanded per step against 104 slots)
-    // does not fit, so LRU thrashes a small hot set while round-robin spreads
-    // the re-reads evenly.
-    // Least-frequently-used victim within the layer, skipping pinned slots.
-    // Traced on this model: the 104 hottest experts per layer cover 66% of all
-    // router hits, but only 11% of hits repeat from the previous token, so a
-    // recency policy throws the hot set away and pays ~77% misses. Frequency
-    // lands on the measured 33%.
     int slot = -1;
     {
+        const int start = moe_rr % std::max(1, s_pl);
         uint32_t coldest = UINT32_MAX;
-        for (int t = 0; t < s_pl; t++) {
+        for (int i = 0; i < s_pl; i++) {
+            const int t = (start + i) % s_pl;
             const int cand = base + t;
             if (pinned && pinned[cand - base]) continue;
             const uint32_t f = moe.slot_freq[(size_t) cand];
             if (f < coldest) { coldest = f; slot = cand; }
         }
-        if (slot < 0) {   // everything pinned: fall back to the round-robin cursor
+        moe_rr++;
+        if (slot < 0) {
             for (int t = 0; t < s_pl; t++) {
                 const int cand = base + ((moe_rr + t) % s_pl);
                 if (!pinned || !pinned[cand - base]) { slot = cand; moe_rr += t + 1; break; }
@@ -4939,7 +4948,17 @@ int llama_context::moe_page_pinned(int il, int e, const bool * pinned) {
         return -1;
     }
     moe.slot_freq[(size_t) slot]++;
-    moe_publish(il, e, slot);
+    if (update_table) {
+        moe_publish(il, e, slot);
+    } else {
+        const int old = moe.slot_key[(size_t) slot];
+        if (old >= 0 && old != key) moe.slot_of[(size_t) old] = -1;
+        const int prev = moe.slot_of[(size_t) key];
+        if (prev >= 0 && prev != slot) moe.slot_key[(size_t) prev] = -1;
+        moe.slot_key[(size_t) slot] = key;
+        moe.slot_of[(size_t) key] = slot;
+        pager.dma_table_int(moe.slot_table[il], e, slot - base);
+    }
     moe.n_miss++;
     return slot;
 }
@@ -5020,6 +5039,41 @@ void llama_context::moe_page_batch_sorted(int il, const int32_t * sel, int n) {
 // r*64+63] into fixed pool slots (e - r*64) in ascending order for sequential
 // NVMe. The remap tables are static (prefill_tables), so no table update is
 // needed here. Called from the slot_ids_c data phase, before the range GEMMs.
+
+bool llama_context::moe_serve_doorbell() {
+    LayerDoorbell * dbs = moe_doorbell_get_host_ptr();
+    if (!moe_ready || !dbs) return false;
+    bool any = false;
+    for (int il = 0; il < moe.n_layer; il++) {
+        if (dbs[il].need_host != 1) continue;
+        any = true;
+        const uint32_t n_miss = dbs[il].miss_count > 16 ? 16 : dbs[il].miss_count;
+        const uint32_t k = dbs[il].k > 16 ? 16 : dbs[il].k;
+        const int n_exp = moe.n_expert;
+        const int n_used = moe.n_used;
+        const int s_pl = moe_get_layer_slots(il, moe.n_layer);
+        const int base = moe_get_layer_base_slot(il, moe.n_layer);
+        std::vector<char> pinned((size_t) s_pl, 0);
+        for (uint32_t j = 0; j < k; j++) {
+            const int32_t e = dbs[il].topk_all[j];
+            if (e < 0 || e >= n_exp) continue;
+            const int cur = moe.slot_of[(size_t) il * n_exp + e];
+            if (cur >= base && cur < base + s_pl) pinned[(size_t) cur - (size_t) base] = 1;
+        }
+        for (uint32_t m = 0; m < n_miss; m++) {
+            const int32_t e = dbs[il].miss_experts[m];
+            if (e < 0 || e >= n_exp) continue;
+            const int got = moe_page_pinned(il, e, (const bool *) pinned.data());
+            if (got >= base && got < base + s_pl) pinned[(size_t) got - (size_t) base] = 1;
+        }
+        for (uint32_t j = 0; j < k && (int) j < n_used; j++) {
+            moe.step_sel[(size_t) il * n_used + j] = dbs[il].topk_all[j];
+        }
+        dbs[il].need_host = 0;
+    }
+    return any;
+}
+
 void llama_context::moe_page_prefill_range(int il, int range) {
     if (!moe_ready || il < 0 || il >= moe.n_layer) return;
     if (range < 0 || range >= 8) return;
@@ -5568,6 +5622,9 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     if (il < 0 || il >= ctx->moe.n_layer) {
         return false;
     }
+    if (moe_doorbell_on(ctx) && t->ne[1] == 1) {
+        return false;
+    }
     if (ask) {
         static int mode = -1;
         if (mode < 0) {
@@ -5605,6 +5662,9 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const int64_t nw = t->ne[0];
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
+    if (moe_doorbell_on(ctx) && ntok == 1) {
+        return true;
+    }
     {
         static int chunked_on = -1;
         if (chunked_on < 0) {

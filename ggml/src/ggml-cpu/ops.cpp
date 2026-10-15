@@ -11551,6 +11551,41 @@ void ggml_compute_forward_dsv4_hc_pre(
     }
 }
 
+void ggml_compute_forward_moe_slot_resolve(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * topk  = dst->src[0];
+    const ggml_tensor * table = dst->src[1];
+
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    GGML_ASSERT(table->type == GGML_TYPE_I32);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+
+    const int32_t sentinel = ggml_get_op_params_i32(dst, 1);
+
+    const int64_t nk = topk->ne[0];
+    const int64_t nt = topk->ne[1];
+    const int64_t nx = table->ne[0] * table->ne[1];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int64_t nr = nk * nt;
+    const int64_t dr = (nr + nth - 1) / nth;
+    const int64_t ir0 = dr * ith;
+    const int64_t ir1 = std::min(ir0 + dr, nr);
+
+    for (int64_t i = ir0; i < ir1; i++) {
+        const int64_t k = i % nk;
+        const int64_t t = i / nk;
+        const int32_t e = *(const int32_t *) ((const char *) topk->data + t * topk->nb[1] + k * topk->nb[0]);
+        int32_t s = sentinel;
+        if (e >= 0 && e < nx) {
+            s = *(const int32_t *) ((const char *) table->data + e * table->nb[0]);
+        }
+        *(int32_t *) ((char *) dst->data + t * dst->nb[1] + k * dst->nb[0]) = s;
+    }
+}
+
 // ggml_compute_forward_dsv4_hc_post
 
 static void ggml_compute_forward_dsv4_hc_post_f32(

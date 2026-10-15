@@ -14,6 +14,7 @@
 
 #include <array>
 #include <map>
+#include <mutex>
 #include <vector>
 
 struct llama_model;
@@ -305,10 +306,11 @@ public:
     bool      moe_ready = false;
     bool moe_enabled() const { return moe_ready; }
     int  moe_page(int il, int e);
-    int  moe_page_pinned(int il, int e, const bool * pinned);
+    int  moe_page_pinned(int il, int e, const bool * pinned, bool update_table = true);
     void moe_page_batch(int il, const int32_t * sel, int n);
     void moe_page_batch_sorted(int il, const int32_t * sel, int n);
     void moe_page_prefill_range(int il, int range);
+    bool moe_serve_doorbell();
     // queue async reads for experts the next layer(s) will likely need.
     // never blocks; admission-controlled inside.
     void moe_prefetch_ahead(int il, const int32_t * sel, int n);

@@ -1084,6 +1084,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    "MOE_SLOT_RESOLVE",
 
     "UNARY",
 
@@ -1101,7 +1102,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1199,6 +1200,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
+    "moe_slot_resolve(topk, table)",
 
     "unary(x)",
 
@@ -1216,7 +1218,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6613,6 +6615,27 @@ struct ggml_tensor * ggml_dsv4_hc_post(
     result->src[1] = residual;
     result->src[2] = post;
     result->src[3] = comb;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_moe_slot_resolve(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * topk,
+        struct ggml_tensor  * table,
+        int32_t               il,
+        int32_t               sentinel) {
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    GGML_ASSERT(table->type == GGML_TYPE_I32);
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, topk->ne[0], topk->ne[1]);
+
+    ggml_set_op_params_i32(result, 0, il);
+    ggml_set_op_params_i32(result, 1, sentinel);
+
+    result->op     = GGML_OP_MOE_SLOT_RESOLVE;
+    result->src[0] = topk;
+    result->src[1] = table;
 
     return result;
 }

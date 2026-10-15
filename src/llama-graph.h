@@ -825,6 +825,7 @@ struct llm_graph_params {
     const ggml_tensor * const * moe_up    = nullptr;
     const ggml_tensor * const * moe_down  = nullptr;
     const ggml_tensor * const * moe_table = nullptr;
+    const ggml_tensor * const * moe_prefill_tables = nullptr;
     int32_t moe_n_layer = 0;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
@@ -1043,6 +1044,7 @@ struct llm_graph_context {
     const ggml_tensor * const * moe_gate_up = nullptr;
     const ggml_tensor * const * moe_down  = nullptr;
     const ggml_tensor * const * moe_table = nullptr;
+    const ggml_tensor * const * moe_prefill_tables = nullptr;
     int32_t moe_n_layer = 0;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?

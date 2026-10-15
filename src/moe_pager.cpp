@@ -16,6 +16,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <fcntl.h>
@@ -245,7 +246,8 @@ int moe_pager::submit_(int key, bool demand) {
     Req q; q.il = il; q.e = e; q.stage = st; q.done = pending; q.used = true; q.demand = demand;
     q.got[0] = got_self[0]; q.got[1] = got_self[1]; q.got[2] = got_self[2];
     reqs_.push_back(q);
-    io_uring_submit((struct io_uring *) ring_);
+    int nsub = io_uring_submit((struct io_uring *) ring_);
+    if (nsub <= 0) { fprintf(stderr, "pager submit failed il=%d e=%d nsub=%d\n", il, e, nsub); }
     if (pack_mode_) { io_ops_ += 1; io_bytes_ += (long) boff; n_pack_reads_ += 1; }
     else            { io_ops_ += 3; io_bytes_ += (long) boff; n_gguf_reads_ += 3; }
     return (int) reqs_.size() - 1;
@@ -286,6 +288,7 @@ double moe_pager::wait_(int r) {
 // must run often enough that free_stage_ never empties under prefetch load;
 // each call also surfaces stuck completions for in-flight requests.
 int moe_pager::reap() {
+    std::lock_guard<std::mutex> lock(mtx_);
     int n = 0;
     struct io_uring * ring = (struct io_uring *) ring_;
     for (;;) {
@@ -381,6 +384,7 @@ bool moe_pager::init_cache(size_t bytes) {
 }
 
 bool moe_pager::prefetch(int il, int e) {
+    std::lock_guard<std::mutex> lock(mtx_);
     const int key = il * n_expert_ + e;
     if (find_(key) >= 0) return true;
     const int r = submit_(key, false);
@@ -391,7 +395,19 @@ bool moe_pager::prefetch(int il, int e) {
 bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
                                   void * dst_up,     size_t up_bytes,
                                   void * dst_down,   size_t down_bytes) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return commit_locked(il, e, dst_gate, gate_bytes, dst_up, up_bytes, dst_down, down_bytes);
+}
+
+bool moe_pager::commit_locked(int il, int e, void * dst_gate, size_t gate_bytes,
+                                  void * dst_up,     size_t up_bytes,
+                                  void * dst_down,   size_t down_bytes) {
     const int key = il * n_expert_ + e;
+    cudaStream_t ws = (cudaStream_t) worker_stream();
+    if (!ws) {
+        n_io_fail_++;
+        return false;
+    }
 
     // Tier 1 first: a resident host copy is a PCIe copy, not an NVMe read
     if (cache_ && cache_slots_ > 0) {
@@ -410,11 +426,13 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
                     ? role_bytes_[(size_t) il * 3 + (size_t) k]
                     : ((size_t) cs[k].len - cs[k].pre);
                 cudaMemcpyAsync(cdst[k], csrc + coff, std::min(cwant[k], cav),
-                                cudaMemcpyHostToDevice, 0);
+                                cudaMemcpyHostToDevice, ws);
                 coff += cav;
             }
             cache_stamp_[(size_t) cslot] = ++cache_tick_;
             n_cache_hit_++;
+            cudaError_t se = cudaStreamSynchronize(ws);
+            if (se != cudaSuccess) { fprintf(stderr, "pager cache sync failed: %d\n", (int) se); return false; }
             return true;
         }
         n_cache_miss_++;
@@ -447,9 +465,17 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
         const size_t avail = pack_mode_
             ? role_bytes_[(size_t) il * 3 + (size_t) k]
             : ((size_t) s[k].len - skip);
-        cudaMemcpy(dst[k], src + (pack_mode_ ? 0 : off) + skip,
-                   std::min(want[k], avail), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(dst[k], src + (pack_mode_ ? 0 : off) + skip,
+                   std::min(want[k], avail), cudaMemcpyHostToDevice, ws);
         if (!pack_mode_) off += s[k].len;
+    }
+    cudaError_t se = cudaStreamSynchronize(ws);
+    if (se != cudaSuccess) {
+        fprintf(stderr, "pager fetch sync failed: %d\n", (int) se);
+        n_io_fail_++;
+        (reqs_[r].demand ? free_demand_ : free_stage_).push_back(reqs_[r].stage);
+        reqs_[r].used = false;
+        return false;
     }
 
     // keep a host copy so the next time this expert is demanded it comes over
@@ -500,8 +526,33 @@ bool moe_pager::commit(int il, int e, void * dst_gate, size_t gate_bytes,
     return true;
 }
 
+void * moe_pager::worker_stream() {
+    thread_local cudaStream_t ws = nullptr;
+    thread_local bool tried = false;
+    if (!ws && !tried) {
+        tried = true;
+        cudaError_t e = cudaStreamCreateWithFlags(&ws, cudaStreamNonBlocking);
+        if (e != cudaSuccess) {
+            fprintf(stderr, "pager worker_stream create failed: %d\n", (int) e);
+            ws = nullptr;
+        }
+    }
+    return (void *) ws;
+}
+
+
+void moe_pager::dma_table_int(struct ggml_tensor * table, int e, int32_t v) {
+    if (!table || !table->data) return;
+    cudaStream_t ws = (cudaStream_t) worker_stream();
+    if (!ws) return;
+    cudaMemcpyAsync((char *) table->data + (size_t) e * sizeof(int32_t), &v, sizeof(int32_t),
+                    cudaMemcpyHostToDevice, ws);
+    cudaStreamSynchronize(ws);
+}
+
 bool moe_pager::fetch(int il, int e, void * dst_gate, size_t gate_bytes,
                                 void * dst_up,     size_t up_bytes,
                                 void * dst_down,   size_t down_bytes) {
-    return commit(il, e, dst_gate, gate_bytes, dst_up, up_bytes, dst_down, down_bytes);
+    std::lock_guard<std::mutex> lock(mtx_);
+    return commit_locked(il, e, dst_gate, gate_bytes, dst_up, up_bytes, dst_down, down_bytes);
 }

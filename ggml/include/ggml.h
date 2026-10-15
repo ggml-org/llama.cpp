@@ -585,6 +585,7 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_MOE_SLOT_RESOLVE,
 
         GGML_OP_UNARY,
 
@@ -2725,6 +2726,13 @@ extern "C" {
             struct ggml_tensor  * residual,
             struct ggml_tensor  * post,
             struct ggml_tensor  * comb);
+
+    GGML_API struct ggml_tensor * ggml_moe_slot_resolve(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * table,
+            int32_t               il,
+            int32_t               sentinel);
 
     // custom operators
 

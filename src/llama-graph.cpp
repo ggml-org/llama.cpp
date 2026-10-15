@@ -2213,12 +2213,24 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         gate_exps = (ggml_tensor *) moe_gate[il];
         up_exps   = (ggml_tensor *) moe_up[il];
         down_exps = (ggml_tensor *) moe_down[il];
-        // slot_table is [1, n_expert]; gather through a flattened index so
-        // this holds for any n_tokens, then restore [n_used, n_tokens].
-        ggml_tensor * ids_flat  = ggml_reshape_1d(ctx0, selected_experts, n_expert_used * n_tokens);
-        ggml_tensor * slot_flat = ggml_get_rows(ctx0, (ggml_tensor *) moe_table[il], ids_flat);
-        slot_ids = ggml_reshape_2d(ctx0, slot_flat, n_expert_used, n_tokens);
-        cb(slot_ids, "ffn_moe_slot_ids", il);
+        static int doorbell = -1;
+        if (doorbell < 0) {
+            const char * e = getenv("MOE_DOORBELL");
+            doorbell = (!e || atoi(e) != 0) ? 1 : 0;
+        }
+        if (doorbell == 1 && n_tokens == 1 && n_expert_used * n_tokens <= 16) {
+            const int32_t sentinel = (int32_t) (((ggml_tensor *) moe_up[il])->ne[2] - 1);
+            slot_ids = ggml_moe_slot_resolve(ctx0, selected_experts,
+                (ggml_tensor *) moe_table[il], (int32_t) il, sentinel);
+            cb(slot_ids, "ffn_moe_slot_ids", il);
+        } else {
+            // slot_table is [1, n_expert]; gather through a flattened index so
+            // this holds for any n_tokens, then restore [n_used, n_tokens].
+            ggml_tensor * ids_flat  = ggml_reshape_1d(ctx0, selected_experts, n_expert_used * n_tokens);
+            ggml_tensor * slot_flat = ggml_get_rows(ctx0, (ggml_tensor *) moe_table[il], ids_flat);
+            slot_ids = ggml_reshape_2d(ctx0, slot_flat, n_expert_used, n_tokens);
+            cb(slot_ids, "ffn_moe_slot_ids", il);
+        }
     }
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
@@ -2276,7 +2288,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             chunked_on = (e && atoi(e) != 0) ? 1 : 0;
         }
         bool do_chunked = false;
-        if (chunked_on == 1 && n_tokens > 32 && cparams.moe_direct_io &&
+        if (chunked_on == 1 && n_tokens > 32 && n_tokens <= 1024 && cparams.moe_direct_io &&
             moe_n_layer > il && il >= 0 && moe_gate && moe_up && moe_down && moe_table &&
             moe_prefill_tables &&
             moe_gate[il] && moe_up[il] && moe_down[il] && moe_table[il] &&
@@ -2318,7 +2330,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 "ffn_moe_weighted_c4", "ffn_moe_weighted_c5",
                 "ffn_moe_weighted_c6", "ffn_moe_weighted_c7",
             };
-            ggml_tensor * parts[8] = { nullptr };
+            ggml_tensor * chunked = nullptr;
             for (int r = 0; r < 8; r++) {
                 ggml_tensor * stable = (ggml_tensor *) moe_prefill_tables[(size_t) il * 8 + r];
                 ggml_tensor * s_flat = ggml_get_rows(ctx0, stable, ids_flat);
@@ -2332,12 +2344,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 ggml_tensor * w_r = ggml_mul(ctx0, d_r, weights);
                 cb(w_r, wt_nm[r], il);
                 ggml_build_forward_expand(gf, w_r);
-                parts[r] = w_r;
-            }
-            ggml_tensor * chunked = parts[0];
-            for (int r = 1; r < 8; r++) {
-                chunked = ggml_add(ctx0, chunked, parts[r]);
-                ggml_build_forward_expand(gf, chunked);
+                if (chunked == nullptr) {
+                    chunked = w_r;
+                } else {
+                    chunked = ggml_add(ctx0, chunked, w_r);
+                    ggml_build_forward_expand(gf, chunked);
+                }
             }
             cb(chunked, "ffn_moe_weighted_sum", il);
             const uint32_t n_used_il = hparams.n_expert_used(il);

@@ -693,6 +693,12 @@ static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
 static std::atomic<int> ggml_cuda_lock_counter;
 
+static ggml_cuda_moe_slot_resolve_fn_t ggml_cuda_moe_slot_resolve_fn = nullptr;
+
+void ggml_cuda_moe_slot_resolve_register(ggml_cuda_moe_slot_resolve_fn_t fn) {
+    ggml_cuda_moe_slot_resolve_fn = fn;
+}
+
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
@@ -2452,6 +2458,17 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_DSV4_HC_POST:
             ggml_cuda_op_dsv4_hc_post(ctx, dst);
             break;
+        case GGML_OP_MOE_SLOT_RESOLVE:
+            {
+                GGML_ASSERT(ggml_cuda_moe_slot_resolve_fn != nullptr);
+                const ggml_tensor * topk  = dst->src[0];
+                const ggml_tensor * table = dst->src[1];
+                ggml_cuda_moe_slot_resolve_fn(ctx.stream(),
+                    (const int32_t *) topk->data, (const int32_t *) table->data, (int32_t *) dst->data,
+                    topk->ne[0], topk->ne[1], topk->nb[0], topk->nb[1], table->nb[0], dst->nb[0], dst->nb[1],
+                    ggml_get_op_params_i32(dst, 0), (int32_t) (table->ne[0] * table->ne[1]),
+                    ggml_get_op_params_i32(dst, 1));
+            } break;
         case GGML_OP_RWKV_WKV7:
             ggml_cuda_op_rwkv_wkv7(ctx, dst);
             break;
@@ -5761,6 +5778,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 && (op->src[3] == nullptr || op->src[3]->type == GGML_TYPE_F32) &&
                 op->type == GGML_TYPE_F32;
+        case GGML_OP_MOE_SLOT_RESOLVE:
+            return op->src[0]->type == GGML_TYPE_I32 && op->src[1]->type == GGML_TYPE_I32 &&
+                op->type == GGML_TYPE_I32;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
         case GGML_OP_CROSS_ENTROPY_LOSS:
