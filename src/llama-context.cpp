@@ -76,11 +76,21 @@ static void stop_doorbell_worker() {
 static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud);
 
 // Non-uniform "Arrival Slack" slot allocation (Pillar 2)
-static inline int moe_get_layer_slots(int il, int n_layer) {
-    if (il >= 0 && il < 5) return 240;       // Layers 0..4: 240 slots (1,200 total) -> ~82% VRAM hit rate
-    if (il >= 5 && il < 43) return 92;       // Layers 5..42: 92 slots (3,496 total)
-    if (il >= 43 && il < n_layer) return 60; // Layers 43..47: 60 slots (300 total)
+static int g_moe_slots_total = 0; // 0 = fixed table; else scaled total
+static inline int moe_fixed_slots(int il, int n_layer) {
+    if (il >= 0 && il < 5) return 240;
+    if (il >= 5 && il < 43) return 92;
+    if (il >= 43 && il < n_layer) return 60;
     return 104;
+}
+static inline int moe_get_layer_slots(int il, int n_layer) {
+    const int base = moe_fixed_slots(il, n_layer);
+    if (g_moe_slots_total <= 0) return base;
+    int total_fixed = 0;
+    for (int l = 0; l < n_layer; l++) total_fixed += moe_fixed_slots(l, n_layer);
+    if (total_fixed <= 0) return base;
+    int scaled = (base * g_moe_slots_total + total_fixed / 2) / total_fixed;
+    return std::max(16, scaled);
 }
 
 static inline int moe_get_layer_base_slot(int il, int n_layer) {
@@ -183,6 +193,11 @@ llama_context::llama_context(
     cparams.moe_chunk_max = params.moe_chunk_max;
     cparams.moe_gguf_path = params.moe_gguf_path;
     cparams.moe_profile_path = params.moe_profile_path;
+    if (params.moe_direct_io && params.moe_slots > 0 && params.moe_slots != 4096) {
+        g_moe_slots_total = params.moe_slots;
+    } else {
+        g_moe_slots_total = 0;
+    }
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
@@ -571,6 +586,8 @@ llama_context::llama_context(
                         moe.slot_freq.assign((size_t) total_slots, 0);
                         moe.step_sel.assign((size_t) n_layer * n_used, -1);
                         moe.step_topk.assign((size_t) n_layer, nullptr);
+                        moe.prefill_topk.assign((size_t) n_layer, {});
+                        moe.prefill_nw.assign((size_t) n_layer, 0);
                         // staging for demand plus lookahead: 2 layers of layer-ahead
                         // plus token-ahead, all potentially unclaimed (65% predictor
                         // miss), plus margin so demand never starves
@@ -600,8 +617,10 @@ llama_context::llama_context(
                                     ggml_backend_tensor_set(moe.pool_up[il],   zero.data(), (size_t) s_pl_now * ub, ub);
                                     ggml_backend_tensor_set(moe.pool_down[il], zero.data(), (size_t) s_pl_now * db, db);
                                 }
-                                LLAMA_LOG_INFO("%s: sentinel slots armed per layer (Arrival-Slack: L0-4: 240, L5-42: 92, L43-47: 60)\n",
-                                               __func__);
+                                LLAMA_LOG_INFO("%s: sentinel slots armed per layer (L0-4: %d, L5-42: %d, L43-47: %d)\n",
+                                               __func__, moe_get_layer_slots(0, moe.n_layer),
+                                               moe_get_layer_slots(5, moe.n_layer),
+                                               moe_get_layer_slots(43, moe.n_layer));
                             }
                             moe_ready = true;
                             LLAMA_LOG_INFO("%s: moe pool %zu bytes (%.2f MiB) for %d layers, %d total slots\n",
@@ -4982,6 +5001,69 @@ void llama_context::moe_page_batch_sorted(int il, const int32_t * sel, int n) {
     }
 }
 
+// Chunked prefill range pager. Remaps the layer table so experts in [r*64,
+// r*64+63] read slots 0..63 and everything else reads the zero sentinel.
+// Pages the needed subset of the range into fixed slots (e - r*64) in ascending
+// order for sequential NVMe. Called from the slot_ids_c data phase, before the
+// range GEMMs run.
+void llama_context::moe_page_prefill_range(int il, int range) {
+    if (!moe_ready || il < 0 || il >= moe.n_layer) return;
+    if (range < 0 || range >= 8) return;
+    const int n_exp = moe.n_expert;
+    const int s_pl = moe_get_layer_slots(il, moe.n_layer);
+    const int base = moe_get_layer_base_slot(il, moe.n_layer);
+    if (s_pl < 65) return;
+    std::vector<int32_t> tab((size_t) n_exp, s_pl);
+    for (int e = range * 64; e < range * 64 + 64 && e < n_exp; e++) {
+        tab[(size_t) e] = e - range * 64;
+    }
+    ggml_backend_tensor_set(moe.slot_table[il], tab.data(), 0, n_exp * sizeof(int32_t));
+    const std::vector<int32_t> & ids = moe.prefill_topk[(size_t) il];
+    if (ids.empty()) return;
+    std::vector<char> seen(64, 0);
+    std::vector<int32_t> need;
+    need.reserve(64);
+    for (size_t k = 0; k < ids.size(); k++) {
+        const int32_t e = ids[k];
+        if (e < range * 64 || e >= range * 64 + 64) continue;
+        const int li = e - range * 64;
+        if (seen[(size_t) li]) continue;
+        seen[(size_t) li] = 1;
+        need.push_back(e);
+    }
+    std::sort(need.begin(), need.end());
+    for (size_t k = 0; k < need.size(); k++) {
+        const int32_t e = need[k];
+        const int want = base + (e - range * 64);
+        const int cur = moe.slot_of[(size_t) il * n_exp + e];
+        if (cur == want) {
+            moe.prefill_resident++;
+            continue;
+        }
+        if (cur >= 0) {
+            moe.slot_key[(size_t) cur] = -1;
+            moe.slot_of[(size_t) il * n_exp + e] = -1;
+        }
+        const int key_old = moe.slot_key[(size_t) want];
+        if (key_old >= 0) moe.slot_of[key_old] = -1;
+        moe.prefill_miss++;
+        const int local = e - range * 64;
+        const size_t g_slot = ggml_nbytes(moe.pool_gate[il]) / (size_t) (s_pl + 1);
+        const size_t u_slot = ggml_nbytes(moe.pool_up[il])   / (size_t) (s_pl + 1);
+        const size_t d_slot = ggml_nbytes(moe.pool_down[il]) / (size_t) (s_pl + 1);
+        if (!pager.fetch(il, e,
+                (char *) moe.pool_gate[il]->data + (size_t) local * g_slot, g_slot,
+                (char *) moe.pool_up[il]->data   + (size_t) local * u_slot, u_slot,
+                (char *) moe.pool_down[il]->data + (size_t) local * d_slot, d_slot)) {
+            moe.n_page_fail++;
+            continue;
+        }
+        moe.slot_key[(size_t) want] = il * n_exp + e;
+        moe.slot_of[(size_t) il * n_exp + e] = want;
+        moe.n_miss++;
+    }
+}
+
 // Seed every layer's slots with the offline hot profile so the first decode
 // step starts warm. Runs synchronously inside pool setup; each page is a
 // normal demand fetch through the pager, failures tolerated (slot stays -1).
@@ -5461,6 +5543,15 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     if (!ctx || !ctx->moe_enabled()) {
         return false;
     }
+    if (strncmp(nm, "ffn_moe_slot_ids_c", 19) == 0) {
+        const int range = nm[19] >= '0' && nm[19] <= '7' ? nm[19] - '0' : -1;
+        const char * dash = strrchr(nm, '-');
+        const int cil = dash ? atoi(dash + 1) : -1;
+        if (range < 0 || cil < 0 || cil >= ctx->moe.n_layer) return false;
+        if (ask) return true;
+        ctx->moe_page_prefill_range(cil, range);
+        return true;
+    }
     if (strncmp(nm, "ffn_moe_topk-", 13) != 0) {
         return false;
     }
@@ -5505,6 +5596,18 @@ static bool llama_moe_page_cb(struct ggml_tensor * t, bool ask, void * ud) {
     const int64_t nw = t->ne[0];
     std::vector<int32_t> ids((size_t) nw * ntok);
     ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
+    {
+        static int chunked_on = -1;
+        if (chunked_on < 0) {
+            const char * e = getenv("MOE_PREFILL_CHUNKED");
+            chunked_on = (e && atoi(e) != 0) ? 1 : 0;
+        }
+        if (chunked_on == 1 && ntok > 32) {
+            ctx->moe.prefill_topk[(size_t) il] = ids;
+            ctx->moe.prefill_nw[(size_t) il] = (int) nw;
+            return true;
+        }
+    }
     if (ntok == 1 || (ntok > 1 && ntok <= ctx->get_cparams().moe_chunk_max)) {
         // decode, or prefill micro-chunk the graph routed through the pool.
         // sorted path dedups the whole chunk and pages misses in ascending

@@ -278,6 +278,8 @@ public:
         int n_slots = 0;   // s_per_layer plus the sentinel slot when armed
         long n_hit = 0, n_miss = 0, n_page_fail = 0;
         long prefill_resident = 0, prefill_miss = 0;
+        std::vector<std::vector<int32_t>> prefill_topk;
+        std::vector<int> prefill_nw;
         // previous decode step's top-k per layer, for the recency predictor
         // (moe_step_sel[il*n_used+k]); empty until the first decode step
         std::vector<int32_t> step_sel;
@@ -305,6 +307,7 @@ public:
     int  moe_page_pinned(int il, int e, const bool * pinned);
     void moe_page_batch(int il, const int32_t * sel, int n);
     void moe_page_batch_sorted(int il, const int32_t * sel, int n);
+    void moe_page_prefill_range(int il, int range);
     // queue async reads for experts the next layer(s) will likely need.
     // never blocks; admission-controlled inside.
     void moe_prefetch_ahead(int il, const int32_t * sel, int n);
