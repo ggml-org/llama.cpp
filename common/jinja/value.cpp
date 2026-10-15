@@ -244,6 +244,8 @@ static std::string json_ensure_ascii_preserving_format(const std::string & json_
     return output;
 }
 
+static std::string float_repr(double val);
+
 static value tojson(const func_args & args) {
     args.ensure_count(1, 5);
     value val_ascii      = args.get_kwarg_or_pos("ensure_ascii", 1);
@@ -634,6 +636,11 @@ const func_builtins & value_int_t::get_builtins() const {
 
 
 const func_builtins & value_float_t::get_builtins() const {
+    // Python's str() of a float, nan and inf stay as they are (tojson writes NaN and Infinity)
+    static const func_handler tostring = [](const func_args & args) -> value {
+        args.ensure_vals<value_float>();
+        return mk_val<value_string>(float_repr(args.get_pos(0)->as_float()));
+    };
     static const func_builtins builtins = {
         {"default", default_value},
         {"abs", [](const func_args & args) -> value {
@@ -650,8 +657,8 @@ const func_builtins & value_float_t::get_builtins() const {
             args.ensure_vals<value_float>();
             return mk_val<value_float>(args.get_pos(0)->as_float());
         }},
-        {"safe", tojson},
-        {"string", tojson},
+        {"safe", tostring},
+        {"string", tostring},
         {"tojson", tojson},
     };
     return builtins;
@@ -1522,10 +1529,10 @@ void global_from_json(context & ctx, const common_json & json_obj, bool mark_inp
     }
 }
 
-// a float as Python writes it (repr, json.dumps): the shortest digits that read back as the same value
-static std::string float_to_json(double val) {
+// a float as Python's repr() and str() write it: the shortest digits that read back as the same value
+static std::string float_repr(double val) {
     if (!std::isfinite(val)) {
-        return std::isnan(val) ? "nan" : val < 0 ? "-inf" : "inf"; // as before (json.dumps writes NaN and Infinity, str() writes nan and inf)
+        return std::isnan(val) ? "nan" : val < 0 ? "-inf" : "inf";
     }
     const double mag = std::fabs(val);
 
@@ -1551,6 +1558,7 @@ static std::string float_to_json(double val) {
         if (prec == 16 || reads_back(d)) {
             digits = d;
         } else if (is_pow2 && d.back() != '9') {
+            // a last digit 9 is not bumped (it would carry): no power of 2, from 2^-1074 to 2^1023, needs it
             d.back()++;
             if (reads_back(d)) {
                 digits = d;
@@ -1581,6 +1589,17 @@ static std::string float_to_json(double val) {
     return out;
 }
 
+// a float as json.dumps writes it: nan and inf as NaN and Infinity, which are not valid JSON
+static std::string float_json(double val) {
+    if (std::isnan(val)) {
+        return "NaN";
+    }
+    if (std::isinf(val)) {
+        return val < 0 ? "-Infinity" : "Infinity";
+    }
+    return float_repr(val);
+}
+
 // recursively convert value to JSON string
 // TODO: avoid circular references
 static void value_to_json_internal(std::ostringstream & oss, const value & val, int curr_lvl, int indent, const std::string_view item_sep, const std::string_view key_sep) {
@@ -1598,7 +1617,7 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
     } else if (is_val<value_int>(val)) {
         oss << val->as_int();
     } else if (is_val<value_float>(val)) {
-        oss << float_to_json(val->as_float());
+        oss << float_json(val->as_float());
     } else if (is_val<value_string>(val)) {
         oss << "\"";
         for (char c : val->as_string().str()) {
@@ -1645,7 +1664,8 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
             size_t i = 0;
             for (const auto & pair : obj) {
                 oss << indent_str() << (indent > 0 ? std::string(indent, ' ') : "");
-                value_to_json_internal(oss, mk_val<value_string>(pair.first->as_string().str()), curr_lvl + 1, indent, item_sep, key_sep);
+                const std::string key = is_val<value_float>(pair.first) ? float_json(pair.first->as_float()) : pair.first->as_string().str();
+                value_to_json_internal(oss, mk_val<value_string>(key), curr_lvl + 1, indent, item_sep, key_sep);
                 oss << key_sep;
                 value_to_json_internal(oss, pair.second, curr_lvl + 1, indent, item_sep, key_sep);
                 if (i < obj.size() - 1) {

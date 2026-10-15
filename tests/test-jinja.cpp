@@ -1083,6 +1083,13 @@ static void test_literals(testing & t) {
         "1.0 1e+308 inf"
     );
 
+    // json.dumps writes NaN and Infinity, str() writes nan and inf
+    test_template(t, "nan and inf",
+        "{{ [p|float, n|float, q|float]|tojson }} {{ {p|float: 1}|tojson }} {{ p|float|string }} {{ n|float|string }} {{ q|float|safe }}",
+        {{"p", "inf"}, {"n", "-inf"}, {"q", "nan"}},
+        "[Infinity, -Infinity, NaN] {\"Infinity\": 1} inf -inf nan"
+    );
+
     test_template(t, "string|tojson",
         "{{ 'hello' | tojson }}",
         json::object(),
