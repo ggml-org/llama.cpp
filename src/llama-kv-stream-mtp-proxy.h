@@ -20,6 +20,10 @@ public:
     ggml_tensor * value() const noexcept;
     // Complete any queued host write after the graph has submitted its consumers.
     bool complete_publication();
+    // Declare that the current invocation is the final reader before target verification.
+    void set_next_target(bool final_use);
+    bool finish_access();
+    bool retire_final_access();
     bool arm(size_t first, uint32_t rows);
     // Retire a rejected suffix and its ring lease before stock KV cells are reused.
     bool remove_suffix(size_t first, size_t last);

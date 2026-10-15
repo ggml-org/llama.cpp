@@ -294,6 +294,25 @@ int main(int argc, char ** argv) {
             t.assert_true(!f.resident->sequence_active());
         }
     });
+    t.test("query_width_changes_preserve_only_same_extent_immutable_prefetch", [](testing & t) {
+        for (size_t active : {size_t(514),size_t(515),size_t(516),size_t(517),size_t(518),size_t(519),size_t(520),size_t(521)}) {
+            llama_kv_stream_prefetch_plan plan;
+            t.assert_true(plan.start({256,256},521,768,256,4,1,513));
+            llama_kv_stream_prefetch_request request;
+            t.assert_true(plan.reserve(request));
+            t.assert_true(request.stable && plan.mark_submitted(0));
+            const auto original=*plan.front();
+            t.assert_true(!plan.retarget(513));
+            t.assert_true(!plan.retarget(769));
+            t.assert_true(plan.retarget(active));
+            const auto current=*plan.front();
+            t.assert_true(current.first == original.first && current.tokens == original.tokens &&
+                current.slot == original.slot && current.submitted);
+            t.assert_equal(size_t(1),plan.pending());
+            t.assert_true(plan.consume(1));
+        }
+    });
+
     t.test("bounded_reservations_preserve_order_despite_deferred_readiness", [](testing & t) {
         llama_kv_stream_prefetch_plan p;
         t.assert_true(p.start({256,256,256,256,256,256,256,256},257,512,256,8,2,256));

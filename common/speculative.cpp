@@ -1515,9 +1515,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+        llama_kv_stream_schedule_next(ctx_tgt,ctx_dft,uint32_t(std::max(0,this->params.n_max)));
     }
 
     ~common_speculative_impl_draft_mtp() override {
+        llama_kv_stream_schedule_next(this->params.ctx_tgt,nullptr,0);
         auto * ctx_dft = this->params.ctx_dft;
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
             if (backend_chains[seq_id] == nullptr) {
@@ -1758,6 +1760,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_nextn_layer_offset(ctx_dft, i);
             }
 
+            llama_kv_stream_schedule_next(ctx_dft,i+1 >= params.n_max ? params.ctx_tgt : nullptr,0);
             int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
             if (ret != 0) {
                 SPC_ERR("llama_process[%d] returned %d\n", i, ret);
@@ -1846,6 +1849,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             ++i;
         }
 
+        llama_kv_stream_finish_access(ctx_dft);
         if (chain_heads) {
             llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
         }

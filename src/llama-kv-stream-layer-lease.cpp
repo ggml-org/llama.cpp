@@ -15,6 +15,147 @@
 
 using pool_ptr = std::unique_ptr<ggml_backend_memory_lease, decltype(&ggml_backend_memory_lease_free)>;
 
+struct llama_kv_stream_transfer::implementation {
+    ggml_backend_ptr queue;
+    ggml_backend_event_t before=nullptr, after=nullptr, reader=nullptr, handoff=nullptr;
+    std::vector<std::unique_ptr<ggml_tensor>> tensors;
+    std::vector<ggml_backend_buffer_ptr> buffers;
+    std::vector<pool_ptr> leases;
+    std::vector<std::shared_ptr<llama_kv_stream_host>> hosts;
+    std::vector<ggml_backend_t> consumers;
+    bool running=false, sealed=false, handoff_pending=false;
+    ~implementation() {
+        if (queue) ggml_backend_synchronize(queue.get());
+        if (handoff_pending) ggml_backend_event_synchronize(handoff);
+        for (auto * consumer : consumers) ggml_backend_synchronize(consumer);
+        if (before) ggml_backend_event_free(before);
+        if (after) ggml_backend_event_free(after);
+        if (reader) ggml_backend_event_free(reader);
+        if (handoff) ggml_backend_event_free(handoff);
+    }
+};
+
+llama_kv_stream_transfer::llama_kv_stream_transfer() = default;
+llama_kv_stream_transfer::~llama_kv_stream_transfer() = default;
+
+// Prepare queue and events before model execution admits any borrowed storage.
+std::shared_ptr<llama_kv_stream_transfer> llama_kv_stream_transfer::create(ggml_backend_t producer) {
+    if (!producer) return {};
+    auto * device=ggml_backend_get_device(producer);
+    if (!device) return {};
+    try {
+        auto result=std::shared_ptr<llama_kv_stream_transfer>(new llama_kv_stream_transfer);
+        result->impl=std::make_unique<implementation>();
+        result->impl->queue.reset(ggml_backend_dev_init(device,nullptr));
+        if (!result->impl->queue) return {};
+        ggml_backend_dev_props props{};
+        ggml_backend_dev_get_props(device,&props);
+        if (props.caps.events) {
+            result->impl->before=ggml_backend_event_new(device);
+            result->impl->after=ggml_backend_event_new(device);
+            result->impl->reader=ggml_backend_event_new(device);
+            result->impl->handoff=ggml_backend_event_new(device);
+            if (!result->impl->before || !result->impl->after || !result->impl->reader || !result->impl->handoff) return {};
+            // Exercise lazy native queue/event allocation before the model claims its arena budget.
+            ggml_backend_event_record(result->impl->before,producer);
+            ggml_backend_event_wait(result->impl->queue.get(),result->impl->before);
+            ggml_backend_event_record(result->impl->after,result->impl->queue.get());
+            ggml_backend_event_record(result->impl->reader,result->impl->queue.get());
+            ggml_backend_event_record(result->impl->handoff,result->impl->queue.get());
+            ggml_backend_event_synchronize(result->impl->handoff);
+        }
+        return result;
+    } catch (const std::bad_alloc &) { return {}; }
+}
+
+// The queue waits for prior slot users; event-capable devices do not block the owner thread.
+bool llama_kv_stream_transfer::begin(ggml_backend_t previous) {
+    if (!impl || impl->running || impl->handoff_pending || !previous ||
+            ggml_backend_get_device(previous) != ggml_backend_get_device(impl->queue.get())) return false;
+    if (impl->before) {
+        ggml_backend_event_record(impl->before,previous);
+        ggml_backend_event_wait(impl->queue.get(),impl->before);
+    } else ggml_backend_synchronize(previous);
+    impl->running=true; impl->sealed=false;
+    return true;
+}
+
+// Retain metadata and buffers even if a later upload fails after partial submission.
+bool llama_kv_stream_transfer::upload(ggml_backend_buffer_t buffer, size_t offset, const void * data, size_t bytes) {
+    if (!impl || !impl->running || impl->sealed || !buffer || !data || !bytes || bytes > INT64_MAX ||
+            !ggml_backend_supports_buft(impl->queue.get(),ggml_backend_buffer_get_type(buffer))) return false;
+    const size_t capacity=ggml_backend_buffer_get_size(buffer);
+    auto * base=static_cast<char *>(ggml_backend_buffer_get_base(buffer));
+    const uintptr_t address=reinterpret_cast<uintptr_t>(base);
+    if (!base || offset > capacity || bytes > capacity-offset ||
+            offset > UINTPTR_MAX-address || bytes > UINTPTR_MAX-address-offset) return false;
+    auto tensor=std::make_unique<ggml_tensor>();
+    tensor->type=GGML_TYPE_I8;
+    tensor->ne[0]=int64_t(bytes); tensor->nb[0]=1;
+    for (int axis=1;axis<4;++axis) { tensor->ne[axis]=1; tensor->nb[axis]=bytes; }
+    if (ggml_backend_tensor_alloc(buffer,tensor.get(),base+offset) != GGML_STATUS_SUCCESS) return false;
+    impl->buffers.emplace_back(ggml_backend_buffer_retain(buffer));
+    impl->tensors.push_back(std::move(tensor));
+    ggml_backend_tensor_set_async(impl->queue.get(),impl->tensors.back().get(),data,0,bytes);
+    return true;
+}
+
+// Publish one fence for the whole transfer batch, not one event per page.
+bool llama_kv_stream_transfer::seal() {
+    if (!impl || !impl->running || impl->sealed) return false;
+    if (impl->after) ggml_backend_event_record(impl->after,impl->queue.get());
+    else ggml_backend_synchronize(impl->queue.get());
+    impl->sealed=true;
+    return true;
+}
+
+// Same device does not imply same stream; order the actual consumer explicitly.
+bool llama_kv_stream_transfer::wait(ggml_backend_t consumer) {
+    if (!impl || !impl->running || !impl->sealed || !consumer ||
+            ggml_backend_get_device(consumer) != ggml_backend_get_device(impl->queue.get())) return false;
+    if (impl->after) ggml_backend_event_wait(consumer,impl->after);
+    if (std::find(impl->consumers.begin(),impl->consumers.end(),consumer) == impl->consumers.end())
+        impl->consumers.push_back(consumer);
+    return true;
+}
+
+// Join transfers and their recorded consumers before recycling metadata and events.
+bool llama_kv_stream_transfer::finish() {
+    if (!impl) return false;
+    if (impl->running) ggml_backend_synchronize(impl->queue.get());
+    if (impl->handoff_pending) ggml_backend_event_synchronize(impl->handoff);
+    impl->handoff_pending=false;
+    for (auto * consumer : impl->consumers) ggml_backend_synchronize(consumer);
+    impl->consumers.clear();
+    impl->tensors.clear(); impl->buffers.clear();
+    impl->leases.clear(); impl->hosts.clear();
+    impl->running=impl->sealed=false;
+    return true;
+}
+
+ggml_backend_t llama_kv_stream_transfer::backend() const noexcept { return impl ? impl->queue.get() : nullptr; }
+
+bool llama_kv_stream_transfer::retain_storage(ggml_backend_memory_lease_t pool,
+        const llama_kv_stream_logical_cache & cache) {
+    if (!impl || !impl->running || impl->sealed || !pool || !cache.host()) return false;
+    impl->leases.emplace_back(ggml_backend_memory_lease_retain(pool),ggml_backend_memory_lease_free);
+    impl->hosts.push_back(cache.host());
+    return bool(impl->leases.back());
+}
+
+bool llama_kv_stream_transfer::order(ggml_backend_t previous, ggml_backend_t consumer) {
+    if (!impl || impl->handoff_pending || (impl->running && !impl->sealed) || !previous || !consumer ||
+            ggml_backend_get_device(previous) != ggml_backend_get_device(impl->queue.get()) ||
+            ggml_backend_get_device(consumer) != ggml_backend_get_device(previous)) return false;
+    if (impl->before) {
+        ggml_backend_event_record(impl->reader,previous);
+        ggml_backend_event_wait(consumer,impl->reader);
+        ggml_backend_event_record(impl->handoff,consumer);
+        impl->handoff_pending=true;
+    } else ggml_backend_synchronize(previous);
+    return true;
+}
+
 static bool multiply(size_t a, size_t b, size_t & output) {
     if (b && a > SIZE_MAX/b) return false;
     output = a*b;
@@ -39,6 +180,8 @@ struct layer_reservation {
     bool published = false;
     bool populating = false, populated = false;
     bool resident_mirror = false;
+    std::shared_ptr<llama_kv_stream_transfer> transfer;
+    ggml_backend_t population_consumer = nullptr;
     size_t populated_tokens = 0;
     llama_kv_stream_population_stats population;
 
@@ -307,7 +450,8 @@ static bool same_population_shape(const ggml_kv_stream_shape & a, const ggml_kv_
 }
 
 static bool populate_layer(ggml_backend_t backend, llama_kv_stream_complete_layer_lease_t lease,
-        const llama_kv_stream_logical_cache & cache, llama_kv_stream_population_stats & stats, bool reuse_resident) {
+        const llama_kv_stream_logical_cache & cache, llama_kv_stream_population_stats & stats, bool reuse_resident,
+        llama_kv_stream_transfer * transfer = nullptr) {
     if (!backend || !lease || !lease->reservation) return false;
     const auto & reservation = *lease->reservation;
     const auto & state = *reservation.owner;
@@ -377,8 +521,12 @@ static bool populate_layer(ggml_backend_t backend, llama_kv_stream_complete_laye
                 for (int axis=1; axis<4; ++axis) { tensor.ne[axis]=1; tensor.nb[axis]=dirty.bytes; }
                 auto * address=static_cast<char *>(ggml_backend_buffer_get_base(buffer))+offset;
                 if (ggml_backend_tensor_alloc(buffer,&tensor,address) != GGML_STATUS_SUCCESS) return false;
-                ggml_backend_tensor_set_async(backend,&tensor,dirty.data,0,dirty.bytes);
-                ggml_backend_synchronize(backend);
+                if (transfer) {
+                    if (!transfer->upload(buffer,offset,dirty.data,dirty.bytes)) return false;
+                } else {
+                    ggml_backend_tensor_set_async(backend,&tensor,dirty.data,0,dirty.bytes);
+                    ggml_backend_synchronize(backend);
+                }
                 next.bytes+=dirty.bytes; ++next.calls;
                 return true;
             });
@@ -398,9 +546,14 @@ static bool populate_layer(ggml_backend_t backend, llama_kv_stream_complete_laye
     }
     try {
         for (size_t i = 0; i < count; ++i) {
-            ggml_backend_tensor_set_async(backend, uploads[i].tensor, uploads[i].source, 0, uploads[i].bytes);
+            if (transfer) {
+                auto * tensor=uploads[i].tensor;
+                const size_t offset=size_t(static_cast<char *>(tensor->data)-
+                    static_cast<char *>(ggml_backend_buffer_get_base(tensor->buffer)));
+                if (!transfer->upload(tensor->buffer,offset,uploads[i].source,uploads[i].bytes)) return false;
+            } else ggml_backend_tensor_set_async(backend, uploads[i].tensor, uploads[i].source, 0, uploads[i].bytes);
         }
-        if (count) ggml_backend_synchronize(backend);
+        if (!transfer && count) ggml_backend_synchronize(backend);
     } catch (...) {
         try { ggml_backend_synchronize(backend); } catch (...) {}
         return false;
@@ -475,6 +628,65 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
         return nullptr;
     }
     return lease;
+}
+
+// Populate one physical placement on the prepared copy queue; readiness is a separate consumer dependency.
+llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::prefetch(
+        llama_kv_stream_transfer & transfer, ggml_backend_t previous,
+        const llama_kv_stream_complete_layer_request & request,
+        const llama_kv_stream_logical_cache & cache, bool reuse_resident) {
+    auto * lease=acquire(request);
+    if (!lease) return nullptr;
+    auto reservation=lease->reservation;
+    auto state=reservation->owner;
+    bool unavailable=false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (reservation->populated || reservation->populating) unavailable=true;
+        else reservation->populating=true;
+    }
+    if (unavailable) { llama_kv_stream_complete_layer_lease_free(lease); return nullptr; }
+    bool copied=false;
+    bool started=false;
+    llama_kv_stream_population_stats stats;
+    try {
+        started=transfer.begin(previous);
+        copied=started && transfer.retain_storage(state->pool.get(),cache) &&
+            populate_layer(transfer.backend(),lease,cache,stats,reuse_resident,&transfer) &&
+            transfer.seal();
+    } catch (...) { copied=false; }
+    if (!copied) {
+        if (started) { transfer.finish(); cache.content()->reset_mirror(); }
+        reservation->populating=false;
+        llama_kv_stream_complete_layer_lease_free(lease);
+        return nullptr;
+    }
+    reservation->transfer=transfer.shared_from_this();
+    reservation->resident_mirror=reuse_resident;
+    reservation->population=stats;
+    reservation->populated_tokens=lease->active_tokens;
+    return lease;
+}
+
+// Validate logical identity before publishing a device-side dependency on the uploaded prefix.
+bool llama_kv_stream_layer_lease_owner::wait_population(llama_kv_stream_complete_layer_lease_t lease,
+        ggml_backend_t consumer, const llama_kv_stream_logical_cache & cache) {
+    if (!impl || !impl->state || !lease || !lease->reservation || !consumer ||
+            lease->reservation->owner != impl->state) return false;
+    auto reservation=lease->reservation;
+    const auto frontier=cache.frontiers();
+    if (cache.identity().id != impl->state->layout.layers[reservation->layer].cache_id ||
+            cache.identity().generation != reservation->content_generation ||
+            cache.content()->generation() != reservation->content_generation ||
+            cache.tokens() != reservation->populated_tokens || frontier.host != cache.tokens() ||
+            frontier.committed != cache.tokens() || frontier.reserved != cache.tokens()) return false;
+    if (!reservation->transfer) return reservation->populated;
+    if (reservation->population_consumer == consumer) return reservation->populated;
+    if (!reservation->transfer->wait(consumer)) return false;
+    reservation->population_consumer=consumer;
+    reservation->populating=false;
+    reservation->populated=true;
+    return true;
 }
 
 // A completed tail copy acknowledges only its resident rows; ring contents remain lease-local.

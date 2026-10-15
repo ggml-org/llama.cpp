@@ -59,6 +59,15 @@ struct llama_kv_stream_model::implementation {
     std::shared_ptr<llama_kv_stream_content> content;
     llama_kv_stream_policy_config physical_policy;
     std::shared_ptr<llama_kv_stream_logical_cache> auxiliary_cache;
+    std::shared_ptr<llama_kv_stream_transfer> transfer;
+    uint64_t next_cache=0;
+    uint32_t next_future=0;
+    bool decoding=false, auxiliary_handoff=false;
+    bool acquire_mtp_layer(size_t future_tokens, bool prefetch);
+    bool complete() const {
+        return session && !session->device_suspended() && !external_mutation && !session->active() &&
+            !session->failed() && !pending_k;
+    }
     std::unique_ptr<llama_kv_stream_layer_lease_owner> mtp_owner;
     std::vector<mtp_lease_ptr> mtp_plans;
     std::shared_ptr<const llama_kv_stream_ring_guard> mtp_guard;
@@ -116,7 +125,7 @@ struct llama_kv_stream_model::implementation {
         session_config.initial_decode = config.resume_decode &&
             (policy.pool_bytes > config.pool_bytes ||
              ggml_backend_buffer_get_size(attention_buffer) == decode_bytes);
-        session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode;
+        session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode && !next_cache;
         session_config.span_workspace_bytes = span_bytes;
         session_config.pool_resource = pool_id;
         session_config.writer_resource = writer_id;
@@ -346,11 +355,20 @@ struct llama_kv_stream_model::implementation {
         }
         float scale; std::memcpy(&scale,op->op_params,sizeof(scale));
         const bool ok = session->attention(layer,op->src[0],op->src[5] ? op->src[5] : op->src[3],op,scale);
+        if (ok && decoding && !session->active() && auxiliary_cache &&
+                next_cache == auxiliary_cache->identity().id && auxiliary_cache->tokens() >= 4 && !mtp_owner) {
+            const size_t future=std::min(size_t(next_future),config.host.context_tokens-session->tokens());
+            if (!acquire_mtp_layer(future,true))
+                LLAMA_LOG_DEBUG("%s: next-cache prefetch deferred to demand admission\n",__func__);
+        }
+        if (ok && decoding && !session->active() && next_cache == host->cache_id())
+            session->prefetch_decode(next_future);
         if (!ok) LLAMA_LOG_WARN("%s: target attention failed at layer %u, rows %u\n",
             __func__, layer, queries);
         return ok ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
     }
     void abort() {
+        if (transfer) transfer->finish();
         if (session) session->abort();
         pending_k = nullptr; pending_owner.reset(); checked_indices.clear();
     }
@@ -451,6 +469,8 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             auto auxiliary = llama_kv_stream_logical_cache::create(std::move(auxiliary_host));
             if (!auxiliary) return {};
             s->auxiliary_cache = std::shared_ptr<llama_kv_stream_logical_cache>(std::move(auxiliary));
+            s->transfer=llama_kv_stream_transfer::create(config.backend);
+            if (!s->transfer) return {};
         }
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
@@ -544,8 +564,12 @@ std::shared_ptr<llama_kv_stream_logical_cache> llama_kv_stream_model::auxiliary_
 llama_kv_stream_binding_view llama_kv_stream_model::binding_view() const noexcept {
     return impl->session ? impl->session->binding_view() : llama_kv_stream_binding_view{};
 }
-bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens) {
-    auto & s = *impl;
+bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens, bool prefetch) {
+    return impl->acquire_mtp_layer(future_tokens,prefetch);
+}
+
+bool llama_kv_stream_model::implementation::acquire_mtp_layer(size_t future_tokens, bool prefetch) {
+    auto & s = *this;
     if (!s.session || s.external_mutation || s.mtp_owner || s.mtp_guard ||
             !s.mtp_plans.empty() || !s.auxiliary_cache || !complete()) return false;
     const auto mtp = s.auxiliary_cache;
@@ -591,16 +615,23 @@ bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens) {
     if (!guard || !s.session->set_ring_guard(guard)) return false;
     struct admission_guard {
         llama_kv_stream_session * session;
+        llama_kv_stream_transfer * transfer;
         bool adopted=false;
-        ~admission_guard() { if (!adopted) session->set_ring_guard({}); }
-    } admission{s.session.get()};
+        ~admission_guard() {
+            if (!adopted) {
+                if (transfer) transfer->finish();
+                session->set_ring_guard({});
+            }
+        }
+    } admission{s.session.get(),prefetch ? s.transfer.get() : nullptr};
     std::vector<mtp_lease_ptr> plans;
     plans.reserve(4);
     for (uint32_t width = 1; width <= 4; ++width) {
         const llama_kv_stream_complete_layer_request request{
             physical_layer, width, revision, generation, mtp->identity().id, mtp_tokens};
         auto * raw = width == 1 ?
-            owner->acquire_populated(s.config.backend, request, *mtp,true) :
+            (prefetch && s.transfer ? owner->prefetch(*s.transfer,s.config.backend,request,*mtp,true) :
+                owner->acquire_populated(s.config.backend, request, *mtp,true)) :
             owner->acquire(request);
         if (!raw) {
             const auto frontier = mtp->frontiers();
@@ -735,11 +766,42 @@ bool llama_kv_stream_model::truncate_mtp_layer(size_t tokens) {
 bool llama_kv_stream_model::release_mtp_layer() {
     auto & s = *impl;
     if (!s.mtp_owner) return true;
-    if (!s.session || !s.session->set_ring_guard({})) return false;
+    if (s.transfer && !s.transfer->finish()) return false;
+    if (!s.session || (!s.auxiliary_handoff && !s.session->set_ring_guard({}))) return false;
     s.mtp_guard.reset();
     s.mtp_plans.clear();
     s.mtp_owner.reset();
     s.mtp_reserved_tokens = 0;
+    s.auxiliary_handoff=false;
+    return true;
+}
+
+// Register an actual cache consumer rather than infer it from the model architecture.
+bool llama_kv_stream_model::schedule_next_cache(uint64_t cache_id, uint32_t future_tokens) {
+    auto & s=*impl;
+    if (future_tokens > s.config.max_decode_rows ||
+            (cache_id && cache_id != s.host->cache_id() &&
+                (!s.auxiliary_cache || cache_id != s.auxiliary_cache->identity().id))) return false;
+    const bool automatic=s.config.cross_token_prefetch && s.config.resume_decode && !cache_id;
+    if (s.session && !s.session->set_automatic_prefetch(automatic)) return false;
+    s.next_cache=cache_id; s.next_future=future_tokens;
+    return true;
+}
+
+bool llama_kv_stream_model::wait_auxiliary_population(ggml_backend_t consumer) {
+    auto & s=*impl;
+    return s.mtp_owner && !s.mtp_plans.empty() && s.auxiliary_cache &&
+        s.mtp_owner->wait_population(s.mtp_plans.front().get(),consumer,*s.auxiliary_cache);
+}
+
+// Queue target lookahead behind the final auxiliary reader, while retaining its publication metadata.
+bool llama_kv_stream_model::prefetch_target_after(ggml_backend_t last_reader) {
+    auto & s=*impl;
+    if (s.auxiliary_handoff) return true;
+    if (!s.next_cache || !s.transfer || !s.session || !s.mtp_owner ||
+            !s.transfer->order(last_reader,s.config.backend) || !s.session->release_ring_guard_ordered()) return false;
+    s.auxiliary_handoff=true;
+    s.session->prefetch_decode(0);
     return true;
 }
 
@@ -782,6 +844,7 @@ bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
         if (!s.mtp_owner || s.session->failed() || !release_mtp_layer() ||
                 !s.session->begin(active,queries,decode)) return false;
     }
+    s.decoding=decode;
     s.queries = queries; s.pending_k = nullptr; s.pending_owner.reset(); s.checked_indices.clear(); return true;
 }
 bool llama_kv_stream_model::complete() const noexcept { return impl->session && !impl->session->device_suspended() && !impl->external_mutation && !impl->session->active() && !impl->session->failed() && !impl->pending_k; }

@@ -290,11 +290,13 @@ struct llama_kv_stream_resident::implementation {
     }
 
     // Refresh only the capacity assigned to each layer; concentrated layouts may assign zero rows.
-    bool refresh(size_t padded, uint32_t only_layer = UINT32_MAX) {
+    bool refresh(size_t padded, uint32_t only_layer = UINT32_MAX, bool defer_clean_sync = false) {
         const bool cold = !initialized;
         const auto start_us = cold ? ggml_time_us() : 0;
         bytes = calls = 0;
-        ggml_backend_synchronize(backend);
+        bool drained=false;
+        const auto drain=[&]() { if (!drained) { ggml_backend_synchronize(backend); drained=true; } };
+        if (cold || !defer_clean_sync) drain();
         const auto drained_us = cold ? ggml_time_us() : 0;
         if (!initialized) {
             if (!content->reset_mirror()) return false;
@@ -307,6 +309,7 @@ struct llama_kv_stream_resident::implementation {
         }
         const auto upload_start_us = cold ? ggml_time_us() : 0;
         if (!content->flush(selected, [&](const llama_kv_stream_copy_span & span) {
+            drain();
             const bool value = span.rows.operand == ggml_kv_stream_operand::v;
             const auto & planes = placement(span.rows.layer).planes;
             const size_t stride = value ? planes.v_token_bytes : planes.k_token_bytes;
@@ -426,7 +429,7 @@ llama_kv_stream_resident::~llama_kv_stream_resident() = default;
 // Establish a serial execution order and the host prefix that is already immutable for every layer.
 bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & layers, size_t active,
         size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
-        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
+        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard, bool defer_clean_sync) {
     auto & s = *impl;
     if (s.busy || s.sequence || s.capturing() || s.poisoned || !s.compatible() || layers.empty() || layers.size() > s.physical_layers.size() || !active || !span ||
             active > size_t(INT32_MAX)-255 || active > s.content->host()->config().context_tokens) return false;
@@ -477,7 +480,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
             s.feedback_epoch == s.content->mirror_epoch();
         s.busy = true; s.valid = false;
         struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
-        if (!s.refresh(seq->padded)) return false;
+        if (!s.refresh(seq->padded,UINT32_MAX,defer_clean_sync)) return false;
         seq->generation = s.content->generation(); seq->epoch = s.content->mirror_epoch();
         if (feedback_tracked) {
             s.feedback_generation=seq->generation;
@@ -492,7 +495,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
 bool llama_kv_stream_resident::prime_sequence(const std::vector<uint32_t> & layers, size_t active,
         size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
         std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
-    if (!begin_sequence(layers,active,span,stable,feedback_context,std::move(ring_guard))) return false;
+    if (!begin_sequence(layers,active,span,stable,feedback_context,std::move(ring_guard),true)) return false;
     impl->sequence->primed = true;
     impl->sequence->stats.primed = true;
     return true;
@@ -506,9 +509,15 @@ bool llama_kv_stream_resident::adopt_sequence(const std::vector<uint32_t> & laye
     if (s.busy || s.capturing() || s.poisoned || !s.sequence || !s.sequence->primed) return false;
     if (!s.sequence_valid()) { s.stop_sequence(); return false; }
     auto & seq=*s.sequence;
-    if (seq.next || seq.layers != layers || seq.active != active || seq.span != span || seq.stable != stable ||
-            seq.queries != feedback_context.query_tokens || seq.decode != feedback_context.decode ||
+    const bool flexible=seq.queries == 0;
+    if (seq.next || seq.layers != layers || (!flexible && seq.active != active) || seq.span != span || seq.stable != stable ||
+            (!flexible && seq.queries != feedback_context.query_tokens) || seq.decode != feedback_context.decode ||
             seq.ring_guard != ring_guard) return false;
+    if (flexible) {
+        if (!feedback_context.query_tokens || !seq.plan.retarget(active)) return false;
+        seq.active=active;
+        seq.queries=feedback_context.query_tokens;
+    }
     seq.primed = false;
     seq.stats.primed = false;
     seq.stats.adopted = true;

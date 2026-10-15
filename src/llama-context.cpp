@@ -1906,7 +1906,7 @@ bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_
     ggml_kv_stream_span_plan_view view;
     auto * plan = target_stream->mtp_layer_plan(ubatch.n_tokens);
     return plan && ggml_kv_stream_span_plan_get_view(plan, view) &&
-        view.active_tokens == cache->tokens();
+        view.active_tokens == cache->tokens() && draft->retire_serial_access();
 }
 
 llm_graph_result * llama_context::process_ubatch(
@@ -4923,6 +4923,29 @@ bool llama_kv_stream_mtp_release(llama_context * ctx) {
     if (!ctx->get_cparams().kv_stream_auxiliary_layers) return true;
     auto * stream = llama_mtp_target_stream(ctx);
     return stream && stream->release_mtp_layer();
+}
+
+bool llama_kv_stream_schedule_next(llama_context * producer, llama_context * consumer, uint32_t future_tokens) {
+    if (!producer) return false;
+    auto * target=llama_mtp_target_stream(producer);
+    if (target && !consumer) return target->schedule_next_cache(0,0);
+    if (target && producer == consumer) return target->schedule_next_cache(target->host()->cache_id(),future_tokens);
+    auto * next_cache=consumer ? dynamic_cast<llama_kv_cache *>(llama_get_memory(consumer)) : nullptr;
+    if (target && next_cache && next_cache->mtp_auxiliary_cache() == target->auxiliary_cache() && target->auxiliary_cache())
+        return target->schedule_next_cache(target->auxiliary_cache()->identity().id,future_tokens);
+    auto * current=dynamic_cast<llama_kv_cache *>(llama_get_memory(producer));
+    auto * next_target=llama_mtp_target_stream(consumer);
+    if (current && current->mtp_auxiliary_cache() && (!consumer ||
+            (next_target && current->mtp_auxiliary_cache() == next_target->auxiliary_cache()))) {
+        current->set_next_target(consumer != nullptr);
+        return true;
+    }
+    return false;
+}
+
+bool llama_kv_stream_finish_access(llama_context * producer) {
+    auto * cache=producer ? dynamic_cast<llama_kv_cache *>(llama_get_memory(producer)) : nullptr;
+    return !cache || cache->finish_serial_access();
 }
 
 

@@ -64,6 +64,13 @@ public:
         output = r; return true;
     }
     bool make_ready(size_t i) { if (i >= ready.size()) return false; ready[i] = true; return true; }
+    // Historical uploads are query-independent when the padded extent does not change.
+    bool retarget(size_t next_active) {
+        if (next_active <= stable || next_active > padded || !page ||
+                (next_active-1)/page != (padded-1)/page) return false;
+        active=next_active;
+        return true;
+    }
     bool can_submit(const llama_kv_stream_prefetch_request & r) const { return r.layer < ready.size() && (r.stable || ready[r.layer]); }
     bool mark_submitted(size_t i) {
         if (i >= count) return false;

@@ -53,9 +53,14 @@ public:
     size_t granted_bytes() const noexcept;
     uint64_t layout_revision() const noexcept;
     bool prefetch_primed() const noexcept;
+    // Explicit next-consumer intent. Zero defers query width until adoption within the same padded extent.
+    bool prefetch_decode(uint32_t query_tokens);
+    bool set_automatic_prefetch(bool enable);
     // Idle-only handoff from the retained MTP layer owner. A guarded layout cannot
     // repartition; the caller releases/replans the lease and retries that append.
     bool set_ring_guard(std::shared_ptr<const llama_kv_stream_ring_guard> guard);
+    // Caller has ordered future ring writes after the old reader on the backend queue.
+    bool release_ring_guard_ordered();
     // Repartition while idle so a retained layer and its reserved tail fit in the ring.
     bool reserve_complete_layer(uint32_t layer, size_t reserved_tokens);
 

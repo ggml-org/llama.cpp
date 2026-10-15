@@ -69,7 +69,7 @@ public:
     // Declare both decode intent and query count before prefetch starts. Unknown phase and single-token prompts stay unprofiled.
     bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1,
             size_t stable_tokens = SIZE_MAX, llama_kv_stream_feedback_context feedback = {},
-            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {});
+            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {}, bool defer_clean_sync = false);
     // Speculatively start the next append while idle; adoption validates the complete logical identity.
     // Both operations are backend-neutral and retain the existing opaque copy queue until adoption or cancellation.
     bool prime_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages,

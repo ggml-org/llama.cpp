@@ -1475,6 +1475,18 @@ bool llama_kv_cache::complete_mtp_publication() {
     return mtp_proxy && mtp_proxy->complete_publication();
 }
 
+void llama_kv_cache::set_next_target(bool final_use) {
+    if (mtp_proxy) mtp_proxy->set_next_target(final_use);
+}
+
+bool llama_kv_cache::finish_serial_access() {
+    return !mtp_proxy || mtp_proxy->finish_access();
+}
+
+bool llama_kv_cache::retire_serial_access() {
+    return !mtp_proxy || mtp_proxy->retire_final_access();
+}
+
 size_t llama_kv_cache::mtp_span_attention_calls() const noexcept {
     return mtp_proxy ? mtp_proxy->attention_calls() : 0;
 }

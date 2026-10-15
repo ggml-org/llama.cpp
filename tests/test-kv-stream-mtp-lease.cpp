@@ -22,7 +22,8 @@ struct mtp_fixture {
     size_t active_tokens = 3*256 - 7;
     size_t committed_tokens = 3*256 - 7;
 
-    explicit mtp_fixture(bool cuda = false, size_t tokens = 3*256 - 7, size_t committed = 0) :
+    explicit mtp_fixture(bool cuda = false, size_t tokens = 3*256 - 7, size_t committed = 0, uint32_t target_layers=16,
+            ggml_type type_k=GGML_TYPE_Q8_0, ggml_type type_v=GGML_TYPE_Q4_0) :
         active_tokens(tokens), committed_tokens(committed ? committed : tokens) {
         if (cuda) {
             ggml_backend_load_all();
@@ -37,18 +38,18 @@ struct mtp_fixture {
         auto * host_type = cuda ? llama_kv_stream_host_buffer_type(device) : ggml_backend_cpu_buffer_type();
         auto * device_type = cuda ? llama_kv_stream_device_buffer_type(device) : ggml_backend_cpu_buffer_type();
         GGML_ASSERT(host_type && device_type);
-        policy.shape = {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 32, 32, 2, 256, 128};
+        policy.shape = {type_k, type_v, 32, 32, 2, 256, 128};
         policy.capabilities = {
-            {GGML_TYPE_Q8_0, true, true, true, true},
-            {GGML_TYPE_Q4_0, true, true, true, true},
+            {type_k, true, true, true, true},
+            {type_v, true, true, true, true},
             true, true,
         };
         ggml_kv_stream_execution page;
         GGML_ASSERT(ggml_kv_stream_resolve(policy.shape, policy.capabilities, 256, page).status ==
             ggml_kv_stream_status::success);
-        policy.layers = 17;
-        policy.caches = {{101, 16}, {202, 1}};
-        policy.pool_bytes = 20*page.storage.bytes + page.conversion.bytes;
+        policy.layers = target_layers+1;
+        policy.caches = {{101, target_layers}, {202, 1}};
+        policy.pool_bytes = (size_t(target_layers)+4)*page.storage.bytes + page.conversion.bytes;
         policy.initial_ring_slots = 3;
         policy.fixed_ring = true;
         GGML_ASSERT(llama_kv_stream_policy_initialize(policy, state).status == llama_kv_stream_policy_status::success);
@@ -88,7 +89,7 @@ struct mtp_fixture {
     }
 
     llama_kv_stream_complete_layer_request request(uint32_t queries = 4, uint64_t id = 202) const {
-        return {16, queries, 11, cache->identity().generation, id};
+        return {policy.layers-1, queries, 11, cache->identity().generation, id};
     }
 };
 
@@ -163,6 +164,116 @@ int main(int argc, char ** argv) {
     testing t;
     if (tail_only) t.set_filter("retained_mtp_tail_publishes_only_new_rows_and_invalidates_old_plans");
 
+    t.test("prepared_layer_transfer_orders_uploads_and_reuses_resources", [&](testing & t) {
+        mtp_fixture f(cuda);
+        auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+        if (!t.assert_true(bool(transfer))) return;
+        t.assert_true(!llama_kv_stream_transfer::create(nullptr));
+        t.assert_true(!transfer->begin(nullptr));
+        llama_kv_stream_host_layer host;
+        t.assert_true(f.cache->host()->layer(0,host));
+        const size_t bytes=128;
+        for (int round=0;round<3;++round) {
+            t.assert_true(transfer->begin(f.backend.get()));
+            t.assert_true(!transfer->begin(f.backend.get()));
+            t.assert_true(!transfer->order(f.backend.get(),f.backend.get()));
+            t.assert_true(!transfer->upload(nullptr,0,host.k,bytes));
+            auto * buffer=ggml_backend_memory_lease_buffer(f.pool);
+            t.assert_true(!transfer->upload(buffer,ggml_backend_buffer_get_size(buffer)-1,host.k,bytes));
+            t.assert_true(transfer->upload(buffer,0,host.k,bytes));
+            t.assert_true(transfer->seal());
+            t.assert_true(transfer->order(f.backend.get(),f.backend.get()));
+            t.assert_true(!transfer->upload(buffer,0,host.k,bytes));
+            t.assert_true(transfer->wait(f.backend.get()));
+            t.assert_true(transfer->finish());
+            t.assert_true(matches(buffer,0,host.k,bytes));
+        }
+    });
+
+    t.test("pending_population_retains_transport_host_and_arena_until_final_lease", [&](testing & t) {
+        for (uint32_t layers : {1u,3u,16u,60u}) {
+            mtp_fixture f(cuda,761,0,layers);
+            auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+            auto owner=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+            if (!t.assert_true(bool(transfer) && bool(owner))) return;
+            auto * lease=owner->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true);
+            if (!t.assert_true(lease != nullptr)) return;
+            std::weak_ptr<llama_kv_stream_transfer> lifetime=transfer;
+            transfer.reset();
+            t.assert_true(!lifetime.expired());
+            ggml_backend_memory_lease_free(f.pool); f.pool=nullptr;
+            t.assert_true(ggml_backend_memory_arena_quiesce(f.arena));
+            t.assert_true(ggml_backend_memory_arena_get_state(f.arena) == GGML_BACKEND_MEMORY_ARENA_STATE_DRAINING);
+            t.assert_true(owner->wait_population(lease,f.backend.get(),*f.cache));
+            owner.reset();
+            llama_kv_stream_complete_layer_lease_free(lease);
+            t.assert_true(lifetime.expired());
+            t.assert_true(ggml_backend_memory_arena_get_state(f.arena) == GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+        }
+    });
+
+    t.test("handoff_retirement_does_not_drain_later_consumer_work", [&](testing & t) {
+        mtp_fixture f(cuda);
+        auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+        if (!t.assert_true(bool(transfer) && transfer->order(f.backend.get(),f.backend.get()))) return;
+        const auto synchronize=f.backend->iface.synchronize;
+        static size_t drains=0;
+        drains=0;
+        f.backend->iface.synchronize=[](ggml_backend_t) { ++drains; };
+        const bool finished=transfer->finish();
+        f.backend->iface.synchronize=synchronize;
+        t.assert_true(finished);
+        t.assert_equal(size_t(0),drains);
+    });
+
+    t.test("prefetched_population_preserves_encoded_bytes_across_cache_formats", [&](testing & t) {
+        for (const auto & types : {std::pair{GGML_TYPE_F16,GGML_TYPE_F16},std::pair{GGML_TYPE_BF16,GGML_TYPE_BF16},
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_Q5_1,GGML_TYPE_Q4_1},
+                std::pair{GGML_TYPE_Q4_0,GGML_TYPE_Q8_0}}) {
+            mtp_fixture f(cuda,761,0,3,types.first,types.second);
+            auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+            auto owner=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+            if (!t.assert_true(bool(transfer) && bool(owner))) return;
+            auto * lease=owner->prefetch(*transfer,f.backend.get(),f.request(8),*f.cache,true);
+            if (!t.assert_true(lease && owner->wait_population(lease,f.backend.get(),*f.cache) && transfer->finish())) return;
+            ggml_kv_stream_span_plan_view view;
+            if (!t.assert_true(ggml_kv_stream_span_plan_get_view(llama_kv_stream_complete_layer_lease_plan(lease),view))) return;
+            llama_kv_stream_host_layer host;
+            t.assert_true(f.cache->host()->layer(0,host));
+            for (size_t i=0;i<view.count;++i) {
+                const auto & span=view.spans[i];
+                t.assert_true(matches(span.k_buffer,span.k_offset,
+                    static_cast<const char *>(host.k)+span.token_begin*f.cache->host()->layout().k_token_bytes,
+                    span.tokens*f.cache->host()->layout().k_token_bytes));
+                t.assert_true(matches(span.v_buffer,span.v_offset,
+                    static_cast<const char *>(host.v)+span.token_begin*f.cache->host()->layout().v_token_bytes,
+                    span.tokens*f.cache->host()->layout().v_token_bytes));
+            }
+            llama_kv_stream_complete_layer_lease_free(lease);
+        }
+    });
+
+    if (cuda) t.test("event_backed_population_never_synchronizes_the_host_before_consumption", [&](testing & t) {
+        mtp_fixture f(true);
+        auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+        auto owner=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+        if (!t.assert_true(bool(transfer) && bool(owner))) return;
+        const auto producer_sync=f.backend->iface.synchronize;
+        const auto copy_sync=transfer->backend()->iface.synchronize;
+        static size_t host_waits=0;
+        host_waits=0;
+        f.backend->iface.synchronize=[](ggml_backend_t) { ++host_waits; };
+        transfer->backend()->iface.synchronize=[](ggml_backend_t) { ++host_waits; };
+        auto * lease=owner->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true);
+        const bool ready=lease && owner->wait_population(lease,f.backend.get(),*f.cache);
+        f.backend->iface.synchronize=producer_sync;
+        transfer->backend()->iface.synchronize=copy_sync;
+        t.assert_true(ready);
+        t.assert_equal(size_t(0),host_waits);
+        t.assert_true(transfer->finish());
+        llama_kv_stream_complete_layer_lease_free(lease);
+    });
+
     t.test("resident_mirror_reuse_never_claims_overwritten_ring_bytes", [&](testing & t) {
         mtp_fixture f(cuda);
         const size_t stride=f.cache->host()->layout().k_token_bytes+f.cache->host()->layout().v_token_bytes;
@@ -201,6 +312,55 @@ int main(int argc, char ** argv) {
             ring.tokens*f.cache->host()->layout().k_token_bytes));
         t.assert_true(matches(ring.v_buffer,ring.v_offset,static_cast<const char *>(host.v)+resident*f.cache->host()->layout().v_token_bytes,
             ring.tokens*f.cache->host()->layout().v_token_bytes));
+        llama_kv_stream_complete_layer_lease_free(lease);
+    });
+
+    t.test("prefetched_layer_requires_consumer_readiness_and_rejects_changed_host_identity", [&](testing & t) {
+        mtp_fixture f(cuda);
+        auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+        auto owner=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+        if (!t.assert_true(bool(transfer) && bool(owner))) return;
+        auto * lease=owner->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true);
+        if (!t.assert_true(lease != nullptr)) return;
+        t.assert_equal(size_t(0),llama_kv_stream_complete_layer_lease_population(lease).bytes);
+        t.assert_true(owner->wait_population(lease,f.backend.get(),*f.cache));
+        t.assert_true(owner->wait_population(lease,f.backend.get(),*f.cache));
+        const size_t stride=f.cache->host()->layout().k_token_bytes+f.cache->host()->layout().v_token_bytes;
+        t.assert_equal(f.committed_tokens*stride,llama_kv_stream_complete_layer_lease_population(lease).bytes);
+        t.assert_true(transfer->finish());
+        llama_kv_stream_complete_layer_lease_free(lease);
+        owner.reset();
+        owner=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+        lease=owner->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true);
+        if (!t.assert_true(lease != nullptr)) return;
+        t.assert_true(f.cache->truncate(f.cache->tokens()-1));
+        t.assert_true(!owner->wait_population(lease,f.backend.get(),*f.cache));
+        t.assert_true(transfer->finish());
+        llama_kv_stream_complete_layer_lease_free(lease);
+    });
+
+    t.test("partial_population_failure_drains_and_retries_without_losing_canonical_host_bytes", [](testing & t) {
+        mtp_fixture f;
+        auto transfer=llama_kv_stream_transfer::create(f.backend.get());
+        auto owner=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+        if (!t.assert_true(bool(transfer) && bool(owner))) return;
+        auto * buffer=ggml_backend_memory_lease_buffer(f.pool);
+        const auto checkpoint=f.cache->checkpoint();
+        {
+            upload_fault fault(buffer,2);
+            t.assert_true(owner->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true) == nullptr);
+        }
+        t.assert_equal(size_t(0),owner->ring_slots_used());
+        t.assert_equal(checkpoint.generation,f.cache->identity().generation);
+        t.assert_equal(f.committed_tokens,f.cache->tokens());
+        auto * lease=owner->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true);
+        if (!t.assert_true(lease != nullptr)) return;
+        auto other=llama_kv_stream_layer_lease_owner::create(f.pool,f.layout());
+        t.assert_true(other->prefetch(*transfer,f.backend.get(),f.request(),*f.cache,true) == nullptr);
+        t.assert_true(owner->wait_population(lease,f.backend.get(),*f.cache));
+        const size_t stride=f.cache->host()->layout().k_token_bytes+f.cache->host()->layout().v_token_bytes;
+        t.assert_equal(f.committed_tokens*stride,llama_kv_stream_complete_layer_lease_population(lease).bytes);
+        t.assert_true(transfer->finish());
         llama_kv_stream_complete_layer_lease_free(lease);
     });
 

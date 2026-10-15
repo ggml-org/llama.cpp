@@ -65,7 +65,11 @@ public:
     bool set_ring_guard(std::shared_ptr<const llama_kv_stream_ring_guard> guard);
     // Populate the MTP layer once and retain one physical reservation for TG1-TG4.
     // Borrowed plans remain valid only until release_mtp_layer().
-    bool acquire_mtp_layer(size_t future_tokens = 0);
+    bool acquire_mtp_layer(size_t future_tokens = 0, bool prefetch = false);
+    // Cache identity selects the next reader; no model layer count is encoded in the schedule.
+    bool schedule_next_cache(uint64_t cache_id, uint32_t future_tokens);
+    bool wait_auxiliary_population(ggml_backend_t consumer);
+    bool prefetch_target_after(ggml_backend_t last_reader);
     size_t mtp_reserved_tokens() const noexcept;
     // Copy only newly published MTP host rows into the retained physical lease.
     bool advance_mtp_layer_tail();

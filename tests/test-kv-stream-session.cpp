@@ -82,7 +82,8 @@ int main(int argc, char ** argv) {
     const bool prefill_tail_only = argc > 1 && !std::strcmp(argv[1],"--cuda-prefill-tail");
     const bool wide_resume_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wide-resume");
     const bool wave_only = argc > 1 && !std::strcmp(argv[1],"--cuda-wave-batching");
-    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool consumer_only = argc > 1 && !std::strcmp(argv[1],"--cuda-consumer-prefetch");
+    const bool cuda = consumer_only || physical_map_only || guard_only || page_boundary_only || short_prefill_only || prefill_tail_only || wide_resume_only || wave_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -94,6 +95,7 @@ int main(int argc, char ** argv) {
     if (prefill_tail_only) t.set_filter("resident_one_query_prefill_keeps_compact_mask_out_of_decode_capture");
     if (wide_resume_only) t.set_filter("wide_target_decode_reuses_small_ring_and_matches_stock");
     if (wave_only) t.set_filter("wrapped_resume_waves_reduce_launches_without_changing_tokens");
+    if (consumer_only) t.set_filter("explicit_consumer_prefetch_adopts_actual_query_width_without_extra_uploads");
     if (cuda) t.test("wrapped_resume_waves_reduce_launches_without_changing_tokens",[&](testing & t) {
         auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
@@ -519,6 +521,49 @@ int main(int argc, char ** argv) {
         t.assert_true(session->failed() && !session->active());
         t.assert_equal(size_t(0),session->tokens());
         t.assert_true(!session->produce(0,input.k,input.v));
+    });
+
+    if (cuda) t.test("explicit_consumer_prefetch_adopts_actual_query_width_without_extra_uploads", [&](testing & t) {
+        for (uint32_t queries : {1u,2u,3u,4u,5u,6u,7u,8u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
+            ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+            f.policy.pool_bytes=8*page.bytes; f.policy.initial_ring_slots=4;
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+            size_t measured=0;
+            if (!t.assert_true(get && get()->decode_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                    4,2,8,f.host->layout().tokens,measured))) return;
+            block_workspace writer(f,32768,19),partial(f,std::max(measured,f.host->layout().bytes),29);
+            llama_kv_stream_session_config config{f.policy,256,4,false,true,true};
+            config.cross_token_prefetch=false;
+            config.max_decode_rows=8;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+                f.lease.get(),writer.lease.get(),partial.lease.get());
+            if (!t.assert_true(bool(session)) || !t.assert_true(session->restore(513))) return;
+            session_inputs initial_kv(backend.get(),1); block_inputs initial_attn(f,514,1);
+            if (!t.assert_true(session->begin(514,1,true))) return;
+            for (uint32_t layer=0;layer<4;++layer) {
+                if (!t.assert_true(session->produce(layer,initial_kv.k,initial_kv.v)) ||
+                        !t.assert_true(session->attention(layer,initial_attn.q,initial_attn.mask,initial_attn.output,1.0f/16))) return;
+            }
+            t.assert_true(!session->prefetch_primed());
+            t.assert_true(!session->prefetch_decode(9));
+            if (!t.assert_true(session->prefetch_decode(0))) return;
+            const auto before=session->sequence_stats();
+            t.assert_true(before.primed && before.copy_calls>0);
+            session_inputs kv(backend.get(),queries); block_inputs attn(f,514+queries,queries);
+            if (!t.assert_true(session->begin(514+queries,queries,true))) return;
+            t.assert_true(!session->set_automatic_prefetch(true));
+            const auto adopted=session->sequence_stats();
+            t.assert_true(adopted.adopted && adopted.copy_calls == before.copy_calls);
+            for (uint32_t layer=0;layer<4;++layer) {
+                if (!t.assert_true(session->produce(layer,kv.k,kv.v)) ||
+                        !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
+            }
+            ggml_backend_synchronize(backend.get());
+            t.assert_true(same_float_bits(stock_attention(f,attn,3),attn.read()));
+            t.assert_true(!session->prefetch_primed());
+        }
     });
 
     if (cuda) t.test("matching_decode_adopts_cross_token_prefetch_and_mismatch_drains_it", [&](testing & t) {

@@ -86,6 +86,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     bool running = false, produced = false, poisoned = false, busy = false;
     bool direct_mode = false, report_layout = false, primed = false;
     size_t primed_active = 0;
+    uint32_t primed_queries = 1;
     pool_rebind * transition = nullptr;
     bool transition_closed = false;
     bool device_suspended = false;
@@ -110,14 +111,17 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     }
 
     // Start only a layout-stable next-token decode; failure is an optimization miss, not session failure.
-    bool prime_next() {
-        if (!config.cross_token_prefetch || !config.resume_decode || primed || poisoned || !resident || !binding ||
+    bool prime_next(uint32_t queries=1) {
+        const uint32_t maximum=queries ? queries : config.max_decode_rows;
+        if (!maximum || maximum > config.max_decode_rows || !config.resume_decode || primed || poisoned || !resident || !binding ||
                 committed >= content->host()->config().context_tokens || !state.ring_slots) return false;
-        const size_t active=committed+1;
+        if (maximum > content->host()->config().context_tokens-committed) return false;
+        const size_t active=committed+maximum;
+        if (!queries && committed/256 != (active-1)/256) return false;
         llama_kv_stream_policy_decision decision;
         const bool trace_policy=std::getenv("LLAMA_KV_STREAM_TRACE_POLICY") != nullptr;
         const auto observed_feedback=trace_policy ? resident->feedback() : llama_kv_stream_feedback{};
-        if (!resident->recommend_policy(state,active,1,decision,true,false)) return false;
+        if (!resident->recommend_policy(state,active,maximum,decision,true,false)) return false;
         if (trace_policy && observed_feedback.available) {
             const uint64_t samples=observed_feedback.samples >= state.samples ? observed_feedback.samples-state.samples : 0;
             const uint64_t misses=observed_feedback.misses >= state.misses ? observed_feedback.misses-state.misses : 0;
@@ -134,10 +138,10 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         if (decision.layout_changed || decision.next.decode_active_pages <= decision.next.resident_pages_per_layer) return false;
         const size_t next_span=std::max(size_t(1),resident->suggested_span_pages());
         if (!pin) pin=binding->acquire();
-        if (!pin || !resident->prime_sequence(order,active,next_span,committed,{1,true},ring_guard)) {
+        if (!pin || !resident->prime_sequence(order,active,next_span,committed,{queries,true},ring_guard)) {
             pin.reset(); return false;
         }
-        state=decision.next; span=next_span; primed=true; primed_active=active;
+        state=decision.next; span=next_span; primed=true; primed_active=active; primed_queries=queries;
         return true;
     }
     bool attention_bytes(bool decode, size_t & bytes) const {
@@ -649,15 +653,18 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
     try {
         bool adopted=false;
         if (s.primed) {
-            bool policy_stable=decode && queries == 1;
+            bool policy_stable=decode && (!s.primed_queries || queries == s.primed_queries);
             if (policy_stable) {
                 llama_kv_stream_policy_decision decision;
                 policy_stable=s.resident->recommend_policy(s.state,active,queries,decision,true,false) &&
                     !decision.layout_changed;
                 if (policy_stable) s.state=decision.next;
             }
-            adopted=policy_stable && active == s.primed_active && bool(s.pin) &&
+            adopted=policy_stable && (!s.primed_queries || active == s.primed_active) && bool(s.pin) &&
                 s.resident->adopt_sequence(s.order,active,s.span,s.committed,{queries,decode},s.ring_guard);
+            if (std::getenv("LLAMA_KV_STREAM_TRACE_POLICY"))
+                LLAMA_LOG_WARN("%s: next-cache adoption active=%zu queries=%u stable=%d adopted=%d\n",
+                    __func__,active,queries,int(policy_stable),int(adopted));
             if (!adopted) {
                 s.resident->cancel_sequence(); s.pin.reset();
             }
@@ -881,7 +888,7 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
             if (!s.resident->advance_feedback_identity()) {
                 s.drain(); s.poisoned=true; return false;
             }
-            if (!s.prime_next()) s.pin.reset();
+            if (!s.config.cross_token_prefetch || !s.prime_next()) s.pin.reset();
         }
         return true;
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
@@ -952,6 +959,32 @@ bool llama_kv_stream_session::set_ring_guard(
 size_t llama_kv_stream_session::granted_bytes() const noexcept { return impl->grant; }
 uint64_t llama_kv_stream_session::layout_revision() const noexcept { return impl->revision; }
 bool llama_kv_stream_session::prefetch_primed() const noexcept { return impl->primed; }
+
+// Storage membership does not choose execution order; the coordinator declares external consumers.
+bool llama_kv_stream_session::set_automatic_prefetch(bool enable) {
+    auto & s=*impl;
+    if (s.busy || s.running || s.transition || s.transition_closed) return false;
+    session_operation operation(s.busy);
+    if (!enable && s.primed && !s.drain()) { s.poisoned=true; return false; }
+    s.config.cross_token_prefetch=enable;
+    return true;
+}
+
+bool llama_kv_stream_session::release_ring_guard_ordered() {
+    auto & s=*impl;
+    if (s.busy || s.running || s.primed || s.transition || s.transition_closed ||
+            s.publication.pending() || (s.resident && s.resident->sequence_active())) return false;
+    s.ring_guard.reset();
+    return true;
+}
+
+// Only an idle owner can announce the next access; an unavailable lookahead is not an execution failure.
+bool llama_kv_stream_session::prefetch_decode(uint32_t query_tokens) {
+    auto & s=*impl;
+    if (s.busy || s.running || s.transition || s.transition_closed || s.publication.pending()) return false;
+    session_operation operation(s.busy);
+    return s.prime_next(query_tokens);
+}
 
 bool llama_kv_stream_session::grow_pool(
         ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode) {
