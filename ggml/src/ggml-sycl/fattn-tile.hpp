@@ -5,6 +5,7 @@
 #include "fattn-common.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <float.h>
 
 namespace syclex = sycl::ext::oneapi::experimental;
@@ -880,11 +881,20 @@ static void flash_attn_tile(const char *  Q,
                                             KQ_max_new_shared);
         }
     } else {
-        // Branch without out-of-bounds checks.
-        for (int k_VKQ_0 = item_ct1.get_group(1) * nbatch_fa; k_VKQ_0 < k_VKQ_max;
-             k_VKQ_0 += item_ct1.get_group_range(1) * nbatch_fa) {
-
+        // Branch without out-of-bounds checks for full chunks; the trailing partial
+        // chunk (n_kv not a multiple of nbatch_fa) takes the checked iteration, so
+        // the GQA-optimized variants no longer require K->ne[1] % FATTN_KQ_STRIDE == 0.
+        int k_VKQ_0 = item_ct1.get_group(1) * nbatch_fa;
+        while (k_VKQ_0 < k_VKQ_max - nbatch_fa) {
             constexpr bool oob_check = false;
+            flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap,
+                                 oob_check>(Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp, stride_K2,
+                                            stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0,
+                                            KQ_max_new_shared);
+            k_VKQ_0 += item_ct1.get_group_range(1) * nbatch_fa;
+        }
+        if (k_VKQ_0 < k_VKQ_max) {
+            constexpr bool oob_check = true;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap,
                                  oob_check>(Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp, stride_K2,
                                             stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0,
@@ -1166,7 +1176,16 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_sycl_context & ctx, ggm
     // However, for DKQ == 576, DV == 512 only the kernel variant with GQA optimizations is implemented.
     //const bool nvidia = GGML_SYCL_CC_IS_NVIDIA(ggml_sycl_info().devices[ggml_sycl_get_device()].cc);
     const int gqa_limit = gqa_ratio <= 4 && DV <= 256 ? 16 : INT_MAX;
-    const bool use_gqa_opt = mask && max_bias == 0.0f && Q->ne[1] <= gqa_limit && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // n_kv need not be a multiple of FATTN_KQ_STRIDE: the kernel handles the trailing
+    // partial chunk with the out-of-bounds checked iteration.
+    const bool use_gqa_opt = mask && max_bias == 0.0f && Q->ne[1] <= gqa_limit;
+    {
+        static int dbg = ggml_sycl_get_env("GGML_SYCL_FA_TILE_DEBUG", 0);
+        if (dbg == 1) {
+            fprintf(stderr, "[FA-TILE] DKQ=%d DV=%d gqa=%d q=%lld n_kv=%lld gqa_opt=%d\n",
+                    DKQ, DV, gqa_ratio, (long long) Q->ne[1], (long long) K->ne[1], (int) use_gqa_opt);
+        }
+    }
 
     if constexpr (DV == 512) {
         if (use_gqa_opt && gqa_ratio % 16 == 0) {
