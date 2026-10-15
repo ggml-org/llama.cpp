@@ -64,6 +64,7 @@ struct vk_mat_mat_id_push_constants {
     uint32_t nei0; uint32_t nei1; uint32_t nbi1; uint32_t ne11;
     uint32_t n_experts;
     uint32_t row_ids_offset;
+    uint32_t rescale;
 };
 
 struct vk_mm_id_amax_push_constants {

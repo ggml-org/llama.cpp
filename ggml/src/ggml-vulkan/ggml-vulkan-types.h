@@ -221,7 +221,6 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
 
-// partial reductions in the MUL_MAT_ID src1 amax pre-pass
 #define GGML_VK_MM_ID_AMAX_NPARTS 256
 
 struct vk_pipeline_struct;
@@ -262,11 +261,10 @@ struct vk_matmul_pipeline_key {
     ggml_type type_b;
     bool mul_mat_id;
     bool f16acc;
-    bool amax = false; // src1 rescale variant (MUL_MAT_ID, f32-B)
 
     bool operator<(const vk_matmul_pipeline_key & o) const {
-        return std::tie(type_a, type_b, mul_mat_id, f16acc, amax)
-             < std::tie(o.type_a, o.type_b, o.mul_mat_id, o.f16acc, o.amax);
+        return std::tie(type_a, type_b, mul_mat_id, f16acc)
+             < std::tie(o.type_a, o.type_b, o.mul_mat_id, o.f16acc);
     }
 };
 
@@ -1233,7 +1231,6 @@ struct ggml_backend_vk_context {
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
-    size_t prealloc_size_mm_id_amax;
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
     vk_buffer prealloc_mm_id_amax;
     vk::Fence fence, almost_ready_fence;

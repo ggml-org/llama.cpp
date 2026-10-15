@@ -125,10 +125,7 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 #ifdef MUL_MAT_ID
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
 layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
-#ifdef MMID_RESCALE
-// src1 rescale factors: [0]=s1_inv, [1]=s1_scale
 layout (binding = 5) readonly buffer Amax {float data_amax[];};
-#endif
 #endif
 
 layout (push_constant) uniform parameter
@@ -151,6 +148,7 @@ layout (push_constant) uniform parameter
     uint ne11;
     uint n_experts;
     uint row_ids_offset;
+    uint rescale;
 #else
     uint base_work_group_z;
     uint num_batches;
@@ -162,15 +160,8 @@ layout (push_constant) uniform parameter
 #endif
 } p;
 
-#ifdef MMID_RESCALE
-// constant_id 13 is reserved for this on all paths (coopmat SHMEM/APPLY were shifted to 14/15).
-layout (constant_id = 13) const bool MMID_RESCALE_ON = false;
-float mmid_s1_scale = 1.0f; // applied to the result on store
+#ifdef MUL_MAT_ID
 #define D_STORE(v) D_TYPE(mmid_s1_scale * float(v))
-// f32-B only: src1 is downscaled on shmem load. For f16-B the copy already applied s1_inv.
-#ifdef MMID_RESCALE_LOAD
-float mmid_s1_inv = 1.0f;
-#endif
 #else
 #define D_STORE(v) D_TYPE(v)
 #endif
@@ -195,9 +186,13 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #endif
 
 #ifdef COOPMAT
-// constant_id 12 (MmTypeA) and 13 (MMID_RESCALE_ON) are reserved so these sit at a uniform id.
-layout(constant_id = 14) const uint SHMEM_STRIDE_PAD = 4;
-layout(constant_id = 15) const bool APPLY_SLM_A_RESHAPE = false;
+#ifdef MULMAT_QUANT
+layout(constant_id = 13) const uint SHMEM_STRIDE_PAD = 4;
+layout(constant_id = 14) const bool APPLY_SLM_A_RESHAPE = false;
+#else
+layout(constant_id = 12) const uint SHMEM_STRIDE_PAD = 4;
+layout(constant_id = 13) const bool APPLY_SLM_A_RESHAPE = false;
+#endif
 #else
 const uint SHMEM_STRIDE_PAD = 1;
 const bool APPLY_SLM_A_RESHAPE = false;
@@ -237,13 +232,8 @@ void main() {
     init_iq_shmem(gl_WorkGroupSize);
 #endif
 
-#ifdef MMID_RESCALE
-    if (MMID_RESCALE_ON) {
-        mmid_s1_scale = data_amax[1];
-#ifdef MMID_RESCALE_LOAD
-        mmid_s1_inv = data_amax[0];
-#endif
-    }
+#ifdef MUL_MAT_ID
+    const float mmid_s1_scale = p.rescale != 0 ? data_amax[1] : 1.0f;
 #endif
 
 #ifndef MUL_MAT_ID
