@@ -632,6 +632,9 @@ class ModelBase:
         scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         input_scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         consumed: list[str] = []
+        candidates: dict[str, tuple[str, Tensor]] = {}
+        scaled_weights: set[str] = set()
+        expert_pattern = re.compile(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
 
         for scale_name in list(self.model_tensors.keys()):
             weight_name = None
@@ -645,6 +648,7 @@ class ModelBase:
             if weight_name is None or weight_name not in self.model_tensors:
                 continue
 
+            scaled_weights.add(weight_name)
             weight = LazyTorchTensor.to_eager(self.model_tensors[weight_name]())
             if weight.dtype != torch.float8_e4m3fn or weight.ndim < 2:
                 continue
@@ -653,6 +657,38 @@ class ModelBase:
             if scale.numel() != 1:
                 continue
 
+            merged_name = re.sub(r"(\.experts)\.\d+\.", r"\1.", weight_name)
+            new_names = self._map_fp8_weight_names(merged_name)
+            if not new_names:
+                continue
+            bid = next((int(part) for part in new_names[0].split(".") if part.isdecimal()), None)
+            self._fp8_e4m3_preserved.add(weight_name)
+            if any(new_name.endswith("_norm.weight") or self.tensor_force_quant(weight_name, new_name, bid, weight.ndim) != gguf.GGMLQuantizationType.F8_E4M3 for new_name in new_names):
+                self._fp8_e4m3_preserved.discard(weight_name)
+                continue
+            candidates[weight_name] = (scale_name, scale)
+
+        expert_groups: dict[str, list[str]] = {}
+        for name in self.model_tensors:
+            if expert_pattern.search(name):
+                expert_groups.setdefault(name.split(".experts.")[0], []).append(name)
+        for names in expert_groups.values():
+            dtypes = {self.model_tensors[name]().dtype for name in names}
+            if torch.float8_e4m3fn not in dtypes:
+                continue
+            if dtypes == {torch.float8_e4m3fn} and not any(name in scaled_weights for name in names):
+                continue
+            # The converter emits all three projections when the last expert arrives.
+            if not all(name in candidates for name in names):
+                for name in names:
+                    candidates.pop(name, None)
+                    self._fp8_e4m3_preserved.discard(name)
+                    if name not in scaled_weights:
+                        gen = self.model_tensors[name]
+                        self.model_tensors[name] = lambda gen=gen: gen().float()
+
+        for weight_name, (scale_name, scale) in candidates.items():
+            weight = self.model_tensors[weight_name]()
             scale = self._transform_fp8_scale(weight_name, scale)
 
             weight_prefix = weight_name.removesuffix(".weight")
@@ -671,10 +707,9 @@ class ModelBase:
                     raise ValueError(f"FP8 input scale {input_scale_name!r} must be a scalar")
                 consumed.append(input_scale_name)
 
-            self._fp8_e4m3_preserved.add(weight_name)
             consumed.append(scale_name)
 
-            expert_match = re.search(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$", weight_name)
+            expert_match = expert_pattern.search(weight_name)
             if expert_match:
                 bid = int(expert_match.group(1))
                 expert_id = int(expert_match.group(2))
@@ -1412,14 +1447,7 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
-                # TODO: why do we squeeze here?
-                # data = data_torch.squeeze().numpy()
-                if preserve_fp8_e4m3:
-                    data = data_torch.view(torch.uint8).numpy()
-                else:
-                    data = data_torch.numpy()
-
-                n_dims = len(data.shape)
+                n_dims = len(data_torch.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
@@ -1496,6 +1524,11 @@ class ModelBase:
                         data_qtype = gguf.GGMLQuantizationType.TQ2_0
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
+
+                if data_torch.dtype == torch.float8_e4m3fn:
+                    data = data_torch.view(torch.uint8).numpy() if data_qtype == gguf.GGMLQuantizationType.F8_E4M3 else data_torch.float().numpy()
+                else:
+                    data = data_torch.numpy()
 
                 # a chunked tensor quantizes as one chunk at a time, while it is written
                 quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
