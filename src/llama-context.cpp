@@ -3824,6 +3824,7 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     llama_set_param(model->cls_out_b,       param_filter, param_filter_ud);
     llama_set_param(model->cls_norm,        param_filter, param_filter_ud);
 
+    static_assert(sizeof(llama_layer) % sizeof(ggml_tensor *) == 0, "llama_layer is iterated as an array of tensor pointers");
     for (struct llama_layer & layer : model->layers) {
         for (size_t i = 0; i < sizeof(layer)/sizeof(struct ggml_tensor *); ++i) {
             llama_set_param(reinterpret_cast<struct ggml_tensor **>(&layer)[i], param_filter, param_filter_ud);
@@ -4787,6 +4788,20 @@ bool llama_opt_param_filter_all(const struct ggml_tensor * tensor, void * userda
     GGML_UNUSED(tensor);
     GGML_UNUSED(userdata);
     return true;
+}
+
+struct llama_opt_params llama_opt_default_params(void) {
+    return {
+        /*n_ctx_train          =*/ 0,
+        /*param_filter         =*/ llama_opt_param_filter_all,
+        /*param_filter_ud      =*/ nullptr,
+        /*get_opt_pars         =*/ ggml_opt_get_default_optimizer_params,
+        /*get_opt_pars_ud      =*/ nullptr,
+        /*optimizer_type       =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
+        /*checkpoint_path      =*/ nullptr,
+        /*load_optimizer_state =*/ false,
+        /*assistant_loss_only  =*/ false,
+    };
 }
 
 void llama_opt_init(struct llama_context * ctx, struct llama_model * model, struct llama_opt_params lopt_params) {

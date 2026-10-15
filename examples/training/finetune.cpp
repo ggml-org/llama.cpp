@@ -66,14 +66,10 @@ int main(int argc, char ** argv) {
             ggml_opt_optimizer_name(params.optimizer), (double) lr.lr0, (double) lr.wd, (double) lr.lr_min, (double) lr.decay_epochs,
             (unsigned) lr.epochs, (double) params.n_batch / params.n_ubatch, (double) params.val_split);
 
-    struct llama_opt_params lopt_params{
-        /*n_ctx_train     =*/0,
-        /*param_filter    =*/llama_opt_param_filter_all,
-        /*param_filter_ud =*/nullptr,
-        /*get_opt_pars    =*/common_opt_lr_pars,
-        /*get_opt_pars_ud =*/&params.lr,
-        /*optimizer_type  =*/params.optimizer,
-    };
+    struct llama_opt_params lopt_params = llama_opt_default_params();
+    lopt_params.get_opt_pars         = common_opt_lr_pars;
+    lopt_params.get_opt_pars_ud      = &params.lr;
+    lopt_params.optimizer_type       = params.optimizer;
     llama_opt_init(ctx, model, lopt_params);
 
     const int64_t idata_split = ggml_opt_dataset_ndata(dataset) * (1.0f - params.val_split);
