@@ -901,14 +901,6 @@ static __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 }
 
-#if !defined(FP8_AVAILABLE) || defined(GGML_USE_HIP)
-static __device__ __forceinline__ int ggml_cuda_round_to_nearest_even(float x) {
-    const int value = (int) floorf(x);
-    const float fraction = x - value;
-    return fraction > 0.5f || (fraction == 0.5f && (value & 1)) ? value + 1 : value;
-}
-#endif // !defined(FP8_AVAILABLE) || defined(GGML_USE_HIP)
-
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
     // TODO: Check how incoming NaNs are treated (i.e. is sign-bit preserved)?
@@ -927,13 +919,13 @@ static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
         return sign | 0x7E;
     }
     if (x < 0.015625f) {
-        return sign | (uint8_t) ggml_cuda_round_to_nearest_even(x * 512.0f);
+        return sign | (uint8_t) __float2int_rn(x * 512.0f);
     }
 
     int exp;
     const float mantissa = frexpf(x, &exp) * 2.0f;
     int encoded_exp = exp + 6;
-    int encoded_man = ggml_cuda_round_to_nearest_even((mantissa - 1.0f) * 8.0f);
+    int encoded_man = __float2int_rn((mantissa - 1.0f) * 8.0f);
     if (encoded_man == 8) {
         encoded_man = 0;
         encoded_exp++;
