@@ -70,11 +70,18 @@ fn main(
     let own_expert = ids[params.offset_ids + slot];
     let row_base   = (wg_linear % output_groups) * OUTPUTS_PER_WG;
 
-    let src0_batch_offset = params.offset_src0 + own_expert * params.stride_02;
+    // a skipped slot (id -1) keeps the zero accumulator, so the reduction below writes zeros
+    // no early return: the barriers below must stay in uniform control flow
+    let skipped = i32(own_expert) == -1;
+
+    let src0_batch_offset = params.offset_src0 + select(own_expert, 0u, skipped) * params.stride_02;
     let src1_idx_base     = params.offset_src1 + (slot % params.b_ne1) * params.stride_11;
     let dst_idx_base      = params.offset_dst + slot * params.m + row_base;
 
-    let acc = accumulate_vec_dot(thread_id, row_base, src0_batch_offset, src1_idx_base);
+    var acc: array<array<f32, OUTPUTS_PER_WG>, NUM_COLS>;
+    if (!skipped) {
+        acc = accumulate_vec_dot(thread_id, row_base, src0_batch_offset, src1_idx_base);
+    }
 
 #ifdef USE_SUBGROUP_REDUCTION
     for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
