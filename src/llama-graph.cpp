@@ -3232,14 +3232,18 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
-static void build_attn_scale_fp8_inputs(
+static bool is_type_scaled(ggml_type type) {
+    return type == GGML_TYPE_F8_E4M3;
+}
+
+static void build_attn_scale_kv_inputs(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         ggml_tensor * & q,
         ggml_tensor * & k,
         ggml_tensor * & v,
         int32_t il) {
-    if (mctx->type_k() == GGML_TYPE_F8_E4M3) {
+    if (is_type_scaled(mctx->type_k())) {
         // Store K/s and move its dequant scale to Q: (Q*s) dot (K/s) = Q dot K.
         ggml_tensor * scale = mctx->get_k_scale(il);
         if (scale) {
@@ -3250,7 +3254,7 @@ static void build_attn_scale_fp8_inputs(
         }
     }
 
-    if (mctx->type_v() == GGML_TYPE_F8_E4M3 && v) {
+    if (is_type_scaled(mctx->type_v()) && v) {
         // Store V/s here and restore its dequant scale after the weighted sum.
         ggml_tensor * scale = mctx->get_v_scale(il);
         if (scale) {
@@ -3259,12 +3263,12 @@ static void build_attn_scale_fp8_inputs(
     }
 }
 
-static ggml_tensor * build_attn_scale_fp8_output(
+static ggml_tensor * build_attn_scale_kv_output(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         ggml_tensor * cur,
         int32_t il) {
-    if (mctx->type_v() == GGML_TYPE_F8_E4M3) {
+    if (is_type_scaled(mctx->type_v())) {
         // P*(V/s)*s = P*V.
         ggml_tensor * scale = mctx->get_v_scale(il);
         if (scale) {
@@ -3301,7 +3305,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto * mctx_cur = inp->mctx;
 
-    build_attn_scale_fp8_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
 
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
@@ -3335,7 +3339,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask = inp->get_kq_mask();
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
-    cur = build_attn_scale_fp8_output(ctx0, mctx_cur, cur, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {
@@ -3590,7 +3594,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto * mctx_iswa = inp->mctx;
     const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
-    build_attn_scale_fp8_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
 
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
@@ -3632,7 +3636,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
-    cur = build_attn_scale_fp8_output(ctx0, mctx_cur, cur, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
