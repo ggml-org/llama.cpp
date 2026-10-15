@@ -1,0 +1,278 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_integer_dot_product : require
+
+// Q2_K and Q3_K matrix-vector product against q8_1 activations for Intel Xe2/Xe3 iGPUs, where
+// the decode matvec is limited by instruction issue (loads and their address arithmetic
+// included), not by memory bandwidth.
+//
+// One subgroup of exactly 16 lanes per workgroup, NUM_ROWS (a multiple of 4) rows per workgroup.
+// Lanes 4*slot .. 4*slot+3 work on the same row, so the four of them read each block's 64 bytes
+// of quants as one contiguous run. Lane quadrant (qn, qh) = ((lane >> 1) & 1, lane & 1) owns
+// the 64 values qn*128 + s*32 + qh*16 + 0..15 for s = 0..3: four scale groups that live in the
+// same four quant dwords (and, for Q3_K, the same four hmask dwords), at bit plane s. So a lane
+// loads those dwords once per block and the plane masks are constants.
+//
+// The fields are masked in place rather than shifted down and dotted against the signed
+// activations with the mixed-sign dot product; the power-of-two factor this leaves on each sum
+// is removed once per group. Q3_K blocks (110 bytes) start on a 2-byte boundary every other
+// block, so they are read as aligned dwords and realigned only when they need it. Rows are
+// assigned so that, for each of a lane's rows, all 16 lanes see blocks of the same alignment,
+// which keeps that branch uniform.
+
+#define MMQ
+#define B_TYPE block_q8_1_x4
+
+#include "mul_mat_vec_base.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A_U32 {uint32_t data_a_u32[];};
+layout (binding = 1) readonly buffer B_I4 {ivec4 data_b_i4[];};
+
+// Diagnostics (GGML_VK_XE_MODE): 0 normal, 1 loads only, 2 every row reads the same two blocks
+// (compute with the weights in cache). Only mode 0 gives correct results.
+layout (constant_id = 3) const uint XE_MODE = 0;
+
+// Rows per lane
+#define RPL (NUM_ROWS / 4)
+
+uint a_offset, b_offset, d_offset;
+
+void compute_outputs(const uint first_row, const uint num_rows) {
+    const uint tid  = gl_LocalInvocationID.x;
+    const uint qn   = (tid >> 1) & 1;
+    const uint qh   = tid & 1;
+    const uint slot = tid >> 2;
+
+    get_offsets(a_offset, b_offset, d_offset);
+    b_offset /= QUANT_K_Q8_1;
+    const uint nblocks = p.ncols / QUANT_K;
+
+    // Local row of this lane's i-th row. With 8 or more rows, rows of the same i are an even
+    // distance apart.
+    uint lrow[RPL];
+    uint arow[RPL];
+    [[unroll]] for (uint i = 0; i < RPL; ++i) {
+        lrow[i] = NUM_ROWS >= 8 ? (i & 1) + 2 * slot + 8 * (i >> 1) : slot;
+        arow[i] = a_offset + (first_row + min(lrow[i], num_rows - 1)) * nblocks;
+    }
+
+    FLOAT_TYPE acc[NUM_COLS][RPL];
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < RPL; ++i) {
+            acc[j][i] = FLOAT_TYPE(0.0f);
+        }
+    }
+
+#if defined(DATA_A_Q2_K)
+    const uint qs_word  = 4 + qn * 8 + qh * 4;
+    const uint sc_shift = qh * 8;
+#else
+    const uint qs_word  = 8 + qn * 8 + qh * 4;
+    const uint hm_word  = qh * 4;
+    const uint sc_shift = qh * 8 + qn * 4;
+    const uint hm_base  = 0x01010101u << (qn * 4);
+#endif
+
+    for (uint ib = 0; ib < nblocks; ++ib) {
+        // Weights of all of this lane's rows first, so the loads are in flight together.
+#if defined(DATA_A_Q2_K)
+        // 84 bytes = 21 dwords: scales in 0-3, qs in 4-19, dm in 20
+        uint q[RPL][4];
+        uint sc[RPL][2];
+        uint dmw[RPL];
+        [[unroll]] for (uint i = 0; i < RPL; ++i) {
+            const uint base = (XE_MODE == 2 ? a_offset + (ib & 1) : arow[i] + ib) * 21;
+            [[unroll]] for (uint k = 0; k < 4; ++k) {
+                q[i][k] = data_a_u32[base + qs_word + k];
+            }
+            sc[i][0] = data_a_u32[base + qn * 2];
+            sc[i][1] = data_a_u32[base + qn * 2 + 1];
+            dmw[i] = data_a_u32[base + 20];
+        }
+#else
+        // 110 bytes, 2-byte aligned: hmask in bytes 0-31, qs 32-95, scales 96-107, d 108-109.
+        // Five aligned dwords from the one holding the first byte needed; the fifth is only
+        // used by blocks that start halfway into a dword and never leaves the block.
+        uint q[RPL][5];
+        uint hm[RPL][5];
+        uint sc[RPL][4];
+        float da[RPL];
+        bool odd[RPL];
+        [[unroll]] for (uint i = 0; i < RPL; ++i) {
+            const uint blk = XE_MODE == 2 ? a_offset + (ib & 1) : arow[i] + ib;
+            const uint byte0 = blk * 110;
+            const uint base = byte0 >> 2;
+            odd[i] = (byte0 & 2) != 0;
+            [[unroll]] for (uint k = 0; k < 5; ++k) {
+                q[i][k]  = data_a_u32[base + qs_word + k];
+                hm[i][k] = data_a_u32[base + hm_word + k];
+            }
+            sc[i][0] = data_a_u32[base + 24];
+            sc[i][1] = data_a_u32[base + 25];
+            sc[i][2] = data_a_u32[base + 26];
+            sc[i][3] = data_a_u32[base + (odd[i] ? 27 : 26)];
+            da[i] = float(data_a[blk].d);
+        }
+#endif
+
+        // Activations: the lane's group in plane s is ints qh*4 .. qh*4+3 of q8_1 block
+        // qn*4 + s, normally all four in one block_q8_1_x4.
+        ivec4 bq[NUM_COLS][4];
+        float bd[NUM_COLS][4];
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            const uint bx = (j*p.batch_stride_b + ib*QUANT_K) / QUANT_K_Q8_1 + b_offset + qn * 4;
+            if ((bx & 3) == 0) {
+                const uint x = (bx >> 2) * 9;
+                const ivec4 ds4 = data_b_i4[x];
+                [[unroll]] for (uint s = 0; s < 4; ++s) {
+                    bq[j][s] = data_b_i4[x + 1 + s * 2 + qh];
+                    bd[j][s] = unpackHalf2x16(uint(ds4[s])).x;
+                }
+            } else {
+                [[unroll]] for (uint s = 0; s < 4; ++s) {
+                    const uint bi = bx + s;
+                    bq[j][s] = data_b_i4[(bi >> 2) * 9 + 1 + (bi & 3) * 2 + qh];
+                    bd[j][s] = float(data_b[bi >> 2].ds[bi & 3].x);
+                }
+            }
+        }
+
+        if (XE_MODE == 1) {
+            [[unroll]] for (uint i = 0; i < RPL; ++i) {
+                acc[0][i] += FLOAT_TYPE(q[i][0] ^ q[i][3] ^ sc[i][1]) + bd[0][0] + float(bq[0][3].w);
+            }
+            continue;
+        }
+
+        // Per-group activation sums, shared by all rows
+        int bsum[NUM_COLS][4];
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint s = 0; s < 4; ++s) {
+                bsum[j][s] = dotPacked4x8EXT(bq[j][s].x, 0x01010101) + dotPacked4x8EXT(bq[j][s].y, 0x01010101) +
+                             dotPacked4x8EXT(bq[j][s].z, 0x01010101) + dotPacked4x8EXT(bq[j][s].w, 0x01010101);
+            }
+        }
+
+#if defined(DATA_A_Q2_K)
+        // d part scaled by 4^-s for the in-place mask, m part needs only the sums
+        float bdq[NUM_COLS][4];
+        float bdm[NUM_COLS][4];
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint s = 0; s < 4; ++s) {
+                bdq[j][s] = bd[j][s] * (1.0f / float(1 << (2 * s)));
+                bdm[j][s] = bd[j][s] * float(bsum[j][s]);
+            }
+        }
+
+        [[unroll]] for (uint i = 0; i < RPL; ++i) {
+            float accd[NUM_COLS];
+            float accm[NUM_COLS];
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                accd[j] = 0.0f;
+                accm[j] = 0.0f;
+            }
+            [[unroll]] for (uint s = 0; s < 4; ++s) {
+                const uint scw = sc[i][s >> 1];
+                const int d4 = int(bitfieldExtract(scw, int(sc_shift + 16 * (s & 1)), 4));
+                const float m4 = float(bitfieldExtract(scw, int(sc_shift + 16 * (s & 1) + 4), 4));
+                const uint qmask = 0x03030303u << (2 * s);
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    int dq = dotPacked4x8EXT(bq[j][s].x, q[i][0] & qmask);
+                    dq    += dotPacked4x8EXT(bq[j][s].y, q[i][1] & qmask);
+                    dq    += dotPacked4x8EXT(bq[j][s].z, q[i][2] & qmask);
+                    dq    += dotPacked4x8EXT(bq[j][s].w, q[i][3] & qmask);
+                    accd[j] += float(dq * d4) * bdq[j][s];
+                    accm[j] += m4 * bdm[j][s];
+                }
+            }
+            const vec2 dm = unpackHalf2x16(dmw[i]);
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                acc[j][i] += FLOAT_TYPE(dm.x * accd[j] - dm.y * accm[j]);
+            }
+        }
+#else // DATA_A_Q3_K
+        [[unroll]] for (uint i = 0; i < RPL; ++i) {
+            uint L[4], H[4], S0, S1, S2;
+            if (odd[i]) {
+                [[unroll]] for (uint k = 0; k < 4; ++k) {
+                    L[k] = (q[i][k] >> 16) | (q[i][k + 1] << 16);
+                    H[k] = (hm[i][k] >> 16) | (hm[i][k + 1] << 16);
+                }
+                S0 = (sc[i][0] >> 16) | (sc[i][1] << 16);
+                S1 = (sc[i][1] >> 16) | (sc[i][2] << 16);
+                S2 = (sc[i][2] >> 16) | (sc[i][3] << 16);
+            } else {
+                [[unroll]] for (uint k = 0; k < 4; ++k) {
+                    L[k] = q[i][k];
+                    H[k] = hm[i][k];
+                }
+                S0 = sc[i][0];
+                S1 = sc[i][1];
+                S2 = sc[i][2];
+            }
+
+            float accf[NUM_COLS];
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                accf[j] = 0.0f;
+            }
+            [[unroll]] for (uint s = 0; s < 4; ++s) {
+                // 6-bit scale of group qn*8 + 2s + qh: low 4 bits from scales[2s + qh] nibble qn,
+                // high 2 bits from scales[8 + 2(s & 1) + qh] bits 2*(2qn + s/2)
+                const uint sh = sc_shift + 16 * (s & 1);
+                const int scale = int(bitfieldInsert(bitfieldExtract(s < 2 ? S0 : S1, int(sh), 4),
+                                                     bitfieldExtract(S2, int(sh + 2 * (s >> 1)), 2), 4, 2)) - 32;
+                const uint qmask = 0x03030303u << (2 * s);
+                const uint hmask = hm_base << s;
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    int dq = dotPacked4x8EXT(bq[j][s].x, L[0] & qmask);
+                    int dh = dotPacked4x8EXT(bq[j][s].x, H[0] & hmask);
+                    dq += dotPacked4x8EXT(bq[j][s].y, L[1] & qmask);
+                    dh += dotPacked4x8EXT(bq[j][s].y, H[1] & hmask);
+                    dq += dotPacked4x8EXT(bq[j][s].z, L[2] & qmask);
+                    dh += dotPacked4x8EXT(bq[j][s].z, H[2] & hmask);
+                    dq += dotPacked4x8EXT(bq[j][s].w, L[3] & qmask);
+                    dh += dotPacked4x8EXT(bq[j][s].w, H[3] & hmask);
+                    // value = q2 + 4*hbit - 4
+                    const int sum = (dq >> (2 * s)) + ((dh >> (qn * 4 + s)) << 2) - 4 * bsum[j][s];
+                    accf[j] += float(sum * scale) * bd[j][s];
+                }
+            }
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                acc[j][i] += FLOAT_TYPE(da[i] * accf[j]);
+            }
+        }
+#endif
+    }
+
+    // Each lane holds partial sums for RPL of the rows; spread them over the row slots and add
+    // across the subgroup.
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint r = 0; r < NUM_ROWS; ++r) {
+            temp[j][r] = FLOAT_TYPE(0.0f);
+            [[unroll]] for (uint i = 0; i < RPL; ++i) {
+                if (lrow[i] == r) {
+                    temp[j][r] = acc[j][i];
+                }
+            }
+        }
+    }
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    // do NUM_ROWS at a time, unless there aren't enough remaining rows
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

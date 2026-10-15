@@ -9039,6 +9039,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Qwen3-235B-A22B Q2_K decode shapes at 2 and 3 ranks, for the Intel Xe2/Xe3 matvec kernels:
+    // k of 512/768 gives an odd block count, 1003 rows a partial workgroup
+    for (ggml_type type_a : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K}) {
+        for (int64_t k : {512, 768, 2048, 4096}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 4096, 1, k, {1, 1}, {1, 1}));
+        }
+        for (int64_t n : {1, 3}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1003, n, 768, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 128, 8, true, 768, 1, 4096));
+        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 128, 8, true, 1003, 1, 4096));
+        for (int64_t k : {512, 768}) {
+            test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, GGML_TYPE_F32, 128, 8, false, 4096, 1, k, 1, true));
+        }
+    }
+
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
             for (int n : {1, 16}) {
@@ -10012,6 +10028,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             }
         }
     }
+    // Qwen3-235B-A22B Q2_K decode (n = 1), one rank's share under tensor parallelism over 2 and 3
+    // ranks: hidden 4096, 64 q / 4 kv heads of 128, 128 experts of 1536 rows with 8 used, vocab
+    // 151936. Select with -p 'k=4096|k=768|k=512|kv=1024' or by type.
+    for (int64_t ffn : {768, 512}) { // expert rows per rank, 1536/2 and 1536/3
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_K, GGML_TYPE_F32, 128, 8, true, ffn, 1, 4096));               // ffn_gate_exps, ffn_up_exps
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q3_K, GGML_TYPE_F32, 128, 8, false, 4096, 1, ffn));              // ffn_down_exps (perf mode times only the last node, so not the fused form)
+    }
+    for (int64_t q : {4096, 2048}) { // q rows per rank: 32 or 16 heads
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_K, GGML_TYPE_F32, q, 1, 4096, {1, 1}, {1, 1})); // attn_q
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q3_K, GGML_TYPE_F32, 4096, 1, q, {1, 1}, {1, 1})); // attn_output
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_K, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {1, 1}));   // attn_k, 2 kv heads
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {1, 1}));   // attn_v, 2 kv heads
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32, 128, 1, 4096, {1, 1}, {1, 1}));   // ffn_gate_inp (router)
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 75968, 1, 4096, {1, 1}, {1, 1})); // output, half the vocab
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, 1024, 1, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     return test_cases;
 }
