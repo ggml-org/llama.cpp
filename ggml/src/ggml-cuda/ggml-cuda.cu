@@ -4870,6 +4870,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     for (int j = i; j <= i + nodes_to_skip; ++j) {
                         cuda_ctx->mmvq_q8_1.written(cgraph->nodes[j]);
                     }
+                    cuda_ctx->mmvq_q8_1.apply_pending();
                     i += nodes_to_skip;
                     continue;
                 }

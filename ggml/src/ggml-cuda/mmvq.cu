@@ -1578,21 +1578,7 @@ void ggml_cuda_mul_mat_vec_q(
     } else {
         void * q = nullptr;
         if (cacheable) {
-            if (cache.buf == nullptr) {
-                bool capturing = false;
-#ifdef USE_CUDA_GRAPH
-                cudaStreamCaptureStatus capture_status;
-                CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
-                capturing = capture_status != cudaStreamCaptureStatusNone;
-#endif // USE_CUDA_GRAPH
-                if (!capturing) {
-                    cache.buf_size = std::max<size_t>(q8_1_size, 1 << 20);
-                    CUDA_CHECK(cudaMalloc(&cache.buf, cache.buf_size));
-                }
-            }
-            if (cache.buf != nullptr && q8_1_size <= cache.buf_size) {
-                q = cache.buf;
-            }
+            q = cache.reserve(q8_1_size, stream);
         }
         if (q == nullptr) {
             q = src1_q8_1_pool.alloc(q8_1_size);

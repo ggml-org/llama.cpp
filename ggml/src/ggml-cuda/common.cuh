@@ -1497,6 +1497,41 @@ struct ggml_cuda_mmvq_q8_1_cache {
             src = nullptr;
         }
     }
+
+    // buf if it can take size bytes, allocated on first use outside a CUDA graph capture (captured graphs keep its
+    // address), else nullptr
+    void * reserve(size_t size, cudaStream_t stream) {
+        if (buf == nullptr) {
+            bool capturing = false;
+#ifdef USE_CUDA_GRAPH
+            cudaStreamCaptureStatus capture_status;
+            CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+            capturing = capture_status != cudaStreamCaptureStatusNone;
+#endif // USE_CUDA_GRAPH
+            if (!capturing) {
+                buf_size = std::max<size_t>(size, 1 << 20);
+                CUDA_CHECK(cudaMalloc(&buf, buf_size));
+            }
+        }
+        GGML_UNUSED(stream);
+        return buf != nullptr && size <= buf_size ? buf : nullptr;
+    }
+
+    // A fused op that writes its output and a q8_1 copy of it into buf: the copy becomes valid once the evaluator has
+    // run written() over the fused nodes, as the output may be where an elided node's result would have been.
+    const ggml_tensor * pending = nullptr;
+
+    void set_pending(const ggml_tensor * t) {
+        src     = nullptr;
+        pending = t;
+    }
+
+    void apply_pending() {
+        if (pending) {
+            set(pending);
+            pending = nullptr;
+        }
+    }
 };
 
 struct ggml_backend_cuda_context {

@@ -1,4 +1,5 @@
 #include "norm.cuh"
+#include "mmvq.cuh"
 #include <cstdint>
 
 template <int block_size>
@@ -464,10 +465,11 @@ static void rms_norm_f32_cuda(
 
 // ADD(a, b) -> RMS_NORM -> MUL(w): rms_norm_f32<block_size, true> over the sum, which is written too. The sum is
 // formed as the add kernel forms it and the square accumulated as rms_norm_f32 accumulates it, so both outputs are
-// bit-identical to the unfused ops.
-template <int block_size>
+// bit-identical to the unfused ops. With yq, also the q8_1 copy of the product that mmvq would make
+// (quantize_q8_1: ncols a multiple of block_size, so lane l of a warp holds element l of a q8_1 block).
+template <int block_size, bool quantize>
 static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, float * sum, float * dst, const float * w,
-                                            const int ncols, const float eps) {
+                                            const int ncols, const float eps, block_q8_1 * yq) {
     const int64_t row = blockIdx.x;
     const int     tid = threadIdx.x;
 
@@ -492,7 +494,24 @@ static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, fl
 
     // each thread reads back the sums it wrote
     for (int col = tid; col < ncols; col += block_size) {
-        dr[col] = scale * sr[col] * w[col];
+        const float v = scale * sr[col] * w[col];
+        dr[col] = v;
+        if constexpr (quantize) {
+            float amax = fabsf(v);
+            float qsum = v;
+
+            amax = warp_reduce_max<QK8_1>(amax);
+            qsum = warp_reduce_sum<QK8_1>(qsum);
+
+            const float  d = amax / 127.0f;
+            const int8_t q = amax == 0.0f ? 0 : roundf(v / d);
+
+            const int64_t i = row*ncols + col;
+            yq[i / QK8_1].qs[i % QK8_1] = q;
+            if (i % QK8_1 == 0) {
+                yq[i / QK8_1].ds = make_half2(d, qsum);
+            }
+        }
     }
 }
 
@@ -912,11 +931,33 @@ int ggml_cuda_try_fuse_add_rms_norm(ggml_backend_cuda_context & ctx, const ggml_
     const int64_t nrows  = ggml_nrows(add);
     cudaStream_t  stream = ctx.stream();
     // the block size rms_norm_f32 takes for this row length
-    if (ncols < 1024) {
-        add_rms_norm_mul_f32<256><<<nrows, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps);
+    const int block_size = ncols < 1024 ? 256 : 1024;
+
+    // A batch that mmvq multiplies gets the q8_1 copy of the product too (rows of whole blocks, no padding), in the
+    // buffer where mmvq looks for it.
+    block_q8_1 * yq = nullptr;
+    ggml_cuda_mmvq_q8_1_cache & cache = ctx.mmvq_q8_1;
+    if (nrows <= MMVQ_MAX_BATCH_SIZE && ctx.curr_stream_no == 0 && ncols % block_size == 0 &&
+            ncols % MATRIX_ROW_PADDING == 0) {
+        yq = (block_q8_1 *) cache.reserve(nrows*ncols/QK8_1*sizeof(block_q8_1), stream);
+    }
+
+    if (block_size == 256) {
+        if (yq) {
+            add_rms_norm_mul_f32<256, true><<<nrows, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, yq);
+        } else {
+            add_rms_norm_mul_f32<256, false><<<nrows, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, nullptr);
+        }
     } else {
-        add_rms_norm_mul_f32<1024><<<nrows, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps);
+        if (yq) {
+            add_rms_norm_mul_f32<1024, true><<<nrows, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, yq);
+        } else {
+            add_rms_norm_mul_f32<1024, false><<<nrows, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps, nullptr);
+        }
     }
     CUDA_CHECK(cudaGetLastError());
+    if (yq) {
+        cache.set_pending(mul);
+    }
     return 2;
 }

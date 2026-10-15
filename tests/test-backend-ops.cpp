@@ -4148,10 +4148,12 @@ struct test_add_rms_norm : public test_case {
 };
 
 // GGML_OP_ADD + GGML_OP_RMS_NORM + GGML_OP_MUL (the residual add before a layer's norm, fused operation): the sum
-// and the product are both checked
+// and the product are both checked. With type_mat, two matmuls read the product, as a layer's projections do, and
+// their results are checked instead: the fused add + norm may hand them its own q8_1 copy of the product.
 struct test_add_rms_norm_mul : public test_case {
     const std::array<int64_t, 4> ne;
-    const bool inplace;
+    const bool      inplace;
+    const ggml_type type_mat; // GGML_TYPE_COUNT: no matmuls
 
     std::vector<ggml_tensor *> checked;
 
@@ -4164,12 +4166,17 @@ struct test_add_rms_norm_mul : public test_case {
 
     std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
 
-    std::string vars() override {
-        return VARS_TO_STR2(ne, inplace);
+    double max_nmse_err() override {
+        return type_mat == GGML_TYPE_COUNT ? 1e-7 : 5e-4;
     }
 
-    test_add_rms_norm_mul(std::array<int64_t, 4> ne = {5120, 4, 1, 1}, bool inplace = false)
-        : ne(ne), inplace(inplace) {}
+    std::string vars() override {
+        return VARS_TO_STR2(ne, inplace) + (type_mat == GGML_TYPE_COUNT ? "" : "," + VAR_TO_STR(type_mat));
+    }
+
+    test_add_rms_norm_mul(std::array<int64_t, 4> ne = {5120, 4, 1, 1}, bool inplace = false,
+            ggml_type type_mat = GGML_TYPE_COUNT)
+        : ne(ne), inplace(inplace), type_mat(type_mat) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
@@ -4182,6 +4189,15 @@ struct test_add_rms_norm_mul : public test_case {
         ggml_tensor * sum = inplace ? ggml_add_inplace(ctx, a, b) : ggml_add(ctx, a, b);
         ggml_set_name(sum, "sum");
         ggml_tensor * out = ggml_mul(ctx, ggml_rms_norm(ctx, sum, 1e-6f), w);
+
+        if (type_mat != GGML_TYPE_COUNT) {
+            ggml_set_name(out, "act");
+            ggml_tensor * wa = ggml_new_tensor_2d(ctx, type_mat, ne[0], 96);
+            ggml_set_name(wa, "wa");
+            ggml_tensor * wb = ggml_new_tensor_2d(ctx, type_mat, ne[0], 64);
+            ggml_set_name(wb, "wb");
+            out = ggml_concat(ctx, ggml_mul_mat(ctx, wa, out), ggml_mul_mat(ctx, wb, out), 0);
+        }
         ggml_set_name(out, "out");
 
         checked = { sum, out };
@@ -11207,6 +11223,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    // ... and the matmuls after it: batches mmvq multiplies (the fusion writes their q8_1 activations) and one it does not
+    for (ggml_type type_mat : {GGML_TYPE_Q4_K, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0}) {
+        for (int64_t nrows : {1, 4, 8, 9}) {
+            test_cases.emplace_back(new test_add_rms_norm_mul({5120, nrows, 1, 1}, false, type_mat));
+        }
+    }
+    test_cases.emplace_back(new test_add_rms_norm_mul({1024, 4, 1, 1}, false, GGML_TYPE_Q4_K));
 
     // linear-attention conv input with its rollback snapshots: verify batches (T < K included) and a prefill ubatch
     for (int64_t T : {1, 2, 3, 4, 16, 256}) {
