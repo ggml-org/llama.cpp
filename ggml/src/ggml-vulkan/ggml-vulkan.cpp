@@ -3470,11 +3470,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fill_f16, "fill_f16", fill_f16_len, fill_f16_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
-#if defined(GGML_VULKAN_SHADER_CLOCK_GLSLC_SUPPORT)
     if (device->shader_clock) {
         ggml_vk_create_pipeline(device, device->pipeline_sleep, "sleep", sleep_len, sleep_data, "main", 1, sizeof(vk_op_sleep_push_constants), {1, 1, 1}, {}, 1);
     }
-#endif
 
 #define CREATE_GLU(name)  \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
@@ -4112,11 +4110,9 @@ vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp(VK_EXT_SHADER_FLOAT8_EXTENSION_NAME, properties.extensionName) == 0) {
                 shader_float8_extension = true;
 #endif
-#if defined(GGML_VULKAN_SHADER_CLOCK_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_shader_clock", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_SHADER_CLOCK")) {
                 shader_clock_support = true;
-#endif
             } else if (strcmp("VK_VALVE_shader_mixed_float_dot_product", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_DOT2")) {
                 dot2_f16_support = true;
