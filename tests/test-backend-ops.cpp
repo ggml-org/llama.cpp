@@ -4726,6 +4726,62 @@ struct test_ssm_conv_bias_silu : public test_case {
     }
 };
 
+// The conv input of a linear-attention layer as build_conv_state builds it: CONCAT(state, x^T), the K conv-state
+// snapshot copies of 3-column views of it into a cache, then SSM_CONV + SILU (fused in the CUDA backend)
+struct test_gdn_conv_state : public test_case {
+    const int64_t C;
+    const int64_t T;
+    const int64_t K; // snapshots (n_rs_seq + 1)
+
+    std::vector<ggml_tensor *> checked;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GDN_CONV_STATE";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(C, T, K);
+    }
+
+    test_gdn_conv_state(int64_t C = 512, int64_t T = 4, int64_t K = 4) : C(C), T(T), K(K) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * state = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 3, C, 1);
+        ggml_set_name(state, "state");
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, T);
+        ggml_set_name(x, "x");
+        ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * C, K);
+        ggml_set_name(cache, "cache");
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, C);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * cc = ggml_concat(ctx, state, ggml_transpose(ctx, x), 0);
+        ggml_set_name(cc, "conv_input");
+
+        checked.clear();
+        for (int64_t t = 1; t <= K; ++t) {
+            const int64_t s_idx = std::max<int64_t>(0, T - K + t);
+            ggml_tensor * src = ggml_view_3d(ctx, cc, 3, C, 1, cc->nb[1], cc->nb[2], ggml_row_size(cc->type, s_idx));
+            ggml_tensor * dst = ggml_view_2d(ctx, cache, 3 * C, 1, cache->nb[1], (K - t) * cache->nb[1]);
+            ggml_tensor * cpy = ggml_cpy(ctx, src, dst);
+            checked.push_back(cpy);
+            if (mode == MODE_TEST) {
+                ggml_build_forward_expand(gf, cpy);
+            }
+        }
+
+        ggml_tensor * out = ggml_silu(ctx, ggml_ssm_conv(ctx, cc, w));
+        ggml_set_name(out, "out");
+        checked.push_back(out);
+        return out;
+    }
+};
+
 // GGML_OP_SSM_SCAN
 struct test_ssm_scan : public test_case {
     const ggml_type type;
@@ -11100,6 +11156,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
     }
+
+    // linear-attention conv input with its rollback snapshots: verify batches (T < K included) and a prefill ubatch
+    for (int64_t T : {1, 2, 3, 4, 16, 256}) {
+        test_cases.emplace_back(new test_gdn_conv_state(10240, T, 4));
+    }
+    test_cases.emplace_back(new test_gdn_conv_state(512, 4, 1));
 
     // fused ssm_conv + (optional) bias_add + silu. The bias-only graph (no silu) is intentionally
     // not tested since there's no fusion for that pattern in ggml_cuda_can_fuse.
