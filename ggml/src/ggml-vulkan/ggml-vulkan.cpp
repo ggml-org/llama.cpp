@@ -3393,6 +3393,8 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_concat_i16, "concat_i16", concat_i16_len, concat_i16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_i32, "concat_i32", concat_i32_len, concat_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     // One workgroup per 32x32 tile: elements are passed as (rows, cols, 1).
+    ggml_vk_create_pipeline(device, device->pipeline_concat_transpose_i8, "concat_transpose_i8", concat_transpose_i8_len, concat_transpose_i8_data, "main", 3, sizeof(vk_op_binary_push_constants), {32, 32, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_concat_transpose_i16, "concat_transpose_i16", concat_transpose_i16_len, concat_transpose_i16_data, "main", 3, sizeof(vk_op_binary_push_constants), {32, 32, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_transpose_i32, "concat_transpose_i32", concat_transpose_i32_len, concat_transpose_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {32, 32, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_i64, "concat_i64", concat_i64_len, concat_i64_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -8765,15 +8767,11 @@ static vk_pipeline ggml_vk_rms_norm_pipeline(const std::array<vk_pipeline, 3> & 
     return pipelines[2];
 }
 
-// EXPERIMENT (GGML_VK_CONCAT_TRANSPOSE=1): the delta-net conv-state path does
-// ggml_transpose() straight into a dim-0 ggml_concat(), so the generic concat kernel reads
-// src1 fully de-coalesced. Measured on Qwen3.6-35B-A3B: CONCAT is ~22% of pp2048 at ub=2048
-// and grows 3.1x for a 2x ubatch. Route that exact shape to a tiled-transpose kernel.
+// The delta-net conv-state path does ggml_transpose() straight into a dim-0 ggml_concat(), so
+// the generic concat kernel reads src1 fully de-coalesced and its throughput halves for every
+// doubling of the transposed dimension. Route that shape to a tiled-transpose kernel that
+// coalesces both the load and the store; it wins (or ties at launch-bound sizes) on every tested device.
 static bool ggml_vk_concat_is_transposed(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
-    static const char * env = getenv("GGML_VK_CONCAT_TRANSPOSE");
-    if (!(env && atoi(env) != 0)) {
-        return false;
-    }
     if (ggml_get_op_params_i32(dst, 0) != 0) {           // dim 0 only
         return false;
     }
@@ -8882,10 +8880,18 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         if (!ggml_vk_concat_supported(src0, src1, dst)) {
             return nullptr;
         }
-        // Tiled-transpose path handles unquantized 4-byte elements only.
-        if (!ggml_is_quantized(src0->type) && ggml_vk_concat_unit_size(src0->type) == 4 &&
-            ggml_vk_concat_is_transposed(src0, src1, dst)) {
-            return ctx->device->pipeline_concat_transpose_i32;
+        // Tiled-transpose path handles unquantized elements of any supported width.
+        if (!ggml_is_quantized(src0->type) && ggml_vk_concat_is_transposed(src0, src1, dst)) {
+            switch (ggml_vk_concat_unit_size(src0->type)) {
+            case 1:
+                return ctx->device->pipeline_concat_transpose_i8;
+            case 2:
+                return ctx->device->pipeline_concat_transpose_i16;
+            case 4:
+                return ctx->device->pipeline_concat_transpose_i32;
+            default:
+                break;
+            }
         }
         switch (ggml_vk_concat_unit_size(src0->type)) {
         case 1:
@@ -9820,7 +9826,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_2D_DW:
         {
             // The tiled concat kernel is dispatched per 32x32 tile, not per element.
-            if (op == GGML_OP_CONCAT && pipeline == ctx->device->pipeline_concat_transpose_i32) {
+            if (op == GGML_OP_CONCAT &&
+                (pipeline == ctx->device->pipeline_concat_transpose_i8 ||
+                 pipeline == ctx->device->pipeline_concat_transpose_i16 ||
+                 pipeline == ctx->device->pipeline_concat_transpose_i32)) {
                 elements = { (uint32_t)src1->ne[1], (uint32_t)src1->ne[0], 1 };
                 break;
             }
