@@ -8515,40 +8515,47 @@ static void ggml_compute_forward_pad_f32(
     const int32_t lp3 = ggml_get_op_params_i32(dst, 6);
     const int32_t rp3 = ggml_get_op_params_i32(dst, 7);
 
-    // TODO: optimize
+    const int64_t nrows = ne1 * ne2 * ne3;
+    const bool src_row_contig = src0->nb[0] == sizeof(float);
 
-    for (int64_t i2 = 0; i2 < ne2; ++i2) {
-        for (int64_t i1 = ith; i1 < ne1; i1 += nth) {
+    for (int64_t row = ith; row < nrows; row += nth) {
+        const int64_t i1 = row % ne1;
+        const int64_t i2 = (row / ne1) % ne2;
+        const int64_t i3 = row / (ne1 * ne2);
+
+        float * dst_row = dst_ptr + row * ne0;
+
+        if constexpr (circular_t) {
+            // circular padding wraps around on a torus
+            const int64_t src_i1 = ggml_wrap_around(i1 - lp1, ne01);
+            const int64_t src_i2 = ggml_wrap_around(i2 - lp2, ne02);
+            const int64_t src_i3 = ggml_wrap_around(i3 - lp3, ne03);
+
             for (int64_t i0 = 0; i0 < ne0; ++i0) {
-                for (int64_t i3 = 0; i3 < ne3; ++i3) {
-                    // circular means wrap around on a torus, so x and y loop around
-                    if constexpr (circular_t) {
-                        const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
-                        const int64_t src_i0 = ggml_wrap_around(i0 - lp0, ne00);
-                        const int64_t src_i1 = ggml_wrap_around(i1 - lp1, ne01);
-                        const int64_t src_i2 = ggml_wrap_around(i2 - lp2, ne02);
-                        const int64_t src_i3 = ggml_wrap_around(i3 - lp3, ne03);
+                const int64_t src_i0 = ggml_wrap_around(i0 - lp0, ne00);
+                dst_row[i0] = *(const float *)((const char *) src0->data + src_i3*nb03 + src_i2*nb02 + src_i1*nb01 + src_i0*nb00);
+            }
+        } else {
+            const bool interior = (i1 >= lp1 && i1 < ne1 - rp1)
+                               && (i2 >= lp2 && i2 < ne2 - rp2)
+                               && (i3 >= lp3 && i3 < ne3 - rp3);
+            if (!interior) {
+                memset(dst_row, 0, ne0 * sizeof(float));
+                continue;
+            }
 
-                        const int64_t src_idx =
-                            src_i3*nb03 +
-                            src_i2*nb02 +
-                            src_i1*nb01 +
-                            src_i0*nb00;
+            const char * src_row = (const char *) src0->data + (i3 - lp3)*nb03 + (i2 - lp2)*nb02 + (i1 - lp1)*nb01;
 
-                        const float * src_ptr = (const float *)((char *) src0->data + src_idx);
-                        dst_ptr[dst_idx] = *src_ptr;
+            if (src_row_contig && lp0 >= 0 && rp0 >= 0) {
+                memset(dst_row, 0, lp0 * sizeof(float));
+                memcpy(dst_row + lp0, src_row, ne00 * sizeof(float));
+                memset(dst_row + lp0 + ne00, 0, rp0 * sizeof(float));
+            } else {
+                for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                    if (i0 >= lp0 && i0 < ne0 - rp0) {
+                        dst_row[i0] = *(const float *)(src_row + (i0 - lp0)*nb00);
                     } else {
-                        const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
-                        if ((i0 >= lp0 && i0 < ne0 - rp0) \
-                            && (i1 >= lp1 && i1 < ne1 - rp1) \
-                            && (i2 >= lp2 && i2 < ne2 - rp2) \
-                            && (i3 >= lp3 && i3 < ne3 - rp3)) {
-                            const int64_t src_idx = (i3 - lp3)*nb03 + (i2 - lp2)*nb02 + (i1 - lp1)*nb01 + (i0 - lp0)*nb00;
-                            const float * src_ptr = (const float *)((char *) src0->data + src_idx);
-                            dst_ptr[dst_idx] = *src_ptr;
-                        } else {
-                            dst_ptr[dst_idx] = 0;
-                        }
+                        dst_row[i0] = 0.0f;
                     }
                 }
             }
