@@ -2193,13 +2193,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("<think>\nI'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .run();
 
-        // the model does not always emit the canonical whitespace around </think>
-        tst.test("\nI'm\nthinking\n\n</think>\n\n\nHello, world!\nWhat's up?\n")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .enable_thinking(true)
-            .expect(message_assist_thoughts)
-            .run();
-
         tst.test(
                "<tool_call>\n"
                "<function=special_function>\n"
@@ -2480,7 +2473,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 run_in_terminal_tool
         })
-            .expect_content("Let me inspect the current directory.\n")
+            .expect_content("Let me inspect the current directory.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
@@ -2502,7 +2495,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 run_in_terminal_tool
         })
             .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
-            .expect_content("Let me inspect the current directory.\n")
+            .expect_content("Let me inspect the current directory.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
@@ -2611,7 +2604,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
                 .messages({ user_start, assistant_todos, tool_result, user_continue })
                 .expect_reasoning("I need to run a terminal command.")
-                .expect_content("Let me inspect the current directory.\n")
+                .expect_content("Let me inspect the current directory.")
                 .expect_tool_calls({
                     { "run_in_terminal", R"({"command": "pwd"})", {} },
                 })
@@ -8082,6 +8075,31 @@ static void test_chat_session() {
         assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
     }
 
+    // content before a tool call stops before the separator the template re-adds
+    {
+        const std::string output_with_content =
+            "I'm\nthinking\n</think>\n\n"
+            "Let me check.\n\n"
+            "<tool_call>\n"
+            "<function=special_function>\n"
+            "<parameter=arg1>\n1\n</parameter>\n"
+            "</function>\n"
+            "</tool_call>";
+
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+
+        const std::string up_to_call = "I'm\nthinking\n</think>\n\nLet me check.\n\n";
+        for (size_t i = 0; i < up_to_call.size(); i += 3) {
+            session.feed(common_chat_input(up_to_call.substr(i, 3)));
+        }
+        assert_msg_equals(simple_assist_msg("Let me check.", "I'm\nthinking"), session.msg());
+
+        for (size_t i = up_to_call.size(); i < output_with_content.size(); i += 3) {
+            session.feed(common_chat_input(output_with_content.substr(i, 3)));
+        }
+        assert_msg_equals(simple_assist_msg("Let me check.", "I'm\nthinking", "special_function", "{\"arg1\":1}"), session.finish());
+    }
+
     // a copy does not see what is fed to the original
     {
         common_chat_session a(tmpls.get(), nullptr, inputs);
@@ -8104,7 +8122,7 @@ static void test_chat_session() {
         common_chat_session session(tmpls.get(), nullptr, cont);
         assert_equals(std::string("<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, "),
                       session.generation_prompt());
-        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking\n"), session.msg());
+        assert_msg_equals(simple_assist_msg("Hello, ", "I'm thinking"), session.msg());
         session.feed(common_chat_input("world!"));
         assert_equals(std::string("Hello, world!"), session.msg().content);
 

@@ -353,41 +353,6 @@ static void test_example_native(testing & t) {
          /* .expect_content =       */
             R"({"invoice_number": "INV-2025-001", "amount": 1250.50, "due_date": "2025-12-31"})", /* .expect_tool_calls =    */ {},
          },
-        {
-         /* .name =                 */ "content with trailing whitespace in reasoning and content",
-         /* .tools =                */ {},
-         /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
-         /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
-         /* .json_schema =          */ {},
-         /* .parallel_tool_calls =  */ false,
-         /* .generation_prompt =    */ "<think>",
-         /* .input =                */ ("The user said hello, I must say hello back\n\n</think>\nHello\n"),
-         /* .expect_reasoning =     */ "The user said hello, I must say hello back",
-         /* .expect_content =       */ "Hello",
-         /* .expect_tool_calls =    */ {},
-         },
-        {
-         /* .name =                 */ "tools with trailing whitespace before the tool call",
-         /* .tools =                */ create_tools(),
-         /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
-         /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
-         /* .json_schema =          */ {},
-         /* .parallel_tool_calls =  */ false,
-         /* .generation_prompt =    */ "<think>",
-         /* .input =                */
-            ("I must get the weather in New York\n</think>\nLet me check.\n\n"
-             "<tool_call>["
-             R"({"name": "get_current_weather", "arguments": {"location": "New York City, NY", "unit": "fahrenheit"}})"
-             "]</tool_call>"),
-         /* .expect_reasoning =     */ "I must get the weather in New York",
-         /* .expect_content =       */ "Let me check.",
-         /* .expect_tool_calls =    */
-            { {
-                /* .name =      */ "get_current_weather",
-                /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit"})",
-                /* .id =        */ "",
-            } },
-         },
     };
 
     for (const auto & tc : test_cases) {
@@ -565,7 +530,7 @@ static void test_example_qwen3_non_coder(testing & t) {
         auto            mapper = common_chat_peg_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
-        t.assert_equal("content", "I need to get the weather.", msg.content);
+        t.assert_equal("content", "I need to get the weather.\n", msg.content);
         t.assert_equal("reasoning", "", msg.reasoning_content);
         t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
         if (!msg.tool_calls.empty()) {

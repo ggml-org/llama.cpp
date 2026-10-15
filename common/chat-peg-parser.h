@@ -11,8 +11,7 @@ class common_chat_peg_mapper {
   public:
     common_chat_msg & result;
 
-    common_chat_peg_mapper(common_chat_msg & msg, size_t generation_prompt_size = 0) :
-        result(msg), generation_prompt_size(generation_prompt_size) {}
+    common_chat_peg_mapper(common_chat_msg & msg) : result(msg) {}
 
     virtual ~common_chat_peg_mapper() = default;
 
@@ -21,11 +20,6 @@ class common_chat_peg_mapper {
   protected:
     virtual std::string normalize_container_value(const std::string & input);
   private:
-      // Whitespace inside the generation prompt belongs to the prefill and is kept
-      size_t generation_prompt_size = 0;
-
-      std::string trimmed_text(const common_peg_ast_node & node) const;
-
       // Tool call handling state
       std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name
       common_chat_tool_call *              current_tool          = nullptr;
