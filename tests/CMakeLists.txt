@@ -188,6 +188,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
     llama_build_and_test(test-llama-grammar.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
+    llama_build_and_test(test-kv-cache.cpp)
+    target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
     llama_build_and_test(test-chat.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
@@ -356,9 +358,6 @@ endif()
 llama_build(test-backend-ops.cpp LINK ggml)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
-
-llama_build_and_test(test-kv-cache.cpp)
-target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
