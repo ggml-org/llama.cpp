@@ -1059,6 +1059,9 @@ static std::pair<dim3, dim3> calc_launch_params(
     return {block_nums, block_dims};
 }
 
+// set while ggml_cuda_mul_mat_vec_q launches the matmul of a sibling without a barrier (ggml_cuda_mm_siblings)
+static thread_local bool mmvq_any_order = false;
+
 template<ggml_type type, int c_ncols_dst, bool small_k = false, bool halve_iters = false>
 static void mul_mat_vec_q_switch_fusion(
         const void * vx, const void * vy, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1073,7 +1076,8 @@ static void mul_mat_vec_q_switch_fusion(
                             fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
-            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
+            ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
+            launch_params.any_order = mmvq_any_order;
             ggml_cuda_kernel_launch(mul_mat_vec_q<type, c_ncols_dst, true, small_k, halve_iters>, launch_params,
                  vx, vy, ids, fusion, dst, ncols_x, nrows_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
@@ -1084,7 +1088,8 @@ static void mul_mat_vec_q_switch_fusion(
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
+    ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
+    launch_params.any_order = mmvq_any_order;
     ggml_cuda_kernel_launch(mul_mat_vec_q<type, c_ncols_dst, false, small_k, halve_iters>, launch_params,
         vx, vy, ids, fusion, dst, ncols_x, nrows_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
@@ -1480,12 +1485,13 @@ static const void * mmvq_src1_q8_1(
     const size_t  q8_1_size   = src1->ne[3]*src1->ne[2] * src1->ne[1]*ne10_padded * sizeof(block_q8_1)/QK8_1;
 
     ggml_cuda_mmvq_q8_1_cache & cache = ctx.mmvq_q8_1;
-    const bool cacheable = cacheable_op && ctx.curr_stream_no == 0;
+    // a sibling forked onto stream 1 reads the copy too (made before its fork point), but only stream 0 writes it
+    const bool cacheable = cacheable_op && (ctx.curr_stream_no == 0 || ctx.mm_siblings.sibling);
     if (cacheable && cache.matches(src1)) {
         return cache.buf;
     }
     void * q = nullptr;
-    if (cacheable) {
+    if (cacheable && ctx.curr_stream_no == 0) {
         q = cache.reserve(q8_1_size, stream);
     }
     if (q == nullptr) {
@@ -1601,7 +1607,14 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
 
     ggml_cuda_pool_alloc<char> src1_q8_1_pool(ctx.pool());
+    // a sibling launched without a barrier must launch nothing but its matmul: the q8_1 copy comes from the cache
+    const bool any_order = ctx.mm_siblings.sibling && ctx.curr_stream_no == 0 && !ids && ctx.mmvq_q8_1.matches(src1);
     const void * src1_q8_1 = mmvq_src1_q8_1(ctx, src1, src0->type, !ids, src1_q8_1_pool);
+#if defined(GGML_USE_HIP)
+    if (ctx.mm_siblings.capturing && ctx.curr_stream_no == 0) {
+        ctx.mm_siblings.mark_fork(dst, stream);
+    }
+#endif // defined(GGML_USE_HIP)
 
     const int64_t s01 = src0->nb[1] / ts_src0;
     const int64_t s11 = ne10_padded / QK8_1;
@@ -1625,11 +1638,13 @@ void ggml_cuda_mul_mat_vec_q(
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
+    mmvq_any_order = any_order;
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1, ids_d, fusion_local, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+    mmvq_any_order = false;
 }
 
 void ggml_cuda_op_mul_mat_vec_q(

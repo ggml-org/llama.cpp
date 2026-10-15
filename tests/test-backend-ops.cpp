@@ -5898,6 +5898,61 @@ struct test_mul_mat_siblings : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT of several weights on the same activations back to back (q, k and v; gate and up): the CUDA backend
+// on HIP lets each start before the ones before it end
+struct test_mul_mat_adjacent_siblings : public test_case {
+    const std::vector<ggml_type> types;
+    const std::vector<int64_t>   rows;
+    const int64_t                k;
+    const int64_t                n_tokens;
+
+    std::vector<ggml_tensor *> checked;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return ggml_op_name(GGML_OP_MUL_MAT);
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return checked; }
+
+    double max_nmse_err() override { return 5e-4; }
+
+    std::string vars() override {
+        std::string mats;
+        for (size_t i = 0; i < types.size(); ++i) {
+            mats += (i ? "+" : "") + std::string(ggml_type_name(types[i])) + "x" + std::to_string(rows[i]);
+        }
+        return "mats=" + mats + "," + VARS_TO_STR2(k, n_tokens);
+    }
+
+    test_mul_mat_adjacent_siblings(std::vector<ggml_type> types = {GGML_TYPE_Q4_K, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0},
+            std::vector<int64_t> rows = {256, 128, 64}, int64_t k = 1024, int64_t n_tokens = 4)
+        : types(types), rows(rows), k(k), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n_tokens);
+        ggml_set_name(x, "x");
+
+        checked.clear();
+        for (size_t i = 0; i < types.size(); ++i) {
+            ggml_tensor * w = ggml_new_tensor_2d(ctx, types[i], k, rows[i]);
+            ggml_set_name(w, ("w" + std::to_string(i)).c_str());
+            ggml_tensor * y = ggml_mul_mat(ctx, w, x);
+            ggml_set_name(y, ("y" + std::to_string(i)).c_str());
+            checked.push_back(y);
+        }
+        // concatenated from the right, so that the graph runs the matmuls first and in order
+        ggml_tensor * out = checked.back();
+        for (size_t i = checked.size() - 1; i-- > 0;) {
+            out = ggml_concat(ctx, checked[i], out, 0);
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -12843,6 +12898,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    for (int64_t n : {1, 2, 4, 8, 9}) {
+        test_cases.emplace_back(new test_mul_mat_adjacent_siblings({GGML_TYPE_Q4_K, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0}, {256, 128, 64}, 1024, n));
+    }
+    test_cases.emplace_back(new test_mul_mat_adjacent_siblings({GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_XS}, {512, 512}, 2048, 4));
+    test_cases.emplace_back(new test_mul_mat_adjacent_siblings({GGML_TYPE_F16, GGML_TYPE_Q4_0}, {64, 96}, 512, 4));
 
     for (ggml_type type : base_types) {
         for (bool with_gate : {false, true}) {

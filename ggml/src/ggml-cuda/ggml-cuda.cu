@@ -771,6 +771,10 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
         ggml_cuda_set_device(device);
         CUDA_CHECK(cudaFree(mmvq_q8_1.buf));
     }
+    if (mm_siblings.fork_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(mm_siblings.fork_event));
+        CUDA_CHECK(cudaEventDestroy(mm_siblings.join_event));
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
@@ -4883,6 +4887,50 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     return 0;
 }
 
+#if defined(GGML_USE_HIP)
+static bool ggml_cuda_mm_siblings_enabled() {
+    static const bool enabled = getenv("GGML_CUDA_DISABLE_ANY_ORDER") == nullptr;
+    return enabled;
+}
+
+// the CLR settings in which a captured fork replays without a barrier (ggml_cuda_mm_siblings)
+static bool ggml_cuda_mm_siblings_fork_enabled() {
+    static const bool enabled = [] {
+        const char * async_queue  = getenv("DEBUG_HIP_FORCE_ASYNC_QUEUE");
+        const char * graph_queues = getenv("DEBUG_HIP_FORCE_GRAPH_QUEUES");
+        return ggml_cuda_mm_siblings_enabled() && async_queue && atoi(async_queue) == 1 && graph_queues &&
+               atoi(graph_queues) == 1;
+    }();
+    return enabled;
+}
+
+// not computed in the graph: the allocator never reuses its memory while the graph runs
+static bool ggml_cuda_is_graph_leaf(const ggml_tensor * t) {
+    return (t->view_src ? t->view_src : t)->op == GGML_OP_NONE;
+}
+
+// node is a sibling of the matmuls in group (ggml_cuda_mm_siblings): a matmul of the same activations by a weight-like
+// leaf, whose output overlaps none of theirs; with a leaf src0 the group only reads memory that stays live
+static bool ggml_cuda_mm_is_sibling(const ggml_backend_cuda_context * ctx, const std::vector<const ggml_tensor *> & group,
+                                    const ggml_tensor * node) {
+    if (node->op != GGML_OP_MUL_MAT || group.empty() || node->src[1] != group[0]->src[1] ||
+        !ggml_cuda_is_graph_leaf(node->src[0])) {
+        return false;
+    }
+    const char * d0 = (const char *) node->data;
+    const char * d1 = d0 + ggml_nbytes(node);
+    for (const ggml_tensor * mm : group) {
+        const char * m0 = (const char *) mm->data;
+        if (m0 < d1 && d0 < m0 + ggml_nbytes(mm)) {
+            return false;
+        }
+    }
+    // in a capture, fork from right before the group's first matmul kernel, which must have come from mmvq
+    return !ctx->mm_siblings.capturing ||
+           (ctx->mm_siblings.fork_node == group[0] && ctx->mmvq_q8_1.matches(node->src[1]));
+}
+#endif // defined(GGML_USE_HIP)
+
 static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
@@ -4918,6 +4966,13 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
         if (!use_cuda_graph || cuda_graph_update_required) {
             [[maybe_unused]] int prev_i = 0;
+#if defined(GGML_USE_HIP)
+            // matmuls of the same activations run unfused one after another (ggml_cuda_mm_siblings)
+            std::vector<const ggml_tensor *> mm_group;
+            ggml_cuda_mm_siblings & siblings = cuda_ctx->mm_siblings;
+            siblings.capturing = use_cuda_graph && cuda_graph_update_required && ggml_cuda_mm_siblings_fork_enabled();
+            siblings.fork_node = nullptr;
+#endif // defined(GGML_USE_HIP)
 
             if (stream_ctx.concurrent_events.size() > 0) {
                 should_launch_concurrent_events = true;
@@ -5042,6 +5097,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     }
                     cuda_ctx->mmvq_q8_1.apply_pending();
                     i += nodes_to_skip;
+#if defined(GGML_USE_HIP)
+                    mm_group.clear();
+#endif // defined(GGML_USE_HIP)
                     continue;
                 }
 #ifndef NDEBUG
@@ -5061,7 +5119,33 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 GGML_UNUSED(integrated);
 #endif  // NDEBUG
 
+#if defined(GGML_USE_HIP)
+                // a captured graph forks only when CLR replays the fork without a barrier
+                const bool sibling = ggml_cuda_mm_siblings_enabled() && !is_concurrent_event_active &&
+                                     cuda_ctx->curr_stream_no == 0 &&
+                                     (siblings.capturing || !(use_cuda_graph && cuda_graph_update_required)) &&
+                                     ggml_cuda_mm_is_sibling(cuda_ctx, mm_group, node);
+                siblings.sibling = sibling;
+                if (sibling && siblings.capturing) {
+                    siblings.fork(cuda_ctx->stream(cuda_ctx->device, 1));
+                    cuda_ctx->curr_stream_no = 1;
+                }
+#endif // defined(GGML_USE_HIP)
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+#if defined(GGML_USE_HIP)
+                if (sibling && siblings.capturing) {
+                    cuda_ctx->curr_stream_no = 0;
+                    siblings.join(cuda_ctx->stream(cuda_ctx->device, 1), cuda_ctx->stream());
+                }
+                siblings.sibling = false;
+                if (node->op != GGML_OP_MUL_MAT || !ggml_cuda_is_graph_leaf(node->src[0])) {
+                    mm_group.clear();
+                } else if (sibling) {
+                    mm_group.push_back(node);
+                } else {
+                    mm_group = { node };
+                }
+#endif // defined(GGML_USE_HIP)
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }

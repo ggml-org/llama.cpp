@@ -1562,12 +1562,59 @@ struct ggml_cuda_mmvq_q8_1_cache {
     }
 };
 
+// HIP: a matmul of the same activations as the matmuls run just before it (a sibling: up after gate, k and v after q)
+// does not depend on them, so it may start before they end. On RDNA4 a 4-token mmvq loses ~9-10 us per launch to its
+// ramp-up and tail, and letting siblings overlap hides most of it. A direct launch clears the AQL barrier bit
+// (hipExtAnyOrderLaunch). Stream capture drops that flag, so in a capture a sibling runs on stream 1 with the capture
+// dependencies of its group's first matmul kernel and joins back; CLR replays such a fork without a barrier only with
+// DEBUG_HIP_FORCE_ASYNC_QUEUE=1 and DEBUG_HIP_FORCE_GRAPH_QUEUES=1 (else on a second HW queue, which gained nothing), so
+// captures fork only then.
+struct ggml_cuda_mm_siblings {
+    bool sibling   = false; // the node being run is a sibling
+    bool capturing = false; // capturing a graph in which siblings fork
+
+    const ggml_tensor *          fork_node = nullptr; // the mmvq whose matmul kernel fork_deps precede
+    std::vector<cudaGraphNode_t> fork_deps;
+    cudaEvent_t                  fork_event = nullptr;
+    cudaEvent_t                  join_event = nullptr;
+
+#if defined(GGML_USE_HIP)
+    // right before the matmul kernel of an mmvq on stream 0 in a capture: its siblings fork from here
+    void mark_fork(const ggml_tensor * node, cudaStream_t stream) {
+        if (fork_event == nullptr) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming));
+            CUDA_CHECK(cudaEventCreateWithFlags(&join_event, cudaEventDisableTiming));
+        }
+        CUDA_CHECK(cudaEventRecord(fork_event, stream));
+        hipStreamCaptureStatus status;
+        const hipGraphNode_t * deps   = nullptr;
+        size_t                 n_deps = 0;
+        CUDA_CHECK(hipStreamGetCaptureInfo_v2(stream, &status, nullptr, nullptr, &deps, &n_deps));
+        fork_deps.assign(deps, deps + n_deps);
+        fork_node = node;
+    }
+
+    // s1 joins the capture with exactly fork_node's dependencies: a wait alone would keep s1's node from an earlier
+    // fork as a second dependency, and CLR only drops the barrier of a node with one
+    void fork(cudaStream_t s1) {
+        CUDA_CHECK(cudaStreamWaitEvent(s1, fork_event));
+        CUDA_CHECK(hipStreamUpdateCaptureDependencies(s1, fork_deps.data(), fork_deps.size(), hipStreamSetCaptureDependencies));
+    }
+
+    void join(cudaStream_t s1, cudaStream_t s0) {
+        CUDA_CHECK(cudaEventRecord(join_event, s1));
+        CUDA_CHECK(cudaStreamWaitEvent(s0, join_event));
+    }
+#endif // defined(GGML_USE_HIP)
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
     cudaEvent_t copy_event = nullptr;
 
     ggml_cuda_mmvq_q8_1_cache mmvq_q8_1;
+    ggml_cuda_mm_siblings     mm_siblings;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
@@ -1715,6 +1762,7 @@ struct ggml_cuda_kernel_launch_params {
     dim3 block_dims;
     size_t shmem;
     cudaStream_t stream;
+    bool any_order = false; // HIP: may start before the previous kernel on the stream ends (ggml_cuda_mm_siblings)
 
     // size_t shmem
     ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const size_t shmem_, const cudaStream_t stream_)
@@ -1831,6 +1879,14 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     }
 #endif //defined(GGML_CUDA_USE_PDL)
 
+#if defined(GGML_USE_HIP)
+    if (launch_params.any_order) {
+        hipExtLaunchKernelGGL(kernel, launch_params.block_nums, launch_params.block_dims, (uint32_t) launch_params.shmem,
+                              launch_params.stream, nullptr, nullptr, hipExtAnyOrderLaunch, std::forward<Args>(args)...);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+#endif // defined(GGML_USE_HIP)
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
     CUDA_CHECK(cudaGetLastError());
 }
