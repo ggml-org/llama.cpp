@@ -1967,8 +1967,7 @@ struct llama_vocab::impl {
     // Tokenizer normalizer options
     llama_vocab::normalizer_options normalizer_opts;
 
-    // HF Metaspace pre-tokenizer prepend_scheme: "always", "first" or "never"
-    std::string prepend_scheme;
+    llama_metaspace_prepend_scheme metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_NEVER;
 
     std::unordered_map<std::string, llama_token> token_to_id;
     std::vector<token_data>                      id_to_token;
@@ -2805,7 +2804,23 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         normalizer_opts.strip_accents = normalizer_opts.lowercase;
         ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_STRIP_ACCENTS, normalizer_opts.strip_accents, false);
 
-        ml.get_key(LLM_KV_TOKENIZER_PRE_TOKENIZER_PREPEND_SCHEME, prepend_scheme, false);
+        {
+            std::string scheme;
+            if (ml.get_key(LLM_KV_TOKENIZER_METASPACE_PREPEND_SCHEME, scheme, false)) {
+                if (scheme == "never") {
+                    metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_NEVER;
+                } else if (scheme == "first") {
+                    metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
+                } else if (scheme == "always") {
+                    metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS;
+                } else {
+                    throw std::runtime_error(format("unknown metaspace prepend_scheme: '%s'", scheme.c_str()));
+                }
+                if (type == LLAMA_VOCAB_TYPE_BPE && metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS) {
+                    throw std::runtime_error("metaspace prepend_scheme 'always' is not supported for BPE vocab");
+                }
+            }
+        }
 
         // suppress tokens
         {
@@ -3662,7 +3677,8 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                         }
 
                         // Metaspace prepend_scheme "first": add U+2581 only at the start of the input
-                        if (prepend_scheme == "first" && &fragment == &fragment_buffer.front() && text.rfind("\xe2\x96\x81", 0) != 0) {
+                        if (metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST &&
+                            &fragment == &fragment_buffer.front() && text.rfind("\xe2\x96\x81", 0) != 0) {
                             text.insert(0, "\xe2\x96\x81");
                         }
 

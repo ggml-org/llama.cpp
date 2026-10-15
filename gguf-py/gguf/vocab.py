@@ -55,7 +55,7 @@ class SpecialVocab:
     normalizer_nfc: bool | None
     normalizer_lowercase: bool | None
     normalizer_strip_accents: bool | None
-    pre_tokenizer_prepend_scheme: str | None
+    metaspace_prepend_scheme: str | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -71,7 +71,7 @@ class SpecialVocab:
         self.normalizer_nfc = None
         self.normalizer_lowercase = None
         self.normalizer_strip_accents = None
-        self.pre_tokenizer_prepend_scheme = None
+        self.metaspace_prepend_scheme = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -122,10 +122,10 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
             gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
-        if self.pre_tokenizer_prepend_scheme is not None:
+        if self.metaspace_prepend_scheme is not None:
             if not quiet:
-                logger.info(f'Setting pre_tokenizer_prepend_scheme to {self.pre_tokenizer_prepend_scheme}')
-            gw.add_pre_tokenizer_prepend_scheme(self.pre_tokenizer_prepend_scheme)
+                logger.info(f'Setting metaspace_prepend_scheme to {self.metaspace_prepend_scheme}')
+            gw.add_metaspace_prepend_scheme(self.metaspace_prepend_scheme)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -199,7 +199,7 @@ class SpecialVocab:
         pre_tokenizer_type = pre_tokenizer.get('type')
         if pre_tokenizer_type == 'Metaspace':
             if 'prepend_scheme' in pre_tokenizer:
-                self.pre_tokenizer_prepend_scheme = pre_tokenizer['prepend_scheme']
+                self.metaspace_prepend_scheme = pre_tokenizer['prepend_scheme']
         elif pre_tokenizer_type == 'Sequence':
             for pre in pre_tokenizer.get('pretokenizers', []):
                 self._parse_pre_tokenizer(pre)

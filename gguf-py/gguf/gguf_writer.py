@@ -1362,8 +1362,8 @@ class GGUFWriter:
     def add_normalizer_strip_accents(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_STRIP_ACCENTS, value)
 
-    def add_pre_tokenizer_prepend_scheme(self, value: str) -> None:
-        self.add_string(Keys.Tokenizer.PRE_TOKENIZER_PREPEND_SCHEME, value)
+    def add_metaspace_prepend_scheme(self, value: str) -> None:
+        self.add_string(Keys.Tokenizer.METASPACE_PREPEND_SCHEME, value)
 
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
