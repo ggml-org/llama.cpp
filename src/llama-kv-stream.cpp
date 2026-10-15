@@ -665,6 +665,16 @@ void llama_kv_stream::set_pool(uint32_t n_slots, uint32_t n_ring) {
             ggml_backend_buffer_get_size(slots_buf.get())/1024.0/1024.0);
 }
 
+void llama_kv_stream::drop_pool() {
+    for (uint32_t p = 0; p < n_pages; ++p) {
+        GGML_ASSERT(page_slot[p] < 0 && "llama_kv_stream: drop_pool without release_pool");
+    }
+    n_slots = 0;
+    slot_page.clear();
+    slots_buf.reset();
+    layout_id++;
+}
+
 void llama_kv_stream::get_rows(int32_t ikv, bool is_v, uint32_t c0, uint32_t c1, void * dst) {
     drain();
     if (backend) {

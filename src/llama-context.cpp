@@ -763,26 +763,33 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
 }
 
-void llama_context::switch_phase(bool decode, uint32_t n_tokens_next) {
+bool llama_context::switch_phase(bool decode, uint32_t n_tokens_next) {
     if (decode == phase_decode) {
-        return;
+        return true;
     }
     synchronize();
+    const bool streams = memory && memory->get_kv_stream();
     if (decode) {
         // the followers' compute buffers shrink first, then ours, then the pool grows into what they freed
         for (llama_context * f : phase_followers) {
             f->switch_phase(true, n_tokens_next);
         }
-    } else if (memory) {
+    } else if (streams) {
         // the pool shrinks before the prefill buffers come back (a follower grows its own on its next prefill)
-        memory->resize_kv_stream(cparams.kv_resident_size, false);
+        if (!memory->resize_kv_stream(cparams.kv_resident_size, false)) {
+            // without a pool the graphs cannot be reserved: the batch that retries the pool reserves them
+            phase_decode       = decode;
+            sched_need_reserve = true;
+            return false;
+        }
     }
     phase_decode       = decode;
     sched_need_reserve = true;
     sched_reserve(true);
-    if (decode && memory) {
-        memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_next);
+    if (decode && streams) {
+        return memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_next);
     }
+    return true;
 }
 
 void llama_context::sched_reserve(bool quiet) {
@@ -2014,19 +2021,26 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     if (cparams.kv_resident_size_decode > 0) {
         const bool decode_batch = n_tokens_all <= cparams.n_tokens_decode;
         phase_seen_prefill = phase_seen_prefill || !decode_batch;
+        const llama_kv_stream * kv_stream = memory->get_kv_stream();
+        bool has_pool = true;
         if (decode_batch != phase_decode && phase_seen_prefill) {
-            switch_phase(decode_batch, n_tokens_all);
-        } else if (phase_decode && memory->kv_stream_needs_resize(n_tokens_all)) {
-            // the context outgrew the decode slots: split the same budget again, and rebuild the graphs, whose views
-            // point into the old pool and slots
+            has_pool = switch_phase(decode_batch, n_tokens_all);
+        } else if ((kv_stream && !kv_stream->has_pool()) || (phase_decode && memory->kv_stream_needs_resize(n_tokens_all))) {
+            // a pool that could not be allocated earlier, or a context that outgrew the decode slots (split the same
+            // budget again): allocate the phase's pool, and rebuild the graphs, whose views point into the old one
             synchronize();
-            memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_all);
+            has_pool = phase_decode ? memory->resize_kv_stream(cparams.kv_resident_size_decode, true, n_tokens_all)
+                                    : memory->resize_kv_stream(cparams.kv_resident_size, false);
             for (auto & res : gf_res_prev) {
                 if (res) {
                     res->reset();
                 }
             }
             gf_res_prev_active = nullptr;
+        }
+        if (!has_pool) {
+            // the budget does not fit (logged): nothing of this batch ran, and the cache keeps its pages in host memory
+            return -2;
         }
     }
 

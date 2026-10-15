@@ -155,6 +155,11 @@ public:
     void release_pool();
     void set_pool(uint32_t n_slots, uint32_t n_ring = 0);
 
+    // after release_pool, when the new pool could not be allocated: no pool, every page in the host store; nothing may
+    // reserve or run graphs on the cache until set_pool
+    void drop_pool();
+    bool has_pool() const { return n_slots > 0; }
+
     // rows [c0, c1) of layer ikv, wherever they live; for state save/restore, with the backend idle
     void get_rows(int32_t ikv, bool is_v, uint32_t c0, uint32_t c1, void * dst);
     void set_rows(int32_t ikv, bool is_v, uint32_t c0, uint32_t c1, const void * src);

@@ -329,6 +329,7 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
+        ctxs_bufts.push_back(buft);
     }
 
     if (n_slots > 0) {
@@ -446,7 +447,9 @@ void llama_kv_cache::clear(bool data) {
 
     if (data) {
         for (auto & [_, buf] : ctxs_bufs) {
-            ggml_backend_buffer_clear(buf.get(), 0);
+            if (buf) {
+                ggml_backend_buffer_clear(buf.get(), 0);
+            }
         }
     }
 }
@@ -757,6 +760,9 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const auto & [ctx, buf] : ctxs_bufs) {
+        if (!buf) {
+            continue; // a KV stream pool that could not be allocated
+        }
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
 
         if (hparams.no_alloc) {
@@ -1644,44 +1650,74 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size, bool decode, uint32_
     // and new never coexist
     stream->release_pool();
 
-    std::vector<ggml_backend_buffer_type_t> bufts;
     for (auto & [ctx, buf] : ctxs_bufs) {
-        bufts.push_back(ggml_backend_buffer_get_type(buf.get()));
         buf.reset();
     }
 
     const int64_t n_rows = (int64_t) n_slots*llama_kv_stream::page_size;
-    const auto reshape = [&](ggml_tensor * t) {
-        if (!t) {
-            return;
+    const auto reshape = [&](int64_t rows) {
+        const auto set = [&](ggml_tensor * t) {
+            if (!t) {
+                return;
+            }
+            t->ne[1] = rows;
+            t->nb[2] = t->nb[1]*t->ne[1];
+            t->nb[3] = t->nb[2]*t->ne[2];
+            t->data   = nullptr;
+            t->buffer = nullptr;
+        };
+        for (auto & layer : layers) {
+            set(layer.k);
+            set(layer.v);
+            for (auto * t : layer.k_stream) {
+                set(t);
+            }
+            for (auto * t : layer.v_stream) {
+                set(t);
+            }
         }
-        t->ne[1] = n_rows;
-        t->nb[2] = t->nb[1]*t->ne[1];
-        t->nb[3] = t->nb[2]*t->ne[2];
-        t->data   = nullptr;
-        t->buffer = nullptr;
     };
-    for (auto & layer : layers) {
-        reshape(layer.k);
-        reshape(layer.v);
-        for (auto * t : layer.k_stream) {
-            reshape(t);
-        }
-        for (auto * t : layer.v_stream) {
-            reshape(t);
-        }
-    }
+    reshape(n_rows);
 
-    for (size_t i = 0; i < ctxs_bufs.size(); ++i) {
+    bool ok = true;
+    for (size_t i = 0; i < ctxs_bufs.size() && ok; ++i) {
         auto & [ctx, buf] = ctxs_bufs[i];
-        buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), bufts[i]));
-        if (!buf) {
-            throw std::runtime_error(format("KV streaming: failed to allocate a pool of %u pages", n_slots));
+        buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), ctxs_bufts[i]));
+        if (buf) {
+            ggml_backend_buffer_clear(buf.get(), 0);
         }
-        ggml_backend_buffer_clear(buf.get(), 0);
+        ok = buf != nullptr;
+    }
+    if (ok) {
+        try {
+            stream->set_pool(n_slots, n_ring);
+        } catch (const std::exception & e) {
+            LLAMA_LOG_ERROR("%s: %s\n", __func__, e.what());
+            ok = false;
+        }
     }
 
-    stream->set_pool(n_slots, n_ring);
+    // the budget is the user's: when it does not fit, say so and leave the cache without a pool (every page is in the
+    // host store), for the caller to report and to try again before the next batch
+    if (!ok) {
+        for (auto & [ctx, buf] : ctxs_bufs) {
+            buf.reset();
+        }
+        reshape(n_rows);
+        stream->drop_pool();
+
+        size_t free = 0;
+        size_t total = 0;
+        ggml_backend_dev_memory(stream->device(), &free, &total);
+        const double MiB = 1024.0*1024.0;
+        const char * phase = decode ? "decode" : "prefill";
+        LLAMA_LOG_ERROR("%s: KV streaming: the %s pool of %u pages (%.0f MiB of the %.0f MiB %s KV budget) does not fit: "
+                "%s has %.0f MiB free of %.0f MiB. Lower the %s KV budget, or free VRAM that other processes hold. The KV "
+                "cache stays in host memory, and the next batch tries again.\n", __func__, phase, n_slots,
+                (double) n_slots*bytes_per_cell*llama_kv_stream::page_size/MiB, resident_size/MiB, phase,
+                ggml_backend_dev_name(stream->device()), free/MiB, total/MiB, phase);
+        return false;
+    }
 
     LLAMA_LOG_DEBUG("%s: pool resized to %u pages, slots to %u pages, in %.1f ms\n", __func__, n_slots, stream->n_ring(),
             (ggml_time_us() - t_start_us)/1000.0);
@@ -2197,7 +2233,9 @@ size_t llama_kv_cache::total_size() const {
     size_t size = 0;
 
     for (const auto & [_, buf] : ctxs_bufs) {
-        size += ggml_backend_buffer_get_size(buf.get());
+        if (buf) {
+            size += ggml_backend_buffer_get_size(buf.get());
+        }
     }
 
     return size;
