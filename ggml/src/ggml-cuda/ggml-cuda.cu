@@ -4046,6 +4046,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
+    // the residual add before a layer's norm
+    if (node->op == GGML_OP_ADD) {
+        const int n_fused = ggml_cuda_try_fuse_add_rms_norm(*cuda_ctx, cgraph, i);
+        if (n_fused > 0) {
+            return n_fused;
+        }
+    }
+
     // multi-(add or mul)
     if (node->op == GGML_OP_ADD || node->op == GGML_OP_MUL) {
         int     n_fuse = 0;

@@ -462,6 +462,40 @@ static void rms_norm_f32_cuda(
         stream, scale_out);
 }
 
+// ADD(a, b) -> RMS_NORM -> MUL(w): rms_norm_f32<block_size, true> over the sum, which is written too. The sum is
+// formed as the add kernel forms it and the square accumulated as rms_norm_f32 accumulates it, so both outputs are
+// bit-identical to the unfused ops.
+template <int block_size>
+static __global__ void add_rms_norm_mul_f32(const float * a, const float * b, float * sum, float * dst, const float * w,
+                                            const int ncols, const float eps) {
+    const int64_t row = blockIdx.x;
+    const int     tid = threadIdx.x;
+
+    extern __shared__ float s_sum[];
+
+    const float * ar = a   + row*ncols;
+    const float * br = b   + row*ncols;
+    float       * sr = sum + row*ncols;
+    float       * dr = dst + row*ncols;
+
+    float tmp = 0.0f;
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = ar[col] + br[col];
+        sr[col] = xi;
+        tmp += xi * xi;
+    }
+
+    tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
+
+    const float mean  = tmp / ncols;
+    const float scale = rsqrtf(mean + eps);
+
+    // each thread reads back the sums it wrote
+    for (int col = tid; col < ncols; col += block_size) {
+        dr[col] = scale * sr[col] * w[col];
+    }
+}
+
 static void rms_norm_mul_f32_cuda(const ggml_tensor * x_t,
                                   const ggml_tensor * mul_t,
                                   const ggml_tensor * add_t,
@@ -822,4 +856,67 @@ void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s03 = nb03 / ts0;
 
     l2_norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+}
+
+int ggml_cuda_try_fuse_add_rms_norm(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i) {
+    if (i + 2 >= cgraph->n_nodes) {
+        return 0;
+    }
+    ggml_tensor *       add = cgraph->nodes[i];
+    const ggml_tensor * rms = cgraph->nodes[i + 1];
+    ggml_tensor *       mul = cgraph->nodes[i + 2];
+    if (add->op != GGML_OP_ADD || rms->op != GGML_OP_RMS_NORM || mul->op != GGML_OP_MUL || rms->src[0] != add ||
+            (mul->src[0] != rms && mul->src[1] != rms)) {
+        return 0;
+    }
+    if ((rms->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || (mul->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 ||
+            !ggml_node_has_n_uses(cgraph, i + 1, 1)) {
+        return 0;
+    }
+    const ggml_tensor * a = add->src[0];
+    const ggml_tensor * b = add->src[1];
+    const ggml_tensor * w = mul->src[0] == rms ? mul->src[1] : mul->src[0];
+    if (a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 ||
+            rms->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32) {
+        return 0;
+    }
+    if (!ggml_are_same_shape(a, b) || !ggml_are_same_shape(a, add) || !ggml_are_same_shape(add, mul) ||
+            !ggml_is_contiguous(a) || !ggml_is_contiguous(b) || !ggml_is_contiguous(add) || !ggml_is_contiguous(mul)) {
+        return 0;
+    }
+    const int64_t ncols = add->ne[0];
+    if (!ggml_is_contiguous(w) || w->ne[0] != ncols || ggml_nrows(w) != 1 || ncols > INT_MAX) {
+        return 0;
+    }
+    // The sum and the product may each be one of the add's inputs exactly (in place, as the allocator places them):
+    // a row is read and written by one block only, the inputs before the reduction and the product after it. Any
+    // other overlap is not handled, nor the product sharing memory with the sum or the weight.
+    const auto same_or_disjoint = [](const ggml_tensor * x, const ggml_tensor * y) {
+        return x->data == y->data || !ggml_cuda_tensors_overlap(x, y);
+    };
+    if (!same_or_disjoint(add, a) || !same_or_disjoint(add, b) || !same_or_disjoint(mul, a) || !same_or_disjoint(mul, b) ||
+            ggml_cuda_tensors_overlap(mul, add) || ggml_cuda_tensors_overlap(mul, w) || ggml_cuda_tensors_overlap(add, w)) {
+        return 0;
+    }
+
+    float eps;
+    memcpy(&eps, rms->op_params, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+
+    const float * a_d   = (const float *) a->data;
+    const float * b_d   = (const float *) b->data;
+    const float * w_d   = (const float *) w->data;
+    float *       sum_d = (float *) add->data;
+    float *       dst_d = (float *) mul->data;
+
+    const int64_t nrows  = ggml_nrows(add);
+    cudaStream_t  stream = ctx.stream();
+    // the block size rms_norm_f32 takes for this row length
+    if (ncols < 1024) {
+        add_rms_norm_mul_f32<256><<<nrows, 256, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps);
+    } else {
+        add_rms_norm_mul_f32<1024><<<nrows, 1024, 32 * sizeof(float), stream>>>(a_d, b_d, sum_d, dst_d, w_d, (int) ncols, eps);
+    }
+    CUDA_CHECK(cudaGetLastError());
+    return 2;
 }
